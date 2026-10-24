@@ -25,6 +25,7 @@ run python3 -I tools/gen_puzzles.py --check
 step "clean build and unit tests"
 run make clean >/dev/null
 run make -j"$(nproc)"
+[ -x build/pzsolve ] && echo "  OK a plain make builds build/pzsolve" || { echo "  FAIL a plain make does not build build/pzsolve"; fail=$((fail+1)); }
 run make test
 run make lib-examples >/dev/null
 run make lib-cxx >/dev/null

@@ -12,6 +12,10 @@
 #   X86=0           force the portable scalar code even on an x86-64 machine (what arm64 builds use)
 #   CC=clang        use another compiler (the default is `cc`: gcc on Linux, Apple clang on macOS)
 #   MACOS_MIN=11.0  oldest macOS the binary will run on
+
+# the first rule of the file would be the default goal: say which one it is (lib/pzcore adds rules above `all`)
+.DEFAULT_GOAL := all
+
 VERSION  := $(shell cat VERSION)
 GITREV   := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
 BUILDINFO := git-$(GITREV)/$(shell $(CC) -dumpmachine)
