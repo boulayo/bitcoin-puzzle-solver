@@ -172,7 +172,7 @@ $(BIN): $(OBJS) $(ALLENG)
 	$(CC) $(COMMON) -o $@ $^ $(LDLIBS)
 
 # Unit tests (built against the same sources)
-TESTS := t_core t_perm t_jobq t_engine t_fe t_fe_asm t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe
+TESTS := t_core t_perm t_perm_pin t_jobq t_engine t_fe t_fe_asm t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe
 ifeq ($(X86),1)
 TESTS += t_fev2 t_fev5 t_fev52
 endif
