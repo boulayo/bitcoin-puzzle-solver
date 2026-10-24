@@ -6,6 +6,7 @@
 |------|-------|
 | `common.h`, `util.c` | tipi, log (terminale + `log.txt`), formattazione, file atomici, memoria con controllo errori |
 | `platform.h/.c` | **unico punto dipendente dal sistema operativo** (POSIX e Windows): file binari con offset a 64 bit, rinomina atomica, blocco della campagna, memoria grande (mmap/THP, VirtualAlloc/pagine grandi), orologi, entropia, console (sequenze ANSI, larghezza), Ctrl-C / SIGTERM / SIGHUP / chiusura della finestra, librerie dinamiche. Il resto del programma è C11 + pthread; qualche `#ifdef _WIN32` residuo c'è solo dove il codice è comunque specifico (`cl_api.c`, `rt_cuda.c`, `sysinfo.c`, `doctor.c`, `util.c`, `common.h`) |
+| `../lib/pzcore/` | **il nucleo crittografico riutilizzabile** (README proprio): `u256`, `fe`, `ec`, `hash`, `address` (Base58Check, bech32, WIF), `hash160_batch`, `perm`, `cpu` e le intestazioni a corsie `fev.h` / `fev52.h`; compilato in `build/libpzcore.a` senza nulla di `src/`. Le righe seguenti per questi file si riferiscono a `lib/pzcore/include/pzcore/` e `lib/pzcore/src/` |
 | `u256.h/.c` | interi a 256 bit, ordine del gruppo `n` |
 | `fe.h` | campo `GF(p)` (tutto `static inline`, così ogni unità di compilazione ottiene il codice per il *proprio* set di istruzioni; moltiplicazione e addizione/sottrazione in assembly MULX/ADX con fallback C) |
 | `fev.h` | campo `GF(p)` **a corsie SIMD** (9 limbi da 29 bit, `vpmuludq`): una corsia = un elemento indipendente; limiti dei limbi documentati nell'intestazione |

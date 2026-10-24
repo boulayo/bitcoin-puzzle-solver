@@ -3,6 +3,25 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Added
+- `lib/pzcore`: the crypto core (256-bit integers, secp256k1 field and curve, SHA-256 / RIPEMD-160 / HASH160, Base58Check, bech32 / bech32m,
+  SegWit addresses, the keyed permutation, and HASH160 of many keys with the best SIMD code of the CPU) as a reusable C library with its own
+  README, tests and examples. `make lib`, `lib-test`, `lib-examples`, `lib-cxx`. pzsolve links the same archive.
+
+### Changed
+- Every exported name of the core has the `pz_` prefix; functions return errors instead of exiting; the campaign permutation is unchanged
+  (380 values produced by 1.8.1 are pinned by a test).
+- Faster scalar code (median of interleaved runs, ns): RIPEMD-160 353 -> 160, SHA-256 of 33 bytes 313 -> 239, HASH160 of one key 630 -> 392,
+  field squaring with BMI2 15.8 -> 11.7, square root 9.9 us -> 4.1 us. The search engines run at the same speed as before (within the noise).
+
+### Fixed
+- Base58Check encoding overflowed a stack buffer for payloads above 124 bytes and cut texts that did not fit.
+- 65-byte public keys with a coordinate written as x + p were accepted.
+- The permutation could loop forever for a number outside its domain; the point at infinity of a Jacobian sum kept stale coordinates;
+  a bit index of 256 or more read out of bounds; a valid empty Base58Check payload was refused.
+
 ## [1.8.1] — 2026-10-24
 
 ### Fixed

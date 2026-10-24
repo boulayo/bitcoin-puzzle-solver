@@ -19,7 +19,7 @@ Per il puzzle *n* la chiave privata `k` sta in `[2^(n-1), 2^n − 1]` (intervall
 
 * Campo `GF(p)`, `p = 2^256 − 2^32 − 977`, in 4 limbi da 64 bit con riduzione lazy (`2^256 ≡ 2^32 + 977`).
   Moltiplicazione 4×4 in assembly inline con **MULX** e le due catene di riporto **ADCX/ADOX** (ADX); versione C portabile
-  per le CPU senza BMI2/ADX (le due sono confrontate in `tests/t_fe.c` su 400 000 coppie, bordi inclusi).
+  per le CPU senza BMI2/ADX (le due sono confrontate in `lib/pzcore/tests/t_fe.c` su 400 000 coppie, bordi inclusi).
 * Le chiavi consecutive di un blocco si ottengono **sommando punti affini** invece di rifare una moltiplicazione scalare per
   chiave. Una somma affine richiede un'inversione modulare, che costa come ~270 moltiplicazioni: si ammortizza con il
   **trucco di Montgomery** (un'unica inversione per un vettore di denominatori).
@@ -913,7 +913,7 @@ La ricerca lineare spende circa il 75 % del tempo nell'aritmetica della curva (m
 Le moltiplicazioni scalari 4×64 bit (MULX/ADX) costano ≈ 37 cicli ciascuna su una CPU x86-64 recente. I motori `*v` eseguono invece la
 stessa aritmetica su **4 (AVX2) o 8 (AVX-512) finestre indipendenti** in parallelo, una per corsia:
 
-* **Rappresentazione** (`src/fev.h`): 9 limbi da 29 bit per elemento, "struttura di array" (il limbo `i` di tutte le corsie è un
+* **Rappresentazione** (`lib/pzcore/include/pzcore/fev.h`): 9 limbi da 29 bit per elemento, "struttura di array" (il limbo `i` di tutte le corsie è un
   registro). `vpmuludq` (32×32→64) fa 4 o 8 prodotti per istruzione e una colonna di 9 prodotti da ≤ 2^60 sta in 64 bit.
 * **Riduzione**: `2^261 ≡ 32·(2^32 + 977) = 0x7A20 + 256·2^29 (mod p)`: le colonne alte si propagano in limbi da 29 bit e si
   ripiegano con due prodotti piccoli ciascuna.
@@ -943,7 +943,7 @@ coincide. Test delle mutazioni: 8 errori introdotti nel codice vettoriale, 8 ril
 Velocità (1 thread, passi/s): portabile 4,4 M, BMI2/ADX (la versione fino alla 1.4.0) 6,4 M, AVX2 a corsie
 8,3 M, AVX-512 a corsie 12,7 M, **AVX-512 IFMA a corsie 24,9 M (×3,9)**. Con 4 thread: 25,3 → 95 M passi/s.
 
-### 10.1 Variante AVX-512 IFMA (`avx512i`, `src/fev52.h`)
+### 10.1 Variante AVX-512 IFMA (`avx512i`, `lib/pzcore/include/pzcore/fev52.h`)
 
 `vpmadd52luq` / `vpmadd52huq` sommano a un accumulatore a 64 bit la metà bassa / alta (52 bit ciascuna) del prodotto di due
 operandi da 52 bit. Con **5 limbi da 52 bit** un prodotto completo costa 25 + 25 di queste istruzioni, contro 81 `vpmuludq` più le
@@ -960,7 +960,7 @@ addizioni della rappresentazione a 29 bit. Il motore (`engine_vec_impl.inc`) è 
 * **Sottrazione**: si aggiunge `4p` (o `8p` per `a − b − c`) scritto con limbi che dominano il sottraendo (`FEV_K1`, `FEV_K2`).
 * **Normalizzazione**: un solo ripiegamento lascia il limbo 4 ≤ 2^48, cioè `r < 2^256 + 2^208`; poi `r ≥ p ⇔ r + c ≥ 2^256`
   e `r − p < p` (il secondo ripiegamento della versione a 29 bit qui è superfluo: lo ha mostrato il test delle mutazioni).
-* **Verifica**: `tests/t_fev52.c` (valori casuali e ai limiti di ogni limbo, multipli di `p` ± piccoli, catene lunghe, inversione;
+* **Verifica**: `lib/pzcore/tests/t_fev52.c` (valori casuali e ai limiti di ogni limbo, multipli di `p` ± piccoli, catene lunghe, inversione;
   8 mutazioni del codice, tutte rilevate tranne quella dimostrata innocua), `t_engine` e `selftest` sul motore completo. Eseguiti
   sia direttamente su una CPU con IFMA (`PZ_ASSUME_IFMA=1` salta il controllo
   della CPUID, **solo per i test**) sia sotto **Intel SDE** in modalità Tiger Lake, che emula anche la

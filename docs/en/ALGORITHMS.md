@@ -45,7 +45,7 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
    * 9.3 When it pays off
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
     * 10.0 Lane kangaroo (1.5.0, `src/kang_vec_impl.inc`)
-    * 10.1 AVX-512 IFMA variant (`avx512i`, `src/fev52.h`)
+    * 10.1 AVX-512 IFMA variant (`avx512i`, `lib/pzcore/include/pzcore/fev52.h`)
 11. Time-estimation model (`src/eta.c`)
 
 ## 1. The problem
@@ -64,7 +64,7 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
 
 * Field `GF(p)`, `p = 2^256 − 2^32 − 977`, in 4 limbs of 64 bits with lazy reduction (`2^256 ≡ 2^32 + 977`).
   The 4×4 multiplication is inline assembly with **MULX** and the two carry chains **ADCX/ADOX** (ADX); a portable C version
-  serves CPUs without BMI2/ADX (the two are compared in `tests/t_fe.c` on 400,000 pairs, edge cases included).
+  serves CPUs without BMI2/ADX (the two are compared in `lib/pzcore/tests/t_fe.c` on 400,000 pairs, edge cases included).
 * Consecutive keys of a block are obtained by **adding affine points** instead of redoing a scalar multiplication for every
   key. An affine addition needs one modular inversion, which costs about as much as 270 multiplications: it is amortized with
   **Montgomery's trick** (a single inversion for a whole vector of denominators).
@@ -959,7 +959,7 @@ The linear search spends about 75% of its time in curve arithmetic (field multip
 The scalar 4×64-bit multiplications (MULX/ADX) cost ≈ 37 cycles each on the test machine used below. The `*v` engines instead run the
 same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, one per lane:
 
-* **Representation** (`src/fev.h`): 9 limbs of 29 bits per element, "structure of arrays" (limb `i` of all lanes is one
+* **Representation** (`lib/pzcore/include/pzcore/fev.h`): 9 limbs of 29 bits per element, "structure of arrays" (limb `i` of all lanes is one
   register). `vpmuludq` (32×32→64) does 4 or 8 products per instruction and a column of 9 products of ≤ 2^60 fits in 64 bits.
 * **Reduction**: `2^261 ≡ 32·(2^32 + 977) = 0x7A20 + 256·2^29 (mod p)`: the high columns propagate into 29-bit limbs
   and fold with two small products each.
@@ -989,7 +989,7 @@ does not match. Mutation testing: 8 errors introduced in the vector code, 8 dete
 Speed (1 thread, steps/s, same test machine): portable 4.4 M, BMI2/ADX (the version up to 1.4.0) 6.4 M, AVX2 lanes
 8.3 M, AVX-512 lanes 12.7 M, **AVX-512 IFMA lanes 24.9 M (×3.9)**. With 4 threads: from 25.3 to 95 M steps/s.
 
-### 10.1 AVX-512 IFMA variant (`avx512i`, `src/fev52.h`)
+### 10.1 AVX-512 IFMA variant (`avx512i`, `lib/pzcore/include/pzcore/fev52.h`)
 
 `vpmadd52luq` / `vpmadd52huq` add to a 64-bit accumulator the low / high half (52 bits each) of the product of two 52-bit
 operands. With **5 limbs of 52 bits** a full product costs 25 + 25 of these instructions, against 81 `vpmuludq` plus the
@@ -1006,7 +1006,7 @@ additions of the 29-bit representation. The engine (`engine_vec_impl.inc`) is th
 * **Subtraction**: `4p` (or `8p` for `a − b − c`) is added, written with limbs that dominate the subtrahend (`FEV_K1`, `FEV_K2`).
 * **Normalization**: a single fold leaves limb 4 ≤ 2^48, that is `r < 2^256 + 2^208`; then `r ≥ p ⇔ r + c ≥ 2^256`
   and `r − p < p` (the second fold of the 29-bit version is superfluous here: shown by the mutation test).
-* **Verification**: `tests/t_fev52.c` (random values and values at the bounds of every limb, multiples of `p` ± small, long chains, inversion;
+* **Verification**: `lib/pzcore/tests/t_fev52.c` (random values and values at the bounds of every limb, multiples of `p` ± small, long chains, inversion;
   8 mutations of the code, all detected except the one shown to be harmless), `t_engine` and `selftest` on the complete engine. Run
   both directly on the CPU of the test machine (its virtual CPUID hides IFMA but the processor executes it:
   `PZ_ASSUME_IFMA=1` skips the check, **for tests only**) and under **Intel SDE** in Tiger Lake mode, which also emulates

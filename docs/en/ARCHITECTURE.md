@@ -6,6 +6,7 @@
 |------|------|
 | `common.h`, `util.c` | types, logging (terminal + `log.txt`), formatting, atomic files, memory with error checking |
 | `platform.h/.c` | **the only operating-system-dependent point** (POSIX and Windows): binary files with 64-bit offsets, atomic rename, campaign lock, large memory (mmap/THP, VirtualAlloc/large pages), clocks, entropy, console (ANSI sequences, width), Ctrl-C / SIGTERM / SIGHUP / window close, dynamic libraries. The rest of the program is C11 + pthread; a few `#ifdef _WIN32` remain only where the code is specific anyway (`cl_api.c`, `rt_cuda.c`, `sysinfo.c`, `doctor.c`, `util.c`, `common.h`) |
+| `../lib/pzcore/` | **the reusable crypto core** (own README): `u256`, `fe` (field), `ec` (curve), `hash`, `address` (Base58Check, bech32, WIF), `hash160_batch`, `perm`, `cpu`, and the lane headers `fev.h` / `fev52.h` and templates in `impl/`; built into `build/libpzcore.a` with nothing from `src/`. The rows below for these files now refer to `lib/pzcore/include/pzcore/` and `lib/pzcore/src/` |
 | `u256.h/.c` | 256-bit integers, group order `n` |
 | `fe.h` | field `GF(p)` (all `static inline`, so every compilation unit gets the code for its *own* instruction set; multiplication and addition/subtraction in MULX/ADX assembly with a C fallback) |
 | `fev.h` | **SIMD-lane** field `GF(p)` (9 limbs of 29 bits, `vpmuludq`): one lane = one independent element; limb bounds documented in the header |
@@ -108,10 +109,10 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 | Level | Where |
 |-------|-------|
 | Vectors from an independent reference (`tools/ref.py`, pure Python) | `tests/t_core.c`, `src/selftest.c` |
-| Field/assembly | `tests/t_fe.c` (two builds: C and MULX/ADX); `tests/t_fev.c` (AVX2 and AVX-512: limb bounds, extreme values, verified mutations) |
+| Field/assembly | `lib/pzcore/tests/t_fe.c` (two builds: C and MULX/ADX); `lib/pzcore/tests/t_fev.c` (AVX2 and AVX-512: limb bounds, extreme values, verified mutations) |
 | BSGS, ETA, database | `tests/t_bsgs.c`, `t_eta.c`, `t_puzzles.c` |
 | GPU kernel arithmetic | `tests/t_gpufe.c`: the field of `kernels/pz_common.cl` compiled for the host, portable variant and PTX carry-chain variant (with the carry flag emulated according to the PTX ISA), against the CPU on 5 million combinations with all the edge cases |
-| Permutation, scheduler, SIMD engines | `tests/t_perm.c`, `t_jobq.c`, `t_engine.c` |
+| Permutation, scheduler, SIMD engines | `lib/pzcore/tests/t_perm.c`, `t_jobq.c`, `t_engine.c` |
 | Complete campaigns | `tests/e2e.sh` |
 | CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the embedded PTX modules and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
 | Windows | `make windows` / `make wintest`: static MinGW-w64 exe, unit tests, self-test and campaigns run under Wine (`tools/verify.sh`) |
