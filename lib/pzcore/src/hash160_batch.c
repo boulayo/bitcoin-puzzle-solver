@@ -4,6 +4,7 @@
 #include <pzcore/cpu.h>
 #include <pzcore/hash.h>
 #include <stdatomic.h>
+#include "bytes.h"
 #include "h160_impl.h"
 
 typedef struct {
@@ -79,6 +80,28 @@ bool pz_hash160_batch_select(const char *name)
 
 #define MAXLANES 16
 
+/* The conversion between the byte strings of the API and the lane layout of the kernels. `lanes` is a constant in every call
+ * (the function is inlined into one copy per lane count), so the loops unroll and the addresses are computed at compile time. */
+static inline __attribute__((always_inline)) void run_batch(size_t n, const uint8_t *xs, const uint8_t *parity, uint8_t *out,
+                                                           pz_h160_kernel_fn kernel, const size_t L)
+{
+    uint32_t X[8 * MAXLANES] PZ_ALIGN(64), pfx[MAXLANES] PZ_ALIGN(64), res[5 * MAXLANES] PZ_ALIGN(64);
+    for (size_t i = 0; i < n; i += L) {
+        const size_t cnt = n - i < L ? n - i : L;
+        for (size_t l = 0; l < L; l++) {
+            const size_t k = i + (l < cnt ? l : cnt - 1);       /* the unused lanes of the last step repeat its last key */
+            const uint8_t *x = xs + 32 * k;
+            for (size_t w = 0; w < 8; w++) X[w * L + l] = load_be32(x + 4 * w);
+            pfx[l] = 2u + (parity[k] & 1u);
+        }
+        kernel(X, pfx, res);
+        for (size_t l = 0; l < cnt; l++) {
+            uint8_t *o = out + 20 * (i + l);
+            for (size_t w = 0; w < 5; w++) store_le32(o + 4 * w, res[w * L + l]);
+        }
+    }
+}
+
 void pz_hash160_x_batch(size_t n, const uint8_t *xs, const uint8_t *parity, uint8_t *out)
 {
     const impl_t *im = current();
@@ -86,24 +109,9 @@ void pz_hash160_x_batch(size_t n, const uint8_t *xs, const uint8_t *parity, uint
         for (size_t i = 0; i < n; i++) pz_hash160_pub33(parity[i], xs + 32 * i, out + 20 * i);
         return;
     }
-    const size_t L = im->lanes;
-    uint32_t X[8 * MAXLANES] PZ_ALIGN(64), pfx[MAXLANES] PZ_ALIGN(64), res[5 * MAXLANES] PZ_ALIGN(64);
-    for (size_t i = 0; i < n; i += L) {
-        const size_t cnt = n - i < L ? n - i : L;
-        for (size_t l = 0; l < L; l++) {
-            const size_t k = i + (l < cnt ? l : cnt - 1);       /* the unused lanes of the last step repeat its last key */
-            const uint8_t *x = xs + 32 * k;
-            for (size_t w = 0; w < 8; w++)
-                X[w * L + l] = (uint32_t)x[4 * w] << 24 | (uint32_t)x[4 * w + 1] << 16 | (uint32_t)x[4 * w + 2] << 8 | x[4 * w + 3];
-            pfx[l] = 2u + (parity[k] & 1u);
-        }
-        im->kernel(X, pfx, res);
-        for (size_t l = 0; l < cnt; l++) {
-            uint8_t *o = out + 20 * (i + l);
-            for (size_t w = 0; w < 5; w++) {
-                const uint32_t v = res[w * L + l];
-                o[4 * w] = (uint8_t)v; o[4 * w + 1] = (uint8_t)(v >> 8); o[4 * w + 2] = (uint8_t)(v >> 16); o[4 * w + 3] = (uint8_t)(v >> 24);
-            }
-        }
+    switch (im->lanes) {
+    case 16: run_batch(n, xs, parity, out, im->kernel, 16); break;
+    case 8: run_batch(n, xs, parity, out, im->kernel, 8); break;
+    default: run_batch(n, xs, parity, out, im->kernel, 4); break;
     }
 }
