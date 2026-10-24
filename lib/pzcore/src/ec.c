@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* ec.c - secp256k1 point arithmetic. */
-#include "ec.h"
+#include <pzcore/ec.h>
 #include <pthread.h>
 
 const pz_ge pz_ec_g = {

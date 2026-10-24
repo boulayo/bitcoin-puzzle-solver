@@ -2,8 +2,8 @@
 /* selftest.c - 'pzsolve selftest' and 'pzsolve bench'. */
 #include "selftest.h"
 #include "run.h"
-#include "hash.h"
-#include "perm.h"
+#include <pzcore/hash.h>
+#include <pzcore/perm.h>
 #include "kangaroo.h"
 #include "gpu.h"
 #include "bench_tg.h"

@@ -2,7 +2,7 @@
 /* util.c - logging, formatting, file helpers. */
 #include "common.h"
 #include "platform.h"
-#include "u256.h"
+#include <pzcore/u256.h>
 #include <stdarg.h>
 #include <time.h>
 #include <errno.h>

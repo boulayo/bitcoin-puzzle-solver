@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_core.c - known-answer tests for field/curve/hash primitives, vectors from tools/ref.py */
-#include "../src/ec.h"
-#include "../src/hash.h"
+#include <pzcore/ec.h>
+#include <pzcore/hash.h>
 #include "../src/platform.h"
 #include <assert.h>
 #ifndef _WIN32

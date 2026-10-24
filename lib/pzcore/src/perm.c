@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* perm.c - keyed bijection on [0, M). See perm.h. */
-#include "perm.h"
-#include "hash.h"
+#include <pzcore/perm.h>
+#include <pzcore/hash.h>
 
 static u128 mask_bits(unsigned w) { return w >= 128 ? ~(u128)0 : (((u128)1 << w) - 1); }
 

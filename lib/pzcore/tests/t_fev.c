@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_fev.c - lane-parallel field arithmetic (pz_fev.h) against the scalar implementation, with limb patterns at the bounds.
  * Compiled once per vector width (see Makefile): PZ_VBYTES is 32 or 64. */
-#include "../src/fev.h"
+#include <pzcore/fev.h>
 #include "../src/cpu_engine.h"
 
 static int fails;

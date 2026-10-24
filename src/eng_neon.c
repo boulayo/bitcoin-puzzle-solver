@@ -3,12 +3,12 @@
  * and RIPEMD-160 on NEON vectors (hash_neon.inc). Built with -march=armv8-a+crypto (see the Makefile) and used only when the CPU
  * reports SHA2. */
 #include "cpu_engine.h"
-#include "hash.h"
-#include "hash_tables.h"
+#include <pzcore/hash.h>
+#include <pzcore/impl/hash_tables.h>
 
 #define ISA neon
 #define PZ_VBYTES 16
-#define PZ_HASH_EXTERNAL "hash_neon.inc"
+#define PZ_HASH_EXTERNAL "pzcore/impl/hash_lanes_neon.inc"
 #include "engine_impl.inc"
 
 static bool supported(void) { return cpu_has_sha2(); }

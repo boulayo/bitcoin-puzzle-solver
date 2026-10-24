@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* puzzles.c - lookup and run-time verification of the built-in puzzle table. */
 #include "puzzles.h"
-#include "ec.h"
-#include "hash.h"
+#include <pzcore/ec.h>
+#include <pzcore/hash.h>
 
 const puzzle_info *puzzle_find(int n)
 {

@@ -30,7 +30,7 @@
 #define PZ_KANGAROO_PRIV_H
 
 #include "kangaroo.h"
-#include "ec.h"
+#include <pzcore/ec.h>
 
 #define KANG_R 256               /* jump table size */
 #define KANG_NESC 16             /* escape jumps, after the R regular ones: used only to leave a fruitless cycle */

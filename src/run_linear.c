@@ -4,7 +4,7 @@
 #include "run.h"
 #include "platform.h"
 #include "gpu.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "bench_tg.h"
 #include "outfmt.h"
 #include "campaign.h"

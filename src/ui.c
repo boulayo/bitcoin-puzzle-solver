@@ -2,7 +2,7 @@
 /* ui.c - text rendering of the campaign status. Pure formatting: no terminal I/O happens here. */
 #include "ui.h"
 #include "platform.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include <math.h>
 #include <string.h>
 

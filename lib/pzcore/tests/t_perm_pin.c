@@ -2,7 +2,7 @@
 /* t_perm_pin.c - the permutation of a campaign must never change: a campaign visits its blocks in the order this function
  * defines, so any change of the algorithm would make a resumed campaign skip or repeat blocks. The table holds outputs produced
  * by the implementation of release 1.8.1, for several seeds and domain sizes (power of two or not, one bit to 192 bits). */
-#include "../src/perm.h"
+#include <pzcore/perm.h>
 #include "perm_pins.h"
 
 static int fails;

@@ -2,7 +2,7 @@
 /* bsgs.c - baby-step giant-step with a symmetric RAM table. See bsgs.h. */
 #include "bsgs_priv.h"
 #include "cpu_engine.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "kangaroo.h"
 #include "platform.h"
 #include "outfmt.h"

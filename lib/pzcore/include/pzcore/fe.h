@@ -9,7 +9,7 @@
 #define PZ_FE_H
 
 #include "common.h"
-#include "u256.h"
+#include <pzcore/u256.h>
 
 typedef struct { u64 n[4]; } pz_fe;
 

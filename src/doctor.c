@@ -3,7 +3,7 @@
 #include "doctor.h"
 #include "run.h"
 #include "gpu.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "kangaroo_priv.h"
 #include "campaign.h"
 #include "campaigns.h"

@@ -14,7 +14,7 @@
 #define PZ_JOBQ_H
 
 #include "campaign.h"
-#include "perm.h"
+#include <pzcore/perm.h>
 #include <pthread.h>
 
 typedef struct {

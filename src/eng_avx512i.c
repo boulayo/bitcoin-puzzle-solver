@@ -2,8 +2,8 @@
 /* eng_avx512i.c - CPU linear-search engine with lane-parallel curve arithmetic on AVX-512 IFMA (fev52.h).
  * Built with ISA-specific flags (see Makefile); selected only on processors that report IFMA. */
 #include "cpu_engine.h"
-#include "hash.h"
-#include "hash_tables.h"
+#include <pzcore/hash.h>
+#include <pzcore/impl/hash_tables.h>
 
 #define ISA avx512i
 #define PZ_VBYTES 64

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_engine.c - verifies every CPU engine variant against the scalar reference. */
 #include "../src/cpu_engine.h"
-#include "../src/hash.h"
+#include <pzcore/hash.h>
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 

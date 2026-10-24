@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* campaign.c - configuration persistence, seeds. */
 #include "campaign.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "platform.h"
 #include <time.h>
 #include <errno.h>

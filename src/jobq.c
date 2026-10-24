@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* jobq.c - interval-based work scheduler. See jobq.h. */
 #include "jobq.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "platform.h"
 #include <errno.h>
 

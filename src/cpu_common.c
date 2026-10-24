@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* cpu_common.c - tables, engine registry and ISA detection for the CPU engines. */
 #include "cpu_engine.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include <pthread.h>
 
 pz_ge cpu_gtab[CPU_HALF];

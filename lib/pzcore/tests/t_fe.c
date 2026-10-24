@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_fe.c - the (possibly assembly) pz_fe_mul/pz_fe_sqr must agree with the portable C versions and with Python-checked identities. */
-#include "../src/fe.h"
+#include <pzcore/fe.h>
 #include "../src/cpu_engine.h"
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)

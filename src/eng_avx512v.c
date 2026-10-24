@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* eng_avx512v.c - CPU linear-search engine with lane-parallel curve arithmetic, avx512v variant. Built with ISA-specific flags. */
 #include "cpu_engine.h"
-#include "hash.h"
-#include "hash_tables.h"
+#include <pzcore/hash.h>
+#include <pzcore/impl/hash_tables.h>
 
 #define ISA avx512v
 #define PZ_VBYTES 64

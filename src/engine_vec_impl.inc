@@ -15,11 +15,11 @@
 #define CAT_(a, b) a##b
 #define CAT(a, b) CAT_(a, b)
 #define PZ_HASH_LANES_FN CAT(hash_lanes_, ISA)
-#include "hash_simd.inc"
+#include <pzcore/impl/hash_lanes.inc>
 #ifdef PZ_FEV_IFMA
-#include "fev52.h"
+#include <pzcore/fev52.h>
 #else
-#include "fev.h"
+#include <pzcore/fev.h>
 #endif
 #include <pthread.h>
 

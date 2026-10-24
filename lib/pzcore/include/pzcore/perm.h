@@ -9,7 +9,7 @@
 #ifndef PZ_PERM_H
 #define PZ_PERM_H
 
-#include "u256.h"
+#include <pzcore/u256.h>
 
 #define PZ_PERM_ROUNDS 8
 

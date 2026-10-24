@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_puzzles.c - consistency of the built-in puzzle database (independent of the generator script). */
 #include "../src/puzzles.h"
-#include "../src/ec.h"
-#include "../src/hash.h"
+#include <pzcore/ec.h>
+#include <pzcore/hash.h>
 #include "../src/campaign.h"
 
 static int fails;

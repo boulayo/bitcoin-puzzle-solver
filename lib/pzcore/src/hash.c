@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* hash.c - SHA-256, RIPEMD-160, Base58Check (scalar reference code). */
-#include "hash.h"
-#include "hash_tables.h"
-#include "ec.h"
+#include <pzcore/hash.h>
+#include <pzcore/impl/hash_tables.h>
+#include <pzcore/ec.h>
 
 
 static inline u32 rotr32(u32 x, int n) { return x >> n | x << (32 - n); }

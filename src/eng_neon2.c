@@ -3,12 +3,12 @@
  * which doubles the independent dependency chains of RIPEMD-160 (faster on cores that are limited by latency, slower on others: the
  * autotune decides). */
 #include "cpu_engine.h"
-#include "hash.h"
-#include "hash_tables.h"
+#include <pzcore/hash.h>
+#include <pzcore/impl/hash_tables.h>
 
 #define ISA neon2
 #define PZ_VBYTES 32
-#define PZ_HASH_EXTERNAL "hash_neon.inc"
+#define PZ_HASH_EXTERNAL "pzcore/impl/hash_lanes_neon.inc"
 #include "engine_impl.inc"
 
 static bool supported(void) { return cpu_has_sha2(); }

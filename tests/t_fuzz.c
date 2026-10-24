@@ -4,7 +4,7 @@
 #include "../src/bsgs.h"
 #include "../src/platform.h"
 #include "../src/campaigns.h"
-#include "../src/hash.h"
+#include <pzcore/hash.h>
 #include "../src/jobq.h"
 #include <unistd.h>
 #include <fcntl.h>

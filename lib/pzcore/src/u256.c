@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* pz_u256.c - 256-bit helpers and group-order arithmetic. */
-#include "u256.h"
+#include <pzcore/u256.h>
 
 const pz_u256 pz_secp256k1_n = {{0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL, 0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL}};
 

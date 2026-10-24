@@ -3,7 +3,7 @@
 #ifndef PZ_CPU_ENGINE_H
 #define PZ_CPU_ENGINE_H
 
-#include "ec.h"
+#include <pzcore/ec.h>
 #include <stdatomic.h>
 
 #define CPU_HALF 256                 /* group = 2*HALF consecutive keys per batch inversion */

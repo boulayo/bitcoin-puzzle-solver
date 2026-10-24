@@ -6,7 +6,7 @@
 #include "gpu_rt.h"
 #include "platform.h"
 #include "cpu_engine.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "kangaroo_priv.h"
 #include "outfmt.h"
 #include <unistd.h>

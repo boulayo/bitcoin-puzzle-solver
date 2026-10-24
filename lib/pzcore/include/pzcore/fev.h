@@ -15,7 +15,7 @@
 #ifndef PZ_FEV_H
 #define PZ_FEV_H
 
-#include "fe.h"
+#include <pzcore/fe.h>
 #include <immintrin.h>
 
 #ifndef PZ_VBYTES
@@ -265,6 +265,6 @@ static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
     for (int i = 0; i < 9; i++) r->l[i] = (t[i] & sel) | (r->l[i] & ~sel);
 }
 
-#include "fev_chain.inc"
+#include <pzcore/impl/fev_chain.inc>
 
 #endif

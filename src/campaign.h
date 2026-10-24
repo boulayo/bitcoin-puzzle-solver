@@ -4,7 +4,7 @@
 #ifndef PZ_CAMPAIGN_H
 #define PZ_CAMPAIGN_H
 
-#include "ec.h"
+#include <pzcore/ec.h>
 
 #define PZ_FORMAT_VERSION 1
 

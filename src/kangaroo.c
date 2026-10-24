@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* kangaroo.c - symmetric Gaudry-Schost kangaroo: setup, DP table, solving, CPU workers. */
 #include "kangaroo_priv.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "cpu_engine.h"
 #include "platform.h"
 #include "outfmt.h"

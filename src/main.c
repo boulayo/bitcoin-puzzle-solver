@@ -2,7 +2,7 @@
 /* main.c - pzsolve command line interface. */
 #include "run.h"
 #include "gpu.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "selftest.h"
 #include "profile.h"
 #include "doctor.h"

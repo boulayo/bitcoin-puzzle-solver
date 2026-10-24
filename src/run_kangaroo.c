@@ -3,7 +3,7 @@
 #include "kangaroo_priv.h"
 #include "platform.h"
 #include "gpu.h"
-#include "hash.h"
+#include <pzcore/hash.h>
 #include "bench_tg.h"
 #include "outfmt.h"
 #include <stdarg.h>

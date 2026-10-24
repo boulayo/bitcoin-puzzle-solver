@@ -3,7 +3,7 @@
  * at the bounds of the "tight" form every operation accepts and returns. Skipped on CPUs without IFMA (PZ_ASSUME_IFMA=1
  * forces it, see cpu_has_ifma). */
 #define PZ_VBYTES 64
-#include "../src/fev52.h"
+#include <pzcore/fev52.h>
 #include "../src/cpu_engine.h"
 
 static int fails;

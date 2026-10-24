@@ -7,7 +7,7 @@
 #ifndef PZ_EC_H
 #define PZ_EC_H
 
-#include "fe.h"
+#include <pzcore/fe.h>
 
 typedef struct { pz_fe x, y; } pz_ge;                  /* affine point (never infinity) */
 typedef struct { pz_fe x, y, z; bool inf; } pz_gej;    /* Jacobian point */

@@ -20,7 +20,7 @@ HOSTCC  ?= cc
 OPT     ?= -O3
 WARN    := -Wall -Wextra -Wshadow -Wno-unused-parameter
 COMMON  := -std=gnu11 $(OPT) -g $(WARN) -D_GNU_SOURCE -fno-strict-aliasing \
-           -DPZ_VERSION=\"$(VERSION)\" -DPZ_BUILD_INFO=\"$(BUILDINFO)\" -Isrc
+           -DPZ_VERSION=\"$(VERSION)\" -DPZ_BUILD_INFO=\"$(BUILDINFO)\" -Isrc -Ilib/pzcore/include
 LDLIBS  := -lpthread -lm -ldl
 
 # clang (including Apple clang): without the SLP vectorizer. Apple clang 17 (x86-64, -O3) miscompiled the AVX2 lane step of the
@@ -58,7 +58,7 @@ endif
 BUILD   ?= build
 BIN     := $(BUILD)/pzsolve$(EXE)
 
-CORE_SRC := platform util u256 ec hash perm campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common cpu_arm sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
+CORE_SRC := platform util campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common cpu_arm sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c
@@ -71,10 +71,14 @@ KANG_SRC := src/kangaroo.c src/kang_base.c src/bsgs_base.c
 GPU_SRC  := cl_api rt rt_cl rt_cuda gpu
 SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
+# pzcore: the reusable crypto core (lib/pzcore). pzsolve links the archive; the engines include its headers.
+LIB_SRC := u256 ec hash perm
+LIBOBJ  := $(addprefix $(BUILD)/pzcore/,$(addsuffix .o,$(LIB_SRC)))
+LIB     := $(BUILD)/libpzcore.a
 ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
 KVOBJ  := $(BUILD)/kang_x86.o $(BUILD)/kang_avx2v.o $(BUILD)/kang_avx512v.o $(BUILD)/kang_avx512i.o $(BUILD)/kang_avx512i2.o
 BSVOBJ := $(BUILD)/bsgs_x86.o $(BUILD)/bsgs_avx2v.o $(BUILD)/bsgs_avx512v.o $(BUILD)/bsgs_avx512i.o
-DEPS   := $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
+DEPS   := $(LIBOBJ:.o=.d) $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
 
 # X86=1 builds the per-ISA SIMD engines (each object file with its own -m flags, picked at run time by CPU detection); on any other
 # CPU only the portable engine is built and -DPZ_NO_X86_VARIANTS removes the rest. On arm64 (Apple Silicon, Linux aarch64) ARM64=1 adds
@@ -102,7 +106,7 @@ COMMON += -mcpu=native
 endif
 endif
 
-.PHONY: all test e2e asan tsan clean windows wintest mockcuda winmockcuda
+.PHONY: all lib test e2e asan tsan clean windows wintest mockcuda winmockcuda
 
 all: $(BIN)
 
@@ -121,6 +125,18 @@ $(BUILD)/kernels_gen.o: $(BUILD)/kernels_gen.c
 
 $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
+
+$(BUILD)/pzcore:
+	@mkdir -p $@
+
+$(BUILD)/pzcore/%.o: lib/pzcore/src/%.c | $(BUILD)/pzcore
+	$(CC) $(COMMON) -MMD -MP -c $< -o $@
+
+$(LIB): $(LIBOBJ)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+lib: $(LIB)
 
 $(BUILD)/eng_base.o: src/eng_base.c | $(BUILD)
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
@@ -159,16 +175,16 @@ $(BUILD)/bsgs_avx512i.o: src/bsgs_avx512i.c | $(BUILD)
 
 ifeq ($(X86),1)
 ALLENG := $(ENGOBJ) $(KVOBJ) $(BSVOBJ)
-TESTENG := $(ENGOBJ) $(BSVOBJ)       # the unit tests do not link the kangaroo
+TESTENG := $(ENGOBJ) $(BSVOBJ) $(LIB)       # the unit tests do not link the kangaroo
 else
 ALLENG := $(BUILD)/eng_base.o
 ifeq ($(ARM64),1)
 ALLENG += $(BUILD)/eng_neon.o $(BUILD)/eng_neon2.o
 endif
-TESTENG := $(ALLENG)
+TESTENG := $(ALLENG) $(LIB)
 endif
 
-$(BIN): $(OBJS) $(ALLENG)
+$(BIN): $(OBJS) $(ALLENG) $(LIB)
 	$(CC) $(COMMON) -o $@ $^ $(LDLIBS)
 
 # Unit tests (built against the same sources)
@@ -178,16 +194,16 @@ TESTS += t_fev2 t_fev5 t_fev52
 endif
 TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/kangaroo.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
-$(BUILD)/t_fe_asm$(EXE): tests/t_fe.c $(TESTOBJS) $(TESTENG) | $(BUILD)
+$(BUILD)/t_fe_asm$(EXE): lib/pzcore/tests/t_fe.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) $(AVX2_FLAGS) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
-$(BUILD)/t_fev2$(EXE): tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
+$(BUILD)/t_fev2$(EXE): lib/pzcore/tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) $(AVX2_FLAGS) -DPZ_VBYTES=32 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
-$(BUILD)/t_fev5$(EXE): tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
+$(BUILD)/t_fev5$(EXE): lib/pzcore/tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) $(AVX512_FLAGS) -DPZ_VBYTES=64 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
-$(BUILD)/t_fev52$(EXE): tests/t_fev52.c $(TESTOBJS) $(TESTENG) | $(BUILD)
+$(BUILD)/t_fev52$(EXE): lib/pzcore/tests/t_fev52.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) $(IFMA_FLAGS) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 # t_gpufe: the kernel field arithmetic compiled for the host, PTX carry-chain variant (emulated) and portable variant
@@ -199,6 +215,9 @@ $(BUILD)/t_gpufe$(EXE): tests/t_gpufe.c $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o 
 	$(CC) $(COMMON) -o $@ $< $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 $(BUILD)/t_%$(EXE): tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
+	$(CC) $(COMMON) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
+
+$(BUILD)/t_%$(EXE): lib/pzcore/tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 test: $(BIN) $(addsuffix $(EXE),$(addprefix $(BUILD)/,$(TESTS)))

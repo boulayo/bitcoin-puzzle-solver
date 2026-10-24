@@ -10,9 +10,9 @@
 #define CAT_(a, b) a##b
 #define CAT(a, b) CAT_(a, b)
 #ifdef PZ_FEV_IFMA
-#include "fev52.h"
+#include <pzcore/fev52.h>
 #else
-#include "fev.h"
+#include <pzcore/fev.h>
 #endif
 
 #define NL PZ_FEV_LANES
