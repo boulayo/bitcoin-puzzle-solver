@@ -2,6 +2,7 @@
 /* t_gpufe.c - the GPU field arithmetic (kernels/pz_common.cl, portable and PTX carry-chain variants, the latter with
  * the carry flag emulated exactly as the PTX ISA defines it) against the CPU implementation: random values and every
  * combination of the limb patterns that trigger the rare carry/borrow paths (values near 0, near p, near 2^256). */
+#include "../src/common.h"
 #include <pzcore/fe.h>
 #include <stdio.h>
 

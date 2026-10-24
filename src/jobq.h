@@ -13,9 +13,25 @@
 #ifndef PZ_JOBQ_H
 #define PZ_JOBQ_H
 
+#include "common.h"
 #include "campaign.h"
 #include <pzcore/perm.h>
 #include <pthread.h>
+
+/* The order of the blocks of a campaign. Their arguments are always below the number of blocks, so a refusal of the permutation
+ * is an internal error. */
+static inline pz_u256 sched_perm_apply(const pz_perm *p, const pz_u256 *x)
+{
+    pz_u256 y;
+    if (!pz_perm_apply(p, x, &y)) pz_die("internal error: a position of the visiting order is beyond the last block");
+    return y;
+}
+static inline pz_u256 sched_perm_invert(const pz_perm *p, const pz_u256 *y)
+{
+    pz_u256 x;
+    if (!pz_perm_invert(p, y, &x)) pz_die("internal error: a block is beyond the last block of the campaign");
+    return x;
+}
 
 typedef struct {
     pz_u256 key_start;   /* first key of the claim */
@@ -30,7 +46,7 @@ typedef struct { u128 a, b; } vival;   /* [a, b) */
 
 typedef struct sched {
     pthread_mutex_t mu;
-    pz_perm_t perm;
+    pz_perm perm;
     part_spec part;        /* this computer's shares of the search order (total == 0: all of it, see campaign.h) */
     char part_text[PART_TEXT];
     pz_u256 blocks_all;       /* blocks of the whole search order */

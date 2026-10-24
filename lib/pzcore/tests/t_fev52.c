@@ -1,25 +1,27 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_fev52.c - lane-parallel field arithmetic with AVX-512 IFMA (fev52.h) against the scalar implementation, with limbs
  * at the bounds of the "tight" form every operation accepts and returns. Skipped on CPUs without IFMA (PZ_ASSUME_IFMA=1
- * forces it, see cpu_has_ifma). */
+ * forces it, the PZ_ASSUME_IFMA environment variable). */
 #define PZ_VBYTES 64
 #include <pzcore/fev52.h>
-#include "../src/cpu_engine.h"
+#include <pzcore/cpu.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); if (++fails > 20) exit(1); } } while (0)
 
-static u64 s = 0x9E3779B97F4A7C15ULL;
-static u64 rnd(void) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
+static uint64_t s = 0x9E3779B97F4A7C15ULL;
+static uint64_t rnd(void) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
 
-static const u64 LIMB_MAX = PZ_FEV_MASK;           /* limbs 0..3 of a tight element */
-static u64 bound(int i) { return i < 4 ? LIMB_MAX : PZ_FEV_TOP_MAX; }
+static const uint64_t LIMB_MAX = PZ_FEV_MASK;           /* limbs 0..3 of a tight element */
+static uint64_t bound(int i) { return i < 4 ? LIMB_MAX : PZ_FEV_TOP_MAX; }
 
 /* value of a lane, whatever the limbs are: sum l_i * 2^(52 i) mod p, with scalar field ops */
 static void lane_value(pz_fe *out, const pz_fev *v, int lane)
 {
     pz_fe base, acc, t;
-    pz_fe_set_u64(&base, (u64)1 << 52);
+    pz_fe_set_u64(&base, (uint64_t)1 << 52);
     pz_fe_zero(&acc);
     for (int i = 4; i >= 0; i--) {
         pz_fe_mul(&acc, &acc, &base);
@@ -31,28 +33,28 @@ static void lane_value(pz_fe *out, const pz_fev *v, int lane)
 }
 
 /* limbs from a 320-bit integer w[0..4] (little-endian words); the value must be below 2^257 */
-static void set_lane_words(pz_fev *v, int lane, const u64 w[5])
+static void set_lane_words(pz_fev *v, int lane, const uint64_t w[5])
 {
     for (int i = 0; i < 5; i++) {
         int bit = 52 * i, wi = bit / 64, sh = bit % 64;
-        u64 x = w[wi] >> sh;
+        uint64_t x = w[wi] >> sh;
         if (sh > 12 && wi + 1 < 5) x |= w[wi + 1] << (64 - sh);
         v->l[i][lane] = i < 4 ? x & PZ_FEV_MASK : x;
     }
 }
-static void words_add_small(u64 w[5], u64 d) { u128 c = d; for (int i = 0; i < 5 && c; i++) { c += w[i]; w[i] = (u64)c; c >>= 64; } }
-static void words_sub_small(u64 w[5], u64 d) { u64 b = d; for (int i = 0; i < 5 && b; i++) { u64 t = w[i]; w[i] = t - b; b = t < b; } }
-static void words_add(u64 w[5], const u64 v[5]) { u128 c = 0; for (int i = 0; i < 5; i++) { c += (u128)w[i] + v[i]; w[i] = (u64)c; c >>= 64; } }
+static void words_add_small(uint64_t w[5], uint64_t d) { pz_u128 c = d; for (int i = 0; i < 5 && c; i++) { c += w[i]; w[i] = (uint64_t)c; c >>= 64; } }
+static void words_sub_small(uint64_t w[5], uint64_t d) { uint64_t b = d; for (int i = 0; i < 5 && b; i++) { uint64_t t = w[i]; w[i] = t - b; b = t < b; } }
+static void words_add(uint64_t w[5], const uint64_t v[5]) { pz_u128 c = 0; for (int i = 0; i < 5; i++) { c += (pz_u128)w[i] + v[i]; w[i] = (uint64_t)c; c >>= 64; } }
 
 /* values around multiples of p and powers of two, all at most 2^257 + 3 (limb 4 <= 2^49: still tight) */
-static void crafted_value(u64 w[5], u64 sel)
+static void crafted_value(uint64_t w[5], uint64_t sel)
 {
-    static const u64 P[5] = {0xFFFFFFFEFFFFFC2FULL, ~0ULL, ~0ULL, ~0ULL, 0};
-    memset(w, 0, 5 * sizeof(u64));
-    u64 kind = sel % 6, k = (sel / 6) % 3, d = (sel / 18) % 9;   /* k multiples of p (0..2), d in -4..4 */
+    static const uint64_t P[5] = {0xFFFFFFFEFFFFFC2FULL, ~0ULL, ~0ULL, ~0ULL, 0};
+    memset(w, 0, 5 * sizeof(uint64_t));
+    uint64_t kind = sel % 6, k = (sel / 6) % 3, d = (sel / 18) % 9;   /* k multiples of p (0..2), d in -4..4 */
     switch (kind) {
     case 0: case 1:
-        for (u64 i = 0; i < k; i++) words_add(w, P);
+        for (uint64_t i = 0; i < k; i++) words_add(w, P);
         break;
     case 2: w[3] = w[2] = w[1] = w[0] = ~0ULL; break;                       /* 2^256 - 1 */
     case 3: w[4] = 1; break;                                                /* 2^256 */
@@ -72,8 +74,8 @@ static void fill(pz_fev *v, int mode)
     for (int lane = 0; lane < PZ_FEV_LANES; lane++) {
         int m = (mode + lane) % 6;
         for (int i = 0; i < 5; i++) {
-            const u64 b = bound(i);
-            u64 x;
+            const uint64_t b = bound(i);
+            uint64_t x;
             switch (m) {
             case 0: x = b; break;
             case 1: x = 0; break;
@@ -105,20 +107,20 @@ static void check_canonical(const pz_fev *r, const pz_fe *want)
         pz_fev_get_lane(&got, r, l);
         pz_fe_normalize(&w);
         CHECK(pz_fe_eq(&got, &w));
-        CHECK(r->l[4][l] < ((u64)1 << PZ_FEV_TOPBITS));
+        CHECK(r->l[4][l] < ((uint64_t)1 << PZ_FEV_TOPBITS));
         for (int i = 0; i < 4; i++) CHECK(r->l[i][l] <= PZ_FEV_MASK);
     }
 }
 
 int main(void)
 {
-    if (!cpu_has_ifma()) { printf("t_fev52: CPU without AVX-512 IFMA, skipped\n"); return 0; }
+    if (!pz_cpu_has_ifma() && !getenv("PZ_ASSUME_IFMA")) { printf("t_fev52: CPU without AVX-512 IFMA, skipped\n"); return 0; }
     /* the subtraction constants are multiples of p whose limbs dominate one (K1) or two (K2) tight subtrahends */
     {
         pz_fe base, acc, t;
-        pz_fe_set_u64(&base, (u64)1 << 52);
+        pz_fe_set_u64(&base, (uint64_t)1 << 52);
         for (int w = 0; w < 2; w++) {
-            const u64 *K = w ? pz_fev_k2 : pz_fev_k1;
+            const uint64_t *K = w ? pz_fev_k2 : pz_fev_k1;
             pz_fe_zero(&acc);
             for (int i = 4; i >= 0; i--) { pz_fe_mul(&acc, &acc, &base); pz_fe_set_u64(&t, K[i]); pz_fe_add(&acc, &acc, &t); }
             pz_fe_normalize(&acc);
@@ -196,12 +198,12 @@ int main(void)
         }
     }
     /* crafted values around multiples of p and powers of two: normalization is exact, products keep the residue */
-    for (u64 sel = 0; sel < 20000; sel++) {
+    for (uint64_t sel = 0; sel < 20000; sel++) {
         pz_fev x, r;
         pz_fe vx[PZ_FEV_LANES];
         for (int l = 0; l < PZ_FEV_LANES; l++) {
-            u64 w[5];
-            crafted_value(w, sel * PZ_FEV_LANES + (u64)l);
+            uint64_t w[5];
+            crafted_value(w, sel * PZ_FEV_LANES + (uint64_t)l);
             set_lane_words(&x, l, w);
         }
         for (int l = 0; l < PZ_FEV_LANES; l++) {

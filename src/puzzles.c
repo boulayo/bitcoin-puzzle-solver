@@ -2,6 +2,7 @@
 /* puzzles.c - lookup and run-time verification of the built-in puzzle table. */
 #include "puzzles.h"
 #include <pzcore/ec.h>
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 
 const puzzle_info *puzzle_find(int n)

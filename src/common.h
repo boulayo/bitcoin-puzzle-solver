@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pzcore/defs.h>
 
 #ifndef PZ_VERSION
 #define PZ_VERSION "0.0.0-dev"
@@ -21,23 +22,15 @@
 #define PZ_BUILD_INFO "unknown"
 #endif
 
-typedef unsigned __int128 u128;
+/* the fixed-width types and the attribute macros (PZ_ALIGN, PZ_UNUSED, PZ_VABI) come from pzcore */
+typedef pz_u128 u128;
 typedef uint64_t u64;
 typedef int64_t i64;
 typedef uint32_t u32;
 typedef uint8_t u8;
 
-#define LIKELY(x)   __builtin_expect(!!(x), 1)
-#define UNLIKELY(x) __builtin_expect(!!(x), 0)
-#define PZ_ALIGN(n) __attribute__((aligned(n)))
-#define PZ_UNUSED   __attribute__((unused))
-/* Win64: hot internal routines use the System V calling convention, so a call the compiler did not inline does not have
- * to save and restore xmm6-xmm15 (callee-saved in the Microsoft ABI) - worth ~20% in the SIMD-lane engines. */
-#if defined(_WIN32) && defined(__x86_64__)
-#define PZ_VABI __attribute__((sysv_abi))
-#else
-#define PZ_VABI
-#endif
+#define LIKELY(x)   PZ_LIKELY(x)
+#define UNLIKELY(x) PZ_UNLIKELY(x)
 #ifdef __MINGW32__
 #define PZ_PRINTF gnu_printf   /* MinGW with __USE_MINGW_ANSI_STDIO: C99 formats (%zu, %Lf) */
 #else

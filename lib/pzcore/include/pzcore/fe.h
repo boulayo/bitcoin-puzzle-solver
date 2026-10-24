@@ -1,40 +1,46 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* pz_fe.h - arithmetic in GF(p), p = 2^256 - 2^32 - 977 (secp256k1).
+/* fe.h - arithmetic in GF(p), p = 2^256 - 2^32 - 977 (the secp256k1 field).
  *
- * Field elements are four 64-bit limbs (little-endian). Values are "lazy":
- * any 256-bit pattern is a valid representative; pz_fe_normalize() produces the
- * canonical value in [0, p). Everything is static inline so each engine
- * translation unit gets code compiled for its own instruction set. */
-#ifndef PZ_FE_H
-#define PZ_FE_H
+ * Field elements are four 64-bit limbs (least significant first). Values are "lazy": any 256-bit pattern is a valid
+ * representative of its residue, and the operations accept and return such values; pz_fe_normalize() produces the canonical
+ * value in [0, p). The functions that need a canonical value (is_zero, is_odd, eq, to_be, the comparisons) say so.
+ *
+ * Everything but pz_fe_sqrt is static inline, so every translation unit gets code compiled for its own instruction set; on
+ * x86-64 with BMI2 and ADX (-mbmi2 -madx, e.g. -march=haswell or newer) the multiplication, the addition and the subtraction are
+ * straight-line assembly. The output may alias any input of a function. Nothing here is constant-time, so do not use it with
+ * secret values where a side channel matters. */
+#ifndef PZCORE_FE_H
+#define PZCORE_FE_H
 
-#include "common.h"
+#include <pzcore/defs.h>
 #include <pzcore/u256.h>
 
-typedef struct { u64 n[4]; } pz_fe;
+PZ_BEGIN_DECLS
+
+typedef struct { uint64_t n[4]; } pz_fe;
 
 #define PZ_FE_C 0x1000003D1ULL   /* 2^256 mod p */
 
 static const pz_fe pz_fe_p PZ_UNUSED = {{0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL}};
 
-static inline void pz_fe_set_u64(pz_fe *r, u64 v) { r->n[0] = v; r->n[1] = r->n[2] = r->n[3] = 0; }
+static inline void pz_fe_set_u64(pz_fe *r, uint64_t v) { r->n[0] = v; r->n[1] = r->n[2] = r->n[3] = 0; }
 static inline void pz_fe_zero(pz_fe *r) { pz_fe_set_u64(r, 0); }
 static inline void pz_fe_copy(pz_fe *r, const pz_fe *a) { *r = *a; }
 
 /* r += c * PZ_FE_C with full carry propagation, c small. Keeps r < 2^256. */
-static inline void pz_fe_fold_(u64 r[4], u64 c)
+static inline void pz_fe_fold_(uint64_t r[4], uint64_t c)
 {
-    u128 t = (u128)c * PZ_FE_C + r[0];
-    r[0] = (u64)t;
-    u64 k = (u64)(t >> 64);
-    t = (u128)r[1] + k; r[1] = (u64)t; k = (u64)(t >> 64);
-    t = (u128)r[2] + k; r[2] = (u64)t; k = (u64)(t >> 64);
-    t = (u128)r[3] + k; r[3] = (u64)t; k = (u64)(t >> 64);
-    if (UNLIKELY(k)) {
+    pz_u128 t = (pz_u128)c * PZ_FE_C + r[0];
+    r[0] = (uint64_t)t;
+    uint64_t k = (uint64_t)(t >> 64);
+    t = (pz_u128)r[1] + k; r[1] = (uint64_t)t; k = (uint64_t)(t >> 64);
+    t = (pz_u128)r[2] + k; r[2] = (uint64_t)t; k = (uint64_t)(t >> 64);
+    t = (pz_u128)r[3] + k; r[3] = (uint64_t)t; k = (uint64_t)(t >> 64);
+    if (PZ_UNLIKELY(k)) {
         /* wrapped past 2^256: the remaining value is tiny, adding PZ_FE_C is safe */
-        t = (u128)r[0] + PZ_FE_C; r[0] = (u64)t; k = (u64)(t >> 64);
-        t = (u128)r[1] + k; r[1] = (u64)t; k = (u64)(t >> 64);
-        t = (u128)r[2] + k; r[2] = (u64)t; k = (u64)(t >> 64);
+        t = (pz_u128)r[0] + PZ_FE_C; r[0] = (uint64_t)t; k = (uint64_t)(t >> 64);
+        t = (pz_u128)r[1] + k; r[1] = (uint64_t)t; k = (uint64_t)(t >> 64);
+        t = (pz_u128)r[2] + k; r[2] = (uint64_t)t; k = (uint64_t)(t >> 64);
         r[3] += k;
     }
 }
@@ -45,58 +51,58 @@ static inline void pz_fe_fold_(u64 r[4], u64 c)
  * The (astronomically rare) second wrap is handled by a predicted-not-taken branch. */
 static inline void pz_fe_add_c(pz_fe *r, const pz_fe *a, const pz_fe *b)
 {
-    u64 o[4];
-    u128 t = (u128)a->n[0] + b->n[0];
-    o[0] = (u64)t;
-    t = (t >> 64) + a->n[1] + b->n[1]; o[1] = (u64)t;
-    t = (t >> 64) + a->n[2] + b->n[2]; o[2] = (u64)t;
-    t = (t >> 64) + a->n[3] + b->n[3]; o[3] = (u64)t;
-    const u64 m = (u64)0 - (u64)(t >> 64);          /* all ones if the sum wrapped */
-    t = (u128)o[0] + (m & PZ_FE_C); o[0] = (u64)t;
-    t = (t >> 64) + o[1]; o[1] = (u64)t;
-    t = (t >> 64) + o[2]; o[2] = (u64)t;
-    t = (t >> 64) + o[3]; o[3] = (u64)t;
-    if (UNLIKELY((u64)(t >> 64))) {                 /* wrapped again: value is tiny, adding C is safe */
-        t = (u128)o[0] + PZ_FE_C; o[0] = (u64)t;
-        t = (t >> 64) + o[1]; o[1] = (u64)t;
-        t = (t >> 64) + o[2]; o[2] = (u64)t;
-        o[3] += (u64)(t >> 64);
+    uint64_t o[4];
+    pz_u128 t = (pz_u128)a->n[0] + b->n[0];
+    o[0] = (uint64_t)t;
+    t = (t >> 64) + a->n[1] + b->n[1]; o[1] = (uint64_t)t;
+    t = (t >> 64) + a->n[2] + b->n[2]; o[2] = (uint64_t)t;
+    t = (t >> 64) + a->n[3] + b->n[3]; o[3] = (uint64_t)t;
+    const uint64_t m = (uint64_t)0 - (uint64_t)(t >> 64);          /* all ones if the sum wrapped */
+    t = (pz_u128)o[0] + (m & PZ_FE_C); o[0] = (uint64_t)t;
+    t = (t >> 64) + o[1]; o[1] = (uint64_t)t;
+    t = (t >> 64) + o[2]; o[2] = (uint64_t)t;
+    t = (t >> 64) + o[3]; o[3] = (uint64_t)t;
+    if (PZ_UNLIKELY((uint64_t)(t >> 64))) {                 /* wrapped again: value is tiny, adding C is safe */
+        t = (pz_u128)o[0] + PZ_FE_C; o[0] = (uint64_t)t;
+        t = (t >> 64) + o[1]; o[1] = (uint64_t)t;
+        t = (t >> 64) + o[2]; o[2] = (uint64_t)t;
+        o[3] += (uint64_t)(t >> 64);
     }
     r->n[0] = o[0]; r->n[1] = o[1]; r->n[2] = o[2]; r->n[3] = o[3];
 }
 
 static inline void pz_fe_sub_c(pz_fe *r, const pz_fe *a, const pz_fe *b)
 {
-    u64 o[4];
-    u128 t = (u128)a->n[0] - b->n[0];
-    o[0] = (u64)t;
-    u64 br = (u64)(t >> 64) & 1;
-    t = (u128)a->n[1] - b->n[1] - br; o[1] = (u64)t; br = (u64)(t >> 64) & 1;
-    t = (u128)a->n[2] - b->n[2] - br; o[2] = (u64)t; br = (u64)(t >> 64) & 1;
-    t = (u128)a->n[3] - b->n[3] - br; o[3] = (u64)t; br = (u64)(t >> 64) & 1;
+    uint64_t o[4];
+    pz_u128 t = (pz_u128)a->n[0] - b->n[0];
+    o[0] = (uint64_t)t;
+    uint64_t br = (uint64_t)(t >> 64) & 1;
+    t = (pz_u128)a->n[1] - b->n[1] - br; o[1] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+    t = (pz_u128)a->n[2] - b->n[2] - br; o[2] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+    t = (pz_u128)a->n[3] - b->n[3] - br; o[3] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
     /* result is a-b+2^256 when it borrowed; the residue is that minus C */
-    const u64 m = (u64)0 - br;
-    t = (u128)o[0] - (m & PZ_FE_C); o[0] = (u64)t; br = (u64)(t >> 64) & 1;
-    t = (u128)o[1] - br; o[1] = (u64)t; br = (u64)(t >> 64) & 1;
-    t = (u128)o[2] - br; o[2] = (u64)t; br = (u64)(t >> 64) & 1;
-    t = (u128)o[3] - br; o[3] = (u64)t; br = (u64)(t >> 64) & 1;
-    if (UNLIKELY(br)) {                             /* borrowed again: subtract C once more */
-        t = (u128)o[0] - PZ_FE_C; o[0] = (u64)t; br = (u64)(t >> 64) & 1;
-        t = (u128)o[1] - br; o[1] = (u64)t; br = (u64)(t >> 64) & 1;
-        t = (u128)o[2] - br; o[2] = (u64)t; br = (u64)(t >> 64) & 1;
+    const uint64_t m = (uint64_t)0 - br;
+    t = (pz_u128)o[0] - (m & PZ_FE_C); o[0] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+    t = (pz_u128)o[1] - br; o[1] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+    t = (pz_u128)o[2] - br; o[2] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+    t = (pz_u128)o[3] - br; o[3] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+    if (PZ_UNLIKELY(br)) {                             /* borrowed again: subtract C once more */
+        t = (pz_u128)o[0] - PZ_FE_C; o[0] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+        t = (pz_u128)o[1] - br; o[1] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
+        t = (pz_u128)o[2] - br; o[2] = (uint64_t)t; br = (uint64_t)(t >> 64) & 1;
         o[3] -= br;
     }
     r->n[0] = o[0]; r->n[1] = o[1]; r->n[2] = o[2]; r->n[3] = o[3];
 }
 
 #if defined(__x86_64__) && defined(__BMI2__) && defined(__ADX__) && !defined(PZ_NO_ASM)
-/* Straight-line x86-64 versions of pz_fe_add / pz_fe_sub: the compiler's u128 carry chains cost about twice as much.
+/* Straight-line x86-64 versions of pz_fe_add / pz_fe_sub: the compiler's pz_u128 carry chains cost about twice as much.
  * A carry (borrow) out of bit 256 is folded back as +-C with a mask; if that fold wraps again the value is tiny
  * (< C), so a second mask-and-add of a single limb is exact and needs no carry propagation. */
 #define PZ_FE_ADDSUB_ASM 1
 static inline void pz_fe_add(pz_fe *r, const pz_fe *a, const pz_fe *b)
 {
-    u64 o0, o1, o2, o3, m, c;
+    uint64_t o0, o1, o2, o3, m, c;
     __asm__(
         "movq %[a0], %[o0]\n\t"
         "movq %[a1], %[o1]\n\t"
@@ -126,7 +132,7 @@ static inline void pz_fe_add(pz_fe *r, const pz_fe *a, const pz_fe *b)
 
 static inline void pz_fe_sub(pz_fe *r, const pz_fe *a, const pz_fe *b)
 {
-    u64 o0, o1, o2, o3, m, c;
+    uint64_t o0, o1, o2, o3, m, c;
     __asm__(
         "movq %[a0], %[o0]\n\t"
         "movq %[a1], %[o1]\n\t"
@@ -168,61 +174,61 @@ static inline void pz_fe_neg(pz_fe *r, const pz_fe *a)
 }
 
 /* Reduce a 512-bit product l[0..7] modulo p into r. */
-static inline void pz_fe_reduce512_(pz_fe *r, const u64 l[8])
+static inline void pz_fe_reduce512_(pz_fe *r, const uint64_t l[8])
 {
-    u64 o[4];
-    u128 t = (u128)l[4] * PZ_FE_C + l[0];
-    o[0] = (u64)t;
-    t = (t >> 64) + (u128)l[5] * PZ_FE_C + l[1]; o[1] = (u64)t;
-    t = (t >> 64) + (u128)l[6] * PZ_FE_C + l[2]; o[2] = (u64)t;
-    t = (t >> 64) + (u128)l[7] * PZ_FE_C + l[3]; o[3] = (u64)t;
-    u64 c = (u64)(t >> 64);   /* < 2^34 */
+    uint64_t o[4];
+    pz_u128 t = (pz_u128)l[4] * PZ_FE_C + l[0];
+    o[0] = (uint64_t)t;
+    t = (t >> 64) + (pz_u128)l[5] * PZ_FE_C + l[1]; o[1] = (uint64_t)t;
+    t = (t >> 64) + (pz_u128)l[6] * PZ_FE_C + l[2]; o[2] = (uint64_t)t;
+    t = (t >> 64) + (pz_u128)l[7] * PZ_FE_C + l[3]; o[3] = (uint64_t)t;
+    uint64_t c = (uint64_t)(t >> 64);   /* < 2^34 */
     pz_fe_fold_(o, c);
     r->n[0] = o[0]; r->n[1] = o[1]; r->n[2] = o[2]; r->n[3] = o[3];
 }
 
 static inline void pz_fe_mul_c(pz_fe *r, const pz_fe *a, const pz_fe *b)
 {
-    u64 l[8];
-    u128 t;
-    u64 c;
-    const u64 b0 = b->n[0], b1 = b->n[1], b2 = b->n[2], b3 = b->n[3];
+    uint64_t l[8];
+    pz_u128 t;
+    uint64_t c;
+    const uint64_t b0 = b->n[0], b1 = b->n[1], b2 = b->n[2], b3 = b->n[3];
     /* row 0 */
-    t = (u128)a->n[0] * b0; l[0] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[0] * b1 + c; l[1] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[0] * b2 + c; l[2] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[0] * b3 + c; l[3] = (u64)t; l[4] = (u64)(t >> 64);
+    t = (pz_u128)a->n[0] * b0; l[0] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[0] * b1 + c; l[1] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[0] * b2 + c; l[2] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[0] * b3 + c; l[3] = (uint64_t)t; l[4] = (uint64_t)(t >> 64);
     /* row 1 */
-    t = (u128)a->n[1] * b0 + l[1]; l[1] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[1] * b1 + l[2] + c; l[2] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[1] * b2 + l[3] + c; l[3] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[1] * b3 + l[4] + c; l[4] = (u64)t; l[5] = (u64)(t >> 64);
+    t = (pz_u128)a->n[1] * b0 + l[1]; l[1] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[1] * b1 + l[2] + c; l[2] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[1] * b2 + l[3] + c; l[3] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[1] * b3 + l[4] + c; l[4] = (uint64_t)t; l[5] = (uint64_t)(t >> 64);
     /* row 2 */
-    t = (u128)a->n[2] * b0 + l[2]; l[2] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[2] * b1 + l[3] + c; l[3] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[2] * b2 + l[4] + c; l[4] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[2] * b3 + l[5] + c; l[5] = (u64)t; l[6] = (u64)(t >> 64);
+    t = (pz_u128)a->n[2] * b0 + l[2]; l[2] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[2] * b1 + l[3] + c; l[3] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[2] * b2 + l[4] + c; l[4] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[2] * b3 + l[5] + c; l[5] = (uint64_t)t; l[6] = (uint64_t)(t >> 64);
     /* row 3 */
-    t = (u128)a->n[3] * b0 + l[3]; l[3] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[3] * b1 + l[4] + c; l[4] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[3] * b2 + l[5] + c; l[5] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a->n[3] * b3 + l[6] + c; l[6] = (u64)t; l[7] = (u64)(t >> 64);
+    t = (pz_u128)a->n[3] * b0 + l[3]; l[3] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[3] * b1 + l[4] + c; l[4] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[3] * b2 + l[5] + c; l[5] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a->n[3] * b3 + l[6] + c; l[6] = (uint64_t)t; l[7] = (uint64_t)(t >> 64);
     pz_fe_reduce512_(r, l);
 }
 
 static inline void pz_fe_sqr_c(pz_fe *r, const pz_fe *a)
 {
-    const u64 a0 = a->n[0], a1 = a->n[1], a2 = a->n[2], a3 = a->n[3];
-    u64 l[8];
-    u128 t;
-    u64 c;
+    const uint64_t a0 = a->n[0], a1 = a->n[1], a2 = a->n[2], a3 = a->n[3];
+    uint64_t l[8];
+    pz_u128 t;
+    uint64_t c;
     /* off-diagonal products */
-    t = (u128)a0 * a1; l[1] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a0 * a2 + c; l[2] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a0 * a3 + c; l[3] = (u64)t; l[4] = (u64)(t >> 64);
-    t = (u128)a1 * a2 + l[3]; l[3] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a1 * a3 + l[4] + c; l[4] = (u64)t; l[5] = (u64)(t >> 64);
-    t = (u128)a2 * a3 + l[5]; l[5] = (u64)t; l[6] = (u64)(t >> 64);
+    t = (pz_u128)a0 * a1; l[1] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a0 * a2 + c; l[2] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a0 * a3 + c; l[3] = (uint64_t)t; l[4] = (uint64_t)(t >> 64);
+    t = (pz_u128)a1 * a2 + l[3]; l[3] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a1 * a3 + l[4] + c; l[4] = (uint64_t)t; l[5] = (uint64_t)(t >> 64);
+    t = (pz_u128)a2 * a3 + l[5]; l[5] = (uint64_t)t; l[6] = (uint64_t)(t >> 64);
     /* double */
     l[7] = l[6] >> 63;
     l[6] = l[6] << 1 | l[5] >> 63;
@@ -232,13 +238,13 @@ static inline void pz_fe_sqr_c(pz_fe *r, const pz_fe *a)
     l[2] = l[2] << 1 | l[1] >> 63;
     l[1] = l[1] << 1;
     /* add squares */
-    t = (u128)a0 * a0; l[0] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)l[1] + c; l[1] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a1 * a1 + l[2] + c; l[2] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)l[3] + c; l[3] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a2 * a2 + l[4] + c; l[4] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)l[5] + c; l[5] = (u64)t; c = (u64)(t >> 64);
-    t = (u128)a3 * a3 + l[6] + c; l[6] = (u64)t; c = (u64)(t >> 64);
+    t = (pz_u128)a0 * a0; l[0] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)l[1] + c; l[1] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a1 * a1 + l[2] + c; l[2] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)l[3] + c; l[3] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a2 * a2 + l[4] + c; l[4] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)l[5] + c; l[5] = (uint64_t)t; c = (uint64_t)(t >> 64);
+    t = (pz_u128)a3 * a3 + l[6] + c; l[6] = (uint64_t)t; c = (uint64_t)(t >> 64);
     l[7] += c;
     pz_fe_reduce512_(r, l);
 }
@@ -253,7 +259,7 @@ static inline void pz_fe_sqr_c(pz_fe *r, const pz_fe *a)
  * read before outputs are written, so r may alias a or b. */
 static inline void pz_fe_mul(pz_fe *r, const pz_fe *a, const pz_fe *b)
 {
-    u64 l0, l1, l2, l3, l4, l5, l6, l7, t0, t1, rdx_;
+    uint64_t l0, l1, l2, l3, l4, l5, l6, l7, t0, t1, rdx_;
     __asm__ volatile(
         /* row 0 */
         "movq %[b0], %%rdx\n\t"
@@ -371,12 +377,12 @@ static inline void pz_fe_sqr_n(pz_fe *r, const pz_fe *a, int n)
 /* Canonical reduction into [0, p). */
 static inline void pz_fe_normalize(pz_fe *r)
 {
-    u128 t = (u128)r->n[0] + PZ_FE_C;
-    u64 o0 = (u64)t;
-    t = (t >> 64) + r->n[1]; u64 o1 = (u64)t;
-    t = (t >> 64) + r->n[2]; u64 o2 = (u64)t;
-    t = (t >> 64) + r->n[3]; u64 o3 = (u64)t;
-    if ((u64)(t >> 64)) {   /* r >= p  <=>  r + C overflows 2^256 */
+    pz_u128 t = (pz_u128)r->n[0] + PZ_FE_C;
+    uint64_t o0 = (uint64_t)t;
+    t = (t >> 64) + r->n[1]; uint64_t o1 = (uint64_t)t;
+    t = (t >> 64) + r->n[2]; uint64_t o2 = (uint64_t)t;
+    t = (t >> 64) + r->n[3]; uint64_t o3 = (uint64_t)t;
+    if ((uint64_t)(t >> 64)) {   /* r >= p  <=>  r + C overflows 2^256 */
         r->n[0] = o0; r->n[1] = o1; r->n[2] = o2; r->n[3] = o3;
     }
 }
@@ -412,20 +418,20 @@ static inline void pz_fe_to_u256(pz_u256 *v, const pz_fe *a)
 }
 
 /* big-endian 32-byte serialization (normalizes). */
-static inline void pz_fe_to_be(u8 out[32], const pz_fe *a)
+static inline void pz_fe_to_be(uint8_t out[32], const pz_fe *a)
 {
     pz_u256 v;
     pz_fe_to_u256(&v, a);
     pz_u256_to_be(&v, out);
 }
-static inline void pz_fe_from_be(pz_fe *r, const u8 in[32])
+static inline void pz_fe_from_be(pz_fe *r, const uint8_t in[32])
 {
     pz_u256 v;
     pz_u256_from_be(&v, in);
     pz_fe_from_u256(r, &v);
 }
 
-/* r = a^-1 mod p (a != 0). Addition chain from libsecp256k1 (255 sqr + 15 mul). */
+/* r = a^-1 mod p by an addition chain (255 squarings and 15 multiplications). The inverse of 0 is 0. */
 static inline void pz_fe_inv(pz_fe *r, const pz_fe *a)
 {
     pz_fe x2, x3, x6, x9, x11, x22, x44, x88, x176, x220, x223, t;
@@ -446,12 +452,12 @@ static inline void pz_fe_inv(pz_fe *r, const pz_fe *a)
     pz_fe_sqr_n(&t, &t, 2);       pz_fe_mul(r, &t, a);
 }
 
-/* Square root: r = a^((p+1)/4). Returns true if r^2 == a. Not performance critical. */
+/* r = a^((p+1)/4) mod p, normalized. Returns true if r*r == a, that is when a is a square (r is then one of its two roots, the
+ * one that is a square itself); on false r is unspecified. Out of line: 253 squarings and 13 multiplications. */
 bool pz_fe_sqrt(pz_fe *r, const pz_fe *a);
 
-/* Montgomery batch inversion of n elements in place; tmp must hold n elements.
- * No element may be zero (mod p). Returns false and leaves a[] untouched if
- * the total product is zero. */
+/* Montgomery batch inversion of the n elements of a, in place, with a single inversion; tmp must hold n elements and not overlap
+ * a. If some element is zero (mod p) it returns false and leaves a[] untouched (tmp is overwritten); n == 0 is fine. */
 static inline bool pz_fe_inv_batch(pz_fe *a, pz_fe *tmp, size_t n)
 {
     if (n == 0) return true;
@@ -463,7 +469,7 @@ static inline bool pz_fe_inv_batch(pz_fe *a, pz_fe *tmp, size_t n)
     }
     pz_fe chk = acc;
     pz_fe_normalize(&chk);
-    if (UNLIKELY(pz_fe_is_zero(&chk))) return false;
+    if (PZ_UNLIKELY(pz_fe_is_zero(&chk))) return false;
     pz_fe inv;
     pz_fe_inv(&inv, &acc);
     for (size_t i = n - 1; i > 0; i--) {
@@ -475,5 +481,7 @@ static inline bool pz_fe_inv_batch(pz_fe *a, pz_fe *tmp, size_t n)
     a[0] = inv;
     return true;
 }
+
+PZ_END_DECLS
 
 #endif

@@ -88,7 +88,13 @@ sched_t *sched_new(const campaign_cfg *cfg)
     part_format(&s->part, s->part_text, sizeof s->part_text);
     s->blocks_all = m;
     s->blocks_part = own;
-    pz_perm_init(&s->perm, cfg->seed, &m);
+    if (pz_u256_is_zero(&m)) pz_die("perm_init: empty domain");
+    if (!pz_perm_init(&s->perm, cfg->seed, &m)) {
+        pz_u256 mm1;
+        const pz_u256 one1 = pz_u256_from_u64(1);
+        pz_u256_sub(&mm1, &m, &one1);
+        pz_die("perm_init: domain too large (%u bits)", pz_u256_bits(&mm1));
+    }
     s->part_keys = s->range_size;
     if (s->part.total) {
         /* the keys of this part: its blocks are all full except the block that holds the end of the range, when that one is short */
@@ -100,7 +106,7 @@ sched_t *sched_new(const campaign_cfg *cfg)
         pz_u256_sub(&len, &s->range_size, &first_of_last);
         s->part_keys = pz_u256_shl(&own, s->cbits);
         if (pz_u256_cmp(&len, &full) < 0) {
-            const pz_u256 pos = pz_perm_invert(&s->perm, &last);         /* where the order visits it */
+            const pz_u256 pos = sched_perm_invert(&s->perm, &last);         /* where the order visits it */
             u32 r;
             (void)pz_u256_divmod_u32(&pos, s->part.total, &r);
             for (unsigned i = 0; i < s->part.count; i++) {
@@ -196,7 +202,7 @@ static void load_chunk(sched_t *s, u128 seq)
 {
     if (s->cur_valid && s->cur_seq == seq) return;
     pz_u256 sq = global_seq(s, seq);
-    pz_u256 c = pz_perm_apply(&s->perm, &sq);
+    pz_u256 c = sched_perm_apply(&s->perm, &sq);
     pz_u256 off = pz_u256_shl(&c, s->cbits);
     pz_u256_add(&s->cur_start, &s->range_start, &off);
     pz_u256 rem;
@@ -328,7 +334,7 @@ bool sched_locate(sched_t *s, const pz_u256 *key, pz_u256 *seq, u64 *offset)
     pz_u256 mask = pz_u256_pow2(s->cbits), one = pz_u256_from_u64(1);
     pz_u256_sub(&mask, &mask, &one);
     *offset = d.w[0] & mask.w[0];
-    *seq = pz_perm_invert(&s->perm, &c);
+    *seq = sched_perm_invert(&s->perm, &c);
     return true;
 }
 

@@ -58,7 +58,7 @@ endif
 BUILD   ?= build
 BIN     := $(BUILD)/pzsolve$(EXE)
 
-CORE_SRC := platform util campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common cpu_arm sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
+CORE_SRC := platform util campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c
@@ -71,14 +71,10 @@ KANG_SRC := src/kangaroo.c src/kang_base.c src/bsgs_base.c
 GPU_SRC  := cl_api rt rt_cl rt_cuda gpu
 SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
-# pzcore: the reusable crypto core (lib/pzcore). pzsolve links the archive; the engines include its headers.
-LIB_SRC := u256 ec hash perm
-LIBOBJ  := $(addprefix $(BUILD)/pzcore/,$(addsuffix .o,$(LIB_SRC)))
-LIB     := $(BUILD)/libpzcore.a
 ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
 KVOBJ  := $(BUILD)/kang_x86.o $(BUILD)/kang_avx2v.o $(BUILD)/kang_avx512v.o $(BUILD)/kang_avx512i.o $(BUILD)/kang_avx512i2.o
 BSVOBJ := $(BUILD)/bsgs_x86.o $(BUILD)/bsgs_avx2v.o $(BUILD)/bsgs_avx512v.o $(BUILD)/bsgs_avx512i.o
-DEPS   := $(LIBOBJ:.o=.d) $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
+DEPS   := $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
 
 # X86=1 builds the per-ISA SIMD engines (each object file with its own -m flags, picked at run time by CPU detection); on any other
 # CPU only the portable engine is built and -DPZ_NO_X86_VARIANTS removes the rest. On arm64 (Apple Silicon, Linux aarch64) ARM64=1 adds
@@ -106,7 +102,63 @@ COMMON += -mcpu=native
 endif
 endif
 
-.PHONY: all lib test e2e asan tsan clean windows wintest mockcuda winmockcuda
+# ---- pzcore: the reusable core (lib/pzcore) ----
+# Built into build/libpzcore.a from the sources of lib/pzcore alone: no -Isrc, so nothing of pzsolve can leak in, and with the
+# strict-aliasing rules on (the rest of pzsolve is built with -fno-strict-aliasing). pzsolve and its unit tests link the archive
+# (so there is a single copy of the code); the search engines include the headers and templates of lib/pzcore/include and
+# are compiled for their own instruction sets, as before. The per-ISA objects follow the same X86 / ARM64 switches as the engines.
+LIBFLAGS  = $(filter-out -fno-strict-aliasing -Isrc,$(COMMON))
+LIBLDLIBS = $(filter-out -ldl -lbcrypt,$(LDLIBS))
+PZC_SRC   := u256 fe ec hash address perm cpu
+LIBOBJ    := $(addprefix $(BUILD)/pzcore/,$(addsuffix .o,$(PZC_SRC)))
+LIB       := $(BUILD)/libpzcore.a
+DEPS      += $(LIBOBJ:.o=.d)
+
+$(BUILD)/pzcore:
+	@mkdir -p $@
+
+$(BUILD)/pzcore/%.o: lib/pzcore/src/%.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) -MMD -MP -c $< -o $@
+
+$(LIB): $(LIBOBJ)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+lib: $(LIB)
+
+# the unit tests and the examples of the library link nothing but the archive
+LIBTESTS := t_u256 t_fe t_ec t_hash t_address t_perm
+ifeq ($(X86),1)
+LIBTESTS += t_fe_asm t_fev2 t_fev5 t_fev52
+endif
+LIBEXAMPLES := keyaddr roundtrip permute
+
+$(BUILD)/pzcore/t_fe_asm$(EXE): lib/pzcore/tests/t_fe.c $(LIB) | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
+$(BUILD)/pzcore/t_fev2$(EXE): lib/pzcore/tests/t_fev.c $(LIB) | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -DPZ_VBYTES=32 -o $@ $< $(LIB) $(LIBLDLIBS)
+$(BUILD)/pzcore/t_fev5$(EXE): lib/pzcore/tests/t_fev.c $(LIB) | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(AVX512_FLAGS) -DPZ_VBYTES=64 -o $@ $< $(LIB) $(LIBLDLIBS)
+$(BUILD)/pzcore/t_fev52$(EXE): lib/pzcore/tests/t_fev52.c $(LIB) | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(IFMA_FLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
+$(BUILD)/pzcore/t_%$(EXE): lib/pzcore/tests/t_%.c lib/pzcore/tests/testutil.h $(LIB) | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
+$(BUILD)/pzcore/ex_%$(EXE): lib/pzcore/examples/%.c $(LIB) | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
+
+lib-test: $(addsuffix $(EXE),$(addprefix $(BUILD)/pzcore/,$(LIBTESTS)))
+	@for t in $(LIBTESTS); do $(RUN) ./$(BUILD)/pzcore/$$t$(EXE) || exit 1; done
+
+# the public headers as C++ (the library is C, but is meant to be called from C++ too)
+CXX ?= c++
+lib-cxx: $(LIB) lib/pzcore/tests/cxx_check.cpp
+	$(CXX) -std=c++14 -Wall -Wextra -Wpedantic $(DEPLOY) -pthread -Ilib/pzcore/include -o $(BUILD)/pzcore/cxx_check$(EXE) lib/pzcore/tests/cxx_check.cpp $(LIB) $(LIBLDLIBS)
+	$(RUN) ./$(BUILD)/pzcore/cxx_check$(EXE)
+
+lib-examples: $(addsuffix $(EXE),$(addprefix $(BUILD)/pzcore/ex_,$(LIBEXAMPLES)))
+	@for e in $(LIBEXAMPLES); do echo "== $$e"; $(RUN) ./$(BUILD)/pzcore/ex_$$e$(EXE) || exit 1; done
+
+.PHONY: all lib lib-test lib-cxx lib-examples test e2e asan tsan clean windows wintest mockcuda winmockcuda
 
 all: $(BIN)
 
@@ -125,18 +177,6 @@ $(BUILD)/kernels_gen.o: $(BUILD)/kernels_gen.c
 
 $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
-
-$(BUILD)/pzcore:
-	@mkdir -p $@
-
-$(BUILD)/pzcore/%.o: lib/pzcore/src/%.c | $(BUILD)/pzcore
-	$(CC) $(COMMON) -MMD -MP -c $< -o $@
-
-$(LIB): $(LIBOBJ)
-	rm -f $@
-	$(AR) rcs $@ $^
-
-lib: $(LIB)
 
 $(BUILD)/eng_base.o: src/eng_base.c | $(BUILD)
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
@@ -188,23 +228,8 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 	$(CC) $(COMMON) -o $@ $^ $(LDLIBS)
 
 # Unit tests (built against the same sources)
-TESTS := t_core t_perm t_perm_pin t_jobq t_engine t_fe t_fe_asm t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe
-ifeq ($(X86),1)
-TESTS += t_fev2 t_fev5 t_fev52
-endif
+TESTS := t_core t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe
 TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/kangaroo.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
-
-$(BUILD)/t_fe_asm$(EXE): lib/pzcore/tests/t_fe.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
-
-$(BUILD)/t_fev2$(EXE): lib/pzcore/tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -DPZ_VBYTES=32 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
-
-$(BUILD)/t_fev5$(EXE): lib/pzcore/tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) $(AVX512_FLAGS) -DPZ_VBYTES=64 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
-
-$(BUILD)/t_fev52$(EXE): lib/pzcore/tests/t_fev52.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) $(IFMA_FLAGS) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 # t_gpufe: the kernel field arithmetic compiled for the host, PTX carry-chain variant (emulated) and portable variant
 $(BUILD)/kfe_fast.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kernels/pz_common.cl | $(BUILD)
@@ -217,10 +242,7 @@ $(BUILD)/t_gpufe$(EXE): tests/t_gpufe.c $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o 
 $(BUILD)/t_%$(EXE): tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
-$(BUILD)/t_%$(EXE): lib/pzcore/tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
-
-test: $(BIN) $(addsuffix $(EXE),$(addprefix $(BUILD)/,$(TESTS)))
+test: lib-test $(BIN) $(addsuffix $(EXE),$(addprefix $(BUILD)/,$(TESTS)))
 	@for t in $(TESTS); do $(RUN) ./$(BUILD)/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(BIN) selftest
 

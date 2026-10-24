@@ -4,6 +4,7 @@
 #include "../src/bsgs.h"
 #include "../src/platform.h"
 #include "../src/campaigns.h"
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include "../src/jobq.h"
 #include <unistd.h>

@@ -24,22 +24,22 @@
 
 #define PZ_FEV_LANES (PZ_VBYTES / 8)
 #define PZ_FEV_NLIMB 9
-typedef u64 pz_vl __attribute__((vector_size(PZ_VBYTES)));
+typedef uint64_t pz_vl __attribute__((vector_size(PZ_VBYTES)));
 typedef struct { pz_vl l[9]; } pz_fev;
 
-#define PZ_FEV_TIGHT (((u64)1 << 29) + ((u64)1 << 23))
+#define PZ_FEV_TIGHT (((uint64_t)1 << 29) + ((uint64_t)1 << 23))
 #define PZ_FEV_LOOSE (2 * PZ_FEV_TIGHT)
 #define PZ_FEV_BITS 29
 #define PZ_FEV_TOPBITS 24                  /* bits of limb 8 in a canonical element (8 * 29 + 24 = 256) */
-#define PZ_FEV_MASK (((u64)1 << PZ_FEV_BITS) - 1)
+#define PZ_FEV_MASK (((uint64_t)1 << PZ_FEV_BITS) - 1)
 /* 2^261 = 32 * (2^32 + 977) mod p = PZ_FEV_F0 + 256 * 2^29 */
 #define PZ_FEV_F0 0x7A20ULL
 
 /* Multiples of p written with limbs that dominate a tight (K1) or the sum of two loose (K2) subtrahend; checked by t_fev. */
-static const u64 pz_fev_k1[9] PZ_UNUSED = {0x5fff07efULL, 0x5ffffdf5ULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x40fffffdULL};
-static const u64 pz_fev_k2[9] PZ_UNUSED = {0x11ffc2b2fULL, 0x11ffff7efULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x100fffff7ULL};
+static const uint64_t pz_fev_k1[9] PZ_UNUSED = {0x5fff07efULL, 0x5ffffdf5ULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x5ffffffdULL, 0x40fffffdULL};
+static const uint64_t pz_fev_k2[9] PZ_UNUSED = {0x11ffc2b2fULL, 0x11ffff7efULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x11ffffff7ULL, 0x100fffff7ULL};
 
-static inline PZ_VABI pz_vl pz_vl_set(u64 x)
+static inline PZ_VABI pz_vl pz_vl_set(uint64_t x)
 {
     pz_vl r = {0};
     for (int i = 0; i < PZ_FEV_LANES; i++) r[i] = x;
@@ -69,13 +69,13 @@ static inline PZ_VABI void pz_fev_set_lane(pz_fev *r, int lane, const pz_fe *x)
 {
     pz_fe t = *x;
     pz_fe_normalize(&t);
-    u128 lo = (u128)t.n[1] << 64 | t.n[0], hi = (u128)t.n[3] << 64 | t.n[2];
+    pz_u128 lo = (pz_u128)t.n[1] << 64 | t.n[0], hi = (pz_u128)t.n[3] << 64 | t.n[2];
     for (int i = 0; i < 9; i++) {
         int bit = 29 * i;
-        u64 v;
-        if (bit + 29 <= 128) v = (u64)(lo >> bit) & PZ_FEV_MASK;
-        else if (bit >= 128) v = (u64)(hi >> (bit - 128)) & PZ_FEV_MASK;
-        else v = (u64)((lo >> bit) | (hi << (128 - bit))) & PZ_FEV_MASK;
+        uint64_t v;
+        if (bit + 29 <= 128) v = (uint64_t)(lo >> bit) & PZ_FEV_MASK;
+        else if (bit >= 128) v = (uint64_t)(hi >> (bit - 128)) & PZ_FEV_MASK;
+        else v = (uint64_t)((lo >> bit) | (hi << (128 - bit))) & PZ_FEV_MASK;
         r->l[i][lane] = v;
     }
 }
@@ -83,15 +83,15 @@ static inline PZ_VABI void pz_fev_set_lane(pz_fev *r, int lane, const pz_fe *x)
 /* canonical lane value back to the scalar form */
 static inline PZ_VABI void pz_fev_get_lane(pz_fe *x, const pz_fev *v, int lane)
 {
-    u128 acc = 0;
+    pz_u128 acc = 0;
     int bits = 0, w = 0;
-    u64 out[6] = {0, 0, 0, 0, 0, 0};
+    uint64_t out[6] = {0, 0, 0, 0, 0, 0};
     for (int i = 0; i < 9; i++) {
-        acc |= (u128)v->l[i][lane] << bits;
+        acc |= (pz_u128)v->l[i][lane] << bits;
         bits += 29;
-        while (bits >= 64) { out[w++] = (u64)acc; acc >>= 64; bits -= 64; }
+        while (bits >= 64) { out[w++] = (uint64_t)acc; acc >>= 64; bits -= 64; }
     }
-    out[w] = (u64)acc;
+    out[w] = (uint64_t)acc;
     x->n[0] = out[0]; x->n[1] = out[1]; x->n[2] = out[2]; x->n[3] = out[3];
 }
 
@@ -230,7 +230,7 @@ static inline PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
 /* Canonical reduction: every lane in [0, p), limbs < 2^29 and limb 8 < 2^24. */
 static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
 {
-    const pz_vl M = pz_vl_set(PZ_FEV_MASK), M24 = pz_vl_set(((u64)1 << 24) - 1);
+    const pz_vl M = pz_vl_set(PZ_FEV_MASK), M24 = pz_vl_set(((uint64_t)1 << 24) - 1);
     pz_fev_carry(r);
     /* fold the bits at and above 2^256 (limb 8 >> 24): h * 2^256 = h * (2^32 + 977); twice, the second time only matters
      * when the first carry ripple produced exactly 2^256 */

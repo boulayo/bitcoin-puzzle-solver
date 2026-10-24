@@ -2,6 +2,7 @@
 /* t_puzzles.c - consistency of the built-in puzzle database (independent of the generator script). */
 #include "../src/puzzles.h"
 #include <pzcore/ec.h>
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include "../src/campaign.h"
 

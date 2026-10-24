@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_fe.c - the (possibly assembly) pz_fe_mul/pz_fe_sqr must agree with the portable C versions and with Python-checked identities. */
 #include <pzcore/fe.h>
-#include "../src/cpu_engine.h"
+#include <pzcore/cpu.h>
+#include <stdio.h>
+#include <stdlib.h>
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
-static u64 s = 0x1234ABCD5678EF01ULL;
-static u64 rnd(void) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
+static uint64_t s = 0x1234ABCD5678EF01ULL;
+static uint64_t rnd(void) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
 
 static void pick(pz_fe *a, int mode)
 {
@@ -27,7 +29,7 @@ static void pick(pz_fe *a, int mode)
 int main(void)
 {
 #ifdef PZ_FE_ASM
-    if (!cpu_has_avx2()) { printf("t_fe (asm): CPU without BMI2/ADX, skipped\n"); return 0; }
+    if (!pz_cpu_has_avx2()) { printf("t_fe (asm): CPU without BMI2/ADX, skipped\n"); return 0; }
     const char *mode = "asm";
 #else
     const char *mode = "C";
@@ -70,7 +72,7 @@ int main(void)
             pz_fe_to_u256(&ua, &a);
             pz_fe_to_u256(&ub, &b);
             for (int k = 0; k < 4; k++) pp.w[k] = pz_fe_p.n[k];
-            u64 c = pz_u256_add(&sum, &ua, &ub);
+            uint64_t c = pz_u256_add(&sum, &ua, &ub);
             if (c || pz_u256_cmp(&sum, &pp) >= 0) pz_u256_sub(&sum, &sum, &pp);
             if (pz_u256_sub(&dif, &ua, &ub)) pz_u256_add(&dif, &dif, &pp);
             pz_fe fr; pz_u256 got;
@@ -93,7 +95,7 @@ int main(void)
                 pz_fe_to_u256(&ua, &a);
                 pz_fe_to_u256(&ub, &b);
                 for (int k = 0; k < 4; k++) pp.w[k] = pz_fe_p.n[k];
-                u64 c = pz_u256_add(&sum, &ua, &ub);
+                uint64_t c = pz_u256_add(&sum, &ua, &ub);
                 if (c || pz_u256_cmp(&sum, &pp) >= 0) pz_u256_sub(&sum, &sum, &pp);
                 if (pz_u256_sub(&dif, &ua, &ub)) pz_u256_add(&dif, &dif, &pp);
                 pz_fe_add(&fr, &a, &b); pz_fe_to_u256(&got, &fr); CHECK(!pz_u256_cmp(&got, &sum));

@@ -1,16 +1,26 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* ec.c - secp256k1 point arithmetic. */
 #include <pzcore/ec.h>
-#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 
 const pz_ge pz_ec_g = {
     {{0x59F2815B16F81798ULL, 0x029BFCDB2DCE28D9ULL, 0x55A06295CE870B07ULL, 0x79BE667EF9DCBBACULL}},
     {{0x9C47D08FFB10D4B8ULL, 0xFD17B448A6855419ULL, 0x5DA4FBFC0E1108A8ULL, 0x483ADA7726A3C465ULL}}
 };
 
+/* comb table for k*G: g_comb[i][d-1] = d * 16^i * G, for the 64 windows i of four bits and the digits d = 1..15 */
 #define COMB_W 64
 static pz_ge g_comb[COMB_W][15];
-static pthread_once_t g_once = PTHREAD_ONCE_INIT;
+static _Atomic int g_comb_state;      /* 0: not built, 1: a thread is building it, 2: ready */
+
+static void gej_set_inf(pz_gej *r)
+{
+    pz_fe_zero(&r->x);
+    pz_fe_zero(&r->y);
+    pz_fe_zero(&r->z);
+    r->inf = true;
+}
 
 void pz_gej_set_ge(pz_gej *r, const pz_ge *a)
 {
@@ -63,10 +73,10 @@ void pz_gej_add_ge(pz_gej *r, const pz_gej *a, const pz_ge *b)
     pz_fe_sub(&rr, &s2, &a->y);
     pz_fe hn = h, rn = rr;
     pz_fe_normalize(&hn);
-    if (UNLIKELY(pz_fe_is_zero(&hn))) {
+    if (PZ_UNLIKELY(pz_fe_is_zero(&hn))) {
         pz_fe_normalize(&rn);
         if (pz_fe_is_zero(&rn)) { pz_gej_double(r, a); return; }
-        r->inf = true;
+        gej_set_inf(r);
         return;
     }
     pz_fe_sqr(&hh, &h);
@@ -110,10 +120,10 @@ void pz_gej_add(pz_gej *r, const pz_gej *a, const pz_gej *b)
     pz_fe_sub(&rr, &s2, &s1);
     pz_fe hn = h, rn = rr;
     pz_fe_normalize(&hn);
-    if (UNLIKELY(pz_fe_is_zero(&hn))) {
+    if (PZ_UNLIKELY(pz_fe_is_zero(&hn))) {
         pz_fe_normalize(&rn);
         if (pz_fe_is_zero(&rn)) { pz_gej_double(r, a); return; }
-        r->inf = true;
+        gej_set_inf(r);
         return;
     }
     pz_fe_add(&t, &h, &h);
@@ -140,23 +150,40 @@ void pz_gej_add(pz_gej *r, const pz_gej *a, const pz_gej *b)
     r->inf = false;
 }
 
-void pz_gej_to_ge_batch(pz_ge *out, const pz_gej *in, size_t n)
+bool pz_gej_to_ge_batch(pz_ge *out, const pz_gej *in, size_t n)
 {
-    if (!n) return;
-    pz_fe *zs = pz_xmalloc(n * sizeof(pz_fe)), *tmp = pz_xmalloc(n * sizeof(pz_fe));
-    for (size_t i = 0; i < n; i++) zs[i] = in[i].z;
-    if (!pz_fe_inv_batch(zs, tmp, n)) pz_die("gej_to_ge_batch: unexpected point at infinity");
-    for (size_t i = 0; i < n; i++) {
-        pz_fe zi2, zi3;
-        pz_fe_sqr(&zi2, &zs[i]);
-        pz_fe_mul(&zi3, &zi2, &zs[i]);
+    if (!n) return true;
+    for (size_t i = 0; i < n; i++)
+        if (in[i].inf) return false;
+    /* out[i].x holds the product z_0 * ... * z_i until the backward pass has used it; out is not otherwise needed before */
+    pz_fe acc = in[0].z;
+    out[0].x = acc;
+    for (size_t i = 1; i < n; i++) {
+        pz_fe_mul(&acc, &acc, &in[i].z);
+        out[i].x = acc;
+    }
+    pz_fe chk = acc;
+    pz_fe_normalize(&chk);
+    if (PZ_UNLIKELY(pz_fe_is_zero(&chk))) return false;      /* some z is zero: not a point */
+    pz_fe inv, zi, zi2, zi3;
+    pz_fe_inv(&inv, &acc);
+    for (size_t i = n - 1; i > 0; i--) {
+        pz_fe_mul(&zi, &inv, &out[i - 1].x);                 /* 1 / z_i */
+        pz_fe_mul(&inv, &inv, &in[i].z);                     /* 1 / (z_0 ... z_{i-1}) */
+        pz_fe_sqr(&zi2, &zi);
+        pz_fe_mul(&zi3, &zi2, &zi);
         pz_fe_mul(&out[i].x, &in[i].x, &zi2);
         pz_fe_mul(&out[i].y, &in[i].y, &zi3);
         pz_fe_normalize(&out[i].x);
         pz_fe_normalize(&out[i].y);
     }
-    free(zs);
-    free(tmp);
+    pz_fe_sqr(&zi2, &inv);
+    pz_fe_mul(&zi3, &zi2, &inv);
+    pz_fe_mul(&out[0].x, &in[0].x, &zi2);
+    pz_fe_mul(&out[0].y, &in[0].y, &zi3);
+    pz_fe_normalize(&out[0].x);
+    pz_fe_normalize(&out[0].y);
+    return true;
 }
 
 bool pz_gej_to_ge(pz_ge *r, const pz_gej *a)
@@ -193,54 +220,45 @@ bool pz_ge_on_curve(const pz_ge *p)
     return pz_fe_equiv(&y2, &x3);
 }
 
-bool pz_fe_sqrt(pz_fe *r, const pz_fe *a)
-{
-    pz_u256 e;
-    for (int i = 0; i < 4; i++) e.w[i] = pz_fe_p.n[i];
-    pz_u256_add_u64(&e, &e, 1);
-    e = pz_u256_shr(&e, 2);
-    pz_fe acc;
-    pz_fe_set_u64(&acc, 1);
-    for (int i = 255; i >= 0; i--) {
-        pz_fe_sqr(&acc, &acc);
-        if (pz_u256_bit(&e, (unsigned)i)) pz_fe_mul(&acc, &acc, a);
-    }
-    pz_fe chk;
-    pz_fe_sqr(&chk, &acc);
-    *r = acc;
-    pz_fe_normalize(r);
-    return pz_fe_equiv(&chk, a);
-}
-
+/* Builds the table in groups of eight windows, so that the Jacobian points of a group fit in a small buffer on the stack and are
+ * brought to affine with one inversion per group. */
 static void comb_build(void)
 {
-    pz_gej *pts = pz_xmalloc(sizeof(pz_gej) * COMB_W * 15);
+    enum { GROUP = 8 };
+    pz_gej pts[GROUP * 15];
     pz_gej base;
     pz_gej_set_ge(&base, &pz_ec_g);
-    for (int i = 0; i < COMB_W; i++) {
-        pz_gej cur = base;
-        pts[i * 15] = cur;
-        for (int j = 1; j < 15; j++) {
-            pz_gej_add(&cur, &cur, &base);
-            pts[i * 15 + j] = cur;
+    for (int w0 = 0; w0 < COMB_W; w0 += GROUP) {
+        for (int i = 0; i < GROUP; i++) {
+            pz_gej cur = base;
+            pts[i * 15] = cur;
+            for (int j = 1; j < 15; j++) {
+                pz_gej_add(&cur, &cur, &base);
+                pts[i * 15 + j] = cur;
+            }
+            for (int k = 0; k < 4; k++) pz_gej_double(&base, &base);
         }
-        pz_gej_double(&base, &base);
-        pz_gej_double(&base, &base);
-        pz_gej_double(&base, &base);
-        pz_gej_double(&base, &base);
+        pz_gej_to_ge_batch(&g_comb[w0][0], pts, GROUP * 15);   /* cannot fail: no multiple of G below 16^64 is the identity */
     }
-    pz_gej_to_ge_batch(&g_comb[0][0], pts, COMB_W * 15);
-    free(pts);
 }
 
-void pz_ec_init(void) { pthread_once(&g_once, comb_build); }
+void pz_ec_init(void)
+{
+    if (atomic_load_explicit(&g_comb_state, memory_order_acquire) == 2) return;
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&g_comb_state, &expected, 1, memory_order_acq_rel, memory_order_acquire)) {
+        comb_build();
+        atomic_store_explicit(&g_comb_state, 2, memory_order_release);
+        return;
+    }
+    while (atomic_load_explicit(&g_comb_state, memory_order_acquire) != 2) sched_yield();
+}
 
 void pz_ec_mul_g_j(pz_gej *r, const pz_u256 *k)
 {
     pz_ec_init();
     pz_gej acc;
-    acc.inf = true;
-    pz_fe_zero(&acc.x); pz_fe_zero(&acc.y); pz_fe_zero(&acc.z);
+    gej_set_inf(&acc);
     for (int i = 0; i < COMB_W; i++) {
         unsigned d = (unsigned)(k->w[i >> 4] >> ((i & 15) * 4)) & 15;
         if (d) pz_gej_add_ge(&acc, &acc, &g_comb[i][d - 1]);
@@ -270,38 +288,53 @@ bool pz_ge_sub(pz_ge *r, const pz_ge *a, const pz_ge *b)
     return pz_ge_add(r, a, &nb);
 }
 
-void pz_ge_to_pub33(u8 out[33], const pz_ge *p)
+void pz_ge_to_pub33(uint8_t out[33], const pz_ge *p)
 {
-    pz_fe x = p->x, y = p->y;
+    pz_fe y = p->y;
     pz_fe_normalize(&y);
     out[0] = pz_fe_is_odd(&y) ? 3 : 2;
-    pz_fe_to_be(out + 1, &x);
+    pz_fe_to_be(out + 1, &p->x);
 }
 
-bool pz_ge_from_pubkey(pz_ge *r, const u8 *b, size_t len)
+void pz_ge_to_pub65(uint8_t out[65], const pz_ge *p)
 {
+    out[0] = 4;
+    pz_fe_to_be(out + 1, &p->x);
+    pz_fe_to_be(out + 33, &p->y);
+}
+
+bool pz_ge_from_pubkey(pz_ge *r, const uint8_t *b, size_t len)
+{
+    if (!b) return false;
+    pz_u256 xv, yv;
+    pz_ge t;
     if (len == 33 && (b[0] == 2 || b[0] == 3)) {
-        pz_u256 xv;
         pz_u256_from_be(&xv, b + 1);
         pz_u256 pv;
         for (int i = 0; i < 4; i++) pv.w[i] = pz_fe_p.n[i];
         if (pz_u256_cmp(&xv, &pv) >= 0) return false;
-        pz_fe x, y2, seven, y;
-        pz_fe_from_u256(&x, &xv);
-        pz_fe_sqr(&y2, &x);
-        pz_fe_mul(&y2, &y2, &x);
+        pz_fe y2, seven;
+        pz_fe_from_u256(&t.x, &xv);
+        pz_fe_sqr(&y2, &t.x);
+        pz_fe_mul(&y2, &y2, &t.x);
         pz_fe_set_u64(&seven, 7);
         pz_fe_add(&y2, &y2, &seven);
-        if (!pz_fe_sqrt(&y, &y2)) return false;
-        if ((pz_fe_is_odd(&y) ? 1 : 0) != (b[0] & 1)) { pz_fe_neg(&y, &y); pz_fe_normalize(&y); }
-        r->x = x;
-        r->y = y;
+        if (!pz_fe_sqrt(&t.y, &y2)) return false;
+        if ((pz_fe_is_odd(&t.y) ? 1 : 0) != (b[0] & 1)) { pz_fe_neg(&t.y, &t.y); pz_fe_normalize(&t.y); }
+        *r = t;
         return true;
     }
     if (len == 65 && b[0] == 4) {
-        pz_fe_from_be(&r->x, b + 1);
-        pz_fe_from_be(&r->y, b + 33);
-        return pz_ge_on_curve(r);
+        pz_u256 pv;
+        for (int i = 0; i < 4; i++) pv.w[i] = pz_fe_p.n[i];
+        pz_u256_from_be(&xv, b + 1);
+        pz_u256_from_be(&yv, b + 33);
+        if (pz_u256_cmp(&xv, &pv) >= 0 || pz_u256_cmp(&yv, &pv) >= 0) return false;   /* not the canonical encoding of a coordinate */
+        pz_fe_from_u256(&t.x, &xv);
+        pz_fe_from_u256(&t.y, &yv);
+        if (!pz_ge_on_curve(&t)) return false;
+        *r = t;
+        return true;
     }
     return false;
 }

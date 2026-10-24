@@ -29,6 +29,7 @@
 #ifndef PZ_KANGAROO_PRIV_H
 #define PZ_KANGAROO_PRIV_H
 
+#include "common.h"
 #include "kangaroo.h"
 #include <pzcore/ec.h>
 

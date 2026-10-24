@@ -181,7 +181,7 @@ static void steps_make(bs_steps *st, const pz_ge *U, u64 kmag, bool negated)
     }
     pz_gej_double(&cur, &pts[BS_HALF - 1]);
     pts[BS_HALF] = cur;
-    pz_gej_to_ge_batch(aff, pts, BS_HALF + 1);
+    if (!pz_gej_to_ge_batch(aff, pts, BS_HALF + 1)) pz_die("BSGS tables: unexpected point at infinity");
     memcpy(st->tab, aff, sizeof(pz_ge) * BS_HALF);
     st->step = aff[BS_HALF];
     /* independent check of the last table entry and of the step with scalar multiplications */

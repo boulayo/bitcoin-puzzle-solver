@@ -25,20 +25,20 @@
 #define PZ_FEV_LANES 8
 #define PZ_FEV_NLIMB 5
 #define PZ_FEV_BITS 52
-#define PZ_FEV_MASK (((u64)1 << PZ_FEV_BITS) - 1)
+#define PZ_FEV_MASK (((uint64_t)1 << PZ_FEV_BITS) - 1)
 #define PZ_FEV_TOPBITS 48                  /* bits of limb 4 in a canonical element (4 * 52 + 48 = 256) */
-#define PZ_FEV_TOP_MAX ((u64)1 << 49)
+#define PZ_FEV_TOP_MAX ((uint64_t)1 << 49)
 #define PZ_FEV_C 0x1000003D1ULL            /* 2^256 mod p */
 #define PZ_FEV_R 0x1000003D10ULL           /* 2^260 mod p */
-typedef u64 pz_vl __attribute__((vector_size(64)));
+typedef uint64_t pz_vl __attribute__((vector_size(64)));
 typedef struct { pz_vl l[5]; } pz_fev;
 
 /* Multiples of p (4p and 8p) written with limbs that dominate a tight (K1) or the sum of two tight (K2) subtrahends;
  * checked by t_fev52. */
-static const u64 pz_fev_k1[5] PZ_UNUSED = {0x1ffffbfffff0bcULL, 0x1ffffffffffffeULL, 0x1ffffffffffffeULL, 0x1ffffffffffffeULL, 0x3fffffffffffeULL};
-static const u64 pz_fev_k2[5] PZ_UNUSED = {0x2ffff7ffffe178ULL, 0x2ffffffffffffdULL, 0x2ffffffffffffdULL, 0x2ffffffffffffdULL, 0x7fffffffffffdULL};
+static const uint64_t pz_fev_k1[5] PZ_UNUSED = {0x1ffffbfffff0bcULL, 0x1ffffffffffffeULL, 0x1ffffffffffffeULL, 0x1ffffffffffffeULL, 0x3fffffffffffeULL};
+static const uint64_t pz_fev_k2[5] PZ_UNUSED = {0x2ffff7ffffe178ULL, 0x2ffffffffffffdULL, 0x2ffffffffffffdULL, 0x2ffffffffffffdULL, 0x7fffffffffffdULL};
 
-static inline PZ_VABI pz_vl pz_vl_set(u64 x) { return (pz_vl)_mm512_set1_epi64((long long)x); }
+static inline PZ_VABI pz_vl pz_vl_set(uint64_t x) { return (pz_vl)_mm512_set1_epi64((long long)x); }
 /* acc + low / high 52 bits of the 104-bit product of the low 52 bits of a and b */
 static inline PZ_VABI pz_vl pz_vl_mlo(pz_vl acc, pz_vl a, pz_vl b) { return (pz_vl)_mm512_madd52lo_epu64((__m512i)acc, (__m512i)a, (__m512i)b); }
 static inline PZ_VABI pz_vl pz_vl_mhi(pz_vl acc, pz_vl a, pz_vl b) { return (pz_vl)_mm512_madd52hi_epu64((__m512i)acc, (__m512i)a, (__m512i)b); }
@@ -59,7 +59,7 @@ static inline PZ_VABI void pz_fev_set_lane(pz_fev *r, int lane, const pz_fe *x)
 /* canonical lane value back to the scalar form */
 static inline PZ_VABI void pz_fev_get_lane(pz_fe *x, const pz_fev *v, int lane)
 {
-    const u64 a = v->l[0][lane], b = v->l[1][lane], c = v->l[2][lane], d = v->l[3][lane], e = v->l[4][lane];
+    const uint64_t a = v->l[0][lane], b = v->l[1][lane], c = v->l[2][lane], d = v->l[3][lane], e = v->l[4][lane];
     x->n[0] = a | b << 52;
     x->n[1] = b >> 12 | c << 40;
     x->n[2] = c >> 24 | d << 28;
@@ -74,7 +74,7 @@ static inline PZ_VABI void pz_fev_settle(pz_vl *x)
 {
     const pz_vl M = pz_vl_set(PZ_FEV_MASK);
     const pz_vl t = x[4] >> PZ_FEV_TOPBITS;            /* < 2^12, so t * c < 2^45 fits the low half of the product */
-    x[4] &= pz_vl_set(((u64)1 << PZ_FEV_TOPBITS) - 1);
+    x[4] &= pz_vl_set(((uint64_t)1 << PZ_FEV_TOPBITS) - 1);
     x[0] = pz_vl_mlo(x[0], t, pz_vl_set(PZ_FEV_C));
 #pragma GCC unroll 4
     for (int i = 0; i < 4; i++) {
@@ -129,7 +129,7 @@ static inline PZ_VABI void pz_fev_reduce_cols(pz_fev *r, pz_vl *t)
     top = pz_vl_mhi(top, t[9], R);
     /* bits at and above 2^256: limb 4 above bit 48 plus top * 16; their product with c can exceed 52 bits */
     const pz_vl hi = (t[4] >> PZ_FEV_TOPBITS) + (top << 4), C = pz_vl_set(PZ_FEV_C);
-    t[4] &= pz_vl_set(((u64)1 << PZ_FEV_TOPBITS) - 1);
+    t[4] &= pz_vl_set(((uint64_t)1 << PZ_FEV_TOPBITS) - 1);
     t[0] = pz_vl_mlo(t[0], hi, C);
     t[1] = pz_vl_mhi(t[1], hi, C);
 #pragma GCC unroll 4
@@ -181,7 +181,7 @@ static inline PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
 /* Canonical reduction: every lane in [0, p), limbs 0..3 < 2^52 and limb 4 < 2^48. */
 static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
 {
-    const pz_vl M = pz_vl_set(PZ_FEV_MASK), M48 = pz_vl_set(((u64)1 << PZ_FEV_TOPBITS) - 1);
+    const pz_vl M = pz_vl_set(PZ_FEV_MASK), M48 = pz_vl_set(((uint64_t)1 << PZ_FEV_TOPBITS) - 1);
     /* one fold leaves limb 4 <= 2^48, so r < 2^256 + 2^208; then r >= p  <=>  r + c reaches 2^256 (and r - p < p) */
     pz_fev_settle(r->l);
     pz_vl t[5];

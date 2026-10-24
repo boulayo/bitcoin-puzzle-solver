@@ -2,6 +2,7 @@
 /* selftest.c - 'pzsolve selftest' and 'pzsolve bench'. */
 #include "selftest.h"
 #include "run.h"
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include <pzcore/perm.h>
 #include "kangaroo.h"
@@ -60,13 +61,12 @@ static void t_perm(void)
     u8 seed[32];
     for (int i = 0; i < 32; i++) seed[i] = (u8)rnd64();
     for (u64 m = 2; m < 3000; m += 997) {
-        pz_perm_t p; pz_u256 M = pz_u256_from_u64(m);
-        pz_perm_init(&p, seed, &M);
+        pz_perm p; pz_u256 M = pz_u256_from_u64(m);
+        bool ok = pz_perm_init(&p, seed, &M);
         u8 *seen = pz_xcalloc(m, 1);
-        bool ok = true;
-        for (u64 i = 0; i < m; i++) {
-            pz_u256 x = pz_u256_from_u64(i), y = pz_perm_apply(&p, &x), z = pz_perm_invert(&p, &y);
-            if (y.w[0] >= m || seen[y.w[0]] || z.w[0] != i) ok = false;
+        for (u64 i = 0; ok && i < m; i++) {
+            pz_u256 x = pz_u256_from_u64(i), y, z;
+            if (!pz_perm_apply(&p, &x, &y) || !pz_perm_invert(&p, &y, &z) || y.w[0] >= m || seen[y.w[0]] || z.w[0] != i) ok = false;
             else seen[y.w[0]] = 1;
         }
         CHECK(ok);

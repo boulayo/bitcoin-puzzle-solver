@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* cpu_common.c - tables, engine registry and ISA detection for the CPU engines. */
 #include "cpu_engine.h"
+#include <pzcore/cpu.h>
 #include <pzcore/hash.h>
 #include <pthread.h>
 
@@ -24,7 +25,7 @@ static void tables_build(void)
     pz_gej_double(&cur, &pts[CPU_HALF - 1]);       /* 2*HALF*G */
     pts[CPU_HALF] = cur;
     pz_ge *aff = pz_xmalloc(sizeof(pz_ge) * (CPU_HALF + 1));
-    pz_gej_to_ge_batch(aff, pts, CPU_HALF + 1);
+    if (!pz_gej_to_ge_batch(aff, pts, CPU_HALF + 1)) pz_die("CPU tables: unexpected point at infinity");
     memcpy(cpu_gtab, aff, sizeof(pz_ge) * CPU_HALF);
     cpu_gstep = aff[CPU_HALF];
     pz_ge chk;
@@ -49,7 +50,7 @@ void cpu_gmultiples(pz_ge *out, int n)
         pz_gej_add_ge(&cur, &cur, &pz_ec_g);
         pts[i] = cur;
     }
-    pz_gej_to_ge_batch(out + CPU_HALF, pts, (size_t)(n - CPU_HALF));
+    if (!pz_gej_to_ge_batch(out + CPU_HALF, pts, (size_t)(n - CPU_HALF))) pz_die("CPU tables: unexpected point at infinity");
     free(pts);
 }
 
@@ -61,35 +62,17 @@ void scan_job_init(scan_job *j, const u8 h160[20])
         j->target_w[i] = (u32)h160[4 * i] | (u32)h160[4 * i + 1] << 8 | (u32)h160[4 * i + 2] << 16 | (u32)h160[4 * i + 3] << 24;
 }
 
-#if defined(__x86_64__)
-#include <cpuid.h>
-/* ADX is CPUID leaf 7, EBX bit 19. Not __builtin_cpu_supports("adx"): clang (Apple clang too) rejects that feature name. */
-static bool cpu_has_adx(void)
-{
-    unsigned a, b, c, d;
-    return __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b >> 19 & 1);
-}
-bool cpu_has_avx2(void) { __builtin_cpu_init(); return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("bmi2") && cpu_has_adx(); }
-bool cpu_has_avx512(void)
-{
-    __builtin_cpu_init();
-    return cpu_has_avx2() && __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vl") &&
-           __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512dq");
-}
-/* AVX-512 IFMA (Ice Lake, Tiger Lake, Rocket Lake, Sapphire Rapids, Zen 4 and later). PZ_ASSUME_IFMA=1 skips the
- * CPUID check: for tests on hosts whose (virtual) CPUID hides an extension the processor does execute. */
+/* ISA probes: the detection itself is in pzcore; PZ_ASSUME_IFMA=1 skips the CPUID check of the IFMA extension, for tests on
+ * hosts whose (virtual) CPUID hides an extension the processor does execute. */
+bool cpu_has_avx2(void) { return pz_cpu_has_avx2(); }
+bool cpu_has_avx512(void) { return pz_cpu_has_avx512(); }
 bool cpu_has_ifma(void)
 {
-    if (!cpu_has_avx512()) return false;
     const char *f = getenv("PZ_ASSUME_IFMA");
-    if (f && !strcmp(f, "1")) return true;
-    return __builtin_cpu_supports("avx512ifma");
+    if (f && !strcmp(f, "1")) return pz_cpu_has_avx512();
+    return pz_cpu_has_ifma();
 }
-#else
-bool cpu_has_avx2(void) { return false; }
-bool cpu_has_avx512(void) { return false; }
-bool cpu_has_ifma(void) { return false; }
-#endif
+bool cpu_has_sha2(void) { return pz_cpu_has_sha2(); }
 
 extern const cpu_engine ENG_BASE;
 #if defined(__aarch64__)

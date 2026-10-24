@@ -286,7 +286,7 @@ int main(void)
         sched_t *s = sched_new(&c);
         pz_u256 pos = pz_u256_pow2(130);
         pz_u256_add_u64(&pos, &pos, 12345);                              /* the block at position 2^130 + 12345 of the visiting order */
-        pz_u256 blk = pz_perm_apply(&s->perm, &pos), off36 = pz_u256_shl(&blk, 36), key;
+        pz_u256 blk = sched_perm_apply(&s->perm, &pos), off36 = pz_u256_shl(&blk, 36), key;
         pz_u256_add(&key, &s->range_start, &off36);
         pz_u256_add_u64(&key, &key, 7);
         pz_u256 got;

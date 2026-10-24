@@ -2,6 +2,7 @@
 /* run_common.c - shared runtime: found-key handling, signals, session
  * persistence, live terminal reporting and report files. */
 #include "run.h"
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include "ui.h"
 #include "platform.h"

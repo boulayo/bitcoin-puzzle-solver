@@ -3,6 +3,7 @@
 #ifndef PZ_CPU_ENGINE_H
 #define PZ_CPU_ENGINE_H
 
+#include "common.h"
 #include <pzcore/ec.h>
 #include <stdatomic.h>
 
@@ -52,7 +53,7 @@ u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys);
 bool cpu_has_avx2(void);
 bool cpu_has_avx512(void);
 bool cpu_has_ifma(void);
-/* aarch64 probe: the SHA-256 instructions (src/cpu_arm.c). */
+/* aarch64 probe: the SHA-256 instructions (pzcore/cpu.h). */
 bool cpu_has_sha2(void);
 
 #endif
