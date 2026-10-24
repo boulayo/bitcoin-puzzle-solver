@@ -44,18 +44,25 @@ char *pz_u256_to_hex(const pz_u256 *a, char *buf)
 
 char *pz_u256_to_dec(const pz_u256 *a, char *buf)
 {
+    /* nineteen digits at a time: 10^19 is the largest power of ten that fits in 64 bits */
+    const uint64_t chunk_div = 10000000000000000000ULL;
     pz_u256 t = *a;
-    char tmp[100];
+    char tmp[80];
     int n = 0;
     if (pz_u256_is_zero(&t)) tmp[n++] = '0';
     while (!pz_u256_is_zero(&t)) {
         pz_u128 rem = 0;
         for (int i = 3; i >= 0; i--) {
             const pz_u128 cur = rem << 64 | t.w[i];
-            t.w[i] = (uint64_t)(cur / 10);
-            rem = cur % 10;
+            t.w[i] = (uint64_t)(cur / chunk_div);
+            rem = cur % chunk_div;
         }
-        tmp[n++] = (char)('0' + (int)rem);
+        uint64_t chunk = (uint64_t)rem;
+        for (int j = 0; j < 19; j++) {
+            tmp[n++] = (char)('0' + chunk % 10);
+            chunk /= 10;
+            if (chunk == 0 && pz_u256_is_zero(&t)) break;   /* the last chunk has no leading zeros */
+        }
     }
     for (int i = 0; i < n; i++) buf[i] = tmp[n - 1 - i];
     buf[n] = 0;

@@ -21,6 +21,8 @@ static int b58_digit(unsigned char c)
 
 /* the whole data (payload and checksum) of the longest Base58Check string */
 #define B58_RAW_MAX (PZ_BASE58CHECK_MAX_PAYLOAD + 4)
+#define B58_LIMBS ((B58_RAW_MAX + 3) / 4)          /* 32-bit limbs that hold that many bytes */
+#define B58_P5 656356768u                           /* 58^5, the largest power of 58 below 2^32 */
 
 int pz_base58check_decode(const char *s, uint8_t *out, size_t outcap)
 {
@@ -28,24 +30,27 @@ int pz_base58check_decode(const char *s, uint8_t *out, size_t outcap)
     size_t len = 0;
     while (s[len] && len < PZ_BASE58CHECK_MAX_TEXT) len++;
     if (s[len]) return -1;                                     /* longer than any valid string */
-    uint8_t buf[B58_RAW_MAX];   /* the number so far, big-endian, in the last n bytes */
-    size_t n = 0, zeros = 0;
+    uint32_t limbs[B58_LIMBS];                                 /* the number so far, least significant limb first */
+    size_t nl = 0, zeros = 0;
     while (zeros < len && s[zeros] == '1') zeros++;
     for (size_t k = zeros; k < len; k++) {
         const int d = b58_digit((unsigned char)s[k]);
         if (d < 0) return -1;
-        unsigned carry = (unsigned)d;
-        for (size_t i = 0; i < n; i++) {
-            const unsigned v = (unsigned)buf[sizeof buf - 1 - i] * 58 + carry;
-            buf[sizeof buf - 1 - i] = (uint8_t)v;
-            carry = v >> 8;
+        uint64_t carry = (uint64_t)d;
+        for (size_t i = 0; i < nl; i++) {
+            const uint64_t v = (uint64_t)limbs[i] * 58 + carry;
+            limbs[i] = (uint32_t)v;
+            carry = v >> 32;
         }
-        while (carry) {
-            if (n >= sizeof buf) return -1;
-            buf[sizeof buf - 1 - n] = (uint8_t)carry;
-            n++;
-            carry >>= 8;
+        if (carry) {
+            if (nl >= B58_LIMBS) return -1;
+            limbs[nl++] = (uint32_t)carry;
         }
+    }
+    size_t n = nl * 4;                                          /* significant bytes of the number */
+    if (nl) {
+        uint32_t top = limbs[nl - 1];
+        while (!(top >> 24)) { top <<= 8; n--; }
     }
     const size_t total = zeros + n;
     if (total < 4 || total - 4 > PZ_BASE58CHECK_MAX_PAYLOAD) return -1;
@@ -53,7 +58,7 @@ int pz_base58check_decode(const char *s, uint8_t *out, size_t outcap)
     if (plen > outcap) return -1;
     uint8_t raw[B58_RAW_MAX];
     memset(raw, 0, zeros);
-    memcpy(raw + zeros, buf + sizeof buf - n, n);
+    for (size_t i = 0; i < n; i++) raw[zeros + i] = (uint8_t)(limbs[(n - 1 - i) / 4] >> (8 * ((n - 1 - i) % 4)));
     uint8_t chk[32];
     pz_sha256d(raw, plen, chk);
     if (memcmp(chk, raw + plen, 4) != 0) return -1;
@@ -72,22 +77,34 @@ int pz_base58check_encode(const uint8_t *payload, size_t len, char *out, size_t 
     const size_t total = len + 4;
     size_t zeros = 0;
     while (zeros < total && raw[zeros] == 0) zeros++;
-    uint8_t digits[B58_RAW_MAX * 138 / 100 + 2];                 /* base-58 digits, least significant first */
-    size_t nd = 0;
+    uint32_t limbs[B58_RAW_MAX * 8 / 29 + 2];                   /* base 58^5, least significant limb first */
+    size_t nl = 0;
     for (size_t i = zeros; i < total; i++) {
-        unsigned carry = raw[i];
-        for (size_t j = 0; j < nd; j++) {
-            const unsigned v = (unsigned)digits[j] * 256 + carry;
-            digits[j] = (uint8_t)(v % 58);
-            carry = v / 58;
+        uint64_t carry = raw[i];
+        for (size_t j = 0; j < nl; j++) {
+            const uint64_t v = ((uint64_t)limbs[j] << 8) + carry;
+            limbs[j] = (uint32_t)(v % B58_P5);
+            carry = v / B58_P5;
         }
-        while (carry) { digits[nd++] = (uint8_t)(carry % 58); carry /= 58; }
+        while (carry) { limbs[nl++] = (uint32_t)(carry % B58_P5); carry /= B58_P5; }
+    }
+    /* five digits per limb, the top limb without its leading zeros */
+    char digits[B58_LIMBS * 8 + 8];                             /* most significant first */
+    size_t nd = 0;
+    for (size_t j = nl; j > 0; j--) {
+        uint32_t v = limbs[j - 1];
+        char five[5];
+        for (int q = 4; q >= 0; q--) { five[q] = B58[v % 58]; v /= 58; }
+        int start = 0;
+        if (j == nl) while (start < 4 && five[start] == B58[0]) start++;
+        for (int q = start; q < 5; q++) digits[nd++] = five[q];
     }
     const size_t need = zeros + nd;
     if (need + 1 > outcap) return -1;
     size_t o = 0;
     for (size_t i = 0; i < zeros; i++) out[o++] = '1';
-    for (size_t i = nd; i > 0; i--) out[o++] = B58[digits[i - 1]];
+    memcpy(out + o, digits, nd);
+    o += nd;
     out[o] = 0;
     return (int)o;
 }
@@ -111,11 +128,14 @@ static const int8_t BECH32_REV[128] = {
 
 static uint32_t bech32_polymod_step(uint32_t chk, unsigned v)
 {
-    static const uint32_t gen[5] = {0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3};
     const uint32_t top = chk >> 25;
     chk = (chk & 0x1ffffff) << 5 ^ v;
-    for (int i = 0; i < 5; i++)
-        if ((top >> i) & 1) chk ^= gen[i];
+    /* the generator coefficients of the BCH code, added where a bit of `top` is set (without a branch: the bits are unpredictable) */
+    chk ^= (0u - ((top >> 0) & 1)) & 0x3b6a57b2u;
+    chk ^= (0u - ((top >> 1) & 1)) & 0x26508e6du;
+    chk ^= (0u - ((top >> 2) & 1)) & 0x1ea119fau;
+    chk ^= (0u - ((top >> 3) & 1)) & 0x3d4233ddu;
+    chk ^= (0u - ((top >> 4) & 1)) & 0x2a1462b3u;
     return chk;
 }
 
