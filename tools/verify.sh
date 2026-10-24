@@ -28,6 +28,7 @@ run make -j"$(nproc)"
 [ -x build/pzsolve ] && echo "  OK a plain make builds build/pzsolve" || { echo "  FAIL a plain make does not build build/pzsolve"; fail=$((fail+1)); }
 run make test
 run make lib-examples >/dev/null
+run make OPT=-O0 BUILD=build/o0 lib-test >/dev/null   # an unoptimized build of the library tests (the field asm needs optimization)
 run make lib-cxx >/dev/null
 
 step "Linux binary compatibility (no glibc symbol newer than 2.34)"

@@ -251,8 +251,10 @@ static inline void pz_fe_sqr_c(pz_fe *r, const pz_fe *a)
 
 
 /* Not with clang (Apple clang on Intel Macs): this asm needs 14 registers at once and clang fails with "inline assembly requires
- * more registers than available" when the function around it also needs a frame pointer or a realigned stack. */
-#if defined(__x86_64__) && defined(__BMI2__) && defined(__ADX__) && !defined(PZ_NO_ASM) && !defined(__clang__)
+ * more registers than available" when the function around it also needs a frame pointer or a realigned stack. Not without
+ * optimization either: GCC at -O0 keeps every variable in memory and rejects the asm for the same reason ("impossible constraints"),
+ * so a debug build of a program that includes this header with -mbmi2 -madx uses the C multiplication. */
+#if defined(__x86_64__) && defined(__BMI2__) && defined(__ADX__) && !defined(PZ_NO_ASM) && !defined(__clang__) && defined(__OPTIMIZE__)
 #define PZ_FE_ASM 1
 /* 4x4-limb multiplication with MULX and the two independent carry chains of ADX
  * (ADCX/ADOX), followed by the secp256k1 reduction 2^256 = 2^32 + 977. Inputs are
