@@ -67,5 +67,6 @@ instructions); `tools/verify.sh` runs them all.
 ## Performance
 
 Speed on one x86-64 machine (AVX-512 IFMA, noisy VM; median of interleaved runs), version 1.8.1 -> pzcore; see `CHANGELOG.md` for the tables:
-scalar RIPEMD-160 2.2x, SHA-256 1.3x, HASH160 of one key 1.6x, field squaring (BMI2) 1.35x, square root 2.4x. HASH160 of one key takes about
-390 ns scalar, 80 ns per key with AVX2 lanes, 30 ns with AVX-512.
+scalar RIPEMD-160 2.2x, SHA-256 1.3x, HASH160 of one key 1.8x, square root 2.2x. HASH160 of one key takes about 360 ns scalar; in
+batches, about 160 ns per key with portable lanes, 90 ns with AVX2 and 40 ns with AVX-512. The search engines of pzsolve run at the same
+speed as before.

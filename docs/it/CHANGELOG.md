@@ -2,6 +2,68 @@
 
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/); versionamento [semantico](https://semver.org/lang/it/).
 Le versioni precedenti restano consultabili (binario + sorgenti) in `archive/vX.Y.Z/` e tramite i tag git `vX.Y.Z`.
+Le voci fino alla 1.7.9 sono quelle originali in italiano (il programma si chiamava allora `puzzlehunt`); la 1.8.0 e la 1.8.1 sono tradotte da `CHANGELOG.md`.
+
+## [1.9.0] — 2026-10-24
+
+### Aggiunto
+- `lib/pzcore`: il nucleo crittografico (interi a 256 bit, campo e curva secp256k1, SHA-256 / RIPEMD-160 / HASH160, Base58Check, bech32 / bech32m,
+  indirizzi SegWit, la permutazione con chiave e l'HASH160 di molte chiavi insieme con il miglior codice SIMD della CPU) come libreria C riutilizzabile,
+  con README, test ed esempi propri. `make lib`, `lib-test`, `lib-examples`, `lib-cxx`. pzsolve usa lo stesso archivio.
+
+### Modificato
+- Ogni nome esportato del nucleo ha il prefisso `pz_`; le funzioni restituiscono errori invece di uscire; la permutazione delle campagne non cambia
+  (380 valori prodotti dalla 1.8.1 sono fissati da un test).
+- Codice scalare più veloce (mediana di prove alternate, ns): RIPEMD-160 353 -> 160, SHA-256 di 33 byte 313 -> 239, HASH160 di una chiave 640 -> 360,
+  radice quadrata 8,7 us -> 3,9 us. I motori di ricerca vanno alla stessa velocità di prima (entro il rumore, verificato da una revisione indipendente).
+- `make` senza argomenti torna a costruire `build/pzsolve` dopo l'aggiunta delle regole della libreria; il codice del campo compila con `-O0` e `-mbmi2 -madx`.
+
+### Corretto
+- La codifica Base58Check riempiva oltre la fine un buffer sullo stack per dati oltre 124 byte e tagliava i testi che non stavano nel buffer.
+- Venivano accettate chiavi pubbliche di 65 byte con una coordinata scritta come x + p.
+- La permutazione poteva non terminare mai per un numero fuori dal suo dominio; il punto all'infinito di una somma Jacobiana conservava coordinate vecchie;
+  un indice di bit pari o superiore a 256 leggeva fuori dai limiti; un dato Base58Check vuoto ma valido veniva rifiutato.
+
+## [1.8.1] — 2026-10-24
+
+### Corretto
+- La tabella dei punti distinti del canguro poteva essere grande fino al doppio del limite di memoria (`--mem` o limite automatico): la sua
+  dimensione è una potenza di due e veniva arrotondata per eccesso. Ora si arrotonda per difetto.
+- `doctor --full` non mescola più i due flussi di uscita e `doctor` segnala un'opzione sbagliata come ogni altro comando.
+
+### Modificato
+- Nessuna riga stampata sul terminale supera le 128 colonne: aiuto, righe del log, `doctor` e `devices` vanno a capo su uno spazio con
+  rientro. Il file `log.txt` conserva le righe intere.
+- `selftest` non stampa più le righe di log delle piccole campagne che esegue; i risultati sono un unico elenco allineato, una riga per gruppo.
+- `bench`, `devices`, `puzzle`, `list`, `info`, `merge` e `kstat` stampano tabelle ed elenchi allineati, con testi più brevi; `bench --together`
+  è una tabella con una colonna per dispositivo. In `report.txt` alcune etichette cambiano di poco: gli script devono leggere `status.json`,
+  le cui chiavi non sono cambiate.
+- `puzzle N`: nessun carattere di controllo se l'uscita non è un terminale, gruppi di cifre nel numero di chiavi, separatori delle migaia
+  negli anni, una riga finale con il comando che avvia la campagna; `--rate` accetta i suffissi k, M, G e T (`--rate 800M`).
+- Un comando o un'opzione sconosciuti ricevono un messaggio di una riga che rimanda a `pzsolve help`, invece dell'intero testo di aiuto.
+  Tutti gli errori iniziano con `ERROR:`.
+- Le righe lunghe vanno a capo in punti naturali: dopo una frase, un punto e virgola, i due punti o una virgola, mai tra un numero e la sua
+  unità. Il pannello dal vivo toglie campi interi invece di tagliarne uno a metà.
+
+### Aggiunto
+- arm64 (Linux e Apple silicon): i motori `neon` e `neon2` calcolano l'hash con NEON e con lo SHA-256 hardware della CPU, scelti dal benchmark
+  d'avvio (`--isa neon|neon2`); la scansione lineare è circa il 55-60 % più veloce del motore portabile su Linux arm64 e più veloce anche su
+  Apple silicon (misure su macchine della CI). Le CPU senza le istruzioni SHA-256 restano sul motore portabile.
+- Indirizzi SegWit nativi (`bc1q...`, P2WPKH) accettati come bersaglio, oltre a quelli `1...`.
+- `pzsolve help hunt` e `pzsolve help bench` mostrano le opzioni di un comando raggruppate per argomento.
+- Il README dice in che cosa il programma si distingue; badge della CI; modulo per le segnalazioni di errore.
+
+## [1.8.0] — 2026-10-23
+
+### Prima versione pubblica (edizione inglese)
+- Scansione lineare, BSGS e canguro su CPU (SIMD) e GPU (CUDA, OpenCL) per i 160 puzzle, con campagne riprendibili, più computer sulla stessa
+  ricerca, autoregolazione e pannello dal vivo. La documentazione è in inglese; quella italiana sta in `docs/it/`.
+- Versioni per Linux x86-64, Linux arm64, macOS (Apple silicon e Intel) e Windows x86-64, pubblicate su GitHub Releases con `SHA256SUMS`. Le
+  versioni macOS e Linux arm64 usano il motore scalare portabile, solo CPU.
+- La tabella dei salti dello schema 3 è calcolata solo con aritmetica intera, così computer di architetture diverse sulla stessa campagna
+  concordano. Il log d'avvio stampa `jump table id XXXXXXXX`, che deve essere uguale su ogni computer. Le campagne degli schemi 1 e 2 usano
+  `long double` e sono coerenti solo su x86-64 (il programma avverte sulle altre architetture).
+- Licenza `AGPL-3.0-or-later`, con licenza commerciale disponibile (vedi il README).
 
 ## [1.7.9] — 2026-10-23
 

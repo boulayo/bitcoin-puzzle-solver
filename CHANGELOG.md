@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.9.0] — 2026-10-24
 
 ### Added
 - `lib/pzcore`: the crypto core (256-bit integers, secp256k1 field and curve, SHA-256 / RIPEMD-160 / HASH160, Base58Check, bech32 / bech32m,
@@ -13,8 +13,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.
 ### Changed
 - Every exported name of the core has the `pz_` prefix; functions return errors instead of exiting; the campaign permutation is unchanged
   (380 values produced by 1.8.1 are pinned by a test).
-- Faster scalar code (median of interleaved runs, ns): RIPEMD-160 353 -> 160, SHA-256 of 33 bytes 313 -> 239, HASH160 of one key 630 -> 392,
-  field squaring with BMI2 15.8 -> 11.7, square root 9.9 us -> 4.1 us. The search engines run at the same speed as before (within the noise).
+- Faster scalar code (median of interleaved runs, ns): RIPEMD-160 353 -> 160, SHA-256 of 33 bytes 313 -> 239, HASH160 of one key 640 -> 360,
+  square root 8.7 us -> 3.9 us. The search engines run at the same speed as before (within the noise, checked by an independent review).
+- A plain `make` builds `build/pzsolve` again after the library rules were added; the field code compiles with `-O0` and `-mbmi2 -madx`.
 
 ### Fixed
 - Base58Check encoding overflowed a stack buffer for payloads above 124 bytes and cut texts that did not fit.

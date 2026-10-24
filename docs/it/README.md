@@ -1,5 +1,5 @@
 > **Documentazione italiana.** Questa cartella (`docs/it/`) contiene README, guida, algoritmi, architettura e CHANGELOG in italiano. Il testo
-> è stato scritto per la versione 1.7.9 e aggiornato alla 1.8.0 solo nei nomi delle opzioni. I messaggi del programma sono in inglese,
+> è stato scritto per la versione 1.7.9 e poi aggiornato fino alla 1.8.1 (opzioni, arm64, indirizzi `bc1q`, aiuto per comando). I messaggi del programma sono in inglese,
 > quindi gli esempi di output riportati qui possono differire. Per tutto il resto fa fede la documentazione inglese nella cartella principale.
 
 # pzsolve
