@@ -112,7 +112,7 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 | Field/assembly | `lib/pzcore/tests/t_fe.c` (two builds: C and MULX/ADX); `lib/pzcore/tests/t_fev.c` (AVX2 and AVX-512: limb bounds, extreme values, verified mutations) |
 | BSGS, ETA, database | `tests/t_bsgs.c`, `t_eta.c`, `t_puzzles.c` |
 | GPU kernel arithmetic | `tests/t_gpufe.c`: the field of `kernels/pz_common.cl` compiled for the host, portable variant and PTX carry-chain variant (with the carry flag emulated according to the PTX ISA), against the CPU on 5 million combinations with all the edge cases |
-| Permutation, scheduler, SIMD engines | `lib/pzcore/tests/t_perm.c`, `t_jobq.c`, `t_engine.c` |
+| Permutation, scheduler, SIMD engines | `lib/pzcore/tests/t_perm.c`, `tests/t_jobq.c`, `t_engine.c` |
 | Complete campaigns | `tests/e2e.sh` |
 | CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the embedded PTX modules and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
 | Windows | `make windows` / `make wintest`: static MinGW-w64 exe, unit tests, self-test and campaigns run under Wine (`tools/verify.sh`) |

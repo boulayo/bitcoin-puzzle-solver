@@ -27,8 +27,8 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 
 ## Rules
 
-* **Errors** are return values (`bool`, or a length or `-1`). Nothing prints, exits or allocates. Where a function fails its output is left
-  untouched (stated in the header). A function that writes text takes the buffer size and refuses rather than truncates.
+* **Errors** are return values (`bool`, or a length or `-1`). Nothing prints, exits or allocates. Where a function fails, its header says what
+  happens to the output (mostly it is left untouched; after a failed `pz_fe_sqrt` or `pz_gej_to_ge_batch` its contents are unspecified). A function that writes text takes the buffer size and refuses rather than truncates.
 * **Hostile input** (text, lengths, public keys) is accepted by every parser and refused cleanly: wrong characters, mixed case, bad
   checksums, over-long strings, coordinates not below p, points off the curve.
 * **Threads:** everything is thread-safe. Global state is the curve table (built once, atomically, 61 KB static), the choice of batch

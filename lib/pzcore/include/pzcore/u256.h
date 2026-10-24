@@ -69,8 +69,8 @@ static inline pz_u256 pz_u256_shl(const pz_u256 *a, unsigned s)
     if (s >= 256) return r;
     unsigned ws = s / 64, bs = s % 64;
     for (int i = 3; i >= (int)ws; i--) {
-        uint64_t v = a->w[i - ws] << bs;
-        if (bs && i - (int)ws - 1 >= 0) v |= a->w[i - ws - 1] >> (64 - bs);
+        uint64_t v = a->w[i - (int)ws] << bs;
+        if (bs && i - (int)ws - 1 >= 0) v |= a->w[i - (int)ws - 1] >> (64 - bs);
         r.w[i] = v;
     }
     return r;
@@ -83,8 +83,8 @@ static inline pz_u256 pz_u256_shr(const pz_u256 *a, unsigned s)
     if (s >= 256) return r;
     unsigned ws = s / 64, bs = s % 64;
     for (int i = 0; i + (int)ws < 4; i++) {
-        uint64_t v = a->w[i + ws] >> bs;
-        if (bs && i + (int)ws + 1 < 4) v |= a->w[i + ws + 1] << (64 - bs);
+        uint64_t v = a->w[i + (int)ws] >> bs;
+        if (bs && i + (int)ws + 1 < 4) v |= a->w[i + (int)ws + 1] << (64 - bs);
         r.w[i] = v;
     }
     return r;
