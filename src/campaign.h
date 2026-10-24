@@ -32,12 +32,12 @@ typedef struct {
     char name[96];
     char dir[512];
     int puzzle;                  /* 0 when a custom range is used */
-    u256 range_start, range_end; /* inclusive */
+    pz_u256 range_start, range_end; /* inclusive */
     u8 target_h160[20];
     char address[64];            /* may be empty if only a hash160 was given */
     bool has_pubkey;
     u8 pubkey33[33];
-    ge pubkey;
+    pz_ge pubkey;
     search_mode mode;
     u8 seed[32];
     unsigned chunk_bits;
@@ -50,10 +50,10 @@ typedef struct {
 } campaign_cfg;
 
 const char *mode_name(search_mode m);
-/* Range size = end - start + 1 (u256). */
-u256 cfg_range_size(const campaign_cfg *c);
+/* Range size = end - start + 1 (pz_u256). */
+pz_u256 cfg_range_size(const campaign_cfg *c);
 /* Derives the default chunk size for a range. */
-unsigned cfg_default_chunk_bits(const u256 *range_size);
+unsigned cfg_default_chunk_bits(const pz_u256 *range_size);
 /* Generates a fresh 256-bit seed from OS entropy mixed with time/pid/host. */
 void seed_generate(u8 seed[32]);
 /* Parses a user seed: 64 hex digits are used verbatim, anything else is hashed. */
@@ -64,6 +64,6 @@ int cfg_save(const campaign_cfg *c, const char *path);
 int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen);
 
 /* Puzzle n covers keys [2^(n-1), 2^n - 1]. */
-bool puzzle_range(int n, u256 *start, u256 *end);
+bool puzzle_range(int n, pz_u256 *start, pz_u256 *end);
 
 #endif

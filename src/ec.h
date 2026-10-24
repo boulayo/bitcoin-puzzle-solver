@@ -3,42 +3,42 @@
  *
  * Only fixed-base multiplication (k*G) is needed by the search engines; the
  * hot loops use affine additions with batched inversions implemented
- * directly on top of fe.h inside each engine. */
+ * directly on top of pz_fe.h inside each engine. */
 #ifndef PZ_EC_H
 #define PZ_EC_H
 
 #include "fe.h"
 
-typedef struct { fe x, y; } ge;                  /* affine point (never infinity) */
-typedef struct { fe x, y, z; bool inf; } gej;    /* Jacobian point */
+typedef struct { pz_fe x, y; } pz_ge;                  /* affine point (never infinity) */
+typedef struct { pz_fe x, y, z; bool inf; } pz_gej;    /* Jacobian point */
 
-void ec_init(void);                              /* builds the comb table; idempotent, call before threads start */
+void pz_ec_init(void);                              /* builds the comb table; idempotent, call before threads start */
 
-extern const ge EC_G;
+extern const pz_ge pz_ec_g;
 
-void gej_set_ge(gej *r, const ge *a);
-void gej_double(gej *r, const gej *a);
-void gej_add_ge(gej *r, const gej *a, const ge *b);
-void gej_add(gej *r, const gej *a, const gej *b);
-bool gej_to_ge(ge *r, const gej *a);             /* false for infinity */
-void ge_neg(ge *r, const ge *a);
-bool ge_on_curve(const ge *p);
-bool ge_equal(const ge *a, const ge *b);
+void pz_gej_set_ge(pz_gej *r, const pz_ge *a);
+void pz_gej_double(pz_gej *r, const pz_gej *a);
+void pz_gej_add_ge(pz_gej *r, const pz_gej *a, const pz_ge *b);
+void pz_gej_add(pz_gej *r, const pz_gej *a, const pz_gej *b);
+bool pz_gej_to_ge(pz_ge *r, const pz_gej *a);             /* false for infinity */
+void pz_ge_neg(pz_ge *r, const pz_ge *a);
+bool pz_ge_on_curve(const pz_ge *p);
+bool pz_ge_equal(const pz_ge *a, const pz_ge *b);
 /* Converts n Jacobian points to affine with one inversion; infinity points are not allowed. */
-void gej_to_ge_batch(ge *out, const gej *in, size_t n);
+void pz_gej_to_ge_batch(pz_ge *out, const pz_gej *in, size_t n);
 
 /* r = k*G. Returns false when k == 0 mod n (point at infinity). */
-bool ec_mul_g(ge *r, const u256 *k);
-void ec_mul_g_j(gej *r, const u256 *k);
+bool pz_ec_mul_g(pz_ge *r, const pz_u256 *k);
+void pz_ec_mul_g_j(pz_gej *r, const pz_u256 *k);
 
 /* a + b in affine form (one inversion). Returns false for infinity. */
-bool ge_add(ge *r, const ge *a, const ge *b);
+bool pz_ge_add(pz_ge *r, const pz_ge *a, const pz_ge *b);
 /* a - b */
-bool ge_sub(ge *r, const ge *a, const ge *b);
+bool pz_ge_sub(pz_ge *r, const pz_ge *a, const pz_ge *b);
 
 /* Serialization. */
-void ge_to_pub33(u8 out[33], const ge *p);
+void pz_ge_to_pub33(u8 out[33], const pz_ge *p);
 /* Accepts 33-byte compressed or 65-byte uncompressed encodings. */
-bool ge_from_pubkey(ge *r, const u8 *bytes, size_t len);
+bool pz_ge_from_pubkey(pz_ge *r, const u8 *bytes, size_t len);
 
 #endif

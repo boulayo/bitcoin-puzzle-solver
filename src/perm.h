@@ -11,18 +11,18 @@
 
 #include "u256.h"
 
-#define PERM_ROUNDS 8
+#define PZ_PERM_ROUNDS 8
 
 typedef struct {
     u8 seed[32];
-    u256 m;            /* domain size (>= 1) */
+    pz_u256 m;            /* domain size (>= 1) */
     unsigned bits;     /* bit length of m-1 */
     unsigned wl, wr;   /* initial left/right widths */
     bool swap1;        /* used when bits == 1 */
-} perm_t;
+} pz_perm_t;
 
-void perm_init(perm_t *p, const u8 seed[32], const u256 *m);
-u256 perm_apply(const perm_t *p, const u256 *x);    /* x < m  ->  y < m */
-u256 perm_invert(const perm_t *p, const u256 *y);
+void pz_perm_init(pz_perm_t *p, const u8 seed[32], const pz_u256 *m);
+pz_u256 pz_perm_apply(const pz_perm_t *p, const pz_u256 *x);    /* x < m  ->  y < m */
+pz_u256 pz_perm_invert(const pz_perm_t *p, const pz_u256 *y);
 
 #endif

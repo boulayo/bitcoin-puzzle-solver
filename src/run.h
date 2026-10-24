@@ -46,7 +46,7 @@ typedef struct run_ctx {
     _Atomic int cpu_cap;             /* kangaroo CPU workers with a slot >= cpu_cap sleep (run_init: no limit; 'bench --together' varies it) */
     _Atomic int found;
     pthread_mutex_t found_mu;
-    u256 found_key;
+    pz_u256 found_key;
     bool found_valid;
     double found_time;
 
@@ -108,7 +108,7 @@ int run_alloc_worker(run_ctx *r, const char *name, char kind);
 void run_install_signals(run_ctx *r);
 /* Verifies a candidate private key against the campaign target and, if valid,
  * records it and stops everything. Returns true if the key is correct. */
-bool run_submit_key(run_ctx *r, const u256 *key, const char *source);
+bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source);
 void run_write_found(run_ctx *r);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */

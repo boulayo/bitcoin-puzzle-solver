@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* kang_vec_impl.inc - one batch round of the kangaroo herd with lane-parallel arithmetic (fev.h or, with FEV_IFMA,
- * fev52.h), instantiated per ISA. The includer defines ISA (token) and VBYTES.
+/* kang_vec_impl.inc - one batch round of the kangaroo herd with lane-parallel arithmetic (pz_fev.h or, with PZ_FEV_IFMA,
+ * fev52.h), instantiated per ISA. The includer defines ISA (token) and PZ_VBYTES.
  *
  * Exactly the arithmetic and the rules of kang_isa.inc (same jump choice, 2-cycle escape, even-y representative,
  * distinguished points and restarts, reported in the same order), so a herd evolves bit for bit as with the scalar
@@ -13,53 +13,53 @@
 
 #define CAT_(a, b) a##b
 #define CAT(a, b) CAT_(a, b)
-#ifdef FEV_IFMA
+#ifdef PZ_FEV_IFMA
 #include "fev52.h"
 #else
 #include "fev.h"
 #endif
 
-#define NL FEV_LANES
-#define KV_WORDS (2 * FEV_NLIMB + 2)          /* table entry: x limbs, y limbs, distance (two words) */
+#define NL PZ_FEV_LANES
+#define KV_WORDS (2 * PZ_FEV_NLIMB + 2)          /* table entry: x limbs, y limbs, distance (two words) */
 #define KV_STRIDE ((KV_WORDS + 7) & ~7)        /* padded to whole 64-byte rows */
 
-typedef struct { vl d0, d1, d2, prev, prev2, lastdp, sig, ck, mn, esc; } kv_aux;   /* sig, esc: 0 or all ones; tags in the low 32 bits */
+typedef struct { pz_vl d0, d1, d2, prev, prev2, lastdp, sig, ck, mn, esc; } kv_aux;   /* sig, esc: 0 or all ones; tags in the low 32 bits */
 
 /* bits [64k, 64k + 64) of a canonical element */
-static inline PZ_VABI vl kv_word64(const fev *x, int k)
+static inline PZ_VABI pz_vl kv_word64(const pz_fev *x, int k)
 {
-    const int bit = 64 * k, a = bit / FEV_BITS, sh = bit % FEV_BITS;
-    vl w = x->l[a] >> sh;
+    const int bit = 64 * k, a = bit / PZ_FEV_BITS, sh = bit % PZ_FEV_BITS;
+    pz_vl w = x->l[a] >> sh;
 #pragma GCC unroll 3
     for (int m = 1; m <= 3; m++)
-        if (m * FEV_BITS - sh < 64 && a + m < FEV_NLIMB) w |= x->l[a + m] << (m * FEV_BITS - sh);
+        if (m * PZ_FEV_BITS - sh < 64 && a + m < PZ_FEV_NLIMB) w |= x->l[a + m] << (m * PZ_FEV_BITS - sh);
     return w;
 }
 
 /* table offsets of the jumps (kang_jump_index): low bits of x, moved to the next jump when the walk would close a
  * 2-cycle, or an escape jump at the point of least tag of a detected cycle */
-static inline PZ_VABI vl kv_jbase(const fev *x, const kv_aux *a, u64 R)
+static inline PZ_VABI pz_vl kv_jbase(const pz_fev *x, const kv_aux *a, u64 R)
 {
-    const vl t = kv_word64(x, 2) & vl_set(0xFFFFFFFFULL);
-    const vl two = (vl)(t == a->prev2) & vl_set(1);
-    const vl out = (a->esc | (vl)(t == a->ck)) & (vl)(t == a->mn);
-    const vl reg = (x->l[0] + two) & vl_set(R - 1), ej = vl_set(R) + ((x->l[0] >> 16) & vl_set(KANG_NESC - 1));
-    return ((ej & out) | (reg & ~out)) * vl_set(KV_STRIDE);
+    const pz_vl t = kv_word64(x, 2) & pz_vl_set(0xFFFFFFFFULL);
+    const pz_vl two = (pz_vl)(t == a->prev2) & pz_vl_set(1);
+    const pz_vl out = (a->esc | (pz_vl)(t == a->ck)) & (pz_vl)(t == a->mn);
+    const pz_vl reg = (x->l[0] + two) & pz_vl_set(R - 1), ej = pz_vl_set(R) + ((x->l[0] >> 16) & pz_vl_set(KANG_NESC - 1));
+    return ((ej & out) | (reg & ~out)) * pz_vl_set(KV_STRIDE);
 }
 
 /* kang_cycle_update on all lanes; bnd: all ones on a checkpoint step, else zero */
-static inline PZ_VABI void kv_cycle_update(kv_aux *a, vl t, vl bnd)
+static inline PZ_VABI void kv_cycle_update(kv_aux *a, pz_vl t, pz_vl bnd)
 {
-    const vl notag = vl_set(KANG_NOTAG);
-    const vl in = a->esc | (vl)(t == a->ck), eqm = (vl)(t == a->mn);
-    const vl out = in & eqm, restart = a->esc & ~eqm & bnd, set = (~in & bnd) | restart;
-    const vl lt = (vl)(t < a->mn) & ~in;
+    const pz_vl notag = pz_vl_set(KANG_NOTAG);
+    const pz_vl in = a->esc | (pz_vl)(t == a->ck), eqm = (pz_vl)(t == a->mn);
+    const pz_vl out = in & eqm, restart = a->esc & ~eqm & bnd, set = (~in & bnd) | restart;
+    const pz_vl lt = (pz_vl)(t < a->mn) & ~in;
     a->esc = in & ~out & ~restart;
     a->ck = (notag & out) | (t & set) | (a->ck & ~(out | set));
     a->mn = (notag & out) | (t & (set | lt)) | (a->mn & ~(out | set | lt));
 }
 
-#if VBYTES == 64
+#if PZ_VBYTES == 64
 /* 8x8 transpose of 64-bit words: r[l] = row of lane l -> r[w] = word w of every lane */
 static inline PZ_VABI void kv_tr8(__m512i r[8])
 {
@@ -88,21 +88,21 @@ static inline PZ_VABI void kv_tr8(__m512i r[8])
 #endif
 
 /* words [0, nw) of the table entries of the lanes, as one vector per word */
-static inline PZ_VABI void kv_load_words(vl *out, int nw, const u64 *vjt, vl jb)
+static inline PZ_VABI void kv_load_words(pz_vl *out, int nw, const u64 *vjt, pz_vl jb)
 {
-#if VBYTES == 64
+#if PZ_VBYTES == 64
     for (int blk = 0; blk * 8 < nw; blk++) {
         __m512i r[8];
 #pragma GCC unroll 8
         for (int l = 0; l < 8; l++) r[l] = _mm512_load_si512((const void *)(vjt + jb[l] + 8 * blk));
         kv_tr8(r);
-        for (int k = 0; k < 8 && blk * 8 + k < nw; k++) out[blk * 8 + k] = (vl)r[k];
+        for (int k = 0; k < 8 && blk * 8 + k < nw; k++) out[blk * 8 + k] = (pz_vl)r[k];
     }
 #else
     u64 t[KV_STRIDE][NL] PZ_ALIGN(64);
     for (int l = 0; l < NL; l++)
         for (int i = 0; i < nw; i++) t[i][l] = vjt[jb[l] + (u64)i];
-    memcpy(out, t, sizeof(vl) * (size_t)nw);
+    memcpy(out, t, sizeof(pz_vl) * (size_t)nw);
 #endif
 }
 
@@ -139,14 +139,14 @@ static void kv_sort_events(kang_worker *w, int dp0, int rs0)
 
 static void CAT(kv_sync_, ISA)(kang_worker *w)
 {
-    const fev *vx = w->vx, *vy = w->vy;
+    const pz_fev *vx = w->vx, *vy = w->vy;
     const kv_aux *A = w->vaux;
     for (int c = 0; c < w->K / NL; c++)
         for (int l = 0; l < NL; l++) {
             const int i = c * NL + l;
             if (w->vstale[i]) continue;          /* the scalar copy is the newer one */
-            fev_get_lane(&w->x[i], &vx[c], l);
-            fev_get_lane(&w->y[i], &vy[c], l);
+            pz_fev_get_lane(&w->x[i], &vx[c], l);
+            pz_fev_get_lane(&w->y[i], &vy[c], l);
             w->d[i].w[0] = A[c].d0[l];
             w->d[i].w[1] = A[c].d1[l];
             w->d[i].w[2] = A[c].d2[l];
@@ -164,21 +164,21 @@ static void CAT(kv_sync_, ISA)(kang_worker *w)
 static void CAT(kv_setup_, ISA)(kang_worker *w)
 {
     const int nc = w->K / NL;
-    w->vx = pz_xaligned(64, sizeof(fev) * (size_t)nc);
-    w->vy = pz_xaligned(64, sizeof(fev) * (size_t)nc);
-    w->vdx = pz_xaligned(64, sizeof(fev) * (size_t)nc);
-    w->vtmp = pz_xaligned(64, sizeof(fev) * (size_t)nc);
+    w->vx = pz_xaligned(64, sizeof(pz_fev) * (size_t)nc);
+    w->vy = pz_xaligned(64, sizeof(pz_fev) * (size_t)nc);
+    w->vdx = pz_xaligned(64, sizeof(pz_fev) * (size_t)nc);
+    w->vtmp = pz_xaligned(64, sizeof(pz_fev) * (size_t)nc);
     w->vaux = pz_xaligned(64, sizeof(kv_aux) * (size_t)nc);
     u64 *t = pz_xaligned(64, sizeof(u64) * KV_STRIDE * (w->P->R + KANG_NESC));
     for (unsigned j = 0; j < w->P->R + KANG_NESC; j++) {
         u64 *e = t + (size_t)j * KV_STRIDE;
-        fev a;
-        fev_set_lane(&a, 0, &w->P->jx[j]);
-        for (int i = 0; i < FEV_NLIMB; i++) e[i] = a.l[i][0];
-        fev_set_lane(&a, 0, &w->P->jy[j]);
-        for (int i = 0; i < FEV_NLIMB; i++) e[FEV_NLIMB + i] = a.l[i][0];
-        e[2 * FEV_NLIMB] = (u64)w->P->jv[j];
-        e[2 * FEV_NLIMB + 1] = (u64)(w->P->jv[j] >> 64);
+        pz_fev a;
+        pz_fev_set_lane(&a, 0, &w->P->jx[j]);
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[i] = a.l[i][0];
+        pz_fev_set_lane(&a, 0, &w->P->jy[j]);
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[PZ_FEV_NLIMB + i] = a.l[i][0];
+        e[2 * PZ_FEV_NLIMB] = (u64)w->P->jv[j];
+        e[2 * PZ_FEV_NLIMB + 1] = (u64)(w->P->jv[j] >> 64);
     }
     w->vjt = t;
     memset(w->vstale, 1, (size_t)w->K);
@@ -189,20 +189,20 @@ static void CAT(kv_setup_, ISA)(kang_worker *w)
 /* Everything the backward pass reads and writes besides the vectors it works on. */
 typedef struct {
     kang_worker *w;
-    fev *vx, *vy, *vdx, *vtmp;
+    pz_fev *vx, *vy, *vdx, *vtmp;
     kv_aux *A;
     const u64 *vjt;
     const kang_params_t *P;
-    const vl *pl;                      /* p as limbs */
-    vl one, dpmask, cap, bndv;
+    const pz_vl *pl;                      /* p as limbs */
+    pz_vl one, dpmask, cap, bndv;
     bool bnd;
     u64 n;
 } kv_env;
 
 typedef struct {
     kv_aux *a;
-    fev ic, jx, jy, t, lam, x3, y3;
-    vl jv0, jv1, sel, dpm, rsm, s0, s1, s2;
+    pz_fev ic, jx, jy, t, lam, x3, y3;
+    pz_vl jv0, jv1, sel, dpm, rsm, s0, s1, s2;
 } kv_ctx;
 
 /* The backward pass of the batch inversion fused with the step, for the nu (1 or 2) vectors c, c-1: the inverse of the
@@ -211,97 +211,97 @@ typedef struct {
  * so the units idle while a product waits for the one before it; two chains side by side keep them busy. The arithmetic of
  * every vector is exactly the same as when it runs alone (the vectors do not depend on each other), and the events are
  * recorded in the same order (c first, then c - 1). */
-static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_env *E, fev *inv, int c, int nu)
+static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_env *E, pz_fev *inv, int c, int nu)
 {
     kang_worker *w = E->w;
     const kang_params_t *P = E->P;
-    const vl one = E->one;
+    const pz_vl one = E->one;
     kv_ctx x[2];
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
         const int cc = c - u;
         x[u].a = &E->A[cc];
         if (cc > 0) {
-            fev_mul(&x[u].ic, inv, &E->vtmp[cc - 1]);
-            fev_mul(inv, inv, &E->vdx[cc]);
+            pz_fev_mul(&x[u].ic, inv, &E->vtmp[cc - 1]);
+            pz_fev_mul(inv, inv, &E->vdx[cc]);
         } else {
             x[u].ic = *inv;
         }
     }
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
-        const vl jb = kv_jbase(&E->vx[c - u], x[u].a, P->R);
-        vl e[KV_STRIDE];
+        const pz_vl jb = kv_jbase(&E->vx[c - u], x[u].a, P->R);
+        pz_vl e[KV_STRIDE];
         kv_load_words(e, KV_WORDS, E->vjt, jb);
         memcpy(x[u].jx.l, e, sizeof x[u].jx.l);
-        memcpy(x[u].jy.l, e + FEV_NLIMB, sizeof x[u].jy.l);
-        x[u].jv0 = e[2 * FEV_NLIMB];
-        x[u].jv1 = e[2 * FEV_NLIMB + 1];
+        memcpy(x[u].jy.l, e + PZ_FEV_NLIMB, sizeof x[u].jy.l);
+        x[u].jv0 = e[2 * PZ_FEV_NLIMB];
+        x[u].jv1 = e[2 * PZ_FEV_NLIMB + 1];
     }
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_sub(&x[u].t, &E->vy[c - u], &x[u].jy);
+    for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vy[c - u], &x[u].jy);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_mul(&x[u].lam, &x[u].t, &x[u].ic);
+    for (int u = 0; u < nu; u++) pz_fev_mul(&x[u].lam, &x[u].t, &x[u].ic);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_sqr(&x[u].x3, &x[u].lam);
+    for (int u = 0; u < nu; u++) pz_fev_sqr(&x[u].x3, &x[u].lam);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_sub2(&x[u].x3, &x[u].x3, &E->vx[c - u], &x[u].jx);
+    for (int u = 0; u < nu; u++) pz_fev_sub2(&x[u].x3, &x[u].x3, &E->vx[c - u], &x[u].jx);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_sub(&x[u].t, &E->vx[c - u], &x[u].x3);
+    for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vx[c - u], &x[u].x3);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_mul(&x[u].y3, &x[u].lam, &x[u].t);
+    for (int u = 0; u < nu; u++) pz_fev_mul(&x[u].y3, &x[u].lam, &x[u].t);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) fev_sub(&x[u].y3, &x[u].y3, &E->vy[c - u]);
+    for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].y3, &x[u].y3, &E->vy[c - u]);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
-        fev_normalize(&x[u].x3);
-        fev_normalize(&x[u].y3);
+        pz_fev_normalize(&x[u].x3);
+        pz_fev_normalize(&x[u].y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
-        const vl sel = vl_set(0) - (x[u].y3.l[0] & one);
-        fev ny;
-        vl br = vl_set(0);
-        for (int i = 0; i < FEV_NLIMB; i++) {              /* p - y limb by limb (y canonical, so no reduction) */
-            const vl t2 = E->pl[i] - x[u].y3.l[i] - br;
+        const pz_vl sel = pz_vl_set(0) - (x[u].y3.l[0] & one);
+        pz_fev ny;
+        pz_vl br = pz_vl_set(0);
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) {              /* p - y limb by limb (y canonical, so no reduction) */
+            const pz_vl t2 = E->pl[i] - x[u].y3.l[i] - br;
             br = t2 >> 63;
-            ny.l[i] = i < FEV_NLIMB - 1 ? t2 & vl_set(FEV_MASK) : t2;
+            ny.l[i] = i < PZ_FEV_NLIMB - 1 ? t2 & pz_vl_set(PZ_FEV_MASK) : t2;
         }
-        for (int i = 0; i < FEV_NLIMB; i++) x[u].y3.l[i] = (ny.l[i] & sel) | (x[u].y3.l[i] & ~sel);
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) x[u].y3.l[i] = (ny.l[i] & sel) | (x[u].y3.l[i] & ~sel);
         x[u].sel = sel;
     }
     /* the rest of the step, vector by vector, in the order of the scalar round (events: c, then c - 1) */
     for (int u = 0; u < nu; u++) {
         const int cc = c - u;
         kv_aux *a = x[u].a;
-        const vl sel = x[u].sel;
+        const pz_vl sel = x[u].sel;
         /* distance += jump (192-bit, carries as 0/1 lanes), then negated where y was odd: (d ^ sel) + 1 */
-        vl s0 = a->d0 + x[u].jv0, c0 = (vl)(s0 < x[u].jv0) & one;
-        vl s1 = a->d1 + x[u].jv1, c1 = (vl)(s1 < x[u].jv1) & one;
+        pz_vl s0 = a->d0 + x[u].jv0, c0 = (pz_vl)(s0 < x[u].jv0) & one;
+        pz_vl s1 = a->d1 + x[u].jv1, c1 = (pz_vl)(s1 < x[u].jv1) & one;
         s1 += c0;
-        c1 |= (vl)(s1 < c0) & one;
-        vl s2 = a->d2 + c1;
-        const vl b = sel & one;
+        c1 |= (pz_vl)(s1 < c0) & one;
+        pz_vl s2 = a->d2 + c1;
+        const pz_vl b = sel & one;
         s0 = (s0 ^ sel) + b;
-        const vl k0 = (vl)(s0 < b) & one;
+        const pz_vl k0 = (pz_vl)(s0 < b) & one;
         s1 = (s1 ^ sel) + k0;
-        const vl k1 = (vl)(s1 < k0) & one;
+        const pz_vl k1 = (pz_vl)(s1 < k0) & one;
         s2 = (s2 ^ sel) + k1;
         a->d0 = s0; a->d1 = s1; a->d2 = s2;
         a->sig ^= sel;
-        const vl tag = kv_word64(&E->vx[cc], 2) & vl_set(0xFFFFFFFFULL);
+        const pz_vl tag = kv_word64(&E->vx[cc], 2) & pz_vl_set(0xFFFFFFFFULL);
         kv_cycle_update(a, tag, E->bndv);
         a->prev2 = a->prev;
         a->prev = tag;
-        const vl n1 = kv_word64(&x[u].x3, 1);
-        const vl dpm = (vl)((n1 & E->dpmask) == vl_set(0));
-        vl rsm = vl_set(0);
-        if (E->bnd) rsm = (vl)(vl_set(E->n + 1) - a->lastdp > E->cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
+        const pz_vl n1 = kv_word64(&x[u].x3, 1);
+        const pz_vl dpm = (pz_vl)((n1 & E->dpmask) == pz_vl_set(0));
+        pz_vl rsm = pz_vl_set(0);
+        if (E->bnd) rsm = (pz_vl)(pz_vl_set(E->n + 1) - a->lastdp > E->cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
         E->vx[cc] = x[u].x3;
         E->vy[cc] = x[u].y3;
-        const vl ev = dpm | rsm;
+        const pz_vl ev = dpm | rsm;
         u64 any = 0;
         for (int l = 0; l < NL; l++) any |= ev[l];
         if (LIKELY(!any)) continue;
-        const vl n2 = kv_word64(&x[u].x3, 2);
+        const pz_vl n2 = kv_word64(&x[u].x3, 2);
         for (int l = 0; l < NL; l++) {
             const int i = cc * NL + l;
             if (ev[l]) a->lastdp[l] = E->n + 1;
@@ -328,20 +328,20 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     const int K = w->K, nc = K / NL;
     const kang_params_t *P = w->P;
     if (!w->vx) CAT(kv_setup_, ISA)(w);
-    fev *vx = w->vx, *vy = w->vy, *vdx = w->vdx, *vtmp = w->vtmp;
+    pz_fev *vx = w->vx, *vy = w->vy, *vdx = w->vdx, *vtmp = w->vtmp;
     kv_aux *A = w->vaux;
     const u64 *vjt = w->vjt;
     const u64 n = w->round;                                     /* the step number of this round */
     const bool bnd = (n & (KANG_CK_PERIOD - 1)) == 0;           /* checkpoint step: cycle detection, watchdog */
-    const vl bndv = bnd ? vl_set(~0ULL) : vl_set(0);
+    const pz_vl bndv = bnd ? pz_vl_set(~0ULL) : pz_vl_set(0);
 
     /* restarted kangaroos: reload their lanes from the scalar state */
     for (int c = 0; c < nc; c++)
         for (int l = 0; l < NL; l++) {
             const int i = c * NL + l;
             if (!w->vstale[i]) continue;
-            fev_set_lane(&vx[c], l, &w->x[i]);
-            fev_set_lane(&vy[c], l, &w->y[i]);
+            pz_fev_set_lane(&vx[c], l, &w->x[i]);
+            pz_fev_set_lane(&vy[c], l, &w->y[i]);
             A[c].d0[l] = w->d[i].w[0];
             A[c].d1[l] = w->d[i].w[1];
             A[c].d2[l] = w->d[i].w[2];
@@ -356,20 +356,20 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         }
 
     /* denominators x - jx and their prefix products */
-    fev acc;
+    pz_fev acc;
     for (int c = 0; c < nc; c++) {
-        fev jx;
-        kv_load_words(jx.l, FEV_NLIMB, vjt, kv_jbase(&vx[c], &A[c], P->R));
-        fev_sub(&vdx[c], &vx[c], &jx);
+        pz_fev jx;
+        kv_load_words(jx.l, PZ_FEV_NLIMB, vjt, kv_jbase(&vx[c], &A[c], P->R));
+        pz_fev_sub(&vdx[c], &vx[c], &jx);
         if (c == 0) acc = vdx[0];
-        else fev_mul(&acc, &acc, &vdx[c]);
+        else pz_fev_mul(&acc, &acc, &vdx[c]);
         vtmp[c] = acc;
     }
     {
-        fev chk = acc;
-        fev_normalize(&chk);
-        vl z = chk.l[0];
-        for (int i = 1; i < FEV_NLIMB; i++) z |= chk.l[i];
+        pz_fev chk = acc;
+        pz_fev_normalize(&chk);
+        pz_vl z = chk.l[0];
+        for (int i = 1; i < PZ_FEV_NLIMB; i++) z |= chk.l[i];
         bool zero = false;
         for (int l = 0; l < NL; l++) zero |= z[l] == 0;
         if (UNLIKELY(zero)) {
@@ -381,24 +381,24 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         }
     }
     /* p as limbs, for the negation of a canonical y */
-    vl pl[FEV_NLIMB];
+    pz_vl pl[PZ_FEV_NLIMB];
     {
-        u128 lo = (u128)FE_P.n[1] << 64 | FE_P.n[0], hi = (u128)FE_P.n[3] << 64 | FE_P.n[2];
-        for (int i = 0; i < FEV_NLIMB; i++) {
-            const int bit = FEV_BITS * i;
+        u128 lo = (u128)pz_fe_p.n[1] << 64 | pz_fe_p.n[0], hi = (u128)pz_fe_p.n[3] << 64 | pz_fe_p.n[2];
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) {
+            const int bit = PZ_FEV_BITS * i;
             u64 v;
-            if (bit + FEV_BITS <= 128) v = (u64)(lo >> bit);
+            if (bit + PZ_FEV_BITS <= 128) v = (u64)(lo >> bit);
             else if (bit >= 128) v = (u64)(hi >> (bit - 128));
             else v = (u64)((lo >> bit) | (hi << (128 - bit)));
-            pl[i] = vl_set(i < FEV_NLIMB - 1 ? v & FEV_MASK : v);
+            pl[i] = pz_vl_set(i < PZ_FEV_NLIMB - 1 ? v & PZ_FEV_MASK : v);
         }
     }
     /* Montgomery, backward pass fused with the step: each inverse is used as soon as it is peeled off, from the last
      * vector to the first; the rare events are sorted back into index order at the end */
-    fev inv;
-    fev_inv(&inv, &acc);
+    pz_fev inv;
+    pz_fev_inv(&inv, &acc);
     const int ndp0 = w->ndp, nrs0 = w->nrestart;
-    const vl one = vl_set(1), dpmask = vl_set(P->dp_mask), cap = vl_set(P->cap_since);
+    const pz_vl one = pz_vl_set(1), dpmask = pz_vl_set(P->dp_mask), cap = pz_vl_set(P->cap_since);
 #ifdef KV_PAIR
     const kv_env E = {w, vx, vy, vdx, vtmp, A, vjt, P, pl, one, dpmask, cap, bndv, bnd, n};
     int c = nc - 1;
@@ -407,70 +407,70 @@ void CAT(kang_round_, ISA)(kang_worker *w)
 #else
     for (int c = nc - 1; c >= 0; c--) {
         kv_aux *a = &A[c];
-        fev ic;
+        pz_fev ic;
         if (c > 0) {
-            fev_mul(&ic, &inv, &vtmp[c - 1]);
-            fev_mul(&inv, &inv, &vdx[c]);
+            pz_fev_mul(&ic, &inv, &vtmp[c - 1]);
+            pz_fev_mul(&inv, &inv, &vdx[c]);
         } else {
             ic = inv;
         }
-        const vl jb = kv_jbase(&vx[c], a, P->R);
-        fev jx, jy, t, lam, x3, y3, ny;
-        vl e[KV_STRIDE];
+        const pz_vl jb = kv_jbase(&vx[c], a, P->R);
+        pz_fev jx, jy, t, lam, x3, y3, ny;
+        pz_vl e[KV_STRIDE];
         kv_load_words(e, KV_WORDS, vjt, jb);
         memcpy(jx.l, e, sizeof jx.l);
-        memcpy(jy.l, e + FEV_NLIMB, sizeof jy.l);
-        const vl jv0 = e[2 * FEV_NLIMB], jv1 = e[2 * FEV_NLIMB + 1];
-        fev_sub(&t, &vy[c], &jy);
-        fev_mul(&lam, &t, &ic);
-        fev_sqr(&x3, &lam);
-        fev_sub2(&x3, &x3, &vx[c], &jx);
-        fev_sub(&t, &vx[c], &x3);
-        fev_mul(&y3, &lam, &t);
-        fev_sub(&y3, &y3, &vy[c]);
-        fev_normalize(&x3);
-        fev_normalize(&y3);
+        memcpy(jy.l, e + PZ_FEV_NLIMB, sizeof jy.l);
+        const pz_vl jv0 = e[2 * PZ_FEV_NLIMB], jv1 = e[2 * PZ_FEV_NLIMB + 1];
+        pz_fev_sub(&t, &vy[c], &jy);
+        pz_fev_mul(&lam, &t, &ic);
+        pz_fev_sqr(&x3, &lam);
+        pz_fev_sub2(&x3, &x3, &vx[c], &jx);
+        pz_fev_sub(&t, &vx[c], &x3);
+        pz_fev_mul(&y3, &lam, &t);
+        pz_fev_sub(&y3, &y3, &vy[c]);
+        pz_fev_normalize(&x3);
+        pz_fev_normalize(&y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
-        const vl sel = vl_set(0) - (y3.l[0] & one);
+        const pz_vl sel = pz_vl_set(0) - (y3.l[0] & one);
         {
-            vl br = vl_set(0);
-            for (int i = 0; i < FEV_NLIMB; i++) {          /* p - y limb by limb (y canonical, so no reduction) */
-                const vl t2 = pl[i] - y3.l[i] - br;
+            pz_vl br = pz_vl_set(0);
+            for (int i = 0; i < PZ_FEV_NLIMB; i++) {          /* p - y limb by limb (y canonical, so no reduction) */
+                const pz_vl t2 = pl[i] - y3.l[i] - br;
                 br = t2 >> 63;
-                ny.l[i] = i < FEV_NLIMB - 1 ? t2 & vl_set(FEV_MASK) : t2;
+                ny.l[i] = i < PZ_FEV_NLIMB - 1 ? t2 & pz_vl_set(PZ_FEV_MASK) : t2;
             }
         }
-        for (int i = 0; i < FEV_NLIMB; i++) y3.l[i] = (ny.l[i] & sel) | (y3.l[i] & ~sel);
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) y3.l[i] = (ny.l[i] & sel) | (y3.l[i] & ~sel);
 
         /* distance += jump (192-bit, carries as 0/1 lanes), then negated where y was odd: (d ^ sel) + 1 */
-        vl s0 = a->d0 + jv0, c0 = (vl)(s0 < jv0) & one;
-        vl s1 = a->d1 + jv1, c1 = (vl)(s1 < jv1) & one;
+        pz_vl s0 = a->d0 + jv0, c0 = (pz_vl)(s0 < jv0) & one;
+        pz_vl s1 = a->d1 + jv1, c1 = (pz_vl)(s1 < jv1) & one;
         s1 += c0;
-        c1 |= (vl)(s1 < c0) & one;
-        vl s2 = a->d2 + c1;
-        const vl b = sel & one;
+        c1 |= (pz_vl)(s1 < c0) & one;
+        pz_vl s2 = a->d2 + c1;
+        const pz_vl b = sel & one;
         s0 = (s0 ^ sel) + b;
-        const vl k0 = (vl)(s0 < b) & one;
+        const pz_vl k0 = (pz_vl)(s0 < b) & one;
         s1 = (s1 ^ sel) + k0;
-        const vl k1 = (vl)(s1 < k0) & one;
+        const pz_vl k1 = (pz_vl)(s1 < k0) & one;
         s2 = (s2 ^ sel) + k1;
         a->d0 = s0; a->d1 = s1; a->d2 = s2;
         a->sig ^= sel;
-        const vl tag = kv_word64(&vx[c], 2) & vl_set(0xFFFFFFFFULL);
+        const pz_vl tag = kv_word64(&vx[c], 2) & pz_vl_set(0xFFFFFFFFULL);
         kv_cycle_update(a, tag, bndv);
         a->prev2 = a->prev;
         a->prev = tag;
-        const vl n1 = kv_word64(&x3, 1);
-        const vl dpm = (vl)((n1 & dpmask) == vl_set(0));
-        vl rsm = vl_set(0);
-        if (bnd) rsm = (vl)(vl_set(n + 1) - a->lastdp > cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
+        const pz_vl n1 = kv_word64(&x3, 1);
+        const pz_vl dpm = (pz_vl)((n1 & dpmask) == pz_vl_set(0));
+        pz_vl rsm = pz_vl_set(0);
+        if (bnd) rsm = (pz_vl)(pz_vl_set(n + 1) - a->lastdp > cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
         vx[c] = x3;
         vy[c] = y3;
-        const vl ev = dpm | rsm;
+        const pz_vl ev = dpm | rsm;
         u64 any = 0;
         for (int l = 0; l < NL; l++) any |= ev[l];
         if (LIKELY(!any)) continue;
-        const vl n2 = kv_word64(&x3, 2);
+        const pz_vl n2 = kv_word64(&x3, 2);
         for (int l = 0; l < NL; l++) {
             const int i = c * NL + l;
             if (ev[l]) a->lastdp[l] = n + 1;

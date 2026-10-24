@@ -31,50 +31,50 @@ u64 bsgs_max_T_for_bytes(u64 bytes)
     return (u64)t;
 }
 
-u64 bsgs_optimal_T(const u256 *W)
+u64 bsgs_optimal_T(const pz_u256 *W)
 {
-    long double w = u256_to_ld(W);
+    long double w = pz_u256_to_ld(W);
     long double t = ceill(sqrtl(w) / 2.0L);
     if (t < 1) t = 1;
     if (t > (long double)BS_MAX_T) return 0;
     return (u64)t;
 }
 
-long double bsgs_mean_cost(const u256 *W, u64 T)
+long double bsgs_mean_cost(const pz_u256 *W, u64 T)
 {
-    long double w = u256_to_ld(W);
+    long double w = pz_u256_to_ld(W);
     return (long double)T + w / (4.0L * (long double)T);
 }
 
-u64 bsgs_choose_T(const u256 *W, u64 budget_bytes, bool *viable)
+u64 bsgs_choose_T(const pz_u256 *W, u64 budget_bytes, bool *viable)
 {
     u64 topt = bsgs_optimal_T(W), tmax = bsgs_max_T_for_bytes(budget_bytes);
     u64 T = topt ? (topt < tmax ? topt : tmax) : tmax;
     bool ok = false;
-    if (T >= 1) ok = bsgs_mean_cost(W, T) <= KANG_C_MEAN * sqrtl(u256_to_ld(W));
+    if (T >= 1) ok = bsgs_mean_cost(W, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(W));
     if (viable) *viable = ok;
     return T;
 }
 
 /* ------------------------------------------------------------- parameters */
 
-static bool u256_to_u128_checked(const u256 *a, u128 *out)
+static bool u256_to_u128_checked(const pz_u256 *a, u128 *out)
 {
     if (a->w[2] || a->w[3]) return false;
     *out = (u128)a->w[1] << 64 | a->w[0];
     return true;
 }
 
-bool bsgs_params_init(bsgs_params *p, const u256 *lo, const u256 *hi, const ge *pub, u64 T, char *err, size_t errlen)
+bool bsgs_params_init(bsgs_params *p, const pz_u256 *lo, const pz_u256 *hi, const pz_ge *pub, u64 T, char *err, size_t errlen)
 {
     memset(p, 0, sizeof *p);
     if (T < 1 || T > BS_MAX_T) { snprintf(err, errlen, "invalid number of baby steps (%llu)", (unsigned long long)T); return false; }
-    if (u256_cmp(lo, hi) > 0 || u256_is_zero(lo)) { snprintf(err, errlen, "invalid range"); return false; }
+    if (pz_u256_cmp(lo, hi) > 0 || pz_u256_is_zero(lo)) { snprintf(err, errlen, "invalid range"); return false; }
     p->lo = *lo;
     p->hi = *hi;
-    u256 one = u256_from_u64(1), W;
-    u256_sub(&W, hi, lo);
-    u256_add(&W, &W, &one);
+    pz_u256 one = pz_u256_from_u64(1), W;
+    pz_u256_sub(&W, hi, lo);
+    pz_u256_add(&W, &W, &one);
     p->W = W;
     u128 w128;
     if (!u256_to_u128_checked(&W, &w128) || (w128 >> 118)) { snprintf(err, errlen, "range too large for BSGS (more than 2^118 keys)"); return false; }
@@ -85,31 +85,31 @@ bool bsgs_params_init(bsgs_params *p, const u256 *lo, const u256 *hi, const ge *
     if (A >= ((u128)1 << 62)) { snprintf(err, errlen, "too many giant steps: increase the memory for the table"); return false; }
     p->A = (u64)A;
     p->Ng = 2 * p->A + 1;
-    u256 half = u256_from_u128((w128 - 1) >> 1);
-    u256_add(&p->c, lo, &half);
+    pz_u256 half = pz_u256_from_u128((w128 - 1) >> 1);
+    pz_u256_add(&p->c, lo, &half);
     p->P = *pub;
-    ec_init();
-    ge cG;
-    if (!ec_mul_g(&cG, &p->c)) { snprintf(err, errlen, "invalid range centre"); return false; }
-    p->Pp_inf = !ge_sub(&p->Pp, pub, &cG);
+    pz_ec_init();
+    pz_ge cG;
+    if (!pz_ec_mul_g(&cG, &p->c)) { snprintf(err, errlen, "invalid range centre"); return false; }
+    p->Pp_inf = !pz_ge_sub(&p->Pp, pub, &cG);
     return true;
 }
 
 /* d = key - c as a signed 128-bit value (the key is within H of c, so it fits). */
-static __int128 key_minus_c(const bsgs_params *p, const u256 *key)
+static __int128 key_minus_c(const bsgs_params *p, const pz_u256 *key)
 {
-    u256 d;
-    if (u256_cmp(key, &p->c) >= 0) {
-        u256_sub(&d, key, &p->c);
+    pz_u256 d;
+    if (pz_u256_cmp(key, &p->c) >= 0) {
+        pz_u256_sub(&d, key, &p->c);
         return (__int128)((u128)d.w[1] << 64 | d.w[0]);
     }
-    u256_sub(&d, &p->c, key);
+    pz_u256_sub(&d, &p->c, key);
     return -(__int128)((u128)d.w[1] << 64 | d.w[0]);
 }
 
-u64 bsgs_giant_index(const bsgs_params *p, const u256 *key)
+u64 bsgs_giant_index(const bsgs_params *p, const pz_u256 *key)
 {
-    if (u256_cmp(key, &p->lo) < 0 || u256_cmp(key, &p->hi) > 0) return 0;
+    if (pz_u256_cmp(key, &p->lo) < 0 || pz_u256_cmp(key, &p->hi) > 0) return 0;
     __int128 d = key_minus_c(p, key), S = (__int128)p->S, T = (__int128)p->T;
     __int128 num = d + T, a;
     if (num >= 0) a = num / S;
@@ -122,13 +122,13 @@ u64 bsgs_giant_index(const bsgs_params *p, const u256 *key)
 void bsgs_sched_cfg(const bsgs_params *p, const campaign_cfg *cfg, campaign_cfg *out)
 {
     *out = *cfg;
-    out->range_start = u256_from_u64(1);
-    out->range_end = u256_from_u64(p->Ng);
-    u256 rsz = u256_from_u64(p->Ng);
+    out->range_start = pz_u256_from_u64(1);
+    out->range_end = pz_u256_from_u64(p->Ng);
+    pz_u256 rsz = pz_u256_from_u64(p->Ng);
     unsigned cb = cfg_default_chunk_bits(&rsz);
-    u256 chunk = u256_pow2(cb);
-    if (u256_cmp(&chunk, &rsz) > 0) {
-        unsigned b = u256_bits(&rsz) - 1;
+    pz_u256 chunk = pz_u256_pow2(cb);
+    if (pz_u256_cmp(&chunk, &rsz) > 0) {
+        unsigned b = pz_u256_bits(&rsz) - 1;
         cb = b < 1 ? 1 : b;
     }
     out->chunk_bits = cb;
@@ -137,59 +137,59 @@ void bsgs_sched_cfg(const bsgs_params *p, const campaign_cfg *cfg, campaign_cfg 
 /* ------------------------------------------------------------ giant points */
 
 /* q = Pp - a*S*G.  Returns false when q is the point at infinity (the key is then c + a*S exactly). */
-static bool giant_point(const bsgs_params *p, int64_t a, ge *q)
+static bool giant_point(const bsgs_params *p, int64_t a, pz_ge *q)
 {
     __int128 m = (__int128)a * (__int128)p->S;
     if (m == 0) { *q = p->Pp; return true; }
     u128 mag = (u128)(m < 0 ? -m : m);
-    u256 k = u256_from_u128(mag);
-    ge mG;
-    if (!ec_mul_g(&mG, &k)) return false;
-    return m > 0 ? ge_sub(q, &p->Pp, &mG) : ge_add(q, &p->Pp, &mG);
+    pz_u256 k = pz_u256_from_u128(mag);
+    pz_ge mG;
+    if (!pz_ec_mul_g(&mG, &k)) return false;
+    return m > 0 ? pz_ge_sub(q, &p->Pp, &mG) : pz_ge_add(q, &p->Pp, &mG);
 }
 
 /* c + a*S + sgn*b  (mod n) */
-static u256 candidate_key(const bsgs_params *p, int64_t a, u64 b, int sgn)
+static pz_u256 candidate_key(const bsgs_params *p, int64_t a, u64 b, int sgn)
 {
     __int128 m = (__int128)a * (__int128)p->S + (sgn < 0 ? -(__int128)b : (__int128)b);
     u128 mag = (u128)(m < 0 ? -m : m);
-    u256 mg = u256_from_u128(mag), r;
-    if (m >= 0) u256_addmod_n(&r, &p->c, &mg);
-    else u256_submod_n(&r, &p->c, &mg);
+    pz_u256 mg = pz_u256_from_u128(mag), r;
+    if (m >= 0) pz_u256_addmod_n(&r, &p->c, &mg);
+    else pz_u256_submod_n(&r, &p->c, &mg);
     return r;
 }
 
-static bool verify_key(const bsgs_params *p, const u256 *key)
+static bool verify_key(const bsgs_params *p, const pz_u256 *key)
 {
-    ge q;
-    if (u256_is_zero(key) || !ec_mul_g(&q, key)) return false;
-    return ge_equal(&q, &p->P);
+    pz_ge q;
+    if (pz_u256_is_zero(key) || !pz_ec_mul_g(&q, key)) return false;
+    return pz_ge_equal(&q, &p->P);
 }
 
 /* ------------------------------------------------------------------ steps */
 
-static void steps_make(bs_steps *st, const ge *U, u64 kmag, bool negated)
+static void steps_make(bs_steps *st, const pz_ge *U, u64 kmag, bool negated)
 {
-    gej *pts = pz_xmalloc(sizeof(gej) * (BS_HALF + 1));
-    ge *aff = pz_xmalloc(sizeof(ge) * (BS_HALF + 1));
-    gej cur;
-    gej_set_ge(&cur, U);
+    pz_gej *pts = pz_xmalloc(sizeof(pz_gej) * (BS_HALF + 1));
+    pz_ge *aff = pz_xmalloc(sizeof(pz_ge) * (BS_HALF + 1));
+    pz_gej cur;
+    pz_gej_set_ge(&cur, U);
     pts[0] = cur;
     for (int i = 1; i < BS_HALF; i++) {
-        gej_add_ge(&cur, &cur, U);
+        pz_gej_add_ge(&cur, &cur, U);
         pts[i] = cur;
     }
-    gej_double(&cur, &pts[BS_HALF - 1]);
+    pz_gej_double(&cur, &pts[BS_HALF - 1]);
     pts[BS_HALF] = cur;
-    gej_to_ge_batch(aff, pts, BS_HALF + 1);
-    memcpy(st->tab, aff, sizeof(ge) * BS_HALF);
+    pz_gej_to_ge_batch(aff, pts, BS_HALF + 1);
+    memcpy(st->tab, aff, sizeof(pz_ge) * BS_HALF);
     st->step = aff[BS_HALF];
     /* independent check of the last table entry and of the step with scalar multiplications */
-    ge chk, chk2;
-    u256 k1 = u256_from_u128((u128)kmag * BS_HALF), k2 = u256_from_u128((u128)kmag * BS_GRP);
-    if (!ec_mul_g(&chk, &k1) || !ec_mul_g(&chk2, &k2)) pz_die("BSGS: invalid step table");
-    if (negated) { ge_neg(&chk, &chk); ge_neg(&chk2, &chk2); }
-    if (!ge_equal(&chk, &st->tab[BS_HALF - 1]) || !ge_equal(&chk2, &st->step)) pz_die("BSGS: step table check failed");
+    pz_ge chk, chk2;
+    pz_u256 k1 = pz_u256_from_u128((u128)kmag * BS_HALF), k2 = pz_u256_from_u128((u128)kmag * BS_GRP);
+    if (!pz_ec_mul_g(&chk, &k1) || !pz_ec_mul_g(&chk2, &k2)) pz_die("BSGS: invalid step table");
+    if (negated) { pz_ge_neg(&chk, &chk); pz_ge_neg(&chk2, &chk2); }
+    if (!pz_ge_equal(&chk, &st->tab[BS_HALF - 1]) || !pz_ge_equal(&chk2, &st->step)) pz_die("BSGS: step table check failed");
     free(pts);
     free(aff);
 }
@@ -208,22 +208,22 @@ static bs_group_fn pick_group(void)
 static bool vengine_check(const bs_vengine *ve)
 {
     bs_steps *st = pz_xmalloc(sizeof *st);
-    steps_make(st, &EC_G, 1, false);
+    steps_make(st, &pz_ec_g, 1, false);
     void *vt = ve->prepare(st);
     const int nl = ve->lanes;
-    ge *C = pz_xcalloc((size_t)nl, sizeof(ge));
+    pz_ge *C = pz_xcalloc((size_t)nl, sizeof(pz_ge));
     u64 *vlo = pz_xaligned(64, sizeof(u64) * BS_GRP * nl), *vhi = pz_xaligned(64, sizeof(u64) * BS_GRP * nl);
     u64 *slo = pz_xaligned(64, sizeof(u64) * BS_GRP), *shi = pz_xaligned(64, sizeof(u64) * BS_GRP);
-    fe *dx = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1));
+    pz_fe *dx = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1));
     void *scr = pz_xaligned(64, ve->scratch);
     bool ok = vt != NULL;
     const u64 k0 = 7777;
-    for (int l = 0; l < nl && ok; l++) ok = ec_mul_g(&C[l], &(u256){{k0 + BS_HALF + (u64)l * BS_GRP, 0, 0, 0}});
+    for (int l = 0; l < nl && ok; l++) ok = pz_ec_mul_g(&C[l], &(pz_u256){{k0 + BS_HALF + (u64)l * BS_GRP, 0, 0, 0}});
     for (int call = 0; call < 2 && ok; call++) {
         ok = ve->groups(vt, C, vlo, vhi, scr);
         for (int l = 0; l < nl && ok; l++) {
-            ge S;
-            ok = ec_mul_g(&S, &(u256){{k0 + BS_HALF + (u64)(call * nl + l) * BS_GRP, 0, 0, 0}}) && bs_group_base(st, &S, slo, shi, dx, tmp);
+            pz_ge S;
+            ok = pz_ec_mul_g(&S, &(pz_u256){{k0 + BS_HALF + (u64)(call * nl + l) * BS_GRP, 0, 0, 0}}) && bs_group_base(st, &S, slo, shi, dx, tmp);
             for (int off = 0; off < BS_GRP && ok; off++)
                 ok = vlo[(size_t)off * nl + l] == slo[off] && vhi[(size_t)off * nl + l] == shi[off];
         }
@@ -283,13 +283,13 @@ int bsgs_vengine_selftest(void)
 
 void bsgs_job_init(bsgs_job *j, const bsgs_table *t, const bsgs_params *p)
 {
-    ec_init();
+    pz_ec_init();
     j->tab = t;
     j->p = p;
-    ge SG;
-    if (!ec_mul_g(&SG, &(u256){{p->S, 0, 0, 0}})) pz_die("BSGS: invalid S*G");
-    ge U;
-    ge_neg(&U, &SG);
+    pz_ge SG;
+    if (!pz_ec_mul_g(&SG, &(pz_u256){{p->S, 0, 0, 0}})) pz_die("BSGS: invalid S*G");
+    pz_ge U;
+    pz_ge_neg(&U, &SG);
     steps_make(&j->giant, &U, p->S, true);
 }
 
@@ -345,10 +345,10 @@ static void *build_thread(void *p)
     const bs_vengine *ve = pick_vengine();
     void *vt = ve ? ve->prepare(a->st) : NULL;
     const int nl = vt ? ve->lanes : 1;
-    fe *dx = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1));
+    pz_fe *dx = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1));
     u64 *xlo = pz_xaligned(64, sizeof(u64) * BS_GRP * nl), *xhi = pz_xaligned(64, sizeof(u64) * BS_GRP * nl);
     void *scr = vt ? pz_xaligned(64, ve->scratch) : NULL;
-    ge *Cv = pz_xcalloc((size_t)nl, sizeof(ge));
+    pz_ge *Cv = pz_xcalloc((size_t)nl, sizeof(pz_ge));
     for (;;) {
         u64 blk = atomic_fetch_add(a->next_block, 1);
         if (blk >= a->nblocks) break;
@@ -358,7 +358,7 @@ static void *build_thread(void *p)
         if (vt) {
             /* nl windows at once while they fit in the block (baby steps are small multiples of G: no zero denominator) */
             for (int l = 0; l < nl; l++)
-                if (!ec_mul_g(&Cv[l], &(u256){{b0 + BS_HALF + (u64)l * BS_GRP, 0, 0, 0}})) pz_die("BSGS: invalid centre");
+                if (!pz_ec_mul_g(&Cv[l], &(pz_u256){{b0 + BS_HALF + (u64)l * BS_GRP, 0, 0, 0}})) pz_die("BSGS: invalid centre");
             for (; first + (u64)BS_GRP * nl <= bend; first += (u64)BS_GRP * nl) {
                 if (atomic_load_explicit(a->stop, memory_order_relaxed)) { a->stopped = true; goto done; }
                 if (!ve->groups(vt, Cv, xlo, xhi, scr)) pz_die("BSGS: zero denominator while building the table");
@@ -371,8 +371,8 @@ static void *build_thread(void *p)
             }
         }
         if (first >= bend) continue;
-        ge C;
-        if (!ec_mul_g(&C, &(u256){{first + BS_HALF, 0, 0, 0}})) pz_die("BSGS: invalid centre");
+        pz_ge C;
+        if (!pz_ec_mul_g(&C, &(pz_u256){{first + BS_HALF, 0, 0, 0}})) pz_die("BSGS: invalid centre");
         for (; first < bend; first += BS_GRP) {
             if (atomic_load_explicit(a->stop, memory_order_relaxed)) { a->stopped = true; goto done; }
             if (!a->gf(a->st, &C, xlo, xhi, dx, tmp)) pz_die("BSGS: zero denominator while building the table");
@@ -391,10 +391,10 @@ done:
 
 bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic int *stop)
 {
-    ec_init();
+    pz_ec_init();
     if (nthreads < 1) nthreads = 1;
     bs_steps *st = pz_xmalloc(sizeof *st);
-    steps_make(st, &EC_G, 1, false);
+    steps_make(st, &pz_ec_g, 1, false);
     _Atomic u64 next = 0;
     _Atomic int never = 0;
     build_arg *args = pz_xcalloc((size_t)nthreads, sizeof *args);
@@ -503,30 +503,30 @@ static void header_fill(bs_header *h, u64 T, u64 nslots, u64 body_sum)
     h->val_bits = BS_VAL_BITS;
     h->count = T;
     h->body_sum = body_sum;
-    fe_to_be(h->gx, &EC_G.x);
-    ge tg;
-    if (!ec_mul_g(&tg, &(u256){{T, 0, 0, 0}})) pz_die("BSGS: invalid T*G");
-    fe_to_be(h->tx, &tg.x);
-    sha256((const u8 *)h, offsetof(bs_header, sha), h->sha);
+    pz_fe_to_be(h->gx, &pz_ec_g.x);
+    pz_ge tg;
+    if (!pz_ec_mul_g(&tg, &(pz_u256){{T, 0, 0, 0}})) pz_die("BSGS: invalid T*G");
+    pz_fe_to_be(h->tx, &tg.x);
+    pz_sha256((const u8 *)h, offsetof(bs_header, sha), h->sha);
 }
 
 static bool header_check(const bs_header *h, char *err, size_t errlen)
 {
     u8 dg[32];
     if (memcmp(h->magic, BS_FILE_MAGIC, 8) != 0) { snprintf(err, errlen, "not a pzsolve BSGS table"); return false; }
-    sha256((const u8 *)h, offsetof(bs_header, sha), dg);
+    pz_sha256((const u8 *)h, offsetof(bs_header, sha), dg);
     if (memcmp(dg, h->sha, 32) != 0) { snprintf(err, errlen, "table header corrupted"); return false; }
     if (h->endian != 0x0102030405060708ULL || h->version != 1 || h->tag_bits != BS_TAG_BITS || h->val_bits != BS_VAL_BITS) {
         snprintf(err, errlen, "unsupported table format (version %llu)", (unsigned long long)h->version);
         return false;
     }
     if (h->T < 1 || h->T > BS_MAX_T || h->nslots != bsgs_slots_for(h->T) || h->count != h->T) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
-    ec_init();
+    pz_ec_init();
     u8 gx[32], tx[32];
-    ge tg;
-    fe_to_be(gx, &EC_G.x);
-    if (!ec_mul_g(&tg, &(u256){{h->T, 0, 0, 0}})) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
-    fe_to_be(tx, &tg.x);
+    pz_ge tg;
+    pz_fe_to_be(gx, &pz_ec_g.x);
+    if (!pz_ec_mul_g(&tg, &(pz_u256){{h->T, 0, 0, 0}})) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
+    pz_fe_to_be(tx, &tg.x);
     if (memcmp(gx, h->gx, 32) != 0 || memcmp(tx, h->tx, 32) != 0) { snprintf(err, errlen, "the table does not match the secp256k1 curve"); return false; }
     return true;
 }
@@ -659,10 +659,10 @@ bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, s
     for (int i = 0; i < 256; i++) {
         rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17;
         u64 b = 1 + (i == 0 ? 0 : i == 1 ? t->T - 1 : rs % t->T);
-        ge q;
-        if (!ec_mul_g(&q, &(u256){{b, 0, 0, 0}})) continue;
-        fe x = q.x;
-        fe_normalize(&x);
+        pz_ge q;
+        if (!pz_ec_mul_g(&q, &(pz_u256){{b, 0, 0, 0}})) continue;
+        pz_fe x = q.x;
+        pz_fe_normalize(&x);
         if (!table_has_entry(t, x.n[0], x.n[1], b)) {
             snprintf(err, errlen, "spot check failed: %s does not contain baby step %llu", path, (unsigned long long)b);
             bsgs_table_free(t);
@@ -684,7 +684,7 @@ typedef struct {
 static void try_candidate(scan_ctx *c, int64_t a, u64 b)
 {
     const bsgs_params *p = c->j->p;
-    u256 k = candidate_key(p, a, b, +1);
+    pz_u256 k = candidate_key(p, a, b, +1);
     if (verify_key(p, &k)) { c->found(c->user, &k); return; }
     if (b) {
         k = candidate_key(p, a, b, -1);
@@ -715,10 +715,10 @@ static void slow_giants(scan_ctx *c, int64_t a_first, int count)
     atomic_fetch_add_explicit(&bsgs_slow_windows, 1, memory_order_relaxed);
     for (int i = 0; i < count; i++) {
         int64_t a = a_first + i;
-        ge q;
+        pz_ge q;
         if (!giant_point(p, a, &q)) { try_candidate(c, a, 0); continue; }   /* b = 0: Q is the point at infinity */
-        fe x = q.x;
-        fe_normalize(&x);
+        pz_fe x = q.x;
+        pz_fe_normalize(&x);
         probe(c, x.n[0], x.n[1], a);
     }
 }
@@ -732,15 +732,15 @@ u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *u
     const bs_vengine *ve = pick_vengine();
     void *vt = ve ? ve->prepare(&j->giant) : NULL;
     const int nl = vt ? ve->lanes : 1;
-    fe *dx = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1));
+    pz_fe *dx = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1));
     u64 *xlo = pz_xaligned(64, sizeof(u64) * BS_GRP * nl), *xhi = pz_xaligned(64, sizeof(u64) * BS_GRP * nl);
     void *scr = vt ? pz_xaligned(64, ve->scratch) : NULL;
-    ge *Cv = pz_xcalloc((size_t)nl, sizeof(ge));
+    pz_ge *Cv = pz_xcalloc((size_t)nl, sizeof(pz_ge));
     bool vvalid = false;
     scan_ctx ctx = {j, found, user, falsepos};
     const u64 ngroups = (n + BS_GRP - 1) / BS_GRP;
     u64 g = 0;
-    ge C;
+    pz_ge C;
     bool cvalid = false;
     for (; g < ngroups; g++) {
         if (stop && atomic_load_explicit(stop, memory_order_relaxed)) break;
@@ -793,12 +793,12 @@ typedef struct {
     int64_t a0;
     u64 n;
     _Atomic int *stop;
-    u256 *key;
+    pz_u256 *key;
     _Atomic int *hit;
     _Atomic u64 *scanned;
 } solve_arg;
 
-static void solve_found(void *user, const u256 *key)
+static void solve_found(void *user, const pz_u256 *key)
 {
     solve_arg *a = user;
     if (atomic_exchange(a->hit, 1) == 0) *a->key = *key;
@@ -812,7 +812,7 @@ static void *solve_thread(void *p)
     return NULL;
 }
 
-bool bsgs_solve(const u256 *lo, const u256 *hi, const ge *pub, u64 T, int nthreads, u256 *key, u64 *giants)
+bool bsgs_solve(const pz_u256 *lo, const pz_u256 *hi, const pz_ge *pub, u64 T, int nthreads, pz_u256 *key, u64 *giants)
 {
     char err[200];
     bsgs_params p;
@@ -827,7 +827,7 @@ bool bsgs_solve(const u256 *lo, const u256 *hi, const ge *pub, u64 T, int nthrea
     if (nthreads < 1) nthreads = 1;
     _Atomic int stop = 0, hit = 0;
     _Atomic u64 scanned = 0;
-    u256 found = u256_zero();
+    pz_u256 found = pz_u256_zero();
     solve_arg *args = pz_xcalloc((size_t)nthreads, sizeof *args);
     pthread_t *th = pz_xcalloc((size_t)nthreads, sizeof *th);
     u64 per = (p.Ng + (u64)nthreads - 1) / (u64)nthreads;

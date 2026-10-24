@@ -27,7 +27,7 @@ void kang_free_test_state(struct kang_state *ks);
  * instead of 256 (R > 0, a power of two), dp_bits (dp > 0), no restart of walkers without distinguished points and the
  * layout of the walkers (schema 1 or 2; 0 as for a new campaign). */
 typedef struct { unsigned R, dp; bool no_watchdog; int schema; } kang_try_opts;
-double kang_try(const u256 *lo, unsigned wbits, const u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o);
+double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o);
 /* Measures the CPU walk rate (steps/s, all cores) over `secs` seconds; prints when `print` is set. */
 double kangaroo_bench(double secs, bool print);
 /* 'merge': adds the distinguished points of other computers' logs (or campaign folders) to the campaign of `r`, which must be

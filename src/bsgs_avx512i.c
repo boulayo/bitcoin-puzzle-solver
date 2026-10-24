@@ -3,8 +3,8 @@
 #include "bsgs_priv.h"
 #include "cpu_engine.h"
 #define ISA avx512i
-#define VBYTES 64
-#define FEV_IFMA 1
+#define PZ_VBYTES 64
+#define PZ_FEV_IFMA 1
 #include "bsgs_vec_impl.inc"
 
-const bs_vengine BSV_AVX512I = {"AVX-512 IFMA", NL, cpu_has_ifma, CAT(bsv_prepare_, ISA), 2 * (BS_HALF + 1) * sizeof(fev), CAT(bsv_groups_, ISA)};
+const bs_vengine BSV_AVX512I = {"AVX-512 IFMA", NL, cpu_has_ifma, CAT(bsv_prepare_, ISA), 2 * (BS_HALF + 1) * sizeof(pz_fev), CAT(bsv_groups_, ISA)};

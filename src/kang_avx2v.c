@@ -2,5 +2,5 @@
 /* kang_avx2v.c - kangaroo round with lane-parallel arithmetic on AVX2 (see Makefile for the flags). */
 #include "kangaroo_priv.h"
 #define ISA avx2v
-#define VBYTES 32
+#define PZ_VBYTES 32
 #include "kang_vec_impl.inc"

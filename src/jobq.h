@@ -18,7 +18,7 @@
 #include <pthread.h>
 
 typedef struct {
-    u256 key_start;   /* first key of the claim */
+    pz_u256 key_start;   /* first key of the claim */
     u64 nkeys;        /* keys in the claim */
     u128 v_start;     /* position in the virtual space */
     u64 id;
@@ -30,13 +30,13 @@ typedef struct { u128 a, b; } vival;   /* [a, b) */
 
 typedef struct sched {
     pthread_mutex_t mu;
-    perm_t perm;
+    pz_perm_t perm;
     part_spec part;        /* this computer's shares of the search order (total == 0: all of it, see campaign.h) */
     char part_text[PART_TEXT];
-    u256 blocks_all;       /* blocks of the whole search order */
-    u256 blocks_part;      /* blocks of this computer's part (all of them without a split) */
-    u256 part_keys;        /* keys of this computer's part (the range size without a split) */
-    u256 range_start, range_end;
+    pz_u256 blocks_all;       /* blocks of the whole search order */
+    pz_u256 blocks_part;      /* blocks of this computer's part (all of them without a split) */
+    pz_u256 part_keys;        /* keys of this computer's part (the range size without a split) */
+    pz_u256 range_start, range_end;
     unsigned cbits;
     u128 v_limit;          /* virtual space size, in this computer's blocks (capped at 2^126) */
     bool v_capped;
@@ -45,9 +45,9 @@ typedef struct sched {
     struct { u64 id; u128 a, b; } *inflight; size_t ninf, capinf;
     u64 next_id;
     /* cached chunk */
-    u128 cur_seq; bool cur_valid; u256 cur_start; u64 cur_len;
+    u128 cur_seq; bool cur_valid; pz_u256 cur_start; u64 cur_len;
     u128 keys_done;        /* exact count of keys covered (excluding fillers) */
-    u256 range_size;
+    pz_u256 range_size;
 } sched_t;
 
 sched_t *sched_new(const campaign_cfg *cfg);
@@ -55,7 +55,7 @@ sched_t *sched_new(const campaign_cfg *cfg);
 bool sched_check_part(const campaign_cfg *cfg, char *err, size_t errn);
 /* Position in this computer's own order of the block at position `gseq` of the whole search order; false when another computer's
  * share holds it. Without a split the positions are the same. */
-bool sched_part_position(const sched_t *s, const u256 *gseq, u256 *local);
+bool sched_part_position(const sched_t *s, const pz_u256 *gseq, pz_u256 *local);
 void sched_free(sched_t *s);
 claim_status sched_claim(sched_t *s, u64 want, claim_t *out);
 /* covered == nkeys marks the whole claim as done; smaller values mark only
@@ -75,6 +75,6 @@ double sched_fraction(sched_t *s);
 bool sched_finished(sched_t *s);
 /* Sequence number (position in the visiting order of the whole range) at which `key` will be/was
  * scanned, as a fraction of the whole campaign. */
-bool sched_locate(sched_t *s, const u256 *key, u256 *seq, u64 *offset);
+bool sched_locate(sched_t *s, const pz_u256 *key, pz_u256 *seq, u64 *offset);
 
 #endif

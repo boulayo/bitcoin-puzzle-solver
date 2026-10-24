@@ -1,14 +1,14 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* hash_neon.inc - hash160 of LANES compressed public keys on aarch64, included from hash_simd.inc (PZ_HASH_EXTERNAL).
+/* hash_neon.inc - hash160 of PZ_LANES compressed public keys on aarch64, included from hash_simd.inc (PZ_HASH_EXTERNAL).
  * SHA-256 uses the ARMv8 SHA2 instructions (sha256h, sha256h2, sha256su0, sha256su1), four keys at a time in lock step. RIPEMD-160
- * runs on NEON vectors of four lanes; NEON_NV such vectors (LANES = 4 * NEON_NV) are advanced together inside every step, which gives
+ * runs on NEON vectors of four lanes; NEON_NV such vectors (PZ_LANES = 4 * NEON_NV) are advanced together inside every step, which gives
  * the out-of-order core NEON_NV * 2 independent dependency chains (two RIPEMD lines per vector). Rotations are a shift left plus a
- * shift-right-insert. Layout as in hash_simd.inc: X[8][LANES] and pfx[LANES] in, out[5][LANES] (or out0[LANES]) out. */
+ * shift-right-insert. Layout as in hash_simd.inc: X[8][PZ_LANES] and pfx[PZ_LANES] in, out[5][PZ_LANES] (or out0[PZ_LANES]) out. */
 
 #include <arm_neon.h>
 
 #ifndef NEON_NV
-#define NEON_NV (LANES / 4)
+#define NEON_NV (PZ_LANES / 4)
 #endif
 #define NV NEON_NV
 
@@ -28,7 +28,7 @@ static inline void neon_sha256_group(const u32 *X, const u32 *pfx, int g, uint32
     /* message words 0..8 of the four keys, one vector per word */
     uint32x4_t x[8], wv[9];
     const uint32x4_t p = vld1q_u32(pfx + 4 * g);
-    for (int i = 0; i < 8; i++) x[i] = vld1q_u32(X + i * LANES + 4 * g);
+    for (int i = 0; i < 8; i++) x[i] = vld1q_u32(X + i * PZ_LANES + 4 * g);
     wv[0] = vorrq_u32(vshlq_n_u32(p, 24), vshrq_n_u32(x[0], 8));
     for (int i = 1; i < 8; i++) wv[i] = vorrq_u32(vshlq_n_u32(x[i - 1], 24), vshrq_n_u32(x[i], 8));
     wv[8] = vorrq_u32(vshlq_n_u32(x[7], 24), vdupq_n_u32(0x00800000u));
@@ -46,7 +46,7 @@ static inline void neon_sha256_group(const u32 *X, const u32 *pfx, int g, uint32
     for (int k = 0; k < 4; k++) m[k][3] = last;
 
     uint32x4_t s0[4], s1[4];
-    for (int k = 0; k < 4; k++) { s0[k] = vld1q_u32(SHA256_H0); s1[k] = vld1q_u32(SHA256_H0 + 4); }
+    for (int k = 0; k < 4; k++) { s0[k] = vld1q_u32(pz_sha256_h0); s1[k] = vld1q_u32(pz_sha256_h0 + 4); }
 #pragma GCC unroll 16
     for (int i = 0; i < 16; i++) {
 #pragma GCC unroll 4
@@ -56,13 +56,13 @@ static inline void neon_sha256_group(const u32 *X, const u32 *pfx, int g, uint32
                 w = vsha256su1q_u32(vsha256su0q_u32(w, m[k][(i + 1) & 3]), m[k][(i + 2) & 3], m[k][(i + 3) & 3]);
                 m[k][i & 3] = w;
             }
-            const uint32x4_t wk = vaddq_u32(w, vld1q_u32(SHA256_K + 4 * i));
+            const uint32x4_t wk = vaddq_u32(w, vld1q_u32(pz_sha256_k + 4 * i));
             const uint32x4_t prev = s0[k];
             s0[k] = vsha256hq_u32(s0[k], s1[k], wk);
             s1[k] = vsha256h2q_u32(s1[k], prev, wk);
         }
     }
-    const uint32x4_t h0 = vld1q_u32(SHA256_H0), h1 = vld1q_u32(SHA256_H0 + 4);
+    const uint32x4_t h0 = vld1q_u32(pz_sha256_h0), h1 = vld1q_u32(pz_sha256_h0 + 4);
     for (int k = 0; k < 4; k++) { s0[k] = vaddq_u32(s0[k], h0); s1[k] = vaddq_u32(s1[k], h1); }
     neon_transpose4(s0[0], s0[1], s0[2], s0[3], dig);
     neon_transpose4(s1[0], s1[1], s1[2], s1[3], dig + 4);
@@ -113,11 +113,11 @@ static inline void neon_ripemd160(const uint32x4_t dig[8][NV], uint32x4_t out[5]
         const int rd = j / 16;
 #pragma GCC unroll 4
         for (int v = 0; v < NV; v++) {
-            uint32x4_t t = vaddq_u32(vaddq_u32(a[v], neon_rmd_f(rd, b[v], c[v], d[v])), vaddq_u32(m[RMD_RL[j]][v], vdupq_n_u32(RMD_KL[rd])));
-            t = vaddq_u32(neon_rotl(t, RMD_SL[j]), e[v]);
+            uint32x4_t t = vaddq_u32(vaddq_u32(a[v], neon_rmd_f(rd, b[v], c[v], d[v])), vaddq_u32(m[pz_rmd_rl[j]][v], vdupq_n_u32(pz_rmd_kl[rd])));
+            t = vaddq_u32(neon_rotl(t, pz_rmd_sl[j]), e[v]);
             a[v] = e[v]; e[v] = d[v]; d[v] = neon_rotl(c[v], 10); c[v] = b[v]; b[v] = t;
-            t = vaddq_u32(vaddq_u32(a2[v], neon_rmd_f(4 - rd, b2[v], c2[v], d2[v])), vaddq_u32(m[RMD_RR[j]][v], vdupq_n_u32(RMD_KR[rd])));
-            t = vaddq_u32(neon_rotl(t, RMD_SR[j]), e2[v]);
+            t = vaddq_u32(vaddq_u32(a2[v], neon_rmd_f(4 - rd, b2[v], c2[v], d2[v])), vaddq_u32(m[pz_rmd_rr[j]][v], vdupq_n_u32(pz_rmd_kr[rd])));
+            t = vaddq_u32(neon_rotl(t, pz_rmd_sr[j]), e2[v]);
             a2[v] = e2[v]; e2[v] = d2[v]; d2[v] = neon_rotl(c2[v], 10); c2[v] = b2[v]; b2[v] = t;
         }
     }
@@ -140,19 +140,19 @@ static inline void neon_hash160(const u32 *X, const u32 *pfx, uint32x4_t out[5][
     neon_ripemd160(dig, out);
 }
 
-/* Hashes LANES compressed public keys. out is [5][LANES]. */
-static void HASH_LANES_FN(const u32 *X, const u32 *pfx, u32 *out)
+/* Hashes PZ_LANES compressed public keys. out is [5][PZ_LANES]. */
+static void PZ_HASH_LANES_FN(const u32 *X, const u32 *pfx, u32 *out)
 {
     uint32x4_t r[5][NV];
     neon_hash160(X, pfx, r);
     for (int i = 0; i < 5; i++)
-        for (int v = 0; v < NV; v++) vst1q_u32(out + i * LANES + 4 * v, r[i][v]);
+        for (int v = 0; v < NV; v++) vst1q_u32(out + i * PZ_LANES + 4 * v, r[i][v]);
 }
 
-/* Only the first word of each hash160 (the search filter; matches are re-checked with the scalar hash). The words that do not
+/* Only the first word of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). The words that do not
  * reach out[0] are dead code after the inlining and the unrolling. */
-#define HASH_W0_FN CAT(HASH_LANES_FN, _w0)
-static void HASH_W0_FN(const u32 *X, const u32 *pfx, u32 *out0)
+#define PZ_HASH_W0_FN CAT(PZ_HASH_LANES_FN, _w0)
+static void PZ_HASH_W0_FN(const u32 *X, const u32 *pfx, u32 *out0)
 {
     uint32x4_t r[5][NV];
     neon_hash160(X, pfx, r);

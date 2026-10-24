@@ -25,19 +25,19 @@ static int fails;
 static u64 rs = 0x6A09E667F3BCC908ULL;
 static u64 rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return rs; }
 
-static void from32(fe *f, const uint o[8]) { for (int i = 0; i < 4; i++) f->n[i] = (u64)o[2 * i] | (u64)o[2 * i + 1] << 32; }
+static void from32(pz_fe *f, const uint o[8]) { for (int i = 0; i < 4; i++) f->n[i] = (u64)o[2 * i] | (u64)o[2 * i + 1] << 32; }
 
 /* r must be congruent to want and (lazy representation) any value < 2^256; canonical results must be < p */
-static void expect(const char *op, int variant, const uint got[8], const fe *want, const uint a[8], const uint b[8], bool canonical)
+static void expect(const char *op, int variant, const uint got[8], const pz_fe *want, const uint a[8], const uint b[8], bool canonical)
 {
-    fe g, w = *want;
+    pz_fe g, w = *want;
     from32(&g, got);
     if (canonical) {
-        fe n = g;
-        fe_normalize(&n);
+        pz_fe n = g;
+        pz_fe_normalize(&n);
         if (memcmp(&n, &g, sizeof g) != 0) goto bad;
     }
-    if (fe_equiv(&g, &w)) return;
+    if (pz_fe_equiv(&g, &w)) return;
 bad:
     if (fails++ < 10) {
         printf("FAIL %s (%s): a=", op, variant ? "PTX" : "portable");
@@ -50,7 +50,7 @@ bad:
 
 static void check(const uint a[8], const uint b[8])
 {
-    fe A, B, w;
+    pz_fe A, B, w;
     from32(&A, a);
     from32(&B, b);
     uint r[8];
@@ -60,11 +60,11 @@ static void check(const uint a[8], const uint b[8])
     void (*sqr[2])(uint *, const uint *) = {gp_sqr, gf_sqr};
     void (*nrm[2])(uint *, const uint *) = {gp_norm, gf_norm};
     for (int v = 0; v < 2; v++) {
-        add[v](r, a, b); fe_add(&w, &A, &B); expect("add", v, r, &w, a, b, false);
-        sub[v](r, a, b); fe_sub(&w, &A, &B); expect("sub", v, r, &w, a, b, false);
-        sub[v](r, b, a); fe_sub(&w, &B, &A); expect("sub", v, r, &w, b, a, false);
-        mul[v](r, a, b); fe_mul(&w, &A, &B); expect("mul", v, r, &w, a, b, false);
-        sqr[v](r, a); fe_sqr(&w, &A); expect("sqr", v, r, &w, a, NULL, false);
+        add[v](r, a, b); pz_fe_add(&w, &A, &B); expect("add", v, r, &w, a, b, false);
+        sub[v](r, a, b); pz_fe_sub(&w, &A, &B); expect("sub", v, r, &w, a, b, false);
+        sub[v](r, b, a); pz_fe_sub(&w, &B, &A); expect("sub", v, r, &w, b, a, false);
+        mul[v](r, a, b); pz_fe_mul(&w, &A, &B); expect("mul", v, r, &w, a, b, false);
+        sqr[v](r, a); pz_fe_sqr(&w, &A); expect("sqr", v, r, &w, a, NULL, false);
         nrm[v](r, a); w = A; expect("normalize", v, r, &w, a, NULL, true);
     }
 }
@@ -122,9 +122,9 @@ int main(void)
                 default: break;
                 }
             }
-            fe A, w;
+            pz_fe A, w;
             from32(&A, a);
-            fe_inv(&w, &A);
+            pz_fe_inv(&w, &A);
             for (int v = 0; v < 2; v++) {
                 (v ? gf_inv : gp_inv)(r, a);
                 expect("inv", v, r, &w, a, NULL, true);
@@ -141,9 +141,9 @@ int main(void)
                                           {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu}};
             for (int s = 0; s < 6; s++) {
                 memcpy(a, sp[s], sizeof a);
-                fe A, w;
+                pz_fe A, w;
                 from32(&A, a);
-                fe_inv(&w, &A);
+                pz_fe_inv(&w, &A);
                 for (int v = 0; v < 2; v++) { (v ? gf_inv : gp_inv)(r, a); expect("inv", v, r, &w, a, NULL, true); }
             }
         }

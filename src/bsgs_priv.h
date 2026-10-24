@@ -9,9 +9,9 @@
  * stores x.n[0] / x.n[1] (normalized) at position off + BS_HALF, and advances C by BS_GRP*U.  dx and tmp hold
  * BS_HALF + 1 elements.  Returns false (C untouched) when a denominator is zero: some point of the window is
  * the point at infinity or collides with the centre, which the caller handles exactly. */
-typedef bool (*bs_group_fn)(const bs_steps *st, ge *C, u64 *xlo, u64 *xhi, fe *dx, fe *tmp);
-bool bs_group_base(const bs_steps *st, ge *C, u64 *xlo, u64 *xhi, fe *dx, fe *tmp);
-bool bs_group_x86(const bs_steps *st, ge *C, u64 *xlo, u64 *xhi, fe *dx, fe *tmp);
+typedef bool (*bs_group_fn)(const bs_steps *st, pz_ge *C, u64 *xlo, u64 *xhi, pz_fe *dx, pz_fe *tmp);
+bool bs_group_base(const bs_steps *st, pz_ge *C, u64 *xlo, u64 *xhi, pz_fe *dx, pz_fe *tmp);
+bool bs_group_x86(const bs_steps *st, pz_ge *C, u64 *xlo, u64 *xhi, pz_fe *dx, pz_fe *tmp);
 
 /* Lane-parallel variant: `lanes` consecutive windows per call (centres C[0..lanes), advanced by lanes*BS_GRP*U), x
  * words interleaved as xlo[(off + BS_HALF)*lanes + l]. prepare() builds its tables for a bs_steps (NULL on failure,
@@ -22,7 +22,7 @@ typedef struct {
     bool (*supported)(void);
     void *(*prepare)(const bs_steps *st);
     size_t scratch;
-    bool (*groups)(const void *vt, ge *C, u64 *xlo, u64 *xhi, void *scratch);
+    bool (*groups)(const void *vt, pz_ge *C, u64 *xlo, u64 *xhi, void *scratch);
 } bs_vengine;
 extern const bs_vengine BSV_AVX2V, BSV_AVX512V, BSV_AVX512I;
 

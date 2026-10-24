@@ -4,52 +4,52 @@
 #include "hash.h"
 #include <pthread.h>
 
-ge cpu_gtab[CPU_HALF];
-ge cpu_gstep;
+pz_ge cpu_gtab[CPU_HALF];
+pz_ge cpu_gstep;
 static pthread_once_t g_tab_once = PTHREAD_ONCE_INIT;
 
 static void tables_build(void)
 {
-    ec_init();
+    pz_ec_init();
     /* i*G for i = 1..HALF by repeated affine addition from Jacobian points */
-    gej *pts = pz_xmalloc(sizeof(gej) * (CPU_HALF + 1));
-    gej cur;
-    gej_set_ge(&cur, &EC_G);
+    pz_gej *pts = pz_xmalloc(sizeof(pz_gej) * (CPU_HALF + 1));
+    pz_gej cur;
+    pz_gej_set_ge(&cur, &pz_ec_g);
     pts[0] = cur;
     for (int i = 1; i < CPU_HALF; i++) {
-        gej_add_ge(&cur, &cur, &EC_G);
+        pz_gej_add_ge(&cur, &cur, &pz_ec_g);
         pts[i] = cur;
     }
-    u256 k = u256_from_u64(CPU_GRP);
-    gej_double(&cur, &pts[CPU_HALF - 1]);       /* 2*HALF*G */
+    pz_u256 k = pz_u256_from_u64(CPU_GRP);
+    pz_gej_double(&cur, &pts[CPU_HALF - 1]);       /* 2*HALF*G */
     pts[CPU_HALF] = cur;
-    ge *aff = pz_xmalloc(sizeof(ge) * (CPU_HALF + 1));
-    gej_to_ge_batch(aff, pts, CPU_HALF + 1);
-    memcpy(cpu_gtab, aff, sizeof(ge) * CPU_HALF);
+    pz_ge *aff = pz_xmalloc(sizeof(pz_ge) * (CPU_HALF + 1));
+    pz_gej_to_ge_batch(aff, pts, CPU_HALF + 1);
+    memcpy(cpu_gtab, aff, sizeof(pz_ge) * CPU_HALF);
     cpu_gstep = aff[CPU_HALF];
-    ge chk;
-    if (!ec_mul_g(&chk, &k) || !ge_equal(&chk, &cpu_gstep)) pz_die("CPU tables: check failed");
+    pz_ge chk;
+    if (!pz_ec_mul_g(&chk, &k) || !pz_ge_equal(&chk, &cpu_gstep)) pz_die("CPU tables: check failed");
     free(pts);
     free(aff);
 }
 
 void cpu_tables_init(void) { pthread_once(&g_tab_once, tables_build); }
 
-void cpu_gmultiples(ge *out, int n)
+void cpu_gmultiples(pz_ge *out, int n)
 {
     cpu_tables_init();
     const int m = n < CPU_HALF ? n : CPU_HALF;
-    memcpy(out, cpu_gtab, sizeof(ge) * (size_t)m);
+    memcpy(out, cpu_gtab, sizeof(pz_ge) * (size_t)m);
     if (n <= CPU_HALF) return;
     /* the rest by repeated addition of G from (CPU_HALF)*G, converted to affine in one batch */
-    gej *pts = pz_xmalloc(sizeof(gej) * (size_t)(n - CPU_HALF));
-    gej cur;
-    gej_set_ge(&cur, &cpu_gtab[CPU_HALF - 1]);
+    pz_gej *pts = pz_xmalloc(sizeof(pz_gej) * (size_t)(n - CPU_HALF));
+    pz_gej cur;
+    pz_gej_set_ge(&cur, &cpu_gtab[CPU_HALF - 1]);
     for (int i = 0; i < n - CPU_HALF; i++) {
-        gej_add_ge(&cur, &cur, &EC_G);
+        pz_gej_add_ge(&cur, &cur, &pz_ec_g);
         pts[i] = cur;
     }
-    gej_to_ge_batch(out + CPU_HALF, pts, (size_t)(n - CPU_HALF));
+    pz_gej_to_ge_batch(out + CPU_HALF, pts, (size_t)(n - CPU_HALF));
     free(pts);
 }
 
@@ -140,8 +140,8 @@ const cpu_engine *cpu_engine_by_name(const char *name)
     return NULL;
 }
 
-typedef struct { int hits; u256 key; } qc_t;
-static void qc_hit(void *user, const u256 *k)
+typedef struct { int hits; pz_u256 key; } qc_t;
+static void qc_hit(void *user, const pz_u256 *k)
 {
     qc_t *q = user;
     q->hits++;
@@ -152,22 +152,22 @@ bool cpu_engine_quickcheck(const cpu_engine *e)
 {
     cpu_tables_init();
     /* one granule starting at an arbitrary large key, with the target planted at an odd offset in its second half */
-    u256 start = u256_pow2(97);
-    u256_add_u64(&start, &start, 0x5A5A5ULL);
-    u256 want = start;
-    u256_add_u64(&want, &want, e->granule / 2 + 37);
-    ge p;
+    pz_u256 start = pz_u256_pow2(97);
+    pz_u256_add_u64(&start, &start, 0x5A5A5ULL);
+    pz_u256 want = start;
+    pz_u256_add_u64(&want, &want, e->granule / 2 + 37);
+    pz_ge p;
     u8 pub[33], h[20];
-    if (!ec_mul_g(&p, &want)) return false;
-    ge_to_pub33(pub, &p);
-    hash160(pub, 33, h);
+    if (!pz_ec_mul_g(&p, &want)) return false;
+    pz_ge_to_pub33(pub, &p);
+    pz_hash160(pub, 33, h);
     scan_job job;
     scan_job_init(&job, h);
     qc_t q = {0};
     job.on_hit = qc_hit;
     job.user = &q;
     u64 done = e->scan(&job, &start, e->granule);
-    return done == e->granule && q.hits == 1 && u256_cmp(&q.key, &want) == 0;
+    return done == e->granule && q.hits == 1 && pz_u256_cmp(&q.key, &want) == 0;
 }
 
 const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
@@ -187,12 +187,12 @@ const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
             pz_log(PZ_LOG_WARN, "CPU engine %s: wrong result in the quick check, excluded", e->name);
             continue;
         }
-        u256 start = u256_pow2(100);
+        pz_u256 start = pz_u256_pow2(100);
         u64 keys = 0;
         double t0 = pz_mono(), t1;
         do {
             keys += e->scan(&job, &start, 1u << 18);
-            u256_add_u64(&start, &start, 1u << 18);
+            pz_u256_add_u64(&start, &start, 1u << 18);
             t1 = pz_mono();
         } while (t1 - t0 < secs);
         double rate = (double)keys / (t1 - t0);
@@ -205,19 +205,19 @@ const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
     return best;
 }
 
-u64 cpu_scan_reference(const scan_job *job, const u256 *start, u64 nkeys)
+u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys)
 {
-    ec_init();
-    u256 k = *start;
+    pz_ec_init();
+    pz_u256 k = *start;
     for (u64 i = 0; i < nkeys; i++) {
-        ge p;
+        pz_ge p;
         u8 pub[33], h[20];
-        if (ec_mul_g(&p, &k)) {
-            ge_to_pub33(pub, &p);
-            hash160(pub, 33, h);
+        if (pz_ec_mul_g(&p, &k)) {
+            pz_ge_to_pub33(pub, &p);
+            pz_hash160(pub, 33, h);
             if (!memcmp(h, job->target_h160, 20) && job->on_hit) job->on_hit(job->user, &k);
         }
-        u256_add_u64(&k, &k, 1);
+        pz_u256_add_u64(&k, &k, 1);
     }
     return nkeys;
 }

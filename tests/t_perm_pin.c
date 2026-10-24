@@ -23,17 +23,17 @@ static void seed_of(u8 sd[32], int which)
 int main(void)
 {
     for (size_t i = 0; i < sizeof PERM_PINS / sizeof *PERM_PINS; i++) {
-        const struct perm_pin *pin = &PERM_PINS[i];
+        const struct pz_perm_pin *pin = &PERM_PINS[i];
         u8 seed[32];
-        u256 m, x, y, got;
+        pz_u256 m, x, y, got;
         seed_of(seed, pin->seed);
-        CHECK(u256_from_hex(&m, pin->m) && u256_from_hex(&x, pin->x) && u256_from_hex(&y, pin->y));
-        perm_t p;
-        perm_init(&p, seed, &m);
-        got = perm_apply(&p, &x);
-        CHECK(u256_cmp(&got, &y) == 0);
-        got = perm_invert(&p, &y);
-        CHECK(u256_cmp(&got, &x) == 0);
+        CHECK(pz_u256_from_hex(&m, pin->m) && pz_u256_from_hex(&x, pin->x) && pz_u256_from_hex(&y, pin->y));
+        pz_perm_t p;
+        pz_perm_init(&p, seed, &m);
+        got = pz_perm_apply(&p, &x);
+        CHECK(pz_u256_cmp(&got, &y) == 0);
+        got = pz_perm_invert(&p, &y);
+        CHECK(pz_u256_cmp(&got, &x) == 0);
     }
     printf(fails ? "t_perm_pin: %d FAILED\n" : "t_perm_pin: OK\n", fails);
     return fails != 0;

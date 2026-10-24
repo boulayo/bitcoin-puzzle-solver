@@ -121,8 +121,8 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
              mode_name(r->cfg.mode), idb, ui_state_name(r, final));
     len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
 
-    u256 rsz = cfg_range_size(&r->cfg);
-    unsigned rbits = u256_bits(&rsz) ? u256_bits(&rsz) - 1 : 0;
+    pz_u256 rsz = cfg_range_size(&r->cfg);
+    unsigned rbits = pz_u256_bits(&rsz) ? pz_u256_bits(&rsz) - 1 : 0;
     snprintf(ln, sizeof ln, "Target        %s   range of 2^%u keys", r->cfg.address, rbits);
     len = add_line(buf, n, len, &lines, cols, "", "", ln);
 

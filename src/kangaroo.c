@@ -37,22 +37,22 @@ void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b)
     memcpy(buf + 48, &a, 8);
     memcpy(buf + 56, &b, 8);
     u8 h[32];
-    sha256(buf, 64, h);
+    pz_sha256(buf, 64, h);
     memcpy(s, h, 32);
     if (!(s[0] | s[1] | s[2] | s[3])) s[0] = 1;
     for (int i = 0; i < 8; i++) krng_next(s);
 }
 
-u256 krng_below(u64 s[4], const u256 *bound)
+pz_u256 krng_below(u64 s[4], const pz_u256 *bound)
 {
-    unsigned bits = u256_bits(bound);
-    if (bits == 0) return u256_zero();
-    u256 mask = u256_pow2(bits), one = u256_from_u64(1);
-    u256_sub(&mask, &mask, &one);
+    unsigned bits = pz_u256_bits(bound);
+    if (bits == 0) return pz_u256_zero();
+    pz_u256 mask = pz_u256_pow2(bits), one = pz_u256_from_u64(1);
+    pz_u256_sub(&mask, &mask, &one);
     for (;;) {
-        u256 v;
+        pz_u256 v;
         for (int i = 0; i < 4; i++) v.w[i] = krng_next(s) & mask.w[i];
-        if (u256_cmp(&v, bound) < 0) return v;
+        if (pz_u256_cmp(&v, bound) < 0) return v;
     }
 }
 
@@ -81,17 +81,17 @@ static bool solve_pair(kang_state *ks, const dp_rec *a, const dp_rec *b)
     if (den < 0) { den = -den; i192_neg(&x); }
     bool neg = i192_is_neg(&x);
     if (neg) i192_neg(&x);
-    u256 mag = {{x.w[0], x.w[1], x.w[2], 0}}, key;
+    pz_u256 mag = {{x.w[0], x.w[1], x.w[2], 0}}, key;
     if (den > 1) {
         u32 rem;
-        mag = u256_divmod_u32(&mag, (u32)den, &rem);
+        mag = pz_u256_divmod_u32(&mag, (u32)den, &rem);
         if (rem) return false;
     }
     if (neg) {
-        if (u256_cmp(&ks->base, &mag) <= 0) return false;
-        u256_sub(&key, &ks->base, &mag);
+        if (pz_u256_cmp(&ks->base, &mag) <= 0) return false;
+        pz_u256_sub(&key, &ks->base, &mag);
     } else {
-        u256_add(&key, &ks->base, &mag);
+        pz_u256_add(&key, &ks->base, &mag);
     }
     return run_submit_key(ks->r, &key, "kangaroo");
 }
@@ -196,14 +196,14 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
 
 /* Fingerprint of the campaign in a DP log: base, W and public key. Format 2 (1.6.0) has base = start - W/32; format 1
  * had the interval centre start + (W - 1)/2 as base. */
-static void log_fingerprint(const kang_state *ks, const u256 *base, const char *tag, u8 fp[32])
+static void log_fingerprint(const kang_state *ks, const pz_u256 *base, const char *tag, u8 fp[32])
 {
     u8 buf[32 * 3 + 33];
-    u256_to_be(base, buf);
-    u256_to_be(&ks->W, buf + 32);
+    pz_u256_to_be(base, buf);
+    pz_u256_to_be(&ks->W, buf + 32);
     memcpy(buf + 64, tag, 8);
     memcpy(buf + 72, ks->r->cfg.pubkey33, 33);
-    sha256(buf, 72 + 33, fp);
+    pz_sha256(buf, 72 + 33, fp);
 }
 
 /* A write failed (disk full, quota, I/O error): what reached the file is unknown, maybe a torn record, maybe whole ones. Reopens the file,
@@ -293,11 +293,11 @@ static FILE *log_create(const kang_state *ks, const char *path, const u8 fp[32])
  * sigma*(k - c) + d = sigma*(k - b) + d - sigma*(c - b). Writes them to a new log and keeps the old file as dp.bin.v1. */
 static int log_convert_v1(kang_state *ks, FILE *f)
 {
-    u256 one = u256_from_u64(1), wm1, c, delta;
-    u256_sub(&wm1, &ks->W, &one);
-    wm1 = u256_shr(&wm1, 1);
-    u256_add(&c, &ks->r->cfg.range_start, &wm1);
-    u256_sub(&delta, &c, &ks->base);
+    pz_u256 one = pz_u256_from_u64(1), wm1, c, delta;
+    pz_u256_sub(&wm1, &ks->W, &one);
+    wm1 = pz_u256_shr(&wm1, 1);
+    pz_u256_add(&c, &ks->r->cfg.range_start, &wm1);
+    pz_u256_sub(&delta, &c, &ks->base);
     const i192 dl = i192_from_signed(false, &delta);
     char tmp[640], old[640];
     snprintf(tmp, sizeof tmp, "%s.tmp", ks->log_path);
@@ -335,10 +335,10 @@ int kang_load_log(kang_state *ks)
     bool hdr_ok = fread(hdr, 1, 38, f) == 38;
     if (hdr_ok && ks->schema == 1 && memcmp(hdr, "PZDP1\n", 6) == 0) {
         u8 fp1[32];
-        u256 one = u256_from_u64(1), wm1, c;
-        u256_sub(&wm1, &ks->W, &one);
-        wm1 = u256_shr(&wm1, 1);
-        u256_add(&c, &ks->r->cfg.range_start, &wm1);
+        pz_u256 one = pz_u256_from_u64(1), wm1, c;
+        pz_u256_sub(&wm1, &ks->W, &one);
+        wm1 = pz_u256_shr(&wm1, 1);
+        pz_u256_add(&c, &ks->r->cfg.range_start, &wm1);
         log_fingerprint(ks, &c, "PZDPLOG1", fp1);
         if (memcmp(hdr + 6, fp1, 32) == 0) {
             if (log_convert_v1(ks, f) != 0) { pz_log(PZ_LOG_ERR, "converting %s failed", ks->log_path); return -1; }
@@ -403,10 +403,10 @@ static u64 tag_of(const i192 *X, int sign, const i192 *d)
     if (sign) i192_add(&e, &e, &t);
     const bool neg = i192_is_neg(&e);
     if (neg) i192_neg(&e);
-    u256 m = {{e.w[0], e.w[1], e.w[2], 0}};
-    ge p;
-    if (!ec_mul_g(&p, &m)) return 0;
-    fe_normalize(&p.x);
+    pz_u256 m = {{e.w[0], e.w[1], e.w[2], 0}};
+    pz_ge p;
+    if (!pz_ec_mul_g(&p, &m)) return 0;
+    pz_fe_normalize(&p.x);
     return p.x.n[2];
 }
 
@@ -417,16 +417,16 @@ int kang_log_selftest(void)
     kang_state *ks = kang_make_test_state_s(40, 1, 1);
     if (!ks) return 1;
     int fails = 0;
-    u256 key = u256_pow2(90), one = u256_from_u64(1), wm1, c;
-    u256_add_u64(&key, &key, 123456789);          /* the key of kang_make_test_state */
-    u256_sub(&wm1, &ks->W, &one);
-    wm1 = u256_shr(&wm1, 1);
-    u256_add(&c, &ks->r->cfg.range_start, &wm1);
-    const bool lowc = u256_cmp(&key, &c) < 0;     /* x relative to the old base, signed */
-    u256 m;
-    if (lowc) u256_sub(&m, &c, &key); else u256_sub(&m, &key, &c);
+    pz_u256 key = pz_u256_pow2(90), one = pz_u256_from_u64(1), wm1, c;
+    pz_u256_add_u64(&key, &key, 123456789);          /* the key of kang_make_test_state */
+    pz_u256_sub(&wm1, &ks->W, &one);
+    wm1 = pz_u256_shr(&wm1, 1);
+    pz_u256_add(&c, &ks->r->cfg.range_start, &wm1);
+    const bool lowc = pz_u256_cmp(&key, &c) < 0;     /* x relative to the old base, signed */
+    pz_u256 m;
+    if (lowc) pz_u256_sub(&m, &c, &key); else pz_u256_sub(&m, &key, &c);
     const i192 Xo = i192_from_signed(lowc, &m);
-    u256_sub(&m, &key, &ks->base);
+    pz_u256_sub(&m, &key, &ks->base);
     const i192 Xn = i192_from_signed(false, &m);
     u8 fp1[32];
     log_fingerprint(ks, &c, "PZDPLOG1", fp1);
@@ -439,7 +439,7 @@ int kang_log_selftest(void)
     for (int i = 0; i < N; i++) {
         s ^= s << 13; s ^= s >> 7; s ^= s << 17;
         const unsigned kind = (unsigned)i % 3;
-        u256 dm = u256_from_u64(s & ((1ULL << 41) - 1));
+        pz_u256 dm = pz_u256_from_u64(s & ((1ULL << 41) - 1));
         dp_rec r;
         r.d = i192_from_signed(s >> 63, &dm);
         const int sign = kind == KIND_TAME ? 0 : (kind == KIND_WILD_P ? 1 : -1);
@@ -471,7 +471,7 @@ int kang_log_selftest(void)
 
 /* ---------------- setup ---------------- */
 
-static long double u256_ld(const u256 *v) { return u256_to_ld(v); }
+static long double u256_ld(const pz_u256 *v) { return pz_u256_to_ld(v); }
 
 /* Schema 2: the species of walkers (docs/en/ALGORITHMS.md, section 8.8). Tame walkers near 0 in the four residues that are multiples
  * of 3, wild ones on Q in three residues 4 apart, wild ones on 3Q in one residue; zones a little wider than where the
@@ -500,30 +500,30 @@ static const kang_species *spec_table(const kang_state *ks, int *n)
 
 /* floor(sqrt(n)) with integers only: the jump table of schema 3 must come out the same on every architecture (long double is
  * 80 bits on x86, 64 on Apple arm64 and 128 on Linux arm64, so a table computed with it could differ between computers). */
-static u256 u256_isqrt(const u256 *n)
+static pz_u256 u256_isqrt(const pz_u256 *n)
 {
-    u256 x = *n, res = u256_zero();
-    const unsigned b = u256_bits(n);
-    u256 bit = u256_pow2(b ? (b - 1) & ~1u : 0);
-    while (!u256_is_zero(&bit)) {
-        u256 t;
-        u256_add(&t, &res, &bit);
-        res = u256_shr(&res, 1);
-        if (u256_cmp(&x, &t) >= 0) {
-            u256_sub(&x, &x, &t);
-            u256_add(&res, &res, &bit);
+    pz_u256 x = *n, res = pz_u256_zero();
+    const unsigned b = pz_u256_bits(n);
+    pz_u256 bit = pz_u256_pow2(b ? (b - 1) & ~1u : 0);
+    while (!pz_u256_is_zero(&bit)) {
+        pz_u256 t;
+        pz_u256_add(&t, &res, &bit);
+        res = pz_u256_shr(&res, 1);
+        if (pz_u256_cmp(&x, &t) >= 0) {
+            pz_u256_sub(&x, &x, &t);
+            pz_u256_add(&res, &res, &bit);
         }
-        bit = u256_shr(&bit, 2);
+        bit = pz_u256_shr(&bit, 2);
     }
     return res;
 }
 
 /* a * q for q < 2^64 */
-static u256 u256_mul_u64(const u256 *a, u64 q)
+static pz_u256 u256_mul_u64(const pz_u256 *a, u64 q)
 {
-    u256 lo = u256_mul_u32(a, (u32)q), hi = u256_mul_u32(a, (u32)(q >> 32));
-    hi = u256_shl(&hi, 32);
-    u256_add(&lo, &lo, &hi);
+    pz_u256 lo = pz_u256_mul_u32(a, (u32)q), hi = pz_u256_mul_u32(a, (u32)(q >> 32));
+    hi = pz_u256_shl(&hi, 32);
+    pz_u256_add(&lo, &lo, &hi);
     return lo;
 }
 
@@ -550,16 +550,16 @@ static int campaign_schema(const run_ctx *r, int k_total)
 
 kang_state *kang_create(run_ctx *r)
 {
-    ec_init();
+    pz_ec_init();
     kang_state *ks = pz_xcalloc(1, sizeof *ks);
     ks->r = r;
     pthread_mutex_init(&ks->mu, NULL);
     ks->W = cfg_range_size(&r->cfg);
-    if (u256_bits(&ks->W) < 17) pz_die("range too small for the kangaroo (at least 2^16 keys needed): use --mode linear");
-    if (u256_bits(&ks->W) > 190) pz_die("range too large for the kangaroo (maximum 2^190)");
-    ks->tame_w = u256_shr(&ks->W, 5);                     /* W/32 */
-    ks->wild_w = u256_shr(&ks->W, 4);                     /* W + W/16 */
-    u256_add(&ks->wild_w, &ks->wild_w, &ks->W);
+    if (pz_u256_bits(&ks->W) < 17) pz_die("range too small for the kangaroo (at least 2^16 keys needed): use --mode linear");
+    if (pz_u256_bits(&ks->W) > 190) pz_die("range too large for the kangaroo (maximum 2^190)");
+    ks->tame_w = pz_u256_shr(&ks->W, 5);                     /* W/32 */
+    ks->wild_w = pz_u256_shr(&ks->W, 4);                     /* W + W/16 */
+    pz_u256_add(&ks->wild_w, &ks->wild_w, &ks->W);
     ks->tame_frac = 1.0 / 3.0;
     ks->sqrtW = sqrtl(u256_ld(&ks->W));
     ks->epoch = (u64)r->sessions | (u64)r->node << 32;   /* node 0 keeps the streams of the single-computer campaigns */
@@ -590,23 +590,23 @@ static void kang_setup_schema(kang_state *ks)
     ks->c_mean = ks->schema >= 3 ? KANG_C_MEAN : ks->schema == 2 ? KANG_C_MEAN_V2 : KANG_C_MEAN_V1;
     /* schema 1: base = start - S, the interval sits at [S, S + W) above the point where the classes fold (S = W/32 keeps
      * the first keys away from it); schema 2: base = start, the zones of the species are placed around the fold */
-    u256 S = ks->schema >= 2 ? u256_zero() : u256_shr(&ks->W, 5);
-    if (u256_cmp(&S, &r->cfg.range_start) > 0) S = r->cfg.range_start;
-    u256_sub(&ks->base, &r->cfg.range_start, &S);
-    if (u256_is_zero(&ks->base)) {
+    pz_u256 S = ks->schema >= 2 ? pz_u256_zero() : pz_u256_shr(&ks->W, 5);
+    if (pz_u256_cmp(&S, &r->cfg.range_start) > 0) S = r->cfg.range_start;
+    pz_u256_sub(&ks->base, &r->cfg.range_start, &S);
+    if (pz_u256_is_zero(&ks->base)) {
         ks->Qp = r->cfg.pubkey;
     } else {
-        ge bg;
-        if (!ec_mul_g(&bg, &ks->base)) pz_die("invalid base");
-        if (!ge_sub(&ks->Qp, &r->cfg.pubkey, &bg)) {
+        pz_ge bg;
+        if (!pz_ec_mul_g(&bg, &ks->base)) pz_die("invalid base");
+        if (!pz_ge_sub(&ks->Qp, &r->cfg.pubkey, &bg)) {
             /* the public key is exactly base*G */
             run_submit_key(r, &ks->base, "kangaroo (base)");
             ks->Qp = bg;   /* unused */
         }
     }
     if (ks->schema >= 2) {
-        ge q2;
-        if (!ge_add(&q2, &ks->Qp, &ks->Qp) || !ge_add(&ks->Q3, &q2, &ks->Qp)) ks->Q3 = ks->Qp;   /* only if Qp is not a point: the key was found above */
+        pz_ge q2;
+        if (!pz_ge_add(&q2, &ks->Qp, &ks->Qp) || !pz_ge_add(&ks->Q3, &q2, &ks->Qp)) ks->Q3 = ks->Qp;   /* only if Qp is not a point: the key was found above */
     }
     ks->expected_steps = ks->c_mean * ks->sqrtW;
 }
@@ -664,39 +664,39 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     long double mean = KANG_JUMP_MEAN * ks->sqrtW;      /* schemas 1 and 2 */
     u128 mean3 = 0;                                     /* schema 3: integer arithmetic, identical on every architecture */
     if (ks->schema >= 3) {
-        const u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */
+        const pz_u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */
         const char *tj = getenv("PZ_TEST_JUMP");                            /* tests: mean jump in units of sqrt(W) */
-        u256 m;
+        pz_u256 m;
         if (tj && pz_atoi(tj) > 0) {
-            m = u256_mul_u32(&rw, (u32)pz_atoi(tj));
+            m = pz_u256_mul_u32(&rw, (u32)pz_atoi(tj));
         } else {
             m = u256_mul_u64(&rw, qw.w[0]);                                 /* W^(3/4); W^(1/4) < 2^48 */
-            m = u256_shr(&m, 4);                                            /* / KANG_JUMP_DIV (16) */
+            m = pz_u256_shr(&m, 4);                                            /* / KANG_JUMP_DIV (16) */
         }
-        if (u256_bits(&m) > 120) m = u256_pow2(120);                        /* jump distances are 128-bit (W above 2^165) */
+        if (pz_u256_bits(&m) > 120) m = pz_u256_pow2(120);                        /* jump distances are 128-bit (W above 2^165) */
         mean3 = (u128)m.w[1] << 64 | m.w[0];
         if (mean3 < 2 * KANG_MOD) mean3 = 2 * KANG_MOD;
         mean = (long double)mean3;                                          /* only for the log line */
     } else if (mean < 2 * KANG_MOD) mean = 2 * KANG_MOD;
     u64 rg[4];
     krng_seed(rg, r->cfg.seed, ks->schema >= 3 ? "jumps4" : ks->schema == 2 ? "jumps3" : "jumps2", 0, 0);
-    u256 bound = u256_from_u128(ks->schema >= 3 ? mean3 / 3 * 2 + 1 : (u128)(ks->schema >= 2 ? mean * 2 / 3 + 1 : mean));
-    const u256 low = u256_from_u128(ks->schema >= 3 ? mean3 / 3 * 2 : (u128)(mean * 2 / 3));
-    ge pts[KANG_R + KANG_NESC];
+    pz_u256 bound = pz_u256_from_u128(ks->schema >= 3 ? mean3 / 3 * 2 + 1 : (u128)(ks->schema >= 2 ? mean * 2 / 3 + 1 : mean));
+    const pz_u256 low = pz_u256_from_u128(ks->schema >= 3 ? mean3 / 3 * 2 : (u128)(mean * 2 / 3));
+    pz_ge pts[KANG_R + KANG_NESC];
     for (unsigned j = 0; j < KANG_R + KANG_NESC; j++) {   /* the escape jumps after the regular ones, same distribution */
-        u256 v = krng_below(rg, &bound);
+        pz_u256 v = krng_below(rg, &bound);
         if (ks->schema >= 2) {
             u32 rem;
-            u256_add(&v, &v, &low);
-            v = u256_divmod_u32(&v, KANG_MOD, &rem);
-            u256_add_u64(&v, &v, 1);
-            v = u256_mul_u32(&v, KANG_MOD);
+            pz_u256_add(&v, &v, &low);
+            v = pz_u256_divmod_u32(&v, KANG_MOD, &rem);
+            pz_u256_add_u64(&v, &v, 1);
+            v = pz_u256_mul_u32(&v, KANG_MOD);
         } else {
-            v = u256_shl(&v, 1);
-            u256_add_u64(&v, &v, 2);
+            v = pz_u256_shl(&v, 1);
+            pz_u256_add_u64(&v, &v, 2);
         }
         ks->P.jv[j] = (u128)v.w[1] << 64 | v.w[0];
-        if (!ec_mul_g(&pts[j], &v)) pz_die("invalid jump");
+        if (!pz_ec_mul_g(&pts[j], &v)) pz_die("invalid jump");
         ks->P.jx[j] = pts[j].x;
         ks->P.jy[j] = pts[j].y;
     }
@@ -707,7 +707,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
             memcpy(jb + 16 * j, &(u64){(u64)ks->P.jv[j]}, 8);
             memcpy(jb + 16 * j + 8, &(u64){(u64)(ks->P.jv[j] >> 64)}, 8);
         }
-        sha256(jb, sizeof jb, jh);
+        pz_sha256(jb, sizeof jb, jh);
         snprintf(ks->jump_id, sizeof ks->jump_id, "%02x%02x%02x%02x", jh[0], jh[1], jh[2], jh[3]);
     }
 
@@ -761,8 +761,8 @@ kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream)
     kang_worker *w = pz_xcalloc(1, sizeof *w);
     w->K = K;
     w->P = &ks->P;
-    w->x = pz_xaligned(64, sizeof(fe) * (size_t)K);
-    w->y = pz_xaligned(64, sizeof(fe) * (size_t)K);
+    w->x = pz_xaligned(64, sizeof(pz_fe) * (size_t)K);
+    w->y = pz_xaligned(64, sizeof(pz_fe) * (size_t)K);
     w->d = pz_xcalloc((size_t)K, sizeof(i192));
     w->kind = pz_xcalloc((size_t)K, 1);
     w->sigma = pz_xcalloc((size_t)K, 1);
@@ -835,49 +835,49 @@ static u32 i192_mod_u32(const i192 *a, u32 m)
     const bool neg = i192_is_neg(a);
     i192 t = *a;
     if (neg) i192_neg(&t);
-    u256 mag = {{t.w[0], t.w[1], t.w[2], 0}};
+    pz_u256 mag = {{t.w[0], t.w[1], t.w[2], 0}};
     u32 rem;
-    u256_divmod_u32(&mag, m, &rem);
+    pz_u256_divmod_u32(&mag, m, &rem);
     return neg && rem ? m - rem : rem;
 }
 
 /* Schema 2: a start of species sp, E = c*x + u: the point c*Qp + u*G and u. False when it cannot be used (u = 0 on a tame
  * walker, or the point at infinity, which reveals the key). */
-static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], ge *p, i192 *d)
+static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz_ge *p, i192 *d)
 {
-    u256 lo = u256_mul_u32(&ks->W, (u32)(sp->lo < 0 ? -sp->lo : sp->lo)), span = u256_mul_u32(&ks->W, (u32)(sp->hi - sp->lo));
+    pz_u256 lo = pz_u256_mul_u32(&ks->W, (u32)(sp->lo < 0 ? -sp->lo : sp->lo)), span = pz_u256_mul_u32(&ks->W, (u32)(sp->hi - sp->lo));
     u32 rem;
-    lo = u256_divmod_u32(&lo, 1000, &rem);
-    span = u256_divmod_u32(&span, 1000, &rem);
-    u256_add_u64(&span, &span, 1);
-    const u256 v = krng_below(rng, &span);
+    lo = pz_u256_divmod_u32(&lo, 1000, &rem);
+    span = pz_u256_divmod_u32(&span, 1000, &rem);
+    pz_u256_add_u64(&span, &span, 1);
+    const pz_u256 v = krng_below(rng, &span);
     /* u = lo + v, lo negative or not */
     i192 u = i192_from_signed(false, &v), l = i192_from_signed(sp->lo < 0, &lo);
     i192_add(&u, &u, &l);
-    const u256 back = u256_from_u64((i192_mod_u32(&u, KANG_MOD) + KANG_MOD - sp->res) % KANG_MOD);
+    const pz_u256 back = pz_u256_from_u64((i192_mod_u32(&u, KANG_MOD) + KANG_MOD - sp->res) % KANG_MOD);
     const i192 b = i192_from_signed(false, &back);
     i192_sub(&u, &u, &b);                                 /* down to the residue of the species */
     const bool neg = i192_is_neg(&u);
     i192 m = u;
     if (neg) i192_neg(&m);
-    const u256 mag = {{m.w[0], m.w[1], m.w[2], 0}};
-    const ge *cq = sp->coef == 3 ? &ks->Q3 : &ks->Qp;
-    if (u256_is_zero(&mag)) {
+    const pz_u256 mag = {{m.w[0], m.w[1], m.w[2], 0}};
+    const pz_ge *cq = sp->coef == 3 ? &ks->Q3 : &ks->Qp;
+    if (pz_u256_is_zero(&mag)) {
         if (sp->coef == 0) return false;
         *p = *cq;
     } else {
-        ge ug;
-        if (!ec_mul_g(&ug, &mag)) return false;
-        if (neg) ge_neg(&ug, &ug);
+        pz_ge ug;
+        if (!pz_ec_mul_g(&ug, &mag)) return false;
+        if (neg) pz_ge_neg(&ug, &ug);
         if (sp->coef == 0) *p = ug;
-        else if (!ge_add(p, &ug, cq)) {
+        else if (!pz_ge_add(p, &ug, cq)) {
             /* c*x + u = 0: x = -u / c */
-            u256 x;
+            pz_u256 x;
             if (!neg) return false;                       /* x would be negative */
-            x = sp->coef == 3 ? u256_divmod_u32(&mag, 3, &rem) : mag;
+            x = sp->coef == 3 ? pz_u256_divmod_u32(&mag, 3, &rem) : mag;
             if (sp->coef == 3 && rem) return false;
-            u256 key;
-            u256_add(&key, &ks->base, &x);
+            pz_u256 key;
+            pz_u256_add(&key, &ks->base, &x);
             run_submit_key(ks->r, &key, "kangaroo (start)");
             return false;
         }
@@ -889,7 +889,7 @@ static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], ge
 void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
 {
     for (;;) {
-        ge p;
+        pz_ge p;
         i192 d;
         int8_t sg = 1;
         if (ks->schema >= 2) {
@@ -909,23 +909,23 @@ void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
             if (!start_species(ks, band, rng, &p, &d)) continue;
         } else if (w->kind[i] == 0) {
             /* tame: t*G, t in [1, W/32) */
-            u256 t = krng_below(rng, &ks->tame_w);
-            if (u256_is_zero(&t) || !ec_mul_g(&p, &t)) continue;
+            pz_u256 t = krng_below(rng, &ks->tame_w);
+            if (pz_u256_is_zero(&t) || !pz_ec_mul_g(&p, &t)) continue;
             d = i192_from_signed(false, &t);
         } else {
             /* wild: (-x + v)*G = v*G - Qp, v even in [0, W + W/16) */
-            u256 half = u256_shr(&ks->wild_w, 1), v = krng_below(rng, &half);
-            v = u256_shl(&v, 1);
-            ge nq;
-            ge_neg(&nq, &ks->Qp);
-            if (u256_is_zero(&v)) p = nq;
+            pz_u256 half = pz_u256_shr(&ks->wild_w, 1), v = krng_below(rng, &half);
+            v = pz_u256_shl(&v, 1);
+            pz_ge nq;
+            pz_ge_neg(&nq, &ks->Qp);
+            if (pz_u256_is_zero(&v)) p = nq;
             else {
-                ge vg;
-                if (!ec_mul_g(&vg, &v)) continue;
-                if (!ge_add(&p, &vg, &nq)) {
+                pz_ge vg;
+                if (!pz_ec_mul_g(&vg, &v)) continue;
+                if (!pz_ge_add(&p, &vg, &nq)) {
                     /* v*G == Qp: x = v, the key is known */
-                    u256 key;
-                    u256_add(&key, &ks->base, &v);
+                    pz_u256 key;
+                    pz_u256_add(&key, &ks->base, &v);
                     run_submit_key(ks->r, &key, "kangaroo (start)");
                     continue;
                 }
@@ -933,9 +933,9 @@ void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
             d = i192_from_signed(false, &v);
             sg = -1;
         }
-        fe_normalize(&p.y);
-        if (fe_is_odd(&p.y)) {   /* canonical representative: even y */
-            ge_neg(&p, &p);
+        pz_fe_normalize(&p.y);
+        if (pz_fe_is_odd(&p.y)) {   /* canonical representative: even y */
+            pz_ge_neg(&p, &p);
             i192_neg(&d);
             sg = (int8_t)-sg;
         }
@@ -1023,12 +1023,12 @@ static bool kang_round_compare(kang_round_fn fn, int K, int rounds, unsigned R, 
         if (r == rounds / 2 && R == KANG_R) {
             /* a kangaroo on the jump point it is about to use: the batch product is zero */
             for (unsigned j = 0; j < R; j++) {
-                fe x = ks->P.jx[j];
-                fe_normalize(&x);
+                pz_fe x = ks->P.jx[j];
+                pz_fe_normalize(&x);
                 const unsigned lo = (unsigned)x.n[0] & (R - 1);
                 if (lo != j && ((lo + 1) & (R - 1)) != j) continue;
-                fe y = ks->P.jy[j];
-                fe_normalize(&y);
+                pz_fe y = ks->P.jy[j];
+                pz_fe_normalize(&y);
                 const int i = K / 3;
                 a->x[i] = b->x[i] = x;
                 a->y[i] = b->y[i] = y;
@@ -1055,9 +1055,9 @@ static bool kang_round_compare(kang_round_fn fn, int K, int rounds, unsigned R, 
     if (ok) {
         kang_worker_sync(a);
         for (int i = 0; i < K && ok; i++) {
-            fe ax = a->x[i], ay = a->y[i], bx = b->x[i], by = b->y[i];
-            fe_normalize(&ax); fe_normalize(&ay); fe_normalize(&bx); fe_normalize(&by);
-            ok = fe_eq(&ax, &bx) && fe_eq(&ay, &by) && !memcmp(&a->d[i], &b->d[i], sizeof(i192)) && a->sigma[i] == b->sigma[i] &&
+            pz_fe ax = a->x[i], ay = a->y[i], bx = b->x[i], by = b->y[i];
+            pz_fe_normalize(&ax); pz_fe_normalize(&ay); pz_fe_normalize(&bx); pz_fe_normalize(&by);
+            ok = pz_fe_eq(&ax, &bx) && pz_fe_eq(&ay, &by) && !memcmp(&a->d[i], &b->d[i], sizeof(i192)) && a->sigma[i] == b->sigma[i] &&
                  a->prev[i] == b->prev[i] && a->prev2[i] == b->prev2[i] && a->lastdp[i] == b->lastdp[i] && a->ck[i] == b->ck[i] &&
                  a->mn[i] == b->mn[i] && a->esc[i] == b->esc[i];
         }
@@ -1368,9 +1368,9 @@ static int merge_selftest_schema(int schema)
     kang_state *ks = kang_make_test_state_s(40, 1, schema);
     if (!ks) return 1;
     int fails = 0;
-    u256 key = u256_pow2(90), m;
-    u256_add_u64(&key, &key, 123456789);          /* the key of kang_make_test_state */
-    u256_sub(&m, &key, &ks->base);
+    pz_u256 key = pz_u256_pow2(90), m;
+    pz_u256_add_u64(&key, &key, 123456789);          /* the key of kang_make_test_state */
+    pz_u256_sub(&m, &key, &ks->base);
     const i192 X = i192_from_signed(false, &m);   /* the unknown offset from the base */
     u8 fp[32];
     log_fp(ks, fp);
@@ -1396,7 +1396,7 @@ static int merge_selftest_schema(int schema)
     memset(other, 0x5A, sizeof other);
     fwrite(log_magic(ks), 1, 6, fc); fwrite(other, 1, 32, fc);
     for (int i = 0; i < 3; i++) {
-        const u256 dw256 = u256_from_u64(dws[i]);
+        const pz_u256 dw256 = pz_u256_from_u64(dws[i]);
         const i192 dw = i192_from_signed(false, &dw256);
         i192 dt;
         i192_add(&dt, &X, &dw);
@@ -1406,7 +1406,7 @@ static int merge_selftest_schema(int schema)
         wb.d = dw;
         wb.tagk = (tag_of(&X, 1, &dw) & ~km) | KIND_WILD_P;
         if (i == 1) {                              /* the second pair is unrelated points: no collision */
-            wb.d = i192_from_signed(false, &(u256){{99999999, 0, 0, 0}});
+            wb.d = i192_from_signed(false, &(pz_u256){{99999999, 0, 0, 0}});
             wb.tagk = (tag_of(&X, 1, &wb.d) & ~km) | KIND_WILD_P;
         }
         fwrite(&ta, sizeof ta, 1, fa);             /* every tame point goes to computer A, every wild point to computer B */
@@ -1421,7 +1421,7 @@ static int merge_selftest_schema(int schema)
     MCHK(kang_merge_file(ks, pc, &c) != -2 || c.read != 0);                                   /* another campaign: refused */
     MCHK(kang_merge_file(ks, "/nonexistent/dp.bin", &c) != -1);
     MCHK(kang_merge_file(ks, pb, &b) != 0 || !b.solved);                                      /* A and B together do */
-    MCHK(!atomic_load(&ks->r->found) || u256_cmp(&ks->r->found_key, &key) != 0);
+    MCHK(!atomic_load(&ks->r->found) || pz_u256_cmp(&ks->r->found_key, &key) != 0);
     kang_free_test_state(ks);
     char lb[64];
     snprintf(lb, sizeof lb, "merge of two computers' points, schema %d", schema);
@@ -1451,11 +1451,11 @@ static int solve_selftest(void)
             if (kind_coef(ka) == kind_coef(kb)) continue;
             kang_state *ks = kang_make_test_state_s(40, 1, 3);
             if (!ks) return fails + 1;
-            u256 key = u256_pow2(90), m;
-            u256_add_u64(&key, &key, 123456789);       /* the key of kang_make_test_state */
-            u256_sub(&m, &key, &ks->base);
+            pz_u256 key = pz_u256_pow2(90), m;
+            pz_u256_add_u64(&key, &key, 123456789);       /* the key of kang_make_test_state */
+            pz_u256_sub(&m, &key, &ks->base);
             const i192 X = i192_from_signed(false, &m);
-            const u256 dm = u256_from_u64(1000003 + 7919 * (u64)(ka * 5 + kb));
+            const pz_u256 dm = pz_u256_from_u64(1000003 + 7919 * (u64)(ka * 5 + kb));
             dp_rec a, b;
             b.d = i192_from_signed((ka + kb) & 1, &dm);
             i192 E = i192_mul_small(&X, kind_coef(kb)), cx = i192_mul_small(&X, kind_coef(ka));
@@ -1464,7 +1464,7 @@ static int solve_selftest(void)
             const u64 tag = tag_of(&zero, 0, &E) & ~7ULL;
             a.tagk = tag | ka;
             b.tagk = tag | kb;
-            if (kang_insert_dps(ks, &a, 1, NULL) || !kang_insert_dps(ks, &b, 1, NULL) || !atomic_load(&ks->r->found) || u256_cmp(&ks->r->found_key, &key) != 0) {
+            if (kang_insert_dps(ks, &a, 1, NULL) || !kang_insert_dps(ks, &b, 1, NULL) || !atomic_load(&ks->r->found) || pz_u256_cmp(&ks->r->found_key, &key) != 0) {
                 fails++;
                 printf("  solution between kinds %u and %u: FAILED\n", ka, kb);
             }

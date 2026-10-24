@@ -8,7 +8,7 @@
 static inline u32 rotr32(u32 x, int n) { return x >> n | x << (32 - n); }
 static inline u32 rotl32(u32 x, int n) { return x << n | x >> (32 - n); }
 
-void sha256_compress(u32 st[8], const u32 win[16])
+void pz_sha256_compress(u32 st[8], const u32 win[16])
 {
     u32 w[64];
     memcpy(w, win, 64);
@@ -21,7 +21,7 @@ void sha256_compress(u32 st[8], const u32 win[16])
     for (int i = 0; i < 64; i++) {
         u32 S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
         u32 ch = (e & f) ^ (~e & g);
-        u32 t1 = h + S1 + ch + SHA256_K[i] + w[i];
+        u32 t1 = h + S1 + ch + pz_sha256_k[i] + w[i];
         u32 S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
         u32 mj = (a & b) ^ (a & c) ^ (b & c);
         u32 t2 = S0 + mj;
@@ -30,10 +30,10 @@ void sha256_compress(u32 st[8], const u32 win[16])
     st[0] += a; st[1] += b; st[2] += c; st[3] += d; st[4] += e; st[5] += f; st[6] += g; st[7] += h;
 }
 
-void sha256(const u8 *data, size_t len, u8 out[32])
+void pz_sha256(const u8 *data, size_t len, u8 out[32])
 {
     u32 st[8];
-    memcpy(st, SHA256_H0, sizeof st);
+    memcpy(st, pz_sha256_h0, sizeof st);
     u8 blk[128];
     size_t full = len / 64;
     for (size_t i = 0; i < full; i++) {
@@ -42,7 +42,7 @@ void sha256(const u8 *data, size_t len, u8 out[32])
             const u8 *p = data + i * 64 + j * 4;
             w[j] = (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
         }
-        sha256_compress(st, w);
+        pz_sha256_compress(st, w);
     }
     size_t rem = len - full * 64;
     memset(blk, 0, sizeof blk);
@@ -57,7 +57,7 @@ void sha256(const u8 *data, size_t len, u8 out[32])
             const u8 *p = blk + i * 64 + j * 4;
             w[j] = (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
         }
-        sha256_compress(st, w);
+        pz_sha256_compress(st, w);
     }
     for (int j = 0; j < 8; j++) {
         out[j * 4] = (u8)(st[j] >> 24); out[j * 4 + 1] = (u8)(st[j] >> 16);
@@ -65,11 +65,11 @@ void sha256(const u8 *data, size_t len, u8 out[32])
     }
 }
 
-void sha256d(const u8 *data, size_t len, u8 out[32])
+void pz_sha256d(const u8 *data, size_t len, u8 out[32])
 {
     u8 t[32];
-    sha256(data, len, t);
-    sha256(t, 32, out);
+    pz_sha256(data, len, t);
+    pz_sha256(t, 32, out);
 }
 
 /* ---- RIPEMD-160 ---- */
@@ -85,15 +85,15 @@ static inline u32 rmd_f(int round, u32 x, u32 y, u32 z)
     }
 }
 
-void ripemd160_compress(u32 h[5], const u32 x[16])
+void pz_ripemd160_compress(u32 h[5], const u32 x[16])
 {
     u32 a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
     u32 a2 = a, b2 = b, c2 = c, d2 = d, e2 = e;
     for (int j = 0; j < 80; j++) {
         int rd = j / 16;
-        u32 t = rotl32(a + rmd_f(rd, b, c, d) + x[RMD_RL[j]] + RMD_KL[rd], (int)RMD_SL[j]) + e;
+        u32 t = rotl32(a + rmd_f(rd, b, c, d) + x[pz_rmd_rl[j]] + pz_rmd_kl[rd], (int)pz_rmd_sl[j]) + e;
         a = e; e = d; d = rotl32(c, 10); c = b; b = t;
-        t = rotl32(a2 + rmd_f(4 - rd, b2, c2, d2) + x[RMD_RR[j]] + RMD_KR[rd], (int)RMD_SR[j]) + e2;
+        t = rotl32(a2 + rmd_f(4 - rd, b2, c2, d2) + x[pz_rmd_rr[j]] + pz_rmd_kr[rd], (int)pz_rmd_sr[j]) + e2;
         a2 = e2; e2 = d2; d2 = rotl32(c2, 10); c2 = b2; b2 = t;
     }
     u32 t = h[1] + c + d2;
@@ -104,7 +104,7 @@ void ripemd160_compress(u32 h[5], const u32 x[16])
     h[0] = t;
 }
 
-void ripemd160(const u8 *data, size_t len, u8 out[20])
+void pz_ripemd160(const u8 *data, size_t len, u8 out[20])
 {
     u32 h[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
     u8 blk[128];
@@ -115,7 +115,7 @@ void ripemd160(const u8 *data, size_t len, u8 out[20])
             const u8 *p = data + i * 64 + j * 4;
             x[j] = (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
         }
-        ripemd160_compress(h, x);
+        pz_ripemd160_compress(h, x);
     }
     size_t rem = len - full * 64;
     memset(blk, 0, sizeof blk);
@@ -130,7 +130,7 @@ void ripemd160(const u8 *data, size_t len, u8 out[20])
             const u8 *p = blk + i * 64 + j * 4;
             x[j] = (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
         }
-        ripemd160_compress(h, x);
+        pz_ripemd160_compress(h, x);
     }
     for (int j = 0; j < 5; j++) {
         out[j * 4] = (u8)h[j]; out[j * 4 + 1] = (u8)(h[j] >> 8);
@@ -138,25 +138,25 @@ void ripemd160(const u8 *data, size_t len, u8 out[20])
     }
 }
 
-void hash160(const u8 *data, size_t len, u8 out[20])
+void pz_hash160(const u8 *data, size_t len, u8 out[20])
 {
     u8 t[32];
-    sha256(data, len, t);
-    ripemd160(t, 32, out);
+    pz_sha256(data, len, t);
+    pz_ripemd160(t, 32, out);
 }
 
-void hash160_pub33(u8 parity, const u8 x_be[32], u8 out[20])
+void pz_hash160_pub33(u8 parity, const u8 x_be[32], u8 out[20])
 {
     u8 pub[33];
     pub[0] = (u8)(2 + (parity & 1));
     memcpy(pub + 1, x_be, 32);
-    hash160(pub, 33, out);
+    pz_hash160(pub, 33, out);
 }
 
 /* ---- Base58Check ---- */
 static const char B58[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-int base58check_decode(const char *s, u8 *out, size_t maxlen)
+int pz_base58check_decode(const char *s, u8 *out, size_t maxlen)
 {
     u8 buf[128];
     size_t n = 0;   /* big-endian base-256 accumulator, most significant first */
@@ -184,17 +184,17 @@ int base58check_decode(const char *s, u8 *out, size_t maxlen)
     memset(raw, 0, zeros);
     memcpy(raw + zeros, buf + sizeof buf - n, n);
     u8 chk[32];
-    sha256d(raw, total - 4, chk);
+    pz_sha256d(raw, total - 4, chk);
     if (memcmp(chk, raw + total - 4, 4)) return -1;
     memcpy(out, raw, total - 4);
     return (int)(total - 4);
 }
 
-void base58check_encode(const u8 *payload, size_t len, char *out, size_t outlen)
+void pz_base58check_encode(const u8 *payload, size_t len, char *out, size_t outlen)
 {
     u8 raw[128], chk[32];
     memcpy(raw, payload, len);
-    sha256d(payload, len, chk);
+    pz_sha256d(payload, len, chk);
     memcpy(raw + len, chk, 4);
     size_t total = len + 4;
     size_t zeros = 0;
@@ -273,30 +273,30 @@ static bool bech32_to_hash160(const char *addr, u8 h160[20])
     return true;
 }
 
-bool address_to_hash160(const char *addr, u8 h160[20])
+bool pz_address_to_hash160(const char *addr, u8 h160[20])
 {
     if ((addr[0] == 'b' || addr[0] == 'B') && (addr[1] == 'c' || addr[1] == 'C')) return bech32_to_hash160(addr, h160);
     u8 payload[64];
-    int n = base58check_decode(addr, payload, sizeof payload);
+    int n = pz_base58check_decode(addr, payload, sizeof payload);
     if (n != 21 || payload[0] != 0x00) return false;
     memcpy(h160, payload + 1, 20);
     return true;
 }
 
-void hash160_to_address(const u8 h160[20], char *out, size_t outlen)
+void pz_hash160_to_address(const u8 h160[20], char *out, size_t outlen)
 {
     u8 payload[21];
     payload[0] = 0;
     memcpy(payload + 1, h160, 20);
-    base58check_encode(payload, 21, out, outlen);
+    pz_base58check_encode(payload, 21, out, outlen);
 }
 
-void privkey_to_wif(const u8 key_be[32], bool compressed, char *out, size_t outlen)
+void pz_privkey_to_wif(const u8 key_be[32], bool compressed, char *out, size_t outlen)
 {
     u8 payload[34];
     payload[0] = 0x80;
     memcpy(payload + 1, key_be, 32);
     size_t n = 33;
     if (compressed) payload[n++] = 1;
-    base58check_encode(payload, n, out, outlen);
+    pz_base58check_encode(payload, n, out, outlen);
 }

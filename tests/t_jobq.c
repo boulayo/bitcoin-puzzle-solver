@@ -6,7 +6,7 @@ static int fails;
 static campaign_cfg mkcfg(u64 start, u64 end, unsigned cb)
 {
     campaign_cfg c; memset(&c, 0, sizeof c);
-    c.range_start = u256_from_u64(start); c.range_end = u256_from_u64(end); c.chunk_bits = cb;
+    c.range_start = pz_u256_from_u64(start); c.range_end = pz_u256_from_u64(end); c.chunk_bits = cb;
     for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 13 + 5);
     return c;
 }
@@ -33,7 +33,7 @@ static u64 scan_part(const campaign_cfg *base, const char *spec, u8 *cov, u64 st
     }
     CHECK(sched_finished(s));
     CHECK(sched_keys_done(s) == got);
-    CHECK(u256_to_ld(&s->part_keys) == (long double)got);          /* the part's size is exact, also with a short last block */
+    CHECK(pz_u256_to_ld(&s->part_keys) == (long double)got);          /* the part's size is exact, also with a short last block */
     CHECK(sched_fraction(s) == 1.0);
     if (keep) *keep = s; else sched_free(s);
     return got;
@@ -103,24 +103,24 @@ static void t_parts(void)
         campaign_cfg c = mkcfg(1 << 20, (1 << 21) + 5000, 12);                            /* a short last block */
         campaign_cfg w = c;
         sched_t *whole = sched_new(&w);
-        const u64 M = (u64)u256_to_ld(&whole->blocks_all);
+        const u64 M = (u64)pz_u256_to_ld(&whole->blocks_all);
         snprintf(c.part, sizeof c.part, "1,3-4/6");
         sched_t *s = sched_new(&c);
         u128 expect = 0;
         for (u64 g = 0; g < M; g++) {
-            u256 gs = u256_from_u64(g), local;
+            pz_u256 gs = pz_u256_from_u64(g), local;
             bool mine = g % 6 == 1 || g % 6 == 3 || g % 6 == 4;
             CHECK(sched_part_position(s, &gs, &local) == mine);
             if (mine) { CHECK(local.w[0] == expect && !local.w[1] && !local.w[2] && !local.w[3]); expect++; }
         }
-        CHECK((u128)(s->v_limit >> s->cbits) == expect && u256_to_ld(&s->blocks_part) == (long double)expect);
+        CHECK((u128)(s->v_limit >> s->cbits) == expect && pz_u256_to_ld(&s->blocks_part) == (long double)expect);
         /* every claim of the part lies in a block that locate puts at a position of the part, in the order of the part */
         claim_t cl;
         u128 want_local = 0;
         for (;;) {
             claim_status st = sched_claim(s, 1u << 12, &cl);
             if (st == CLAIM_DONE) break;
-            u256 g, local;
+            pz_u256 g, local;
             u64 off;
             CHECK(sched_locate(s, &cl.key_start, &g, &off));
             CHECK(sched_part_position(s, &g, &local));
@@ -175,10 +175,10 @@ static void t_parts(void)
     {
         campaign_cfg c;
         memset(&c, 0, sizeof c);
-        c.range_start = u256_pow2(138);
-        u256 one = u256_from_u64(1);
-        c.range_end = u256_pow2(139);
-        u256_sub(&c.range_end, &c.range_end, &one);
+        c.range_start = pz_u256_pow2(138);
+        pz_u256 one = pz_u256_from_u64(1);
+        c.range_end = pz_u256_pow2(139);
+        pz_u256_sub(&c.range_end, &c.range_end, &one);
         c.chunk_bits = 36;
         for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 7 + 1);
         snprintf(c.part, sizeof c.part, "1/2");
@@ -187,8 +187,8 @@ static void t_parts(void)
         for (int i = 0; i < 20; i++) {
             claim_t cl;
             CHECK(sched_claim(s, 1u << 20, &cl) == CLAIM_OK);
-            CHECK(u256_cmp(&cl.key_start, &c.range_start) >= 0 && u256_cmp(&cl.key_start, &c.range_end) <= 0);
-            u256 g, local;
+            CHECK(pz_u256_cmp(&cl.key_start, &c.range_start) >= 0 && pz_u256_cmp(&cl.key_start, &c.range_end) <= 0);
+            pz_u256 g, local;
             u64 off;
             CHECK(sched_locate(s, &cl.key_start, &g, &off));
             CHECK(g.w[0] % 2 == 1);
@@ -269,7 +269,7 @@ int main(void)
         campaign_cfg c = mkcfg(1 << 20, (1 << 21) - 1, 12);
         sched_t *s = sched_new(&c);
         claim_t cl; CHECK(sched_claim(s, 4096, &cl) == CLAIM_OK);
-        u256 seq; u64 off;
+        pz_u256 seq; u64 off;
         CHECK(sched_locate(s, &cl.key_start, &seq, &off));
         CHECK(seq.w[0] == (u64)(cl.v_start >> 12) && !seq.w[1] && off == (cl.v_start & 4095));
         sched_free(s);
@@ -278,30 +278,30 @@ int main(void)
     {
         campaign_cfg c;
         memset(&c, 0, sizeof c);
-        c.range_start = u256_pow2(169);
-        c.range_end = u256_pow2(170);
-        u256_sub(&c.range_end, &c.range_end, &(u256){{1, 0, 0, 0}});
+        c.range_start = pz_u256_pow2(169);
+        c.range_end = pz_u256_pow2(170);
+        pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
         c.chunk_bits = 36;
         for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 11 + 3);
         sched_t *s = sched_new(&c);
-        u256 pos = u256_pow2(130);
-        u256_add_u64(&pos, &pos, 12345);                              /* the block at position 2^130 + 12345 of the visiting order */
-        u256 blk = perm_apply(&s->perm, &pos), off36 = u256_shl(&blk, 36), key;
-        u256_add(&key, &s->range_start, &off36);
-        u256_add_u64(&key, &key, 7);
-        u256 got;
+        pz_u256 pos = pz_u256_pow2(130);
+        pz_u256_add_u64(&pos, &pos, 12345);                              /* the block at position 2^130 + 12345 of the visiting order */
+        pz_u256 blk = pz_perm_apply(&s->perm, &pos), off36 = pz_u256_shl(&blk, 36), key;
+        pz_u256_add(&key, &s->range_start, &off36);
+        pz_u256_add_u64(&key, &key, 7);
+        pz_u256 got;
         u64 off;
-        CHECK(sched_locate(s, &key, &got, &off) && !u256_cmp(&got, &pos) && off == 7);
+        CHECK(sched_locate(s, &key, &got, &off) && !pz_u256_cmp(&got, &pos) && off == 7);
         sched_free(s);
         /* an order of visit that does not exist for this range is reported before anything is created */
         char err[300];
-        c.range_start = u256_pow2(255);
-        c.range_end = u256_zero();
-        u256_sub(&c.range_end, &c.range_end, &(u256){{1, 0, 0, 0}});    /* 2^256 - 1 */
+        c.range_start = pz_u256_pow2(255);
+        c.range_end = pz_u256_zero();
+        pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});    /* 2^256 - 1 */
         CHECK(!sched_check_part(&c, err, sizeof err) && strstr(err, "too large"));
-        c.range_start = u256_pow2(231);
-        c.range_end = u256_pow2(232);
-        u256_sub(&c.range_end, &c.range_end, &(u256){{1, 0, 0, 0}});
+        c.range_start = pz_u256_pow2(231);
+        c.range_end = pz_u256_pow2(232);
+        pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
         c.chunk_bits = 40;
         CHECK(sched_check_part(&c, err, sizeof err));                   /* puzzle 232 with the largest blocks: 191 bits, still fine */
         c.chunk_bits = 36;

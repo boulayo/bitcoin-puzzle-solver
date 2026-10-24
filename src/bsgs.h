@@ -30,12 +30,12 @@ typedef struct {
 } bsgs_table;
 
 typedef struct {
-    u256 lo, hi, W;      /* key range and its size */
-    u256 c;              /* centre key, lo + (W-1)/2 */
+    pz_u256 lo, hi, W;      /* key range and its size */
+    pz_u256 c;              /* centre key, lo + (W-1)/2 */
     u64 T, S;            /* baby steps, giant stride S = 2T+1 */
     u64 A, Ng;           /* giants a in [-A, A], Ng = 2A+1 */
-    ge P;                /* target public key */
-    ge Pp;               /* P - c*G, valid unless Pp_inf */
+    pz_ge P;                /* target public key */
+    pz_ge Pp;               /* P - c*G, valid unless Pp_inf */
     bool Pp_inf;         /* P == c*G: the key is c */
 } bsgs_params;
 
@@ -44,16 +44,16 @@ u64 bsgs_slots_for(u64 T);
 u64 bsgs_bytes_for(u64 T);
 u64 bsgs_max_T_for_bytes(u64 bytes);
 /* ceil(sqrt(W)/2), the table size minimising the mean cost; 0 when it exceeds BS_MAX_T. */
-u64 bsgs_optimal_T(const u256 *W);
+u64 bsgs_optimal_T(const pz_u256 *W);
 /* Mean number of group operations (builds + giants) for table size T on a range of W keys. */
-long double bsgs_mean_cost(const u256 *W, u64 T);
+long double bsgs_mean_cost(const pz_u256 *W, u64 T);
 /* Table size to use given a memory budget; *viable tells whether it beats the kangaroo (1.15*sqrt(W)). */
-u64 bsgs_choose_T(const u256 *W, u64 budget_bytes, bool *viable);
+u64 bsgs_choose_T(const pz_u256 *W, u64 budget_bytes, bool *viable);
 
 /* ---- parameters of a search ---- */
-bool bsgs_params_init(bsgs_params *p, const u256 *lo, const u256 *hi, const ge *pub, u64 T, char *err, size_t errlen);
+bool bsgs_params_init(bsgs_params *p, const pz_u256 *lo, const pz_u256 *hi, const pz_ge *pub, u64 T, char *err, size_t errlen);
 /* Giant index (1-based, as used by the scheduler) in which `key` is found, 0 if outside the range. */
-u64 bsgs_giant_index(const bsgs_params *p, const u256 *key);
+u64 bsgs_giant_index(const bsgs_params *p, const pz_u256 *key);
 /* Scheduler configuration over the giant indices [1, Ng]. */
 void bsgs_sched_cfg(const bsgs_params *p, const campaign_cfg *cfg, campaign_cfg *out);
 
@@ -72,7 +72,7 @@ bool bsgs_table_peek(const char *path, u64 *T, char *err, size_t errlen);
 bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen);
 
 /* ---- giant steps ---- */
-typedef struct { ge tab[BS_HALF]; ge step; } bs_steps;     /* tab[i] = (i+1)*U, step = BS_GRP*U */
+typedef struct { pz_ge tab[BS_HALF]; pz_ge step; } bs_steps;     /* tab[i] = (i+1)*U, step = BS_GRP*U */
 typedef struct {
     const bsgs_table *tab;
     const bsgs_params *p;
@@ -81,7 +81,7 @@ typedef struct {
 
 void bsgs_job_init(bsgs_job *j, const bsgs_table *t, const bsgs_params *p);
 /* A candidate key whose verification succeeded. */
-typedef void (*bsgs_found_fn)(void *user, const u256 *key);
+typedef void (*bsgs_found_fn)(void *user, const pz_u256 *key);
 /* Scans the giants with indices a0 .. a0+n-1 (a0 may be negative); whole groups are processed, so up to BS_GRP-1 giants
  * beyond the end are covered too.  Returns the number of the n giants fully covered.  `probes` counts table lookups,
  * `falsepos` the tag matches that did not verify. */
@@ -97,6 +97,6 @@ extern _Atomic u64 bsgs_slow_windows;
  * the scalar one (prints one line each, returns the failures). */
 const char *bsgs_engine_name(void);
 int bsgs_vengine_selftest(void);
-bool bsgs_solve(const u256 *lo, const u256 *hi, const ge *pub, u64 T, int nthreads, u256 *key, u64 *giants);
+bool bsgs_solve(const pz_u256 *lo, const pz_u256 *hi, const pz_ge *pub, u64 T, int nthreads, pz_u256 *key, u64 *giants);
 
 #endif

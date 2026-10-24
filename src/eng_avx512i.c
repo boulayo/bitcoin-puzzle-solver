@@ -6,10 +6,10 @@
 #include "hash_tables.h"
 
 #define ISA avx512i
-#define VBYTES 64
+#define PZ_VBYTES 64
 #define VHALF 256
-#define FEV_IFMA 1
+#define PZ_FEV_IFMA 1
 #include "engine_vec_impl.inc"
 
 static bool supported(void) { return cpu_has_ifma(); }
-const cpu_engine ENG_AVX512I = {"avx512i", LANES, (u64)NL * GRPV, supported, CAT(engv_scan_, ISA), CAT(engv_hash_, ISA)};
+const cpu_engine ENG_AVX512I = {"avx512i", PZ_LANES, (u64)NL * GRPV, supported, CAT(engv_scan_, ISA), CAT(engv_hash_, ISA)};

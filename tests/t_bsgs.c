@@ -14,7 +14,7 @@ static int fails;
 static u64 rs = 0x2545F4914F6CDD1DULL;
 static u64 rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return rs; }
 
-static ge pub_of(const u256 *k) { ge p; if (!ec_mul_g(&p, k)) { printf("bad key\n"); exit(2); } return p; }
+static pz_ge pub_of(const pz_u256 *k) { pz_ge p; if (!pz_ec_mul_g(&p, k)) { printf("bad key\n"); exit(2); } return p; }
 
 /* every d in [-H, H] must be a*S + b with |a| <= A and |b| <= T */
 static void t_coverage(void)
@@ -24,14 +24,14 @@ static void t_coverage(void)
     for (size_t i = 0; i < sizeof Ts / sizeof *Ts; i++)
         for (size_t j = 0; j < sizeof Ws / sizeof *Ws; j++) {
             u64 T = Ts[i], W = Ws[j];
-            u256 lo = u256_from_u64(1000), hi = u256_from_u64(1000 + W - 1);
-            ge g = EC_G;
+            pz_u256 lo = pz_u256_from_u64(1000), hi = pz_u256_from_u64(1000 + W - 1);
+            pz_ge g = pz_ec_g;
             char err[200];
             bsgs_params p;
             CHECK(bsgs_params_init(&p, &lo, &hi, &g, T, err, sizeof err));
             CHECK(p.S == 2 * T + 1 && p.Ng == 2 * p.A + 1);
             for (u64 off = 0; off < W; off++) {
-                u256 key = u256_from_u64(1000 + off);
+                pz_u256 key = pz_u256_from_u64(1000 + off);
                 u64 idx = bsgs_giant_index(&p, &key);
                 CHECK(idx >= 1 && idx <= p.Ng);
                 /* the decomposition must exist with |b| <= T */
@@ -41,8 +41,8 @@ static void t_coverage(void)
                 CHECK(b >= -(__int128)T && b <= (__int128)T);
             }
         }
-    u256 lo = u256_from_u64(5), hi = u256_from_u64(100), out = u256_from_u64(101);
-    ge g = EC_G;
+    pz_u256 lo = pz_u256_from_u64(5), hi = pz_u256_from_u64(100), out = pz_u256_from_u64(101);
+    pz_ge g = pz_ec_g;
     char err[200];
     bsgs_params p;
     CHECK(bsgs_params_init(&p, &lo, &hi, &g, 4, err, sizeof err));
@@ -53,14 +53,14 @@ static void t_coverage(void)
 
 static void t_sizing(void)
 {
-    u256 W = u256_pow2(64);
+    pz_u256 W = pz_u256_pow2(64);
     CHECK(bsgs_optimal_T(&W) == ((u64)1 << 31));
     bool viable;
     u64 T = bsgs_choose_T(&W, (u64)64 << 30, &viable);
     CHECK(viable && T == ((u64)1 << 31));
     T = bsgs_choose_T(&W, (u64)1 << 30, &viable);       /* 1 GiB: far below sqrt(W)/4 entries */
     CHECK(!viable && T < ((u64)1 << 28));
-    u256 big = u256_pow2(139);
+    pz_u256 big = pz_u256_pow2(139);
     bsgs_choose_T(&big, (u64)128 << 30, &viable);
     CHECK(!viable);                                     /* the open puzzles with a public key are out of reach */
     CHECK(bsgs_bytes_for(1000000) >= 8 * 1000000 && bsgs_max_T_for_bytes(bsgs_bytes_for(1000000)) >= 999000);
@@ -80,9 +80,9 @@ static void t_table(void)
     CHECK(bsgs_table_count(&t, 2) == T);
     int missing = 0, wrong = 0;
     for (u64 b = 1; b <= T; b += (b < 200 ? 1 : 37)) {
-        ge q = pub_of(&(u256){{b, 0, 0, 0}});
-        fe x = q.x;
-        fe_normalize(&x);
+        pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
+        pz_fe x = q.x;
+        pz_fe_normalize(&x);
         u64 got;
         if (!bsgs_table_contains(&t, x.n[0], x.n[1], &got)) missing++;
         else if (got != b) wrong++;   /* a tag collision may return another b: tolerated below */
@@ -91,9 +91,9 @@ static void t_table(void)
     CHECK(wrong <= 1);
     int fp = 0;
     for (u64 b = T + 1; b <= T + 3000; b++) {
-        ge q = pub_of(&(u256){{b, 0, 0, 0}});
-        fe x = q.x;
-        fe_normalize(&x);
+        pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
+        pz_fe x = q.x;
+        pz_fe_normalize(&x);
         u64 got;
         if (bsgs_table_contains(&t, x.n[0], x.n[1], &got)) fp++;
     }
@@ -144,15 +144,15 @@ static void t_table(void)
     bsgs_table_free(&t);
 }
 
-static void solve_expect(const u256 *lo, const u256 *hi, const u256 *key, u64 T, int nthreads)
+static void solve_expect(const pz_u256 *lo, const pz_u256 *hi, const pz_u256 *key, u64 T, int nthreads)
 {
-    ge P = pub_of(key);
-    u256 got = u256_zero();
+    pz_ge P = pub_of(key);
+    pz_u256 got = pz_u256_zero();
     u64 giants;
     bool ok = bsgs_solve(lo, hi, &P, T, nthreads, &got, &giants);
     char a[80], b[80], c[80], d[80];
-    if (!ok || u256_cmp(&got, key) != 0) {
-        printf("  solve failed: range %s..%s T=%llu key %s found %s\n", u256_to_hex(lo, a), u256_to_hex(hi, b), (unsigned long long)T, u256_to_hex(key, c), ok ? u256_to_hex(&got, d) : "none");
+    if (!ok || pz_u256_cmp(&got, key) != 0) {
+        printf("  solve failed: range %s..%s T=%llu key %s found %s\n", pz_u256_to_hex(lo, a), pz_u256_to_hex(hi, b), (unsigned long long)T, pz_u256_to_hex(key, c), ok ? pz_u256_to_hex(&got, d) : "none");
         fails++;
     }
 }
@@ -165,7 +165,7 @@ static void t_solve(void)
         {99, 700000, 777}, {1ULL << 40, (1 << 24) + 5, 1 << 11}, {5, 100000, 5000},
     };
     for (size_t i = 0; i < sizeof cfgs / sizeof *cfgs; i++) {
-        u256 lo = u256_from_u64(cfgs[i].lo), hi = u256_from_u64(cfgs[i].lo + cfgs[i].W - 1);
+        pz_u256 lo = pz_u256_from_u64(cfgs[i].lo), hi = pz_u256_from_u64(cfgs[i].lo + cfgs[i].W - 1);
         u64 T = cfgs[i].T, W = cfgs[i].W, S = 2 * T + 1;
         u64 c = cfgs[i].lo + ((W - 1) >> 1);
         u64 cand[16], nc = 0;
@@ -182,42 +182,42 @@ static void t_solve(void)
             }
         }
         for (u64 j = 0; j < nc; j++) {
-            u256 key = u256_from_u64(cand[j]);
+            pz_u256 key = pz_u256_from_u64(cand[j]);
             solve_expect(&lo, &hi, &key, T, 1 + (int)(j % 3));
         }
     }
     CHECK(atomic_load(&bsgs_slow_windows) > 0);   /* the exact path for keys sitting on a giant step was exercised */
     /* every key of a small range, so no giant/baby combination is skipped */
     {
-        u256 lo = u256_from_u64(5000), hi = u256_from_u64(5000 + 1500 - 1);
+        pz_u256 lo = pz_u256_from_u64(5000), hi = pz_u256_from_u64(5000 + 1500 - 1);
         for (u64 k = 5000; k < 5000 + 1500; k += 7) {
-            u256 key = u256_from_u64(k);
+            pz_u256 key = pz_u256_from_u64(k);
             solve_expect(&lo, &hi, &key, 20, 2);
         }
         for (u64 k = 5000 + 1; k < 5000 + 1500; k += 211) {
-            u256 key = u256_from_u64(k);
+            pz_u256 key = pz_u256_from_u64(k);
             solve_expect(&lo, &hi, &key, 1, 1);
         }
     }
     /* huge keys: the offsets wrap around the 256-bit value without trouble */
     {
-        u256 base = u256_pow2(255), lo, hi;
-        u256_add_u64(&lo, &base, 12345);
-        u256_add_u64(&hi, &lo, 99999);
-        u256 key;
-        u256_add_u64(&key, &lo, 40001);
+        pz_u256 base = pz_u256_pow2(255), lo, hi;
+        pz_u256_add_u64(&lo, &base, 12345);
+        pz_u256_add_u64(&hi, &lo, 99999);
+        pz_u256 key;
+        pz_u256_add_u64(&key, &lo, 40001);
         solve_expect(&lo, &hi, &key, 100, 2);
     }
     /* a key outside the range is not found */
     {
-        u256 lo = u256_from_u64(1000), hi = u256_from_u64(1999), key = u256_from_u64(5000000), got;   /* whole groups are scanned: a key just past the end may still be found */
-        ge P = pub_of(&key);
+        pz_u256 lo = pz_u256_from_u64(1000), hi = pz_u256_from_u64(1999), key = pz_u256_from_u64(5000000), got;   /* whole groups are scanned: a key just past the end may still be found */
+        pz_ge P = pub_of(&key);
         u64 giants;
         CHECK(!bsgs_solve(&lo, &hi, &P, 16, 2, &got, &giants));
     }
     /* the public key equals the centre */
     {
-        u256 lo = u256_from_u64(1000), hi = u256_from_u64(1999), key = u256_from_u64(1000 + 499);
+        pz_u256 lo = pz_u256_from_u64(1000), hi = pz_u256_from_u64(1999), key = pz_u256_from_u64(1000 + 499);
         solve_expect(&lo, &hi, &key, 16, 1);
     }
 }
@@ -228,10 +228,10 @@ static void t_solve(void)
 static void t_window_edges(void)
 {
     const u64 W = (u64)1 << 24, T = 256, S = 2 * T + 1, lo0 = 1ULL << 33;
-    u256 lo = u256_from_u64(lo0), hi = u256_from_u64(lo0 + W - 1);
+    pz_u256 lo = pz_u256_from_u64(lo0), hi = pz_u256_from_u64(lo0 + W - 1);
     bsgs_params p;
     char err[200];
-    ge g = pub_of(&(u256){{1, 0, 0, 0}});
+    pz_ge g = pub_of(&(pz_u256){{1, 0, 0, 0}});
     CHECK(bsgs_params_init(&p, &lo, &hi, &g, T, err, sizeof err));
     CHECK(p.Ng > 8 * BS_GRP);
     const u64 c = lo0 + ((W - 1) >> 1);
@@ -244,7 +244,7 @@ static void t_window_edges(void)
             for (size_t o = 0; o < sizeof offs / sizeof *offs; o++) {
                 int64_t k = (int64_t)c + a * (int64_t)S + offs[o];
                 if (k < (int64_t)lo0 || k > (int64_t)(lo0 + W - 1)) continue;
-                u256 key = u256_from_u64((u64)k);
+                pz_u256 key = pz_u256_from_u64((u64)k);
                 solve_expect(&lo, &hi, &key, T, 1 + (w + dg + 8) % 3);
                 done++;
             }
@@ -253,19 +253,19 @@ static void t_window_edges(void)
     CHECK(done > 60);
 }
 
-typedef struct { u256 key; int hits; _Atomic int *stop; bool stop_on_hit; } hit_rec;
-static void on_hit(void *u, const u256 *k) { hit_rec *h = u; h->hits++; h->key = *k; if (h->stop_on_hit) atomic_store(h->stop, 1); }
+typedef struct { pz_u256 key; int hits; _Atomic int *stop; bool stop_on_hit; } hit_rec;
+static void on_hit(void *u, const pz_u256 *k) { hit_rec *h = u; h->hits++; h->key = *k; if (h->stop_on_hit) atomic_store(h->stop, 1); }
 
 /* bsgs_scan: return value, progress accounting and the stop flag */
 static void t_scan_contract(void)
 {
     const u64 W = (u64)1 << 22, T = 128, S = 2 * T + 1, lo0 = 1ULL << 30;
-    u256 lo = u256_from_u64(lo0), hi = u256_from_u64(lo0 + W - 1);
+    pz_u256 lo = pz_u256_from_u64(lo0), hi = pz_u256_from_u64(lo0 + W - 1);
     bsgs_params p;
     char err[200];
     const u64 c = lo0 + ((W - 1) >> 1);
-    u256 key = u256_from_u64(c + 5 * BS_GRP * S + 11);   /* the giant a = 5 * BS_GRP: first giant of the sixth window */
-    ge P = pub_of(&key);
+    pz_u256 key = pz_u256_from_u64(c + 5 * BS_GRP * S + 11);   /* the giant a = 5 * BS_GRP: first giant of the sixth window */
+    pz_ge P = pub_of(&key);
     CHECK(bsgs_params_init(&p, &lo, &hi, &P, T, err, sizeof err));
     bsgs_table tab;
     CHECK(bsgs_table_alloc(&tab, T, err, sizeof err));
@@ -275,7 +275,7 @@ static void t_scan_contract(void)
     const int64_t a0 = 0;                                  /* scanning a = 0, 1, ...: the key's giant is a = 5 * BS_GRP */
     /* a range that does not reach the key: nothing found, everything covered, progress counts whole windows */
     {
-        hit_rec h = {u256_zero(), 0, NULL, false};
+        hit_rec h = {pz_u256_zero(), 0, NULL, false};
         _Atomic u64 prog = 0, fp = 0;
         u64 n = 5 * BS_GRP;
         CHECK(bsgs_scan(&job, a0, n, on_hit, &h, &prog, &fp, NULL) == n);
@@ -283,23 +283,23 @@ static void t_scan_contract(void)
     }
     /* a ragged length: the last window is whole, the return value is clamped to n */
     {
-        hit_rec h = {u256_zero(), 0, NULL, false};
+        hit_rec h = {pz_u256_zero(), 0, NULL, false};
         _Atomic u64 prog = 0;
         u64 n = 5 * BS_GRP + 1;
         CHECK(bsgs_scan(&job, a0, n, on_hit, &h, &prog, NULL, NULL) == n);
-        CHECK(h.hits == 1 && !u256_cmp(&h.key, &key));      /* the extra giant belongs to a whole window that contains the key */
+        CHECK(h.hits == 1 && !pz_u256_cmp(&h.key, &key));      /* the extra giant belongs to a whole window that contains the key */
         CHECK(atomic_load(&prog) == 6 * BS_GRP);
     }
     /* zero length */
     {
-        hit_rec h = {u256_zero(), 0, NULL, false};
+        hit_rec h = {pz_u256_zero(), 0, NULL, false};
         _Atomic u64 prog = 0;
         CHECK(bsgs_scan(&job, a0, 0, on_hit, &h, &prog, NULL, NULL) == 0 && atomic_load(&prog) == 0 && h.hits == 0);
     }
     /* stop requested before the call: nothing is scanned */
     {
         _Atomic int stop = 1;
-        hit_rec h = {u256_zero(), 0, &stop, false};
+        hit_rec h = {pz_u256_zero(), 0, &stop, false};
         _Atomic u64 prog = 0;
         CHECK(bsgs_scan(&job, a0, 20 * BS_GRP, on_hit, &h, &prog, NULL, &stop) == 0 && atomic_load(&prog) == 0 && h.hits == 0);
     }
@@ -307,17 +307,17 @@ static void t_scan_contract(void)
      * with the scalar routine, up to 8 with the lane-parallel ones), and reports exactly what it covered */
     {
         _Atomic int stop = 0;
-        hit_rec h = {u256_zero(), 0, &stop, true};
+        hit_rec h = {pz_u256_zero(), 0, &stop, true};
         _Atomic u64 prog = 0;
         u64 got = bsgs_scan(&job, a0, 20 * BS_GRP, on_hit, &h, &prog, NULL, &stop);
-        CHECK(h.hits == 1 && !u256_cmp(&h.key, &key));
+        CHECK(h.hits == 1 && !pz_u256_cmp(&h.key, &key));
         CHECK(got % BS_GRP == 0 && got >= 6 * BS_GRP && got <= 8 * BS_GRP && atomic_load(&prog) == got);
     }
     /* the same key scanned starting from a negative index and across the centre (a < 0 .. a > 0) */
     {
-        hit_rec h = {u256_zero(), 0, NULL, false};
+        hit_rec h = {pz_u256_zero(), 0, NULL, false};
         CHECK(bsgs_scan(&job, -(int64_t)(3 * BS_GRP), 9 * BS_GRP, on_hit, &h, NULL, NULL, NULL) == 9 * BS_GRP);
-        CHECK(h.hits == 1 && !u256_cmp(&h.key, &key));
+        CHECK(h.hits == 1 && !pz_u256_cmp(&h.key, &key));
     }
     bsgs_table_free(&tab);
 }
@@ -330,8 +330,8 @@ static void t_group_variants(void)
 #else
     if (!cpu_has_avx2()) { puts("  (BMI2/ADX not available: variants not compared)"); return; }
     const u64 W = (u64)1 << 20;
-    u256 lo = u256_from_u64(1000), hi = u256_from_u64(1000 + W - 1);
-    ge P = pub_of(&(u256){{987654321, 0, 0, 0}});
+    pz_u256 lo = pz_u256_from_u64(1000), hi = pz_u256_from_u64(1000 + W - 1);
+    pz_ge P = pub_of(&(pz_u256){{987654321, 0, 0, 0}});
     bsgs_params p;
     char err[200];
     CHECK(bsgs_params_init(&p, &lo, &hi, &P, 64, err, sizeof err));
@@ -339,17 +339,17 @@ static void t_group_variants(void)
     CHECK(bsgs_table_alloc(&tab, 64, err, sizeof err));
     bsgs_job job;
     bsgs_job_init(&job, &tab, &p);
-    fe *dx = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(fe) * (BS_HALF + 1));
+    pz_fe *dx = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1));
     u64 *a_lo = pz_xaligned(64, 8 * BS_GRP), *a_hi = pz_xaligned(64, 8 * BS_GRP), *b_lo = pz_xaligned(64, 8 * BS_GRP), *b_hi = pz_xaligned(64, 8 * BS_GRP);
     for (int round = 0; round < 4; round++) {
-        ge C1 = pub_of(&(u256){{12345ULL + 7777ULL * (u64)round, (u64)round, 0, 0}}), C2 = C1;
+        pz_ge C1 = pub_of(&(pz_u256){{12345ULL + 7777ULL * (u64)round, (u64)round, 0, 0}}), C2 = C1;
         for (int win = 0; win < 3; win++) {
             bool ok1 = bs_group_base(&job.giant, &C1, a_lo, a_hi, dx, tmp);
             bool ok2 = bs_group_x86(&job.giant, &C2, b_lo, b_hi, dx, tmp);
             CHECK(ok1 && ok2);
             CHECK(memcmp(a_lo, b_lo, 8 * BS_GRP) == 0 && memcmp(a_hi, b_hi, 8 * BS_GRP) == 0);
-            fe x1 = C1.x, x2 = C2.x, y1 = C1.y, y2 = C2.y;
-            fe_normalize(&x1); fe_normalize(&x2); fe_normalize(&y1); fe_normalize(&y2);
+            pz_fe x1 = C1.x, x2 = C2.x, y1 = C1.y, y2 = C2.y;
+            pz_fe_normalize(&x1); pz_fe_normalize(&x2); pz_fe_normalize(&y1); pz_fe_normalize(&y2);
             CHECK(!memcmp(&x1, &x2, sizeof x1) && !memcmp(&y1, &y2, sizeof y1));
         }
     }
@@ -360,7 +360,7 @@ static void t_group_variants(void)
 
 int main(void)
 {
-    ec_init();
+    pz_ec_init();
     t_coverage();
     t_sizing();
     t_table();

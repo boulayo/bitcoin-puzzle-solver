@@ -3,7 +3,7 @@
 #include "bsgs_priv.h"
 #include "cpu_engine.h"
 #define ISA avx512v
-#define VBYTES 64
+#define PZ_VBYTES 64
 #include "bsgs_vec_impl.inc"
 
-const bs_vengine BSV_AVX512V = {"AVX-512", NL, cpu_has_avx512, CAT(bsv_prepare_, ISA), 2 * (BS_HALF + 1) * sizeof(fev), CAT(bsv_groups_, ISA)};
+const bs_vengine BSV_AVX512V = {"AVX-512", NL, cpu_has_avx512, CAT(bsv_prepare_, ISA), 2 * (BS_HALF + 1) * sizeof(pz_fev), CAT(bsv_groups_, ISA)};

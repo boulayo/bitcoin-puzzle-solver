@@ -20,7 +20,7 @@ typedef struct {
 static _Atomic int g_active_workers;
 static u128 g_keys_at_start;
 
-static void on_cpu_hit(void *user, const u256 *key)
+static void on_cpu_hit(void *user, const pz_u256 *key)
 {
     run_submit_key((run_ctx *)user, key, "CPU");
 }
@@ -70,7 +70,7 @@ static void linear_progress(run_ctx *r, progress_info *pi)
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
     const sched_t *sc = r->sched;
     const bool parted = sc->part.total != 0;
-    long double total = u256_to_ld(&sc->part_keys);          /* this computer's part (the whole range without a split) */
+    long double total = pz_u256_to_ld(&sc->part_keys);          /* this computer's part (the whole range without a split) */
     long double done = (long double)g_keys_at_start + (long double)session;
     u128 exact = sched_keys_done(r->sched);
     if ((long double)exact > done) done = (long double)exact;
@@ -83,7 +83,7 @@ static void linear_progress(run_ctx *r, progress_info *pi)
     if (parted) {
         /* the key may lie anywhere in what this computer has not scanned yet, but it can scan only its own part: probabilities are
          * relative to the whole range, times beyond the part are not reachable by this computer alone */
-        const long double all = u256_to_ld(&sc->range_size);
+        const long double all = pz_u256_to_ld(&sc->range_size);
         pi->eta = (eta_in){ETA_UNIFORM, done, all - done > 0 ? all - done : 0, 0, true, left};
     } else {
         pi->eta = (eta_in){ETA_UNIFORM, done, left, 0, false, 0};
@@ -91,7 +91,7 @@ static void linear_progress(run_ctx *r, progress_info *pi)
     int n = snprintf(pi->detail, sizeof pi->detail, "random order: blocks of 2^%u keys, open intervals: %zu", sc->cbits, sched_open_intervals(r->sched));
     if (parted && n > 0 && (size_t)n < sizeof pi->detail)
         snprintf(pi->detail + n, sizeof pi->detail - (size_t)n, "\npart %.120s, %.3Lg%% of the range: probabilities refer to the whole range; n/a = beyond this computer's part",
-                 sc->part_text, total * 100.0L / u256_to_ld(&sc->range_size));
+                 sc->part_text, total * 100.0L / pz_u256_to_ld(&sc->range_size));
 }
 
 static int linear_checkpoint(run_ctx *r)
@@ -105,7 +105,7 @@ static int linear_checkpoint(run_ctx *r)
 
 int run_linear(run_ctx *r)
 {
-    ec_init();
+    pz_ec_init();
     cpu_tables_init();
     bool resumed;
     r->sched = run_load_sched(r, &r->cfg, &resumed);
@@ -172,17 +172,17 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
     if (gpu_filter && gpu_filter[0]) pz_strlcpy(r->gpu_filter, gpu_filter, sizeof r->gpu_filter);
-    ec_init();
+    pz_ec_init();
     cpu_tables_init();
     r->engine = engine ? engine : cpu_engine_autotune(0.25, false);
-    r->cfg.range_start = u256_pow2(100);
-    r->cfg.range_end = u256_pow2(101);
-    u256 one = u256_from_u64(1);
-    u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
+    r->cfg.range_start = pz_u256_pow2(100);
+    r->cfg.range_end = pz_u256_pow2(101);
+    pz_u256 one = pz_u256_from_u64(1);
+    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
     r->cfg.mode = MODE_LINEAR;
     for (int i = 0; i < 20; i++) r->cfg.target_h160[i] = (u8)(0x5A + 31 * i);
     for (int i = 0; i < 32; i++) r->cfg.seed[i] = (u8)(7 * i + 3);
-    u256 sz = cfg_range_size(&r->cfg);
+    pz_u256 sz = cfg_range_size(&r->cfg);
     r->cfg.chunk_bits = cfg_default_chunk_bits(&sz);
     r->use_cpu = true;
     r->use_gpu = true;

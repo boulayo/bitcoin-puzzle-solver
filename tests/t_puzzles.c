@@ -10,7 +10,7 @@ static int fails;
 
 int main(void)
 {
-    ec_init();
+    pz_ec_init();
     char err[200];
     CHECK(puzzles_verify(err, sizeof err) == 0);
     if (fails) printf("%s\n", err);
@@ -38,7 +38,7 @@ int main(void)
         CHECK(a != NULL && puzzle_find(n) == NULL);
         if (!a) continue;
         u8 hr[20];
-        CHECK(address_to_hash160(a, hr));
+        CHECK(pz_address_to_hash160(a, hr));
         for (int m = 1; m <= PZ_NUM_PUZZLES; m++) CHECK(strcmp(a, puzzle_find(m)->address) != 0);
         for (int m = n + 1; m <= 256; m++) CHECK(strcmp(a, puzzle_retired_address(m)) != 0);
     }
@@ -46,15 +46,15 @@ int main(void)
     CHECK(!strcmp(puzzle_retired_address(256), "1FMcotmnqqE5M2x9DDX3VfPAPuBWArGisa"));
     /* ranges: [2^(n-1), 2^n - 1], for 256 up to the group order n - 1 */
     {
-        u256 a, b, one = u256_from_u64(1), w;
+        pz_u256 a, b, one = pz_u256_from_u64(1), w;
         CHECK(puzzle_range(161, &a, &b));
-        w = u256_pow2(160);
-        CHECK(u256_cmp(&a, &w) == 0);
+        w = pz_u256_pow2(160);
+        CHECK(pz_u256_cmp(&a, &w) == 0);
         CHECK(puzzle_range(256, &a, &b));
-        w = u256_pow2(255);
-        CHECK(u256_cmp(&a, &w) == 0);
-        u256_sub(&w, &SECP_N, &one);
-        CHECK(u256_cmp(&b, &w) == 0);
+        w = pz_u256_pow2(255);
+        CHECK(pz_u256_cmp(&a, &w) == 0);
+        pz_u256_sub(&w, &pz_secp256k1_n, &one);
+        CHECK(pz_u256_cmp(&b, &w) == 0);
         CHECK(!puzzle_range(0, &a, &b) && !puzzle_range(257, &a, &b));
     }
 
@@ -64,7 +64,7 @@ int main(void)
     snprintf(addr, sizeof addr, "%s", bad.address);
     addr[5] = addr[5] == 'a' ? 'b' : 'a';
     u8 h[20];
-    CHECK(!address_to_hash160(addr, h));
+    CHECK(!pz_address_to_hash160(addr, h));
 
     puts(fails ? "t_puzzles: FAILED" : "t_puzzles: ok");
     return fails != 0;

@@ -5,9 +5,9 @@
 #include "hash_tables.h"
 
 #define ISA avx2v
-#define VBYTES 32
+#define PZ_VBYTES 32
 #define VHALF 256
 #include "engine_vec_impl.inc"
 
 static bool supported(void) { return cpu_has_avx2(); }
-const cpu_engine ENG_AVX2V = {"avx2v", LANES, (u64)NL * GRPV, supported, CAT(engv_scan_, ISA), CAT(engv_hash_, ISA)};
+const cpu_engine ENG_AVX2V = {"avx2v", PZ_LANES, (u64)NL * GRPV, supported, CAT(engv_scan_, ISA), CAT(engv_hash_, ISA)};

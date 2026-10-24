@@ -5,8 +5,8 @@
 #include "hash_tables.h"
 
 #define ISA base
-#define VBYTES 16
+#define PZ_VBYTES 16
 #include "engine_impl.inc"
 
 static bool supported(void) { return true; }
-const cpu_engine ENG_BASE = {"baseline", LANES, CPU_GRP, supported, CAT(eng_scan_, ISA), CAT(eng_hash_, ISA)};
+const cpu_engine ENG_BASE = {"baseline", PZ_LANES, CPU_GRP, supported, CAT(eng_scan_, ISA), CAT(eng_hash_, ISA)};

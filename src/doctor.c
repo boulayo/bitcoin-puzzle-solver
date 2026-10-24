@@ -94,14 +94,14 @@ static void check_cpu_engines(void)
 static void check_primitives(void)
 {
     section("Primitives");
-    u256 k = u256_from_u64(1);
-    ge p;
+    pz_u256 k = pz_u256_from_u64(1);
+    pz_ge p;
     u8 pub[33], h[20];
     char hx[48];
-    ec_init();
-    if (!ec_mul_g(&p, &k)) { doctor_line('x', "curve multiplication failed"); return; }
-    ge_to_pub33(pub, &p);
-    hash160(pub, 33, h);
+    pz_ec_init();
+    if (!pz_ec_mul_g(&p, &k)) { doctor_line('x', "curve multiplication failed"); return; }
+    pz_ge_to_pub33(pub, &p);
+    pz_hash160(pub, 33, h);
     pz_hex_encode(h, 20, hx);
     if (!strcmp(hx, "751e76e8199196d454941c45d1b3a323f1433bd6")) doctor_line('o', "key 1 gives the correct hash160 (curve, SHA-256, RIPEMD-160)");
     else doctor_line('x', "key 1 gives the WRONG hash160 (%s)", hx);

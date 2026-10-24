@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* t_fe.c - the (possibly assembly) fe_mul/fe_sqr must agree with the portable C versions and with Python-checked identities. */
+/* t_fe.c - the (possibly assembly) pz_fe_mul/pz_fe_sqr must agree with the portable C versions and with Python-checked identities. */
 #include "../src/fe.h"
 #include "../src/cpu_engine.h"
 static int fails;
@@ -7,13 +7,13 @@ static int fails;
 static u64 s = 0x1234ABCD5678EF01ULL;
 static u64 rnd(void) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
 
-static void pick(fe *a, int mode)
+static void pick(pz_fe *a, int mode)
 {
     for (int j = 0; j < 4; j++) a->n[j] = rnd();
     switch (mode % 12) {
     case 0: memset(a, 0, sizeof *a); break;
     case 1: memset(a, 0xff, sizeof *a); break;
-    case 2: *a = FE_P; break;
+    case 2: *a = pz_fe_p; break;
     case 3: a->n[3] = a->n[2] = a->n[1] = ~0ULL; break;
     case 4: a->n[0] = ~0ULL; a->n[1] = a->n[2] = a->n[3] = 0; break;
     case 5: a->n[3] = 1ULL << 63; a->n[0] = a->n[1] = a->n[2] = 0; break;
@@ -33,52 +33,52 @@ int main(void)
     const char *mode = "C";
 #endif
     for (int it = 0; it < 400000; it++) {
-        fe a, b, r1, r2, r3;
+        pz_fe a, b, r1, r2, r3;
         pick(&a, it);
         pick(&b, it / 12 + it);
-        fe_mul(&r1, &a, &b);
-        fe_mul_c(&r2, &a, &b);
-        CHECK(fe_equiv(&r1, &r2));
-        fe_sqr(&r1, &a);
-        fe_sqr_c(&r2, &a);
-        CHECK(fe_equiv(&r1, &r2));
+        pz_fe_mul(&r1, &a, &b);
+        pz_fe_mul_c(&r2, &a, &b);
+        CHECK(pz_fe_equiv(&r1, &r2));
+        pz_fe_sqr(&r1, &a);
+        pz_fe_sqr_c(&r2, &a);
+        CHECK(pz_fe_equiv(&r1, &r2));
         /* aliasing */
         r3 = a;
-        fe_mul(&r3, &r3, &b);
-        fe_mul_c(&r2, &a, &b);
-        CHECK(fe_equiv(&r3, &r2));
+        pz_fe_mul(&r3, &r3, &b);
+        pz_fe_mul_c(&r2, &a, &b);
+        CHECK(pz_fe_equiv(&r3, &r2));
         r3 = b;
-        fe_mul(&r3, &a, &r3);
-        CHECK(fe_equiv(&r3, &r2));
+        pz_fe_mul(&r3, &a, &r3);
+        CHECK(pz_fe_equiv(&r3, &r2));
         r3 = a;
-        fe_sqr(&r3, &r3);
-        fe_sqr_c(&r2, &a);
-        CHECK(fe_equiv(&r3, &r2));
+        pz_fe_sqr(&r3, &r3);
+        pz_fe_sqr_c(&r2, &a);
+        CHECK(pz_fe_equiv(&r3, &r2));
         /* algebra: (a*b)/b == a */
-        fe bn = b;
-        fe_normalize(&bn);
-        if (!fe_is_zero(&bn)) {
-            fe bi, ab;
-            fe_inv(&bi, &b);
-            fe_mul(&ab, &a, &b);
-            fe_mul(&r1, &ab, &bi);
-            CHECK(fe_equiv(&r1, &a));
+        pz_fe bn = b;
+        pz_fe_normalize(&bn);
+        if (!pz_fe_is_zero(&bn)) {
+            pz_fe bi, ab;
+            pz_fe_inv(&bi, &b);
+            pz_fe_mul(&ab, &a, &b);
+            pz_fe_mul(&r1, &ab, &bi);
+            CHECK(pz_fe_equiv(&r1, &a));
         }
         /* add / sub / neg against straightforward 256-bit modular arithmetic */
         {
-            u256 ua, ub, pp, sum, dif;
-            fe_to_u256(&ua, &a);
-            fe_to_u256(&ub, &b);
-            for (int k = 0; k < 4; k++) pp.w[k] = FE_P.n[k];
-            u64 c = u256_add(&sum, &ua, &ub);
-            if (c || u256_cmp(&sum, &pp) >= 0) u256_sub(&sum, &sum, &pp);
-            if (u256_sub(&dif, &ua, &ub)) u256_add(&dif, &dif, &pp);
-            fe fr; u256 got;
-            fe_add(&fr, &a, &b); fe_to_u256(&got, &fr); CHECK(!u256_cmp(&got, &sum));
-            fe_sub(&fr, &a, &b); fe_to_u256(&got, &fr); CHECK(!u256_cmp(&got, &dif));
-            fr = a; fe_add(&fr, &fr, &fr); u256 two; u256_add(&two, &ua, &ua); if (u256_cmp(&two, &ua) < 0 || u256_cmp(&two, &pp) >= 0) u256_sub(&two, &two, &pp);
-            fe_to_u256(&got, &fr); CHECK(!u256_cmp(&got, &two));
-            fe_neg(&fr, &a); fe_add(&fr, &fr, &a); fe_normalize(&fr); CHECK(fe_is_zero(&fr));
+            pz_u256 ua, ub, pp, sum, dif;
+            pz_fe_to_u256(&ua, &a);
+            pz_fe_to_u256(&ub, &b);
+            for (int k = 0; k < 4; k++) pp.w[k] = pz_fe_p.n[k];
+            u64 c = pz_u256_add(&sum, &ua, &ub);
+            if (c || pz_u256_cmp(&sum, &pp) >= 0) pz_u256_sub(&sum, &sum, &pp);
+            if (pz_u256_sub(&dif, &ua, &ub)) pz_u256_add(&dif, &dif, &pp);
+            pz_fe fr; pz_u256 got;
+            pz_fe_add(&fr, &a, &b); pz_fe_to_u256(&got, &fr); CHECK(!pz_u256_cmp(&got, &sum));
+            pz_fe_sub(&fr, &a, &b); pz_fe_to_u256(&got, &fr); CHECK(!pz_u256_cmp(&got, &dif));
+            fr = a; pz_fe_add(&fr, &fr, &fr); pz_u256 two; pz_u256_add(&two, &ua, &ua); if (pz_u256_cmp(&two, &ua) < 0 || pz_u256_cmp(&two, &pp) >= 0) pz_u256_sub(&two, &two, &pp);
+            pz_fe_to_u256(&got, &fr); CHECK(!pz_u256_cmp(&got, &two));
+            pz_fe_neg(&fr, &a); pz_fe_add(&fr, &fr, &a); pz_fe_normalize(&fr); CHECK(pz_fe_is_zero(&fr));
         }
         if (fails > 10) break;
     }
@@ -86,33 +86,33 @@ int main(void)
     for (int i = 0; i < 12; i++)
         for (int j = 0; j < 12; j++)
             for (int rep = 0; rep < 50; rep++) {
-                fe a, b, fr;
+                pz_fe a, b, fr;
                 pick(&a, i);
                 pick(&b, j);
-                u256 ua, ub, pp, sum, dif, got;
-                fe_to_u256(&ua, &a);
-                fe_to_u256(&ub, &b);
-                for (int k = 0; k < 4; k++) pp.w[k] = FE_P.n[k];
-                u64 c = u256_add(&sum, &ua, &ub);
-                if (c || u256_cmp(&sum, &pp) >= 0) u256_sub(&sum, &sum, &pp);
-                if (u256_sub(&dif, &ua, &ub)) u256_add(&dif, &dif, &pp);
-                fe_add(&fr, &a, &b); fe_to_u256(&got, &fr); CHECK(!u256_cmp(&got, &sum));
-                fe_sub(&fr, &a, &b); fe_to_u256(&got, &fr); CHECK(!u256_cmp(&got, &dif));
+                pz_u256 ua, ub, pp, sum, dif, got;
+                pz_fe_to_u256(&ua, &a);
+                pz_fe_to_u256(&ub, &b);
+                for (int k = 0; k < 4; k++) pp.w[k] = pz_fe_p.n[k];
+                u64 c = pz_u256_add(&sum, &ua, &ub);
+                if (c || pz_u256_cmp(&sum, &pp) >= 0) pz_u256_sub(&sum, &sum, &pp);
+                if (pz_u256_sub(&dif, &ua, &ub)) pz_u256_add(&dif, &dif, &pp);
+                pz_fe_add(&fr, &a, &b); pz_fe_to_u256(&got, &fr); CHECK(!pz_u256_cmp(&got, &sum));
+                pz_fe_sub(&fr, &a, &b); pz_fe_to_u256(&got, &fr); CHECK(!pz_u256_cmp(&got, &dif));
                 /* chained use of lazily reduced results */
-                fe t1, t2;
-                fe_add(&t1, &a, &b);
-                fe_add(&t2, &t1, &t1);
-                fe_sub(&t2, &t2, &a);
-                fe_sub(&t2, &t2, &t1);
-                fe_to_u256(&got, &t2);
-                u256 want;
-                fe w = b;
-                fe_add_c(&w, &b, &a);   /* reference path: portable versions */
-                fe_add_c(&w, &w, &w);
-                fe_sub_c(&w, &w, &a);
-                fe_sub_c(&w, &w, &t1);
-                fe_to_u256(&want, &w);
-                CHECK(!u256_cmp(&got, &want));
+                pz_fe t1, t2;
+                pz_fe_add(&t1, &a, &b);
+                pz_fe_add(&t2, &t1, &t1);
+                pz_fe_sub(&t2, &t2, &a);
+                pz_fe_sub(&t2, &t2, &t1);
+                pz_fe_to_u256(&got, &t2);
+                pz_u256 want;
+                pz_fe w = b;
+                pz_fe_add_c(&w, &b, &a);   /* reference path: portable versions */
+                pz_fe_add_c(&w, &w, &w);
+                pz_fe_sub_c(&w, &w, &a);
+                pz_fe_sub_c(&w, &w, &t1);
+                pz_fe_to_u256(&want, &w);
+                CHECK(!pz_u256_cmp(&got, &want));
             }
     printf(fails ? "t_fe (%s): %d FAILED\n" : "t_fe (%s): OK\n", mode, fails);
     return fails != 0;

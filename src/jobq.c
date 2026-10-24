@@ -7,7 +7,7 @@
 
 #define V_CAP (((u128)1) << 126)
 
-static u256 u256_from_u128v(u128 v) { return u256_from_u128(v); }
+static pz_u256 u256_from_u128v(u128 v) { return pz_u256_from_u128(v); }
 
 static char *u128_to_hex(u128 v, char *buf)
 {
@@ -33,32 +33,32 @@ static bool u128_from_hex(const char *s, u128 *out)
 }
 
 /* Blocks of the whole search order (M = ceil(R / 2^b)) and of the part in cfg->part. */
-static bool part_blocks(const campaign_cfg *cfg, part_spec *ps, u256 *m_all, u256 *own, char *err, size_t errn)
+static bool part_blocks(const campaign_cfg *cfg, part_spec *ps, pz_u256 *m_all, pz_u256 *own, char *err, size_t errn)
 {
     if (!part_parse(cfg->part, ps, err, errn)) return false;
-    u256 cs = u256_pow2(cfg->chunk_bits), one = u256_from_u64(1), m, rs = cfg_range_size(cfg);
-    u256_add(&m, &rs, &cs);
-    u256_sub(&m, &m, &one);
-    m = u256_shr(&m, cfg->chunk_bits);    /* M = ceil(R / 2^b) */
-    u256 mm1;
-    u256_sub(&mm1, &m, &one);
-    if (u256_bits(&mm1) > 192) {                  /* the permutation of the visiting order works on at most 192 bits */
+    pz_u256 cs = pz_u256_pow2(cfg->chunk_bits), one = pz_u256_from_u64(1), m, rs = cfg_range_size(cfg);
+    pz_u256_add(&m, &rs, &cs);
+    pz_u256_sub(&m, &m, &one);
+    m = pz_u256_shr(&m, cfg->chunk_bits);    /* M = ceil(R / 2^b) */
+    pz_u256 mm1;
+    pz_u256_sub(&mm1, &m, &one);
+    if (pz_u256_bits(&mm1) > 192) {                  /* the permutation of the visiting order works on at most 192 bits */
         snprintf(err, errn, "the range is too large for the visiting order: with blocks of 2^%u keys you need %u position bits, the maximum is 192%s",
-                 cfg->chunk_bits, u256_bits(&mm1), cfg->chunk_bits < 40 ? " (--chunk-bits 40 helps up to puzzle 232; beyond that use -r with a sub-range)" : " (use -r with a sub-range)");
+                 cfg->chunk_bits, pz_u256_bits(&mm1), cfg->chunk_bits < 40 ? " (--chunk-bits 40 helps up to puzzle 232; beyond that use -r with a sub-range)" : " (use -r with a sub-range)");
         return false;
     }
     *m_all = m;
     *own = m;
     if (!ps->total) return true;
     u32 rem;
-    const u256 q = u256_divmod_u32(&m, ps->total, &rem);       /* share r holds q blocks, plus one when r < rem */
-    u256 o = u256_mul_u32(&q, ps->count);
+    const pz_u256 q = pz_u256_divmod_u32(&m, ps->total, &rem);       /* share r holds q blocks, plus one when r < rem */
+    pz_u256 o = pz_u256_mul_u32(&q, ps->count);
     for (unsigned i = 0; i < ps->count; i++)
-        if (ps->res[i] < rem) u256_add_u64(&o, &o, 1);
-    if (u256_is_zero(&o)) {
+        if (ps->res[i] < rem) pz_u256_add_u64(&o, &o, 1);
+    if (pz_u256_is_zero(&o)) {
         char ms[80];
         snprintf(err, errn, "with blocks of 2^%u keys the range has only %s blocks: too few for %u shares (use a smaller --chunk-bits or fewer shares)",
-                 cfg->chunk_bits, u256_to_dec(&m, ms), ps->total);
+                 cfg->chunk_bits, pz_u256_to_dec(&m, ms), ps->total);
         return false;
     }
     *own = o;
@@ -68,7 +68,7 @@ static bool part_blocks(const campaign_cfg *cfg, part_spec *ps, u256 *m_all, u25
 bool sched_check_part(const campaign_cfg *cfg, char *err, size_t errn)
 {
     part_spec ps;
-    u256 m, own;
+    pz_u256 m, own;
     if (cfg->chunk_bits < 1 || cfg->chunk_bits > 40) { snprintf(err, errn, "chunk_bits must be between 1 and 40"); return false; }
     return part_blocks(cfg, &ps, &m, &own, err, errn);
 }
@@ -82,38 +82,38 @@ sched_t *sched_new(const campaign_cfg *cfg)
     s->cbits = cfg->chunk_bits;
     if (s->cbits < 1 || s->cbits > 40) pz_die("chunk_bits must be between 1 and 40 (got %u)", s->cbits);
     s->range_size = cfg_range_size(cfg);
-    u256 m, own;
+    pz_u256 m, own;
     char perr[300];
     if (!part_blocks(cfg, &s->part, &m, &own, perr, sizeof perr)) pz_die("%s", perr);
     part_format(&s->part, s->part_text, sizeof s->part_text);
     s->blocks_all = m;
     s->blocks_part = own;
-    perm_init(&s->perm, cfg->seed, &m);
+    pz_perm_init(&s->perm, cfg->seed, &m);
     s->part_keys = s->range_size;
     if (s->part.total) {
         /* the keys of this part: its blocks are all full except the block that holds the end of the range, when that one is short */
-        const u256 full = u256_pow2(s->cbits), one = u256_from_u64(1);
-        u256 last = m, first_of_last;
-        u256_sub(&last, &last, &one);                              /* id of the last block of the range */
-        first_of_last = u256_shl(&last, s->cbits);
-        u256 len;
-        u256_sub(&len, &s->range_size, &first_of_last);
-        s->part_keys = u256_shl(&own, s->cbits);
-        if (u256_cmp(&len, &full) < 0) {
-            const u256 pos = perm_invert(&s->perm, &last);         /* where the order visits it */
+        const pz_u256 full = pz_u256_pow2(s->cbits), one = pz_u256_from_u64(1);
+        pz_u256 last = m, first_of_last;
+        pz_u256_sub(&last, &last, &one);                              /* id of the last block of the range */
+        first_of_last = pz_u256_shl(&last, s->cbits);
+        pz_u256 len;
+        pz_u256_sub(&len, &s->range_size, &first_of_last);
+        s->part_keys = pz_u256_shl(&own, s->cbits);
+        if (pz_u256_cmp(&len, &full) < 0) {
+            const pz_u256 pos = pz_perm_invert(&s->perm, &last);         /* where the order visits it */
             u32 r;
-            (void)u256_divmod_u32(&pos, s->part.total, &r);
+            (void)pz_u256_divmod_u32(&pos, s->part.total, &r);
             for (unsigned i = 0; i < s->part.count; i++) {
                 if (s->part.res[i] != r) continue;
-                u256 deficit;
-                u256_sub(&deficit, &full, &len);
-                u256_sub(&s->part_keys, &s->part_keys, &deficit);
+                pz_u256 deficit;
+                pz_u256_sub(&deficit, &full, &len);
+                pz_u256_sub(&s->part_keys, &s->part_keys, &deficit);
                 break;
             }
         }
     }
-    u256 vt = u256_shl(&own, s->cbits);
-    const bool ovf = u256_bits(&own) + s->cbits > 126;                  /* the virtual space is capped at 2^126 */
+    pz_u256 vt = pz_u256_shl(&own, s->cbits);
+    const bool ovf = pz_u256_bits(&own) + s->cbits > 126;                  /* the virtual space is capped at 2^126 */
     s->v_limit = ovf ? V_CAP : (u128)vt.w[1] << 64 | vt.w[0];
     s->v_capped = ovf;
     s->capdone = 16;
@@ -167,25 +167,25 @@ static u128 first_gap(const sched_t *s)
 }
 
 /* Position in the order of the whole range of the seq-th block of this computer's part. */
-static u256 global_seq(const sched_t *s, u128 seq)
+static pz_u256 global_seq(const sched_t *s, u128 seq)
 {
     if (!s->part.total) return u256_from_u128v(seq);
     const u32 m = s->part.count;
-    const u256 base = u256_from_u128v(seq / m);
-    u256 k = u256_mul_u32(&base, s->part.total);
-    u256_add_u64(&k, &k, s->part.res[(unsigned)(seq % m)]);
+    const pz_u256 base = u256_from_u128v(seq / m);
+    pz_u256 k = pz_u256_mul_u32(&base, s->part.total);
+    pz_u256_add_u64(&k, &k, s->part.res[(unsigned)(seq % m)]);
     return k;
 }
 
-bool sched_part_position(const sched_t *s, const u256 *gseq, u256 *local)
+bool sched_part_position(const sched_t *s, const pz_u256 *gseq, pz_u256 *local)
 {
     if (!s->part.total) { *local = *gseq; return true; }
     u32 r;
-    const u256 q = u256_divmod_u32(gseq, s->part.total, &r);
+    const pz_u256 q = pz_u256_divmod_u32(gseq, s->part.total, &r);
     for (unsigned i = 0; i < s->part.count; i++) {
         if (s->part.res[i] != r) continue;
-        u256 t = u256_mul_u32(&q, s->part.count);
-        u256_add_u64(&t, &t, i);
+        pz_u256 t = pz_u256_mul_u32(&q, s->part.count);
+        pz_u256_add_u64(&t, &t, i);
         *local = t;
         return true;
     }
@@ -195,14 +195,14 @@ bool sched_part_position(const sched_t *s, const u256 *gseq, u256 *local)
 static void load_chunk(sched_t *s, u128 seq)
 {
     if (s->cur_valid && s->cur_seq == seq) return;
-    u256 sq = global_seq(s, seq);
-    u256 c = perm_apply(&s->perm, &sq);
-    u256 off = u256_shl(&c, s->cbits);
-    u256_add(&s->cur_start, &s->range_start, &off);
-    u256 rem;
-    u256_sub(&rem, &s->range_end, &s->cur_start);
-    u256 one = u256_from_u64(1);
-    u256_add(&rem, &rem, &one);
+    pz_u256 sq = global_seq(s, seq);
+    pz_u256 c = pz_perm_apply(&s->perm, &sq);
+    pz_u256 off = pz_u256_shl(&c, s->cbits);
+    pz_u256_add(&s->cur_start, &s->range_start, &off);
+    pz_u256 rem;
+    pz_u256_sub(&rem, &s->range_end, &s->cur_start);
+    pz_u256 one = pz_u256_from_u64(1);
+    pz_u256_add(&rem, &rem, &one);
     u64 full = 1ULL << s->cbits;
     if (rem.w[1] || rem.w[2] || rem.w[3] || rem.w[0] > full) s->cur_len = full;
     else s->cur_len = rem.w[0];
@@ -246,8 +246,8 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out)
             if (s->done[i].a > s->next) { if (s->done[i].a < end) end = s->done[i].a; break; }
         out->v_start = s->next;
         out->nkeys = (u64)(end - s->next);
-        u256 o = u256_from_u64(off);
-        u256_add(&out->key_start, &s->cur_start, &o);
+        pz_u256 o = pz_u256_from_u64(off);
+        pz_u256_add(&out->key_start, &s->cur_start, &o);
         out->id = ++s->next_id;
         if (s->ninf == s->capinf) {
             s->capinf *= 2;
@@ -306,7 +306,7 @@ size_t sched_open_intervals(sched_t *s)
 double sched_fraction(sched_t *s)
 {
     long double kd = (long double)sched_keys_done(s);
-    long double r = u256_to_ld(&s->part_keys);
+    long double r = pz_u256_to_ld(&s->part_keys);
     double f = (double)(kd / r);
     return f > 1.0 ? 1.0 : f;
 }
@@ -319,16 +319,16 @@ bool sched_finished(sched_t *s)
     return f;
 }
 
-bool sched_locate(sched_t *s, const u256 *key, u256 *seq, u64 *offset)
+bool sched_locate(sched_t *s, const pz_u256 *key, pz_u256 *seq, u64 *offset)
 {
-    if (u256_cmp(key, &s->range_start) < 0 || u256_cmp(key, &s->range_end) > 0) return false;
-    u256 d;
-    u256_sub(&d, key, &s->range_start);
-    u256 c = u256_shr(&d, s->cbits);
-    u256 mask = u256_pow2(s->cbits), one = u256_from_u64(1);
-    u256_sub(&mask, &mask, &one);
+    if (pz_u256_cmp(key, &s->range_start) < 0 || pz_u256_cmp(key, &s->range_end) > 0) return false;
+    pz_u256 d;
+    pz_u256_sub(&d, key, &s->range_start);
+    pz_u256 c = pz_u256_shr(&d, s->cbits);
+    pz_u256 mask = pz_u256_pow2(s->cbits), one = pz_u256_from_u64(1);
+    pz_u256_sub(&mask, &mask, &one);
     *offset = d.w[0] & mask.w[0];
-    *seq = perm_invert(&s->perm, &c);
+    *seq = pz_perm_invert(&s->perm, &c);
     return true;
 }
 
@@ -342,7 +342,7 @@ static bool state_file_valid(const char *path)
     if (crc) {
         u8 dg[32];
         char hx[17];
-        sha256((u8 *)text, (size_t)(crc - text), dg);
+        pz_sha256((u8 *)text, (size_t)(crc - text), dg);
         pz_hex_encode(dg, 8, hx);
         ok = strncmp(crc + 4, hx, 16) == 0;
     }
@@ -365,7 +365,7 @@ int sched_save(sched_t *s, const char *path)
     pthread_mutex_unlock(&s->mu);
     u8 dg[32];
     char hx[17];
-    sha256((u8 *)buf, (size_t)n, dg);
+    pz_sha256((u8 *)buf, (size_t)n, dg);
     pz_hex_encode(dg, 8, hx);
     n += snprintf(buf + n, 64, "crc=%s\n", hx);
     /* keep one backup of the previous checkpoint, but never rotate a damaged file over a good backup */
@@ -408,12 +408,12 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
     if (!crc) { snprintf(err, errlen, "checkpoint without checksum"); free(text); return -1; }
     u8 dg[32];
     char hx[17];
-    sha256((u8 *)text, (size_t)(crc - text), dg);
+    pz_sha256((u8 *)text, (size_t)(crc - text), dg);
     pz_hex_encode(dg, 8, hx);
     if (strncmp(crc + 4, hx, 16)) { snprintf(err, errlen, "invalid checkpoint checksum (corrupt file?)"); free(text); return -1; }
     *crc = 0;
     unsigned cb = 0;
-    char vl[64] = "", kd[64] = "", nds[32] = "";
+    char pz_vl[64] = "", kd[64] = "", nds[32] = "";
     size_t nd = 0;
     if (strncmp(text, "PZSCHED 1\n", 10) != 0 || !state_field(text, "cbits", nds, sizeof nds)) {
         snprintf(err, errlen, "unrecognized checkpoint format");
@@ -431,14 +431,14 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
         }
     }
     cb = (unsigned)pz_strtou64(nds);
-    if (!state_field(text, "v_limit", vl, sizeof vl) || !state_field(text, "keys_done", kd, sizeof kd) || !state_field(text, "ndone", nds, sizeof nds)) {
+    if (!state_field(text, "v_limit", pz_vl, sizeof pz_vl) || !state_field(text, "keys_done", kd, sizeof kd) || !state_field(text, "ndone", nds, sizeof nds)) {
         snprintf(err, errlen, "unrecognized checkpoint format");
         free(text);
         return -1;
     }
     nd = (size_t)pz_strtou64(nds);
     u128 vlim, kdone;
-    if (!u128_from_hex(vl, &vlim) || !u128_from_hex(kd, &kdone) || cb != s->cbits || vlim != s->v_limit) {
+    if (!u128_from_hex(pz_vl, &vlim) || !u128_from_hex(kd, &kdone) || cb != s->cbits || vlim != s->v_limit) {
         snprintf(err, errlen, "the checkpoint does not match the campaign (different chunk_bits or size)");
         free(text);
         return -2;

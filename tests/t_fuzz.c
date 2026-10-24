@@ -76,9 +76,9 @@ static void fuzz_cfg(const char *dir)
     c.format_version = PZ_FORMAT_VERSION;
     snprintf(c.name, sizeof c.name, "fuzz");
     c.puzzle = 66;
-    c.range_start = u256_pow2(65);
-    c.range_end = u256_pow2(66);
-    u256_sub(&c.range_end, &c.range_end, &(u256){{1, 0, 0, 0}});
+    c.range_start = pz_u256_pow2(65);
+    c.range_end = pz_u256_pow2(66);
+    pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
     snprintf(c.address, sizeof c.address, "13zb1hQbWVsc2S7ZTZnP2G4undNNpdh5so");
     c.has_pubkey = false;
     c.chunk_bits = 30;
@@ -111,8 +111,8 @@ static void fuzz_sched(const char *dir)
     campaign_cfg c;
     memset(&c, 0, sizeof c);
     c.format_version = PZ_FORMAT_VERSION;
-    c.range_start = u256_from_u64(1);
-    c.range_end = u256_from_u64(1000000);
+    c.range_start = pz_u256_from_u64(1);
+    c.range_end = pz_u256_from_u64(1000000);
     c.chunk_bits = 8;
     for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 7 + 1);
     sched_t *s = sched_new(&c);
@@ -201,17 +201,17 @@ static void fuzz_parsers(void)
         size_t n = rnd() % 120;
         for (size_t i = 0; i < n; i++) buf[i] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz0Il\x01\xff"[rnd() % 63];
         buf[n] = 0;
-        (void)address_to_hash160(buf, h);
-        (void)base58check_decode(buf, raw, sizeof raw);
-        u256 v;
-        (void)u256_from_hex(&v, buf);
+        (void)pz_address_to_hash160(buf, h);
+        (void)pz_base58check_decode(buf, raw, sizeof raw);
+        pz_u256 v;
+        (void)pz_u256_from_hex(&v, buf);
         (void)pz_hex_decode(buf, raw, sizeof raw);
         for (size_t i = 0; i < n; i++) raw[i % 130] = (u8)rnd();
-        ge p;
-        (void)ge_from_pubkey(&p, raw, n % 3 == 0 ? 33 : n % 3 == 1 ? 65 : n % 70);
+        pz_ge p;
+        (void)pz_ge_from_pubkey(&p, raw, n % 3 == 0 ? 33 : n % 3 == 1 ? 65 : n % 70);
     }
-    CHECK(!address_to_hash160("", h) && !address_to_hash160("1", h) && !address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX", h));
-    CHECK(address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", h));
+    CHECK(!pz_address_to_hash160("", h) && !pz_address_to_hash160("1", h) && !pz_address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX", h));
+    CHECK(pz_address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", h));
 }
 
 static void fuzz_list(const char *dir)
@@ -225,8 +225,8 @@ static void fuzz_list(const char *dir)
     memset(&c, 0, sizeof c);
     c.format_version = PZ_FORMAT_VERSION;
     snprintf(c.name, sizeof c.name, "camp");
-    c.range_start = u256_from_u64(1);
-    c.range_end = u256_from_u64(100);
+    c.range_start = pz_u256_from_u64(1);
+    c.range_end = pz_u256_from_u64(100);
     snprintf(c.address, sizeof c.address, "x");
     c.chunk_bits = 4;
     CHECK(cfg_save(&c, p) == 0);
@@ -255,7 +255,7 @@ static void fuzz_list(const char *dir)
 
 int main(void)
 {
-    ec_init();
+    pz_ec_init();
     char dir[600];
     if (!pz_make_temp_dir(dir, sizeof dir, "pzfuzz")) { puts("mkdtemp"); return 2; }
     fuzz_part_text();

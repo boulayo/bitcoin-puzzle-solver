@@ -250,17 +250,17 @@ int gpu_count_usable(void)
 
 /* ---------------- helpers ---------------- */
 
-static void pack_fe(uint32_t out[8], const fe *f)
+static void pack_fe(uint32_t out[8], const pz_fe *f)
 {
-    fe t = *f;
-    fe_normalize(&t);
+    pz_fe t = *f;
+    pz_fe_normalize(&t);
     for (int i = 0; i < 4; i++) { out[2 * i] = (uint32_t)t.n[i]; out[2 * i + 1] = (uint32_t)(t.n[i] >> 32); }
 }
-static void unpack_fe(fe *f, const uint32_t in[8])
+static void unpack_fe(pz_fe *f, const uint32_t in[8])
 {
     for (int i = 0; i < 4; i++) f->n[i] = (u64)in[2 * i] | (u64)in[2 * i + 1] << 32;
 }
-static void pack_ge(uint32_t out[16], const ge *p) { pack_fe(out, &p->x); pack_fe(out + 8, &p->y); }
+static void pack_ge(uint32_t out[16], const pz_ge *p) { pack_fe(out, &p->x); pack_fe(out + 8, &p->y); }
 
 static u64 g_rs = 0x9E3779B97F4A7C15ULL;
 static u64 grnd(void) { g_rs ^= g_rs << 13; g_rs ^= g_rs >> 7; g_rs ^= g_rs << 17; return g_rs; }
@@ -286,7 +286,7 @@ static bool session_open(gpu_session *s, const rt_dev *d)
 
 static void make_gtab(uint32_t *tab, int half)
 {
-    ge *g = pz_xmalloc(sizeof(ge) * (size_t)half);
+    pz_ge *g = pz_xmalloc(sizeof(pz_ge) * (size_t)half);
     cpu_gmultiples(g, half);
     for (int i = 0; i < half; i++) pack_ge(tab + i * 16, &g[i]);
     free(g);
@@ -338,7 +338,7 @@ static bool linear_prepare_variant(gpu_session *s, int variant)
 static bool linear_prepare(gpu_session *s) { return linear_prepare_variant(s, s->variant ? s->variant : default_variant(&s->info)); }
 
 typedef struct {
-    u256 key_start;
+    pz_u256 key_start;
     u64 nkeys;
     size_t T;
     uint32_t ngroups;
@@ -360,14 +360,14 @@ static bool linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
 
     uint32_t prm[64];
     memset(prm, 0, sizeof prm);
-    u256 center = L->key_start;
-    u256_add_u64(&center, &center, HALFK);
-    ge P0, D, GS;
-    if (!ec_mul_g(&P0, &center)) return false;
-    u256 step = u256_from_u64((u64)L->ngroups * GRPK);
-    if (!ec_mul_g(&D, &step)) return false;
-    u256 gs = u256_from_u64(GRPK);
-    if (!ec_mul_g(&GS, &gs)) return false;
+    pz_u256 center = L->key_start;
+    pz_u256_add_u64(&center, &center, HALFK);
+    pz_ge P0, D, GS;
+    if (!pz_ec_mul_g(&P0, &center)) return false;
+    pz_u256 step = pz_u256_from_u64((u64)L->ngroups * GRPK);
+    if (!pz_ec_mul_g(&D, &step)) return false;
+    pz_u256 gs = pz_u256_from_u64(GRPK);
+    if (!pz_ec_mul_g(&GS, &gs)) return false;
     pack_ge(prm, &P0);
     pack_ge(prm + 16, &D);
     pack_ge(prm + 32, &GS);
@@ -462,7 +462,7 @@ static void tune_cache_put(const rt_dev *d, bool kang, int variant)
 static double linear_measure(gpu_session *s)
 {
     u8 h[20] = {0};
-    u256 start = u256_pow2(100);
+    pz_u256 start = pz_u256_pow2(100);
     uint32_t ng = 1;
     double t_begin = pz_mono(), best = 0;
     int good = 0;
@@ -475,7 +475,7 @@ static double linear_measure(gpu_session *s)
         double a = pz_mono();
         if (!linear_run(s, h, &L) || L.err) return 0;
         double dt = pz_mono() - a;
-        u256_add_u64(&start, &start, L.nkeys);
+        pz_u256_add_u64(&start, &start, L.nkeys);
         if (dt < 0.12 && ng < 4096) { ng *= 2; continue; }      /* too short to time reliably */
         double rate = (double)L.nkeys / dt;
         if (rate > best) best = rate;
@@ -561,15 +561,15 @@ static bool test_fe(gpu_session *s)
     rt_kern *kfe = rt_kernel(p, "pz_test_fe", 2), *khash = rt_kernel(p, "pz_test_hash", 2), *kec = rt_kernel(p, "pz_test_ec", 2);
     bool ok = kfe && khash && kec;
     uint32_t *in = pz_xcalloc((size_t)N * 64, 4), *out = pz_xcalloc((size_t)N * 64, 4);
-    fe A[192], B[192];
+    pz_fe A[192], B[192];
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < 4; j++) { A[i].n[j] = grnd(); B[i].n[j] = grnd(); }
         if (i % 5 == 0) { A[i].n[3] = A[i].n[2] = ~0ULL; }                 /* near p */
         if (i % 7 == 0) { B[i].n[1] = B[i].n[2] = B[i].n[3] = ~0ULL; }
-        if (i == 1) { fe_set_u64(&A[i], 0); }
-        if (i == 2) { fe_set_u64(&B[i], 0); }
-        if (i == 3) { A[i] = FE_P; }
-        if (i == 4) { fe_set_u64(&A[i], 1); fe_set_u64(&B[i], 1); }
+        if (i == 1) { pz_fe_set_u64(&A[i], 0); }
+        if (i == 2) { pz_fe_set_u64(&B[i], 0); }
+        if (i == 3) { A[i] = pz_fe_p; }
+        if (i == 4) { pz_fe_set_u64(&A[i], 1); pz_fe_set_u64(&B[i], 1); }
         for (int j = 0; j < 4; j++) { in[i * 16 + 2 * j] = (u32)A[i].n[j]; in[i * 16 + 2 * j + 1] = (u32)(A[i].n[j] >> 32); in[i * 16 + 8 + 2 * j] = (u32)B[i].n[j]; in[i * 16 + 8 + 2 * j + 1] = (u32)(B[i].n[j] >> 32); }
     }
     rt_buf *bin = ok ? rt_buf_new(s->c, (size_t)N * 64, in) : NULL;
@@ -577,20 +577,20 @@ static bool test_fe(gpu_session *s)
     if (ok && bin && bout) {
         ok = run2(s, kfe, bin, bout, (size_t)N) && rt_read(s->c, bout, 0, out, (size_t)N * 256);
         for (int i = 0; ok && i < N; i++) {
-            fe r[8], e[8];
+            pz_fe r[8], e[8];
             for (int k = 0; k < 8; k++) unpack_fe(&r[k], out + i * 64 + k * 8);
-            fe_mul(&e[0], &A[i], &B[i]);
-            fe_sqr(&e[1], &A[i]);
-            fe_add(&e[2], &A[i], &B[i]);
-            fe_sub(&e[3], &A[i], &B[i]);
-            fe a0 = A[i]; fe_normalize(&a0);
-            if (fe_is_zero(&a0)) fe_zero(&e[4]); else fe_inv(&e[4], &A[i]);
+            pz_fe_mul(&e[0], &A[i], &B[i]);
+            pz_fe_sqr(&e[1], &A[i]);
+            pz_fe_add(&e[2], &A[i], &B[i]);
+            pz_fe_sub(&e[3], &A[i], &B[i]);
+            pz_fe a0 = A[i]; pz_fe_normalize(&a0);
+            if (pz_fe_is_zero(&a0)) pz_fe_zero(&e[4]); else pz_fe_inv(&e[4], &A[i]);
             e[5] = A[i];
-            fe_sub(&e[6], &B[i], &A[i]);
-            fe_add(&e[7], &A[i], &A[i]);
+            pz_fe_sub(&e[6], &B[i], &A[i]);
+            pz_fe_add(&e[7], &A[i], &A[i]);
             for (int k = 0; k < 8; k++) {
-                if (k == 4 && fe_is_zero(&a0)) continue;   /* inverse of zero is undefined */
-                if (!fe_equiv(&r[k], &e[k])) { pz_log(PZ_LOG_ERR, "GPU self-test: operation %d differs from the CPU (item %d)", k, i); ok = false; break; }
+                if (k == 4 && pz_fe_is_zero(&a0)) continue;   /* inverse of zero is undefined */
+                if (!pz_fe_equiv(&r[k], &e[k])) { pz_log(PZ_LOG_ERR, "GPU self-test: operation %d differs from the CPU (item %d)", k, i); ok = false; break; }
             }
         }
     } else ok = false;
@@ -600,11 +600,11 @@ static bool test_fe(gpu_session *s)
         const int H = 64;
         uint32_t *hin = pz_xcalloc((size_t)H * 9, 4), *hout = pz_xcalloc((size_t)H * 5, 4);
         u8 xb[64][32];
-        fe xs[64];
+        pz_fe xs[64];
         for (int i = 0; i < H; i++) {
             for (int j = 0; j < 32; j++) xb[i][j] = (u8)grnd();
-            fe_from_be(&xs[i], xb[i]);
-            u8 xx[32]; fe_to_be(xx, &xs[i]);
+            pz_fe_from_be(&xs[i], xb[i]);
+            u8 xx[32]; pz_fe_to_be(xx, &xs[i]);
             memcpy(xb[i], xx, 32);
             uint32_t pk[8]; pack_fe(pk, &xs[i]);
             memcpy(hin + i * 9, pk, 32);
@@ -615,7 +615,7 @@ static bool test_fe(gpu_session *s)
         ok = hb && ho && run2(s, khash, hb, ho, (size_t)H) && rt_read(s->c, ho, 0, hout, (size_t)H * 20);
         for (int i = 0; ok && i < H; i++) {
             u8 h[20], got[20];
-            hash160_pub33((u8)hin[i * 9 + 8], xb[i], h);
+            pz_hash160_pub33((u8)hin[i * 9 + 8], xb[i], h);
             for (int w = 0; w < 5; w++) for (int b = 0; b < 4; b++) got[4 * w + b] = (u8)(hout[i * 5 + w] >> (8 * b));
             if (memcmp(h, got, 20)) { pz_log(PZ_LOG_ERR, "GPU self-test: hash160 differs from the CPU (item %d)", i); ok = false; }
         }
@@ -628,12 +628,12 @@ static bool test_fe(gpu_session *s)
     if (ok) {
         const int E = 24;
         uint32_t *ein = pz_xcalloc((size_t)E * 33, 4), *eout = pz_xcalloc((size_t)E * 17, 4);
-        ge pa[24], pd[24];
+        pz_ge pa[24], pd[24];
         u32 ts[24];
         for (int i = 0; i < E; i++) {
-            u256 k1 = u256_from_u64(grnd() | 1), k2 = u256_from_u64(grnd() | 1);
-            ec_mul_g(&pa[i], &k1);
-            ec_mul_g(&pd[i], &k2);
+            pz_u256 k1 = pz_u256_from_u64(grnd() | 1), k2 = pz_u256_from_u64(grnd() | 1);
+            pz_ec_mul_g(&pa[i], &k1);
+            pz_ec_mul_g(&pd[i], &k2);
             ts[i] = i == 0 ? 0 : (i == 1 ? 1 : (i == 2 ? 0xFFFFFFFFu : (u32)grnd()));
             pack_ge(ein + i * 33, &pa[i]);
             pack_ge(ein + i * 33 + 16, &pd[i]);
@@ -644,20 +644,20 @@ static bool test_fe(gpu_session *s)
         ok = eb && eo && run2(s, kec, eb, eo, (size_t)E) && rt_read(s->c, eo, 0, eout, (size_t)E * 17 * 4);
         for (int i = 0; ok && i < E; i++) {
             /* want = pa + ts*pd computed with the host group law */
-            ge want;
-            gej acc;
+            pz_ge want;
+            pz_gej acc;
             acc.inf = true;
             for (int bit = 31; bit >= 0; bit--) {
-                gej_double(&acc, &acc);
-                if ((ts[i] >> bit) & 1) gej_add_ge(&acc, &acc, &pd[i]);
+                pz_gej_double(&acc, &acc);
+                if ((ts[i] >> bit) & 1) pz_gej_add_ge(&acc, &acc, &pd[i]);
             }
-            gej_add_ge(&acc, &acc, &pa[i]);
-            bool inf = !gej_to_ge(&want, &acc);
+            pz_gej_add_ge(&acc, &acc, &pa[i]);
+            bool inf = !pz_gej_to_ge(&want, &acc);
             if (inf || eout[i * 17 + 16] == 0) { if (!(inf && eout[i * 17 + 16] == 0)) ok = false; continue; }
-            ge got;
+            pz_ge got;
             unpack_fe(&got.x, eout + i * 17);
             unpack_fe(&got.y, eout + i * 17 + 8);
-            if (!ge_equal(&got, &want)) { pz_log(PZ_LOG_ERR, "GPU self-test: point sum differs from the CPU (item %d)", i); ok = false; }
+            if (!pz_ge_equal(&got, &want)) { pz_log(PZ_LOG_ERR, "GPU self-test: point sum differs from the CPU (item %d)", i); ok = false; }
         }
         rt_buf_free(eb);
         rt_buf_free(eo);
@@ -679,18 +679,18 @@ static bool test_linear(gpu_session *s)
     const size_t tmax_production = s->T_max;      /* the test uses a handful of work-items; production keeps the full size */
     s->T_max = s->T_max > 96 ? 96 : s->T_max;
     bool ok = true;
-    u256 start = u256_pow2(77);
-    u256_add_u64(&start, &start, grnd() & 0xffffff);
+    pz_u256 start = pz_u256_pow2(77);
+    pz_u256_add_u64(&start, &start, grnd() & 0xffffff);
     for (int trial = 0; trial < 3 && ok; trial++) {
         u64 span = 40 * (u64)(2 * s->half) * 3ULL;
         u64 off = trial == 0 ? 0 : (trial == 1 ? span - 1 : grnd() % span);
-        u256 key = start;
-        u256_add_u64(&key, &key, off);
-        ge p;
+        pz_u256 key = start;
+        pz_u256_add_u64(&key, &key, off);
+        pz_ge p;
         u8 pub[33], h[20];
-        ec_mul_g(&p, &key);
-        ge_to_pub33(pub, &p);
-        hash160(pub, 33, h);
+        pz_ec_mul_g(&p, &key);
+        pz_ge_to_pub33(pub, &p);
+        pz_hash160(pub, 33, h);
         lin_launch L;
         memset(&L, 0, sizeof L);
         L.key_start = start;
@@ -699,9 +699,9 @@ static bool test_linear(gpu_session *s)
         if (!linear_run(s, h, &L)) { ok = false; break; }
         bool found = false;
         for (uint32_t i = 0; i < L.nhits; i++) {
-            u256 k = start;
-            u256_add_u64(&k, &k, L.hits[i]);
-            if (!u256_cmp(&k, &key)) found = true; else ok = false;
+            pz_u256 k = start;
+            pz_u256_add_u64(&k, &k, L.hits[i]);
+            if (!pz_u256_cmp(&k, &key)) found = true; else ok = false;
         }
         if (!found || L.nhits != 1 || L.err) {
             pz_log(PZ_LOG_ERR, "GPU self-test: wrong linear search result (hit=%u err=%u, expected offset %llu)", L.nhits, L.err, (unsigned long long)off);
@@ -839,7 +839,7 @@ static int open_sessions(run_ctx *r, gpu_session **out, bool for_kangaroo)
 
 /* ---------------- linear worker ---------------- */
 
-static void cpu_support_hit(void *user, const u256 *key) { run_submit_key((run_ctx *)user, key, "CPU (GPU support)"); }
+static void cpu_support_hit(void *user, const pz_u256 *key) { run_submit_key((run_ctx *)user, key, "CPU (GPU support)"); }
 
 static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
 {
@@ -935,8 +935,8 @@ static void *gpu_linear_thread(void *p)
             cpu_scan_claim(r, &c, &covered);
         }
         for (uint32_t i = 0; i < L.nhits; i++) {
-            u256 k = c.key_start;
-            u256_add_u64(&k, &k, L.hits[i]);
+            pz_u256 k = c.key_start;
+            pz_u256_add_u64(&k, &k, L.hits[i]);
             run_submit_key(r, &k, "GPU");
         }
         sched_complete(r->sched, &c, covered);
@@ -1108,7 +1108,7 @@ void gpu_bench(void)
         lin_launch L;
         uint32_t ng = 2;
         u64 keys = 0;
-        u256 start = u256_pow2(100);
+        pz_u256 start = pz_u256_pow2(100);
         double t0 = pz_mono(), el;
         for (;;) {
             memset(&L, 0, sizeof L);
@@ -1119,7 +1119,7 @@ void gpu_bench(void)
             if (!linear_run(s, h, &L)) break;
             double dt = pz_mono() - a;
             keys += L.nkeys;
-            u256_add_u64(&start, &start, L.nkeys);
+            pz_u256_add_u64(&start, &start, L.nkeys);
             el = pz_mono() - t0;
             if (el > 4.0) break;
             if (dt < 0.3 && ng < 4096) ng *= 2;
@@ -1487,8 +1487,8 @@ static void kang_autotune(gpu_session *s, int idx)
 int gpu_kangaroo_start(run_ctx *r, gpu_session **out, int *k_total)
 {
     *k_total = 0;
-    u256 rsz = cfg_range_size(&r->cfg);
-    const long double sqrt_w = sqrtl(u256_to_ld(&rsz));
+    pz_u256 rsz = cfg_range_size(&r->cfg);
+    const long double sqrt_w = sqrtl(pz_u256_to_ld(&rsz));
     gpu_session *arr = NULL;
     int n = open_sessions(r, &arr, true);
     *out = arr;
@@ -1683,12 +1683,12 @@ void gpu_doctor_cache(void)
     if (!pz_cache_file("gpu_tune.txt", path, sizeof path)) return;
     char *t = pz_read_file(path, NULL);
     int cnt = 0;
-    const size_t vl = strlen(PZ_VERSION);
+    const size_t pz_vl = strlen(PZ_VERSION);
     for (char *line = t; line && *line;) {
         char *nl = strchr(line, '\n');
         if (nl) *nl = 0;
         char *eq = strrchr(line, '=');
-        if (eq && (size_t)(eq - line) > vl && !strncmp(eq - vl - 1, "|" PZ_VERSION, vl + 1)) { doctor_line('i', "saved GPU tuning: %.150s", line); cnt++; }
+        if (eq && (size_t)(eq - line) > pz_vl && !strncmp(eq - pz_vl - 1, "|" PZ_VERSION, pz_vl + 1)) { doctor_line('i', "saved GPU tuning: %.150s", line); cnt++; }
         line = nl ? nl + 1 : NULL;
     }
     free(t);

@@ -80,7 +80,7 @@ static int bs_checkpoint(run_ctx *r)
     return rc;
 }
 
-static void bs_on_found(void *user, const u256 *key)
+static void bs_on_found(void *user, const pz_u256 *key)
 {
     run_ctx *r = user;
     run_submit_key(r, key, "BSGS");
@@ -183,7 +183,7 @@ static void bs_cleanup(run_ctx *r)
 
 int run_bsgs(run_ctx *r)
 {
-    ec_init();
+    pz_ec_init();
     if (!r->cfg.has_pubkey) pz_die("bsgs mode needs the public key");
     if (!r->use_cpu) pz_die("bsgs mode uses the CPU and RAM (GPUs do not take part): drop --no-cpu");
     bs_run *b = pz_xcalloc(1, sizeof *b);
@@ -208,11 +208,11 @@ int run_bsgs(run_ctx *r)
         pz_die("the BSGS table needs %s but only %s of RAM are available", mb, ma);
     }
     pz_fmt_si((double)bsgs_mean_cost(&b->P.W, T), c1, sizeof c1);
-    pz_fmt_si(KANG_C_MEAN * (double)sqrtl(u256_to_ld(&b->P.W)), c2, sizeof c2);
+    pz_fmt_si(KANG_C_MEAN * (double)sqrtl(pz_u256_to_ld(&b->P.W)), c2, sizeof c2);
     pz_log(PZ_LOG_INFO, "BSGS: %llu baby steps (table %s, available RAM %s), %llu giant steps; expected mean cost %s operations (kangaroo: %s)",
            (unsigned long long)T, mb, ma, (unsigned long long)b->P.Ng, c1, c2);
     if (r->use_gpu) pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode (use --mode kangaroo to put them to work)");
-    if (bsgs_mean_cost(&b->P.W, T) > KANG_C_MEAN * sqrtl(u256_to_ld(&b->P.W)))
+    if (bsgs_mean_cost(&b->P.W, T) > KANG_C_MEAN * sqrtl(pz_u256_to_ld(&b->P.W)))
         pz_log(PZ_LOG_WARN, "BSGS: with %llu baby steps it costs more than the kangaroo (table too small for this range)", (unsigned long long)T);
     if (r->table_path[0] && access(r->table_path, F_OK) != 0) {
         /* the table will be saved after it is built (minutes or hours): find out now whether that is possible */

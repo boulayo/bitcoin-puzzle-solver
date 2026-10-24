@@ -8,30 +8,30 @@
 
 const char *mode_name(search_mode m) { return m == MODE_KANGAROO ? "kangaroo" : m == MODE_BSGS ? "bsgs" : "linear"; }
 
-bool puzzle_range(int n, u256 *start, u256 *end)
+bool puzzle_range(int n, pz_u256 *start, pz_u256 *end)
 {
     if (n < 1 || n > 256) return false;
-    *start = u256_pow2((unsigned)n - 1);
-    u256 top = u256_pow2((unsigned)n);
-    u256 one = u256_from_u64(1);
-    if (n == 256) u256_sub(end, &SECP_N, &one);     /* keys stop at the group order n - 1 < 2^256 - 1 */
-    else u256_sub(end, &top, &one);
+    *start = pz_u256_pow2((unsigned)n - 1);
+    pz_u256 top = pz_u256_pow2((unsigned)n);
+    pz_u256 one = pz_u256_from_u64(1);
+    if (n == 256) pz_u256_sub(end, &pz_secp256k1_n, &one);     /* keys stop at the group order n - 1 < 2^256 - 1 */
+    else pz_u256_sub(end, &top, &one);
     return true;
 }
 
-u256 cfg_range_size(const campaign_cfg *c)
+pz_u256 cfg_range_size(const campaign_cfg *c)
 {
-    u256 d, one = u256_from_u64(1);
-    u256_sub(&d, &c->range_end, &c->range_start);
-    u256_add(&d, &d, &one);
+    pz_u256 d, one = pz_u256_from_u64(1);
+    pz_u256_sub(&d, &c->range_end, &c->range_start);
+    pz_u256_add(&d, &d, &one);
     return d;
 }
 
-unsigned cfg_default_chunk_bits(const u256 *range_size)
+unsigned cfg_default_chunk_bits(const pz_u256 *range_size)
 {
-    u256 m1, one = u256_from_u64(1);
-    u256_sub(&m1, range_size, &one);
-    unsigned rb = u256_bits(&m1);        /* range ~ 2^rb */
+    pz_u256 m1, one = pz_u256_from_u64(1);
+    pz_u256_sub(&m1, range_size, &one);
+    unsigned rb = pz_u256_bits(&m1);        /* range ~ 2^rb */
     int b = (int)rb - 12;                /* at least ~4096 chunks when the range allows it */
     if (b < 12) b = 12;
     if (b > 36) b = 36;
@@ -52,7 +52,7 @@ void seed_generate(u8 seed[32])
     memcpy(pool + n, &pid, 8); n += 8;
     pz_hostname((char *)pool + n, 64);
     n += 64;
-    sha256(pool, n, seed);
+    pz_sha256(pool, n, seed);
 }
 
 void seed_from_text(const char *text, u8 seed[32])
@@ -64,7 +64,7 @@ void seed_from_text(const char *text, u8 seed[32])
     if (n > sizeof buf - 8) n = sizeof buf - 8;
     memcpy(buf, "PZSEED1:", 8);
     memcpy(buf + 8, text, n);
-    sha256(buf, n + 8, seed);
+    pz_sha256(buf, n + 8, seed);
 }
 
 void seed_to_id(const u8 seed[32], char id[17])
@@ -72,7 +72,7 @@ void seed_to_id(const u8 seed[32], char id[17])
     u8 h[32], buf[40];
     memcpy(buf, "PZID", 4);
     memcpy(buf + 4, seed, 32);
-    sha256(buf, 36, h);
+    pz_sha256(buf, 36, h);
     pz_hex_encode(h, 8, id);
 }
 
@@ -173,8 +173,8 @@ bool part_split(const u64 *speed, unsigned n, unsigned total, unsigned *counts)
 int cfg_save(const campaign_cfg *c, const char *path)
 {
     char buf[4096], t1[80], t2[80], h[130], sd[65], pk[80];
-    u256_to_hex(&c->range_start, t1);
-    u256_to_hex(&c->range_end, t2);
+    pz_u256_to_hex(&c->range_start, t1);
+    pz_u256_to_hex(&c->range_end, t2);
     pz_hex_encode(c->target_h160, 20, h);
     pz_hex_encode(c->seed, 32, sd);
     pk[0] = 0;
@@ -236,13 +236,13 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
     GET("created_at") c->created_at = atof(v);
     GET("name") pz_strlcpy(c->name, v, sizeof c->name);
     GET("puzzle") c->puzzle = pz_atoi(v);
-    GET("range_start") if (!u256_from_hex(&c->range_start, v)) { snprintf(err, errlen, "invalid range_start"); free(text); return -1; }
-    GET("range_end") if (!u256_from_hex(&c->range_end, v)) { snprintf(err, errlen, "invalid range_end"); free(text); return -1; }
+    GET("range_start") if (!pz_u256_from_hex(&c->range_start, v)) { snprintf(err, errlen, "invalid range_start"); free(text); return -1; }
+    GET("range_end") if (!pz_u256_from_hex(&c->range_end, v)) { snprintf(err, errlen, "invalid range_end"); free(text); return -1; }
     GET("address") pz_strlcpy(c->address, v, sizeof c->address);
     GET("hash160") if (pz_hex_decode(v, c->target_h160, 20) != 20) { snprintf(err, errlen, "invalid hash160"); free(text); return -1; }
     GET("pubkey")
     if (v[0]) {
-        if (pz_hex_decode(v, c->pubkey33, 33) != 33 || !ge_from_pubkey(&c->pubkey, c->pubkey33, 33)) {
+        if (pz_hex_decode(v, c->pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->pubkey, c->pubkey33, 33)) {
             snprintf(err, errlen, "invalid pubkey");
             free(text);
             return -1;

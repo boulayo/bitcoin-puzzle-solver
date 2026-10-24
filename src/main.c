@@ -380,17 +380,17 @@ static bool parse_pubkey(const char *hex, campaign_cfg *c)
     u8 b[65];
     int n = pz_hex_decode(hex, b, 65);
     if (n != 33 && n != 65) return false;
-    ge p;
-    if (!ge_from_pubkey(&p, b, (size_t)n)) return false;
+    pz_ge p;
+    if (!pz_ge_from_pubkey(&p, b, (size_t)n)) return false;
     c->pubkey = p;
-    ge_to_pub33(c->pubkey33, &p);
+    pz_ge_to_pub33(c->pubkey33, &p);
     c->has_pubkey = true;
     return true;
 }
 
 /* Table size for a bsgs campaign: forced with --bsgs-entries, taken from an existing --table file, or the best one that
  * fits the memory budget (70% of the available RAM, or --mem). *viable (optional) tells whether it beats the kangaroo. */
-static u64 pick_bsgs_entries(const opts_t *o, const u256 *rsz, bool *viable)
+static u64 pick_bsgs_entries(const opts_t *o, const pz_u256 *rsz, bool *viable)
 {
     sysinfo_t si;
     sysinfo_detect(&si);
@@ -399,12 +399,12 @@ static u64 pick_bsgs_entries(const opts_t *o, const u256 *rsz, bool *viable)
     char err[256];
     if (o->table[0] && access(o->table, F_OK) == 0) {
         if (!bsgs_table_peek(o->table, &T, err, sizeof err)) pz_die("table %s is not usable: %s", o->table, err);
-        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(u256_to_ld(rsz));
+        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(rsz));
         return T;
     }
     if (o->bsgs_entries) {
         T = o->bsgs_entries;
-        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(u256_to_ld(rsz));
+        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(rsz));
         return T;
     }
     T = bsgs_choose_T(rsz, budget, viable);
@@ -425,18 +425,18 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
         char tmp[200];
         pz_strlcpy(tmp, o->range, sizeof tmp);
         char *colon = strchr(tmp, ':');
-        u256 a, b;
-        if (colon && (*colon = 0, u256_from_hex(&a, tmp) && u256_from_hex(&b, colon + 1))) {
+        pz_u256 a, b;
+        if (colon && (*colon = 0, pz_u256_from_hex(&a, tmp) && pz_u256_from_hex(&b, colon + 1))) {
             char ha[80], hb[80];
-            u256_to_hex(&a, ha);
-            u256_to_hex(&b, hb);
+            pz_u256_to_hex(&a, ha);
+            pz_u256_to_hex(&b, hb);
             snprintf(rng, sizeof rng, "%s:%s", ha, hb);   /* normalised: leading zeros / case do not matter */
         } else pz_strlcpy(rng, o->range, sizeof rng);
     }
     int kl = snprintf(key, sizeof key, "PZNAME1|%d|%s|%s|%s|%s", o->puzzle, rng, o->address, o->hash160, o->pubkey);
     u8 h[32];
     char id[17];
-    sha256((const u8 *)key, (size_t)(kl < (int)sizeof key ? kl : (int)sizeof key - 1), h);
+    pz_sha256((const u8 *)key, (size_t)(kl < (int)sizeof key ? kl : (int)sizeof key - 1), h);
     pz_hex_encode(h, 4, id);
     if (o->puzzle) snprintf(out, n, "p%d-%s", o->puzzle, id);
     else snprintf(out, n, "custom-%s", id);
@@ -455,7 +455,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
         char *colon = strchr(tmp, ':');
         if (!colon) pz_die("--range requires the format START:END (hexadecimal)");
         *colon = 0;
-        if (!u256_from_hex(&c->range_start, tmp) || !u256_from_hex(&c->range_end, colon + 1)) pz_die("--range: invalid hexadecimal values");
+        if (!pz_u256_from_hex(&c->range_start, tmp) || !pz_u256_from_hex(&c->range_end, colon + 1)) pz_die("--range: invalid hexadecimal values");
         c->puzzle = o->puzzle;
     } else if (o->puzzle) {
         if (!puzzle_range(o->puzzle, &c->range_start, &c->range_end)) pz_die("puzzle %d is outside the supported limits (1..256)", o->puzzle);
@@ -463,9 +463,9 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     } else {
         pz_die("specify the range with --puzzle N or --range START:END");
     }
-    if (u256_is_zero(&c->range_start)) pz_die("the range must start from a key >= 1");
-    if (u256_cmp(&c->range_start, &c->range_end) > 0) pz_die("empty range (start > end)");
-    if (u256_cmp(&c->range_end, &SECP_N) >= 0) pz_die("the range exceeds the order of the secp256k1 group");
+    if (pz_u256_is_zero(&c->range_start)) pz_die("the range must start from a key >= 1");
+    if (pz_u256_cmp(&c->range_start, &c->range_end) > 0) pz_die("empty range (start > end)");
+    if (pz_u256_cmp(&c->range_end, &pz_secp256k1_n) >= 0) pz_die("the range exceeds the order of the secp256k1 group");
 
     bool have_target = false;
     const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
@@ -473,48 +473,48 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     if (db && !o->address[0] && !o->hash160[0] && !o->pubkey[0]) {
         /* target taken from the built-in database */
         u8 h[20];
-        if (!address_to_hash160(db->address, h)) pz_die("puzzle database corrupted (puzzle %d)", db->n);
+        if (!pz_address_to_hash160(db->address, h)) pz_die("puzzle database corrupted (puzzle %d)", db->n);
         memcpy(c->target_h160, h, 20);
         pz_strlcpy(c->address, db->address, sizeof c->address);
         have_target = true;
         from_db = true;
         if (db->pubkey[0] && parse_pubkey(db->pubkey, c)) {
             u8 hp[20];
-            hash160(c->pubkey33, 33, hp);
+            pz_hash160(c->pubkey33, 33, hp);
             if (memcmp(hp, h, 20) != 0) pz_die("puzzle database inconsistent (puzzle %d)", db->n);
         }
         if (db->privkey[0]) {
             /* a solved puzzle: the stored key must map to the stored address, otherwise the database is damaged */
-            u256 pk;
-            ge pt;
+            pz_u256 pk;
+            pz_ge pt;
             u8 pub[33], hk[20];
-            if (!u256_from_hex(&pk, db->privkey) || !ec_mul_g(&pt, &pk)) pz_die("puzzle database corrupted (key of puzzle %d)", db->n);
-            ge_to_pub33(pub, &pt);
-            hash160(pub, 33, hk);
+            if (!pz_u256_from_hex(&pk, db->privkey) || !pz_ec_mul_g(&pt, &pk)) pz_die("puzzle database corrupted (key of puzzle %d)", db->n);
+            pz_ge_to_pub33(pub, &pt);
+            pz_hash160(pub, 33, hk);
             if (memcmp(hk, h, 20) != 0) pz_die("puzzle database inconsistent (the key of puzzle %d does not match the address)", db->n);
             pz_log(PZ_LOG_WARN, "puzzle %d is already SOLVED (the key is public): the campaign is only a test run", db->n);
-            if (o->range[0] && (u256_cmp(&pk, &c->range_start) < 0 || u256_cmp(&pk, &c->range_end) > 0))
+            if (o->range[0] && (pz_u256_cmp(&pk, &c->range_start) < 0 || pz_u256_cmp(&pk, &c->range_end) > 0))
                 pz_log(PZ_LOG_WARN, "the known key of puzzle %d is not in the given range: the campaign will not find it", db->n);
         }
         if (o->range[0]) {
             /* a custom range must overlap the range the puzzle guarantees */
-            u256 pa, pb;
+            pz_u256 pa, pb;
             if (puzzle_range(o->puzzle, &pa, &pb)) {
-                if (u256_cmp(&c->range_end, &pa) < 0 || u256_cmp(&c->range_start, &pb) > 0)
+                if (pz_u256_cmp(&c->range_end, &pa) < 0 || pz_u256_cmp(&c->range_start, &pb) > 0)
                     pz_die("the given range does not intersect the one of puzzle %d: the key cannot be there", o->puzzle);
-                if (u256_cmp(&c->range_start, &pa) < 0 || u256_cmp(&c->range_end, &pb) > 0)
+                if (pz_u256_cmp(&c->range_start, &pa) < 0 || pz_u256_cmp(&c->range_end, &pb) > 0)
                     pz_log(PZ_LOG_WARN, "the given range extends beyond the one of puzzle %d: the outside part cannot contain the key", o->puzzle);
             }
         }
     }
     if (o->pubkey[0]) {
         if (!parse_pubkey(o->pubkey, c)) pz_die("invalid public key (expected 33 or 65 bytes in hex, a point on the curve)");
-        hash160(c->pubkey33, 33, c->target_h160);
+        pz_hash160(c->pubkey33, 33, c->target_h160);
         have_target = true;
     }
     if (o->address[0]) {
         u8 h[20];
-        if (!address_to_hash160(o->address, h)) pz_die("invalid address (a mainnet \"1...\" address or a native SegWit \"bc1q...\" address with a valid checksum is expected)");
+        if (!pz_address_to_hash160(o->address, h)) pz_die("invalid address (a mainnet \"1...\" address or a native SegWit \"bc1q...\" address with a valid checksum is expected)");
         if (have_target && memcmp(h, c->target_h160, 20) != 0)
             pz_die("the given public key does not match the address (the hash160 of the compressed form differs)");
         memcpy(c->target_h160, h, 20);
@@ -530,14 +530,14 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     }
     if (db && !from_db) {
         u8 hd[20];
-        if (address_to_hash160(db->address, hd) && memcmp(hd, c->target_h160, 20) != 0)
+        if (pz_address_to_hash160(db->address, hd) && memcmp(hd, c->target_h160, 20) != 0)
             pz_log(PZ_LOG_WARN, "the given target is not the one of puzzle %d in the database (%s): using the given one", db->n, db->address);
     }
     const char *retired = o->puzzle ? puzzle_retired_address(o->puzzle) : NULL;
     if (!have_target && retired) {
         /* puzzles 161..256: the address is known, the funds are gone */
         u8 h[20];
-        if (!address_to_hash160(retired, h)) pz_die("puzzle database corrupted (puzzle %d)", o->puzzle);
+        if (!pz_address_to_hash160(retired, h)) pz_die("puzzle database corrupted (puzzle %d)", o->puzzle);
         memcpy(c->target_h160, h, 20);
         pz_strlcpy(c->address, retired, sizeof c->address);
         have_target = true;
@@ -545,16 +545,16 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
                "funds, the search is only an exercise (and with 2^%d keys it cannot finish)", o->puzzle, retired, o->puzzle - 1);
     }
     if (!have_target) pz_die("a target is required: --address, --hash160 or --pubkey");
-    if (!c->address[0]) hash160_to_address(c->target_h160, c->address, sizeof c->address);
+    if (!c->address[0]) pz_hash160_to_address(c->target_h160, c->address, sizeof c->address);
 
     if (o->seed[0] && strcmp(o->seed, "auto") != 0) seed_from_text(o->seed, c->seed);
     else seed_generate(c->seed);
 
-    u256 rsz = cfg_range_size(c);
+    pz_u256 rsz = cfg_range_size(c);
     c->chunk_bits = o->chunk_bits > 0 ? (unsigned)o->chunk_bits : cfg_default_chunk_bits(&rsz);
-    u256 chunk = u256_pow2(c->chunk_bits);
-    if (u256_cmp(&chunk, &rsz) > 0) {   /* chunk larger than the range: shrink */
-        unsigned b = u256_bits(&rsz) - 1;
+    pz_u256 chunk = pz_u256_pow2(c->chunk_bits);
+    if (pz_u256_cmp(&chunk, &rsz) > 0) {   /* chunk larger than the range: shrink */
+        unsigned b = pz_u256_bits(&rsz) - 1;
         c->chunk_bits = b < 1 ? 1 : b;
     }
     c->dp_bits = o->dp_bits > 0 ? (unsigned)o->dp_bits : 0;
@@ -568,8 +568,8 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
         c->mode = MODE_BSGS;
         c->bsgs_t = pick_bsgs_entries(o, &rsz, NULL);
     } else if (!strcmp(o->mode, "auto")) {
-        u256 lim = u256_pow2(20);
-        if (!c->has_pubkey || u256_cmp(&rsz, &lim) < 0) c->mode = MODE_LINEAR;
+        pz_u256 lim = pz_u256_pow2(20);
+        if (!c->has_pubkey || pz_u256_cmp(&rsz, &lim) < 0) c->mode = MODE_LINEAR;
         else {
             bool viable;
             u64 T = pick_bsgs_entries(o, &rsz, &viable);
@@ -607,16 +607,16 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         char tmp[200];
         pz_strlcpy(tmp, o->range, sizeof tmp);
         char *colon = strchr(tmp, ':');
-        u256 a, b;
+        pz_u256 a, b;
         if (!colon) pz_die("--range requires the format START:END (hexadecimal)");
         *colon = 0;
-        if (!u256_from_hex(&a, tmp) || !u256_from_hex(&b, colon + 1)) pz_die("--range: invalid hexadecimal values");
-        if (u256_cmp(&a, &c->range_start) != 0 || u256_cmp(&b, &c->range_end) != 0)
+        if (!pz_u256_from_hex(&a, tmp) || !pz_u256_from_hex(&b, colon + 1)) pz_die("--range: invalid hexadecimal values");
+        if (pz_u256_cmp(&a, &c->range_start) != 0 || pz_u256_cmp(&b, &c->range_end) != 0)
             pz_die("--range does not match the range of the existing campaign (the range cannot be changed; use another name with -c)");
     }
     if (o->address[0]) {
         u8 h[20];
-        if (!address_to_hash160(o->address, h) || memcmp(h, c->target_h160, 20) != 0) pz_die("the given address does not match the one of the existing campaign");
+        if (!pz_address_to_hash160(o->address, h) || memcmp(h, c->target_h160, 20) != 0) pz_die("the given address does not match the one of the existing campaign");
     }
     if (o->hash160[0]) {
         u8 h[20];
@@ -653,7 +653,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
 static void parse_gpu_filter(run_ctx *r, const char *list) { pz_strlcpy(r->gpu_filter, list, sizeof r->gpu_filter); }
 
 /* The size of a range in words: "8,388,608 keys", "2^43 keys", "about 6.65e35 keys". */
-static void size_text(const u256 *sz, const char *dec, char *out, size_t n)
+static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
 {
     const size_t len = strlen(dec);
     int bits = 0, top = -1;
@@ -759,10 +759,10 @@ static int cmd_hunt(int argc, char **argv)
 
     char idb[17], rs[80], re[80], rsz[80], addr[80];
     seed_to_id(r->cfg.seed, idb);
-    u256_to_hex(&r->cfg.range_start, rs);
-    u256_to_hex(&r->cfg.range_end, re);
-    u256 sz = cfg_range_size(&r->cfg);
-    u256_to_dec(&sz, rsz);
+    pz_u256_to_hex(&r->cfg.range_start, rs);
+    pz_u256_to_hex(&r->cfg.range_end, re);
+    pz_u256 sz = cfg_range_size(&r->cfg);
+    pz_u256_to_dec(&sz, rsz);
     char rsz_short[64];
     size_text(&sz, rsz, rsz_short, sizeof rsz_short);
     pz_strlcpy(addr, r->cfg.address, sizeof addr);
@@ -823,9 +823,9 @@ static int cmd_hunt(int argc, char **argv)
     if (atomic_load(&r->found)) {
         char hx[80], wif[80];
         u8 kb[32];
-        u256_to_hex(&r->found_key, hx);
-        u256_to_be(&r->found_key, kb);
-        privkey_to_wif(kb, true, wif, sizeof wif);
+        pz_u256_to_hex(&r->found_key, hx);
+        pz_u256_to_be(&r->found_key, kb);
+        pz_privkey_to_wif(kb, true, wif, sizeof wif);
         print_found_banner(r, addr, hx, wif);
         pz_log_set_file(NULL);
         free(r);
@@ -912,11 +912,11 @@ static int cmd_merge(int argc, char **argv)
     if (rc == 10 || atomic_load(&r->found)) {
         char hx[80], wif[80], addr[80];
         u8 kb[32];
-        u256_to_hex(&r->found_key, hx);
-        u256_to_be(&r->found_key, kb);
-        privkey_to_wif(kb, true, wif, sizeof wif);
+        pz_u256_to_hex(&r->found_key, hx);
+        pz_u256_to_be(&r->found_key, kb);
+        pz_privkey_to_wif(kb, true, wif, sizeof wif);
         if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-        else hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
+        else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
         print_found_banner(r, addr, hx, wif);
         free(r);
         return 0;
@@ -985,8 +985,8 @@ static int cmd_where(int argc, char **argv)
     char p[700], err[256];
     snprintf(p, sizeof p, "%s/%s/campaign.conf", o.dir, o.campaign);
     if (cfg_load(&c, p, err, sizeof err) != 0) pz_die("%s", err);
-    u256 key;
-    if (!u256_from_hex(&key, o.key)) pz_die("invalid key (hexadecimal digits expected)");
+    pz_u256 key;
+    if (!pz_u256_from_hex(&key, o.key)) pz_die("invalid key (hexadecimal digits expected)");
     if (c.mode == MODE_KANGAROO) pz_die("the campaign uses the kangaroo: it has no predetermined visit order, 'where' does not apply");
     if (c.mode == MODE_BSGS) {
         char berr[200];
@@ -997,39 +997,39 @@ static int cmd_where(int argc, char **argv)
         campaign_cfg sc;
         bsgs_sched_cfg(&bp, &c, &sc);
         sched_t *s = sched_new(&sc);
-        u256 seq;
+        pz_u256 seq;
         u64 off;
-        u256 gk = u256_from_u64(gi);
+        pz_u256 gk = pz_u256_from_u64(gi);
         if (!sched_locate(s, &gk, &seq, &off)) pz_die("giant index out of range");
         char sb[80];
-        const long double nblocks = u256_to_ld(&s->blocks_all);
+        const long double nblocks = pz_u256_to_ld(&s->blocks_all);
         char g1[48], g2[48], g3[48], g4[48];
         snprintf(g1, sizeof g1, "%llu", (unsigned long long)gi);
         snprintf(g2, sizeof g2, "%llu", (unsigned long long)bp.Ng);
         snprintf(g4, sizeof g4, "%.0Lf", nblocks);
         pz_prop_line("giant step", "the key will be found at step %s of %s", pz_group_digits(g1, g3, sizeof g3), pz_group_digits(g2, g1, sizeof g1));
-        pz_prop_line("visit order", "block %s of %s, %.4Lf%% of the way", pz_group_digits(u256_to_dec(&seq, sb), g2, sizeof g2), pz_group_digits(g4, g3, sizeof g3),
-                     u256_to_ld(&seq) * 100.0L / nblocks);
+        pz_prop_line("visit order", "block %s of %s, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, sb), g2, sizeof g2), pz_group_digits(g4, g3, sizeof g3),
+                     pz_u256_to_ld(&seq) * 100.0L / nblocks);
         sched_free(s);
         return 0;
     }
     sched_t *s = sched_new(&c);
-    u256 seq;
+    pz_u256 seq;
     u64 off;
     if (!sched_locate(s, &key, &seq, &off)) pz_die("the key is not in the campaign range");
     char sb[80];
-    const long double blocks = u256_to_ld(&s->blocks_all);            /* of the whole search order, also with --part */
-    long double frac = u256_to_ld(&seq) / blocks;
+    const long double blocks = pz_u256_to_ld(&s->blocks_all);            /* of the whole search order, also with --part */
+    long double frac = pz_u256_to_ld(&seq) / blocks;
     {
         char g1[64], g2[64], g3[64];
         snprintf(g3, sizeof g3, "%.0Lf", blocks);
-        pz_prop_line("visit order", "block %s of %s, offset %llu within the block, %.4Lf%% of the way", pz_group_digits(u256_to_dec(&seq, sb), g1, sizeof g1),
+        pz_prop_line("visit order", "block %s of %s, offset %llu within the block, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, sb), g1, sizeof g1),
                      pz_group_digits(g3, g2, sizeof g2), (unsigned long long)off, frac * 100.0L);
     }
     if (s->part.total) {
-        u256 local;
+        pz_u256 local;
         if (sched_part_position(s, &seq, &local))
-            pz_prop_line("part", "in part %s of this computer: its block %s of %.0Lf", s->part_text, u256_to_dec(&local, sb), u256_to_ld(&s->blocks_part));
+            pz_prop_line("part", "in part %s of this computer: its block %s of %.0Lf", s->part_text, pz_u256_to_dec(&local, sb), pz_u256_to_ld(&s->blocks_part));
         else
             pz_prop_line("part", "not in part %s of this computer: another computer will scan it", s->part_text);
     }
@@ -1066,7 +1066,7 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
         /* BSGS with a RAM table, if one that beats the kangaroo fits in 70% of the free memory */
         sysinfo_t si;
         sysinfo_detect(&si);
-        u256 w256 = u256_pow2((unsigned)(n - 1));
+        pz_u256 w256 = pz_u256_pow2((unsigned)(n - 1));
         bool viable;
         u64 T = bsgs_choose_T(&w256, (u64)(0.70 * (double)si.mem_avail), &viable);
         if (viable) {
@@ -1092,13 +1092,13 @@ static int cmd_puzzle(int argc, char **argv)
             rate_lin = rate_kang = opt_rate("--rate", argv[++i]);
         }
         else pz_die("unknown option: %s", argv[i]);
-    u256 a, b;
+    pz_u256 a, b;
     if (!puzzle_range(n, &a, &b)) pz_die("puzzle out of range (1..256)");
     char ha[80], hb[80], ds[100];
-    u256_to_hex(&a, ha);
-    u256_to_hex(&b, hb);
-    u256 sz = cfg_range_size(&(campaign_cfg){.range_start = a, .range_end = b});
-    u256_to_dec(&sz, ds);
+    pz_u256_to_hex(&a, ha);
+    pz_u256_to_hex(&b, hb);
+    pz_u256 sz = cfg_range_size(&(campaign_cfg){.range_start = a, .range_end = b});
+    pz_u256_to_dec(&sz, ds);
     const puzzle_info *p = puzzle_find(n);
     char title[32];
     snprintf(title, sizeof title, "Puzzle #%d", n);

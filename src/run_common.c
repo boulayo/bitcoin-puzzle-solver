@@ -145,19 +145,19 @@ sched_t *run_load_sched(run_ctx *r, const campaign_cfg *scfg, bool *resumed)
 
 /* ---- found key ---- */
 
-static bool key_matches(run_ctx *r, const u256 *key)
+static bool key_matches(run_ctx *r, const pz_u256 *key)
 {
-    if (u256_is_zero(key) || u256_cmp(key, &SECP_N) >= 0) return false;
-    ge p;
-    if (!ec_mul_g(&p, key)) return false;
+    if (pz_u256_is_zero(key) || pz_u256_cmp(key, &pz_secp256k1_n) >= 0) return false;
+    pz_ge p;
+    if (!pz_ec_mul_g(&p, key)) return false;
     u8 pub[33], h[20];
-    ge_to_pub33(pub, &p);
-    hash160(pub, 33, h);
+    pz_ge_to_pub33(pub, &p);
+    pz_hash160(pub, 33, h);
     if (memcmp(h, r->cfg.target_h160, 20) == 0) return true;
-    return r->cfg.has_pubkey && ge_equal(&p, &r->cfg.pubkey);
+    return r->cfg.has_pubkey && pz_ge_equal(&p, &r->cfg.pubkey);
 }
 
-bool run_submit_key(run_ctx *r, const u256 *key, const char *source)
+bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
 {
     bool ok = key_matches(r, key);
     if (!ok) {
@@ -183,15 +183,15 @@ void run_write_found(run_ctx *r)
 {
     char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80];
     u8 kb[32], h[20], pub[33];
-    ge p;
-    u256_to_hex(&r->found_key, hx);
-    u256_to_be(&r->found_key, kb);
-    privkey_to_wif(kb, true, wif, sizeof wif);
-    ec_mul_g(&p, &r->found_key);
-    ge_to_pub33(pub, &p);
+    pz_ge p;
+    pz_u256_to_hex(&r->found_key, hx);
+    pz_u256_to_be(&r->found_key, kb);
+    pz_privkey_to_wif(kb, true, wif, sizeof wif);
+    pz_ec_mul_g(&p, &r->found_key);
+    pz_ge_to_pub33(pub, &p);
     pz_hex_encode(pub, 33, pk);
-    hash160(pub, 33, h);
-    hash160_to_address(h, addr, sizeof addr);
+    pz_hash160(pub, 33, h);
+    pz_hash160_to_address(h, addr, sizeof addr);
     pz_hex_encode(r->cfg.seed, 32, seed);
     time_t t = (time_t)r->found_time;
     char ts[40];
@@ -271,11 +271,11 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", &tmv);
     pz_hex_encode(r->cfg.seed, 32, seedhex);
     seed_to_id(r->cfg.seed, idb);
-    u256_to_hex(&r->cfg.range_start, rs);
-    u256_to_hex(&r->cfg.range_end, re);
+    pz_u256_to_hex(&r->cfg.range_start, rs);
+    pz_u256_to_hex(&r->cfg.range_end, re);
     pz_hex_encode(r->cfg.target_h160, 20, hx);
     if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-    else hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
+    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
     pz_fmt_duration(el, elapsed, sizeof elapsed);
     pz_strlcpy(state, ui_state_name(r, final), sizeof state);
     eta_summary es;
@@ -300,8 +300,8 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         const size_t pl = strlen(partline);
         snprintf(partline + pl, sizeof partline - pl, "Limit:          %d%% of the machine (fewer CPU threads and GPU work-items, always at full speed)\n", r->limit_pct);
     }
-    u256 rsz = cfg_range_size(&r->cfg);
-    unsigned rbits = u256_bits(&rsz) ? u256_bits(&rsz) - 1 : 0;
+    pz_u256 rsz = cfg_range_size(&r->cfg);
+    unsigned rbits = pz_u256_bits(&rsz) ? pz_u256_bits(&rsz) - 1 : 0;
 
     char detail[900];
     wrap_fields(pi->detail, 100, 16, detail, sizeof detail);

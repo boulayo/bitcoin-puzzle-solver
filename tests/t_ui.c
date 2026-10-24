@@ -82,9 +82,9 @@ int main(void)
     r.cfg.puzzle = 71;
     snprintf(r.cfg.name, sizeof r.cfg.name, "p71");
     snprintf(r.cfg.address, sizeof r.cfg.address, "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU");
-    r.cfg.range_start = u256_pow2(70);
-    r.cfg.range_end = u256_pow2(71);
-    u256_sub(&r.cfg.range_end, &r.cfg.range_end, &(u256){{1, 0, 0, 0}});
+    r.cfg.range_start = pz_u256_pow2(70);
+    r.cfg.range_end = pz_u256_pow2(71);
+    pz_u256_sub(&r.cfg.range_end, &r.cfg.range_end, &(pz_u256){{1, 0, 0, 0}});
     r.sessions = 3;
     r.t_start = pz_mono() - 100;
     r.elapsed_prev = 1e6;

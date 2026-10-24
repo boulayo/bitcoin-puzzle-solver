@@ -182,10 +182,10 @@ $(BUILD)/t_fe_asm$(EXE): tests/t_fe.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) $(AVX2_FLAGS) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 $(BUILD)/t_fev2$(EXE): tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -DVBYTES=32 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
+	$(CC) $(COMMON) $(AVX2_FLAGS) -DPZ_VBYTES=32 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 $(BUILD)/t_fev5$(EXE): tests/t_fev.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) $(AVX512_FLAGS) -DVBYTES=64 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
+	$(CC) $(COMMON) $(AVX512_FLAGS) -DPZ_VBYTES=64 -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 $(BUILD)/t_fev52$(EXE): tests/t_fev52.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) $(IFMA_FLAGS) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)

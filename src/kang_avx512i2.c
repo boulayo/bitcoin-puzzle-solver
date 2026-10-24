@@ -3,7 +3,7 @@
  * (KV_PAIR in kang_vec_impl.inc). Same arithmetic and same results as kang_avx512i.c; the program times both and keeps the faster. */
 #include "kangaroo_priv.h"
 #define ISA avx512i2
-#define VBYTES 64
-#define FEV_IFMA 1
+#define PZ_VBYTES 64
+#define PZ_FEV_IFMA 1
 #define KV_PAIR 1
 #include "kang_vec_impl.inc"

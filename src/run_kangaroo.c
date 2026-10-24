@@ -80,7 +80,7 @@ static int kang_launch_cpu(run_ctx *r, kang_state *ks, pthread_t *th, kth_arg *a
 
 int run_kangaroo(run_ctx *r)
 {
-    ec_init();
+    pz_ec_init();
     if (!r->cfg.has_pubkey) pz_die("kangaroo mode needs the public key");
     gpu_session *gpus = NULL;
     int k_gpu = 0, ngpu = 0;
@@ -122,7 +122,7 @@ int run_kangaroo(run_ctx *r)
 
 static u64 st_rnd(u64 *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; return *s; }
 
-double kang_try(const u256 *lo, unsigned wbits, const u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
+double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
 {
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
@@ -131,16 +131,16 @@ double kang_try(const u256 *lo, unsigned wbits, const u256 *key, int nthreads, d
     pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
     run_paths(r);
     r->cfg.range_start = *lo;
-    r->cfg.range_end = u256_pow2(wbits);
-    u256 one = u256_from_u64(1);
-    u256_add(&r->cfg.range_end, &r->cfg.range_end, lo);
-    u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    ge q;
-    ec_mul_g(&q, key);
+    r->cfg.range_end = pz_u256_pow2(wbits);
+    pz_u256 one = pz_u256_from_u64(1);
+    pz_u256_add(&r->cfg.range_end, &r->cfg.range_end, lo);
+    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
+    pz_ge q;
+    pz_ec_mul_g(&q, key);
     r->cfg.pubkey = q;
-    ge_to_pub33(r->cfg.pubkey33, &q);
+    pz_ge_to_pub33(r->cfg.pubkey33, &q);
     r->cfg.has_pubkey = true;
-    hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
+    pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     r->cfg.mode = MODE_KANGAROO;
     u64 s = seedn * 0x9E3779B97F4A7C15ULL + 1;
     for (int i = 0; i < 4; i++) memcpy(r->cfg.seed + 8 * i, &(u64){st_rnd(&s)}, 8);
@@ -169,7 +169,7 @@ double kang_try(const u256 *lo, unsigned wbits, const u256 *key, int nthreads, d
     atomic_store(&r->stop, 1);
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
     double steps = -1;
-    if (atomic_load(&r->found) && !u256_cmp(&r->found_key, key)) {
+    if (atomic_load(&r->found) && !pz_u256_cmp(&r->found_key, key)) {
         steps = 0;
         for (int i = 0; i < r->nws; i++) steps += (double)atomic_load(&r->ws[i].units);
     }
@@ -189,19 +189,19 @@ struct kang_state *kang_make_test_state_s(unsigned wbits, int nthreads, int sche
     if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return NULL; }
     pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
     run_paths(r);
-    r->cfg.range_start = u256_pow2(90);
-    r->cfg.range_end = u256_pow2(wbits);
-    u256 one = u256_from_u64(1);
-    u256_add(&r->cfg.range_end, &r->cfg.range_end, &r->cfg.range_start);
-    u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    u256 k = u256_pow2(90);
-    u256_add_u64(&k, &k, 123456789);
-    ge q;
-    ec_mul_g(&q, &k);
+    r->cfg.range_start = pz_u256_pow2(90);
+    r->cfg.range_end = pz_u256_pow2(wbits);
+    pz_u256 one = pz_u256_from_u64(1);
+    pz_u256_add(&r->cfg.range_end, &r->cfg.range_end, &r->cfg.range_start);
+    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
+    pz_u256 k = pz_u256_pow2(90);
+    pz_u256_add_u64(&k, &k, 123456789);
+    pz_ge q;
+    pz_ec_mul_g(&q, &k);
     r->cfg.pubkey = q;
-    ge_to_pub33(r->cfg.pubkey33, &q);
+    pz_ge_to_pub33(r->cfg.pubkey33, &q);
     r->cfg.has_pubkey = true;
-    hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
+    pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     r->cfg.mode = MODE_KANGAROO;
     for (int i = 0; i < 32; i++) r->cfg.seed[i] = (u8)(i * 37 + 11);
     r->nthreads = nthreads;
@@ -235,12 +235,12 @@ int kangaroo_selftest(void)
         char vals[160] = "";
         int lost = 0;
         for (int t = 0; t < cases[c].n; t++) {
-            u256 lo = u256_pow2(60 + (unsigned)t), key;
-            u256_add_u64(&lo, &lo, st_rnd(&s) & 0xffffff);
-            u256 off = u256_from_u64(st_rnd(&s) & ((1ULL << cases[c].wbits) - 1));
-            if (t == 1) off = u256_zero();                                              /* first key of the interval */
-            if (t == 2) { off = u256_pow2(cases[c].wbits); u256_sub(&off, &off, &(u256){{1, 0, 0, 0}}); }   /* last key */
-            u256_add(&key, &lo, &off);
+            pz_u256 lo = pz_u256_pow2(60 + (unsigned)t), key;
+            pz_u256_add_u64(&lo, &lo, st_rnd(&s) & 0xffffff);
+            pz_u256 off = pz_u256_from_u64(st_rnd(&s) & ((1ULL << cases[c].wbits) - 1));
+            if (t == 1) off = pz_u256_zero();                                              /* first key of the interval */
+            if (t == 2) { off = pz_u256_pow2(cases[c].wbits); pz_u256_sub(&off, &off, &(pz_u256){{1, 0, 0, 0}}); }   /* last key */
+            pz_u256_add(&key, &lo, &off);
             double steps = kang_try(&lo, cases[c].wbits, &key, 2, 60.0, st_rnd(&s), &so);
             if (steps < 0) { fails++; lost++; }
             else snprintf(vals + strlen(vals), sizeof vals - strlen(vals), "%s%.2f", vals[0] ? " " : "", steps / sqrt(ldexp(1.0, (int)cases[c].wbits)));
@@ -256,9 +256,9 @@ int kangaroo_selftest(void)
     char cyc[80] = "";
     int cyc_lost = 0;
     for (int t = 0; t < 2; t++) {
-        u256 lo = u256_pow2(80 + (unsigned)t), key;
-        u256 off = u256_from_u64(st_rnd(&s) & ((1ULL << 30) - 1));
-        u256_add(&key, &lo, &off);
+        pz_u256 lo = pz_u256_pow2(80 + (unsigned)t), key;
+        pz_u256 off = pz_u256_from_u64(st_rnd(&s) & ((1ULL << 30) - 1));
+        pz_u256_add(&key, &lo, &off);
         const kang_try_opts o = {8, 7, true, 0};
         double steps = kang_try(&lo, 30, &key, 2, 60.0, st_rnd(&s), &o);
         if (steps < 0) { fails++; cyc_lost++; }
@@ -280,16 +280,16 @@ double kangaroo_bench(double secs, bool print)
     if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return 0; }
     pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
     run_paths(r);
-    r->cfg.range_start = u256_pow2(120);
-    r->cfg.range_end = u256_pow2(121);
-    u256 one = u256_from_u64(1);
-    u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    u256 k = u256_pow2(120);
-    u256_add_u64(&k, &k, 987654321);
-    ge q;
-    ec_mul_g(&q, &k);
+    r->cfg.range_start = pz_u256_pow2(120);
+    r->cfg.range_end = pz_u256_pow2(121);
+    pz_u256 one = pz_u256_from_u64(1);
+    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
+    pz_u256 k = pz_u256_pow2(120);
+    pz_u256_add_u64(&k, &k, 987654321);
+    pz_ge q;
+    pz_ec_mul_g(&q, &k);
     r->cfg.pubkey = q;
-    ge_to_pub33(r->cfg.pubkey33, &q);
+    pz_ge_to_pub33(r->cfg.pubkey33, &q);
     r->cfg.has_pubkey = true;
     r->cfg.mode = MODE_KANGAROO;
     r->nthreads = r->sys.ncpu;
@@ -348,14 +348,14 @@ int kangaroo_stats(int argc, char **argv)
     double sum = 0, *v = pz_xmalloc(sizeof(double) * (size_t)runs);
     int fails = 0, n = 0;
     for (int i = 0; i < runs; i++) {
-        u256 lo = u256_pow2(70);
-        u256_add_u64(&lo, &lo, st_rnd(&s));
-        u256 off = u256_zero(), key;
+        pz_u256 lo = pz_u256_pow2(70);
+        pz_u256_add_u64(&lo, &lo, st_rnd(&s));
+        pz_u256 off = pz_u256_zero(), key;
         for (int j = 0; j < 4; j++) off.w[j] = st_rnd(&s);
-        u256 m = u256_pow2(bits), one = u256_from_u64(1);
-        u256_sub(&m, &m, &one);
+        pz_u256 m = pz_u256_pow2(bits), one = pz_u256_from_u64(1);
+        pz_u256_sub(&m, &m, &one);
         for (int j = 0; j < 4; j++) off.w[j] &= m.w[j];
-        u256_add(&key, &lo, &off);
+        pz_u256_add(&key, &lo, &off);
         double steps = kang_try(&lo, bits, &key, thr, 600.0, st_rnd(&s), &o);
         if (steps < 0) { fails++; continue; }
         v[n++] = steps / sqrt(ldexp(1.0, (int)bits));
@@ -387,23 +387,23 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return 1; }
     pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
     run_paths(r);
-    r->cfg.range_start = u256_pow2(139);                   /* the shape of the puzzle 140 campaign */
-    r->cfg.range_end = u256_pow2(140);
-    u256 one = u256_from_u64(1);
-    u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    u256 k = u256_pow2(139);
-    u256_add_u64(&k, &k, 987654321);
-    ge q;
-    ec_mul_g(&q, &k);
+    r->cfg.range_start = pz_u256_pow2(139);                   /* the shape of the puzzle 140 campaign */
+    r->cfg.range_end = pz_u256_pow2(140);
+    pz_u256 one = pz_u256_from_u64(1);
+    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
+    pz_u256 k = pz_u256_pow2(139);
+    pz_u256_add_u64(&k, &k, 987654321);
+    pz_ge q;
+    pz_ec_mul_g(&q, &k);
     r->cfg.pubkey = q;
-    ge_to_pub33(r->cfg.pubkey33, &q);
+    pz_ge_to_pub33(r->cfg.pubkey33, &q);
     r->cfg.has_pubkey = true;
     r->cfg.mode = MODE_KANGAROO;
     r->use_cpu = true;
     r->use_gpu = true;
     r->sessions = 1;
     r->mem_limit = 256ULL << 20;                           /* a small table of distinguished points: the walk is what is measured */
-    ec_init();
+    pz_ec_init();
     tg_section("CPU and GPUs together: kangaroo, as in a campaign on puzzle 140");
     gpu_session *gpus = NULL;
     int k_gpu = 0;
@@ -487,7 +487,7 @@ static char *count_text(u64 v, char *out, size_t n)
 
 int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
 {
-    ec_init();
+    pz_ec_init();
     r->nthreads = 1;
     r->use_cpu = true;
     r->use_gpu = false;

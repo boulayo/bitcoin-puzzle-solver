@@ -82,7 +82,7 @@ static inline void i192_sar1(i192 *a)
     a->w[1] = a->w[1] >> 1 | a->w[2] << 63;
     a->w[2] = (u64)((int64_t)a->w[2] >> 1);
 }
-static inline i192 i192_from_signed(bool neg, const u256 *mag)
+static inline i192 i192_from_signed(bool neg, const pz_u256 *mag)
 {
     i192 r = {{mag->w[0], mag->w[1], mag->w[2]}};
     if (neg) i192_neg(&r);
@@ -105,7 +105,7 @@ typedef struct { u8 coef, res; int16_t lo, hi; uint32_t w; } kang_species;
 
 typedef struct {
     unsigned R;
-    fe jx[KANG_R + KANG_NESC], jy[KANG_R + KANG_NESC];
+    pz_fe jx[KANG_R + KANG_NESC], jy[KANG_R + KANG_NESC];
     u128 jv[KANG_R + KANG_NESC];
     u64 dp_mask;                 /* applied to x.n[1] */
     unsigned dp_bits;
@@ -115,15 +115,15 @@ typedef struct {
 
 typedef struct kang_state {
     run_ctx *r;
-    u256 W;                      /* interval width */
+    pz_u256 W;                      /* interval width */
     int schema;                  /* layout of the walkers (see the top of this file): 1 or 2 */
     unsigned kshift;             /* bits of the kind code at the bottom of tagk: 2 (schema 1) or 3 */
     long double c_mean;          /* expected cost in units of sqrt(W) */
     char jump_id[9];             /* first 4 bytes of the SHA-256 of the jump table, in hex: equal on all computers of a campaign */
-    u256 base;                   /* key = base + x */
-    ge Qp;                       /* pubkey - base*G */
-    ge Q3;                       /* 3*Qp (schema 2) */
-    u256 tame_w, wild_w;         /* schema 1, start distances: tame in [0, tame_w), wild even in [0, wild_w) */
+    pz_u256 base;                   /* key = base + x */
+    pz_ge Qp;                       /* pubkey - base*G */
+    pz_ge Q3;                       /* 3*Qp (schema 2) */
+    pz_u256 tame_w, wild_w;         /* schema 1, start distances: tame in [0, tame_w), wild even in [0, wild_w) */
     double tame_frac;
     long double sqrtW;
     kang_params_t P;
@@ -156,7 +156,7 @@ typedef struct kang_state {
 /* per-worker (CPU or host-side GPU) kangaroo herd */
 typedef struct kang_worker {
     int K;
-    fe *x, *y;
+    pz_fe *x, *y;
     i192 *d;
     u8 *kind;                    /* 0 tame, 1 wild (on 3Q in schema 2: 3; the steps only test kind != 0) */
     u8 *spec;                    /* schemas 2 and 3: species of each walker (index in the table of kangaroo.c) */
@@ -166,7 +166,7 @@ typedef struct kang_worker {
     u32 *ck, *mn;                /* fruitless cycles: tag at the last checkpoint, least tag since */
     u8 *esc;                     /* back on the checkpoint: leaving the cycle from its point of least tag */
     u64 round;                   /* steps taken by every walker of the herd (the step number of the next round) */
-    fe *dx, *tmp;
+    pz_fe *dx, *tmp;
     u32 *jidx;
     dp_rec *dpbuf;
     int *dpidx;
@@ -242,7 +242,7 @@ static inline void kang_dp_recode(const kang_state *ks, const kang_worker *w, dp
 /* Pseudo-random generator (xoshiro256**) seeded from the campaign seed. */
 void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b);
 u64 krng_next(u64 s[4]);
-u256 krng_below(u64 s[4], const u256 *bound);   /* uniform in [0, bound) */
+pz_u256 krng_below(u64 s[4], const pz_u256 *bound);   /* uniform in [0, bound) */
 
 kang_state *kang_create(run_ctx *r);
 int kang_configure(kang_state *ks, int k_gpu_total);

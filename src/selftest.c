@@ -21,16 +21,16 @@ static int g_fail, g_checks;
 static u64 rs_ = 0x2545F4914F6CDD1DULL;
 static u64 rnd64(void) { rs_ ^= rs_ << 13; rs_ ^= rs_ >> 7; rs_ ^= rs_ << 17; return rs_; }
 
-typedef struct { int hits; u256 key; } hitrec;
-static void on_hit(void *u, const u256 *k) { hitrec *h = u; h->hits++; h->key = *k; }
+typedef struct { int hits; pz_u256 key; } hitrec;
+static void on_hit(void *u, const pz_u256 *k) { hitrec *h = u; h->hits++; h->key = *k; }
 
 static void t_primitives(void)
 {
     u8 d[32], h[20];
     char hx[80];
-    sha256((const u8 *)"abc", 3, d); pz_hex_encode(d, 32, hx);
+    pz_sha256((const u8 *)"abc", 3, d); pz_hex_encode(d, 32, hx);
     CHECK(!strcmp(hx, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
-    ripemd160((const u8 *)"abc", 3, h); pz_hex_encode(h, 20, hx);
+    pz_ripemd160((const u8 *)"abc", 3, h); pz_hex_encode(h, 20, hx);
     CHECK(!strcmp(hx, "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc"));
     struct { const char *k, *h160, *addr; } v[] = {
         {"1", "751e76e8199196d454941c45d1b3a323f1433bd6", "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"},
@@ -38,20 +38,20 @@ static void t_primitives(void)
         {"1a838b13505b26867", "52e763a7ddc1aa4fa811578c491c1bc7fd570137", "18ZMbwUFLMHoZBbfpCjUJQTCMCbktshgpe"},
     };
     for (size_t i = 0; i < sizeof v / sizeof *v; i++) {
-        u256 k; ge p; u8 pub[33]; char addr[64];
-        u256_from_hex(&k, v[i].k);
-        CHECK(ec_mul_g(&p, &k) && ge_on_curve(&p));
-        ge_to_pub33(pub, &p);
-        hash160(pub, 33, h); pz_hex_encode(h, 20, hx);
+        pz_u256 k; pz_ge p; u8 pub[33]; char addr[64];
+        pz_u256_from_hex(&k, v[i].k);
+        CHECK(pz_ec_mul_g(&p, &k) && pz_ge_on_curve(&p));
+        pz_ge_to_pub33(pub, &p);
+        pz_hash160(pub, 33, h); pz_hex_encode(h, 20, hx);
         CHECK(!strcmp(hx, v[i].h160));
-        hash160_to_address(h, addr, sizeof addr);
+        pz_hash160_to_address(h, addr, sizeof addr);
         CHECK(!strcmp(addr, v[i].addr));
     }
     for (int it = 0; it < 500; it++) {   /* field consistency */
-        fe a, b, ab, bi, c;
+        pz_fe a, b, ab, bi, c;
         for (int j = 0; j < 4; j++) { a.n[j] = rnd64(); b.n[j] = rnd64(); }
-        fe_mul(&ab, &a, &b); fe_inv(&bi, &b); fe_mul(&c, &ab, &bi);
-        CHECK(fe_equiv(&c, &a));
+        pz_fe_mul(&ab, &a, &b); pz_fe_inv(&bi, &b); pz_fe_mul(&c, &ab, &bi);
+        CHECK(pz_fe_equiv(&c, &a));
     }
 }
 
@@ -60,12 +60,12 @@ static void t_perm(void)
     u8 seed[32];
     for (int i = 0; i < 32; i++) seed[i] = (u8)rnd64();
     for (u64 m = 2; m < 3000; m += 997) {
-        perm_t p; u256 M = u256_from_u64(m);
-        perm_init(&p, seed, &M);
+        pz_perm_t p; pz_u256 M = pz_u256_from_u64(m);
+        pz_perm_init(&p, seed, &M);
         u8 *seen = pz_xcalloc(m, 1);
         bool ok = true;
         for (u64 i = 0; i < m; i++) {
-            u256 x = u256_from_u64(i), y = perm_apply(&p, &x), z = perm_invert(&p, &y);
+            pz_u256 x = pz_u256_from_u64(i), y = pz_perm_apply(&p, &x), z = pz_perm_invert(&p, &y);
             if (y.w[0] >= m || seen[y.w[0]] || z.w[0] != i) ok = false;
             else seen[y.w[0]] = 1;
         }
@@ -92,23 +92,23 @@ static void t_bsgs(void)
 {
     struct { unsigned wbits; u64 T; } cases[] = {{24, 2048}, {30, 1 << 14}, {33, 50000}};
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-        u256 lo = u256_pow2(cases[i].wbits - 1), hi = u256_pow2(cases[i].wbits), one = u256_from_u64(1);
-        u256_sub(&hi, &hi, &one);
+        pz_u256 lo = pz_u256_pow2(cases[i].wbits - 1), hi = pz_u256_pow2(cases[i].wbits), one = pz_u256_from_u64(1);
+        pz_u256_sub(&hi, &hi, &one);
         for (int kind = 0; kind < 3; kind++) {
-            u256 off = u256_zero(), key;
+            pz_u256 off = pz_u256_zero(), key;
             for (int j = 0; j < 2; j++) off.w[j] = rnd64();
-            u256 m = u256_pow2(cases[i].wbits - 1);
-            u256_sub(&m, &m, &one);
+            pz_u256 m = pz_u256_pow2(cases[i].wbits - 1);
+            pz_u256_sub(&m, &m, &one);
             for (int j = 0; j < 4; j++) off.w[j] &= m.w[j];
-            if (kind == 1) off = u256_zero();            /* first key of the range */
+            if (kind == 1) off = pz_u256_zero();            /* first key of the range */
             if (kind == 2) off = m;                      /* last key of the range */
-            u256_add(&key, &lo, &off);
-            ge P;
-            ec_mul_g(&P, &key);
-            u256 got = u256_zero();
+            pz_u256_add(&key, &lo, &off);
+            pz_ge P;
+            pz_ec_mul_g(&P, &key);
+            pz_u256 got = pz_u256_zero();
             u64 giants;
             bool ok = bsgs_solve(&lo, &hi, &P, cases[i].T, 2, &got, &giants);
-            CHECK(ok && !u256_cmp(&got, &key));
+            CHECK(ok && !pz_u256_cmp(&got, &key));
         }
         char lb[64];
         snprintf(lb, sizeof lb, "BSGS W=2^%u, %llu baby steps", cases[i].wbits - 1, (unsigned long long)cases[i].T);
@@ -138,21 +138,21 @@ static void t_engines(void)
         bool hok = true;
         for (int l = 0; l < L; l++) {
             u8 h[20], g[20];
-            hash160_pub33((u8)pfx[l], xb[l], h);
+            pz_hash160_pub33((u8)pfx[l], xb[l], h);
             for (int w = 0; w < 5; w++) for (int b = 0; b < 4; b++) g[4*w+b] = (u8)(out[w * L + l] >> (8*b));
             if (memcmp(h, g, 20)) hok = false;
         }
         CHECK(hok);
         /* planted key somewhere inside a few groups */
-        u256 st = u256_pow2(60); u256_add_u64(&st, &st, 12345);
+        pz_u256 st = pz_u256_pow2(60); pz_u256_add_u64(&st, &st, 12345);
         for (u64 off = 5; off < 5 * CPU_GRP; off += 1999) {
-            u256 key = st; u256_add_u64(&key, &key, off);
-            ge p; u8 pub[33], h[20];
-            ec_mul_g(&p, &key); ge_to_pub33(pub, &p); hash160(pub, 33, h);
+            pz_u256 key = st; pz_u256_add_u64(&key, &key, off);
+            pz_ge p; u8 pub[33], h[20];
+            pz_ec_mul_g(&p, &key); pz_ge_to_pub33(pub, &p); pz_hash160(pub, 33, h);
             scan_job job; scan_job_init(&job, h);
-            hitrec r = {0, u256_zero()}; job.on_hit = on_hit; job.user = &r;
+            hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
             u64 cov = E->scan(&job, &st, 5 * CPU_GRP);
-            CHECK(cov == 5 * CPU_GRP && r.hits == 1 && !u256_cmp(&r.key, &key));
+            CHECK(cov == 5 * CPU_GRP && r.hits == 1 && !pz_u256_cmp(&r.key, &key));
         }
         pz_result_line(lb, "OK");
     }
@@ -303,7 +303,7 @@ static void t_limit(void)
 int selftest_run(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    ec_init();
+    pz_ec_init();
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);          /* the small campaigns run by the checks must not print their own log lines (paths, "KEY FOUND") */
     printf("pzsolve %s - selftest\n", PZ_VERSION);
@@ -366,10 +366,10 @@ static void *bench_thread(void *p)
     sysinfo_pin_thread(a->s, a->slot);
     u8 h[20] = {0};
     scan_job job; scan_job_init(&job, h);
-    u256 st = u256_pow2(100);
-    u256_add_u64(&st, &st, (u64)a->slot << 32);
+    pz_u256 st = pz_u256_pow2(100);
+    pz_u256_add_u64(&st, &st, (u64)a->slot << 32);
     double t0 = pz_mono();
-    while (pz_mono() - t0 < a->secs) { a->keys += a->e->scan(&job, &st, 1u << 18); u256_add_u64(&st, &st, 1u << 18); }
+    while (pz_mono() - t0 < a->secs) { a->keys += a->e->scan(&job, &st, 1u << 18); pz_u256_add_u64(&st, &st, 1u << 18); }
     a->secs = pz_mono() - t0;
     return NULL;
 }
@@ -388,7 +388,7 @@ double bench_cpu_rate(double secs)
     return total;
 }
 
-static void bsgs_nofound(void *u, const u256 *k) { (void)u; (void)k; }
+static void bsgs_nofound(void *u, const pz_u256 *k) { (void)u; (void)k; }
 
 typedef struct { const bsgs_job *j; int64_t a0; u64 n; _Atomic int *stop; } bsgs_bench_arg;
 static void *bsgs_bench_thread(void *p)
@@ -407,11 +407,11 @@ static void bsgs_bench(int nthreads)
     double t0 = pz_mono();
     bsgs_table_build(&t, nthreads, NULL, NULL);
     double tb = pz_mono() - t0;
-    u256 lo = u256_pow2(60), hi = u256_pow2(61), one = u256_from_u64(1), k = u256_pow2(60);
-    u256_sub(&hi, &hi, &one);
-    u256_add_u64(&k, &k, 123456789ULL);
-    ge P;
-    ec_mul_g(&P, &k);
+    pz_u256 lo = pz_u256_pow2(60), hi = pz_u256_pow2(61), one = pz_u256_from_u64(1), k = pz_u256_pow2(60);
+    pz_u256_sub(&hi, &hi, &one);
+    pz_u256_add_u64(&k, &k, 123456789ULL);
+    pz_ge P;
+    pz_ec_mul_g(&P, &k);
     bsgs_params p;
     if (!bsgs_params_init(&p, &lo, &hi, &P, T, err, sizeof err)) return;
     bsgs_job j;
