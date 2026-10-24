@@ -1,0 +1,220 @@
+# Continuous integration: every push and pull request builds pzsolve for the five release targets and runs its built-in
+# self-test (the independent-reference checks of the field arithmetic, the hashes, every CPU engine, the kangaroo and BSGS solvers).
+#
+#   linux-x86_64   ubuntu-22.04      gcc, clang, and the portable scalar build (X86=0); the glibc floor is checked too
+#   linux-arm64    ubuntu-22.04-arm  the portable scalar code (what Apple Silicon also runs)
+#   windows-x86_64 cross-compiled with MinGW-w64 on Ubuntu, then run on a real windows-latest machine
+#   macos-arm64    macos-15          Apple Silicon, Apple clang
+#   macos-x86_64   macos-15-intel    Intel Mac, Apple clang
+#
+# Runner labels change over time (macos-13 was retired, Intel macOS images are on their way out too): when a job stays queued or
+# fails with "label not found", check the current labels at https://github.com/actions/runner-images and update them here and in
+# release.yml. The ubuntu-22.04-arm label is free only for public repositories.
+#
+# Compiler errors: the build step runs `make -k` (keeps compiling the other files after an error, so one run shows every error),
+# the diagnostics become annotations through .github/problem-matchers/cc.json, and a failed build prints an error summary and
+# uploads the whole log as an artifact.
+#
+# The CUDA code needs no toolkit here: the PTX modules are committed, the build only embeds them.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    name: ${{ matrix.name }} (${{ matrix.variant }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, variant: gcc,      runner: ubuntu-22.04,     cc: gcc,   args: '' }
+          - { name: linux-x86_64, variant: clang,    runner: ubuntu-22.04,     cc: clang, args: '' }
+          - { name: linux-x86_64, variant: portable, runner: ubuntu-22.04,     cc: gcc,   args: 'X86=0' }
+          - { name: linux-arm64,  variant: gcc,      runner: ubuntu-22.04-arm, cc: gcc,   args: '' }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        run: |
+          echo "::add-matcher::.github/problem-matchers/cc.json"
+          uname -a
+          ${{ matrix.cc }} --version | sed -n 1p
+          make --version | sed -n 1p
+      - name: Build
+        run: make -k -j"$(nproc)" CC=${{ matrix.cc }} ${{ matrix.args }} 2>&1 | tee build.log
+      - name: Self-test
+        run: build/pzsolve selftest
+      - name: Detected hardware and engines
+        run: build/pzsolve devices
+      - name: Smoke test (find the key of puzzle 20)
+        run: |
+          build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --no-progress -q --no-gpu
+          grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
+      - name: Binary needs no glibc newer than 2.34
+        run: |
+          newest=$(objdump -T build/pzsolve | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
+          echo "needs at most $newest"
+          if objdump -T build/pzsolve | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -1)" != GLIBC_2.34 ]; then
+            echo "::error::the binary needs $newest or __isoc23_* symbols: it would not start on older distributions"; exit 1
+          fi
+      # The unit tests gate the gcc build on x86-64. Elsewhere they are informational until the test sources build with clang and
+      # without the x86 engines (tests/t_engine.c uses a nested function, tests/t_bsgs.c calls bs_group_x86 unconditionally).
+      - name: Unit tests
+        continue-on-error: ${{ !(matrix.name == 'linux-x86_64' && matrix.variant == 'gcc') }}
+        run: make test CC=${{ matrix.cc }} ${{ matrix.args }}
+      - name: Compiler errors
+        if: failure()
+        run: grep -nE 'error:|Error [0-9]+|undefined reference' build.log | head -100 || true
+      - name: Keep the build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ matrix.name }}-${{ matrix.variant }}
+          path: build.log
+          if-no-files-found: ignore
+
+  windows-build:
+    name: windows-x86_64 (cross-compile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install MinGW-w64
+        run: |
+          # a stalled mirror must not block the job for 45 minutes: limit each try and retry
+          export DEBIAN_FRONTEND=noninteractive
+          for try in 1 2 3; do
+            sudo timeout 120 apt-get update -o Acquire::Retries=3 && \
+              sudo timeout 300 apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix && break
+            echo "apt failed (try $try), retrying"; sleep 5
+          done
+          x86_64-w64-mingw32-gcc-posix --version | sed -n 1p
+      - name: Build
+        run: |
+          echo "::add-matcher::.github/problem-matchers/cc.json"
+          make windows -k -j"$(nproc)" 2>&1 | tee build.log
+      - name: The exe imports only system DLLs
+        run: |
+          x86_64-w64-mingw32-objdump -p build/win/pzsolve.exe | grep 'DLL Name'
+          if x86_64-w64-mingw32-objdump -p build/win/pzsolve.exe | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
+            echo "::error::pzsolve.exe depends on a DLL that is not part of Windows"; exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64-exe
+          path: build/win/pzsolve.exe
+          if-no-files-found: error
+          retention-days: 7
+      - name: Compiler errors
+        if: failure()
+        run: grep -nE 'error:|Error [0-9]+|undefined reference' build.log | head -100 || true
+      - name: Keep the build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-windows-x86_64
+          path: build.log
+          if-no-files-found: ignore
+
+  windows-test:
+    name: windows-x86_64 (run on Windows)
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x86_64-exe
+      - name: Self-test
+        run: |
+          ./pzsolve.exe version
+          ./pzsolve.exe devices
+          ./pzsolve.exe selftest
+      - name: Smoke test (find the key of puzzle 20)
+        run: |
+          ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --no-progress -q --no-gpu
+          grep -qi d2c55 campaigns/ci20/FOUND.txt
+
+  macos:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-arm64,  runner: macos-15 }
+          - { name: macos-x86_64, runner: macos-15-intel }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        run: |
+          echo "::add-matcher::.github/problem-matchers/cc.json"
+          sw_vers
+          uname -m
+          cc --version
+          make --version | sed -n 1p
+          sysctl -n machdep.cpu.brand_string
+          sysctl hw.ncpu hw.physicalcpu hw.memsize
+      - name: Build
+        run: make -k -j"$(sysctl -n hw.ncpu)" 2>&1 | tee build.log
+      - name: The binary
+        run: |
+          file build/pzsolve
+          lipo -archs build/pzsolve
+          otool -L build/pzsolve
+          # ad-hoc signature, as in the release (no Apple Developer account involved)
+          codesign -s - --force build/pzsolve
+          codesign -dv build/pzsolve 2>&1 | head -5
+      - name: Detected hardware and engines
+        run: build/pzsolve devices
+      # The runners may expose a virtual GPU through Apple's OpenCL: the first self-test leaves it out so that the CPU code is
+      # judged on its own, the second one lets the program try whatever OpenCL finds and does not fail the job.
+      - name: Self-test (CPU)
+        run: PZ_NO_OPENCL=1 build/pzsolve selftest
+      - name: Self-test (with OpenCL, informational)
+        continue-on-error: true
+        run: build/pzsolve selftest
+      - name: Smoke test (find the key of puzzle 20)
+        run: |
+          PZ_NO_OPENCL=1 build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --no-progress -q --no-gpu
+          grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
+      # Informational until the test sources build with Apple clang (tests/t_engine.c uses a GCC nested function) and without the
+      # x86 engines on Apple Silicon (tests/t_bsgs.c calls bs_group_x86 unconditionally).
+      - name: Unit tests
+        continue-on-error: true
+        run: PZ_NO_OPENCL=1 make test -k
+      - name: Compiler errors
+        if: failure()
+        run: grep -nE 'error:|Error [0-9]+|undefined (reference|symbol)' build.log | head -100 || true
+      - name: Keep the build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ matrix.name }}
+          path: build.log
+          if-no-files-found: ignore
+      - name: Keep the binary (to try it on a real Mac)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}-binary
+          path: build/pzsolve
+          if-no-files-found: ignore
+          retention-days: 7

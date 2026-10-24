@@ -1,0 +1,316 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* engine_vec_impl.inc - CPU linear-search engine with lane-parallel elliptic-curve arithmetic (fev.h), instantiated once
+ * per vector width. The includer defines ISA (token) and VBYTES (32 or 64) and VHALF (points on each side of a centre).
+ *
+ * N = VBYTES/8 independent windows are processed at once, one per vector lane. Round g covers N consecutive windows of
+ * GRP = 2*VHALF keys starting at key_start + g*N*GRP; lane l takes window g*N + l, so after any number of rounds
+ * the keys covered form a prefix of the claim (the scheduler relies on that).
+ *
+ * Per round and lane: one Montgomery batch inversion of the VHALF+1 denominators x(i*G) - x(C), then the points
+ * C +- i*G, whose compressed public keys are hashed 2N at a time with the vectorized SHA-256 + RIPEMD-160 pipeline.
+ *
+ * The field arithmetic is fev.h (9 limbs of 29 bits, vpmuludq) or, when the includer defines FEV_IFMA, fev52.h (5 limbs
+ * of 52 bits, AVX-512 IFMA); this file only relies on their common interface. */
+
+#define CAT_(a, b) a##b
+#define CAT(a, b) CAT_(a, b)
+#define HASH_LANES_FN CAT(hash_lanes_, ISA)
+#include "hash_simd.inc"
+#ifdef FEV_IFMA
+#include "fev52.h"
+#else
+#include "fev.h"
+#endif
+#include <pthread.h>
+
+#define NL FEV_LANES            /* elliptic-curve lanes */
+#define GRPV (2 * VHALF)        /* keys per window */
+#if LANES != 2 * NL
+#error "the hash width must be twice the number of curve lanes"
+#endif
+
+typedef struct {
+    u32 X[8][LANES] PZ_ALIGN(64);
+    u32 pfx[LANES] PZ_ALIGN(64);
+    u32 out[5][LANES] PZ_ALIGN(64);
+    u64 koff[LANES] PZ_ALIGN(64);
+    int n;
+    const scan_job *job;
+    u256 base;             /* first key of the claim */
+} vctx_t;
+
+static PZ_VABI void vctx_verify(vctx_t *c, int lane)
+{
+    u8 pub[33], h[20];
+    pub[0] = (u8)c->pfx[lane];
+    for (int i = 0; i < 8; i++) {
+        u32 w = c->X[i][lane];
+        pub[1 + 4 * i] = (u8)(w >> 24); pub[2 + 4 * i] = (u8)(w >> 16);
+        pub[3 + 4 * i] = (u8)(w >> 8);  pub[4 + 4 * i] = (u8)w;
+    }
+    hash160(pub, 33, h);
+    if (memcmp(h, c->job->target_h160, 20) != 0) return;
+    u256 key;
+    u256 d = u256_from_u64(c->koff[lane]);
+    u256_add(&key, &c->base, &d);
+    if (c->job->on_hit) c->job->on_hit(c->job->user, &key);
+}
+
+static inline PZ_VABI void vctx_flush(vctx_t *c)
+{
+#ifdef PZ_PROF_NOHASH
+    c->n = 0;
+    return;
+#endif
+    HASH_W0_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
+    const u32 t0 = c->job->target_w[0];
+    for (int l = 0; l < c->n; l++)
+        if (UNLIKELY(c->out[0][l] == t0)) vctx_verify(c, l);
+    c->n = 0;
+}
+
+/* one candidate from the scalar fallback path */
+static PZ_VABI void vctx_add_scalar(vctx_t *c, const fe *x, const fe *y, u64 koff)
+{
+    fe xn = *x, yn = *y;
+    fe_normalize(&xn);
+    fe_normalize(&yn);
+    const int l = c->n;
+    c->X[0][l] = (u32)(xn.n[3] >> 32); c->X[1][l] = (u32)xn.n[3];
+    c->X[2][l] = (u32)(xn.n[2] >> 32); c->X[3][l] = (u32)xn.n[2];
+    c->X[4][l] = (u32)(xn.n[1] >> 32); c->X[5][l] = (u32)xn.n[1];
+    c->X[6][l] = (u32)(xn.n[0] >> 32); c->X[7][l] = (u32)xn.n[0];
+    c->pfx[l] = 2u + (u32)(yn.n[0] & 1);
+    c->koff[l] = koff;
+    if (++c->n == LANES) vctx_flush(c);
+}
+
+typedef u32 vw __attribute__((vector_size(NL * 4)));
+
+/* Canonical reduction of x and y, then NL candidates appended to the hash batch. */
+static inline PZ_VABI void vctx_emit(vctx_t *c, fev *x, fev *y, vl koff)
+{
+    fev_normalize(x);
+    fev_normalize(y);
+    const int n = c->n;
+#pragma GCC unroll 8
+    for (int j = 0; j < 8; j++) {            /* word j counted from the least significant end: bits [32j, 32j+32) */
+        const int bit = 32 * j, a = bit / FEV_BITS, sh = bit % FEV_BITS;
+        vl w = x->l[a] >> sh;
+#pragma GCC unroll 2
+        for (int k = 1; k <= 2; k++)          /* the following limbs that still overlap the word */
+            if (k * FEV_BITS - sh < 32 && a + k < FEV_NLIMB) w |= x->l[a + k] << (k * FEV_BITS - sh);
+        w &= vl_set(0xFFFFFFFFULL);
+        vw w32 = __builtin_convertvector(w, vw);
+        memcpy(&c->X[7 - j][n], &w32, sizeof w32);
+    }
+    vl par = (y->l[0] & vl_set(1)) + vl_set(2);
+    vw p32 = __builtin_convertvector(par, vw);
+    memcpy(&c->pfx[n], &p32, sizeof p32);
+    memcpy(&c->koff[n], &koff, sizeof koff);
+    c->n = n + NL;
+    if (c->n == LANES) vctx_flush(c);
+}
+
+/* the same operations with one operand a constant given as limbs, broadcast to every lane */
+static inline PZ_VABI void fev_bcast(fev *r, const u64 *a)
+{
+#pragma GCC unroll 9
+    for (int i = 0; i < FEV_NLIMB; i++) r->l[i] = vl_set(a[i]);
+}
+static inline PZ_VABI void fev_bc_sub(fev *r, const u64 *a, const fev *b) { fev t; fev_bcast(&t, a); fev_sub(r, &t, b); }
+static inline PZ_VABI void fev_bc_add(fev *r, const fev *a, const u64 *b) { fev t; fev_bcast(&t, b); fev_add(r, a, &t); }
+static inline PZ_VABI void fev_sub2_bc(fev *r, const fev *a, const fev *b, const u64 *c) { fev t; fev_bcast(&t, c); fev_sub2(r, a, b, &t); }
+
+static inline PZ_VABI bool vec_any_zero(const fev *a)
+{
+    vl z = a->l[0];
+    for (int i = 1; i < FEV_NLIMB; i++) z |= a->l[i];
+    for (int l = 0; l < NL; l++)
+        if (z[l] == 0) return true;
+    return false;
+}
+
+/* Montgomery batch inversion of a[0..n) (each lane independently); false if some lane has a zero element. */
+static inline PZ_VABI bool vinv_batch(fev *a, fev *tmp, int n)
+{
+    tmp[0] = a[0];
+    for (int i = 1; i < n; i++) fev_mul(&tmp[i], &tmp[i - 1], &a[i]);
+    fev chk = tmp[n - 1];
+    fev_normalize(&chk);
+    if (UNLIKELY(vec_any_zero(&chk))) return false;
+    fev inv;
+    fev_inv(&inv, &tmp[n - 1]);
+    for (int i = n - 1; i > 0; i--) {
+        fev t;
+        fev_mul(&t, &inv, &tmp[i - 1]);
+        fev_mul(&inv, &inv, &a[i]);
+        a[i] = t;
+    }
+    a[0] = inv;
+    return true;
+}
+
+typedef struct {
+    u64 sx[FEV_NLIMB], sy[FEV_NLIMB];      /* the point N*GRP*G (centre advance per round), as limbs */
+} vstep_t;
+
+static void to_limbs(u64 out[FEV_NLIMB], const fe *x)
+{
+    fev t;
+    fev_set_lane(&t, 0, x);
+    for (int i = 0; i < FEV_NLIMB; i++) out[i] = t.l[i][0];
+}
+
+/* i*G for i = 1..VHALF as limbs of this field layout, built once */
+static u64 vtab_x[VHALF][FEV_NLIMB], vtab_y[VHALF][FEV_NLIMB];
+static pthread_once_t vtab_once = PTHREAD_ONCE_INIT;
+static void vtab_build(void)
+{
+    ge *g = pz_xmalloc(sizeof(ge) * VHALF);
+    cpu_gmultiples(g, VHALF);
+    for (int i = 0; i < VHALF; i++) {
+        to_limbs(vtab_x[i], &g[i].x);
+        to_limbs(vtab_y[i], &g[i].y);
+    }
+    free(g);
+}
+
+/* One round: the NL windows whose centres are in (xc, yc). Advances the centres by N*GRP*G. false = zero denominator. */
+static inline PZ_VABI bool vround(vctx_t *c, fev *xc, fev *yc, const vstep_t *st, u64 wbase, fev *dx, fev *tmp)
+{
+    const vl kb = vl_set(wbase);
+    vl lane_off = vl_set(0);
+    for (int l = 0; l < NL; l++) lane_off[l] = (u64)l * GRPV;
+    const vl kw = kb + lane_off;                 /* window start offsets of the lanes */
+
+#pragma GCC unroll 1
+    for (int i = 0; i < VHALF; i++) fev_bc_sub(&dx[i], vtab_x[i], xc);
+    fev_bc_sub(&dx[VHALF], st->sx, xc);
+    if (UNLIKELY(!vinv_batch(dx, tmp, VHALF + 1))) return false;
+
+    {   /* the centre itself */
+        fev x = *xc, y = *yc;
+        vctx_emit(c, &x, &y, kw + vl_set(VHALF));
+    }
+    for (int i = 1; i < VHALF; i++) {
+        const u64 *Sx = vtab_x[i - 1], *Sy = vtab_y[i - 1];
+        const fev *inv = &dx[i - 1];
+        /* C + i*G and C - i*G (slope -(S.y + yc)/(S.x - xc): only its square matters for x) are computed stage by stage,
+         * side by side, so that the carry chains of one overlap the products of the other */
+        fev tp, tm, lp, lm, xp, xm, yp, ym;
+        fev_bc_sub(&tp, Sy, yc);
+        fev_bc_add(&tm, yc, Sy);
+        fev_mul(&lp, &tp, inv);
+        fev_mul(&lm, &tm, inv);
+        fev_sqr(&xp, &lp);
+        fev_sqr(&xm, &lm);
+        fev_sub2_bc(&xp, &xp, xc, Sx);
+        fev_sub2_bc(&xm, &xm, xc, Sx);
+        fev_sub(&tp, xc, &xp);
+        fev_sub(&tm, &xm, xc);
+        fev_mul(&yp, &lp, &tp);
+        fev_mul(&ym, &lm, &tm);
+        fev_sub(&yp, &yp, yc);
+        fev_sub(&ym, &ym, yc);
+        vctx_emit(c, &xp, &yp, kw + vl_set(VHALF + i));
+        vctx_emit(c, &xm, &ym, kw + vl_set(VHALF - i));
+    }
+    {   /* i = VHALF: only C - VHALF*G is needed */
+        const u64 *Sx = vtab_x[VHALF - 1], *Sy = vtab_y[VHALF - 1];
+        fev lam, t, x3, y3;
+        fev_bc_add(&t, yc, Sy);
+        fev_mul(&lam, &t, &dx[VHALF - 1]);
+        fev_sqr(&x3, &lam);
+        fev_sub2_bc(&x3, &x3, xc, Sx);
+        fev_sub(&t, &x3, xc);
+        fev_mul(&y3, &lam, &t);
+        fev_sub(&y3, &y3, yc);
+        vctx_emit(c, &x3, &y3, kw);
+    }
+    /* next centres: C + (N*GRP)*G */
+    fev lam, t, nx, ny;
+    fev_bc_sub(&t, st->sy, yc);
+    fev_mul(&lam, &t, &dx[VHALF]);
+    fev_sqr(&nx, &lam);
+    fev_sub2_bc(&nx, &nx, xc, st->sx);
+    fev_sub(&t, xc, &nx);
+    fev_mul(&ny, &lam, &t);
+    fev_sub(&ny, &ny, yc);
+    *xc = nx;
+    *yc = ny;
+    return true;
+}
+
+/* Exact but slow: the NL windows of a round, one scalar multiplication per key (a key that is 0 mod n has no point and is
+ * skipped). The batch is flushed at the end so that the vector path always starts on a multiple of NL entries. */
+static PZ_VABI void vround_slow(vctx_t *c, const u256 *start, u64 wbase)
+{
+    for (int l = 0; l < NL; l++) {
+        u64 w0 = wbase + (u64)l * GRPV;
+        for (int p = 0; p < GRPV; p++) {
+            u256 k = *start;
+            u256_add_u64(&k, &k, w0 + (u64)p);
+            ge pt;
+            if (ec_mul_g(&pt, &k)) vctx_add_scalar(c, &pt.x, &pt.y, w0 + (u64)p);
+        }
+    }
+    if (c->n) vctx_flush(c);
+}
+
+/* Loads the window centres of the round starting at wbase; false when one is the point at infinity (key 0 mod n). */
+static PZ_VABI bool load_centres(fev *xc, fev *yc, const u256 *start, u64 wbase)
+{
+    for (int l = 0; l < NL; l++) {
+        u256 k = *start;
+        u256_add_u64(&k, &k, wbase + (u64)l * GRPV + VHALF);
+        ge pt;
+        if (!ec_mul_g(&pt, &k)) return false;
+        fev_set_lane(xc, l, &pt.x);
+        fev_set_lane(yc, l, &pt.y);
+    }
+    return true;
+}
+
+static u64 CAT(engv_scan_, ISA)(const scan_job *job, const u256 *key_start, u64 nkeys)
+{
+    cpu_tables_init();
+    pthread_once(&vtab_once, vtab_build);
+    vctx_t *c = pz_xaligned(64, sizeof *c);
+    fev *dx = pz_xaligned(64, sizeof(fev) * (VHALF + 1));
+    fev *tmp = pz_xaligned(64, sizeof(fev) * (VHALF + 1));
+    c->job = job;
+    c->base = *key_start;
+    vstep_t st;
+    {
+        ge sp;
+        if (!ec_mul_g(&sp, &(u256){{(u64)NL * GRPV, 0, 0, 0}})) pz_die("scan: invalid step");
+        to_limbs(st.sx, &sp.x);
+        to_limbs(st.sy, &sp.y);
+    }
+    const u64 per_round = (u64)NL * GRPV;
+    const u64 rounds = (nkeys + per_round - 1) / per_round;
+    fev xc, yc;
+    bool cvalid = false;            /* xc / yc hold the centres of round g */
+    u64 g = 0, unreported = 0;
+    for (; g < rounds; g++) {
+        if ((g & 7) == 0) {
+            if (job->progress && unreported) { atomic_fetch_add_explicit(job->progress, unreported, memory_order_relaxed); unreported = 0; }
+            if (job->stop && atomic_load_explicit(job->stop, memory_order_relaxed)) break;
+        }
+        const u64 wbase = g * per_round;
+        if (UNLIKELY(!cvalid)) cvalid = load_centres(&xc, &yc, key_start, wbase);
+        if (UNLIKELY(!cvalid || !vround(c, &xc, &yc, &st, wbase, dx, tmp))) {
+            vround_slow(c, key_start, wbase);
+            cvalid = false;         /* the next round starts from freshly computed centres */
+        }
+        unreported += per_round;
+    }
+    if (c->n) vctx_flush(c);
+    if (job->progress && unreported) atomic_fetch_add_explicit(job->progress, unreported, memory_order_relaxed);
+    pz_afree(c); pz_afree(dx); pz_afree(tmp);
+    u64 covered = g * per_round;
+    return covered > nkeys ? nkeys : covered;
+}
+
+static void CAT(engv_hash_, ISA)(const u32 *X, const u32 *pfx, u32 *out) { HASH_LANES_FN(X, pfx, out); }

@@ -1,0 +1,233 @@
+# Release: builds the five binaries in release mode, packages them, writes SHA256SUMS and creates the GitHub release.
+#
+# How to release: bump VERSION, add the "## [X.Y.Z]" section to CHANGELOG.md, then either
+#   - push the tag vX.Y.Z (it must match VERSION), or
+#   - run this workflow by hand (Actions tab, "Run workflow") with "publish" ticked: it creates the tag on the selected commit.
+# Without "publish" a manual run only builds the packages and keeps them as workflow artifacts. A manual publish creates a DRAFT
+# release by default (untick "draft" to publish at once).
+#
+# Archives (one top folder each, with the binary, README.md, LICENSE if present, CHANGELOG.md, docs/ and BUILD-INFO.txt):
+#   pzsolve-<version>-linux-x86_64.tar.gz    pzsolve-<version>-linux-arm64.tar.gz
+#   pzsolve-<version>-macos-arm64.tar.gz     pzsolve-<version>-macos-x86_64.tar.gz
+#   pzsolve-<version>-windows-x86_64.zip     SHA256SUMS
+# The same archives can be made on a Linux machine without Actions: tools/package_release.sh.
+#
+# Release builds are portable: the Makefile never passes -march=native (the program picks its SIMD engine at run time).
+# Linux binaries are built on Ubuntu 22.04 so that they need at most glibc 2.34. The Windows exe is cross-compiled with
+# MinGW-w64 (static runtime) and then run on a real Windows machine before it is published.
+#
+# macOS: the binaries get an ad-hoc signature (`codesign -s -`). That is enough to run on Apple Silicon, but they are NOT notarized:
+# notarization needs a paid Apple Developer account (a "Developer ID Application" certificate, `codesign --options runtime
+# --timestamp`, then `xcrun notarytool submit --wait`). Until then, a file downloaded with a browser is quarantined and Gatekeeper
+# refuses it; the release notes tell users to run `xattr -dr com.apple.quarantine <folder>` (files fetched with curl or `gh release
+# download` are not quarantined).
+#
+# Runner labels change over time (see ci.yml): macos-15 is Apple Silicon, macos-15-intel is Intel.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a GitHub release for the version in VERSION (creates the tag v<version> if it does not exist)'
+        type: boolean
+        default: false
+      draft:
+        description: 'Create the release as a draft'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          echo "version in VERSION: $VERSION"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+            echo "::error::the tag $GITHUB_REF_NAME does not match VERSION ($VERSION)"; exit 1
+          fi
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md has no '## [$VERSION]' section: the release notes will be empty"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.os }}-${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,   arch: x86_64, runner: ubuntu-22.04 }
+          - { os: linux,   arch: arm64,  runner: ubuntu-22.04-arm }
+          - { os: macos,   arch: arm64,  runner: macos-15 }
+          - { os: macos,   arch: x86_64, runner: macos-15-intel }
+          - { os: windows, arch: x86_64, runner: ubuntu-24.04 }      # cross-compiled
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install MinGW-w64
+        if: matrix.os == 'windows'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          for try in 1 2 3; do
+            sudo timeout 120 apt-get update -o Acquire::Retries=3 && \
+              sudo timeout 300 apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix zip && break
+            echo "apt failed (try $try), retrying"; sleep 5
+          done
+      - name: Build (release, portable)
+        run: |
+          echo "::add-matcher::.github/problem-matchers/cc.json"
+          if [ "${{ matrix.os }}" = windows ]; then
+            make windows -k -j"$(nproc)" 2>&1 | tee build.log
+            echo "BIN=build/win/pzsolve.exe" >> "$GITHUB_ENV"
+          else
+            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" 2>&1 | tee build.log
+            echo "BIN=build/pzsolve" >> "$GITHUB_ENV"
+          fi
+      - name: Ad-hoc code signature
+        if: matrix.os == 'macos'
+        run: |
+          codesign -s - --force build/pzsolve
+          codesign -v build/pzsolve
+          codesign -dv build/pzsolve 2>&1 | head -5
+      # The self-test gates the release. On macOS it leaves out OpenCL (Apple's deprecated framework, no usable GPU on the runners).
+      - name: Self-test
+        if: matrix.os != 'windows'
+        env:
+          PZ_NO_OPENCL: ${{ matrix.os == 'macos' && '1' || '' }}
+        run: |
+          "$BIN" version
+          "$BIN" selftest
+      - name: Linux binary needs no glibc newer than 2.34
+        if: matrix.os == 'linux'
+        run: |
+          newest=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
+          echo "needs at most $newest"
+          if objdump -T "$BIN" | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -1)" != GLIBC_2.34 ]; then
+            echo "::error::the binary needs $newest or __isoc23_* symbols"; exit 1
+          fi
+      - name: Windows exe imports only system DLLs
+        if: matrix.os == 'windows'
+        run: |
+          if x86_64-w64-mingw32-objdump -p "$BIN" | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
+            echo "::error::pzsolve.exe depends on a DLL that is not part of Windows"; exit 1
+          fi
+      - name: Package
+        run: |
+          export OUT=dist-release
+          tools/package_release.sh --pack "$BIN" ${{ matrix.os }} ${{ matrix.arch }}
+          ls -l dist-release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pzsolve-${{ needs.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist-release/*
+          if-no-files-found: error
+      - name: Compiler errors
+        if: failure()
+        run: grep -nE 'error:|Error [0-9]+|undefined (reference|symbol)' build.log | head -100 || true
+      - name: Keep the build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ matrix.os }}-${{ matrix.arch }}
+          path: build.log
+          if-no-files-found: ignore
+
+  test-windows:
+    name: run the Windows package on Windows
+    needs: [version, build]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: pzsolve-${{ needs.version.outputs.version }}-windows-x86_64
+          path: pkg
+      - name: Unpack
+        shell: pwsh
+        run: Expand-Archive -Path "pkg/pzsolve-*-windows-x86_64.zip" -DestinationPath pkg/unpacked
+      - name: Self-test and smoke test
+        run: |
+          cd pkg/unpacked/pzsolve-*-windows-x86_64
+          ls
+          ./pzsolve.exe version
+          ./pzsolve.exe selftest
+          ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --no-progress -q --no-gpu
+          grep -qi d2c55 campaigns/ci20/FOUND.txt
+
+  release:
+    name: GitHub release
+    needs: [version, build, test-windows]
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pzsolve-*
+          path: dist-release
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          ls -l dist-release
+          test "$(find dist-release -maxdepth 1 -name 'pzsolve-*' | wc -l)" -eq 5 || { echo "::error::expected 5 archives"; exit 1; }
+          OUT=dist-release tools/package_release.sh --sums
+      - name: Release notes
+        run: |
+          {
+            # the CHANGELOG.md section of this version
+            awk -v v="$VERSION" '/^## \[/ { if (p) exit; if (index($0, "[" v "]")) p = 1 } p' CHANGELOG.md | sed '1d'
+            echo
+            echo "## Downloads"
+            echo
+            echo "| System | File |"
+            echo "|--------|------|"
+            echo "| Linux x86-64 | \`pzsolve-$VERSION-linux-x86_64.tar.gz\` |"
+            echo "| Linux arm64 | \`pzsolve-$VERSION-linux-arm64.tar.gz\` |"
+            echo "| macOS, Apple Silicon | \`pzsolve-$VERSION-macos-arm64.tar.gz\` |"
+            echo "| macOS, Intel | \`pzsolve-$VERSION-macos-x86_64.tar.gz\` |"
+            echo "| Windows x86-64 | \`pzsolve-$VERSION-windows-x86_64.zip\` |"
+            echo
+            echo "Check the download against \`SHA256SUMS\` (\`sha256sum -c SHA256SUMS\`, or \`shasum -a 256 -c SHA256SUMS\` on macOS)."
+            echo
+            echo "- **GPU:** CUDA and OpenCL on Linux and Windows. macOS and Linux arm64 builds run on the CPU (portable scalar code, slower than the AVX2/AVX-512 engines); Apple's OpenCL is tried but not supported."
+            echo "- **macOS:** the binaries are signed ad hoc, not notarized. If macOS refuses to open a file downloaded with a browser, run \`xattr -dr com.apple.quarantine pzsolve-$VERSION-macos-*\` once after unpacking."
+            echo "- **Windows:** the exe is not code-signed; SmartScreen may ask for \"More info\" and \"Run anyway\"."
+          } > notes.md
+          cat notes.md
+      - name: Create or update the release
+        run: |
+          TAG="v$VERSION"
+          # `gh release view <tag>` does not see drafts, so look the release up through the API (drafts included).
+          # A published release only gets its assets replaced; a leftover draft of the same tag is replaced by a new one.
+          LINE=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(.draft)\"" | sed -n 1p)
+          if [ "${LINE#* }" = false ]; then
+            gh release upload "$TAG" dist-release/* --clobber
+          else
+            if [ -n "$LINE" ]; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/${LINE%% *}"; fi
+            DRAFT=""
+            if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.draft }}" = true ]; then DRAFT="--draft"; fi
+            gh release create "$TAG" dist-release/* --title "pzsolve $VERSION" --notes-file notes.md --target "$GITHUB_SHA" $DRAFT
+          fi

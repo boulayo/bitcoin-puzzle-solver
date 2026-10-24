@@ -1,0 +1,255 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Full verification before a release: unit tests, end-to-end, ASan/UBSan, TSan, Valgrind.
+# Usage: tools/verify.sh [quick]      (quick = shorter end-to-end)
+set -uo pipefail
+cd "$(dirname "$0")/.."
+QUICK=${1:-}
+fail=0
+step() { echo; echo "######## $*"; }
+run()  { "$@" || { echo "!!!! FAILED: $*"; fail=$((fail+1)); }; }
+T=$(mktemp -d /tmp/pzverify.XXXXXX); trap 'rm -rf "$T"' EXIT
+
+vec() { python3 tools/ref.py "$1"; }
+field() { vec "$1" | awk -v k="$2" '$1==k{print $2}'; }
+
+K=$(python3 -c "import random; random.seed(5); print(hex(random.randrange(2**25, 2**26)))"); A=$(field "$K" addr)
+KK=$(python3 -c "import random; random.seed(15); print(hex(random.randrange(2**43, 2**44)))"); KP=$(field "$KK" pub); KA=$(field "$KK" addr)
+# outhas PATTERN COMMAND...: the whole output is captured first (grep -q exiting early would kill the command with SIGPIPE, and pipefail turns that into a failure)
+outhas() { local pat=$1 o; shift; o=$("$@" 2>&1); grep -q -- "$pat" <<<"$o"; }
+check_found() { grep -q "private key hex: ${2#0x}" "$1/FOUND.txt" 2>/dev/null; }
+
+step "puzzle database (re-checked with the independent implementation)"
+run python3 -I tools/gen_puzzles.py --check
+
+step "clean build and unit tests"
+run make clean >/dev/null
+run make -j"$(nproc)"
+run make test
+
+step "Linux binary compatibility (no glibc symbol newer than 2.34)"
+NEWEST=$(objdump -T build/pzsolve | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
+if objdump -T build/pzsolve | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$NEWEST" | sort -V | tail -1)" != GLIBC_2.34 ]; then
+  echo "  FAIL the binary needs $NEWEST (or __isoc23_* symbols): it would not start on older distributions"; fail=$((fail+1))
+else echo "  OK needs at most $NEWEST"; fi
+
+if [ -n "${PZ_NVRTC:-}" ]; then
+  step "PTX modules consistent with the kernels (NVRTC: $PZ_NVRTC)"
+  run python3 -I tools/gen_ptx.py --nvrtc "$PZ_NVRTC" --check
+fi
+
+step "AVX-512 IFMA engine (avx512i)"
+IFMA_ENV=PZ_IFMA_UNUSED=1
+# The engine is chosen only if CPUID declares IFMA. Here it is tried (1) directly, if the processor executes the
+# instructions even when a virtual CPUID hides them (PZ_ASSUME_IFMA=1), and (2) under Intel SDE in Tiger Lake mode
+# (variable PZ_SDE = path of sde64), which emulates CPUID and the instructions.
+if build/t_fev52 | grep -q OK && ! build/t_fev52 | grep -q skipped; then echo "  OK t_fev52 (IFMA declared by the CPU)"
+elif PZ_ASSUME_IFMA=1 build/t_fev52 >/dev/null 2>&1; then
+  IFMA_ENV=PZ_ASSUME_IFMA=1
+  echo "  OK t_fev52 (IFMA executed by the CPU, hidden by CPUID)"
+  PZ_ASSUME_IFMA=1 build/t_engine >/dev/null && echo "  OK t_engine with avx512i" || { echo "  FAIL t_engine with avx512i"; fail=$((fail+1)); }
+  rm -rf "$T/i1"; run env PZ_ASSUME_IFMA=1 build/pzsolve hunt -p 26 -a "$A" --isa avx512i -c i -d "$T/i1" --no-progress -q --no-gpu
+  check_found "$T/i1/i" "$K" && echo "  OK linear with --isa avx512i" || { echo "  FAIL linear with --isa avx512i"; fail=$((fail+1)); }
+else echo "  (the CPU does not execute IFMA: tried only under SDE, if available)"; fi
+if [ -n "${PZ_SDE:-}" ]; then
+  run "$PZ_SDE" -tgl -- build/t_fev52
+  "$PZ_SDE" -tgl -- build/pzsolve selftest 2>&1 | grep -q "engine avx512i   OK" && echo "  OK selftest avx512i under SDE (Tiger Lake)" || { echo "  FAIL selftest avx512i under SDE"; fail=$((fail+1)); }
+fi
+
+# Without IFMA in the CPU (and without SDE) the two IFMA kangaroo steps and the avx512i engine are tried with an emulation of the two
+# instructions (vpmadd52luq/huq with AVX-512F, tools/ifma_emul.h): same arithmetic, slower. It only checks correctness, not speed.
+if grep -q avx512f /proc/cpuinfo && ! grep -q avx512ifma /proc/cpuinfo; then
+  run make BUILD=build/emu OPT="-O2 -include tools/ifma_emul.h" -j"$(nproc)" build/emu/pzsolve >/dev/null
+  EMU=$(PZ_ASSUME_IFMA=1 build/emu/pzsolve selftest 2>&1)
+  grep -q "engine avx512i   OK" <<<"$EMU" && grep -qE "IFMA lanes +identical" <<<"$EMU" && grep -qE "IFMA pairs +identical" <<<"$EMU" && grep -q "SELFTEST PASSED" <<<"$EMU" \
+    && echo "  OK emulated IFMA: engine, lane and pair kangaroo steps identical to the reference" || { echo "  FAIL emulated IFMA"; fail=$((fail+1)); }
+  for v in avx512i avx512i2; do
+    rm -rf "$T/em$v"; run env PZ_ASSUME_IFMA=1 PZ_KANG_ROUND=$v build/emu/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c em -d "$T/em$v" --no-progress -q --no-gpu -t 2
+    check_found "$T/em$v/em" "$KK" && echo "  OK kangaroo with the $v step (emulated IFMA)" || { echo "  FAIL kangaroo with the $v step (emulated IFMA)"; fail=$((fail+1)); }
+  done
+fi
+
+step "GPU: CUDA path with a simulated driver (same API as the NVIDIA driver, kernels run on the CPU)"
+run make mockcuda >/dev/null
+MOCK="env LD_LIBRARY_PATH=$PWD/build/mockcuda"
+$MOCK build/pzsolve selftest 2>&1 | grep -q "CUDA Mock CUDA GPU (CPU): OK" && echo "  OK GPU self-test via CUDA" || { echo "  FAIL GPU self-test via CUDA"; fail=$((fail+1)); }
+rm -rf "$T/c1"; run $MOCK PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/c1" --no-cpu --no-progress -q
+check_found "$T/c1/c" "$K" && echo "  OK linear via CUDA" || { echo "  FAIL linear via CUDA"; fail=$((fail+1)); }
+rm -rf "$T/c2"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c2" --no-cpu --no-progress -q
+check_found "$T/c2/c" "$KK" && echo "  OK kangaroo via CUDA" || { echo "  FAIL kangaroo via CUDA"; fail=$((fail+1)); }
+rm -rf "$T/c3"; outhas "limit 40%: .* work-items per launch" $MOCK PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/c3" --no-cpu --no-progress --limit 40 \
+  && check_found "$T/c3/c" "$K" && echo "  OK linear via CUDA with --limit (fewer work-items per launch)" || { echo "  FAIL linear via CUDA with --limit"; fail=$((fail+1)); }
+rm -rf "$T/c4"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c4" --no-cpu --no-progress -q --limit 40
+check_found "$T/c4/c" "$KK" && echo "  OK kangaroo via CUDA with --limit" || { echo "  FAIL kangaroo via CUDA with --limit"; fail=$((fail+1)); }
+outhas "copy bandwidth" $MOCK PZ_GPU_TUNE=1 build/pzsolve bench --gpu-only && echo "  OK GPU bench (bandwidth and throughput probes) via CUDA" || { echo "  FAIL GPU bench via CUDA"; fail=$((fail+1)); }
+outhas "repeat of the first configuration" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together via CUDA" || { echo "  FAIL bench --together via CUDA"; fail=$((fail+1)); }
+outhas "repeat of the first configuration" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear via CUDA" || { echo "  FAIL bench --together --linear via CUDA"; fail=$((fail+1)); }
+# priority of the threads serving the GPUs: --prio-gpu is validated and fixes it (no measurement); in auto mode it is measured,
+# but only where the system lets the program raise a thread's priority (root / CAP_SYS_NICE on Linux)
+build/pzsolve bench --together --prio-gpu maybe >/dev/null 2>&1 && { echo "  FAIL --prio-gpu with an invalid value accepted"; fail=$((fail+1)); } || echo "  OK --prio-gpu: invalid value rejected"
+outhas "repeat of the first configuration" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu yes && echo "  OK bench --together --prio-gpu yes" || { echo "  FAIL bench --together --prio-gpu yes"; fail=$((fail+1)); }
+outhas "in alternating pairs (all CPU threads)" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu no && { echo "  FAIL --prio-gpu no measured the priority"; fail=$((fail+1)); } || echo "  OK --prio-gpu no: priority not measured"
+if [ "$(id -u)" = 0 ]; then
+  outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together measures the priority of the GPU threads" || { echo "  FAIL priority measurement"; fail=$((fail+1)); }
+  outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear measures the priority" || { echo "  FAIL priority measurement (linear)"; fail=$((fail+1)); }
+else echo "  (not root: the priority of the GPU threads cannot be raised, measurement not tried)"; fi
+# the panel's estimate in the first seconds: no completion time until every engine (here the simulated GPU too) has produced something,
+# then a provisional one that says so (the multi-line panel only appears on a terminal: a pseudo-terminal stands in)
+PANEL=$(env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/panelcache" python3 -I tools/pty_run.py 30 "$PWD/build/pzsolve" hunt -p 71 -m linear -c e -d "$T/panel" -t 2 --report-interval 1 --ui full 2>&1 || true)
+grep -qE "Time left +measuring" <<<"$PANEL" && grep -q "provisional estimate" <<<"$PANEL" && echo "  OK panel: measuring, then a provisional estimate (CPU + simulated GPU)" || { echo "  FAIL panel: initial estimate"; fail=$((fail+1)); }
+# profile of the machine: measured by the first hunt (CPU + GPU, nothing forced), remembered by the next, applied to -t/--gpu
+PC="$T/profcache"; mkdir -p "$PC"; PROF="env XDG_CACHE_HOME=$PC LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15"
+rm -rf "$T/pr1"; outhas "profile of this machine (just measured)" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr1" --no-progress && echo "  OK profile measured on the first run (linear)" || { echo "  FAIL profile measured (linear)"; fail=$((fail+1)); }
+rm -rf "$T/pr2"; outhas "profile of this machine from " $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr2" --no-progress && echo "  OK profile reused on the second run (linear)" || { echo "  FAIL profile reused (linear)"; fail=$((fail+1)); }
+rm -rf "$T/pr3"; outhas "profile of this machine (just measured)" $PROF build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr3" --no-progress && echo "  OK profile measured on the first run (kangaroo)" || { echo "  FAIL profile measured (kangaroo)"; fail=$((fail+1)); }
+check_found "$T/pr3/p" "$KK" && echo "  OK kangaroo with CPU+GPU after tuning" || { echo "  FAIL kangaroo with CPU+GPU after tuning"; fail=$((fail+1)); }
+rm -rf "$T/pr4"; outhas "profile of this machine from " $PROF build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr4" --no-progress && echo "  OK profile reused on the second run (kangaroo)" || { echo "  FAIL profile reused (kangaroo)"; fail=$((fail+1)); }
+rm -rf "$T/pr6"; outhas "high priority" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr6" --no-progress -t 2 --prio-gpu yes && echo "  OK hunt --prio-gpu yes (with an explicit -t)" || { echo "  FAIL hunt --prio-gpu yes"; fail=$((fail+1)); }
+check_found "$T/pr6/p" "$K" && echo "  OK linear found with high priority for the GPU threads" || { echo "  FAIL linear with --prio-gpu yes"; fail=$((fail+1)); }
+rm -rf "$T/pr5"; outhas "profile\|first run" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr5" --no-progress -t 2 && { echo "  FAIL explicit -t ignored by the profile"; fail=$((fail+1)); } || echo "  OK explicit -t: no tuning"
+
+# doctor, and the protections against suspension: a device error mid-campaign (the mock fails one launch when a file appears,
+# like a driver reset after sleep) must reopen the GPU; a frozen process (SIGSTOP, like sleep) must be noticed
+outhas "RESULT: " build/pzsolve doctor -d "$T" && echo "  OK doctor" || { echo "  FAIL doctor"; fail=$((fail+1)); }
+$MOCK build/pzsolve doctor -d "$T" >/dev/null && echo "  OK doctor with a simulated GPU (no errors)" || { echo "  FAIL doctor with a simulated GPU"; fail=$((fail+1)); }
+gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while the campaign runs
+  local f="$T/fault.$1" d="$T/fl.$1" o="$T/fl.$1.log"
+  rm -rf "$d" "$f"
+  ( sleep 14; touch "$f" ) &
+  $MOCK PZ_MOCK_FAIL_FILE="$f" PZ_GPU_TUNE=0 timeout -s INT 34 build/pzsolve hunt -p "$2" -m "$1" -c f -d "$d" --no-cpu --no-progress > "$o" 2>&1
+  wait
+  grep -q "device resumed" "$o"
+}
+gpu_fault_test linear 40 && echo "  OK GPU error mid-campaign: reopened (linear)" || { echo "  FAIL GPU recovery (linear)"; fail=$((fail+1)); }
+gpu_fault_test kangaroo 135 && echo "  OK GPU error mid-campaign: reopened (kangaroo)" || { echo "  FAIL GPU recovery (kangaroo)"; fail=$((fail+1)); }
+rm -rf "$T/sus"; ( build/pzsolve hunt -p 45 -m linear -c s -d "$T/sus" --no-gpu --no-progress -t 2 > "$T/sus.log" 2>&1 & p=$!; sleep 6; kill -STOP $p; sleep 18; kill -CONT $p; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
+grep -q "system suspension detected" "$T/sus.log" && echo "  OK frozen process (like a suspension): detected" || { echo "  FAIL suspension detection"; fail=$((fail+1)); }
+
+# several computers on one campaign: same seed and range, different --node; merge adds the other's distinguished points
+NS=$(python3 -c "print('ab'*32)"); MA="$T/ma"; MB="$T/mb"
+for n in 0 1; do d=$([ $n = 0 ] && echo "$MA" || echo "$MB"); ( build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node $n --no-gpu -t 2 --mem 0.05 -c p140 -d "$d" --no-progress -q >/dev/null 2>&1 & p=$!; sleep 6; kill -INT $p; wait $p ) 2>/dev/null; done
+outhas "new, 0 already known" build/pzsolve merge -c p140 -d "$MA" -f "$MB/p140" && echo "  OK merge: points of another node added (no overlap between nodes)" || { echo "  FAIL merge between two nodes"; fail=$((fail+1)); }
+outhas "already known" build/pzsolve merge -c p140 -d "$MA" -f "$MB/p140/dp.bin" && echo "  OK repeated merge: all already known" || { echo "  FAIL repeated merge"; fail=$((fail+1)); }
+build/pzsolve merge -c p140 -d "$MA" -f "$T/nonexistent.bin" >/dev/null 2>&1 && { echo "  FAIL merge of a nonexistent file gave no error"; fail=$((fail+1)); } || echo "  OK merge: nonexistent file rejected"
+# a campaign of the walker layout of 1.6.0-1.7.7 (schema 1) keeps it when resumed; its log cannot be merged into a schema-2 campaign
+MC="$T/mc"
+( PZ_KANG_SCHEMA=1 build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --no-progress -q >/dev/null 2>&1 & p=$!; sleep 8; kill -INT $p; wait $p ) 2>/dev/null
+( build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --no-progress -q >/dev/null 2>&1 & p=$!; sleep 8; kill -INT $p; wait $p ) 2>/dev/null
+[ "$(grep -c "kangaroo: schema 1" "$MC/p140/log.txt" 2>/dev/null)" = 2 ] && grep -q "kangaroo: schema 3" "$MA/p140/log.txt" && echo "  OK kangaroo schema: new campaign gets 3, a schema 1 campaign resumes with schema 1" || { echo "  FAIL kangaroo schema on resume"; fail=$((fail+1)); }
+outhas "log of kangaroo schema 1" build/pzsolve merge -c p140 -d "$MA" -f "$MC/p140" && echo "  OK merge between different schemas rejected with an explanation" || { echo "  FAIL merge between different schemas"; fail=$((fail+1)); }
+
+# several computers on one linear search (--part): the shares tile the search order, so exactly one of the two finds the key and the
+# other scans its half to the end; the share belongs to the campaign (resuming with another one is refused, resuming without keeps it)
+PS=$(python3 -c "print('cd'*32)"); PD="$T/parts"
+for part in 0/2 1/2; do build/pzsolve hunt -p 26 -a "$A" -m linear -c "q${part%/*}" -d "$PD" -s "$PS" --chunk-bits 20 --part "$part" --no-gpu -t 2 --no-progress -q >/dev/null 2>&1; done
+nf=0; for c in q0 q1; do [ -f "$PD/$c/FOUND.txt" ] && nf=$((nf+1)); done
+if [ "$nf" = 1 ] && { check_found "$PD/q0" "$K" || check_found "$PD/q1" "$K"; }; then echo "  OK --part 0/2 and 1/2: only one finds the key"; else echo "  FAIL --part: the key was not found by exactly one of the two parts"; fail=$((fail+1)); fi
+NF=$([ -f "$PD/q0/FOUND.txt" ] && echo q1 || echo q0)
+FF=$([ "$NF" = q0 ] && echo q1 || echo q0)
+[ "$(stat -c %a "$PD/$FF/FOUND.txt")" = 600 ] && echo "  OK FOUND.txt created with mode 0600 (it holds the private key)" || { echo "  FAIL FOUND.txt permissions: $(stat -c %a "$PD/$FF/FOUND.txt")"; fail=$((fail+1)); }
+grep -q "COMPLETED" "$PD/$NF/report.txt" && grep -q "^Part: " "$PD/$NF/report.txt" && echo "  OK the part without the key is marked completed" || { echo "  FAIL part completed"; fail=$((fail+1)); }
+build/pzsolve hunt -p 26 -a "$A" -m linear -c "$NF" -d "$PD" --part $([ "$NF" = q0 ] && echo 1/2 || echo 0/2) --no-gpu -t 2 --no-progress -q >/dev/null 2>&1 && { echo "  FAIL a different --part on an existing campaign accepted"; fail=$((fail+1)); } || echo "  OK a different --part on an existing campaign: rejected"
+outhas "already completed" build/pzsolve hunt -p 26 -a "$A" -m linear -c "$NF" -d "$PD" --no-gpu -t 2 --no-progress && echo "  OK resuming without --part keeps the part" || { echo "  FAIL resume without --part"; fail=$((fail+1)); }
+build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c pk -d "$PD" --part 0/2 --no-gpu -t 1 --no-progress -q >/dev/null 2>&1 && { echo "  FAIL --part accepted by the kangaroo"; fail=$((fail+1)); } || echo "  OK --part rejected by the kangaroo"
+for bad in 2/2 0,0/2 x/2 0/300; do build/pzsolve hunt -p 26 -a "$A" -m linear -c bad -d "$PD" --part "$bad" --no-gpu -t 1 --no-progress -q >/dev/null 2>&1 && { echo "  FAIL --part $bad accepted"; fail=$((fail+1)); }; done; echo "  OK invalid --part values rejected"
+outhas "not in part" build/pzsolve where -c q0 -d "$PD" --key "$K" || outhas "in part" build/pzsolve where -c q0 -d "$PD" --key "$K" && echo "  OK where reports the part of the key" || { echo "  FAIL where with --part"; fail=$((fail+1)); }
+
+# --limit: a share of the threads (and of the GPU work-items), all flat out: the key is still found, with fewer workers
+limit_check() {   # MODE DIR LIMIT THREADS WORKERS EXTRA-ARGS...: finds the key, status.json lists WORKERS CPU workers and the limit, the report says so
+  local mode=$1 d=$2 lim=$3 thr=$4 want=$5; shift 5
+  rm -rf "$d"; build/pzsolve hunt -p "$LP" -a "$LA" $LK -m "$mode" -c l -d "$d" --limit "$lim" -t "$thr" --no-gpu --no-progress -q "$@" >/dev/null 2>&1
+  check_found "$d/l" "$LKEY" && [ "$(grep -c '"name": "CPU' "$d/l/status.json")" = "$want" ] && grep -q "\"limit_percent\": $lim," "$d/l/status.json" && grep -q '^Limit: ' "$d/l/report.txt"
+}
+LP=26 LA=$A LK="" LKEY=$K
+limit_check linear "$T/lim1" 50 4 2 && echo "  OK --limit 50 with 4 threads: 2 threads, key found (linear)" || { echo "  FAIL --limit (linear)"; fail=$((fail+1)); }
+limit_check linear "$T/lim2" 1 4 1 && echo "  OK --limit 1: at least one thread (linear)" || { echo "  FAIL --limit 1 (linear)"; fail=$((fail+1)); }
+LP=44 LA=$KA LK="-k $KP" LKEY=$KK
+limit_check kangaroo "$T/lim3" 50 2 1 && echo "  OK --limit 50 with 2 threads: 1 thread, key found (kangaroo)" || { echo "  FAIL --limit (kangaroo)"; fail=$((fail+1)); }
+limit_check bsgs "$T/lim4" 50 4 2 && echo "  OK --limit 50 with 4 threads: 2 threads, key found (bsgs)" || { echo "  FAIL --limit (bsgs)"; fail=$((fail+1)); }
+rm -rf "$T/lim5"; build/pzsolve hunt -p 26 -a "$A" -m linear -c l -d "$T/lim5" --limit 100 -t 4 --no-gpu --no-progress -q >/dev/null 2>&1
+[ "$(grep -c '"name": "CPU' "$T/lim5/l/status.json")" = 4 ] && ! grep -q '^Limit: ' "$T/lim5/l/report.txt" && echo "  OK --limit 100 = no limit" || { echo "  FAIL --limit 100"; fail=$((fail+1)); }
+for bad in 0 101 x 5.5; do build/pzsolve hunt -p 26 -a "$A" -m linear -c bad -d "$T/limbad" --limit "$bad" --no-gpu --no-progress -q >/dev/null 2>&1 && { echo "  FAIL --limit $bad accepted"; fail=$((fail+1)); }; done; echo "  OK invalid --limit values rejected"
+build/pzsolve hunt -p 26 -a "$A" -m linear -c bad -d "$T/limbad" --limit 50 --retune --no-gpu --no-progress -q >/dev/null 2>&1 && { echo "  FAIL --limit with --retune accepted"; fail=$((fail+1)); } || echo "  OK --limit with --retune: rejected"
+
+step "end-to-end"
+if [ "$QUICK" = quick ]; then E2E_QUICK=1 run tests/e2e.sh build/pzsolve; else run tests/e2e.sh build/pzsolve; fi
+
+
+step "AddressSanitizer + UndefinedBehaviorSanitizer"
+run make asan -j"$(nproc)" >/dev/null
+export ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+run build/asan/pzsolve selftest
+ASAN_TESTS="t_core t_perm t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_fev2 t_fev5 t_fev52"
+run make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" $(for t in $ASAN_TESTS; do echo build/asan/$t; done) >/dev/null
+for t in $ASAN_TESTS; do run env "$IFMA_ENV" build/asan/$t >/dev/null && echo "  OK $t (ASan/UBSan)"; done
+rm -rf "$T/a1"; run build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a1" --no-progress -q --no-gpu
+check_found "$T/a1/a" "$K" && echo "  OK linear (ASan)" || { echo "  FAIL linear (ASan)"; fail=$((fail+1)); }
+rm -rf "$T/a2"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c a -d "$T/a2" --no-progress -q --no-gpu
+check_found "$T/a2/a" "$KK" && echo "  OK kangaroo (ASan)" || { echo "  FAIL kangaroo (ASan)"; fail=$((fail+1)); }
+rm -rf "$T/a5"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs -c a -d "$T/a5" --no-progress -q --no-gpu
+check_found "$T/a5/a" "$KK" && echo "  OK bsgs (ASan)" || { echo "  FAIL bsgs (ASan)"; fail=$((fail+1)); }
+rm -rf "$T/a6"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs --table "$T/a6.tbl" -c a -d "$T/a6" --no-progress -q --no-gpu
+rm -rf "$T/a7"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs --table "$T/a6.tbl" -c a -d "$T/a7" --no-progress -q --no-gpu
+check_found "$T/a7/a" "$KK" && echo "  OK bsgs with table from file (ASan)" || { echo "  FAIL bsgs with table from file (ASan)"; fail=$((fail+1)); }
+rm -rf "$T/a3"; PZ_TEST_DP_CAP=64 run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c a -d "$T/a3" --no-progress -q --no-gpu --mem 0.002 --dp-bits 3
+check_found "$T/a3/a" "$KK" && echo "  OK kangaroo with a tiny table (growth + density reduction)" || { echo "  FAIL kangaroo tiny table"; fail=$((fail+1)); }
+rm -rf "$T/a4"; run env PZ_OPENCL_ALL=1 build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a4" --no-progress -q --gpu 0 --no-cpu
+check_found "$T/a4/a" "$K" && echo "  OK linear on OpenCL (ASan)" || echo "  (OpenCL not available or not used: ignored)"
+
+$MOCK ASAN_OPTIONS=detect_leaks=1 build/asan/pzsolve selftest 2>&1 | grep -q "CUDA Mock CUDA GPU (CPU): OK" && echo "  OK GPU self-test via CUDA (ASan)" || { echo "  FAIL GPU self-test via CUDA (ASan)"; fail=$((fail+1)); }
+
+step "ThreadSanitizer"
+run make tsan -j"$(nproc)" >/dev/null
+export TSAN_OPTIONS=halt_on_error=1
+rm -rf "$T/t1"; run build/tsan/pzsolve hunt -p 26 -a "$A" -c t -d "$T/t1" --no-progress -q --no-gpu -t 4
+check_found "$T/t1/t" "$K" && echo "  OK linear (TSan)" || { echo "  FAIL linear (TSan)"; fail=$((fail+1)); }
+rm -rf "$T/t2"; run build/tsan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c t -d "$T/t2" --no-progress -q --no-gpu
+check_found "$T/t2/t" "$KK" && echo "  OK kangaroo (TSan)" || { echo "  FAIL kangaroo (TSan)"; fail=$((fail+1)); }
+rm -rf "$T/t4"; run build/tsan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs -c t -d "$T/t4" --no-progress -q --no-gpu -t 4
+check_found "$T/t4/t" "$KK" && echo "  OK bsgs (TSan)" || { echo "  FAIL bsgs (TSan)"; fail=$((fail+1)); }
+rm -rf "$T/t3"; (timeout -s INT 6 build/tsan/pzsolve hunt -p 33 -a "$A" -c t -d "$T/t3" --no-progress -q --no-gpu >/dev/null 2>"$T/t3.err"; true)
+! grep -q "ThreadSanitizer" "$T/t3.err" && echo "  OK interrupt (TSan)" || { echo "  FAIL interrupt (TSan)"; fail=$((fail+1)); }
+
+step "Valgrind (memcheck, leaks included; portable path only: Valgrind does not know AVX-512/ADX)"
+if command -v valgrind >/dev/null; then
+  VG="valgrind -q --error-exitcode=9 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all"
+  K2=0x2aaaaa; A2=$(field $K2 addr)
+  rm -rf "$T/v1"; run $VG build/pzsolve hunt -p 22 -a "$A2" -c v -d "$T/v1" --isa baseline -t 2 --no-gpu --no-progress -q
+  check_found "$T/v1/v" "$K2" && echo "  OK linear (Valgrind)" || { echo "  FAIL linear (Valgrind)"; fail=$((fail+1)); }
+  K3=$(python3 -c "import random; random.seed(4); print(hex(random.randrange(2**30, 2**31)))"); P3=$(field "$K3" pub); A3=$(field "$K3" addr)
+  rm -rf "$T/v2"; run $VG build/pzsolve hunt -p 31 -a "$A3" -k "$P3" -m kangaroo -c v -d "$T/v2" -t 2 --no-gpu --no-progress -q
+  check_found "$T/v2/v" "$K3" && echo "  OK kangaroo (Valgrind)" || { echo "  FAIL kangaroo (Valgrind)"; fail=$((fail+1)); }
+  rm -rf "$T/v3"; run $VG build/pzsolve hunt -p 31 -a "$A3" -k "$P3" -m bsgs -c v -d "$T/v3" -t 2 --no-gpu --no-progress -q
+  check_found "$T/v3/v" "$K3" && echo "  OK bsgs (Valgrind)" || { echo "  FAIL bsgs (Valgrind)"; fail=$((fail+1)); }
+else
+  echo "  valgrind not installed: skipped"
+fi
+
+step "Windows (static MinGW-w64 exe, tried under Wine)"
+if command -v x86_64-w64-mingw32-gcc-posix >/dev/null && command -v wine >/dev/null; then
+  export WINEDEBUG=-all
+  run make windows -j"$(nproc)" >/dev/null
+  run make wintest >"$T/wintest.log" 2>&1 && echo "  OK unit tests and self-test of the exe" || tail -20 "$T/wintest.log"
+  if x86_64-w64-mingw32-objdump -p build/win/pzsolve.exe | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
+    echo "  FAIL the exe depends on non-system DLLs"; fail=$((fail+1)); else echo "  OK the exe uses only system DLLs"; fi
+  run make winmockcuda >/dev/null
+  W="$T/win"; rm -rf "$W"; mkdir -p "$W"; cp build/win/pzsolve.exe build/win/mockcuda/nvcuda.dll "$W/"
+  (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "CUDA Mock CUDA GPU (CPU): OK") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
+  (cd "$W" && wine pzsolve.exe hunt -p 26 -a "$A" -m linear -c w -d camp --no-gpu --no-progress -q >/dev/null 2>&1)
+  check_found "$W/camp/w" "$K" && echo "  OK linear (exe)" || { echo "  FAIL linear (exe)"; fail=$((fail+1)); }
+  (cd "$W" && wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m bsgs --table t.bin -c b -d camp --no-gpu --no-progress -q >/dev/null 2>&1)
+  check_found "$W/camp/b" "$KK" && [ -s "$W/t.bin" ] && echo "  OK bsgs with table on file (exe)" || { echo "  FAIL bsgs (exe)"; fail=$((fail+1)); }
+  (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c k -d camp --no-cpu --no-progress -q >/dev/null 2>&1)
+  check_found "$W/camp/k" "$KK" && echo "  OK kangaroo via CUDA (exe)" || { echo "  FAIL kangaroo via CUDA (exe)"; fail=$((fail+1)); }
+  (cd "$W" && wine pzsolve.exe hunt -p 71 -c i -d camp --no-gpu --no-progress -q >/dev/null 2>&1 &)
+  for i in $(seq 1 60); do [ -s "$W/camp/i/log.txt" ] && break; sleep 0.5; done; sleep 4   # started (Wine may take a while), then running for a moment
+  P=$(ps -eo pid,args | awk '$2 ~ /pzsolve\.exe$/ && $3=="hunt" {print $1}' | head -1)
+  [ -n "$P" ] && kill -INT "$P"; for i in $(seq 1 30); do [ -n "$P" ] && kill -0 "$P" 2>/dev/null || break; sleep 0.5; done
+  [ -s "$W/camp/i/state.dat" ] && grep -q "sessions=1" "$W/camp/i/session.txt" && echo "  OK Ctrl-C: state saved (exe)" || { echo "  FAIL Ctrl-C (exe)"; fail=$((fail+1)); }
+else
+  echo "  MinGW-w64 or Wine not installed: skipped"
+fi
+
+echo
+if [ $fail -eq 0 ]; then echo "FULL VERIFICATION PASSED"; else echo "VERIFICATION FAILED: $fail problems"; fi
+exit $fail

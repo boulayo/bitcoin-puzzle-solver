@@ -1,0 +1,3 @@
+# old releases and the current binaries stay out of the source tarballs (otherwise each tarball contains the previous ones)
+archive/ export-ignore
+dist/ export-ignore

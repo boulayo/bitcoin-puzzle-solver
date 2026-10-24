@@ -1,0 +1,8 @@
+*.o
+*.pyc
+*.tmp
+__pycache__/
+build/
+build_*/
+campaigns/
+dist-release/
