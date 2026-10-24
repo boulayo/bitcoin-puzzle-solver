@@ -216,8 +216,66 @@ void base58check_encode(const u8 *payload, size_t len, char *out, size_t outlen)
     out[o] = 0;
 }
 
+/* Bech32 (BIP173): the 20-byte witness program of a mainnet native SegWit v0 address ("bc1q..."): a P2WPKH output pays to the same
+ * hash160 of the compressed public key as the legacy address of that key. The checksum constant 1 is bech32 (bech32m, used by
+ * witness version 1 and later, is not accepted). */
+static u32 bech32_polymod_step(u32 chk, int v)
+{
+    static const u32 gen[5] = {0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3};
+    const u32 top = chk >> 25;
+    chk = (chk & 0x1ffffff) << 5 ^ (u32)v;
+    for (int i = 0; i < 5; i++) if ((top >> i) & 1) chk ^= gen[i];
+    return chk;
+}
+
+static bool bech32_to_hash160(const char *addr, u8 h160[20])
+{
+    static const char charset[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    const size_t len = strlen(addr);
+    if (len < 8 || len > 90) return false;
+    bool lower = false, upper = false;
+    for (size_t i = 0; i < len; i++) {
+        if (addr[i] >= 'a' && addr[i] <= 'z') lower = true;
+        else if (addr[i] >= 'A' && addr[i] <= 'Z') upper = true;
+    }
+    if (lower && upper) return false;                              /* mixed case is not allowed */
+    char a[91];
+    for (size_t i = 0; i < len; i++) a[i] = (char)(addr[i] >= 'A' && addr[i] <= 'Z' ? addr[i] + 32 : addr[i]);
+    a[len] = 0;
+    if (strncmp(a, "bc1", 3) != 0) return false;                  /* hrp "bc", separator "1" */
+    u32 chk = 1;
+    chk = bech32_polymod_step(chk, 'b' >> 5); chk = bech32_polymod_step(chk, 'c' >> 5); chk = bech32_polymod_step(chk, 0);
+    chk = bech32_polymod_step(chk, 'b' & 31); chk = bech32_polymod_step(chk, 'c' & 31);
+    int data[90];
+    size_t nd = 0;
+    for (size_t i = 3; i < len; i++) {
+        const char *q = strchr(charset, a[i]);
+        if (!q || !a[i]) return false;
+        data[nd++] = (int)(q - charset);
+        chk = bech32_polymod_step(chk, data[nd - 1]);
+    }
+    if (chk != 1 || nd < 6 + 1) return false;                      /* checksum of bech32 */
+    nd -= 6;
+    if (data[0] != 0) return false;                                /* witness version 0 */
+    u32 acc = 0;
+    int bits = 0;
+    size_t out = 0;
+    for (size_t i = 1; i < nd; i++) {
+        acc = (acc << 5) | (u32)data[i];
+        bits += 5;
+        if (bits >= 8) {
+            bits -= 8;
+            if (out >= 20) return false;
+            h160[out++] = (u8)((acc >> bits) & 0xff);
+        }
+    }
+    if (out != 20 || bits >= 5 || (acc & ((1u << bits) - 1)) != 0) return false;   /* 20 bytes, padding of zeros */
+    return true;
+}
+
 bool address_to_hash160(const char *addr, u8 h160[20])
 {
+    if ((addr[0] == 'b' || addr[0] == 'B') && (addr[1] == 'c' || addr[1] == 'C')) return bech32_to_hash160(addr, h160);
     u8 payload[64];
     int n = base58check_decode(addr, payload, sizeof payload);
     if (n != 21 || payload[0] != 0x00) return false;

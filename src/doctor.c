@@ -36,7 +36,10 @@ void doctor_line(char level, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    printf("  %s %s\n", tag[k], buf);
+    char ln[1100];
+    snprintf(ln, sizeof ln, "  %s %s", tag[k], buf);
+    pz_fputs_wrap(stdout, ln, PZ_LINE_MAX, 7);
+    putchar('\n');
 }
 
 static void section(const char *t) { printf("\n== %s\n", t); }
@@ -243,7 +246,7 @@ int doctor_run(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) && i + 1 < argc) base = argv[++i];
         else if (!strcmp(argv[i], "--full")) deep = true;
-        else { fprintf(stderr, "doctor: unrecognized option '%s' (allowed: -d DIR, --full)\n", argv[i]); return 2; }
+        else pz_die("unrecognized option '%s' (doctor accepts -d DIR and --full)", argv[i]);
     }
     sysinfo_t s;
     sysinfo_detect(&s);

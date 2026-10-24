@@ -28,10 +28,10 @@ static void test_engine(const cpu_engine *e)
     const u64 G = e->granule;
     /* 1. SIMD hash vs scalar */
     u32 X[8 * 64], pfx[64], out[5 * 64];
-    for (int round = 0; round < 50; round++) {
+    for (int round = 0; round < 400; round++) {
         u8 xb[64][32];
         for (int l = 0; l < L; l++) {
-            for (int i = 0; i < 32; i++) xb[l][i] = (u8)rnd();
+            for (int i = 0; i < 32; i++) xb[l][i] = round == 0 ? 0 : round == 1 ? 0xff : round == 2 ? (u8)(l * 31 + i) : (u8)rnd();   /* rounds 0-2: edge patterns */
             pfx[l] = 2 + (rnd() & 1);
             for (int i = 0; i < 8; i++) X[i * L + l] = (u32)xb[l][4*i] << 24 | (u32)xb[l][4*i+1] << 16 | (u32)xb[l][4*i+2] << 8 | xb[l][4*i+3];
         }

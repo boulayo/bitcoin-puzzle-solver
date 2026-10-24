@@ -27,6 +27,54 @@ static void check_text(const char *txt, int lines, int cols, bool color)
     CHECK(nl == lines);
 }
 
+
+/* pz_fputs_wrap: no line longer than the width, the words kept in order, continuation lines indented, long words left whole */
+static char *wrap_to_string(const char *text, int width, int hang, char *out, size_t n)
+{
+    FILE *f = tmpfile();
+    if (!f) return NULL;
+    pz_fputs_wrap(f, text, width, hang);
+    rewind(f);
+    size_t got = fread(out, 1, n - 1, f);
+    out[got] = 0;
+    fclose(f);
+    return out;
+}
+
+static void squeeze(const char *in, char *out)      /* the text without any white space */
+{
+    for (; *in; in++) if (*in != ' ' && *in != '\n') *out++ = *in;
+    *out = 0;
+}
+
+static void test_wrap(void)
+{
+    static const struct { const char *text; int hang; } cases[] = {
+        {"[12:00:00] INFO   a message that is far too long for the line because it keeps going and going and going on", 18},
+        {"  --opt X             description of the option that needs several lines, and a second sentence with more words", -1},
+        {"  --opt X             first line of the description\n                      continued here, joined and wrapped", -1},
+        {"short", 4},
+    };
+    char out[2048], a[2048], b[2048];
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        CHECK(wrap_to_string(cases[i].text, 60, cases[i].hang, out, sizeof out));
+        int cur = 0;
+        for (const char *q = out;; q++) {
+            if (*q == '\n' || !*q) { CHECK(cur <= 60); cur = 0; if (!*q) break; } else cur++;
+        }
+        squeeze(cases[i].text, a);
+        squeeze(out, b);
+        CHECK(!strcmp(a, b));
+    }
+    /* hanging indent: the continuation lines start under the description (column 22) */
+    wrap_to_string(cases[1].text, 60, -1, out, sizeof out);
+    const char *nl = strchr(out, '\n');
+    CHECK(nl && nl[22] == ' ' && nl[23] != ' ');
+    /* a word longer than the line is not cut */
+    wrap_to_string("x /very/long/path/that/cannot/be/broken/anywhere/at/all/because/it/has/no/spaces/inside/it/ok y", 40, 2, out, sizeof out);
+    CHECK(strstr(out, "/very/long/path/that/cannot/be/broken/anywhere/at/all/because/it/has/no/spaces/inside/it/ok"));
+}
+
 int main(void)
 {
     static run_ctx r;
@@ -121,6 +169,7 @@ int main(void)
     char b[32];
     CHECK(!strcmp(ui_fmt_prob(1.0, b, sizeof b), "100%"));
     CHECK(!strcmp(ui_fmt_eta(INFINITY, b, sizeof b), "n/a") && !strcmp(ui_fmt_eta(-1, b, sizeof b), "n/a"));
+    test_wrap();
     puts(fails ? "t_ui: FAILED" : "t_ui: ok");
     return fails != 0;
 }

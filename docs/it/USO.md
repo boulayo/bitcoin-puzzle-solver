@@ -54,7 +54,7 @@ cerca lo stesso (con un avviso): utile solo come esercizio, dato che `2^160` chi
                         (161..256: solo l'indirizzo, fondi ritirati nel 2017, vedi sotto). Con -r sceglie solo il
                         bersaglio, l'intervallo è quello di -r
 -r, --range S:E         intervallo personalizzato (esadecimale, inclusivo): p. es. una sola parte del puzzle
--a, --address ADDR      indirizzo P2PKH (Base58Check, mainnet) diverso da quello del database
+-a, --address ADDR      indirizzo mainnet diverso da quello del database: P2PKH (`1...`, Base58Check) o SegWit nativo P2WPKH (`bc1q...`, bech32)
 -H, --hash160 HEX       alternativa all'indirizzo (40 cifre hex)
 -k, --pubkey HEX        chiave pubblica nota (33 byte compressa o 65 non compressa)
 -c, --campaign NOME     nome della campagna: cartella <dir>/<NOME>; se esiste già viene ripresa [pN con -p N]
@@ -77,6 +77,7 @@ cerca lo stesso (con un avviso): utile solo come esercizio, dato che `2^160` chi
     --gpu LISTA         indici (vedi `devices`) separati da virgola; permette anche dispositivi OpenCL su CPU
     --gpu-api A         auto | cuda | opencl   [auto: CUDA per le NVIDIA, OpenCL come riserva e per le altre schede]
     --isa I             auto | baseline | avx2 | avx512 | avx2v | avx512v | avx512i   [auto: micro-benchmark]
+                        su arm64: auto | baseline | neon | neon2 (SHA-256 hardware della CPU, 4 o 8 chiavi alla volta)
     --chunk-bits B      blocchi di 2^B chiavi (20..40) [36, ridotto per intervalli piccoli]; blocchi più piccoli
                         rallenterebbero la CPU e soprattutto le GPU (ogni lancio riceve un solo blocco)
     --dp-bits B         canguro: bit dei punti distinti [automatico]

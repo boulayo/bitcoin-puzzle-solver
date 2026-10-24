@@ -20,8 +20,10 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']   # a change to the documents alone does not rebuild anything
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   workflow_dispatch:
 
 permissions:

@@ -18,10 +18,13 @@ void pz_die(const char *fmt, ...)
 {
     va_list ap;
     if (g_block_lines) { fputc('\n', stderr); g_block_lines = 0; }
-    fputs("ERROR: ", stderr);
+    char msg[1024];
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
+    char ln[1100];
+    snprintf(ln, sizeof ln, "ERROR: %s", msg);
+    pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 7);
     fputc('\n', stderr);
     exit(2);
 }
@@ -68,6 +71,161 @@ void pz_log_terminal_line_break(void)
     pthread_mutex_unlock(&g_log_mu);
 }
 
+static int text_cols(const char *s, size_t n)
+{
+    int c = 0;
+    for (size_t i = 0; i < n; i++) if (((unsigned char)s[i] & 0xC0) != 0x80) c++;   /* UTF-8 continuation bytes take no column */
+    return c;
+}
+
+/* A token that is a unit or a suffix of the number before it ("34.78 M", "12 MiB", "2 minutes"): never separated from that number. */
+static bool unit_token(const char *t, const char *end)
+{
+    static const char *const units[] = {"M", "G", "k", "K", "T", "MiB", "GiB", "KiB", "MB", "GB", "kB", "MHz", "GHz", "kHz", "s", "ms", "us", "ns",
+                                        "%", "x", "B", "steps/s", "keys/s", "M/s", "G/s", "MB/s", "GB/s", "years", "days", "hours", "minutes",
+                                        "seconds", "bytes", "steps", "keys", "threads", "thread", NULL};
+    size_t n = 0;
+    while (t + n < end && t[n] != ' ' && t[n] != ',' && t[n] != ';' && t[n] != ')' && t[n] != ':') n++;
+    for (int i = 0; units[i]; i++)
+        if (strlen(units[i]) == n && !strncmp(units[i], t, n)) return true;
+    return false;
+}
+
+/* How good a place the space at q is to end a line: -1 forbidden, otherwise higher is better (the end of a sentence, a semicolon or a
+ * colon, a comma, the start of a parenthesis). */
+static int break_score(const char *s, const char *q, const char *end)
+{
+    if (q <= s || q + 1 >= end || q[1] == ' ') return -1;
+    const char prev = q[-1];
+    const char *tok = q;
+    while (tok > s && tok[-1] != ' ') tok--;
+    if ((size_t)(q - tok) == 2 && !strncmp(tok, "->", 2)) return -1;                          /* an arrow stays with its value */
+    if (q[1] == '-' && q + 3 < end && q[2] == '>' && q[3] == ' ') return -1;
+    if (prev >= '0' && prev <= '9' && unit_token(q + 1, end)) return -1;                       /* "27.61 M": number and unit stay together */
+    if (prev == '.' && q + 1 < end && ((q[1] >= 'A' && q[1] <= 'Z') || q[1] == '(')) return 5; /* a new sentence */
+    if (prev == ';' || prev == '|') return 4;
+    if (prev == ':' || prev == ',') return 3;
+    if (q[1] == '(') return 2;
+    if (prev == ')') return 1;
+    return 0;
+}
+
+/* Where to break the text s..end so that the first line fits `width` columns (it starts at column col0): at the best place in the
+ * second half of the line, never leaving a last line of a few characters; NULL when there is no space to break at. */
+static const char *pick_break(const char *s, const char *end, int col0, int width)
+{
+    const int low = col0 + (width - col0) * 45 / 100;
+    const char *best = NULL, *fit = NULL, *first_after = NULL;
+    int best_score = -1;
+    int col = col0;
+    for (const char *q = s; q < end; q++) {
+        if (*q == ' ') {
+            const int sc = break_score(s, q, end);
+            if (sc >= 0) {
+                if (col <= width) {
+                    fit = q;
+                    const int rest = text_cols(q + 1, (size_t)(end - q - 1));
+                    const int value = sc * 10 + 40 * col / width;   /* a natural place counts for more, a fuller line for a little */
+                    if (col >= low && (rest >= 10 || !best) && value >= best_score) { best = q; best_score = value; }
+                } else if (!first_after) first_after = q;
+            }
+        }
+        if (((unsigned char)*q & 0xC0) != 0x80) col++;
+    }
+    if (best) return best;
+    if (fit) return fit;
+    return first_after;                       /* a word longer than the line: break after it */
+}
+
+/* Column where the description of an option or command starts in this line, or -1 when the line has none. */
+static int desc_col(const char *p, size_t len, int width)
+{
+    size_t lead = 0;
+    while (lead < len && p[lead] == ' ') lead++;
+    for (size_t i = lead; i + 1 < len; i++)
+        if (p[i] == ' ' && p[i + 1] == ' ') {
+            size_t j = i;
+            while (j < len && p[j] == ' ') j++;
+            if (j < len && text_cols(p, j) <= width / 2) return text_cols(p, j);
+            break;
+        }
+    return -1;
+}
+
+void pz_fputs_wrap(FILE *fp, const char *text, int width, int hang)
+{
+    bool first = true;
+    char *line = NULL;
+    size_t cap = 0;
+    for (const char *p = text; *p;) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        const char *next = nl ? nl + 1 : p + len;
+        size_t lead = 0;
+        while (lead < len && p[lead] == ' ') lead++;
+        int h = (int)lead + 2;
+        if (hang >= 0 && first) h = hang;
+        else if (hang < 0) {
+            int dc = desc_col(p, len, width);
+            if (dc >= 0) {
+                h = dc;
+                /* the following lines indented at least as far continue this description: join them and wrap again */
+                size_t need = len + 1;
+                const char *q = next;
+                size_t total = len;
+                while (*q) {
+                    const char *qn = strchr(q, '\n');
+                    size_t ql = qn ? (size_t)(qn - q) : strlen(q);
+                    size_t qlead = 0;
+                    while (qlead < ql && q[qlead] == ' ') qlead++;
+                    if (qlead < (size_t)dc || qlead == ql) break;
+                    total += 1 + (ql - qlead);
+                    q = qn ? qn + 1 : q + ql;
+                }
+                need = total + 1;
+                if (q != next) {
+                    if (need > cap) { cap = need; line = realloc(line, cap); if (!line) return; }
+                    memcpy(line, p, len);
+                    size_t o = len;
+                    for (const char *r = next; r < q;) {
+                        const char *rn = strchr(r, '\n');
+                        size_t rl = rn ? (size_t)(rn - r) : strlen(r);
+                        size_t rlead = 0;
+                        while (rlead < rl && r[rlead] == ' ') rlead++;
+                        line[o++] = ' ';
+                        memcpy(line + o, r + rlead, rl - rlead);
+                        o += rl - rlead;
+                        r = rn ? rn + 1 : r + rl;
+                    }
+                    line[o] = 0;
+                    p = line;
+                    len = o;
+                    next = q;
+                }
+            }
+        }
+        const char *s = p, *end = p + len;
+        int col0 = 0;
+        while (text_cols(s, (size_t)(end - s)) + col0 > width) {
+            const char *brk = pick_break(s, end, col0, width);
+            if (!brk) break;
+            const char *e = brk;
+            while (e > s && e[-1] == ' ') e--;
+            fwrite(s, 1, (size_t)(e - s), fp);
+            fputc('\n', fp);
+            for (int i = 0; i < h; i++) fputc(' ', fp);
+            col0 = h;
+            s = brk;
+            while (s < end && *s == ' ') s++;
+        }
+        fwrite(s, 1, (size_t)(end - s), fp);
+        if (next > text && next[-1] == '\n') fputc('\n', fp);
+        p = next;
+        first = false;
+    }
+    free(line);
+}
+
 void pz_log(pz_loglevel lvl, const char *fmt, ...)
 {
     static const char *tag[] = {"INFO", "WARN", "ERROR", "DEBUG"};
@@ -88,7 +246,10 @@ void pz_log(pz_loglevel lvl, const char *fmt, ...)
     if (lvl == PZ_LOG_DEBUG && !g_verbose) { pthread_mutex_unlock(&g_log_mu); return; }
     if (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN) {
         block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
-        fprintf(stderr, "[%s] %-6s %s\n", ts + 11, tag[lvl], msg);
+        char ln[1100 + 32];
+        snprintf(ln, sizeof ln, "[%s] %-6s %s", ts + 11, tag[lvl], msg);
+        pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 18);
+        fputc('\n', stderr);
     }
     pthread_mutex_unlock(&g_log_mu);
 }
@@ -250,6 +411,22 @@ char *pz_fmt_bytes(double v, char *buf, size_t n)
     return buf;
 }
 
+/* "1234567" -> "1,234,567" (digits only; any other text is copied unchanged). */
+char *pz_group_digits(const char *in, char *out, size_t n)
+{
+    size_t len = strlen(in);
+    bool digits = len > 0;
+    for (size_t i = 0; i < len; i++) if (in[i] < '0' || in[i] > '9') digits = false;
+    if (!digits || len + (len - 1) / 3 + 1 > n) { pz_strlcpy(out, in, n); return out; }
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (i && (len - i) % 3 == 0) out[o++] = ',';
+        out[o++] = in[i];
+    }
+    out[o] = 0;
+    return out;
+}
+
 char *pz_fmt_duration(double s, char *buf, size_t n)
 {
     if (!(s >= 0)) { snprintf(buf, n, "n/a"); return buf; }
@@ -257,7 +434,12 @@ char *pz_fmt_duration(double s, char *buf, size_t n)
     if (y >= 1e12) { snprintf(buf, n, "%.1e years", y); return buf; }
     if (y >= 1e9) { snprintf(buf, n, "%.1f billion years", y / 1e9); return buf; }
     if (y >= 1e6) { snprintf(buf, n, "%.1f million years", y / 1e6); return buf; }
-    if (y >= 1000.0) { snprintf(buf, n, "%.0f years", y); return buf; }
+    if (y >= 1000.0) {
+        char d[32], g[48];
+        snprintf(d, sizeof d, "%.0f", y);
+        snprintf(buf, n, "%s years", pz_group_digits(d, g, sizeof g));
+        return buf;
+    }
     if (y >= 1.0) { snprintf(buf, n, "%.1f years", y); return buf; }
     unsigned long long t = (unsigned long long)s;
     unsigned long long d = t / 86400, h = t % 86400 / 3600, m = t % 3600 / 60, sec = t % 60;

@@ -1,8 +1,16 @@
 # pzsolve
 
-A C solver for the **Bitcoin Puzzle**, the series of 160 addresses where private key *n* lies in `[2^(n-1), 2^n - 1]`. It uses the
-CPU (SIMD), RAM, SSD and GPUs (CUDA and OpenCL), and it picks the algorithm that fits what you know: a linear scan, a baby-step
-giant-step table in RAM, or a Pollard kangaroo.
+[![CI](https://github.com/boulayo/bitcoin-puzzle-solver/actions/workflows/ci.yml/badge.svg)](https://github.com/boulayo/bitcoin-puzzle-solver/actions/workflows/ci.yml)
+
+pzsolve is a solver for the **Bitcoin Puzzle**, the series of 160 addresses where private key *n* lies in `[2^(n-1), 2^n - 1]`, written in C.
+It brings together the three methods that make sense for it (a linear scan of the range, baby-step giant-step with a table in RAM, and
+Pollard's kangaroo), picks the one that fits what you know about the target, and runs it on the CPU with SIMD code (AVX2, AVX-512) and on
+GPUs through CUDA and OpenCL.
+
+It measures your machine the first time and chooses the best mix of CPU threads, SIMD engine and GPUs by itself. Every engine and every GPU
+is checked bit by bit against a reference before it is used, and every candidate key is re-verified. Campaigns resume after any
+interruption and can be shared among several computers. The kangaroo needs about 1.06·√W steps on the real curve (measured), against
+1.15·√W published for RCKangaroo.
 
 Italian documentation: [docs/it/](docs/it/README.md). Free software: if it is useful to you, you can [support the project](#support-the-project).
 
@@ -78,11 +86,13 @@ For a target that is not in the database use `-a ADDRESS` and/or `-k PUBLIC_KEY`
 | Platform | CPU code | GPU |
 |---|---|---|
 | Linux x86-64, Windows x86-64 (10/11, static exe) | portable, AVX2, AVX-512, AVX-512 IFMA (chosen at run time) | NVIDIA through CUDA, others through OpenCL |
-| Linux arm64 | portable scalar code only | whatever the CUDA/OpenCL drivers offer |
-| macOS arm64 (Apple silicon) and Intel | portable scalar code only | none: CPU only |
+| Linux arm64 | portable code, plus NEON engines with the hardware SHA-256 of the CPU | whatever the CUDA/OpenCL drivers offer |
+| macOS arm64 (Apple silicon) | portable code, plus NEON engines with the hardware SHA-256 | none: CPU only |
+| macOS Intel | portable code only | none: CPU only |
 
-The macOS and arm64 builds have no SIMD code yet: they are 4 to 7 times slower than the x86-64 SIMD engines, so use them to try the
-program, run the tests or search small puzzles. The Linux x86-64 binary needs glibc 2.34 or later (Ubuntu 22.04+, Debian 12+).
+On arm64 only the hash stage of the linear scan uses NEON and the CPU's SHA-256 instructions; the curve arithmetic, the kangaroo and BSGS
+run portable code, which is much slower than the x86-64 SIMD engines. Use these builds to try the program, run the tests or search small
+puzzles. The Linux x86-64 binary needs glibc 2.34 or later (Ubuntu 22.04+, Debian 12+).
 
 On macOS a browser download is quarantined and the binary is not notarized: run `xattr -dr com.apple.quarantine <folder>` once, or
 build from source. On Windows, SmartScreen may ask for "More info" and "Run anyway".
@@ -116,7 +126,7 @@ The full tables and the model are in [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHM
   Puzzle 135, now solved, reportedly took about 300 GPUs for 5 months (a reported figure, not verified here).
 * **This is a research and educational tool.** There is no guarantee of finding anything. The "solved / open" state comes from the
   date the database was created: check on a blockchain explorer that the funds are still there before a long campaign.
-* Only P2PKH addresses with a **compressed** key are supported.
+* Only addresses of a **compressed** public key are supported: P2PKH (`1...`) and native SegWit P2WPKH (`bc1q...`).
 * The kangaroo is probabilistic and its cost has a long tail. GPU speeds were measured on one NVIDIA card (CUDA) and one Intel
   integrated GPU (OpenCL); the kangaroo on the GPU is limited by memory bandwidth, and AMD cards are untested for speed.
 

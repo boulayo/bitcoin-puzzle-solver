@@ -4,9 +4,17 @@
 
 # pzsolve
 
-Risolutore in C per il **Bitcoin Puzzle**, la serie di 160 indirizzi in cui la chiave privata *n* sta nell'intervallo
-`[2^(n-1), 2^n - 1]`. Usa CPU (SIMD), RAM, SSD e GPU (CUDA e OpenCL) e sceglie l'algoritmo adatto a ciò che si conosce: scansione
-lineare, tabella baby-step giant-step in RAM oppure canguro di Pollard.
+[![CI](https://github.com/boulayo/bitcoin-puzzle-solver/actions/workflows/ci.yml/badge.svg)](https://github.com/boulayo/bitcoin-puzzle-solver/actions/workflows/ci.yml)
+
+pzsolve è un risolutore per il **Bitcoin Puzzle**, la serie di 160 indirizzi in cui la chiave privata *n* sta nell'intervallo
+`[2^(n-1), 2^n - 1]`, scritto in C. Riunisce i tre metodi sensati per questo problema (scansione lineare dell'intervallo, baby-step
+giant-step con tabella in RAM e canguro di Pollard), sceglie quello adatto a ciò che si conosce del bersaglio e lo esegue sulla CPU con
+codice SIMD (AVX2, AVX-512) e sulle GPU con CUDA e OpenCL.
+
+Misura la macchina la prima volta e sceglie da solo la combinazione migliore di thread CPU, motore SIMD e GPU. Ogni motore e ogni GPU sono
+confrontati bit per bit con un riferimento prima dell'uso, e ogni chiave candidata è riverificata. Le campagne riprendono dopo qualsiasi
+interruzione e si possono dividere fra più computer. Il canguro richiede circa 1,06·√W passi sulla curva reale (misurato), contro 1,15·√W
+pubblicato per RCKangaroo.
 
 Software libero: se ti è utile puoi [sostenere il progetto](#sostieni-il-progetto).
 
@@ -83,11 +91,13 @@ volendo, `-r INIZIO:FINE` (esadecimale). Più computer sulla ricerca lineare usa
 | Piattaforma | Codice CPU | GPU |
 |---|---|---|
 | Linux x86-64, Windows x86-64 (10/11, exe statico) | portabile, AVX2, AVX-512, AVX-512 IFMA (scelto a runtime) | NVIDIA con CUDA, le altre con OpenCL |
-| Linux arm64 | solo codice scalare portabile | quello che offrono i driver CUDA/OpenCL |
-| macOS arm64 (Apple silicon) e Intel | solo codice scalare portabile | nessuna: solo CPU |
+| Linux arm64 | codice portabile, più motori NEON con lo SHA-256 hardware della CPU | quello che offrono i driver CUDA/OpenCL |
+| macOS arm64 (Apple silicon) | codice portabile, più motori NEON con lo SHA-256 hardware | nessuna: solo CPU |
+| macOS Intel | solo codice portabile | nessuna: solo CPU |
 
-Le build per macOS e arm64 non hanno ancora codice SIMD: sono da 4 a 7 volte più lente dei motori SIMD x86-64, quindi servono per
-provare il programma, eseguire i test o cercare puzzle piccoli. Il binario Linux x86-64 richiede glibc 2.34 o successiva (Ubuntu 22.04+,
+Su arm64 solo lo stadio dell'hash della ricerca lineare usa NEON e le istruzioni SHA-256 della CPU; l'aritmetica della curva, il canguro
+e il BSGS usano codice portabile, molto più lento dei motori SIMD x86-64. Queste build servono per provare il programma, eseguire i test o
+cercare puzzle piccoli. Il binario Linux x86-64 richiede glibc 2.34 o successiva (Ubuntu 22.04+,
 Debian 12+).
 
 Su macOS un file scaricato con il browser è messo in quarantena e il binario non è notarizzato: esegui una volta
@@ -124,7 +134,7 @@ Le tabelle complete e il modello sono in [`docs/it/ALGORITMI.md`](ALGORITMI.md) 
   macchina. Il puzzle 135, ora risolto, ha richiesto secondo quanto riportato circa 300 GPU per 5 mesi (dato riportato, non verificato qui).
 * **È uno strumento di ricerca e didattico.** Nessuna garanzia di trovare qualcosa. Lo stato «risolto / aperto» è quello della data di
   creazione del database: prima di una campagna lunga controlla con un esploratore della blockchain che i fondi siano ancora lì.
-* Sono supportati solo indirizzi P2PKH con chiave **compressa**.
+* Sono supportati solo indirizzi di una chiave pubblica **compressa**: P2PKH (`1...`) e SegWit nativo P2WPKH (`bc1q...`).
 * Il canguro è probabilistico e il suo costo ha una coda lunga. La velocità delle GPU è stata misurata su una scheda NVIDIA (CUDA) e su
   una GPU Intel integrata (OpenCL); sul canguro la GPU è limitata dalla banda di memoria, e le schede AMD non sono provate per la velocità.
 

@@ -54,7 +54,7 @@ it all the same (with a warning): useful only as an exercise, since `2^160` keys
                         (161..256: the address only, funds withdrawn in 2017, see above). With -r it only
                         selects the target, the interval is the one of -r
 -r, --range S:E         custom interval (hexadecimal, inclusive): e.g. a single part of a puzzle
--a, --address ADDR      P2PKH address (Base58Check, mainnet) different from the one in the database
+-a, --address ADDR      mainnet address different from the one in the database: P2PKH (`1...`, Base58Check) or native SegWit P2WPKH (`bc1q...`, bech32)
 -H, --hash160 HEX       alternative to the address (40 hex digits)
 -k, --pubkey HEX        known public key (33 bytes compressed or 65 uncompressed)
 -c, --campaign NAME     campaign name: folder <dir>/<NAME>; if it already exists it is resumed [pN with -p N]
@@ -77,6 +77,7 @@ it all the same (with a warning): useful only as an exercise, since `2^160` keys
     --gpu LIST          indices (see `devices`) separated by commas; also allows OpenCL devices on a CPU
     --gpu-api A         auto | cuda | opencl   [auto: CUDA for NVIDIA, OpenCL as a fallback and for the other cards]
     --isa I             auto | baseline | avx2 | avx512 | avx2v | avx512v | avx512i   [auto: micro-benchmark]
+                        on arm64: auto | baseline | neon | neon2 (hardware SHA-256 of the CPU, 4 or 8 keys at a time)
     --chunk-bits B      blocks of 2^B keys (20..40) [36, reduced for small intervals]; smaller blocks
                         would slow down the CPU and above all the GPUs (every launch receives a single block)
     --dp-bits B         kangaroo: bits of the distinguished points [automatic]
@@ -241,7 +242,7 @@ OpenCL window 64, 128, 256 or 512; kangaroo with 64, 128 or 256 walkers per thre
 forms (since 1.7.0): plain, and with the products of the batch kept in pairs (`b`, less memory traffic). On cards with an L2 cache of
 at least 8 MiB (non-laptop RTX 30/40: 6-72 MiB) the tuning also tries an **L2-sized herd**: fewer work-items (and NK 16 or 32)
 so that the private arrays of the walkers fit in half of the L2, where the traffic that limits the kernel does not reach the memory of the
-card (`NK 64 (herd in L2)` in the log; `PZ_GPU_NK=64l`). It is chosen only if measured faster. `bench` shows
+card (`NK 64 L2 herd` in the log; `PZ_GPU_NK=64l`). It is chosen only if measured faster. `bench` shows
 the speed of both for every GPU. On a **laptop** CPU and GPU share power and cooling: it is worth comparing for a couple of
 minutes the total speed of the panel with the default settings, with `-t 8` (physical cores only: hyper-threading adds
 little in the linear search and heats), and with `--no-cpu`, and keeping the fastest. Since 1.7.1 `bench --together` does this (section 7.9).

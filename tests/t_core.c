@@ -59,6 +59,17 @@ int main(void)
         CHECK(ge_from_pubkey(&q, pub, 33) && ge_equal(&p, &q));
     }
     CHECK(!address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX", r));   /* bad checksum */
+    {   /* native SegWit (BIP173): the address of the public key of key 1 has the hash160 of the legacy address of key 1 */
+        u8 w[20], l[20];
+        CHECK(address_to_hash160("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", w));
+        CHECK(address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", l) && !memcmp(w, l, 20));
+        CHECK(address_to_hash160("BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", w) && !memcmp(w, l, 20));            /* all upper case */
+        CHECK(!address_to_hash160("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5", w));                                /* bad checksum */
+        CHECK(!address_to_hash160("Bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", w));                                /* mixed case */
+        CHECK(!address_to_hash160("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", w));                                /* testnet */
+        CHECK(!address_to_hash160("bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3", w));            /* P2WSH: 32 bytes */
+        CHECK(!address_to_hash160("bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kt5nd6y", w)); /* version 1 (bech32m) */
+    }
     {   /* WIF of key 1 */
         u8 kb[32] = {0}; kb[31] = 1; char w[64];
         privkey_to_wif(kb, true, w, sizeof w);

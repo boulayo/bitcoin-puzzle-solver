@@ -8,6 +8,7 @@
 #include "cpu_engine.h"
 #include "hash.h"
 #include "kangaroo_priv.h"
+#include "outfmt.h"
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
@@ -97,12 +98,12 @@ static bool valid_variant(const rt_dev *d, int v)
 }
 static char *kvariant_name(int v, char *b, size_t n)
 {
-    snprintf(b, n, "NK %d%s%s", KV_NK(v), KV_CFG(v) == 1 ? " (pair products)" : KV_CFG(v) == 2 ? " (quad products)" : "", KV_L2(v) ? " (herd in L2)" : "");
+    snprintf(b, n, "NK %d%s%s%s", KV_NK(v), KV_CFG(v) == 1 ? " pairs" : KV_CFG(v) == 2 ? " quads" : "", KV_L2(v) && KV_CFG(v) ? "," : "", KV_L2(v) ? " L2 herd" : "");
     return b;
 }
 static char *variant_name(int v, char *b, size_t n)
 {
-    if (VAR_MINB(v)) snprintf(b, n, "%d (max 128 registers)", VAR_HALF(v));
+    if (VAR_MINB(v)) snprintf(b, n, "%d, register cap", VAR_HALF(v));
     else snprintf(b, n, "%d", VAR_HALF(v));
     return b;
 }
@@ -204,18 +205,22 @@ int gpu_list_devices(void)
     rt_dev devs[RT_MAX_DEVS];
     char note[200];
     int n = enumerate(devs, note, sizeof note);
-    if (!n) { printf("  no device (%s): CPU only\n", note[0] ? note : "no GPU runtime"); return 0; }
+    if (!n) { printf("  none (%s): the CPU only\n", note[0] ? note : "no GPU runtime"); return 0; }
     for (int i = 0; i < n; i++) {
         const rt_dev *d = &devs[i];
         char mem[160], extra[96] = "";
         if (d->api == RT_CUDA) snprintf(extra, sizeof extra, ", compute %d.%d", d->cc / 10, d->cc % 10);
         const char *use = default_choice(d) ? "used by default"
-                        : d->dup_of >= 0 ? "same GPU as [%d] via OpenCL: fallback if CUDA fails, or with --gpu N"
-                                         : "select with --gpu N";
-        char usebuf[120];
-        snprintf(usebuf, sizeof usebuf, use, d->dup_of);
-        printf("  [%d] %-6s | %s | %s | %u %s @ %u MHz%s | %s  (%s)\n", i, rt_api_name(d->api), d->name, d->is_gpu ? "GPU" : "CPU", d->cu,
-               d->api == RT_CUDA ? "SM" : "CU", d->mhz, extra, fmt_devmem(d, mem, sizeof mem), usebuf);
+                        : d->dup_of >= 0 ? "the same GPU as [%d] via OpenCL: a fallback if CUDA fails, or choose it with --gpu %d"
+                                         : "not used by default: choose it with --gpu %d";
+        char usebuf[160];
+        snprintf(usebuf, sizeof usebuf, use, d->dup_of >= 0 && !default_choice(d) ? d->dup_of : i, i);
+        char ln[900];
+        printf("  [%d] %s via %s\n", i, d->name, rt_api_name(d->api));
+        snprintf(ln, sizeof ln, "      %s, %u %s at %u MHz%s, %s; %s", d->is_gpu ? "GPU" : "CPU device", d->cu, d->api == RT_CUDA ? "SM" : "CU", d->mhz, extra,
+                 fmt_devmem(d, mem, sizeof mem), usebuf);
+        pz_fputs_wrap(stdout, ln, PZ_LINE_MAX, 8);
+        putchar('\n');
     }
     if (note[0]) printf("  (%s)\n", note);
     return n;
@@ -520,12 +525,12 @@ static void linear_autotune(gpu_session *s, int idx)
     }
     if (rate[best] <= 0) { s->variant = default_variant(d); return; }
     char line[400];
-    size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: tuning:", idx);
+    size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: linear kernel tuning (keys/s):", idx);
     for (int i = 0; i < nv && o < sizeof line; i++) {
         char r[32];
-        o += (size_t)snprintf(line + o, sizeof line - o, "%s window %s -> %s", i ? "," : "", variant_name(vs[i], nb, sizeof nb), pz_fmt_si(rate[i], r, sizeof r));
+        o += (size_t)snprintf(line + o, sizeof line - o, "%s window %s %s", i ? ";" : "", variant_name(vs[i], nb, sizeof nb), pz_fmt_si(rate[i], r, sizeof r));
     }
-    pz_log(PZ_LOG_INFO, "%s keys/s: picking %s", line, variant_name(vs[best], nb, sizeof nb));
+    pz_log(PZ_LOG_INFO, "%s; picking window %s", line, variant_name(vs[best], nb, sizeof nb));
     s->variant = vs[best];
     /* the winner must pass the correctness test before it is remembered, otherwise a bad choice would exclude the GPU forever */
     if (!test_linear(s)) {
@@ -722,8 +727,9 @@ int gpu_selftest(void)
     for (int i = 0; i < n; i++) {
         if (!selftest_allowed(&devs[i])) continue;
         gpu_session *s = pz_xcalloc(1, sizeof *s);
-        printf("  [%d] %s %s: ", i, rt_api_name(devs[i].api), devs[i].name);
-        fflush(stdout);
+        char lb[96];
+        snprintf(lb, sizeof lb, "GPU[%d] %.30s via %s", i, devs[i].name, rt_api_name(devs[i].api));
+        pz_result_begin(lb);
         bool ok = session_open(s, &devs[i]) && test_fe(s);
         const int *vs;
         const int nv = variants_of(&devs[i], &vs);
@@ -752,13 +758,13 @@ int gpu_selftest(void)
                 s->NK = KV_L2_NK[k];
                 ok = test_kang(s);
             }
-        printf(ok ? "OK\n" : "FAILED\n");
+        printf(ok ? "kernels identical to the CPU\n" : "FAILED\n");
         if (!ok) fails++;
         tested++;
         session_release(s);
         free(s);
     }
-    if (!tested) printf("  no GPU found%s%s%s (to try an OpenCL CPU device: PZ_OPENCL_ALL=1)\n", note[0] ? " (" : "", note, note[0] ? ")" : "");
+    if (!tested) pz_result_line("GPU", "none found%s%s. To try an OpenCL CPU device set PZ_OPENCL_ALL=1", note[0] ? ": " : "", note);
     return fails;
 }
 
@@ -1059,22 +1065,24 @@ static void gpu_diag_print(const gpu_session *s, const gpu_diag *g, size_t herd_
 {
     const rt_dev *d = &s->info;
     char b1[32], b2[32], b3[32];
-    printf("  GPU[%d] %s (%s): copy bandwidth %s GB/s", d->index, d->name, rt_api_name(d->api), fmt_dec(g->copy_gbs, b1, sizeof b1));
-    if (d->peak_gbs > 0) printf(" (theoretical %.0f GB/s: %.0f%%)", d->peak_gbs, 100.0 * g->copy_gbs / d->peak_gbs);
-    printf("\n  GPU[%d] %s (%s): 32-bit integer instructions: mad.lo %s/s, mad.hi %s/s, 3-input add %s/s", d->index, d->name, rt_api_name(d->api),
-           pz_fmt_si(g->lo_gops * 1e9, b1, sizeof b1), pz_fmt_si(g->hi_gops * 1e9, b2, sizeof b2), pz_fmt_si(g->add3_gops * 1e9, b3, sizeof b3));
-    if (d->cu && d->mhz)
-        printf("\n  GPU[%d]   = %s / %s / %s per %s per cycle at the rated clock (%u MHz; under load the real clock is usually lower)",
-               d->index, fmt_dec(g->lo_gops * 1e3 / d->cu / d->mhz, b1, sizeof b1), fmt_dec(g->hi_gops * 1e3 / d->cu / d->mhz, b2, sizeof b2),
-               fmt_dec(g->add3_gops * 1e3 / d->cu / d->mhz, b3, sizeof b3), d->api == RT_CUDA ? "SM" : "CU", d->mhz);
-    printf("\n");
+    if (d->peak_gbs > 0) pz_prop_line("copy bandwidth", "%s GB/s of %.0f GB/s theoretical (%.0f%%)", fmt_dec(g->copy_gbs, b1, sizeof b1), d->peak_gbs, 100.0 * g->copy_gbs / d->peak_gbs);
+    else pz_prop_line("copy bandwidth", "%s GB/s", fmt_dec(g->copy_gbs, b1, sizeof b1));
+    pz_prop_line("32-bit integer ops", "mad.lo %s/s, mad.hi %s/s, 3-input add %s/s", pz_fmt_si(g->lo_gops * 1e9, b1, sizeof b1),
+                 pz_fmt_si(g->hi_gops * 1e9, b2, sizeof b2), pz_fmt_si(g->add3_gops * 1e9, b3, sizeof b3));
+    if (d->cu && d->mhz) {
+        char unit[40];
+        snprintf(unit, sizeof unit, "per %s per cycle", d->api == RT_CUDA ? "SM" : "CU");
+        pz_prop_line(unit, "%s / %s / %s at the rated clock of %u MHz (under load the real clock is usually lower)",
+                     fmt_dec(g->lo_gops * 1e3 / d->cu / d->mhz, b1, sizeof b1), fmt_dec(g->hi_gops * 1e3 / d->cu / d->mhz, b2, sizeof b2),
+                     fmt_dec(g->add3_gops * 1e3 / d->cu / d->mhz, b3, sizeof b3), d->mhz);
+    }
     if (d->l2_bytes) {
-        char l2[32], sm[32], hb[32];
-        printf("  GPU[%d]   L2 cache %s", d->index, pz_fmt_bytes((double)d->l2_bytes, l2, sizeof l2));
-        if (d->smem_bytes) printf(", shared memory %s per %s", pz_fmt_bytes((double)d->smem_bytes, sm, sizeof sm), d->api == RT_CUDA ? "SM" : "CU");
-        if (herd_bytes) printf("; the kangaroo herd (%s) is %.0f times the L2: every step goes through the card's memory", pz_fmt_bytes((double)herd_bytes, hb, sizeof hb),
-                               (double)herd_bytes / (double)d->l2_bytes);
-        printf("\n");
+        char l2[32], sm[32], hb[32], t[160] = "";
+        snprintf(t, sizeof t, "L2 cache %s", pz_fmt_bytes((double)d->l2_bytes, l2, sizeof l2));
+        if (d->smem_bytes) snprintf(t + strlen(t), sizeof t - strlen(t), ", shared memory %s per %s", pz_fmt_bytes((double)d->smem_bytes, sm, sizeof sm), d->api == RT_CUDA ? "SM" : "CU");
+        pz_prop_line("caches", "%s", t);
+        if (herd_bytes) pz_prop_line("kangaroo herd", "%s, %.0f times the L2: every step goes through the card's memory", pz_fmt_bytes((double)herd_bytes, hb, sizeof hb),
+                                     (double)herd_bytes / (double)d->l2_bytes);
     }
 }
 
@@ -1085,11 +1093,15 @@ void gpu_bench(void)
     int n = enumerate(devs, note, sizeof note);
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
+    bool titled = false;
     for (int i = 0; i < n; i++) {
         if (!selftest_allowed(&devs[i])) continue;
         gpu_session *s = pz_xcalloc(1, sizeof *s);
         s->r = r;
         if (!session_open(s, &devs[i])) { session_release(s); free(s); continue; }
+        if (!titled) { pz_section("GPUs"); titled = true; }
+        printf("GPU[%d] %s via %s\n", devs[i].index, devs[i].name, rt_api_name(devs[i].api));
+        fflush(stdout);
         linear_autotune(s, i);
         if (!linear_prepare(s)) { session_release(s); free(s); continue; }
         u8 h[20] = {0};
@@ -1115,28 +1127,28 @@ void gpu_bench(void)
         char b[32];
         el = pz_mono() - t0;
         char nb[48];
-        printf("  GPU[%d] %s (%s): %s keys/s (linear search, window %s)\n", devs[i].index, devs[i].name, rt_api_name(devs[i].api),
-               pz_fmt_si((double)keys / el, b, sizeof b), variant_name(s->variant, nb, sizeof nb));
+        pz_prop_line("linear search", "%s keys/s, window %s", pz_fmt_si((double)keys / el, b, sizeof b), variant_name(s->variant, nb, sizeof nb));
         fflush(stdout);
         linear_release_program(s);
         kang_autotune(s, i);
         double kr = kang_measure(s);
         if (kr > 0) {
             char mu[80];
-            printf("  GPU[%d] %s (%s): %s steps/s (kangaroo, %s), memory used %s\n", devs[i].index, devs[i].name, rt_api_name(devs[i].api),
-                   pz_fmt_si(kr, b, sizeof b), kvariant_name(kang_code(s), nb, sizeof nb), fmt_devused(&devs[i], s->mem_used, mu, sizeof mu));
+            pz_prop_line("kangaroo", "%s steps/s, %s; memory used %s", pz_fmt_si(kr, b, sizeof b), kvariant_name(kang_code(s), nb, sizeof nb),
+                         fmt_devused(&devs[i], s->mem_used, mu, sizeof mu));
         }
         gpu_diag dg;
         if (gpu_diag_run(s, &dg)) {
             gpu_diag_print(s, &dg, kr > 0 ? s->mem_used : 0);
             if (kr > 0 && devs[i].api == RT_CUDA) {   /* the static counts of the CUDA kernel (docs/en/ALGORITHMS.md 8.4) */
                 char c1[32], c2[32], c3[32];
-                printf("  GPU[%d]   kangaroo %s steps/s; model ceilings (~%d bytes and ~%d integer instructions per step): bandwidth %s, integer %s steps/s\n",
-                       devs[i].index, pz_fmt_si(kr, c1, sizeof c1), KANG_MODEL_BYTES, KANG_MODEL_INSNS,
-                       pz_fmt_si(dg.copy_gbs * 1e9 / KANG_MODEL_BYTES, c2, sizeof c2), pz_fmt_si(dg.lo_gops * 1e9 / KANG_MODEL_INSNS, c3, sizeof c3));
+                pz_prop_line("kangaroo ceilings", "%s steps/s by bandwidth, %s by integer work; measured %s",
+                             pz_fmt_si(dg.copy_gbs * 1e9 / KANG_MODEL_BYTES, c2, sizeof c2), pz_fmt_si(dg.lo_gops * 1e9 / KANG_MODEL_INSNS, c3, sizeof c3),
+                             pz_fmt_si(kr, c1, sizeof c1));
+                pz_prop_line("", "model: ~%d bytes and ~%d integer instructions per step", KANG_MODEL_BYTES, KANG_MODEL_INSNS);
             }
         } else {
-            printf("  GPU[%d] %s (%s): bandwidth and integer throughput probes cannot run\n", devs[i].index, devs[i].name, rt_api_name(devs[i].api));
+            pz_prop_line("probes", "the bandwidth and integer throughput probes cannot run");
         }
         fflush(stdout);
         session_release(s);
@@ -1451,17 +1463,17 @@ static void kang_autotune(gpu_session *s, int idx)
         if (rate[fastest] > rate[best] * 1.03) best = fastest;
     }
     char line[1000];
-    size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: kangaroo tuning:", idx);
+    size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: kangaroo tuning (steps/s):", idx);
     for (int i = 0; i < nv && o < sizeof line; i++) {
         char r[32];
-        o += (size_t)snprintf(line + o, sizeof line - o, "%s %s -> %s", i ? "," : "", kvariant_name(vs[i], nb, sizeof nb), rate[i] > 0 ? pz_fmt_si(rate[i], r, sizeof r) : "cannot run");
+        o += (size_t)snprintf(line + o, sizeof line - o, "%s %s %s", i ? ";" : "", kvariant_name(vs[i], nb, sizeof nb), rate[i] > 0 ? pz_fmt_si(rate[i], r, sizeof r) : "cannot run");
     }
     if (rate[best] <= 0) {
         kang_set_variant(s, default_kvariant(d));
         pz_log(PZ_LOG_WARN, "%s: using the default %s", line, kvariant_name(kang_code(s), nb, sizeof nb));
         return;
     }
-    pz_log(PZ_LOG_INFO, "%s steps/s: picking %s", line, kvariant_name(vs[best], nb, sizeof nb));
+    pz_log(PZ_LOG_INFO, "%s; picking %s", line, kvariant_name(vs[best], nb, sizeof nb));
     kang_set_variant(s, vs[best]);
     /* remembered only once the choice has passed the bit-exact test against the CPU */
     if (!test_kang(s)) {

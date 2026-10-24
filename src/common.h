@@ -46,6 +46,7 @@ typedef uint8_t u8;
 
 /* Fatal error helper: prints and exits with status 2. */
 void pz_die(const char *fmt, ...) __attribute__((noreturn, format(PZ_PRINTF, 1, 2)));
+void pz_help(const char *topic, FILE *f);               /* the help text: "hunt", "bench" or the general one (NULL) */
 
 /* Wall-clock helpers (implemented in platform.c). */
 double pz_now(void);                 /* seconds since the epoch */
@@ -65,6 +66,12 @@ bool pz_env_on(const char *name);
  * log messages erase it first and the reporter redraws it below them. */
 void pz_ui_block(const char *text, int nlines);
 void pz_log_terminal_line_break(void);   /* keeps the block on screen and moves the cursor below it */
+/* Prints text with no line longer than `width` columns. A line that is too long is broken at a space (a word longer than the line
+ * is left whole) and the continuation lines are indented by `hang` columns; with hang < 0 they are indented to the column where the
+ * description of an option or command starts (the text after the first run of two or more spaces), or to the line's own indentation
+ * plus two. */
+void pz_fputs_wrap(FILE *fp, const char *text, int width, int hang);
+#define PZ_LINE_MAX 128   /* longest line written to the terminal */
 
 /* Memory helpers that abort on failure. */
 void *pz_xmalloc(size_t n);
@@ -93,6 +100,7 @@ void pz_hex_encode(const u8 *in, size_t n, char *out);        /* out needs 2n+1 
 char *u128_to_dec(u128 v, char *buf);
 /* Human readable quantities: 1.23 G, etc. buf >= 32 bytes */
 char *pz_fmt_si(double v, char *buf, size_t n);
+char *pz_group_digits(const char *in, char *out, size_t n);   /* "1234567" -> "1,234,567" */
 char *pz_fmt_duration(double secs, char *buf, size_t n);
 char *pz_fmt_bytes(double v, char *buf, size_t n);
 

@@ -11,6 +11,7 @@
 #include "campaigns.h"
 #include "bsgs.h"
 #include "platform.h"
+#include "outfmt.h"
 #include <getopt.h>
 #include <math.h>
 #include <unistd.h>
@@ -19,13 +20,26 @@
 
 #define PLURAL(n) ((n) == 1 ? "" : "s")
 
-static void usage(FILE *f)
+/* instruction sets that --isa accepts on this architecture (the others are not compiled in) */
+#if defined(__aarch64__)
+#define PZ_ISA_LIST "auto, baseline, neon, neon2"
+#define PZ_ISA_HELP "auto | baseline | neon | neon2\n                          [auto: chosen with a micro-benchmark; neon and neon2 use the hardware SHA-256 of the CPU\n                          with 4 and 8 keys at a time; without it the baseline is used]"
+#else
+#define PZ_ISA_LIST "auto, baseline, avx2, avx512, avx2v, avx512v, avx512i"
+#define PZ_ISA_HELP "auto | baseline | avx2 | avx512 | avx2v | avx512v | avx512i\n                          [auto: chosen with a micro-benchmark; 'v' = curve arithmetic in\n                          parallel on the SIMD lanes; 'i' = like avx512v but with AVX-512 IFMA]"
+#endif
+
+static void help_print(FILE *f, const char *text) { pz_fputs_wrap(f, text, PZ_LINE_MAX, -1); }
+
+static void usage_main(FILE *f)
 {
-    fprintf(f,
-"pzsolve %s - solver for the Bitcoin Puzzle campaigns (keys in [2^(n-1), 2^n-1])\n"
+    static char text[8192];
+    snprintf(text, sizeof text,
+"pzsolve %s - solver for the Bitcoin Puzzle (keys in [2^(n-1), 2^n-1])\n"
 "\n"
 "USAGE\n"
 "  pzsolve <command> [options]\n"
+"  pzsolve help <command>    the options of a command (hunt, bench)\n"
 "\n"
 "COMMANDS\n"
 "  hunt       start (or resume) a search campaign\n"
@@ -33,66 +47,15 @@ static void usage(FILE *f)
 "  list       list all campaigns in the folder with progress, speed and time left\n"
 "  where      tell when a given key will be visited in the campaign order: (-c NAME | -p N) --key HEX\n"
 "  split      divide the --part shares among several computers in proportion to their speeds: split 800M 120M ...\n"
-"  puzzle N   show data for puzzle N (address, public key, status) and effort estimates [--rate KEYS_PER_SECOND]\n"
+"  puzzle N   show data for puzzle N (address, public key, status) and effort estimates [--rate KEYS_PER_SECOND, e.g. 800M or 1.5G]\n"
 "  puzzles    list the 160 built-in puzzles [--open | --solved | --pubkey]\n"
 "  devices    list the detected CPU, SIMD instructions, RAM and GPUs\n"
 "  selftest   run the built-in correctness checks\n"
 "  merge      merge the distinguished points of other computers into a kangaroo campaign: -c NAME (or -p N) -f FILE_OR_FOLDER ... [-d DIR]\n"
 "  doctor     check the program, machine, GPUs, cache and campaigns and report what is wrong [-d DIR] [--full]\n"
-"  bench      measure the speed of the CPU/GPU engines [--together [--linear] [-t N] [--gpu LIST] [--prio-gpu P]] [--gpu-only] [--retune]\n"
+"  bench      measure the speed of the CPU and GPU engines\n"
 "  kstat      BITS TRIALS [THREADS [R [DP]]]: statistics of the kangaroo cost over intervals of 2^BITS keys (cycle study)\n"
 "  version    print the version\n"
-"\n"
-"'hunt' OPTIONS\n"
-"  -p, --puzzle N          puzzle 1..256: range, address and (if known) public key are set automatically;\n"
-"                          the campaign is named 'pN' and is resumed automatically if it already exists.\n"
-"                          Puzzles 161..256 were emptied by the creator in 2017\n"
-"  -r, --range S:E         custom range in hexadecimal (inclusive)\n"
-"  -a, --address ADDR      bitcoin P2PKH address to find (required unless -H/-k is used)\n"
-"  -H, --hash160 HEX       instead of the address: hash160 (40 hex digits)\n"
-"  -k, --pubkey HEX        known public key (compressed 33 B or uncompressed 65 B): enables the kangaroo\n"
-"  -c, --campaign NAME     campaign name (folder <dir>/<name>); resumed if it exists\n"
-"  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
-"  -s, --seed SEED         seed: 64 hex digits or any text; default: generated at random\n"
-"  -m, --mode M            auto | linear | kangaroo | bsgs   [auto: with a known pubkey, bsgs if the table fits\n"
-"                          in RAM (and there are no GPUs or the range is small), otherwise kangaroo]\n"
-"      --table FILE        bsgs: reads the baby-step table from FILE if it exists, otherwise builds it and saves it\n"
-"                          (the table does not depend on the target: it is reused for any public key)\n"
-"      --bsgs-entries N    bsgs: baby steps of the table (when created; default: optimal for the range, within the RAM limits)\n"
-"  -t, --threads N         CPU threads [all available cores]\n"
-"      --no-cpu            do not use the CPU\n"
-"      --no-gpu            do not use the GPUs\n"
-"      --gpu LIST          use only the listed GPUs (comma-separated indices, see 'devices')\n"
-"      --retune            measure again the best combination of CPU threads and GPUs for this machine (the first run of each\n                          version measures it automatically, about 2 minutes, and remembers it; used only without -t, --gpu, --no-cpu, --no-gpu)\n"
-"      --no-tune           do not measure or use the machine profile: all threads and all GPUs\n"
-"      --node N            kangaroo on several computers: number of this computer (0..65535, 0 if there is only one): the kangaroos start from\n                          different points; same -s, same range and public key on all of them (see 'merge')\n"
-"      --prio-gpu P        auto | yes | no: the threads that serve the GPUs (they launch the kernels) run at a higher priority than the compute threads\n                          [auto: the tuning tests it and remembers it; Linux requires root]\n"
-"      --part Q/T          linear search on several computers: the blocks of the visit order are divided into T shares, this computer\n                          scans share Q (counting from 0; several are allowed: 0,1/4 or 0-6/9). Same -s, range and --chunk-bits on all\n"
-"      --limit X           use only X%% of the machine (1..99), always at full speed and without pauses: X%% of the CPU threads (one per physical\n                          core first) and X%% of the GPU work-items; less heat and power, speed reduced accordingly [off]\n                          (does not use or update the machine tuning; with -t the X%% is computed on the given threads)\n"
-"      --keep-awake        Windows and macOS: prevent the system from going to sleep while the campaign runs\n"
-"      --gpu-api A         auto | cuda | opencl   [auto: CUDA for NVIDIA cards (OpenCL as a fallback), OpenCL for the others]\n"
-"      --isa I             auto | baseline | avx2 | avx512 | avx2v | avx512v | avx512i\n                          [auto: chosen with a micro-benchmark; 'v' = curve arithmetic in\n                          parallel on the SIMD lanes; 'i' = like avx512v but with AVX-512 IFMA]\n"
-"      --chunk-bits B      size of the permuted blocks: 2^B keys (20..40) [36 for large ranges]\n"
-"      --dp-bits B         kangaroo: bits of the distinguished points (0 = automatic)\n"
-"      --mem GB            kangaroo: maximum RAM for the table of distinguished points [auto]\n"
-"      --ui U              progress display: auto | full (multi-line panel updated in place)\n"
-"                          | line (one line) | log (one line per minute, suited to files) [auto: full on a terminal]\n"
-"      --report-interval S seconds between panel updates [1]\n"
-"      --checkpoint-interval S  seconds between state saves [60]\n"
-"      --no-progress       same as --ui log\n"
-"  -q, --quiet             fewer messages\n"
-"  -v, --verbose           more messages\n"
-"      --new               fail if the campaign already exists\n"
-"      --resume            fail if the campaign does not exist\n"
-"\n"
-"'bench' OPTIONS\n"
-"      --together          measure CPU and GPUs working together as in a campaign (puzzle 140), with several numbers of\n"
-"                          CPU threads and with each slower GPU switched off in turn: reports the best configuration\n"
-"      --linear            with --together: linear search instead of the kangaroo\n"
-"  -t, --threads N         with --together: try only N CPU threads\n"
-"      --gpu LIST          with --together: use only the listed GPUs (as in hunt)\n"
-"      --gpu-only          skip the CPU tests and run only the GPU ones (bandwidth, integer instructions, linear search and kangaroo)\n"
-"      --retune            ignore the saved choice of the GPU kernel variant and measure it again\n"
 "\n"
 "EXAMPLES\n"
 "  pzsolve puzzles --open            list the puzzles that are still unsolved\n"
@@ -100,7 +63,110 @@ static void usage(FILE *f)
 "  pzsolve hunt -p 71 -r 400000000000000000:5fffffffffffffffff   only part of the range\n"
 "  pzsolve hunt -p 66 -a 13zb1hQbWVsc2S7ZTZnP2G4undNNpdh5so -c test   custom target\n"
 "  pzsolve info -c p71\n", PZ_VERSION);
+    help_print(f, text);
 }
+
+static void usage_hunt(FILE *f)
+{
+    static char text[16384];
+    snprintf(text, sizeof text,
+"pzsolve hunt - start (or resume) a search campaign\n"
+"\n"
+"USAGE\n"
+"  pzsolve hunt (-p N | -r START:END) [-a ADDRESS | -H HASH160 | -k PUBKEY] [options]\n"
+"\n"
+"TARGET\n"
+"  -p, --puzzle N          puzzle 1..256: range, address and (if known) public key are set automatically; the campaign is\n"
+"                          named 'pN' and is resumed automatically if it already exists. Puzzles 161..256 were emptied by the\n"
+"                          creator in 2017\n"
+"  -r, --range S:E         custom range in hexadecimal (inclusive)\n"
+"  -a, --address ADDR      bitcoin address to find: \"1...\" or \"bc1q...\" (compressed key); required unless -H or -k is used\n"
+"  -H, --hash160 HEX       instead of the address: its hash160 (40 hex digits)\n"
+"  -k, --pubkey HEX        known public key (compressed 33 bytes or uncompressed 65 bytes): enables the kangaroo and BSGS\n"
+"\n"
+"CAMPAIGN\n"
+"  -c, --campaign NAME     campaign name (folder <dir>/<name>); resumed if it exists\n"
+"  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
+"  -s, --seed SEED         seed: 64 hex digits or any text; default: generated at random\n"
+"      --new               fail if the campaign already exists\n"
+"      --resume            fail if the campaign does not exist\n"
+"\n"
+"METHOD\n"
+"  -m, --mode M            auto | linear | kangaroo | bsgs   [auto: with a known public key, bsgs if the table fits in RAM\n"
+"                          (and there are no GPUs or the range is small), otherwise kangaroo; without it, linear]\n"
+"      --table FILE        bsgs: reads the baby-step table from FILE if it exists, otherwise builds it and saves it (the table\n"
+"                          does not depend on the target: it is reused for any public key)\n"
+"      --bsgs-entries N    bsgs: baby steps of the table when it is created [optimal for the range, within the RAM limits]\n"
+"      --dp-bits B         kangaroo: bits of the distinguished points (0 = automatic)\n"
+"      --mem GB            kangaroo: maximum RAM for the table of distinguished points [auto]\n"
+"      --chunk-bits B      linear: size of the permuted blocks, 2^B keys (20..40) [36 for large ranges]\n"
+"\n"
+"RESOURCES\n"
+"  -t, --threads N         CPU threads [all available cores]\n"
+"      --no-cpu            do not use the CPU\n"
+"      --no-gpu            do not use the GPUs\n"
+"      --gpu LIST          use only the listed GPUs (comma-separated indices, see 'devices')\n"
+"      --gpu-api A         auto | cuda | opencl   [auto: CUDA for NVIDIA cards (OpenCL as a fallback), OpenCL for the others]\n"
+"      --isa I             " PZ_ISA_HELP "\n"
+"      --limit X           use only X%% of the machine (1..99), always at full speed and without pauses: X%% of the CPU threads\n"
+"                          (one per physical core first) and X%% of the GPU work-items; less heat and power, speed reduced\n"
+"                          accordingly [off]. It does not use or update the machine tuning; with -t the X%% is computed on the\n"
+"                          given threads\n"
+"      --prio-gpu P        auto | yes | no: the threads that serve the GPUs (they launch the kernels) run at a higher priority than\n"
+"                          the compute threads [auto: the tuning tests it and remembers it; Linux requires root]\n"
+"      --retune            measure again the best combination of CPU threads and GPUs for this machine (the first run of each\n"
+"                          version measures it automatically, about 2 minutes, and remembers it); not used with -t, --gpu,\n"
+"                          --no-cpu or --no-gpu\n"
+"      --no-tune           do not measure or use the machine profile: all threads and all GPUs\n"
+"      --keep-awake        Windows and macOS: prevent the system from going to sleep while the campaign runs\n"
+"\n"
+"SEVERAL COMPUTERS (same -s, range and public key on all of them)\n"
+"      --part Q/T          linear search: the blocks of the visit order are divided into T shares and this computer scans share Q\n"
+"                          (counting from 0; several are allowed: 0,1/4 or 0-6/9). Same --chunk-bits on all\n"
+"      --node N            kangaroo: number of this computer (0..65535, 0 if there is only one): the kangaroos start from\n"
+"                          different points (see 'merge')\n"
+"\n"
+"DISPLAY AND FILES\n"
+"      --ui U              auto | full (multi-line panel updated in place) | line (one line) | log (one line per minute, suited\n"
+"                          to files)   [auto: full on a terminal]\n"
+"      --no-progress       same as --ui log\n"
+"      --report-interval S seconds between panel updates [1]\n"
+"      --checkpoint-interval S   seconds between state saves [60]\n"
+"  -q, --quiet             fewer messages\n"
+"  -v, --verbose           more messages\n");
+    help_print(f, text);
+}
+
+static void usage_bench(FILE *f)
+{
+    help_print(f,
+"pzsolve bench - measure the speed of the CPU and GPU engines\n"
+"\n"
+"USAGE\n"
+"  pzsolve bench [--together [--linear] [-t N] [--gpu LIST] [--prio-gpu P]] [--gpu-only] [--retune]\n"
+"\n"
+"Without options: every CPU engine, the kangaroo, BSGS, and the GPUs.\n"
+"\n"
+"OPTIONS\n"
+"      --together          measure CPU and GPUs working together as in a campaign (puzzle 140), with several numbers of CPU\n"
+"                          threads and with each slower GPU switched off in turn: reports the best configuration\n"
+"      --linear            with --together: the linear search instead of the kangaroo\n"
+"  -t, --threads N         with --together: try only N CPU threads\n"
+"      --gpu LIST          with --together: use only the listed GPUs (as in hunt)\n"
+"      --prio-gpu P        with --together: auto | yes | no, as in hunt\n"
+"      --gpu-only          skip the CPU tests and run only the GPU ones (bandwidth, integer instructions, linear search, kangaroo)\n"
+"      --retune            ignore the saved choice of the GPU kernel variant and measure it again\n");
+}
+
+/* The help of a command: "pzsolve help hunt", "pzsolve hunt --help". */
+void pz_help(const char *topic, FILE *f)
+{
+    if (topic && !strcmp(topic, "hunt")) usage_hunt(f);
+    else if (topic && !strcmp(topic, "bench")) usage_bench(f);
+    else usage_main(f);
+}
+
+static const char *g_cmd = "";
 
 typedef struct {
     int puzzle;
@@ -154,6 +220,25 @@ static double opt_positive_double(const char *opt, const char *s)
     return v;
 }
 
+/* A speed such as 800000000, 800M or 1.5G (suffixes k, M, G, T). */
+static double opt_rate(const char *opt, const char *s)
+{
+    char *end;
+    errno = 0;
+    double v = strtod(s, &end);
+    if (end != s && end[0] && !end[1]) {
+        switch (end[0]) {
+        case 'k': case 'K': v *= 1e3; end++; break;
+        case 'm': case 'M': v *= 1e6; end++; break;
+        case 'g': case 'G': v *= 1e9; end++; break;
+        case 't': case 'T': v *= 1e12; end++; break;
+        default: break;
+        }
+    }
+    if (end == s || *end || errno == ERANGE || !(v > 0) || v > 1e15) pz_die("%s: invalid value '%s' (expected a speed such as 800M or 1.5G)", opt, s);
+    return v;
+}
+
 static u64 opt_u64(const char *opt, const char *s, u64 lo, u64 hi)
 {
     u64 v;
@@ -187,7 +272,8 @@ static void parse_opts(int argc, char **argv, opts_t *o)
     snprintf(o->isa, sizeof o->isa, "auto");
     optind = 1;
     int c;
-    while ((c = getopt_long(argc, argv, "p:r:a:H:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, ":p:r:a:H:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
         switch (c) {
         case 'p': o->puzzle = (int)opt_int("--puzzle", optarg, 1, 256); break;
         case 'r': pz_strlcpy(o->range, optarg, sizeof o->range); break;
@@ -263,16 +349,17 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else if (!strcmp(optarg, "log")) o->ui = UI_LOG;
             else pz_die("--ui must be auto, full, line or log");
             break;
-        case 'h': usage(stdout); exit(0);
-        default: usage(stderr); exit(2);
+        case 'h': pz_help(g_cmd, stdout); exit(0);
+        case ':': pz_die("the option '%s' needs a value (see 'pzsolve help %s')", argv[optind - 1], g_cmd);
+        default: pz_die("unrecognized option '%s' (see 'pzsolve help %s')", argv[optind - 1], g_cmd);
         }
     }
     if (optind < argc) {
         /* a bare value is almost always a forgotten option name ("hunt 71" instead of "hunt -p 71") */
         const char *a = argv[optind];
         bool num = a[0] >= '0' && a[0] <= '9';
-        if (num) pz_die("unexpected argument '%s' (did you mean -p %s ?)", a, a);
-        pz_die("unexpected argument '%s' (options start with - or --: see 'pzsolve help')", a);
+        if (num) pz_die("unexpected argument '%s' (did you mean -p %s?)", a, a);
+        pz_die("unexpected argument '%s' (options start with - or --: see 'pzsolve help %s')", a, g_cmd);
     }
     if (o->want_new && o->want_resume) pz_die("--new and --resume are mutually exclusive: --new requires a new campaign, --resume an existing one");
 }
@@ -284,7 +371,7 @@ static void check_isa_option(const char *isa)
 {
     if (!strcmp(isa, "auto")) return;
     const cpu_engine *e = cpu_engine_by_name(isa);
-    if (!e) pz_die("unknown --isa: %s (valid: auto, baseline, avx2, avx512, avx2v, avx512v, avx512i)", isa);
+    if (!e) pz_die("unknown --isa: %s (valid: %s)", isa, PZ_ISA_LIST);
     if (!e->supported()) pz_die("the CPU does not support the instruction set '%s' (see 'pzsolve devices')", isa);
 }
 
@@ -427,7 +514,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     }
     if (o->address[0]) {
         u8 h[20];
-        if (!address_to_hash160(o->address, h)) pz_die("invalid address (only mainnet P2PKH is supported, Base58Check checksum)");
+        if (!address_to_hash160(o->address, h)) pz_die("invalid address (a mainnet \"1...\" address or a native SegWit \"bc1q...\" address with a valid checksum is expected)");
         if (have_target && memcmp(h, c->target_h160, 20) != 0)
             pz_die("the given public key does not match the address (the hash160 of the compressed form differs)");
         memcpy(c->target_h160, h, 20);
@@ -565,6 +652,29 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
 
 static void parse_gpu_filter(run_ctx *r, const char *list) { pz_strlcpy(r->gpu_filter, list, sizeof r->gpu_filter); }
 
+/* The size of a range in words: "8,388,608 keys", "2^43 keys", "about 6.65e35 keys". */
+static void size_text(const u256 *sz, const char *dec, char *out, size_t n)
+{
+    const size_t len = strlen(dec);
+    int bits = 0, top = -1;
+    for (int i = 0; i < 256; i++)
+        if ((sz->w[i / 64] >> (i % 64)) & 1) { bits++; top = i; }
+    if (len <= 9 || (len <= 12 && bits != 1)) {
+        char g[48];
+        snprintf(out, n, "%s keys", pz_group_digits(dec, g, sizeof g));
+    } else if (bits == 1) snprintf(out, n, "2^%d keys", top);
+    else snprintf(out, n, "about %c.%c%ce%zu keys", dec[0], dec[1], dec[2], len - 1);
+}
+
+/* The banner printed when the key is found (by 'hunt' or by 'merge'). */
+static void print_found_banner(const run_ctx *r, const char *addr, const char *hx, const char *wif)
+{
+    printf("\a\n======================= KEY FOUND =======================\n");
+    if (r->cfg.puzzle) printf("  puzzle:         #%d\n", r->cfg.puzzle);
+    printf("  address:        %s\n  key (hex):      %s\n  WIF compressed: %s\n", addr, hx, wif);
+    printf("  saved in:       %s\n=========================================================\n", r->path_found);
+}
+
 static int cmd_hunt(int argc, char **argv)
 {
     opts_t o;
@@ -653,12 +763,14 @@ static int cmd_hunt(int argc, char **argv)
     u256_to_hex(&r->cfg.range_end, re);
     u256 sz = cfg_range_size(&r->cfg);
     u256_to_dec(&sz, rsz);
+    char rsz_short[64];
+    size_text(&sz, rsz, rsz_short, sizeof rsz_short);
     pz_strlcpy(addr, r->cfg.address, sizeof addr);
     char memb[32];
     pz_fmt_bytes((double)r->sys.mem_total, memb, sizeof memb);
     pz_log(PZ_LOG_INFO, "pzsolve %s - campaign '%s' %s", PZ_VERSION, r->cfg.name, resuming ? "(resumed)" : "(new)");
     pz_log(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
-    pz_log(PZ_LOG_INFO, "range: 0x%s - 0x%s (%s keys)", rs, re, rsz);
+    pz_log(PZ_LOG_INFO, "range: 0x%s - 0x%s (%s)", rs, re, rsz_short);
     if (r->cfg.mode == MODE_LINEAR)
         pz_log(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);
     else if (r->cfg.mode == MODE_BSGS)
@@ -672,8 +784,8 @@ static int cmd_hunt(int argc, char **argv)
     }
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
     if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes, PLURAL(r->engine->lanes));
-    else if (r->use_cpu && r->cfg.mode == MODE_KANGAROO) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, kangaroo step %s", r->nthreads, PLURAL(r->nthreads), kang_round_name());
-    else if (r->use_cpu) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, giant-step windows %s", r->nthreads, PLURAL(r->nthreads), bsgs_engine_name());
+    else if (r->use_cpu && r->cfg.mode == MODE_KANGAROO) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, kangaroo steps with %s", r->nthreads, PLURAL(r->nthreads), kang_round_name());
+    else if (r->use_cpu) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, giant steps with %s", r->nthreads, PLURAL(r->nthreads), bsgs_engine_name());
     if (r->limit_pct) {
         char cpu[120] = "", gpu[80] = "";
         if (r->use_cpu) snprintf(cpu, sizeof cpu, "CPU %d thread%s out of %d (one per physical core first)", r->nthreads, PLURAL(r->nthreads), thr_full);
@@ -714,9 +826,7 @@ static int cmd_hunt(int argc, char **argv)
         u256_to_hex(&r->found_key, hx);
         u256_to_be(&r->found_key, kb);
         privkey_to_wif(kb, true, wif, sizeof wif);
-        printf("\a\n======================= KEY FOUND =======================\n");
-        printf("  puzzle:         #%d\n  address:        %s\n  key (hex):      %s\n  WIF compressed: %s\n", r->cfg.puzzle, addr, hx, wif);
-        printf("  saved in:       %s\n=========================================================\n", r->path_found);
+        print_found_banner(r, addr, hx, wif);
         pz_log_set_file(NULL);
         free(r);
         return 0;
@@ -777,7 +887,7 @@ static int cmd_merge(int argc, char **argv)
     parse_opts(argc, argv, &o);
     pz_log_set_quiet(o.quiet);
     if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
-    if (!o.campaign[0] || !o.nfiles) pz_die("usage: pzsolve merge (-c NAME | -p N) [-d DIR] -f FILE_OR_FOLDER [-f ...]   (the files are the dp.bin of other computers)");
+    if (!o.campaign[0] || !o.nfiles) pz_die("usage: pzsolve merge (-c NAME | -p N) [-d DIR] -f FILE_OR_FOLDER [-f ...]  (the files are the dp.bin of the other computers)");
     char cdir[600], conf[700], err[256];
     snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
     snprintf(conf, sizeof conf, "%s/campaign.conf", cdir);
@@ -807,13 +917,12 @@ static int cmd_merge(int argc, char **argv)
         privkey_to_wif(kb, true, wif, sizeof wif);
         if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
         else hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
-        printf("\a\n======================= KEY FOUND =======================\n");
-        printf("  puzzle:         #%d\n  address:        %s\n  key (hex):      %s\n  WIF compressed: %s\n", r->cfg.puzzle, addr, hx, wif);
-        printf("  saved in:       %s\n=========================================================\n", r->path_found);
+        print_found_banner(r, addr, hx, wif);
         free(r);
         return 0;
     }
-    printf("no collision between the points of the two logs (yet): continue with 'hunt' on this campaign\n");
+    if (rc == 0) pz_fputs_wrap(stdout, "\nNo collision between the points yet: continue with 'hunt' on this campaign.\n", PZ_LINE_MAX, 2);
+    else pz_fputs_wrap(stdout, "\nSome of the files could not be merged (see above).\n", PZ_LINE_MAX, 2);
     free(r);
     return rc;
 }
@@ -862,7 +971,7 @@ static int cmd_split(int argc, char **argv)
                (u128)speed[i] * 200 < (u128)wsum ? "   (too slow for this split: its minimum share is more than its fair share)" : "");
         first += counts[i];
     }
-    printf("On all of them: the same puzzle or range (-p or -r), the same -s and the same --chunk-bits; linear search (-m linear).\n");
+    printf("On every computer use the same puzzle or range (-p or -r), the same -s and --chunk-bits, and -m linear.\n");
     return 0;
 }
 
@@ -894,8 +1003,13 @@ static int cmd_where(int argc, char **argv)
         if (!sched_locate(s, &gk, &seq, &off)) pz_die("giant index out of range");
         char sb[80];
         const long double nblocks = u256_to_ld(&s->blocks_all);
-        printf("The key will be found at giant step number %llu (of %llu): block %s (of %.0Lf) of the visit order, about %.6Lf%% of the way.\n",
-               (unsigned long long)gi, (unsigned long long)bp.Ng, u256_to_dec(&seq, sb), nblocks, u256_to_ld(&seq) * 100.0L / nblocks);
+        char g1[48], g2[48], g3[48], g4[48];
+        snprintf(g1, sizeof g1, "%llu", (unsigned long long)gi);
+        snprintf(g2, sizeof g2, "%llu", (unsigned long long)bp.Ng);
+        snprintf(g4, sizeof g4, "%.0Lf", nblocks);
+        pz_prop_line("giant step", "the key will be found at step %s of %s", pz_group_digits(g1, g3, sizeof g3), pz_group_digits(g2, g1, sizeof g1));
+        pz_prop_line("visit order", "block %s of %s, %.4Lf%% of the way", pz_group_digits(u256_to_dec(&seq, sb), g2, sizeof g2), pz_group_digits(g4, g3, sizeof g3),
+                     u256_to_ld(&seq) * 100.0L / nblocks);
         sched_free(s);
         return 0;
     }
@@ -906,15 +1020,18 @@ static int cmd_where(int argc, char **argv)
     char sb[80];
     const long double blocks = u256_to_ld(&s->blocks_all);            /* of the whole search order, also with --part */
     long double frac = u256_to_ld(&seq) / blocks;
-    printf("The key will be scanned in block number %s (of %.0Lf) of the visit order,\nat offset %llu within the block: ", u256_to_dec(&seq, sb),
-           blocks, (unsigned long long)off);
-    printf("about %.6Lf%% of the way.\n", frac * 100.0L);
+    {
+        char g1[64], g2[64], g3[64];
+        snprintf(g3, sizeof g3, "%.0Lf", blocks);
+        pz_prop_line("visit order", "block %s of %s, offset %llu within the block, %.4Lf%% of the way", pz_group_digits(u256_to_dec(&seq, sb), g1, sizeof g1),
+                     pz_group_digits(g3, g2, sizeof g2), (unsigned long long)off, frac * 100.0L);
+    }
     if (s->part.total) {
         u256 local;
         if (sched_part_position(s, &seq, &local))
-            printf("It is in part %s of this computer: its block number %s of %.0Lf.\n", s->part_text, u256_to_dec(&local, sb), u256_to_ld(&s->blocks_part));
+            pz_prop_line("part", "in part %s of this computer: its block %s of %.0Lf", s->part_text, u256_to_dec(&local, sb), u256_to_ld(&s->blocks_part));
         else
-            printf("It is not in part %s of this computer: another computer will scan it.\n", s->part_text);
+            pz_prop_line("part", "not in part %s of this computer: another computer will scan it", s->part_text);
     }
     sched_free(s);
     return 0;
@@ -930,24 +1047,22 @@ static const char *recommended_method(const puzzle_info *p)
 static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double rate_kang, bool measured)
 {
     const int n = p->n;
-    char r1[32], r2[32];
+    char r1[32], r2[32], t1[48], t2[48], t3[48];
     if (rate_lin > 0)
-        printf("  speed used:       %s keys/s (linear)%s%s%s %s\n", pz_fmt_si(rate_lin, r1, sizeof r1), rate_kang > 0 && p->pubkey[0] ? ", " : "",
-               p->pubkey[0] && rate_kang > 0 ? pz_fmt_si(rate_kang, r2, sizeof r2) : "", p->pubkey[0] && rate_kang > 0 ? " steps/s (kangaroo)" : "",
-               measured ? "- measured now on the CPU of this machine" : "- given with --rate");
+        pz_prop_line("speed used", "%s keys/s (linear)%s%s%s; %s", pz_fmt_si(rate_lin, r1, sizeof r1), rate_kang > 0 && p->pubkey[0] ? ", " : "",
+                     p->pubkey[0] && rate_kang > 0 ? pz_fmt_si(rate_kang, r2, sizeof r2) : "", p->pubkey[0] && rate_kang > 0 ? " steps/s (kangaroo)" : "",
+                     measured ? "measured now on the CPU of this machine" : "given with --rate");
+    pz_section("Mean effort");
     const long double W = ldexpl(1.0L, n - 1);
-    char t1[48], t2[48], t3[48];
-    printf("  mean effort:\n");
-    printf("    linear search:    %.3Le keys on average (2^%.1f), %.3Le in the worst case\n", W / 2, (double)(n - 2), W);
+    pz_prop_line("linear search", "%.3Le keys on average (2^%.1f), %.3Le in the worst case", W / 2, (double)(n - 2), W);
     if (rate_lin > 0)
-        printf("                      time: 50%% in %s, 100%% in %s\n", pz_fmt_duration((double)(W / 2) / rate_lin, t1, sizeof t1),
-               pz_fmt_duration((double)W / rate_lin, t2, sizeof t2));
+        pz_prop_line("", "time: 50%% in %s, 100%% in %s", pz_fmt_duration((double)(W / 2) / rate_lin, t1, sizeof t1), pz_fmt_duration((double)W / rate_lin, t2, sizeof t2));
     if (p->pubkey[0]) {
         long double st = KANG_C_MEAN * sqrtl(W);
-        printf("    kangaroo:         %.3Le steps on average (2^%.1f)\n", st, (double)log2l(st));
+        pz_prop_line("kangaroo", "%.3Le steps on average (2^%.1f)", st, (double)log2l(st));
         if (rate_kang > 0)
-            printf("                      time: median %s, 90%% in %s\n", pz_fmt_duration((double)(0.9395L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t1, sizeof t1),
-                   pz_fmt_duration((double)(1.7122L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t3, sizeof t3));
+            pz_prop_line("", "time: median %s, 90%% in %s", pz_fmt_duration((double)(0.9395L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t1, sizeof t1),
+                         pz_fmt_duration((double)(1.7122L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t3, sizeof t3));
         /* BSGS with a RAM table, if one that beats the kangaroo fits in 70% of the free memory */
         sysinfo_t si;
         sysinfo_detect(&si);
@@ -958,11 +1073,10 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
             char mb[48], cs[48];
             pz_fmt_bytes((double)bsgs_bytes_for(T), mb, sizeof mb);
             long double cost = bsgs_mean_cost(&w256, T);
-            printf("    BSGS in RAM:      table of %llu entries (%s), %.3Le operations on average (2^%.1f), deterministic\n", (unsigned long long)T, mb, cost,
-                   (double)log2l(cost));
-            if (rate_kang > 0) printf("                      time (estimated with the kangaroo speed): %s on average\n", pz_fmt_duration((double)cost / rate_kang, cs, sizeof cs));
+            pz_prop_line("BSGS in RAM", "table of %llu entries (%s), %.3Le operations on average (2^%.1f), deterministic", (unsigned long long)T, mb, cost, (double)log2l(cost));
+            if (rate_kang > 0) pz_prop_line("", "time, at the kangaroo speed: %s on average", pz_fmt_duration((double)cost / rate_kang, cs, sizeof cs));
         } else {
-            printf("    BSGS in RAM:      not worthwhile (the optimal table does not fit in 70%% of the free RAM of this machine)\n");
+            pz_prop_line("BSGS in RAM", "not worthwhile: the best table does not fit in 70%% of the free RAM of this machine");
         }
     }
 }
@@ -974,8 +1088,8 @@ static int cmd_puzzle(int argc, char **argv)
     double rate_lin = -1, rate_kang = -1;
     for (int i = 3; i < argc; i++)
         if (!strcmp(argv[i], "--rate")) {
-            if (i + 1 >= argc) pz_die("--rate requires a value (keys per second, for example --rate 5e8)");
-            rate_lin = rate_kang = opt_positive_double("--rate", argv[++i]);
+            if (i + 1 >= argc) pz_die("--rate requires a value (keys per second, for example --rate 800M or --rate 1.5G)");
+            rate_lin = rate_kang = opt_rate("--rate", argv[++i]);
         }
         else pz_die("unknown option: %s", argv[i]);
     u256 a, b;
@@ -986,33 +1100,40 @@ static int cmd_puzzle(int argc, char **argv)
     u256 sz = cfg_range_size(&(campaign_cfg){.range_start = a, .range_end = b});
     u256_to_dec(&sz, ds);
     const puzzle_info *p = puzzle_find(n);
-    printf("puzzle #%d\n", n);
+    char title[32];
+    snprintf(title, sizeof title, "Puzzle #%d", n);
+    pz_section(title);
     if (p) {
-        printf("  address:          %s\n", p->address);
-        printf("  public key:       %s\n", p->pubkey[0] ? p->pubkey : "not known (never appeared on the blockchain)");
-        if (p->privkey[0]) printf("  status:           SOLVED (key 0x%s)\n", p->privkey);
-        else printf("  status:           OPEN in the built-in database (check on the address that the funds are still there)\n");
-        printf("  method:           %s\n", recommended_method(p));
+        pz_prop_line("address", "%s", p->address);
+        pz_prop_line("public key", "%s", p->pubkey[0] ? p->pubkey : "not known (it never appeared on the blockchain)");
+        if (p->privkey[0]) pz_prop_line("status", "solved, the key is 0x%s", p->privkey);
+        else pz_prop_line("status", "open in the built-in database: check that the funds are still on the address");
     } else if (puzzle_retired_address(n)) {
-        printf("  address:          %s\n", puzzle_retired_address(n));
-        printf("  public key:       not known\n");
-        printf("  status:           EMPTIED: funds withdrawn by the creator in 2017 (block 475240), together with all puzzles 161..256\n");
+        pz_prop_line("address", "%s", puzzle_retired_address(n));
+        pz_prop_line("public key", "not known");
+        pz_prop_line("status", "emptied: the creator withdrew the funds in 2017 (block 475240), together with all puzzles 161..256");
     }
-    printf("  range:            0x%s - 0x%s\n  keys:             %s  (2^%d)\n", ha, hb, ds, n - 1);
+    char dsg[96];
+    pz_prop_line("range", "0x%s to 0x%s", ha, hb);
+    pz_prop_line("keys", "%s (2^%d)", pz_group_digits(ds, dsg, sizeof dsg), n - 1);
     if (p) {
+        pz_prop_line("best method", "%s", recommended_method(p));
         bool measured = rate_lin < 0;
         if (measured) {
-            fprintf(stderr, "measuring the speed of this machine (about 4 seconds)...\r");
+            const bool tty = pz_stderr_is_terminal();
+            fprintf(stderr, tty ? "measuring the speed of this machine (about 4 seconds)...\r" : "measuring the speed of this machine (about 4 seconds)...\n");
             rate_lin = bench_cpu_rate(1.0);
             rate_kang = p->pubkey[0] ? kangaroo_bench(2.0, false) : 0;
-            fprintf(stderr, "\x1b[K");
+            if (tty) fprintf(stderr, "\x1b[K");
         }
         print_puzzle_effort(p, rate_lin, rate_kang, measured);
-        printf("  (GPUs, if present, add to the CPU: give the overall speed with --rate)\n");
+        printf("\nGPUs, if present, add to the CPU: give the overall speed with --rate.\n");
+        printf("To start the campaign: pzsolve hunt -p %d\n", n);
     } else {
         long double w = ldexpl(1.0L, n - 1);
-        printf("  linear search (no pubkey):  %.3Le keys in the worst case, %.3Le on average\n", w, w / 2);
-        printf("  kangaroo (with pubkey):     ~%.3Le steps on average\n", KANG_C_MEAN * sqrtl(w));
+        pz_section("Mean effort");
+        pz_prop_line("linear search", "%.3Le keys in the worst case, %.3Le on average (no public key)", w, w / 2);
+        pz_prop_line("kangaroo", "about %.3Le steps on average (with the public key)", KANG_C_MEAN * sqrtl(w));
     }
     return 0;
 }
@@ -1049,14 +1170,17 @@ static int cmd_devices(void)
 {
     sysinfo_t s;
     sysinfo_detect(&s);
-    char m1[32], m2[32];
-    printf("CPU:  %s\n      %d usable logical threads (%d physical cores), L2 cache %d KiB, L3 %d KiB\n", s.model, s.ncpu, s.ncore, s.l2_kib, s.l3_kib);
-    printf("RAM:  %s total, %s available\n", pz_fmt_bytes((double)s.mem_total, m1, sizeof m1), pz_fmt_bytes((double)s.mem_avail, m2, sizeof m2));
-    printf("CPU engines:\n");
+    char m1[32], m2[32], c2[32], c3[32];
+    pz_section("CPU");
+    pz_prop_line("model", "%s", s.model);
+    pz_prop_line("threads", "%d usable logical thread%s on %d physical core%s", s.ncpu, PLURAL(s.ncpu), s.ncore, PLURAL(s.ncore));
+    if (s.l2_kib > 0) pz_prop_line("caches", "L2 %s, L3 %s", pz_fmt_bytes((double)s.l2_kib * 1024, c2, sizeof c2), pz_fmt_bytes((double)s.l3_kib * 1024, c3, sizeof c3));
+    pz_prop_line("RAM", "%s total, %s available", pz_fmt_bytes((double)s.mem_total, m1, sizeof m1), pz_fmt_bytes((double)s.mem_avail, m2, sizeof m2));
+    pz_section("CPU engines");
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);
-    for (int i = 0; i < n; i++) printf("  %-9s %2d lanes  %s\n", all[i]->name, all[i]->lanes, all[i]->supported() ? "available" : "not supported by this CPU");
-    printf("GPUs (CUDA and OpenCL):\n");
+    for (int i = 0; i < n; i++) printf("  %-10s%2d lanes   %s\n", all[i]->name, all[i]->lanes, all[i]->supported() ? "available" : "not supported by this CPU");
+    pz_section("GPUs (CUDA and OpenCL)");
     gpu_list_devices();
     return 0;
 }
@@ -1065,7 +1189,7 @@ int main(int argc, char **argv)
 {
     pz_console_init();
     if (argc < 2) {
-        usage(stderr);
+        usage_main(stderr);
         if (pz_console_is_own()) {
             /* double-clicked in Explorer: the window would vanish before the text could be read */
             fprintf(stderr, "\nThis is a command-line program: open PowerShell (or the Command Prompt) in its folder\n"
@@ -1075,6 +1199,7 @@ int main(int argc, char **argv)
         return 2;
     }
     const char *cmd = argv[1];
+    g_cmd = cmd;
     const bool noargs = !strcmp(cmd, "devices") || !strcmp(cmd, "selftest") || !strcmp(cmd, "version");
     if (noargs && argc > 2) pz_die("the command '%s' takes no arguments ('%s' not recognized)", cmd, argv[2]);
     if (!strcmp(cmd, "hunt")) return cmd_hunt(argc - 1, argv + 1);
@@ -1094,8 +1219,7 @@ int main(int argc, char **argv)
         printf("pzsolve %s (%s)\n", PZ_VERSION, PZ_BUILD_INFO);
         return 0;
     }
-    if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") || !strcmp(cmd, "-h")) { usage(stdout); return 0; }
-    fprintf(stderr, "unknown command: %s\n\n", cmd);
-    usage(stderr);
+    if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") || !strcmp(cmd, "-h")) { pz_help(argc > 2 ? argv[2] : NULL, stdout); return 0; }
+    pz_die("unknown command '%s' (see 'pzsolve help')", cmd);
     return 2;
 }

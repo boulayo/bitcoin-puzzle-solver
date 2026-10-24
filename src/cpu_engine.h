@@ -52,5 +52,7 @@ u64 cpu_scan_reference(const scan_job *job, const u256 *start, u64 nkeys);
 bool cpu_has_avx2(void);
 bool cpu_has_avx512(void);
 bool cpu_has_ifma(void);
+/* aarch64 probe: the SHA-256 instructions (src/cpu_arm.c). */
+bool cpu_has_sha2(void);
 
 #endif

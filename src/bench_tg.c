@@ -2,11 +2,37 @@
 /* bench_tg.c - the scan shared by 'bench --together' and the first-run calibration (see bench_tg.h). */
 #include "bench_tg.h"
 #include "platform.h"
+#include "outfmt.h"
 #include <math.h>
+#include <stdarg.h>
 
 typedef struct { int cap; unsigned off; double cpu, gpu[16], total; } tg_res;
 
 int tg_silent;
+
+void tg_section(const char *title)
+{
+    if (!tg_silent) pz_section(title);
+}
+
+void tg_say(const char *fmt, ...)
+{
+    if (tg_silent) return;
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    for (char *q = buf; *q; q++) {                       /* no blanks at the end of a line */
+        if (*q != ' ') continue;
+        char *e = q;
+        while (*e == ' ') e++;
+        if (*e == '\n' || !*e) memmove(q, e, strlen(e) + 1);
+        else q = e - 1;
+    }
+    pz_fputs_wrap(stdout, buf, PZ_LINE_MAX, 4);
+    fflush(stdout);
+}
 
 double tg_scale(void)
 {
@@ -45,16 +71,41 @@ static tg_res tg_run(const tg_scan_cfg *c, int cap, unsigned off, double settle,
     return o;
 }
 
+/* The columns of the table: threads, total, CPU, then one column per GPU (a switched-off GPU shows "off"); beyond 5 GPUs one column
+ * with their sum. */
+#define TG_MAXCOLS 5
+
+static void tg_header(const tg_scan_cfg *c)
+{
+    char line[300];
+    size_t n = (size_t)snprintf(line, sizeof line, "  %-12s%12s%12s", "threads", "total", "CPU");
+    if (c->ngpu <= TG_MAXCOLS) {
+        for (int j = 0; j < c->ngpu; j++) {
+            char h[16];
+            snprintf(h, sizeof h, "GPU%d", c->gidx[j]);
+            n += (size_t)snprintf(line + n, sizeof line - n, "%12s", h);
+        }
+    } else n += (size_t)snprintf(line + n, sizeof line - n, "%12s", "GPUs");
+    tg_say("%s    (%s)\n", line, c->unit);
+}
+
 static void tg_print_tag(const tg_scan_cfg *c, const tg_res *o, const char *tag)
 {
-    char b[32], cb[32], line[400];
-    size_t n = (size_t)snprintf(line, sizeof line, "  CPU %2d thread%s", o->cap, o->cap == 1 ? "" : "s");
-    for (int j = 0; j < c->ngpu; j++)
-        if (!((o->off >> j) & 1)) n += (size_t)snprintf(line + n, sizeof line - n, " + GPU%d", c->gidx[j]);
-    tg_printf("%-34s %10s %s  (CPU %s", line, pz_fmt_si(o->total, b, sizeof b), c->unit, pz_fmt_si(o->cpu, cb, sizeof cb));
-    for (int j = 0; j < c->ngpu; j++)
-        if (!((o->off >> j) & 1)) tg_printf(" | GPU%d %s", c->gidx[j], pz_fmt_si(o->gpu[j], b, sizeof b));
-    tg_printf(")%s%s\n", tag ? "  " : "", tag ? tag : "");
+    char b[32], line[300];
+    char th[24];
+    snprintf(th, sizeof th, "%d thread%s", o->cap, o->cap == 1 ? "" : "s");
+    size_t n = (size_t)snprintf(line, sizeof line, "  %-12s", th);
+    n += (size_t)snprintf(line + n, sizeof line - n, "%12s", pz_fmt_cell(o->total, b, sizeof b));
+    n += (size_t)snprintf(line + n, sizeof line - n, "%12s", pz_fmt_cell(o->cpu, b, sizeof b));
+    if (c->ngpu <= TG_MAXCOLS) {
+        for (int j = 0; j < c->ngpu; j++)
+            n += (size_t)snprintf(line + n, sizeof line - n, "%12s", (o->off >> j) & 1 ? "off" : pz_fmt_cell(o->gpu[j], b, sizeof b));
+    } else {
+        double sum = 0;
+        for (int j = 0; j < c->ngpu; j++) sum += (o->off >> j) & 1 ? 0 : o->gpu[j];
+        n += (size_t)snprintf(line + n, sizeof line - n, "%12s", pz_fmt_cell(sum, b, sizeof b));
+    }
+    tg_say("%s%s%s\n", line, tag ? "    " : "", tag ? tag : "");
 }
 
 static void tg_print(const tg_scan_cfg *c, const tg_res *o) { tg_print_tag(c, o, NULL); }
@@ -73,21 +124,22 @@ bool tg_prio_verdict(double off1, double on1, double on2, double off2, double mi
  * priority; only a first pair that favours the high one by 1% is confirmed by the opposite order (high, normal), which cancels a drift. */
 static bool tg_prio_test(const tg_scan_cfg *c, double settle, double window, double min_pct, double *gain)
 {
-    tg_printf("  priority of the GPU threads, normal and high in alternating pairs (all CPU threads):\n");
+    tg_printf("  priority of the GPU threads, normal and high, in alternating pairs (all CPU threads):\n");
+    tg_header(c);
     gpu_set_boost(false);
     tg_res off1 = tg_run(c, c->full, 0, settle, window);
-    tg_print_tag(c, &off1, "[normal priority]");
+    tg_print_tag(c, &off1, "normal priority");
     if (atomic_load(&c->r->stop)) return false;
     gpu_set_boost(true);
     tg_res on1 = tg_run(c, c->full, 0, settle, window);
-    tg_print_tag(c, &on1, "[high priority]");
+    tg_print_tag(c, &on1, "high priority");
     *gain = off1.total > 0 ? 100.0 * (on1.total / off1.total - 1.0) : 0.0;
     if (atomic_load(&c->r->stop) || !(on1.total > off1.total * 1.01)) return false;
     tg_res on2 = tg_run(c, c->full, 0, settle, window);
-    tg_print_tag(c, &on2, "[high priority]");
+    tg_print_tag(c, &on2, "high priority");
     gpu_set_boost(false);
     tg_res off2 = tg_run(c, c->full, 0, settle, window);
-    tg_print_tag(c, &off2, "[normal priority]");
+    tg_print_tag(c, &off2, "normal priority");
     if (atomic_load(&c->r->stop)) return false;
     return tg_prio_verdict(off1.total, on1.total, on2.total, off2.total, min_pct, gain);
 }
@@ -116,18 +168,19 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
         }
     }
     const double sc = tg_scale(), settle = 2.0 * sc, window = 8.0 * sc;
-    tg_printf("  %.0f s settling + %.0f s measuring for each configuration (typical noise: 2-3%%)\n", settle, window);
+    tg_printf("  each configuration: %.0f s of settling, then %.0f s of measuring (the noise is typically 2-3%%)\n", settle, window);
     /* The first configuration is the default one: measured right after the herds are built, with the GPU clocks still rising, it
      * would look worse than it is. A warm-up at the default settings comes first and is thrown away. */
-    if (!atomic_load(&r->stop)) { tg_printf("  warm-up (%.0f s at the default configuration, not counted)\n", window); (void)tg_run(c, c->full, 0, 0, window); }
+    if (!atomic_load(&r->stop)) { tg_printf("  warm-up: %.0f s at the default configuration (not counted)\n", window); (void)tg_run(c, c->full, 0, 0, window); }
     if (c->prio == PRIO_AUTO && c->ngpu > 0 && pz_boost_possible() && !atomic_load(&r->stop)) {
         double g = 0;
         out.boost_tested = true;
         out.boost = tg_prio_test(c, settle, window, 2.0, &g);
         out.boost_gain_pct = g;
         gpu_set_boost(out.boost);
-        if (!atomic_load(&r->stop)) tg_printf("  -> high priority for the GPU threads: %+.1f%% (%s)\n", g, out.boost ? "worth it: used for the measurements that follow" : "not worth it: stays normal");
+        if (!atomic_load(&r->stop)) tg_printf("  -> high priority for the GPU threads: %+.1f%%, %s\n", g, out.boost ? "worth it: used for the measurements that follow" : "not worth it: stays normal");
     }
+    tg_header(c);
     tg_res res[32];
     int nres = 0, best = 0;
     for (int i = 0; i < nc && !atomic_load(&r->stop); i++) {
@@ -153,7 +206,7 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
      * confirmed by alternating the two (default, candidate, default, candidate), which cancels a slow drift. */
     double conf_a = 0, conf_b = 0, noise = 2.0;
     if (best != 0 && !atomic_load(&r->stop)) {
-        tg_printf("  confirmation in alternating pairs, best against default:\n");
+        tg_printf("  confirming the best against the default, in alternating pairs:\n");
         double a_first = 0;
         for (int pass = 0; pass < 2 && !atomic_load(&r->stop); pass++) {
             tg_res x = tg_run(c, res[0].cap, res[0].off, settle, window);
@@ -168,7 +221,7 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
     } else if (!atomic_load(&r->stop)) {
         tg_res again = tg_run(c, res[0].cap, 0, settle, window);
         noise = fmax(noise, fabs(100.0 * (again.total / res[0].total - 1.0)));
-        tg_printf("  repeat of the first configuration: %+.1f%% (differences of this size above are noise or thermal drift)\n",
+        tg_printf("  the first configuration measured again: %+.1f%%; differences of that size between configurations are noise or heat drift\n",
                100.0 * (again.total / res[0].total - 1.0));
     }
     out.def_rate = conf_a > 0 ? conf_a : res[0].total;
@@ -204,13 +257,13 @@ void tg_print_advice(const tg_choice *ch, const char *unit)
     char b1[32], b2[32], gl[64];
     const char *prio = ch->boost ? " --prio-gpu yes" : "";
     if (ch->boost_tested && ch->boost)
-        tg_printf("  -> high priority for the GPU threads: %+.1f%% (confirmed in alternating pairs): add  --prio-gpu yes\n", ch->boost_gain_pct);
+        tg_printf("  -> high priority for the GPU threads: %+.1f%%, confirmed in alternating pairs: add --prio-gpu yes\n", ch->boost_gain_pct);
     if (!ch->better) {
         tg_printf("  -> no configuration is clearly better than the default (%s %s): leave the default values%s\n",
-                  pz_fmt_si(ch->def_rate, b1, sizeof b1), unit, ch->boost ? " (with high priority for the GPU threads)" : "");
+                  pz_fmt_si(ch->def_rate, b1, sizeof b1), unit, ch->boost ? ", with high priority for the GPU threads" : "");
         return;
     }
     tg_gpu_list(ch, gl, sizeof gl);
-    tg_printf("  -> best: %s %s (%+.1f%% over the default configuration, %s, in the pairwise confirmation): start with  -t %d%s%s%s\n",
+    tg_printf("  -> best: %s %s, %+.1f%% over the default (%s) when confirmed in pairs: start with -t %d%s%s%s\n",
            pz_fmt_si(ch->best_rate, b1, sizeof b1), unit, ch->gain_pct, pz_fmt_si(ch->def_rate, b2, sizeof b2), ch->cap, gl[0] ? " --gpu " : "", gl, prio);
 }

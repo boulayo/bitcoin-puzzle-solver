@@ -5,6 +5,8 @@
 #include "gpu.h"
 #include "hash.h"
 #include "bench_tg.h"
+#include "outfmt.h"
+#include <stdarg.h>
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
@@ -223,12 +225,15 @@ void kang_free_test_state(struct kang_state *ks)
 
 int kangaroo_selftest(void)
 {
+    const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);
     int fails = 0;
     u64 s = 0xC0FFEE1234ULL;
     struct { unsigned wbits; int n, schema; } cases[] = {{24, 4, 3}, {34, 3, 3}, {24, 2, 2}, {34, 1, 2}, {24, 3, 1}, {34, 1, 1}};   /* schemas 1 and 2: campaigns of 1.7.7 and 1.7.8 */
     for (size_t c = 0; c < sizeof cases / sizeof *cases; c++) {
         const kang_try_opts so = {0, 0, false, cases[c].schema};
+        char vals[160] = "";
+        int lost = 0;
         for (int t = 0; t < cases[c].n; t++) {
             u256 lo = u256_pow2(60 + (unsigned)t), key;
             u256_add_u64(&lo, &lo, st_rnd(&s) & 0xffffff);
@@ -237,23 +242,31 @@ int kangaroo_selftest(void)
             if (t == 2) { off = u256_pow2(cases[c].wbits); u256_sub(&off, &off, &(u256){{1, 0, 0, 0}}); }   /* last key */
             u256_add(&key, &lo, &off);
             double steps = kang_try(&lo, cases[c].wbits, &key, 2, 60.0, st_rnd(&s), &so);
-            if (steps < 0) { fails++; printf("  kangaroo W=2^%u (schema %d): key NOT found\n", cases[c].wbits, cases[c].schema); }
-            else printf("  kangaroo W=2^%u (schema %d): key found after %.2f x sqrt(W) steps\n", cases[c].wbits, cases[c].schema, steps / sqrt(ldexp(1.0, (int)cases[c].wbits)));
+            if (steps < 0) { fails++; lost++; }
+            else snprintf(vals + strlen(vals), sizeof vals - strlen(vals), "%s%.2f", vals[0] ? " " : "", steps / sqrt(ldexp(1.0, (int)cases[c].wbits)));
         }
+        char lb[64];
+        snprintf(lb, sizeof lb, "kangaroo, schema %d, W=2^%u", cases[c].schema, cases[c].wbits);
+        if (lost) pz_result_line(lb, "%d of %d keys NOT found", lost, cases[c].n);
+        else pz_result_line(lb, "%d key%s found, steps / sqrt(W): %s", cases[c].n, cases[c].n == 1 ? "" : "s", vals);
     }
     /* Fruitless cycles on real curve points: 8 jumps instead of 256 make a walker fall into a cycle about every 250
      * steps, distinguished points are about as rare and the watchdog is off, so the search ends only if the walkers
      * leave their cycles, and leave them in the same way (otherwise walkers that met would part again). */
+    char cyc[80] = "";
+    int cyc_lost = 0;
     for (int t = 0; t < 2; t++) {
         u256 lo = u256_pow2(80 + (unsigned)t), key;
         u256 off = u256_from_u64(st_rnd(&s) & ((1ULL << 30) - 1));
         u256_add(&key, &lo, &off);
         const kang_try_opts o = {8, 7, true, 0};
         double steps = kang_try(&lo, 30, &key, 2, 60.0, st_rnd(&s), &o);
-        if (steps < 0) { fails++; printf("  kangaroo W=2^30 with 8 jumps (frequent cycles): key NOT found\n"); }
-        else printf("  kangaroo W=2^30 with 8 jumps (frequent cycles): key found after %.2f x sqrt(W) steps\n", steps / sqrt(ldexp(1.0, 30)));
+        if (steps < 0) { fails++; cyc_lost++; }
+        else snprintf(cyc + strlen(cyc), sizeof cyc - strlen(cyc), "%s%.2f", cyc[0] ? " " : "", steps / sqrt(ldexp(1.0, 30)));
     }
-    pz_log_set_quiet(0);
+    if (cyc_lost) pz_result_line("kangaroo, 8 jumps (frequent cycles), W=2^30", "%d of 2 keys NOT found", cyc_lost);
+    else pz_result_line("kangaroo, 8 jumps (frequent cycles), W=2^30", "2 keys found, steps / sqrt(W): %s", cyc);
+    pz_log_set_quiet(was_quiet);
     return fails;
 }
 
@@ -261,7 +274,7 @@ double kangaroo_bench(double secs, bool print)
 {
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
-    if (print) printf("kangaroo benchmark (walk steps per second)\n");
+    const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);
     char dir[600];
     if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return 0; }
@@ -302,10 +315,10 @@ double kangaroo_bench(double secs, bool print)
     double dt = pz_mono() - t0;
     atomic_store(&r->stop, 1);
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
-    pz_log_set_quiet(0);
+    pz_log_set_quiet(was_quiet);
     char b[32];
     double rate = (double)steps / dt;
-    if (print) printf("  CPU %d threads: %s steps/s (step %s)\n", r->nthreads, pz_fmt_si(rate, b, sizeof b), kang_round_name());
+    if (print) printf("  in a campaign (%d threads, step %s): %s steps/s\n", r->nthreads, kang_round_name(), pz_fmt_si(rate, b, sizeof b));
     kang_destroy(ks);
     pz_remove_tree(dir);
     free(r);
@@ -321,17 +334,15 @@ static int cmp_double(const void *a, const void *b)
 
 int kangaroo_stats(int argc, char **argv)
 {
-    if (argc < 4) { fprintf(stderr, "usage: pzsolve kstat BITS RUNS [THREADS [R [DP]]]  (with R or DP: kangaroos without distinguished points are not restarted)\n"); return 2; }
+    if (argc < 4) pz_die("usage: pzsolve kstat BITS RUNS [THREADS [R [DP]]]  (with R or DP the kangaroos without distinguished points are not restarted)");
     unsigned bits = (unsigned)pz_atoi(argv[2]);
     int runs = pz_atoi(argv[3]);
     int thr = argc > 4 ? pz_atoi(argv[4]) : 1;
     kang_try_opts o = {argc > 5 ? (unsigned)pz_atoi(argv[5]) : 0, argc > 6 ? (unsigned)pz_atoi(argv[6]) : 0, argc > 5, 0};
-    if (o.R && (o.R < 2 || o.R > KANG_R || (o.R & (o.R - 1)))) { fprintf(stderr, "kstat: R must be a power of 2 between 2 and %d\n", KANG_R); return 2; }
-    if (o.dp > 40) { fprintf(stderr, "kstat: DP at most 40\n"); return 2; }
-    if (bits < 4 || bits > 64 || runs < 1 || runs > 1000000 || thr < 1 || thr > MAX_WORKERS - 16) {
-        fprintf(stderr, "kstat: parameters out of range (BITS 4..64, RUNS 1..1000000, THREADS 1..%d)\n", MAX_WORKERS - 16);
-        return 2;
-    }
+    if (o.R && (o.R < 2 || o.R > KANG_R || (o.R & (o.R - 1)))) pz_die("kstat: R must be a power of 2 between 2 and %d", KANG_R);
+    if (o.dp > 40) pz_die("kstat: DP must be at most 40");
+    if (bits < 4 || bits > 64 || runs < 1 || runs > 1000000 || thr < 1 || thr > MAX_WORKERS - 16)
+        pz_die("kstat: parameter out of range (BITS 4..64, RUNS 1..1000000, THREADS 1..%d)", MAX_WORKERS - 16);
     pz_log_set_quiet(1);
     u64 s = 0xABCDEF987ULL;
     double sum = 0, *v = pz_xmalloc(sizeof(double) * (size_t)runs);
@@ -350,10 +361,15 @@ int kangaroo_stats(int argc, char **argv)
         v[n++] = steps / sqrt(ldexp(1.0, (int)bits));
         sum += v[n - 1];
     }
-    if (n == 0) { free(v); printf("W=2^%u: no run succeeded out of %d\n", bits, runs); return 1; }
+    if (n == 0) { free(v); printf("W = 2^%u: none of the %d runs succeeded\n", bits, runs); return 1; }
     qsort(v, (size_t)n, sizeof(double), cmp_double);
     const char *se = getenv("PZ_KANG_SCHEMA");
-    printf("W=2^%u, schema %s, %d threads, %d runs: mean %.3f x sqrt(W), median %.3f, p90 %.3f, failed %d\n", bits, se && se[0] >= '1' && se[0] <= '3' && !se[1] ? se : "automatic", thr, n, sum / n, v[n / 2], v[n * 9 / 10], fails);
+    printf("kangaroo cost over %d run%s on W = 2^%u (schema %s, %d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits,
+           se && se[0] >= '1' && se[0] <= '3' && !se[1] ? se : "automatic", thr, thr == 1 ? "" : "s");
+    pz_prop_line("mean", "%.3f", sum / n);
+    pz_prop_line("median", "%.3f", v[n / 2]);
+    pz_prop_line("90th percentile", "%.3f", v[n * 9 / 10]);
+    if (fails) pz_prop_line("failed runs", "%d", fails);
     free(v);
     return 0;
 }
@@ -388,12 +404,12 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     r->sessions = 1;
     r->mem_limit = 256ULL << 20;                           /* a small table of distinguished points: the walk is what is measured */
     ec_init();
-    tg_printf("CPU + GPU benchmark (kangaroo, as in a campaign on puzzle 140)\n");
+    tg_section("CPU and GPUs together: kangaroo, as in a campaign on puzzle 140");
     gpu_session *gpus = NULL;
     int k_gpu = 0;
     int ngpu = gpu_kangaroo_start(r, &gpus, &k_gpu);
     if (ngpu <= 0) {
-        tg_printf("  no usable GPU: nothing to compare (the CPU-only benchmark is in the plain 'bench')\n");
+        tg_printf("  no usable GPU: nothing to compare (the CPU-only benchmark is the plain 'bench')\n");
         pz_remove_tree(dir);
         free(r);
         return 1;
@@ -423,7 +439,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     for (int i = 0; i < r->nws && gi < ngpu; i++)
         if (r->ws[i].kind == 'G') gw[gi++] = i;
 
-    tg_printf("  preparing the herds (%d CPU threads, %d GPUs: the GPU kangaroos are created on the CPU)...\n", total, ngpu);
+    tg_printf("  preparing: %d CPU thread%s and %d GPU%s (the kangaroos of the GPUs are built on the CPU)...\n", total, total == 1 ? "" : "s", ngpu, ngpu == 1 ? "" : "s");
     const double tw = pz_mono();
     for (;;) {
         bool ready = true;
@@ -450,6 +466,25 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
 
 /* ---------------- merge of distinguished-point logs ('pzsolve merge') ---------------- */
 
+/* printf wrapped at the terminal width, with the continuation lines indented. */
+static void say_wrapped(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));
+static void say_wrapped(const char *fmt, ...)
+{
+    char buf[1600];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    pz_fputs_wrap(stdout, buf, PZ_LINE_MAX, 4);
+}
+
+static char *count_text(u64 v, char *out, size_t n)
+{
+    char d[32];
+    snprintf(d, sizeof d, "%llu", (unsigned long long)v);
+    return pz_group_digits(d, out, n);
+}
+
 int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
 {
     ec_init();
@@ -462,7 +497,8 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
     if (kang_configure(ks, 0) != 0) pz_die("kangaroo setup failed");
     const int lr = kang_load_log(ks);
     if (lr < 0) pz_die("cannot use the distinguished-point file %s", ks->log_path);
-    printf("campaign '%s': %llu distinguished points already in %s\n", r->cfg.name, (unsigned long long)ks->loaded, ks->log_path);
+    char c1[32], c2[32], c3[32];
+    say_wrapped("campaign '%s': %s distinguished points already in %s\n", r->cfg.name, count_text(ks->loaded, c1, sizeof c1), ks->log_path);
     int bad = 0;
     for (int i = 0; i < nfiles && !atomic_load(&r->found); i++) {
         char path[1300];
@@ -471,7 +507,7 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
         kang_merge_stats st;
         memset(&st, 0, sizeof st);
         const int rc = kang_merge_file(ks, path, &st);
-        if (rc == -1) { printf("  %s: cannot read file\n", path); bad++; continue; }
+        if (rc == -1) { say_wrapped("  %s: cannot read the file\n", path); bad++; continue; }
         if (rc == -2) {
             char hdr[6] = {0};
             FILE *f = fopen(path, "rb");
@@ -479,15 +515,15 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
             if (f) fclose(f);
             const int fs = !got ? 0 : !memcmp(hdr, "PZDP2\n", 6) ? 1 : !memcmp(hdr, "PZDP3\n", 6) ? 2 : !memcmp(hdr, "PZDP4\n", 6) ? 3 : 0;
             if (fs && fs != ks->schema)
-                printf("  %s: log of kangaroo schema %d, this campaign uses schema %d: the points of the two schemas never meet. "
-                       "All computers must use the same one (set PZ_KANG_SCHEMA=%d before starting the campaign on the new computer)\n", path, fs, ks->schema, ks->schema);
+                say_wrapped("  %s: log of kangaroo schema %d, but this campaign uses schema %d, and the points of two schemas never meet. "
+                            "All computers must use the same schema: set PZ_KANG_SCHEMA=%d before starting the campaign on the new computer\n", path, fs, ks->schema, ks->schema);
             else
-                printf("  %s: not the log of this campaign (different range or public key, or the format of an earlier version: open it with 'hunt' first)\n", path);
+                say_wrapped("  %s: not the log of this campaign: the range or the public key differ, or it comes from an earlier version (open it with 'hunt' first)\n", path);
             bad++;
             continue;
         }
-        printf("  %s: %llu points read, %llu new, %llu already known\n", path, (unsigned long long)st.read, (unsigned long long)st.added, (unsigned long long)st.dups);
-        if (st.skipped) printf("  (%llu points discarded because of the RAM limit: raise --mem)\n", (unsigned long long)st.skipped);
+        say_wrapped("  %s: %s points read, %s new, %s already known\n", path, count_text(st.read, c1, sizeof c1), count_text(st.added, c2, sizeof c2), count_text(st.dups, c3, sizeof c3));
+        if (st.skipped) say_wrapped("  (%s points discarded because of the RAM limit: raise --mem)\n", count_text(st.skipped, c1, sizeof c1));
     }
     if (kang_flush_log(ks) != 0) { pz_log(PZ_LOG_ERR, "writing %s failed (disk full?)", ks->log_path); bad++; }
     kang_destroy(ks);

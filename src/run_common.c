@@ -238,6 +238,29 @@ void run_final_progress(run_ctx *r, progress_info *pi)
     if (r->progress) r->progress(r, pi);
 }
 
+/* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines are
+ * indented by `hang` columns. */
+static void wrap_fields(const char *in, int width, int hang, char *out, size_t n)
+{
+    size_t o = 0;
+    int col = 0;
+    for (const char *p = in; *p && o + 2 < n;) {
+        const char *sep = strstr(p, " | ");
+        const size_t len = sep ? (size_t)(sep - p) : strlen(p);
+        if (col > 0 && col + 3 + (int)len > width) {
+            o += (size_t)snprintf(out + o, n - o, " |\n%*s", hang, "");
+            col = 0;
+        } else if (col > 0) {
+            o += (size_t)snprintf(out + o, n - o, " | ");
+            col += 3;
+        }
+        o += (size_t)snprintf(out + o, n - o, "%.*s", (int)len, p);
+        col += (int)len;
+        p = sep ? sep + 3 : p + len;
+    }
+    out[o < n ? o : n - 1] = 0;
+}
+
 void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 {
     char buf[8192], tb[40], seedhex[65], idb[17], rs[80], re[80], addr[80], hx[48], elapsed[48], state[24];
@@ -280,6 +303,8 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     u256 rsz = cfg_range_size(&r->cfg);
     unsigned rbits = u256_bits(&rsz) ? u256_bits(&rsz) - 1 : 0;
 
+    char detail[900];
+    wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
     int n = snprintf(buf, sizeof buf,
         "=== pzsolve %s - campaign report ===\n"
         "Updated:        %s\n"
@@ -291,22 +316,21 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "Mode:           %s\n"
         "Range:          0x%s - 0x%s  (~2^%u keys)\n"
         "%s"
-        "Sessions:       %d   total compute time: %s\n"
+        "Sessions:       %d, total compute time %s\n"
         "\n"
-        "%s %.6f %%   (%s / %s %s)\n"
+        "%s%.6f %%   (%s of %s %s)\n"
         "Speed:          %s %s/s   (CPU %s, GPU %s)\n"
-        "Time still needed (estimate at constant speed, from the recent average rate):\n"
-        "                50%%: %s   90%%: %s   %s: %s\n"
-        "Probability of finding the key within:  %s: %s   %s: %s   %s: %s   %s: %s   %s: %s\n"
-        "%s\n"
-        "Candidates rejected by verification: %llu\n"
+        "Time left:      50%%: %s   90%%: %s   %s: %s   (at the recent average speed)\n"
+        "Chance within:  %s: %s   %s: %s   %s: %s   %s: %s   %s: %s\n"
+        "Detail:         %s\n"
+        "Rejected:       %llu candidate%s that failed the verification\n"
         "\nWorkers:\n",
         PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, r->cfg.puzzle, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
-        r->sessions, elapsed, kang ? "Success prob.:" : "Progress:      ",
+        r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
         pi->fraction * 100.0, done, total, pi->unit, rate, pi->unit, cr, gr, t50, t90, kang ? "99%" : "100%", tfull,
         ETA_WINDOW_NAMES[0], pw[0], ETA_WINDOW_NAMES[1], pw[1], ETA_WINDOW_NAMES[2], pw[2], ETA_WINDOW_NAMES[3], pw[3], ETA_WINDOW_NAMES[4], pw[4],
-        pi->detail, (unsigned long long)atomic_load(&r->hits_bad));
+        detail, (unsigned long long)atomic_load(&r->hits_bad), atomic_load(&r->hits_bad) == 1 ? "" : "s");
     for (int i = 0; i < r->nws && n < (int)sizeof buf - 200; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
         n += snprintf(buf + n, sizeof buf - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);

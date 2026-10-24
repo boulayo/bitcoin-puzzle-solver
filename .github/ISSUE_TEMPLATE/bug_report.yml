@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work, or gives a wrong result
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `pzsolve version`.
+      placeholder: pzsolve 1.8.0 (git-xxxxxxx/x86_64-linux-gnu)
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command line
+      description: The exact command you ran.
+      placeholder: pzsolve hunt -p 71 --limit 50
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `pzsolve doctor`
+      description: It lists the hardware, the GPUs and the state of the campaigns.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      description: From the terminal or from `campaigns/<name>/log.txt`. Never paste a private key.
+      render: text

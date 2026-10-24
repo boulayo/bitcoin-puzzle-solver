@@ -11,8 +11,10 @@
 #include "profile.h"
 #include "puzzles.h"
 #include "bsgs.h"
+#include "outfmt.h"
 #include <unistd.h>
 
+int pz_sections_printed;
 static int g_fail, g_checks;
 #define CHECK(c, ...) do { g_checks++; if (!(c)) { g_fail++; printf("  FAILED: %s (%s:%d)\n", #c, __FILE__, __LINE__); } } while (0)
 
@@ -83,7 +85,7 @@ static void t_puzzle_db(void)
         solved += PZ_PUZZLES[i].privkey[0] != 0;
         withpub += PZ_PUZZLES[i].pubkey[0] != 0;
     }
-    printf("  %d puzzles in the database (%d solved, %d with a known public key) + %d emptied in 2017 (address only)\n", PZ_NUM_PUZZLES, solved, withpub, PZ_NUM_RETIRED);
+    pz_result_line("puzzle database", "%d puzzles (%d solved, %d with a known public key) + %d emptied in 2017", PZ_NUM_PUZZLES, solved, withpub, PZ_NUM_RETIRED);
 }
 
 static void t_bsgs(void)
@@ -108,7 +110,9 @@ static void t_bsgs(void)
             bool ok = bsgs_solve(&lo, &hi, &P, cases[i].T, 2, &got, &giants);
             CHECK(ok && !u256_cmp(&got, &key));
         }
-        printf("  BSGS W=2^%u, %llu baby steps: random keys and keys at both ends found\n", cases[i].wbits - 1, (unsigned long long)cases[i].T);
+        char lb[64];
+        snprintf(lb, sizeof lb, "BSGS W=2^%u, %llu baby steps", cases[i].wbits - 1, (unsigned long long)cases[i].T);
+        pz_result_line(lb, "random keys and both ends of the range found");
     }
 }
 
@@ -119,7 +123,9 @@ static void t_engines(void)
     const cpu_engine *const *all = cpu_engine_all(&n);
     for (int e = 0; e < n; e++) {
         const cpu_engine *E = all[e];
-        if (!E->supported()) { printf("  engine %-9s not supported by this CPU: skipped\n", E->name); continue; }
+        char lb[64];
+        snprintf(lb, sizeof lb, "CPU engine %s", E->name);
+        if (!E->supported()) { pz_result_line(lb, "not supported by this CPU: skipped"); continue; }
         const int L = E->lanes;
         u32 X[8 * 64], pfx[64], out[5 * 64];
         u8 xb[64][32];
@@ -148,7 +154,7 @@ static void t_engines(void)
             u64 cov = E->scan(&job, &st, 5 * CPU_GRP);
             CHECK(cov == 5 * CPU_GRP && r.hits == 1 && !u256_cmp(&r.key, &key));
         }
-        printf("  engine %-9s OK\n", E->name);
+        pz_result_line(lb, "OK");
     }
 }
 
@@ -192,7 +198,7 @@ static void t_priority(void)
     CHECK(lv[2] == lv[0]);                                                            /* restored */
     CHECK(ok ? lv[1] != lv[0] : lv[1] == lv[0]);                                      /* changed exactly when the system allowed it */
     CHECK(pz_boost_possible() == ok);
-    printf("  GPU thread priority: %s\n", ok ? "raised and restored" : "not allowed for this user (the tuning skips it)");
+    pz_result_line("GPU thread priority", "%s", ok ? "raised and restored" : "not allowed for this user: the tuning skips it");
 }
 
 /* The rate remembered for the completion times: stored per configuration in the machine profile, found again by the next run. The cache
@@ -210,7 +216,7 @@ static run_ctx *rate_ctx(int threads, bool kang)
 static void t_rate_memory(void)
 {
     char tmp[512];
-    if (!pz_make_temp_dir(tmp, sizeof tmp, "pzrate")) { printf("  (no temporary folder: speed memory not tested)\n"); return; }
+    if (!pz_make_temp_dir(tmp, sizeof tmp, "pzrate")) { pz_result_line("speed remembered per configuration", "not tested: no temporary folder"); return; }
     static char env_new[640], env_old[640];
     const char *old = getenv("XDG_CACHE_HOME");
     snprintf(env_old, sizeof env_old, "XDG_CACHE_HOME=%s", old ? old : "");
@@ -259,7 +265,7 @@ static void t_rate_memory(void)
     free(a); free(b); free(c); free(d); free(e); free(f);
     putenv(env_old);
     pz_remove_tree(tmp);
-    printf("  speed remembered per configuration: OK\n");
+    pz_result_line("speed remembered per configuration", "OK");
 }
 
 /* --limit: the share of threads / work-items, and the order that puts the threads on distinct physical cores first. */
@@ -298,12 +304,23 @@ int selftest_run(int argc, char **argv)
 {
     (void)argc; (void)argv;
     ec_init();
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(1);          /* the small campaigns run by the checks must not print their own log lines (paths, "KEY FOUND") */
     printf("pzsolve %s - selftest\n", PZ_VERSION);
-    printf("[1/7] cryptographic primitives (SHA-256, RIPEMD-160, secp256k1, Base58)\n"); t_primitives();
-    printf("[2/7] puzzle database (addresses, keys, ranges)\n"); t_puzzle_db();
-    printf("[3/7] permutation of the search order\n"); t_perm();
-    printf("[4/7] CPU engines (SIMD hash and scan)\n"); t_engines();
-    printf("[5/7] kangaroo (small range)\n");
+    int f0;
+#define SECTION(title) printf("\n[%d/7] %s\n", ++sec, title); f0 = g_fail
+    int sec = 0;
+    SECTION("Primitives");
+    t_primitives();
+    pz_result_line("SHA-256, RIPEMD-160, secp256k1, Base58", "%s", g_fail == f0 ? "OK" : "FAILED");
+    SECTION("Puzzle database");
+    t_puzzle_db();
+    SECTION("Search order");
+    t_perm();
+    pz_result_line("permutation of the blocks (bijective)", "%s", g_fail == f0 ? "OK" : "FAILED");
+    SECTION("CPU engines");
+    t_engines();
+    SECTION("Kangaroo");
     {
         int rc = kang_round_selftest();
         CHECK(rc == 0);
@@ -316,22 +333,28 @@ int selftest_run(int argc, char **argv)
         rc = kang_log_fault_selftest();
         CHECK(rc == 0);
     }
-    printf("[6/7] baby-step giant-step (table in RAM)\n");
+    SECTION("Baby-step giant-step");
     {
         int rc = bsgs_vengine_selftest();
         CHECK(rc == 0);
     }
     t_bsgs();
-    printf("[7/7] GPU\n");
+    SECTION("Machine and GPUs");
     t_priority();
+    f0 = g_fail;
     t_clock_gap();
+    pz_result_line("suspend detection (clock gaps)", "%s", g_fail == f0 ? "OK" : "FAILED");
+    f0 = g_fail;
     t_limit();
+    pz_result_line("--limit shares and thread order", "%s", g_fail == f0 ? "OK" : "FAILED");
     {
         int rc = gpu_selftest();
         CHECK(rc == 0);
     }
     t_rate_memory();
+#undef SECTION
     printf(g_fail ? "\nSELFTEST FAILED: %d of %d checks\n" : "\nSELFTEST PASSED: %d checks, no errors\n", g_fail ? g_fail : g_checks, g_checks);
+    pz_log_set_quiet(was_quiet);
     return g_fail != 0;
 }
 
@@ -377,7 +400,7 @@ static void *bsgs_bench_thread(void *p)
 
 static void bsgs_bench(int nthreads)
 {
-    char err[200], b[32], c[32];
+    char err[200];
     const u64 T = (u64)1 << 22;
     bsgs_table t;
     if (!bsgs_table_alloc(&t, T, err, sizeof err)) return;
@@ -402,8 +425,11 @@ static void bsgs_bench(int nthreads)
     for (int i = 0; i < nt; i++) { ba[i] = (bsgs_bench_arg){&j, -(int64_t)p.A + (int64_t)i * (int64_t)per, per, &stop}; pthread_create(&th[i], NULL, bsgs_bench_thread, &ba[i]); }
     for (int i = 0; i < nt; i++) pthread_join(th[i], NULL);
     double ts = pz_mono() - t0;
-    printf("BSGS benchmark (table of 2^22 baby steps, %d threads):\n  table build:   %s entries/s\n  giant steps:   %s steps/s\n", nt,
-           pz_fmt_si((double)T / tb, b, sizeof b), pz_fmt_si((double)per * nt / ts, c, sizeof c));
+    char sec[96], c1[32], c2[32];
+    snprintf(sec, sizeof sec, "CPU: baby-step giant-step (table of 2^22 entries, %d thread%s)", nt, nt == 1 ? "" : "s");
+    pz_section(sec);
+    pz_prop_line("table build", "%s entries/s", pz_fmt_cell((double)T / tb, c1, sizeof c1));
+    pz_prop_line("giant steps", "%s steps/s", pz_fmt_cell((double)per * nt / ts, c2, sizeof c2));
     bsgs_table_free(&t);
 }
 
@@ -416,7 +442,8 @@ int bench_run(int argc, char **argv)
     bool prio_given = false;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
-        if (!strcmp(a, "--together")) together = true;
+        if (!strcmp(a, "--help") || !strcmp(a, "-h")) { pz_help("bench", stdout); return 0; }
+        else if (!strcmp(a, "--together")) together = true;
         else if (!strcmp(a, "--gpu-only")) gpu_only = true;
         else if (!strcmp(a, "--linear")) linear = true;
         else if (!strcmp(a, "--retune")) gpu_set_retune(true);
@@ -427,14 +454,14 @@ int bench_run(int argc, char **argv)
             if (!strcmp(v, "auto")) prio = PRIO_AUTO;
             else if (!strcmp(v, "yes") || !strcmp(v, "si")) prio = PRIO_YES;
             else if (!strcmp(v, "no")) prio = PRIO_NO;
-            else { fprintf(stderr, "bench: --prio-gpu must be auto, yes or no\n"); return 2; }
+            else pz_die("--prio-gpu must be auto, yes or no (see 'pzsolve help bench')");
             prio_given = true;
         }
-        else { fprintf(stderr, "bench: unrecognized option '%s' (allowed: --together [--linear] [-t N] [--gpu LIST] [--prio-gpu P], --gpu-only, --retune)\n", a); return 2; }
+        else pz_die("bench: unrecognized option '%s' (see 'pzsolve help bench')", a);
     }
-    if ((threads || gpus || linear || prio_given) && !together) { fprintf(stderr, "bench: -t, --gpu, --prio-gpu and --linear are used with --together\n"); return 2; }
+    if ((threads || gpus || linear || prio_given) && !together) pz_die("bench: -t, --gpu, --prio-gpu and --linear are used together with --together (see 'pzsolve help bench')");
     if (gpus) gpu_check_filter(gpus);
-    if (threads < 0 || threads > 512) { fprintf(stderr, "bench: -t must be between 1 and 512\n"); return 2; }
+    if (threads < 0 || threads > 512) pz_die("bench: -t must be between 1 and 512 (see 'pzsolve help bench')");
     if (together) {
         tg_choice ch;
         memset(&ch, 0, sizeof ch);
@@ -453,9 +480,18 @@ int bench_run(int argc, char **argv)
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);
     const int maxt = s.ncpu > 256 ? 256 : s.ncpu;                     /* the arrays below hold 256 threads */
-    printf("linear search benchmark (hash160 of compressed keys), %d threads, 3 s per test\n", maxt);
+    pz_section("CPU: linear search, keys/s (hash160 of compressed keys, 3 s per measurement)");
+    printf("  %-10s", "engine");
+    for (int nt = 1; nt <= maxt; nt = nt == maxt ? nt + 1 : (nt * 2 > maxt ? maxt : nt * 2)) {
+        char h[24];
+        snprintf(h, sizeof h, "%d thread%s", nt, nt == 1 ? "" : "s");
+        printf("%12s", h);
+    }
+    printf("\n");
     for (int e = 0; e < n; e++) {
         if (!all[e]->supported()) continue;
+        printf("  %-10s", all[e]->name);
+        fflush(stdout);
         for (int nt = 1; nt <= maxt; nt = nt == maxt ? nt + 1 : (nt * 2 > maxt ? maxt : nt * 2)) {
             pthread_t th[256];
             bench_arg ba[256];
@@ -463,11 +499,14 @@ int bench_run(int argc, char **argv)
             double total = 0;
             for (int i = 0; i < nt; i++) { pthread_join(th[i], NULL); total += (double)ba[i].keys / ba[i].secs; }
             char b[32];
-            printf("  %-9s %3d %-8s %s keys/s\n", all[e]->name, nt, nt == 1 ? "thread:" : "threads:", pz_fmt_si(total, b, sizeof b));
+            printf("%12s", pz_fmt_cell(total, b, sizeof b));
+            fflush(stdout);
         }
+        printf("\n");
     }
-    kangaroo_bench(3.0, true);
+    pz_section("CPU: kangaroo, steps/s");
     kang_bench_cpu(&s, 1.5);
+    kangaroo_bench(3.0, true);
     bsgs_bench(s.ncpu);
     gpu_bench();
     return 0;

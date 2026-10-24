@@ -21,7 +21,7 @@ void hash160_pub33(u8 parity, const u8 x_be[32], u8 out[20]);
 /* Base58Check. */
 int base58check_decode(const char *s, u8 *out, size_t maxlen);   /* returns payload length (checksum verified) or -1 */
 void base58check_encode(const u8 *payload, size_t len, char *out, size_t outlen);
-/* Decodes a P2PKH mainnet address into its hash160. */
+/* Decodes a mainnet address into its hash160: P2PKH ("1...", Base58Check) or native SegWit P2WPKH ("bc1q...", bech32). */
 bool address_to_hash160(const char *addr, u8 h160[20]);
 void hash160_to_address(const u8 h160[20], char *out, size_t outlen);
 void privkey_to_wif(const u8 key_be[32], bool compressed, char *out, size_t outlen);

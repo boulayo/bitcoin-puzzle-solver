@@ -5,6 +5,7 @@
 #include "hash.h"
 #include "kangaroo.h"
 #include "platform.h"
+#include "outfmt.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -269,9 +270,11 @@ int bsgs_vengine_selftest(void)
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
     const bs_vengine *cand[] = {&BSV_AVX2V, &BSV_AVX512V, &BSV_AVX512I};
     for (size_t i = 0; i < sizeof cand / sizeof *cand; i++) {
-        if (!cand[i]->supported()) { printf("  BSGS windows %-13s not supported by this CPU: skipped\n", cand[i]->name); continue; }
+        char lb[64];
+        snprintf(lb, sizeof lb, "BSGS windows %s", cand[i]->name);
+        if (!cand[i]->supported()) { pz_result_line(lb, "not supported by this CPU: skipped"); continue; }
         bool ok = vengine_check(cand[i]);
-        printf("  BSGS windows %-13s %s\n", cand[i]->name, ok ? "identical to the scalar ones" : "DIFFERENT FROM THE SCALAR ONES");
+        pz_result_line(lb, "%s", ok ? "identical to the scalar ones" : "DIFFERENT FROM THE SCALAR ONES");
         fails += !ok;
     }
 #endif

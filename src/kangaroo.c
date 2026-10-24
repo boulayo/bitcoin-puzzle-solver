@@ -4,6 +4,7 @@
 #include "hash.h"
 #include "cpu_engine.h"
 #include "platform.h"
+#include "outfmt.h"
 #include <math.h>
 #include <float.h>
 #include <unistd.h>
@@ -464,7 +465,7 @@ int kang_log_selftest(void)
     }
     if (f) fclose(f);
     kang_free_test_state(ks);
-    printf("  conversion of the distinguished-point log from format 1: %s\n", fails ? "FAILED" : "OK");
+    pz_result_line("distinguished-point log: conversion from format 1", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -713,7 +714,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     long double n_target = 4.0L * ks->sqrtW / ldexpl(1.0L, dp);
     u64 want = (u64)(n_target / 0.6L) + 4096;
     u64 cap = 4096;
-    while (cap < want && cap < max_entries) cap <<= 1;
+    while (cap < want && (cap << 1) <= max_entries) cap <<= 1;   /* a power of two, never above the memory limit */
     if (getenv("PZ_TEST_DP_CAP")) cap = pz_strtou64(getenv("PZ_TEST_DP_CAP"));   /* tests: force a tiny table to exercise growth */
     if (cap < 64) cap = 64;
     ks->cap = cap;
@@ -726,7 +727,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
 
     if (r->silent_setup) return 0;
     char b1[32], b2[32], b3[32];
-    pz_log(PZ_LOG_INFO, "kangaroo: schema %d, W=2^%.1Lf, kangaroos %d (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
+    pz_log(PZ_LOG_INFO, "kangaroo: schema %d, W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
            ks->schema, log2l(u256_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
     pz_log(PZ_LOG_INFO, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", ks->jump_id);
@@ -1082,9 +1083,11 @@ int kang_round_selftest(void)
 {
     int fails = 0;
     for (int i = 1; i < NKROUNDS; i++) {
-        if (!KROUNDS[i].supported()) { printf("  kangaroo step %-22s not supported by this CPU: skipped\n", KROUNDS[i].name); continue; }
+        char lb[64];
+        snprintf(lb, sizeof lb, "kangaroo step %s", KROUNDS[i].name);
+        if (!KROUNDS[i].supported()) { pz_result_line(lb, "not supported by this CPU: skipped"); continue; }
         bool ok = kang_round_check(KROUNDS[i].fn, 96, 140) && kang_round_check(KROUNDS[i].fn, 1024, 75) && kang_round_check(KROUNDS[i].fn, 40, 140);   /* 40: an odd number of vectors for the pair form */
-        printf("  kangaroo step %-22s %s\n", KROUNDS[i].name, ok ? "identical to the reference" : "DIFFERENT FROM THE REFERENCE");
+        pz_result_line(lb, "%s", ok ? "identical to the reference" : "DIFFERENT FROM THE REFERENCE");
         fails += !ok;
     }
     return fails;
@@ -1263,7 +1266,15 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
         if (sysinfo_core_cpus(s, c, p, 1)) pos_core[ncore++] = p[0];
     }
     for (int i = 0; i < nall; i++) pos_all[i] = i;
-    printf("kangaroo CPU benchmark by step variant (%d physical cores, %d logical threads, %.1f s per run):\n", ncore, nall, secs);
+    {
+        char h[32];
+        printf("  %-24s%12s", "step variant", "1 thread");
+        if (nall > ncore) snprintf(h, sizeof h, "%d cores", ncore);                       /* one thread on each core */
+        else snprintf(h, sizeof h, "%d thread%s", ncore, ncore == 1 ? "" : "s");
+        printf("%12s", h);
+        if (nall > ncore) { snprintf(h, sizeof h, "%d threads", nall); printf("%12s", h); }
+        printf("\n");
+    }
     double best = 0;
     int best_v = -1;
     char b1[32], b2[32], b3[32];
@@ -1273,9 +1284,9 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
         const double r1 = kbench_run(ks, s, 1, fns, pos_all, secs);
         const double rc = kbench_run(ks, s, ncore, fns, pos_core, secs);
         const double ra = nall > ncore ? kbench_run(ks, s, nall, fns, pos_all, secs) : rc;
-        printf("  %-22s 1 thread %s, %d (one thread per core) %s", KROUNDS[v].name, pz_fmt_si(r1, b1, sizeof b1), ncore, pz_fmt_si(rc, b2, sizeof b2));
-        if (nall > ncore) printf(", %d (all) %s", nall, pz_fmt_si(ra, b3, sizeof b3));
-        printf(" steps/s\n");
+        printf("  %-24s%12s%12s", KROUNDS[v].name, pz_fmt_cell(r1, b1, sizeof b1), pz_fmt_cell(rc, b2, sizeof b2));
+        if (nall > ncore) printf("%12s", pz_fmt_cell(ra, b3, sizeof b3));
+        printf("\n");
         fflush(stdout);
         const double r = ra > rc ? ra : rc;
         if (r > best) { best = r; best_v = v; }
@@ -1293,9 +1304,12 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
             for (int j = 0; j < k && n < 256; j++) { pos_all[n] = p[j]; fns[n] = j == 0 ? KROUNDS[best_v].fn : KROUNDS[vx86].fn; n++; }
         }
         const double rm = kbench_run(ks, s, n, fns, pos_all, secs);
-        printf("  mixed: %s on the first thread of each core, %s on the other: %s steps/s (%+.0f%% against the best uniform setup)%s\n",
-               KROUNDS[best_v].name, KROUNDS[vx86].name, pz_fmt_si(rm, b1, sizeof b1), 100.0 * (rm / best - 1.0),
-               rm > best * 1.03 ? "\n  -> worth it: start with PZ_KANG_MIX=1" : "");
+        char ln[400];
+        snprintf(ln, sizeof ln, "  mixed: %s on the first thread of each core and %s on the other: %s steps/s, %+.0f%% against the best uniform setup%s",
+                 KROUNDS[best_v].name, KROUNDS[vx86].name, pz_fmt_si(rm, b1, sizeof b1), 100.0 * (rm / best - 1.0),
+                 rm > best * 1.03 ? " (worth it: start with PZ_KANG_MIX=1)" : "");
+        pz_fputs_wrap(stdout, ln, PZ_LINE_MAX, 4);
+        putchar('\n');
     }
     kang_free_test_state(ks);
 }
@@ -1409,7 +1423,9 @@ static int merge_selftest_schema(int schema)
     MCHK(kang_merge_file(ks, pb, &b) != 0 || !b.solved);                                      /* A and B together do */
     MCHK(!atomic_load(&ks->r->found) || u256_cmp(&ks->r->found_key, &key) != 0);
     kang_free_test_state(ks);
-    printf("  merge of the distinguished points of two computers (schema %d): %s\n", schema, fails ? "FAILED" : "OK");
+    char lb[64];
+    snprintf(lb, sizeof lb, "merge of two computers' points, schema %d", schema);
+    pz_result_line(lb, "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -1456,7 +1472,9 @@ static int solve_selftest(void)
             kang_free_test_state(ks);
         }
     pz_log_set_quiet(was_quiet);
-    printf("  solving the collisions between all kinds of walkers (schemas 2 and 3, %d pairs): %s\n", pairs, fails ? "FAILED" : "OK");
+    char lb[64];
+    snprintf(lb, sizeof lb, "collisions between all kinds of walkers (%d pairs)", pairs);
+    pz_result_line(lb, "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -1538,9 +1556,9 @@ int kang_log_fault_selftest(void)
     }
     signal(SIGXFSZ, old_sig);
     kang_free_test_state(ks);
-    printf("  distinguished-point log with a full or limited disk: %s\n", fails ? "FAILED" : "OK");
+    pz_result_line("distinguished-point log on a full disk", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 #else
-int kang_log_fault_selftest(void) { printf("  distinguished-point log with a full disk: not tested on Windows\n"); return 0; }
+int kang_log_fault_selftest(void) { pz_result_line("distinguished-point log on a full disk", "not tested on Windows"); return 0; }
 #endif

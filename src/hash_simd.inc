@@ -34,6 +34,9 @@ static inline vu v_load(const u32 *p)
 
 static inline void v_store(u32 *p, vu v) { memcpy(p, &v, sizeof v); }
 
+#ifdef PZ_HASH_EXTERNAL
+#include PZ_HASH_EXTERNAL     /* a complete implementation of HASH_LANES_FN and HASH_W0_FN for this lane count (aarch64: hash_neon.inc) */
+#else
 static inline void sha256_lanes_33(const u32 *X, const u32 *pfx, vu dig[8])
 {
     vu w[16];
@@ -128,3 +131,4 @@ static void HASH_W0_FN(const u32 *X, const u32 *pfx, u32 *out0)
     ripemd160_lanes_32(dig, r);
     v_store(out0, r[0]);
 }
+#endif /* PZ_HASH_EXTERNAL */

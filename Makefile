@@ -58,7 +58,7 @@ endif
 BUILD   ?= build
 BIN     := $(BUILD)/pzsolve$(EXE)
 
-CORE_SRC := platform util u256 ec hash perm campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
+CORE_SRC := platform util u256 ec hash perm campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common cpu_arm sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c
@@ -77,9 +77,14 @@ BSVOBJ := $(BUILD)/bsgs_x86.o $(BUILD)/bsgs_avx2v.o $(BUILD)/bsgs_avx512v.o $(BU
 DEPS   := $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
 
 # X86=1 builds the per-ISA SIMD engines (each object file with its own -m flags, picked at run time by CPU detection); on any other
-# CPU (arm64: Apple Silicon, Linux aarch64) only the portable engine is built and -DPZ_NO_X86_VARIANTS removes the rest.
+# CPU only the portable engine is built and -DPZ_NO_X86_VARIANTS removes the rest. On arm64 (Apple Silicon, Linux aarch64) ARM64=1 adds
+# the neon and neon2 engines, built with -march=armv8-a+crypto and chosen at run time when the CPU has the SHA-256 instructions.
 # The -m flags below are used only when X86=1: nothing x86-specific reaches an arm64 compiler.
 X86 := $(shell $(CC) -dumpmachine | grep -cE 'x86_64|amd64')
+ARM64 := $(shell $(CC) -dumpmachine | grep -cE 'aarch64|arm64')
+ifeq ($(ARM64),1)
+NEON_FLAGS   := -march=armv8-a+crypto
+endif
 ifeq ($(X86),1)
 AVX2_FLAGS   := -mavx2 -mbmi2 -madx
 AVX512_FLAGS := -mavx512f -mavx512vl -mavx512bw -mavx512dq -mbmi2 -madx
@@ -119,6 +124,10 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 
 $(BUILD)/eng_base.o: src/eng_base.c | $(BUILD)
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
+$(BUILD)/eng_neon.o: src/eng_neon.c | $(BUILD)
+	$(CC) $(COMMON) $(NEON_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/eng_neon2.o: src/eng_neon2.c | $(BUILD)
+	$(CC) $(COMMON) $(NEON_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/eng_avx2.o: src/eng_avx2.c | $(BUILD)
 	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/eng_avx512.o: src/eng_avx512.c | $(BUILD)
@@ -153,6 +162,9 @@ ALLENG := $(ENGOBJ) $(KVOBJ) $(BSVOBJ)
 TESTENG := $(ENGOBJ) $(BSVOBJ)       # the unit tests do not link the kangaroo
 else
 ALLENG := $(BUILD)/eng_base.o
+ifeq ($(ARM64),1)
+ALLENG += $(BUILD)/eng_neon.o $(BUILD)/eng_neon2.o
+endif
 TESTENG := $(ALLENG)
 endif
 

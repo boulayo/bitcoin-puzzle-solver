@@ -91,7 +91,14 @@ static size_t add_line(char *buf, size_t n, size_t len, int *lines, int cols, co
     snprintf(t, sizeof t, "%s", text);
     int maxw = cols - 1;
     if (maxw < 20) maxw = 20;
-    if ((int)strlen(t) > maxw) { t[maxw] = 0; }
+    if ((int)strlen(t) > maxw) {
+        /* drop whole fields ("a | b | c", "a  |  b") rather than cutting one in half; a hard cut only when there is no separator */
+        int cut = maxw;
+        for (int i = maxw - 1; i >= maxw / 2; i--)
+            if (t[i] == '|' && t[i - 1] == ' ') { cut = i - 1; break; }
+        while (cut > 0 && t[cut - 1] == ' ') cut--;
+        t[cut] = 0;
+    }
     int w = snprintf(buf + len, n - len, "%s%s%s%s", *lines ? "\n" : "", prefix, t, suffix);
     if (w < 0 || (size_t)w >= n - len) return len;   /* does not fit: drop the line */
     (*lines)++;

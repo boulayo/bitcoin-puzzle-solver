@@ -41,7 +41,9 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
 
 /* The tables and messages of the scans go to stdout unless silenced (the first-run calibration of a quiet hunt). */
 extern int tg_silent;
-#define tg_printf(...) do { if (!tg_silent) { printf(__VA_ARGS__); fflush(stdout); } } while (0)
+void tg_section(const char *title);                    /* a "== title" heading, unless silenced */
+void tg_say(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));      /* printf for the scan: wrapped at 128 columns, flushed */
+#define tg_printf tg_say
 
 /* Seconds scale of the measurements (environment variable PZ_BENCH_SCALE, default 1: 2 s of settling and 8 s of measurement). */
 double tg_scale(void);

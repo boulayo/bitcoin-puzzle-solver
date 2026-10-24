@@ -6,6 +6,7 @@
 #include "gpu.h"
 #include "hash.h"
 #include "bench_tg.h"
+#include "outfmt.h"
 #include "campaign.h"
 #include <unistd.h>
 #include <time.h>
@@ -186,11 +187,11 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     r->use_cpu = true;
     r->use_gpu = true;
     r->sessions = 1;
-    tg_printf("CPU + GPU benchmark (linear search, engine %s)\n", r->engine->name);
+    { char t[96]; snprintf(t, sizeof t, "CPU and GPUs together: linear search, engine %s", r->engine->name); tg_section(t); }
     gpu_session *gpus = NULL;
     int ngpu = gpu_linear_start(r, &gpus);
     if (ngpu <= 0) {
-        tg_printf("  no usable GPU: nothing to compare (the CPU-only benchmark is in the plain 'bench')\n");
+        tg_printf("  no usable GPU: nothing to compare (the CPU-only benchmark is the plain 'bench')\n");
         free(r);
         return 1;
     }

@@ -92,6 +92,10 @@ bool cpu_has_ifma(void) { return false; }
 #endif
 
 extern const cpu_engine ENG_BASE;
+#if defined(__aarch64__)
+extern const cpu_engine ENG_NEON;
+extern const cpu_engine ENG_NEON2;
+#endif
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
 extern const cpu_engine ENG_AVX2;
 extern const cpu_engine ENG_AVX512;
@@ -107,6 +111,10 @@ static pthread_once_t g_engines_once = PTHREAD_ONCE_INIT;
 static void engines_build(void)
 {
     g_engines[g_nengines++] = &ENG_BASE;
+#if defined(__aarch64__)
+    g_engines[g_nengines++] = &ENG_NEON;
+    g_engines[g_nengines++] = &ENG_NEON2;
+#endif
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
     g_engines[g_nengines++] = &ENG_AVX2;
     g_engines[g_nengines++] = &ENG_AVX512;

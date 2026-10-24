@@ -53,7 +53,7 @@ elif PZ_ASSUME_IFMA=1 build/t_fev52 >/dev/null 2>&1; then
 else echo "  (the CPU does not execute IFMA: tried only under SDE, if available)"; fi
 if [ -n "${PZ_SDE:-}" ]; then
   run "$PZ_SDE" -tgl -- build/t_fev52
-  "$PZ_SDE" -tgl -- build/pzsolve selftest 2>&1 | grep -q "engine avx512i   OK" && echo "  OK selftest avx512i under SDE (Tiger Lake)" || { echo "  FAIL selftest avx512i under SDE"; fail=$((fail+1)); }
+  "$PZ_SDE" -tgl -- build/pzsolve selftest 2>&1 | grep -qE "engine avx512i +OK" && echo "  OK selftest avx512i under SDE (Tiger Lake)" || { echo "  FAIL selftest avx512i under SDE"; fail=$((fail+1)); }
 fi
 
 # Without IFMA in the CPU (and without SDE) the two IFMA kangaroo steps and the avx512i engine are tried with an emulation of the two
@@ -61,7 +61,7 @@ fi
 if grep -q avx512f /proc/cpuinfo && ! grep -q avx512ifma /proc/cpuinfo; then
   run make BUILD=build/emu OPT="-O2 -include tools/ifma_emul.h" -j"$(nproc)" build/emu/pzsolve >/dev/null
   EMU=$(PZ_ASSUME_IFMA=1 build/emu/pzsolve selftest 2>&1)
-  grep -q "engine avx512i   OK" <<<"$EMU" && grep -qE "IFMA lanes +identical" <<<"$EMU" && grep -qE "IFMA pairs +identical" <<<"$EMU" && grep -q "SELFTEST PASSED" <<<"$EMU" \
+  grep -qE "engine avx512i +OK" <<<"$EMU" && grep -qE "IFMA lanes +identical" <<<"$EMU" && grep -qE "IFMA pairs +identical" <<<"$EMU" && grep -q "SELFTEST PASSED" <<<"$EMU" \
     && echo "  OK emulated IFMA: engine, lane and pair kangaroo steps identical to the reference" || { echo "  FAIL emulated IFMA"; fail=$((fail+1)); }
   for v in avx512i avx512i2; do
     rm -rf "$T/em$v"; run env PZ_ASSUME_IFMA=1 PZ_KANG_ROUND=$v build/emu/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c em -d "$T/em$v" --no-progress -q --no-gpu -t 2
@@ -72,7 +72,7 @@ fi
 step "GPU: CUDA path with a simulated driver (same API as the NVIDIA driver, kernels run on the CPU)"
 run make mockcuda >/dev/null
 MOCK="env LD_LIBRARY_PATH=$PWD/build/mockcuda"
-$MOCK build/pzsolve selftest 2>&1 | grep -q "CUDA Mock CUDA GPU (CPU): OK" && echo "  OK GPU self-test via CUDA" || { echo "  FAIL GPU self-test via CUDA"; fail=$((fail+1)); }
+$MOCK build/pzsolve selftest 2>&1 | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU" && echo "  OK GPU self-test via CUDA" || { echo "  FAIL GPU self-test via CUDA"; fail=$((fail+1)); }
 rm -rf "$T/c1"; run $MOCK PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/c1" --no-cpu --no-progress -q
 check_found "$T/c1/c" "$K" && echo "  OK linear via CUDA" || { echo "  FAIL linear via CUDA"; fail=$((fail+1)); }
 rm -rf "$T/c2"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c2" --no-cpu --no-progress -q
@@ -82,12 +82,18 @@ rm -rf "$T/c3"; outhas "limit 40%: .* work-items per launch" $MOCK PZ_GPU_TUNE=1
 rm -rf "$T/c4"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c4" --no-cpu --no-progress -q --limit 40
 check_found "$T/c4/c" "$KK" && echo "  OK kangaroo via CUDA with --limit" || { echo "  FAIL kangaroo via CUDA with --limit"; fail=$((fail+1)); }
 outhas "copy bandwidth" $MOCK PZ_GPU_TUNE=1 build/pzsolve bench --gpu-only && echo "  OK GPU bench (bandwidth and throughput probes) via CUDA" || { echo "  FAIL GPU bench via CUDA"; fail=$((fail+1)); }
-outhas "repeat of the first configuration" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together via CUDA" || { echo "  FAIL bench --together via CUDA"; fail=$((fail+1)); }
-outhas "repeat of the first configuration" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear via CUDA" || { echo "  FAIL bench --together --linear via CUDA"; fail=$((fail+1)); }
+outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together via CUDA" || { echo "  FAIL bench --together via CUDA"; fail=$((fail+1)); }
+outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear via CUDA" || { echo "  FAIL bench --together --linear via CUDA"; fail=$((fail+1)); }
+# nothing printed is longer than 128 columns, GPUs included
+width() { awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }'; }
+for c in "build/pzsolve devices" "build/pzsolve selftest" "build/pzsolve bench --gpu-only" "build/pzsolve bench --together -t 1" "build/pzsolve bench --together --linear -t 1"; do
+  w=$($MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 $c 2>&1 | width)
+  [ "$w" -le 128 ] && echo "  OK '${c#build/pzsolve }' via CUDA: lines of at most 128 columns ($w)" || { echo "  FAIL '${c#build/pzsolve }' via CUDA: a line of $w columns"; fail=$((fail+1)); }
+done
 # priority of the threads serving the GPUs: --prio-gpu is validated and fixes it (no measurement); in auto mode it is measured,
 # but only where the system lets the program raise a thread's priority (root / CAP_SYS_NICE on Linux)
 build/pzsolve bench --together --prio-gpu maybe >/dev/null 2>&1 && { echo "  FAIL --prio-gpu with an invalid value accepted"; fail=$((fail+1)); } || echo "  OK --prio-gpu: invalid value rejected"
-outhas "repeat of the first configuration" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu yes && echo "  OK bench --together --prio-gpu yes" || { echo "  FAIL bench --together --prio-gpu yes"; fail=$((fail+1)); }
+outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu yes && echo "  OK bench --together --prio-gpu yes" || { echo "  FAIL bench --together --prio-gpu yes"; fail=$((fail+1)); }
 outhas "in alternating pairs (all CPU threads)" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu no && { echo "  FAIL --prio-gpu no measured the priority"; fail=$((fail+1)); } || echo "  OK --prio-gpu no: priority not measured"
 if [ "$(id -u)" = 0 ]; then
   outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together measures the priority of the GPU threads" || { echo "  FAIL priority measurement"; fail=$((fail+1)); }
@@ -196,7 +202,7 @@ check_found "$T/a3/a" "$KK" && echo "  OK kangaroo with a tiny table (growth + d
 rm -rf "$T/a4"; run env PZ_OPENCL_ALL=1 build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a4" --no-progress -q --gpu 0 --no-cpu
 check_found "$T/a4/a" "$K" && echo "  OK linear on OpenCL (ASan)" || echo "  (OpenCL not available or not used: ignored)"
 
-$MOCK ASAN_OPTIONS=detect_leaks=1 build/asan/pzsolve selftest 2>&1 | grep -q "CUDA Mock CUDA GPU (CPU): OK" && echo "  OK GPU self-test via CUDA (ASan)" || { echo "  FAIL GPU self-test via CUDA (ASan)"; fail=$((fail+1)); }
+$MOCK ASAN_OPTIONS=detect_leaks=1 build/asan/pzsolve selftest 2>&1 | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU" && echo "  OK GPU self-test via CUDA (ASan)" || { echo "  FAIL GPU self-test via CUDA (ASan)"; fail=$((fail+1)); }
 
 step "ThreadSanitizer"
 run make tsan -j"$(nproc)" >/dev/null
@@ -234,7 +240,7 @@ if command -v x86_64-w64-mingw32-gcc-posix >/dev/null && command -v wine >/dev/n
     echo "  FAIL the exe depends on non-system DLLs"; fail=$((fail+1)); else echo "  OK the exe uses only system DLLs"; fi
   run make winmockcuda >/dev/null
   W="$T/win"; rm -rf "$W"; mkdir -p "$W"; cp build/win/pzsolve.exe build/win/mockcuda/nvcuda.dll "$W/"
-  (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "CUDA Mock CUDA GPU (CPU): OK") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
+  (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
   (cd "$W" && wine pzsolve.exe hunt -p 26 -a "$A" -m linear -c w -d camp --no-gpu --no-progress -q >/dev/null 2>&1)
   check_found "$W/camp/w" "$K" && echo "  OK linear (exe)" || { echo "  FAIL linear (exe)"; fail=$((fail+1)); }
   (cd "$W" && wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m bsgs --table t.bin -c b -d camp --no-gpu --no-progress -q >/dev/null 2>&1)

@@ -170,7 +170,7 @@ int campaigns_list(const char *base)
     }
     qsort(rows, (size_t)nc, sizeof *rows, cmp_rows);
     time_t now = time(NULL);
-    int wn = 9, ws = 5, wf = 8, wr = 5, we = 13;   /* column widths: header text, grown to the longest cell */
+    int wn = 8, ws = 5, wf = 8, wr = 5, we = 15;   /* column widths: header text, grown to the longest cell */
     for (int i = 0; i < nc; i++) {
         fill_row(&rows[i], base, now);
         if (rows[i].bad) continue;
@@ -181,14 +181,14 @@ int campaigns_list(const char *base)
         if ((l = (int)strlen(rows[i].rate)) > wr) wr = l;
         if ((l = (int)strlen(rows[i].eta)) > we) we = l;
     }
-    printf("%-*s %6s %-9s %-*s %-*s %-*s %-*s %s\n", wn, "CAMPAIGN", "PUZZLE", "MODE", ws, "STATE", wf, "PROGRESS", wr, "SPEED", we, "TIME LEFT 50%", "UPDATED");
+    printf("%-*s %6s  %-9s %-*s %*s %*s %*s  %s\n", wn, "CAMPAIGN", "PUZZLE", "MODE", ws, "STATE", wf, "PROGRESS", wr, "SPEED", we, "TIME LEFT (50%)", "UPDATED");
     for (int i = 0; i < nc; i++) {
         const row_t *w = &rows[i];
         if (w->bad) printf("%-*s  (unreadable configuration: %s)\n", wn, w->name, w->err);
-        else printf("%-*s %6d %-9s %-*s %-*s %-*s %-*s %s\n", wn, w->name, w->puzzle, w->mode, ws, w->state, wf, w->frac, wr, w->rate, we, w->eta, w->upd);
+        else printf("%-*s %6d  %-9s %-*s %*s %*s %*s  %s\n", wn, w->name, w->puzzle, w->mode, ws, w->state, wf, w->frac, wr, w->rate, we, w->eta, w->upd);
         free(w->name);
     }
     free(rows);
-    printf("\nResume a campaign with:  pzsolve hunt -c NAME   (or  hunt -p N  for the puzzles of the database)\n");
+    printf("\nResume a campaign with: pzsolve hunt -c NAME, or pzsolve hunt -p N for a puzzle of the database.\n");
     return nc;
 }

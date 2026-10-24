@@ -212,7 +212,7 @@ jobs:
             echo
             echo "Check the download against \`SHA256SUMS\` (\`sha256sum -c SHA256SUMS\`, or \`shasum -a 256 -c SHA256SUMS\` on macOS)."
             echo
-            echo "- **GPU:** CUDA and OpenCL on Linux and Windows. macOS and Linux arm64 builds run on the CPU (portable scalar code, slower than the AVX2/AVX-512 engines); Apple's OpenCL is tried but not supported."
+            echo "- **GPU:** CUDA and OpenCL on Linux and Windows. macOS and Linux arm64 builds run on the CPU (NEON hashing for the linear scan, portable code for the rest, slower than the AVX2/AVX-512 engines); Apple's OpenCL is tried but not supported."
             echo "- **macOS:** the binaries are signed ad hoc, not notarized. If macOS refuses to open a file downloaded with a browser, run \`xattr -dr com.apple.quarantine pzsolve-$VERSION-macos-*\` once after unpacking."
             echo "- **Windows:** the exe is not code-signed; SmartScreen may ask for \"More info\" and \"Run anyway\"."
           } > notes.md

@@ -211,6 +211,32 @@ if kill -0 $(cat "$DIR/hup.pid") 2>/dev/null; then bad "the process did not stop
 fi
 fi
 
+echo "== line width: nothing printed is longer than 128 columns"
+chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr
+  local label=$1 out w; shift
+  out=$(timeout 300 "$@" 2>&1 </dev/null)
+  w=$(printf '%s\n' "$out" | tr -d '\r' | python3 -c "import sys; print(max((len(l.rstrip('\n')) for l in sys.stdin), default=0))")
+  [ "$w" -le 128 ] && ok "$label (longest line: $w)" || bad "$label: a line of $w columns"
+}
+chk_width "help" $BIN help
+chk_width "hunt --help" $BIN hunt --help
+chk_width "puzzles" $BIN puzzles
+chk_width "puzzle 71" $BIN puzzle 71
+chk_width "puzzle 140" $BIN puzzle 140
+chk_width "devices" $BIN devices
+chk_width "list" $BIN list -d "$DIR/rc"
+chk_width "info" $BIN info -c p71 -d "$DIR/rc"
+chk_width "where" $BIN where -c p71 -d "$DIR/rc" --key 400000000000000123
+chk_width "split" $BIN split 800M 120M 50M
+chk_width "doctor" $BIN doctor -d "$DIR/rc"
+chk_width "selftest" $BIN selftest
+chk_width "hunt, linear search" timeout -s INT 4 $BIN hunt -p 71 -m linear -d "$DIR/w1" --ui log --no-gpu
+chk_width "hunt, kangaroo" timeout -s INT 6 $BIN hunt -p 120 -d "$DIR/w2" --ui log --no-gpu
+chk_width "hunt, BSGS to the key" $BIN hunt -p 30 -d "$DIR/w3" --ui log --no-gpu
+chk_width "error: unknown option" $BIN hunt -p 71 --nonsense
+chk_width "error: conflict with a campaign" $BIN hunt -p 71 -c p71 -d "$DIR/rc" -s somethingelse
+chk_width "merge usage" $BIN merge
+
 echo
 if [ $fail -eq 0 ]; then echo "E2E PASSED"; else echo "E2E FAILED: $fail errors"; fi
 exit $fail
