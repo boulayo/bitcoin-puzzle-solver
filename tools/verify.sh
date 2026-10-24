@@ -26,6 +26,8 @@ step "clean build and unit tests"
 run make clean >/dev/null
 run make -j"$(nproc)"
 run make test
+run make lib-examples >/dev/null
+run make lib-cxx >/dev/null
 
 step "Linux binary compatibility (no glibc symbol newer than 2.34)"
 NEWEST=$(objdump -T build/pzsolve | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
@@ -43,8 +45,8 @@ IFMA_ENV=PZ_IFMA_UNUSED=1
 # The engine is chosen only if CPUID declares IFMA. Here it is tried (1) directly, if the processor executes the
 # instructions even when a virtual CPUID hides them (PZ_ASSUME_IFMA=1), and (2) under Intel SDE in Tiger Lake mode
 # (variable PZ_SDE = path of sde64), which emulates CPUID and the instructions.
-if build/t_fev52 | grep -q OK && ! build/t_fev52 | grep -q skipped; then echo "  OK t_fev52 (IFMA declared by the CPU)"
-elif PZ_ASSUME_IFMA=1 build/t_fev52 >/dev/null 2>&1; then
+if build/pzcore/t_fev52 | grep -q OK && ! build/pzcore/t_fev52 | grep -q skipped; then echo "  OK t_fev52 (IFMA declared by the CPU)"
+elif PZ_ASSUME_IFMA=1 build/pzcore/t_fev52 >/dev/null 2>&1; then
   IFMA_ENV=PZ_ASSUME_IFMA=1
   echo "  OK t_fev52 (IFMA executed by the CPU, hidden by CPUID)"
   PZ_ASSUME_IFMA=1 build/t_engine >/dev/null && echo "  OK t_engine with avx512i" || { echo "  FAIL t_engine with avx512i"; fail=$((fail+1)); }
@@ -52,7 +54,7 @@ elif PZ_ASSUME_IFMA=1 build/t_fev52 >/dev/null 2>&1; then
   check_found "$T/i1/i" "$K" && echo "  OK linear with --isa avx512i" || { echo "  FAIL linear with --isa avx512i"; fail=$((fail+1)); }
 else echo "  (the CPU does not execute IFMA: tried only under SDE, if available)"; fi
 if [ -n "${PZ_SDE:-}" ]; then
-  run "$PZ_SDE" -tgl -- build/t_fev52
+  run "$PZ_SDE" -tgl -- build/pzcore/t_fev52
   "$PZ_SDE" -tgl -- build/pzsolve selftest 2>&1 | grep -qE "engine avx512i +OK" && echo "  OK selftest avx512i under SDE (Tiger Lake)" || { echo "  FAIL selftest avx512i under SDE"; fail=$((fail+1)); }
 fi
 
@@ -185,9 +187,12 @@ step "AddressSanitizer + UndefinedBehaviorSanitizer"
 run make asan -j"$(nproc)" >/dev/null
 export ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
 run build/asan/pzsolve selftest
-ASAN_TESTS="t_core t_perm t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_fev2 t_fev5 t_fev52"
+ASAN_TESTS="t_core t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui"
 run make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" $(for t in $ASAN_TESTS; do echo build/asan/$t; done) >/dev/null
 for t in $ASAN_TESTS; do run env "$IFMA_ENV" build/asan/$t >/dev/null && echo "  OK $t (ASan/UBSan)"; done
+# the library on its own (its tests and examples link nothing but libpzcore.a)
+run env "$IFMA_ENV" make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" lib-test lib-examples >"$T/asan-lib.log" 2>&1 \
+  && echo "  OK pzcore tests and examples (ASan/UBSan)" || tail -20 "$T/asan-lib.log"
 rm -rf "$T/a1"; run build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a1" --no-progress -q --no-gpu
 check_found "$T/a1/a" "$K" && echo "  OK linear (ASan)" || { echo "  FAIL linear (ASan)"; fail=$((fail+1)); }
 rm -rf "$T/a2"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c a -d "$T/a2" --no-progress -q --no-gpu
@@ -216,6 +221,9 @@ check_found "$T/t4/t" "$KK" && echo "  OK bsgs (TSan)" || { echo "  FAIL bsgs (T
 rm -rf "$T/t3"; (timeout -s INT 6 build/tsan/pzsolve hunt -p 33 -a "$A" -c t -d "$T/t3" --no-progress -q --no-gpu >/dev/null 2>"$T/t3.err"; true)
 ! grep -q "ThreadSanitizer" "$T/t3.err" && echo "  OK interrupt (TSan)" || { echo "  FAIL interrupt (TSan)"; fail=$((fail+1)); }
 
+run env "$IFMA_ENV" make BUILD=build/tsan OPT="-O1 -fsanitize=thread" lib-test >"$T/tsan-lib.log" 2>&1 \
+  && echo "  OK pzcore tests (TSan: first use of the curve table and of the batch hash from several threads)" || { tail -20 "$T/tsan-lib.log"; }
+
 step "Valgrind (memcheck, leaks included; portable path only: Valgrind does not know AVX-512/ADX)"
 if command -v valgrind >/dev/null; then
   VG="valgrind -q --error-exitcode=9 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all"
@@ -227,8 +235,22 @@ if command -v valgrind >/dev/null; then
   check_found "$T/v2/v" "$K3" && echo "  OK kangaroo (Valgrind)" || { echo "  FAIL kangaroo (Valgrind)"; fail=$((fail+1)); }
   rm -rf "$T/v3"; run $VG build/pzsolve hunt -p 31 -a "$A3" -k "$P3" -m bsgs -c v -d "$T/v3" -t 2 --no-gpu --no-progress -q
   check_found "$T/v3/v" "$K3" && echo "  OK bsgs (Valgrind)" || { echo "  FAIL bsgs (Valgrind)"; fail=$((fail+1)); }
+  for t in t_u256 t_address t_hash t_batch; do
+    run $VG build/pzcore/$t >/dev/null && echo "  OK pzcore $t (Valgrind)"
+  done
 else
   echo "  valgrind not installed: skipped"
+fi
+
+step "aarch64 (cross-compiled, tried under QEMU user-mode emulation: the NEON/SHA-256 code of the library and of the engines)"
+if command -v aarch64-linux-gnu-gcc >/dev/null && command -v qemu-aarch64 >/dev/null; then
+  ARM=(make CC=aarch64-linux-gnu-gcc BUILD=build/arm64 "LDLIBS=-static -lpthread -lm -ldl" RUN=qemu-aarch64)
+  run "${ARM[@]}" -j"$(nproc)" >"$T/arm.log" 2>&1 || tail -20 "$T/arm.log"
+  run "${ARM[@]}" test >"$T/arm-test.log" 2>&1 && echo "  OK unit tests, library tests and self-test on aarch64 (QEMU)" || tail -20 "$T/arm-test.log"
+  run make CC=aarch64-linux-gnu-gcc BUILD=build/arm64n OPT="-O3 -DPZ_NO_ARM_SHA2" "LDLIBS=-static -lpthread -lm -ldl" RUN=qemu-aarch64 lib-test >"$T/arm-n.log" 2>&1 \
+    && echo "  OK library tests on aarch64 without the SHA-256 instructions (portable path)" || tail -20 "$T/arm-n.log"
+else
+  echo "  aarch64 cross compiler or qemu-aarch64 not installed: skipped"
 fi
 
 step "Windows (static MinGW-w64 exe, tried under Wine)"
