@@ -109,7 +109,13 @@ endif
 # are compiled for their own instruction sets, as before. The per-ISA objects follow the same X86 / ARM64 switches as the engines.
 LIBFLAGS  = $(filter-out -fno-strict-aliasing -Isrc,$(COMMON))
 LIBLDLIBS = $(filter-out -ldl -lbcrypt,$(LDLIBS))
-PZC_SRC   := u256 fe ec hash address perm cpu
+PZC_SRC   := u256 fe ec hash address perm cpu hash160_batch h160_portable
+ifeq ($(X86),1)
+PZC_SRC   += h160_avx2 h160_avx512
+endif
+ifeq ($(ARM64),1)
+PZC_SRC   += h160_neon h160_neon2 sha256_arm
+endif
 LIBOBJ    := $(addprefix $(BUILD)/pzcore/,$(addsuffix .o,$(PZC_SRC)))
 LIB       := $(BUILD)/libpzcore.a
 DEPS      += $(LIBOBJ:.o=.d)
@@ -119,6 +125,16 @@ $(BUILD)/pzcore:
 
 $(BUILD)/pzcore/%.o: lib/pzcore/src/%.c | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/h160_avx2.o: lib/pzcore/src/h160_avx2.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/h160_avx512.o: lib/pzcore/src/h160_avx512.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/h160_neon.o: lib/pzcore/src/h160_neon.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/h160_neon2.o: lib/pzcore/src/h160_neon2.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/sha256_arm.o: lib/pzcore/src/sha256_arm.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
 
 $(LIB): $(LIBOBJ)
 	rm -f $@
@@ -127,11 +143,11 @@ $(LIB): $(LIBOBJ)
 lib: $(LIB)
 
 # the unit tests and the examples of the library link nothing but the archive
-LIBTESTS := t_u256 t_fe t_ec t_hash t_address t_perm
+LIBTESTS := t_u256 t_fe t_ec t_hash t_address t_perm t_batch
 ifeq ($(X86),1)
 LIBTESTS += t_fe_asm t_fev2 t_fev5 t_fev52
 endif
-LIBEXAMPLES := keyaddr roundtrip permute
+LIBEXAMPLES := keyaddr roundtrip permute batch8
 
 $(BUILD)/pzcore/t_fe_asm$(EXE): lib/pzcore/tests/t_fe.c $(LIB) | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)

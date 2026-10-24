@@ -15,6 +15,12 @@ int main()
     char addr[PZ_P2PKH_ADDRESS_BUF];
     if (!pz_hash160_to_address(h, addr, sizeof addr) || std::strcmp(addr, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH") != 0) return 2;
 
+    uint8_t x[32], out[20];
+    pz_fe_to_be(x, &p.x);
+    const uint8_t parity = 0;
+    pz_hash160_x_batch(1, x, &parity, out);
+    if (std::memcmp(out, h, 20) != 0) return 3;
+
     pz_perm perm;
     uint8_t seed[32] = {1};
     pz_u256 m = pz_u256_from_u64(1000), y, z, three = pz_u256_from_u64(3);

@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* hash.c - SHA-256, RIPEMD-160 and HASH160 (portable scalar code). */
 #include <pzcore/hash.h>
+#include <pzcore/cpu.h>
 #include <pzcore/impl/hash_tables.h>
+#include <stdatomic.h>
+#include "h160_impl.h"
 
 static inline uint32_t rotr32(uint32_t x, int n) { return x >> n | x << (32 - n); }
 static inline uint32_t rotl32(uint32_t x, int n) { return x << n | x >> (32 - n); }
@@ -28,9 +31,28 @@ void pz_sha256_compress(uint32_t st[8], const uint32_t win[16])
     st[0] += a; st[1] += b; st[2] += c; st[3] += d; st[4] += e; st[5] += f; st[6] += g; st[7] += h;
 }
 
+#ifdef PZ_HAVE_ARM_SHA2
+static _Atomic int g_arm_sha2 = -1;          /* -1 until probed; the probe is cheap and always gives the same answer */
+static bool arm_sha2(void)
+{
+    int v = atomic_load_explicit(&g_arm_sha2, memory_order_relaxed);
+    if (v < 0) {
+        v = pz_cpu_has_sha2() ? 1 : 0;
+        atomic_store_explicit(&g_arm_sha2, v, memory_order_relaxed);
+    }
+    return v;
+}
+#endif
+
 /* the compression function over nblocks consecutive 64-byte blocks of data */
 static void sha256_blocks(uint32_t st[8], const uint8_t *data, size_t nblocks)
 {
+#ifdef PZ_HAVE_ARM_SHA2
+    if (arm_sha2()) {
+        pz_sha256_blocks_arm(st, data, nblocks);
+        return;
+    }
+#endif
     for (size_t i = 0; i < nblocks; i++) {
         uint32_t w[16];
         for (int j = 0; j < 16; j++) {
