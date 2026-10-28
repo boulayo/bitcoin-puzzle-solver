@@ -125,7 +125,11 @@ timeout -s INT 3 $BIN hunt -p 60 -m bsgs --bsgs-entries 3000000 -c bsr -d "$DIR"
 timeout -s INT 3 $BIN hunt -c bsr -d "$DIR" --ui log --no-gpu >"$DIR/bsr.out" 2>&1
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/bsr/session.txt")
 grep -q "campaign resumed" "$DIR/bsr.out" && [ "$SES" = 2 ] && ok "BSGS resumed from the checkpoint (2 sessions)" || bad "BSGS resume: sessions '$SES'"
-$BIN where -c bsr -d "$DIR" --key $(dbfield 60 4) | grep -q "giant step" && ok "where for a BSGS campaign" || bad "where BSGS"
+# 'where' on a BSGS campaign: the step of a key a quarter and three quarters into the range are different, in order, and below the number of steps
+bstep() { $BIN where -c bsr -d "$DIR" --key "$1" | sed -n 's/.*the key will be found at step \([0-9,]*\) of \([0-9,]*\).*/\1 \2/p' | tr -d ,; }
+read S1 N1 <<< "$(bstep a00000000000000)"; read S2 N2 <<< "$(bstep e00000000000000)"
+[ -n "$S1" ] && [ "$N1" = "$N2" ] && [ "$S1" -gt 0 ] && [ "$S1" -lt "$S2" ] && [ "$S2" -lt "$N1" ] && ok "where for a BSGS campaign: step $S1 and $S2 of $N1" || bad "where BSGS: steps '$S1' '$S2' of '$N1' '$N2'"
+$BIN where -c bsr -d "$DIR" --key $(dbfield 60 4) | grep -q "giant step" && ok "where for the key of puzzle 60" || bad "where BSGS (puzzle 60 key)"
 
 echo "== built-in database: automatic target with -p N (already solved puzzles)"
 for n in 18 23; do

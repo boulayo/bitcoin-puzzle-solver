@@ -1008,14 +1008,13 @@ static int cmd_where(int argc, char **argv)
         u64 off;
         pz_u256 gk = pz_u256_from_u64(gi);
         if (!sched_locate(s, &gk, &seq, &off)) pz_die("giant index out of range");
-        char sb[80];
         const long double nblocks = pz_u256_to_ld(&s->blocks_all);
-        char g1[48], g2[48], g3[48], g4[48];
-        snprintf(g1, sizeof g1, "%llu", (unsigned long long)gi);
-        snprintf(g2, sizeof g2, "%llu", (unsigned long long)bp.Ng);
-        snprintf(g4, sizeof g4, "%.0Lf", nblocks);
-        pz_prop_line("giant step", "the key will be found at step %s of %s", pz_group_digits(g1, g3, sizeof g3), pz_group_digits(g2, g1, sizeof g1));
-        pz_prop_line("visit order", "block %s of %s, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, sb), g2, sizeof g2), pz_group_digits(g4, g3, sizeof g3),
+        char step[48], steps[48], blk[80], blks[48], step_g[64], steps_g[64], blk_g[112], blks_g[64];   /* one buffer for each text: the arguments are evaluated in any order */
+        snprintf(step, sizeof step, "%llu", (unsigned long long)gi);
+        snprintf(steps, sizeof steps, "%llu", (unsigned long long)bp.Ng);
+        snprintf(blks, sizeof blks, "%.0Lf", nblocks);
+        pz_prop_line("giant step", "the key will be found at step %s of %s", pz_group_digits(step, step_g, sizeof step_g), pz_group_digits(steps, steps_g, sizeof steps_g));
+        pz_prop_line("visit order", "block %s of %s, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, blk), blk_g, sizeof blk_g), pz_group_digits(blks, blks_g, sizeof blks_g),
                      pz_u256_to_ld(&seq) * 100.0L / nblocks);
         sched_free(s);
         return 0;
