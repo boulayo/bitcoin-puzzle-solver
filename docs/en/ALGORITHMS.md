@@ -5,8 +5,7 @@ This document explains *what* the program computes and *why* it is efficient. Fo
 and the analyses behind the design are in the research log [`RESEARCH.md`](RESEARCH.md). The section numbers are the same in both files (they are cited
 from the source and from the tools); where a section was moved there, only a short pointer is left here.
 
-Sections 1 to 7 cover the problem, the linear search, the seed-based visiting order, the interval kangaroo (in its three
-successive schemas), the GPU kernels, rough running times and references. Section 8 is the theory: what is proven in the literature,
+Sections 1 to 7 cover the problem, the linear search, the seed-based visiting order, the interval kangaroo, the GPU kernels, rough running times and references. Section 8 is the theory: what is proven in the literature,
 what was measured, what is only modelled, and how much improvement is still possible. Sections 9 to 11 cover the BSGS mode, the SIMD
 lane arithmetic and the time-estimation model. Numbers are labeled as measured on the real curve, measured in a model
 (`tools/research/ksim.c`), or estimated.
@@ -16,8 +15,9 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
 1. The problem
 2. Linear search (address only): 2.1 Arithmetic, 2.2 Vectorized hash160, 2.3 Edge cases
 3. Unique visiting order (seed)
-4. The interval kangaroo (public key known): 4.1 Setup (from 1.6.0), 4.2 Why it costs less, 4.3 Unproductive cycles and drift,
-   4.4 Parameters (chosen automatically), 4.5 Measurements, 4.6 Things evaluated and rejected, 4.7 Resuming (4.5 and 4.6 are in RESEARCH.md)
+4. The interval kangaroo (public key known): 4.1 Setup, 4.2 Why it costs less, 4.3 Unproductive cycles,
+   4.4 Parameters (chosen automatically), 4.5 Measurements, 4.6 Things evaluated and rejected, 4.7 Resuming (4.5 and 4.6 are in RESEARCH.md,
+   and so are the earlier layouts)
 5. GPU (CUDA and OpenCL) (the instruction-level detail is in RESEARCH.md)
 6. How long it takes (orders of magnitude)
 7. References
@@ -25,7 +25,7 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
    8.4 Cost of a step and hardware bottlenecks, 8.5 Comparison with the state of the art (puzzle 135 and RCKangaroo), 8.6 Modular multiplication,
    8.7 How low can it go, 8.8 Species with fixed residues (schema 2), 8.9 More RAM or a precalculation, 8.10 Local walks, long jumps and banded zones
    (schema 3). Sections 8.6, 8.7 and 8.9 are in RESEARCH.md; of 8.4, 8.8 and 8.10 the measurements are there
-9. Symmetric BSGS with a RAM table (`--mode bsgs`, from 1.1.0): 9.1 Algorithm, 9.2 How it is implemented, 9.3 When it pays off
+9. Symmetric BSGS with a RAM table (`--mode bsgs`): 9.1 Algorithm, 9.2 How it is implemented, 9.3 When it pays off
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`) (the details are in RESEARCH.md)
 11. Time-estimation model (`src/eta.c`)
 
@@ -77,7 +77,7 @@ visits the blocks in the order `π(0), π(1), π(2), …` where `π` is a **pseu
 
 * `π` is a Feistel network (8 rounds) with round function `SHA-256(seed ‖ round ‖ half)`, on `⌈log2 M⌉` bits; domains that are not
   a power of two are handled with *cycle-walking*. It is a **bijection**: every block is visited exactly once, and it is
-  computed in O(1) (a few SHA-256 per block, negligible next to the 2^32 keys of a block). Its inverse lets
+  computed in O(1) (a few SHA-256 per block, negligible next to the 2^36 keys of a block). Its inverse lets
   `pzsolve where` say *when* a key will be reached.
 * **Why not modular arithmetic with a large prime** (`i ↦ a·i + b mod p`): it is a valid and very fast permutation,
   but successive blocks end up in arithmetic progression (a few observations reveal the step, and two campaigns with correlated
@@ -89,7 +89,7 @@ visits the blocks in the order `π(0), π(1), π(2), …` where `π` is a **pseu
 * The seed has 256 bits (`getrandom` + time + pid + host, hashed); `--seed` accepts 64 hex digits (used as they are) or
   any text (hashed).
 
-* **Several computers (`--part`, from 1.7.5)**. The *positions* of the visiting order are split, not the interval: with `T` shares, the computer
+* **Several computers (`--part`)**. The *positions* of the visiting order are split, not the interval: with `T` shares, the computer
   that holds the shares `r₁ < r₂ < … < r_m` scans the blocks at positions `k` with `k mod T ∈ {r₁,…,r_m}`, in its local order
   `j ↦ ⌊j/m⌋·T + r_{j mod m}`. The positions of the computers are disjoint and `π` is a bijection, so the blocks (and the keys) are
   disjoint and cover everything, with no communication. Since all blocks are equal (except at most the one at the end of the interval), a
@@ -104,118 +104,117 @@ end) of the interval, and makes each campaign independent of the others.
 
 ## 4. The interval kangaroo (public key known)
 
-**Which schema the program uses.** The kangaroo went through three schemas during development. They share the step and the equivalence classes
-and differ in the species of walkers, where they start, the length of the jumps and how a pair of distinguished points is resolved. **The program
-implements schema 3** (the species and residues of schema 2, long jumps of mean `W^¾/16` and start zones split into bands; sections 8.8 and 8.10).
-Schemas 1 and 2 were used by development builds (1.6.0 to 1.7.8) and, from 1.8.0 to 1.9.0, schema 1 for campaigns with fewer than 256 kangaroos;
-version 1.9.1 removed them together with their log formats (a `dp.bin` written by them is kept aside and not used). This section describes schema 1, which is the simplest and the base of the later
-ones: 4.1 to 4.6 (setup, parameters, measurements; 4.5 and 4.6 are in RESEARCH.md) refer to it, while 8.8 and 8.10 give the changes of schemas 2 and 3 and their measured cost
-(≈ 1.10 and ≈ 1.06 against 1.15·√W).
+The program uses one layout of the walkers, called schema 3 in RESEARCH.md: three species of walkers with fixed residues mod 12
+(section 8.8), long jumps of mean `W^¾/16` and start zones split into bands (section 8.10). It costs about 1.06·√W steps on the real curve.
+The earlier layouts of the development builds (schemas 1 and 2) and how the program got here are in RESEARCH.md section 4.
 
-### 4.1 Setup (from 1.6.0)
+### 4.1 Setup
 
-This subsection describes **schema 1**, the layout of the development builds 1.6.0 to 1.7.7. Schema 2 has the same classes and the same step but
-three species of walkers with fixed residues mod 12 (section 8.8), about 4% fewer steps; schema 3, the one the program uses, is in section 8.10.
-
-Let `S = W/32` (or less, if the interval starts below `W/32`), `base = lo − S` and `Q' = Q − base·G`. The key is
-`k = base + x` with `x ∈ [S, S + W)`: the whole interval lies on one side of the point `0` around which the classes fold.
+Let `base` be the start of the range and `Q' = Q − base·G`: the key is `k = base + x` with `x ∈ [0, W)`. The point `3·Q'` is computed once.
 
 **Equivalence classes.** `P` and `−P` have the same x-coordinate; we work on the classes `{P, −P}` and choose as
-representative the point with even `y`. The walker (kangaroo) carries with it:
+representative the point with even `y`. A walker (kangaroo) carries its canonical point and the exponent of that point written in terms of the
+unknown `x`: `E = σ·c·x + d`, where `c` is the coefficient of its species, `σ = ±1` its current sign and `d` an exact signed 192-bit integer.
 
-* the canonical point `P = e·G` and its *exact* exponent `e` as a signed 192-bit integer:
-  * **tame** kangaroo (one third): starts at `e = t`, `t ∈ [1, W/32)`, and keeps `e = d`;
-  * **wild** kangaroo (two thirds): starts at `e = −x + v`, `v` even in `[0, W + W/16)` (that is, from the point `v·G − Q'`), and keeps
-    `e = σ·x + d`, with `σ = ±1` (it changes sign when canonicalization flips the point).
+**Species.** `c = 0` (tame), `c = 1` (wild on `Q'`) or `c = 3` (wild on `3Q'`). A walker starts at `E = c·x + u`, the point `u·G + c·Q'`,
+with `u` in the zone of its species and in a fixed residue class mod 12. Every jump is a multiple of 12, so the residue of a walker never
+changes (the change of representative `E → −E` maps `(c, r)` to `(−c, −r)`, the same species seen from the other side). The table is
+`src/kang_spec3.inc` (shares rounded here):
 
-Step: `j = x(P) mod 256`, `P ← canon(P + S_j)`, `d ← d + s_j`; if `y` is odd the point is negated (`d ← −d`, `σ ← −σ`).
-The jumps `s_j` (256, **even**, uniform in `[2, 24·√W]`, mean `12·√W`) are pseudo-random from the seed. Since the representative
-has a random sign, the exponent does a symmetric walk (no drift): each walker explores the surroundings of its
-starting point.
+| species | residues mod 12 (share of the walkers) | zone of `u` (in units of `W`) | bands | share |
+|---|---|---|---|---|
+| tame, `E = u` | 0, 3, 6, 9 (3.8 %, 10.3 %, 3.8 %, 10.3 %) | `[−0.02, 0.02]` | 2 of `0.02·W` | 28.2 % |
+| wild on `Q'`, `E = x + u` | 3, 7, 11 (12.7 % each) | `[−1, 0]`, without `[−0.7, −0.6]` | 9 of `0.1·W` | 38.1 % |
+| wild on `3Q'`, `E = 3x + u` | 9 | `[−3, 0]` | 15 of `0.2·W` | 33.7 % |
 
-**Distinguished points (DP).** When `x.n[1]` has `dp_bits` low zero bits, `(x-coordinate, type, d)` is recorded in a table; two
-records with the **same class but different type** reveal `x` (type ∈ {tame, wild σ=+1, wild σ=−1}):
+Each walker belongs to one group (coefficient and residue) for its whole life; the groups are dealt out in proportion to their shares, as
+exactly as the number of walkers allows. At every start the walker draws one of the 50 bands of its group at random by the shares and a
+point uniform in the band, rounded down to its residue.
 
-| pair                           | equation from the same class | solution             |
-|--------------------------------|------------------------------|----------------------|
-| tame `d_t`, wild(+1) `d_w`     | `d_t = x + d_w`              | `x = d_t − d_w`      |
-| tame `d_t`, wild(−1) `d_w`     | `d_t = −x + d_w`             | `x = d_w − d_t`      |
-| wild(+1) `d₁`, wild(−1) `d₂`   | `x + d₁ = −x + d₂`           | `x = (d₂ − d₁)/2`    |
+**Step.** `j = x(P) mod 256`, `P ← canon(P + S_j)`, `d ← d + s_j`; if `y` is odd the point is negated (`d ← −d`, `σ ← −σ`). The 256 jumps
+`s_j` (plus 16 for leaving cycles, 4.3) are pseudo-random from the seed: uniform in `[2/3, 4/3]` of the mean `W^¾/16` and rounded up to a
+multiple of 12. The mean is computed with integers only (`⌊√W⌋·⌊W^¼⌋/16`, at least 24, at most 2^120), so the table is the same on every
+architecture. Its **jump table id** (the first 4 bytes of the SHA-256 of the 272 jumps, in hex) is written to `log.txt`, and to the screen with
+`--node`: all the computers of one campaign must show the same id. Since the representative has a random sign, the exponent does a symmetric
+walk (no drift): each walker explores the surroundings of its start, which is why the jumps are long (section 8.10).
 
-With even jumps and even starts, `d₂ − d₁` is always even: every wild(+1)–wild(−1) meeting gives the solution.
-Pairs of the same type give no information (same trajectory) and the kangaroo is restarted at a random point.
-Every candidate solution is verified (`(base+x)·G` against address/pubkey) before it is accepted: false positives
-of the table (62-bit tag) cannot produce wrong results.
+**Distinguished points (DP).** When the second 64-bit word of `x(P)` has `dp_bits` low zero bits, the record `(tag, type, d)` goes into the
+table: a 61-bit tag (the third word of `x(P)` without its 3 low bits) and a 3-bit type, 0 tame, 1/2 wild on `Q'` with `σ = +1`/`−1`, 3/4 wild
+on `3Q'` with `σ = +1`/`−1` (the step writes tame or wild with its sign, the host adds the species). Two records with the **same tag and a
+different type** give
+
+`(c₁ − c₂)·x = d₂ − d₁`, with `c ∈ {0, +1, −1, +3, −3}` the signed coefficient of each type,
+
+and the division by `|c₁ − c₂| ∈ {1, 2, 3, 4, 6}` must be exact: the residues of the species make it so for the pairs that can meet
+(section 8.8); any other pair is discarded. Two records of the same type give no information (same trajectory) and the walker that
+brought the second one starts again at a random point. Every candidate solution is verified (`(base+x)·G` against the public key) before it is
+accepted: a false positive of the 61-bit tag cannot produce a wrong result.
 
 ### 4.2 Why it costs less
 
 In the classic kangaroo (tame/wild with positive jumps only) the wild must "catch up" with the tame trail:
 `≈ 2·√W` steps. With classes the points live in a roughly halved space and collisions are a *birthday problem*.
 
-* **Up to 1.5.0** the "centered" Gaudry–Schost was used: `base` at the center of the interval, tame kangaroos uniform over the whole
-  interval, wild ones in a window `±W/8` around `x`; the useful collisions were almost only tame–wild (bipartite).
-  Measured: **≈ 1.26·√W** (Galbraith–Ruprai theory ≈ 1.36·√W).
-* **From 1.6.0** the layout is that of the "SOTA" method of RCKangaroo (RetiredCoder, 2024; studied, its code not used):
-  the wild kangaroos start from `−x + v` with `v` spread over the whole interval, so their exponents lie on **both sides**
-  of zero and the classes fold onto themselves: two wild kangaroos at symmetric positions (`−x + v₁ = −(−x + v₂)`, that is
-  `v₁ + v₂ = 2x`) collide and give `x`. Each wild kangaroo can meet almost all the other wild ones (birthday problem that is *not* bipartite,
-  more efficient), while the tame ones cover the zone near zero, where the folded wild ones are sparser. Measured: **≈ 1.1–1.2·√W**
-  (RESEARCH.md section 4.5), about **10% fewer steps**, consistent with the K = 1.15 declared by RCKangaroo.
+The wild walkers start on both sides of zero (`x + u` with `u ∈ [−W, 0]`, `3x + u` with `u ∈ [−3W, 0]`), so the classes fold onto themselves:
+two wild walkers at symmetric positions collide and give `x`. Each wild walker can meet almost all the other wild ones (a birthday problem that is
+*not* bipartite, more efficient), while the tame ones cover the zone near zero, where the folded wild ones are sparser. The residues mod 12
+choose which pairs can meet, so that every `x` receives enough pairs with an integer solution (section 8.8), and the bands set how densely each
+part of a zone is covered (section 8.10). Measured on the real curve: **1.06·√W** on average from `W = 2^32` to `2^44`; at the scale of the open
+puzzles the model gives ≈ 1.02·√W (section 8.10).
 
-### 4.3 Unproductive cycles and drift
+### 4.3 Unproductive cycles
 
 Walking on the classes `{P, −P}`, a walker can return to a point it already visited without ever meeting a DP: from then
 on it repeats the same points forever (an *unproductive* cycle). With `R` jumps in the table (Bos–Kleinjung–Lenstra, *On the use
 of the negation map in the Pollard rho method*, 2010):
 
 * **Cycles of length 2** (`P → P' → P`): probability `1/(2R)` per step. When the current point coincides with the one from
-  two steps earlier, the next jump `(j+1) mod R` is used: the rule depends only on the history `(P_{n−1}, P_n)`, so two
+  two steps earlier (32-bit tags), the next jump `(j+1) mod R` is used: the rule depends only on the history `(P_{n−1}, P_n)`, so two
   walkers that merge keep merging.
 * **Cycles of length 4, 6, …**: even after removing those of length 2 they remain, with probability `≈ (R−1)/(4R³) ≈ 1/(4R²)` per step,
   that is **one every ≈ 2.6·10⁵ steps** with `R = 256` (measured: 3·10⁵ in the model of `tools/research/ksim.c`, almost all of length 4).
-  **Up to 1.5.0 the only defence was a restart after `24·2^dp_bits` steps without a DP**: fine for small intervals, but
-  with `dp_bits = 45` (puzzle 140) that threshold is never reached, and every walker stayed trapped after a few
-  minutes (GPU: ~1700 steps/s per walker). The displayed speed stayed high, but from then on the search could no longer
-  find collisions. In the model, with few jumps to make cycles frequent and the threshold disabled, 38–95% of the
-  searches do not terminate.
-* **Deterministic detection and exit (from 1.5.1)**: every `64` steps the walker stores the label of the current point
-  (*checkpoint*, 64 bits of `x`) and from then on keeps the minimum label seen. If it returns to the checkpoint it is in a cycle, and
-  the minimum is that of the whole cycle; it keeps going until it reaches the point with the minimum label and from there makes an **escape
+  With `dp_bits = 45` (puzzle 140) a walker meets a DP every 3.5·10¹³ steps: without an exit every walker would be trapped after a few minutes.
+* **Detection and exit**: every `64` steps (the same step numbers for the whole herd) the walker stores the 32-bit tag of the current point
+  (*checkpoint*) and from then on keeps the minimum tag seen. If it returns to the checkpoint it is in a cycle, and
+  the minimum is that of the whole cycle; it keeps going until it reaches the point with the minimum tag and from there makes an **escape
   jump**, taken from a separate table of 16 jumps (same distribution as the normal ones). The exit point depends only on the
   cycle, not on where or when the walker entered it: two walkers that had merged leave in the same way and
-  stay merged, so the collision is seen at the next DP (with a restart, or an exit from the detection point, the
-  trails would separate at every cycle, thousands of times between one DP and the next). The escape jump is not part of the
-  normal table, so the walk cannot fall into the same cycle again with a combination of normal jumps. If the cycle does not
-  close within one period (length ≥ 32: negligible probability) detection starts over; the restart after
-  `24·2^dp_bits` steps remains as a last defence.
-  Cost: a few comparisons per step and on average ≈ 40 wasted steps per cycle (0.015%). Checks: in the model, with 16 jumps
-  and the threshold disabled, every search terminates (cost 2.0·√W, against the 38% of searches stuck without the exit); on the real
-  curve the self-test solves an interval of 2^30 keys with only 8 jumps (one cycle every ~250 steps), a DP every 128 steps and
-  no restarts, which without the cycle exit does not terminate.
-* **64-bit counter of steps without a DP** from 1.5.0: up to 1.4.0 it was 32-bit and the threshold stopped at 2^32, so with
-  `dp_bits ≥ 33` almost every walker would have been restarted before reaching its distinguished point.
-* **No drift to tune**: the walk on the classes is symmetric; the mean jump length (`12·√W`) is
-  that of RCKangaroo, and in the simulator the outcome is almost indifferent between `0.5·√W` and `40·√W` (1.16–1.21).
+  stay merged, so the collision is seen at the next DP. The escape jump is not part of the normal table, so the walk cannot fall into the
+  same cycle again with a combination of normal jumps. If the cycle does not close within one period (length ≥ 32: negligible probability)
+  detection starts over. Cost: a few comparisons per step and on average ≈ 40 wasted steps per cycle (0.015%). Checks: in the model, with 16
+  jumps and no other defence, every search terminates (cost 2.0·√W, against 38% of the searches stuck without the exit); on the real curve the
+  self-test solves an interval of 2^30 keys with only 8 jumps (one cycle every ~250 steps), a DP every 128 steps and no restarts, which
+  without the exit does not terminate.
+* **Last defence**: a walker that has gone `24·2^dp_bits + 16` steps without a DP (a 64-bit counter, tested at the checkpoint steps) is
+  started again at a random point.
+* **No drift to tune**: the walk on the classes is symmetric; only the length of the jumps matters (section 8.10).
 
 ### 4.4 Parameters (chosen automatically)
 
-Values for schema 1; schemas 2 and 3 change the walker zones and the jump table (sections 8.8 and 8.10). Here `K` is the total number of walkers.
+Here `K` is the total number of walkers and `N` the number of entries that the memory limit holds.
 
 | Parameter | Value | Reason |
 |-----------|-------|--------|
-| base | start − `W/32` | the interval on one side of zero, far from the folding |
-| tame zone | `[1, W/32)`, one third of the walkers | as in RCKangaroo; in the simulator 1/3 is better than 1/5 and 1/2 |
-| wild zone | `−x + v`, `v` even in `[0, W + W/16)` | the wild kangaroos cover the whole interval on both sides of zero |
-| jumps | 256 even, uniform in `[2, 24·√W]` (+16 for cycle escape) | symmetric walk, even jumps for wild–wild collisions |
-| walkers per CPU thread | `clamp(√W/(256·threads), 16, 4096)`, multiple of 16 | the batch inversion is shared by the whole herd of the thread; 4096 is the measured optimum (RESEARCH.md sec. 8.4) |
-| GPU walkers | `NK` per work-item (64/128/256, tuned) × 512 work-items per SM (CUDA) | at most `√W/256` in total, so each one walks long enough |
-| `dp_bits` | `max(⌊log2(0.01·√W/K)⌋, bits required by RAM, 2)` | more RAM, less overhead |
-| DP table | 32 bytes/entry, grows up to the `--mem` limit (default 40% of free RAM, max 64 GiB); if the limit is reached the density of stored points is halved (only DPs with one more zero bit are kept) instead of stopping | one mutex for the table and another for the log file: DPs are rare |
+| base | the start of the range | `x = key − base` in `[0, W)` |
+| species, zones | the table of 4.1 (`src/kang_spec3.inc`) | optimized in the exact coverage model (sections 8.8 and 8.10) |
+| jumps | 256 multiples of 12, uniform in `[2/3, 4/3]` of `W^¾/16` (+16 for leaving cycles) | long walks without drift (section 8.10) |
+| walkers per CPU thread | `clamp(√W/(256·threads), 16, 4096)`, multiple of 16 | the batch inversion is shared by the whole herd of the thread; 4096 is the measured optimum (RESEARCH.md section 8.4) |
+| GPU walkers | `NK` per work-item (tuned, section 5) × work-items (by default 512 per SM with CUDA, 64 per compute unit with OpenCL, at most 32768) | at most `√W/256` in total, so each one walks long enough |
+| `dp_bits` | `max(⌊log2(0.01·√W/K)⌋, ⌈log2(1.3·√W/(0.8·N))⌉, 2)`, at most 60 | the overhead of the last DP below 1 % of the expected steps; the second term is the memory, below |
+| `--dp-bits B` | at most `⌊log2(√W/K)⌋ − 1` (a larger value is lowered, with a warning), never below what memory requires | a walker reaches its next DP after `2^dp_bits` steps: `K·2^dp_bits` must stay well below `√W` |
+| DP table | 32 bytes per entry, open addressing; limit `--mem` (default 40 % of the free RAM, at least 256 MiB and at most 64 GiB) | see below |
 
-### 4.5 Measurements (real curve, `pzsolve kstat BITS RUNS THREADS`)
+The table must hold the DPs of `1.3·√W` steps at 80 % load when memory decides `dp_bits` (`KANG_DP_MEM_MARGIN = 1.3`): the search costs
+1.06·√W on average and goes beyond 1.3·√W about once in three. It starts with room for those points at 60 % load (within the limit) and
+doubles at 80 % load if the old and the new table fit in the limit together. When it cannot grow it is **thinned in place** at 93 % load:
+from then on only DPs whose tag has one more zero bit are kept, and the stored ones that do not have it are dropped in one sweep over the array,
+with no second table. The search goes on, and a collision is seen with the delay of `dp_bits + 1`, the one a margin twice as large would have had
+from the start. Each bit less halves the delay of the distinguished points (about 1 to 2 `K·2^dp_bits/√W` steps, RESEARCH.md section 8.7).
 
-The mean cost, the median and the 90th percentile of schema 1 on the real curve from 2^28 to 2^44, and the long-tailed distribution on which
-the time estimates of section 11 are based: RESEARCH.md section 4.5. The measurements of schema 3, the one in use, are in section 8.10.
+### 4.5 Measurements (real curve, `pzsolve kstat BITS TRIALS THREADS`)
+
+The measurements of the layout in use are in section 8.10. The long-tailed distribution of the cost, on which the time estimates of
+section 11 are based, and the measurements of schema 1: RESEARCH.md section 4.5.
 
 ### 4.6 Things evaluated and rejected
 
@@ -224,11 +223,18 @@ and the distribution of the solved keys: RESEARCH.md section 4.6.
 
 ### 4.7 Resuming
 
-Every new DP is appended to `dp.bin` (32 bytes + a header with a fingerprint of the interval and the key). On resume the table is
-rebuilt and the walkers restart from new points (a different random stream for each session); the old trails
-remain useful because each of their later DPs is already in the table. A file from a different campaign is recognized and refused.
-The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` of the older layouts are no longer read: `hunt` keeps such a `dp.bin` as
-`dp.bin.vN` and goes on with a new log, `merge` refuses it (the old versions converted them on the fly; 1.9.1 dropped this together with schemas 1 and 2).
+Every DP that enters the table is appended to `dp.bin`: a header of 42 bytes (the magic `"PZDP5\n"`, a SHA-256 fingerprint of `base`, `W`,
+the text `"PZDPLOG4"` and the public key, and the 4 bytes of the jump table id), then records of 32 bytes `{tagk, d}`. The records are
+collected under the lock of the table in a buffer of 32768 (1 MiB); a full buffer is exchanged for an empty one and written after the table lock
+is released, under a lock of its own, so a slow disk does not stall the search threads. If the disk refuses a write the buffer grows (up to
+2^22 records) and the write is tried again; a record cut short at the end of the file is cut off at the next start.
+
+On resume the table is rebuilt from the file and the walkers restart from new points (a different random stream for each session and each
+`--node`); the old trails remain useful because each of their later DPs is already in the table. A file of another campaign (another range or
+public key) is refused, and so is one written with another jump table (another seed, or the setup of another computer): the message gives both ids.
+A file of the format `"PZDP4"` (the same records, a header of 38 bytes without the jump table id: versions 1.9.1 to 1.11.0) is loaded, appended
+to and merged as it is. The formats `"PZDP1"` to `"PZDP3"` of the older layouts cannot be used: `hunt` keeps such a `dp.bin` as `dp.bin.vN` and
+goes on with a new file, `merge` refuses it. A file written by a later version is left as it is.
 
 ## 5. GPU (CUDA and OpenCL)
 
@@ -240,30 +246,34 @@ The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` o
   (each kernel receives the number of work-items as its last argument); hash160 and modular inversion are compiled once as real
   functions (smaller PTX and fewer registers: 128 for the linear kernel on sm_86, no significant spill); the context waits
   for the kernels to finish without busy-waiting, so the core is left to the CPU compute threads.
-* **CUDA arithmetic (from 1.3.0)**: carry chains in PTX for the addition, the subtraction and the reduction, and a dedicated square. The instruction counts and
+* **CUDA arithmetic**: carry chains in PTX for the addition, the subtraction and the reduction, and a dedicated square. The instruction counts and
   the measurements, made on the sm_86 (Ampere) code and on the reference laptop GPU (20 SM, 4 GB, 192 GB/s, 2 MiB of L2; the card on which the GPU speeds
   in this document were measured): RESEARCH.md section 5.
-* **Variants of the linear kernel (CUDA)**: window 128, 256 or 512 × free registers (≈ 160) or limited to 128 (`__launch_bounds__(128, 4)`:
-  more resident warps). Tuning measures all six on the device and keeps the fastest.
-* **Linear kernel with "fused" inversion (1.5.0)**: the backward pass of Montgomery's trick derives each inverse and uses it
-  immediately for the points `C ± i·G`, recomputing the denominator from the table instead of keeping it in an array. The private memory per
-  work-item is halved (window 256: from 17 to 8.7 KB) and the traffic to video memory drops from ≈ 96 to ≈ 32 bytes per key
-  (at ≈ 600 M keys/s it was ≈ 57 GB/s out of ≈ 190). The hash filter uses the first three words (96 bits; every candidate is re-verified
-  on the CPU anyway): they do not depend on the last steps of RIPEMD-160, which the compiler eliminates (≈ 0.4% of instructions).
+* **Linear kernel with "fused" inversion**: the backward pass of Montgomery's trick derives each inverse and uses it
+  immediately for the points `C ± i·G`, recomputing the denominator from the table instead of keeping it in an array: about 8.7 KB of
+  private memory per work-item with a window of 256 and ≈ 32 bytes of traffic to video memory per key. The hash filter uses the first three
+  words (96 bits; every candidate is re-verified on the CPU anyway): they do not depend on the last steps of RIPEMD-160, which the compiler
+  eliminates (≈ 0.4% of instructions).
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
-  `HALF` is a compile-time constant of the kernel: **64, 128 or 256**; on the first run on a real GPU the program tries all
-  three (a few seconds each), picks the fastest (it needs an advantage of > 3% over 128) and stores the choice in
-  `$XDG_CACHE_HOME/pzsolve/gpu_tune.txt` (key: name, driver version, compute units, program version).
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
+  (≈ 160) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps); with OpenCL four: window 64, 128, 256 or 512. On the first
+  run on a device the program measures them all (a few seconds each) and keeps the default (256 with CUDA, 128 with OpenCL) unless another one
+  is more than 3% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
   `PZ_GPU_HALF=N` forces it, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
-* **Kangaroo (rewritten in 1.5.0, kernel v2 in 1.7.0)**: up to 1.4.0 each work-item handled **16** walkers: one inversion (≈ 270 multiplications)
-  every 16 steps, that is ≈ 17 multiplications per step against the ≈ 6 of the step itself, and the kernel used 255 registers with spill.
-  Now `NK` = 64, 128 or 256 walkers per work-item (tuning on the device, `PZ_GPU_NK` to force it), the same "fused" scheme
-  as the linear kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. State in
-  global memory (128 bytes per walker: x, y, 192-bit distance, type, sign, 32-bit anti-cycle labels, last DP);
-  the DPs go out in a buffer and are inserted in the same table as the CPU's. Restarts are handled by the host.
-  Kernel v2 (1.7.0), built around memory traffic (the history buffer, one pass per round, the inversion by divstep): RESEARCH.md section 5.
+* **Kangaroo**: `NK` walkers per work-item, so that one inversion (by divstep) serves `NK` steps, with the same "fused" scheme as the linear
+  kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. The state of the walkers is in
+  global memory (x, y, the running products of the batch, 32-bit tags and flags: ≈ 130 bytes per walker). The distance does not travel from step
+  to step: every step adds 16 bits (jump index, "negated" bit) to a history buffer, and `d` is rebuilt by replaying it, at the end of a launch of
+  at most 64 rounds for everyone and on the spot for the rare distinguished points. One pass per round moves the walkers and computes the
+  denominators of the next round. The DPs go out in a buffer and are inserted in the same table as the CPU's; restarts are handled by the
+  host. Variants, measured on the device by the same procedure as the linear ones (the default stays unless another is more than 3% faster):
+  with CUDA `NK` = 64, 128 or 256 (default 128), each plain or with the running products kept only for every other walker (`b`, less memory
+  traffic for half a multiplication more per step), and `NK` = 64 or 128 with the products every fourth walker (`c`); with OpenCL `NK` = 32, 64
+  or 128 (default 64), plain or `b`. On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
+  work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its
+  measurements: RESEARCH.md sections 5 and 8.4.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,
   with a bit-by-bit comparison of states, DPs and restarts** (with a low step limit, so that restarts really happen). A device
@@ -310,7 +320,7 @@ Kangaroo, **mean case** (≈ 1.06·√W steps, `KANG_C_MEAN`, section 8.10):
 | 160 | 9.06e+23 | 2.9e+08 years | 2.9e+07 years | 2.9e+06 years |
 
 Puzzles without a public key are out of reach for the hardware of a single computer from `n ≳ 70`; those with a known public
-key from `n ≳ 110–120`. The program stays correct for any `n ≤ 189` (kangaroo) / `n ≤ 255` (linear),
+key from `n ≳ 110–120`. The program stays correct for any `n ≤ 189` (kangaroo) / `n ≤ 256` (linear),
 but the time grows as `2^(n/2)` and `2^n`.
 
 ## 7. References
@@ -336,8 +346,8 @@ This section separates what is **known in the literature** from what is **the au
 | classic kangaroo (van Oorschot–Wiener) | small | 2 | literature |
 | 4 kangaroos / improved Gaudry–Schost | small | 1.715 / 1.661 | Galbraith–Pollard–Ruprai |
 | Gaudry–Schost with `±` classes | small | ≈ 1.36 (theoretical) | Galbraith–Ruprai |
-| **this implementation** | small (DP table) | **schema 3 (1.7.9): 1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10)**; schema 2 (1.7.8): ≈ 1.045 with short walks (8.8); schema 1: 1.08–1.21, mean 1.15 (measured, 1.6.0; before that 1.26), ≈ 1.09 with many walkers (model, RESEARCH.md 8.7); for schemas 1 and 2 with long walks see the correction in 8.10 | `pzsolve kstat`, `ksim` |
-| BSGS with `±`, `T = √W/2` | `≈ 6·√W` bytes | **1.0** (worst case 1.41) | direct calculation (RESEARCH.md section 4.6) |
+| **this implementation** | small (DP table) | **1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10)**; the earlier layouts: RESEARCH.md section 8.1 | `pzsolve kstat`, `ksim` |
+| BSGS with `±`, `T = √W/2` | `≈ 6·√W` bytes | **1.0** (worst case 1.5) | direct calculation (RESEARCH.md section 4.6) |
 | counting lower bound | any | **≥ ≈ 0.67**, optimistic: with integer values the optimum of the model is 0.8165 (RESEARCH.md 8.7) | the author's own reasoning, below |
 
 **Is `q < 1` possible in theory? Only beyond a certain point.** With enough memory, BSGS with `±` reaches
@@ -354,7 +364,7 @@ With `n` elements there are at most `n²/2` pairs × 2 values, so the probabilit
 **Where it is used.** BSGS with `q = 1.0` needs `T = √W/2` entries (≈ 11.4 bytes each): for puzzle 135 that would be `2^66` entries,
 out of reach for any machine, and for the open puzzles with a known public key (140–160) `2^69…2^79`. The gain (≈ 6 % of steps compared
 with the kangaroo, plus a *deterministic* cost without the long tail of the kangaroo) exists for `W ≲ 2^68` with 128 GB of RAM and is
-implemented in 1.1.0 (section 9). With little memory the best known minimum remains ≈ 1.2–1.3.
+implemented (section 9). With little memory the best known minimum remains ≈ 1.2–1.3.
 
 ### 8.2 The exponent
 
@@ -384,8 +394,8 @@ implemented in 1.1.0 (section 9). With little memory the best known minimum rema
 
 | Goal | Possible? |
 |------|-----------|
-| `q < 1` with little memory | not known; the best known is ≈ 1.15–1.36 (here ≈ 1.02 with schema 3 at large scale, 8.10) |
-| `q ≈ 1.0` with a lot of RAM | yes (BSGS with `±`, implemented in 1.1.0): `W ≲ 2^68` with 128 GB; better than the kangaroo up to `W ≈ 2^70` |
+| `q < 1` with little memory | not known; the best known is ≈ 1.15–1.36 (here 1.06 measured, ≈ 1.02 at the scale of the open puzzles in the model, 8.10) |
+| `q ≈ 1.0` with a lot of RAM | yes (BSGS with `±`, section 9): `W ≲ 2^68` with 128 GB; better than the kangaroo up to `W ≈ 2^69` |
 | exponent `< 1/2` for a single instance, classical | no in the generic model; no specific attack on secp256k1 is known |
 | exponent `1/3` per instance | yes with a `W^{2/3}` precomputation and many instances of the same width |
 | polynomial time | only with a fault-tolerant quantum computer |
@@ -395,9 +405,9 @@ Corrigan-Gibbs–Kogan, *The Discrete-Logarithm Problem with Preprocessing* (<ht
 Roetteler et al., *Quantum resource estimates for computing elliptic curve discrete logarithms* (<https://eprint.iacr.org/2017/598>);
 Ekerå–Håstad, *Quantum algorithms for computing short discrete logarithms and factoring RSA integers* (<https://eprint.iacr.org/2017/077>).
 
-### 8.4 Cost of a step and hardware bottlenecks (1.5.0)
+### 8.4 Cost of a step and hardware bottlenecks
 
-With the algorithm fixed (constant ≈ 1.15 since 1.6.0 and exponent 1/2, sections 8.1–8.2), what remains is the cost of **one step** and how many
+With the algorithm fixed (constant ≈ 1.06 and exponent 1/2, sections 8.1–8.2), what remains is the cost of **one step** and how many
 steps per second the hardware can really do.
 
 **The arithmetic minimum.** A step is an affine addition `P + S_j`: slope `λ = (y − y_j)/(x − x_j)`, `x₃ = λ² − x − x_j`,
@@ -413,7 +423,7 @@ the CUDA kernel, the reasons for not keeping the herd in shared memory or in L2,
 laptop with a discrete GPU, an integrated GPU and the CPU) that is ≈ 27,000 years on average; the probability of succeeding in one year is
 ≈ `(n/c)² ≈ 10⁻⁹` (model of section 11). Every doubling of speed halves the time, but the order of magnitude remains.
 
-### 8.5 Comparison with the state of the art: puzzle 135 and RCKangaroo (1.6.0)
+### 8.5 Comparison with the state of the art: puzzle 135 and RCKangaroo
 
 Puzzle 135 (`W = 2^134`) has been solved, reportedly with about 300 GPUs in 5 months (a reported figure, not verified here). Calculations:
 
@@ -425,35 +435,35 @@ Puzzle 135 (`W = 2^134`) has been solved, reportedly with about 300 GPUs in 5 mo
 
 What follows for this program:
 
-1. **Constant**: 1.26 up to 1.5.0 against 1.15 for RCKangaroo. Having studied their method and remodeled it in the simulator, the
-   difference was in the arrangement of the walkers; adopted (section 4.2): now ≈ 1.1–1.2.
+1. **Constant**: 1.15 for RCKangaroo, 1.06 here (measured, sections 4.2 and 8.10). The arrangement of the walkers on both sides of zero comes
+   from their method (studied and remodeled in the simulator, their code not used); the species with fixed residues and the long jumps with
+   banded zones are this program's own (sections 8.8 and 8.10).
 2. **Fruitless cycles** (section 4.3): RCKangaroo handles them explicitly (cycles of 2 with a second table of jumps, longer cycles
-   reconstructed in a separate kernel). Here the handling of cycles of 4 and more was missing, and with large `dp_bits` the
-   walkers got stuck: fixed in 1.6.0. **It was the most serious defect**: without the fix a campaign on puzzle 140 would
-   never have found the key.
-3. **Step speed on GPU** (text written for v1; the v2 of 1.7.0 takes up its main points): this is the largest gap. RCKangaroo does ≈ 14.5 G steps/s on a 4090 (128 SM at 2.5 GHz). In
-   proportion to integer compute capacity, on the reference laptop GPU (20 SM, ≈ 1.4 GHz) it would be ≈ 1–1.3 G steps/s; the v1 kernel did
-   0.21 (puzzle 140) and 0.49 G/s measured after 1.6.0. The main differences in their kernel: a state of 24 walkers per thread kept in the L2 cache
-   (on a 4090, 72 MB), no 192-bit distance in the loop (only the jump index is written, 2 bytes, and the distances are
-   reconstructed in a second kernel), a fast inversion (a binary-GCD type algorithm instead of the power `p − 2`) and
-   64-bit arithmetic in PTX assembly. ≈ 70–230 bytes per step, almost all in L2, against ≈ 330–400 bytes here in video memory.
-   The reference laptop GPU has only 2 MB of L2, so on this card the possible gain is closer to 3× than to 5×.
+   reconstructed in a separate kernel). Here they are detected and left by every walker in the same way. Without such handling, with large
+   `dp_bits` every walker gets stuck and a campaign on puzzle 140 would never find the key.
+3. **Step speed on GPU**: this is the largest gap. RCKangaroo does ≈ 14.5 G steps/s on a 4090 (128 SM at 2.5 GHz). In proportion to integer
+   compute capacity, on the reference laptop GPU (20 SM, ≈ 1.4 GHz) it would be ≈ 1–1.3 G steps/s; the kernel here does ≈ 0.81 G steps/s there
+   (RESEARCH.md section 8.4). The main differences in their kernel: a state of 24 walkers per thread kept in the L2 cache (on a 4090, 72 MB),
+   no 192-bit distance in the loop (only the jump index is written, and the distances are reconstructed in a second kernel), a fast inversion
+   (a binary-GCD type algorithm instead of the power `p − 2`) and 64-bit arithmetic in PTX assembly. The kernel here also keeps only a history
+   of the jumps and inverts by divstep (section 5), and on cards with a large L2 it tries herds that fit in it; the reference laptop GPU has only
+   2 MB of L2, so on that card the state of the walkers has to live in video memory.
 
-### 8.6 Modular multiplication: what was tried (1.7.0)
+### 8.6 Modular multiplication: what was tried
 
 The 256-bit modular multiplication in use compared with 29-bit limbs on the GPU, one-level Karatsuba and a row-wise product (SASS instruction counts),
 the number of multiplications per step and the inversion: RESEARCH.md section 8.6.
 
-### 8.7 How low can it go: counting pairs with integer values (1.7.7)
+### 8.7 How low can it go: counting pairs with integer values
 
 The counting argument of 8.1 redone with integer values, the optimum of the mixtures of walker species, the measured cost against the number of walkers
 and the bits of the distinguished points, and the interleaved BSGS: RESEARCH.md section 8.7.
 
-### 8.8 Below 1.085: species with fixed residues (schema 2, from 1.7.8)
+### 8.8 Below 1.085: species with fixed residues (schema 2)
 
 In RESEARCH.md 8.7 a pair of walkers with coefficients `b ≠ b'` gave an integer `x` only with probability `1/|b − b'|`, and no congruence
 made all the pairs integer together. True pair by pair; but one can **choose for which `x` each pair is integer** and arrange that,
-for every `x`, there are enough of them. This is the scheme of the new campaigns from 1.7.8.
+for every `x`, there are enough of them. The layout in use (schema 3, section 8.10) keeps these species and residues.
 
 * Each walker has `E = b·x + u` with `u ≡ r (mod 12)` and **all jumps multiples of 12**: the residue `r` never changes (the change of
   representative `E → −E` maps `(b, r)` to `(−b, −r)`, i.e. to the same species seen from the other side). The start `u` is uniform in the
@@ -472,17 +482,17 @@ for every `x`, there are enough of them. This is the scheme of the new campaigns
 | wild on `Q`, `E = x + u` | 3, 7, 11 | `[−1.005, 0.005]` | 34.9 % |
 | wild on `3Q`, `E = 3x + u` | 9 | `[−3.005, 0.005]` | 35.8 % |
 
-  Cost in the random-coverage model: **1.045·√W**, against 1.085 for the optimum without residues (the 1.6.0 layout). Other families
+  Cost in the random-coverage model: **1.045·√W**, against 1.085 for the optimum without residues (schema 1). Other families
   (`b ∈ {0, 1, 3, 5}` mod 60, `{0, 1, 3, 9}` mod 36) give the same value in the ideal model without geometry (0.991); coefficients 2, 5, 9
   do not help. The value 0.991 is the floor of this idea; the zones overlapping non-uniformly bring it to 1.045.
 * **Cost per step: none.** The CPU and GPU step is the same; only the jump table (computed once), the starts
   (`u·G + b·Q'`, with `3·Q'` computed once) and the solution change: a pair with type codes `k₁, k₂` gives `(c₁ − c₂)·x = d₂ − d₁` with
-  `c ∈ {0, +1, −1, +3, −3}`, exact division by `|c₁ − c₂| ∈ {1, 2, 3, 4, 6}`. The step still writes the usual 2-bit code (tame or
-  wild with its sign) and the host turns it into the 3-bit code of the species, so the GPU kernel did not change. The abscissa label in the table
-  goes from 62 to 61 bits (false positives are verified anyway).
+  `c ∈ {0, +1, −1, +3, −3}`, exact division by `|c₁ − c₂| ∈ {1, 2, 3, 4, 6}`. The step writes a 2-bit code (tame or
+  wild with its sign) and the host turns it into the 3-bit code of the species, so the GPU kernel is the same for every species. The abscissa
+  tag in the table has 61 bits (false positives are verified anyway).
 * The walk model, the measurements on the real curve, the compatibility of the log and what remains to be gained: RESEARCH.md section 8.8.
 
-### 8.9 More RAM or a precalculation: what can be bought (analysis, after 1.7.8)
+### 8.9 More RAM or a precalculation: what can be bought (analysis)
 
 Question: with a more complex algorithm, more RAM or a precomputation kept in memory, can the factor in front of √W be lowered by a lot?
 Short answer: **for a single key, no**. Memory lowers the factor only when it is of the order of √W, and a precomputation makes the
@@ -490,7 +500,7 @@ later search fast only by moving the cost, increased, into the precomputation it
 The limits by amount of memory, the measurements of the Bernstein-Lange precomputation (`tools/research/blsim.c`), what it would mean for puzzle 135,
 when it pays off and the other ways of using RAM: RESEARCH.md section 8.9.
 
-### 8.10 Local walks, long jumps and banded zones (schema 3, from 1.7.9)
+### 8.10 Local walks, long jumps and banded zones (schema 3)
 
 **The defect found.** With `±` classes the walk has no drift: every step moves `|E|` by `±s` (s = jump), so after `n` steps a
 walker has explored only a region of width ≈ `√n·s` around its start. The models of RESEARCH.md 8.7 and 8.8 were measured with short walks
@@ -508,7 +518,7 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
 **Schema 3.**
 * **Mean jump `W^¾/16`** (a multiple of 12 as in schema 2): `P ≈ K^1.5/16`, i.e. 256 with 256 walkers and ≈ 2^25 on puzzle 135, while the
   explored region is `W/(16·√K)`, a fraction `1/(16·√K)` of `W`, much smaller than the start zones. On the test intervals (`W ≤ 2^44`) the jump
-  goes from 16·√W (at `2^32`) to 128·√W (at `2^44`), longer than the 12·√W of before.
+  goes from 16·√W (at `2^32`) to 128·√W (at `2^44`), longer than the 12·√W of schemas 1 and 2.
 * **Banded zones**: the same species and the same residues as schema 2, with every zone split into bands (tame: 2 bands of `0.02·W`; wild on `Q`: bands of
   `0.1·W`; on `3Q`: bands of `0.2·W`) and a share per band, optimized in the exact coverage model (`tools/research/kbands.py`; in the
   program `src/kang_spec3.inc`, generated from `tools/research/kang_schema3.txt` with `tools/research/kspec_table.py`). The density of the wild walkers on `Q` concentrates
@@ -516,7 +526,7 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
   walks no difference). Walk model, `W = 2^36`, 4096 walkers, `dp = 0`, 5000 trials, two seeds: **1.015 and 1.021 against 1.044 and
   1.053** for schema 2. With 64 walkers the bands do not help (1.063 against 1.054).
 * Each walker has its group fixed (coefficient and residue, as in schema 2) and at every start draws the band according to the shares: with
-  51 bands and few walkers, a fixed band per walker left some residues uncovered and certain keys without a solution (found
+  50 bands and few walkers, a fixed band per walker left some residues uncovered and certain keys without a solution (found
   by the self-test on `W = 2^24` with 32 walkers).
 * A fourth species does not help: in the ideal model, with `{0, 1, 2, 3}` mod 60 and `{0, 1, 3, 5}` mod 120, the optimizer gives them zero share and stays at
   0.9908, the value of three species. The theoretical calculation with four species (0.957) requires a uniform distribution of the residues that those families do not allow.
@@ -533,10 +543,10 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
   Mean from `2^32` to `2^44`: **1.060** against 1.100 (schema 2) and 1.164 (schema 1); it is the constant of the time estimates (`KANG_C_MEAN`). At the scales of the
   open puzzles the model gives ≈ 1.02.
 
-**Compatibility.** Schema 3 writes the log in the `PZDP4` format (fingerprint `PZDPLOG4`). Schemas 1 and 2 were removed in 1.9.1: a `dp.bin`
-of an older layout is kept aside by `hunt` and not used (section 4, introduction).
+**Compatibility.** The log of schema 3 is `dp.bin` in the `PZDP5` format (section 4.7); a `dp.bin` of an older layout is kept aside by `hunt`
+and not used.
 
-## 9. Symmetric BSGS with a RAM table (`--mode bsgs`, from 1.1.0)
+## 9. Symmetric BSGS with a RAM table (`--mode bsgs`)
 
 ### 9.1 Algorithm
 
@@ -572,12 +582,12 @@ path, which is also triggered by every zero denominator in the batch inversion.
   and **idempotent** (safe to run again), transparent huge pages (`madvise(MADV_HUGEPAGE)`) to reduce TLB misses. A tag that
   matches by chance (probability `~2^-24` per occupied cell compared, about 9 per lookup, i.e. `~5·10^-7` per giant step) is a
   false positive discarded by the `k·G = P` check and counted in the statistics (it costs two scalar multiplications, ≈ 20 µs: about
-  0.01 ns per giant step, against ≈ 100 ns for the step itself). Tables written by the first versions (`PZBSGS01`: one array, linear
+  0.01 ns per giant step, against ≈ 100 ns for the step itself). Tables written by versions up to 1.10.0 (`PZBSGS01`: one array, linear
   probing, load 0.65, 12.3 bytes per baby step) are read and used as they are; they cannot be converted without computing the baby
   steps again.
 * **Parallel construction**: blocks of 2^22 baby steps taken from an atomic counter; each thread uses the same batch-inversion
   window. Measured on 4 cores: ≈ 16–24 M entries/s.
-* **SIMD lane windows (1.5.0)**: 4 (AVX2) or 8 (AVX-512, IFMA) consecutive windows per instruction, with the arithmetic of
+* **SIMD lane windows**: 4 (AVX2) or 8 (AVX-512, IFMA) consecutive windows per instruction, with the arithmetic of
   `fev.h`/`fev52.h`, both for the giants and for building the table. At startup each variant must produce exactly the
   x-coordinates of the scalar routine (two calls, so the advance of the centers is covered too), otherwise it is not used;
   `PZ_BSGS_SCALAR=1` disables them. Here (4 threads, table 2^22): giants from 25.8 to ≈ 50 M/s; the limit is now the random read
@@ -606,12 +616,11 @@ path, which is also triggered by every zero denominator in the batch inversion.
 | 2^70 | 2^34 | 183 GiB | 3.4e10 | 3.6e10 |
 
 With 128 GB of RAM (table ≤ 90 GiB) the optimal BSGS fits up to `W ≈ 2^68.0`; with a table smaller than `√W/2` the cost is
-`T + W/(4T)`, which stays below the kangaroo (1.06·√W) for `T ≥ 0.35·√W`, that is up to `W ≈ 2^69.0` (with the kangaroo constant of 1.26 used
-up to 1.5.0 it was `0.24·√W` and `2^70`).
+`T + W/(4T)`, which stays below the kangaroo (1.06·√W) for `T ≥ 0.35·√W`, that is up to `W ≈ 2^69.0`.
 
 **Honesty about applicability.** The open puzzles with a known public key (135, 140, 145, 150, 155, 160) have `W = 2^134…2^159`:
 `T` would be of the order of `√W = 2^67…2^79.5`, unthinkable. For them BSGS cannot help and the kangaroo remains (still ≈ 2^70 steps for 140). BSGS
-is useful for intervals with a known public key up to `W ≈ 2^70` and as a "universal solver" with a reusable
+is useful for intervals with a known public key up to `W ≈ 2^69` and as a "universal solver" with a reusable
 precomputed table.
 
 ## 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
@@ -627,7 +636,7 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 
 ## 11. Time-estimation model (`src/eta.c`)
 
-Estimates are computed from a *realistic rate from the start* (since 1.7.4, `rate_est` in `eta.c`): no estimate until every
+Estimates are computed from a *realistic rate from the start* (`rate_est` in `eta.c`): no estimate until every
 engine has produced something (a GPU counts only at the end of a launch), then the average over a sliding window of up to 2 minutes; at the start
 it is blended, with a weight growing up to 150 s, with a *remembered* speed (the steady-state speed of a previous run of the same
 configuration, which on laptops is lower than the cold speed measured by tuning). BSGS, which changes speed at the end

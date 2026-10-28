@@ -8,20 +8,27 @@ the cross-references; the figures are those of the version named in each section
 noted where they are).
 
 **Section numbers.** The sections keep the numbers they had when everything was in one document, because they are cited from the source, the tools and
-the other documents. Here are 4.5, 4.6, 5, 8.4 to 8.10 and 10; in ALGORITHMS.md are the others and a short pointer to each section that is here.
-Sections 4.5, 4.6, 8.6, 8.7 and 8.9 are only here. Sections 5, 8.4, 8.8, 8.10 and 10 are in both files: the description of the schema in use (8.8,
-8.10), the arithmetic minimum of a step (8.4), the GPU kernels (5) and the SIMD engines (10) stay in ALGORITHMS.md, and the note at the start of each
-section here says what is in the other file. A reference written as "ALGORITHMS.md section N" or "RESEARCH.md section N" names the file; one without a
+the other documents. Here are 4.1 to 4.7, 5, 8.1, 8.4 to 8.10 and 10; in ALGORITHMS.md are the others and a short pointer to each section that is here.
+Sections 4.5, 4.6, 8.6, 8.7 and 8.9 are only here. Sections 4.1 to 4.4, 4.7, 5, 8.1, 8.4, 8.5, 8.8, 8.10 and 10 are in both files: ALGORITHMS.md
+describes what the program does now (the layout in use, 4 and 8.8, 8.10; the arithmetic minimum of a step, 8.4; the GPU kernels, 5; the SIMD
+engines, 10), this file the earlier layouts and figures, and the note at the start of each section here says what is in the other file. A reference written as "ALGORITHMS.md section N" or "RESEARCH.md section N" names the file; one without a
 file name is to a section of the same file. The term "schema" is explained at the start of section 4 of ALGORITHMS.md.
 
 ## Contents
 
 4. The interval kangaroo
+   * 4.1 Setup of schema 1
+   * 4.2 Why it costs less: from the centered layout to schema 1
+   * 4.3 Unproductive cycles and drift: how the defences came
+   * 4.4 Parameters of schema 1
    * 4.5 Measurements (real curve, `pzsolve kstat BITS RUNS THREADS`)
    * 4.6 Things evaluated and rejected
+   * 4.7 Resuming: the log formats of the older layouts
 5. GPU (CUDA and OpenCL)
 8. Theoretical limits: how much can still be improved?
+   * 8.1 The constant: the figures of the earlier layouts
    * 8.4 Cost of a step and hardware bottlenecks (1.5.0)
+   * 8.5 Comparison with RCKangaroo: what followed for this program
    * 8.6 Modular multiplication: what was tried
    * 8.7 How low can it go: counting pairs with integer values
    * 8.8 Below 1.085: species with fixed residues (schema 2)
@@ -30,6 +37,122 @@ file name is to a section of the same file. The term "schema" is explained at th
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
 ## 4. The interval kangaroo (public key known)
+
+The program uses schema 3 (ALGORITHMS.md section 4). Subsections 4.1 to 4.4 and 4.7 below are the text that described the earlier
+layouts in ALGORITHMS.md when they were still in the program; it was moved here without changes.
+
+**Which schema the program uses.** The kangaroo went through three schemas during development. They share the step and the equivalence classes
+and differ in the species of walkers, where they start, the length of the jumps and how a pair of distinguished points is resolved. **The program
+implements schema 3** (the species and residues of schema 2, long jumps of mean `W^¾/16` and start zones split into bands; sections 8.8 and 8.10).
+Schemas 1 and 2 were used by development builds (1.6.0 to 1.7.8) and, from 1.8.0 to 1.9.0, schema 1 for campaigns with fewer than 256 kangaroos;
+version 1.9.1 removed them together with their log formats (a `dp.bin` written by them is kept aside and not used). This section describes schema 1, which is the simplest and the base of the later
+ones: 4.1 to 4.6 (setup, parameters, measurements; 4.5 and 4.6 are in RESEARCH.md) refer to it, while 8.8 and 8.10 give the changes of schemas 2 and 3 and their measured cost
+(≈ 1.10 and ≈ 1.06 against 1.15·√W).
+
+### 4.1 Setup of schema 1 (from 1.6.0)
+
+This subsection describes **schema 1**, the layout of the development builds 1.6.0 to 1.7.7. Schema 2 has the same classes and the same step but
+three species of walkers with fixed residues mod 12 (section 8.8), about 4% fewer steps; schema 3, the one the program uses, is in section 8.10.
+
+Let `S = W/32` (or less, if the interval starts below `W/32`), `base = lo − S` and `Q' = Q − base·G`. The key is
+`k = base + x` with `x ∈ [S, S + W)`: the whole interval lies on one side of the point `0` around which the classes fold.
+
+**Equivalence classes.** `P` and `−P` have the same x-coordinate; we work on the classes `{P, −P}` and choose as
+representative the point with even `y`. The walker (kangaroo) carries with it:
+
+* the canonical point `P = e·G` and its *exact* exponent `e` as a signed 192-bit integer:
+  * **tame** kangaroo (one third): starts at `e = t`, `t ∈ [1, W/32)`, and keeps `e = d`;
+  * **wild** kangaroo (two thirds): starts at `e = −x + v`, `v` even in `[0, W + W/16)` (that is, from the point `v·G − Q'`), and keeps
+    `e = σ·x + d`, with `σ = ±1` (it changes sign when canonicalization flips the point).
+
+Step: `j = x(P) mod 256`, `P ← canon(P + S_j)`, `d ← d + s_j`; if `y` is odd the point is negated (`d ← −d`, `σ ← −σ`).
+The jumps `s_j` (256, **even**, uniform in `[2, 24·√W]`, mean `12·√W`) are pseudo-random from the seed. Since the representative
+has a random sign, the exponent does a symmetric walk (no drift): each walker explores the surroundings of its
+starting point.
+
+**Distinguished points (DP).** When `x.n[1]` has `dp_bits` low zero bits, `(x-coordinate, type, d)` is recorded in a table; two
+records with the **same class but different type** reveal `x` (type ∈ {tame, wild σ=+1, wild σ=−1}):
+
+| pair                           | equation from the same class | solution             |
+|--------------------------------|------------------------------|----------------------|
+| tame `d_t`, wild(+1) `d_w`     | `d_t = x + d_w`              | `x = d_t − d_w`      |
+| tame `d_t`, wild(−1) `d_w`     | `d_t = −x + d_w`             | `x = d_w − d_t`      |
+| wild(+1) `d₁`, wild(−1) `d₂`   | `x + d₁ = −x + d₂`           | `x = (d₂ − d₁)/2`    |
+
+With even jumps and even starts, `d₂ − d₁` is always even: every wild(+1)–wild(−1) meeting gives the solution.
+Pairs of the same type give no information (same trajectory) and the kangaroo is restarted at a random point.
+Every candidate solution is verified (`(base+x)·G` against address/pubkey) before it is accepted: false positives
+of the table (62-bit tag) cannot produce wrong results.
+
+### 4.2 Why it costs less: from the centered layout to schema 1
+
+In the classic kangaroo (tame/wild with positive jumps only) the wild must "catch up" with the tame trail:
+`≈ 2·√W` steps. With classes the points live in a roughly halved space and collisions are a *birthday problem*.
+
+* **Up to 1.5.0** the "centered" Gaudry–Schost was used: `base` at the center of the interval, tame kangaroos uniform over the whole
+  interval, wild ones in a window `±W/8` around `x`; the useful collisions were almost only tame–wild (bipartite).
+  Measured: **≈ 1.26·√W** (Galbraith–Ruprai theory ≈ 1.36·√W).
+* **From 1.6.0** the layout is that of the "SOTA" method of RCKangaroo (RetiredCoder, 2024; studied, its code not used):
+  the wild kangaroos start from `−x + v` with `v` spread over the whole interval, so their exponents lie on **both sides**
+  of zero and the classes fold onto themselves: two wild kangaroos at symmetric positions (`−x + v₁ = −(−x + v₂)`, that is
+  `v₁ + v₂ = 2x`) collide and give `x`. Each wild kangaroo can meet almost all the other wild ones (birthday problem that is *not* bipartite,
+  more efficient), while the tame ones cover the zone near zero, where the folded wild ones are sparser. Measured: **≈ 1.1–1.2·√W**
+  (RESEARCH.md section 4.5), about **10% fewer steps**, consistent with the K = 1.15 declared by RCKangaroo.
+
+### 4.3 Unproductive cycles and drift: how the defences came
+
+Walking on the classes `{P, −P}`, a walker can return to a point it already visited without ever meeting a DP: from then
+on it repeats the same points forever (an *unproductive* cycle). With `R` jumps in the table (Bos–Kleinjung–Lenstra, *On the use
+of the negation map in the Pollard rho method*, 2010):
+
+* **Cycles of length 2** (`P → P' → P`): probability `1/(2R)` per step. When the current point coincides with the one from
+  two steps earlier, the next jump `(j+1) mod R` is used: the rule depends only on the history `(P_{n−1}, P_n)`, so two
+  walkers that merge keep merging.
+* **Cycles of length 4, 6, …**: even after removing those of length 2 they remain, with probability `≈ (R−1)/(4R³) ≈ 1/(4R²)` per step,
+  that is **one every ≈ 2.6·10⁵ steps** with `R = 256` (measured: 3·10⁵ in the model of `tools/research/ksim.c`, almost all of length 4).
+  **Up to 1.5.0 the only defence was a restart after `24·2^dp_bits` steps without a DP**: fine for small intervals, but
+  with `dp_bits = 45` (puzzle 140) that threshold is never reached, and every walker stayed trapped after a few
+  minutes (GPU: ~1700 steps/s per walker). The displayed speed stayed high, but from then on the search could no longer
+  find collisions. In the model, with few jumps to make cycles frequent and the threshold disabled, 38–95% of the
+  searches do not terminate.
+* **Deterministic detection and exit (from 1.5.1)**: every `64` steps the walker stores the label of the current point
+  (*checkpoint*, 64 bits of `x`) and from then on keeps the minimum label seen. If it returns to the checkpoint it is in a cycle, and
+  the minimum is that of the whole cycle; it keeps going until it reaches the point with the minimum label and from there makes an **escape
+  jump**, taken from a separate table of 16 jumps (same distribution as the normal ones). The exit point depends only on the
+  cycle, not on where or when the walker entered it: two walkers that had merged leave in the same way and
+  stay merged, so the collision is seen at the next DP (with a restart, or an exit from the detection point, the
+  trails would separate at every cycle, thousands of times between one DP and the next). The escape jump is not part of the
+  normal table, so the walk cannot fall into the same cycle again with a combination of normal jumps. If the cycle does not
+  close within one period (length ≥ 32: negligible probability) detection starts over; the restart after
+  `24·2^dp_bits` steps remains as a last defence.
+  Cost: a few comparisons per step and on average ≈ 40 wasted steps per cycle (0.015%). Checks: in the model, with 16 jumps
+  and the threshold disabled, every search terminates (cost 2.0·√W, against the 38% of searches stuck without the exit); on the real
+  curve the self-test solves an interval of 2^30 keys with only 8 jumps (one cycle every ~250 steps), a DP every 128 steps and
+  no restarts, which without the cycle exit does not terminate.
+* **64-bit counter of steps without a DP** from 1.5.0: up to 1.4.0 it was 32-bit and the threshold stopped at 2^32, so with
+  `dp_bits ≥ 33` almost every walker would have been restarted before reaching its distinguished point.
+* **No drift to tune**: the walk on the classes is symmetric; the mean jump length (`12·√W`) is
+  that of RCKangaroo, and in the simulator the outcome is almost indifferent between `0.5·√W` and `40·√W` (1.16–1.21).
+
+### 4.4 Parameters of schema 1
+
+Values for schema 1; schemas 2 and 3 change the walker zones and the jump table (sections 8.8 and 8.10). Here `K` is the total number of walkers.
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| base | start − `W/32` | the interval on one side of zero, far from the folding |
+| tame zone | `[1, W/32)`, one third of the walkers | as in RCKangaroo; in the simulator 1/3 is better than 1/5 and 1/2 |
+| wild zone | `−x + v`, `v` even in `[0, W + W/16)` | the wild kangaroos cover the whole interval on both sides of zero |
+| jumps | 256 even, uniform in `[2, 24·√W]` (+16 for cycle escape) | symmetric walk, even jumps for wild–wild collisions |
+| walkers per CPU thread | `clamp(√W/(256·threads), 16, 4096)`, multiple of 16 | the batch inversion is shared by the whole herd of the thread; 4096 is the measured optimum (RESEARCH.md sec. 8.4) |
+| GPU walkers | `NK` per work-item (64/128/256, tuned) × 512 work-items per SM (CUDA) | at most `√W/256` in total, so each one walks long enough |
+| `dp_bits` | `max(⌊log2(0.01·√W/K)⌋, bits required by RAM, 2)` | more RAM, less overhead |
+| DP table | 32 bytes/entry, grows up to the `--mem` limit (default 40% of free RAM, max 64 GiB); if the limit is reached the density of stored points is halved (only DPs with one more zero bit are kept) instead of stopping | one mutex for the table and another for the log file: DPs are rare |
+
+**The memory margin of `dp_bits` (up to 1.11.0).** When memory decided `dp_bits`, the table had to hold the distinguished points of `4·√W`
+steps. Since the table thins itself in place when it is full (ALGORITHMS.md section 4.4) the margin is 1.3 (`KANG_DP_MEM_MARGIN`): the
+margin of 4 cost one or two bits wherever memory decides, on puzzles 135 and 140 with 2^20 to 2^22 walkers (GPUs) and 8 to 64 GiB of RAM up
+to 29 % more steps (8 % at 32 GiB); the file of distinguished points is now 2 to 4 times larger.
 
 ### 4.5 Measurements (real curve, `pzsolve kstat BITS RUNS THREADS`)
 
@@ -56,12 +179,13 @@ The distribution has a long tail (it is of the "birthday" type: about `1 − exp
 * **BSGS with a table in RAM**: with `T` entries in the table (the x-coordinates of `t·G`, `t < T`, also hold for `−t`) every giant
   step covers `2T+1` values: mean cost `T + W/(4T)`, minimum `1.0·√W` for `T = √W/2` (worst case `1.41·√W`, or `1.5·√W` with this `T`, see ALGORITHMS.md 9.1). **With enough RAM
   it therefore beats the kangaroo (1.15·√W)**. It has been implemented since 1.1.0 (`--mode bsgs`, ALGORITHMS.md section 9); the table
-  takes `≈ 6.2·√W` bytes (25 GiB at `W = 2^64`, 98 GiB at `2^68`), so it is usable only for medium-small intervals.
+  takes `≈ 6.2·√W` bytes (25 GiB at `W = 2^64`, 98 GiB at `2^68`), so it is usable only for medium-small intervals. With the kangaroo
+  constant of 1.26 used up to 1.5.0, a table smaller than `√W/2` stayed below the kangaroo for `T ≥ 0.24·√W`, that is up to `2^70`.
 * **4-animal kangaroo** (≈ 1.715·√W) and Gaudry–Schost without symmetry (≈ 1.66·√W): superseded by the symmetric variant.
 * **Parameters of the centered variant (up to 1.5.0, `tools/research/ksim.c`, 8000 runs per point, W = 2^28, error ≈ ±0.007)**: a grid of 45
   combinations of wild zone `B ∈ {1/16…1/4}·W`, tame fraction `{0.4, 0.5, 0.6}` and mean jump `{0.3, 0.5, 0.8}`, plus 4 widths of the
   tame zone. The point in use (`A = W/2`, `B = W/8`, half tame, jump 0.5) is the best (1.292·√W in the model); the optimum is flat and
-  far-off choices cost up to 7% (tame on `0.75·W`: +17%). No room *in that family*: the gain came from changing the layout (ALGORITHMS.md section 4.2). In the model, 3000–4000 runs per point (error ≈ ±0.01), same number of
+  far-off choices cost up to 7% (tame on `0.75·W`: +17%). No room *in that family*: the gain came from changing the layout (section 4.2). In the model, 3000–4000 runs per point (error ≈ ±0.01), same number of
   walkers and `dp`: centered 1.27–1.36·√W, new layout 1.14–1.23·√W on `W = 2^26 … 2^34` and 64–2048 walkers
   (`ksim rck=1 tf=0.3333 jabs=12`).
 * **Third species of walkers on `2x`** (wild with exponent `±2x + d`, starting from `2Q`, each collision with different coefficients gives
@@ -69,6 +193,14 @@ The distribution has a long tail (it is of the "birthday" type: about `1 − exp
   on `2x` make it worse (up to 1.78). Their points often fall outside the tame zone and the extra pairs do not compensate.
 * **Distribution of the solved keys**: the relative position in the interval of the 82 known keys is compatible with uniform
   (Kolmogorov–Smirnov D = 0.074, 5% threshold 0.15; mean 0.51; one-bits 49.3%): no part of the interval is more likely.
+
+### 4.7 Resuming: the log formats of the older layouts
+
+Every new DP is appended to `dp.bin` (32 bytes + a header with a fingerprint of the interval and the key). On resume the table is
+rebuilt and the walkers restart from new points (a different random stream for each session); the old trails
+remain useful because each of their later DPs is already in the table. A file from a different campaign is recognized and refused.
+The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` of the older layouts are no longer read: `hunt` keeps such a `dp.bin` as
+`dp.bin.vN` and goes on with a new log, `merge` refuses it (the old versions converted them on the fly; 1.9.1 dropped this together with schemas 1 and 2).
 
 ## 5. GPU (CUDA and OpenCL)
 
@@ -85,7 +217,21 @@ kangaroo kernel.
   exact emulation of the PTX semantics (`tests/t_gpufe.c`, 5 million combinations, edge cases of the double carries; mutation testing);
   on the device it is confirmed by the self-test.
 
-Kangaroo kernel (rewritten in 1.5.0, kernel v2 in 1.7.0), continuing the Kangaroo bullet of ALGORITHMS.md section 5:
+The two bullets that described the kernels of 1.5.0 in ALGORITHMS.md section 5:
+
+* **Linear kernel with "fused" inversion (1.5.0)**: the backward pass of Montgomery's trick derives each inverse and uses it
+  immediately for the points `C ± i·G`, recomputing the denominator from the table instead of keeping it in an array. The private memory per
+  work-item is halved (window 256: from 17 to 8.7 KB) and the traffic to video memory drops from ≈ 96 to ≈ 32 bytes per key
+  (at ≈ 600 M keys/s it was ≈ 57 GB/s out of ≈ 190). The hash filter uses the first three words (96 bits; every candidate is re-verified
+  on the CPU anyway): they do not depend on the last steps of RIPEMD-160, which the compiler eliminates (≈ 0.4% of instructions).
+* **Kangaroo (rewritten in 1.5.0, kernel v2 in 1.7.0)**: up to 1.4.0 each work-item handled **16** walkers: one inversion (≈ 270 multiplications)
+  every 16 steps, that is ≈ 17 multiplications per step against the ≈ 6 of the step itself, and the kernel used 255 registers with spill.
+  Now `NK` = 64, 128 or 256 walkers per work-item (tuning on the device, `PZ_GPU_NK` to force it), the same "fused" scheme
+  as the linear kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. State in
+  global memory (128 bytes per walker: x, y, 192-bit distance, type, sign, 32-bit anti-cycle labels, last DP);
+  the DPs go out in a buffer and are inserted in the same table as the CPU's. Restarts are handled by the host.
+
+Kangaroo kernel (rewritten in 1.5.0, kernel v2 in 1.7.0), continuing the Kangaroo bullet above:
 
   **Kernel v2 (1.7.0)**, built around memory traffic (sec. 8.4): (a) the distance does not travel from step to step: every
   step adds 16 bits to a *history* buffer (jump index, "negated" bit) and `d` is rebuilt by replaying the history, at the end of the
@@ -96,6 +242,13 @@ Kangaroo kernel (rewritten in 1.5.0, kernel v2 in 1.7.0), continuing the Kangaro
   starting from the step number common to the whole herd.
 
 ## 8. Theoretical limits: how much can still be improved?
+
+### 8.1 The constant: the figures of the earlier layouts
+
+ALGORITHMS.md section 8.1 gives the constant of the layout in use. Its table, when the earlier layouts were still in the program, gave for
+this implementation: **schema 3 (1.7.9): 1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10)**; schema 2 (1.7.8): ≈ 1.045
+with short walks (8.8); schema 1: 1.08–1.21, mean 1.15 (measured, 1.6.0; before that 1.26), ≈ 1.09 with many walkers (model, 8.7); for
+schemas 1 and 2 with long walks see the correction in 8.10.
 
 ### 8.4 Cost of a step and hardware bottlenecks (1.5.0)
 
@@ -191,6 +344,24 @@ read of the table (single thread, 64 MB table). For large tables the RAM latency
 prefetch matter; a filter in cache does not help when the table itself is tens of GB, and sorting the probes by
 address would give locality only with batches comparable to the table. BSGS in any case does not apply to the open puzzles (ALGORITHMS.md 8.1).
 
+### 8.5 Comparison with RCKangaroo: what followed for this program (1.6.0)
+
+ALGORITHMS.md section 8.5 has the calculations on puzzle 135 and the comparison as it stands. Its list, as written for 1.6.0:
+
+1. **Constant**: 1.26 up to 1.5.0 against 1.15 for RCKangaroo. Having studied their method and remodeled it in the simulator, the
+   difference was in the arrangement of the walkers; adopted (section 4.2): now ≈ 1.1–1.2.
+2. **Fruitless cycles** (section 4.3): RCKangaroo handles them explicitly (cycles of 2 with a second table of jumps, longer cycles
+   reconstructed in a separate kernel). Here the handling of cycles of 4 and more was missing, and with large `dp_bits` the
+   walkers got stuck: fixed in 1.6.0. **It was the most serious defect**: without the fix a campaign on puzzle 140 would
+   never have found the key.
+3. **Step speed on GPU** (text written for v1; the v2 of 1.7.0 takes up its main points): this is the largest gap. RCKangaroo does ≈ 14.5 G steps/s on a 4090 (128 SM at 2.5 GHz). In
+   proportion to integer compute capacity, on the reference laptop GPU (20 SM, ≈ 1.4 GHz) it would be ≈ 1–1.3 G steps/s; the v1 kernel did
+   0.21 (puzzle 140) and 0.49 G/s measured after 1.6.0. The main differences in their kernel: a state of 24 walkers per thread kept in the L2 cache
+   (on a 4090, 72 MB), no 192-bit distance in the loop (only the jump index is written, 2 bytes, and the distances are
+   reconstructed in a second kernel), a fast inversion (a binary-GCD type algorithm instead of the power `p − 2`) and
+   64-bit arithmetic in PTX assembly. ≈ 70–230 bytes per step, almost all in L2, against ≈ 330–400 bytes here in video memory.
+   The reference laptop GPU has only 2 MB of L2, so on this card the possible gain is closer to 3× than to 5×.
+
 ### 8.6 Modular multiplication: what was tried (1.7.0)
 
 Question: are there 256-bit modular multiplication algorithms more efficient than the one in use? Static measurements (SASS instructions
@@ -249,7 +420,7 @@ Redone with more care (`tools/research/bounds.py` repeats the calculations):
   collide in two ways, `E₁ = E₂` and `E₁ = −E₂`, and give `x = (a₂ − a₁)/(b₁ − b₂)` and `x = −(a₁ + a₂)/(b₁ + b₂)`: each is an integer only with
   probability `1/|difference|`, unless the offsets `a` are chosen so that it is.
 * Tame–wild: two values, always integer. Wild–wild: one, integer if the offsets are even (the "even distance" trick of the method of
-  ALGORITHMS.md section 4.2). Tame–tame: none. With coefficients 2 or more the pairs are worth on average `1/2`, `1 + 1/3`, … and **no congruence makes
+  section 4.1). Tame–tame: none. With coefficients 2 or more the pairs are worth on average `1/2`, `1 + 1/3`, … and **no congruence makes
   them all integer**: a tame walker with even offsets would only see even `x`.
 * With tame fraction `α` and the rest wild: coverage `c·n²/W` with `c = 2α(1 − α) + (1 − α)²/2`, maximal for `α = 1/3` with `c = 2/3`: **the
   fraction the program has used since 1.6.0** (not a chance choice: it is the exact optimum). Adding species with coefficient 2…5 the numerical optimum

@@ -465,7 +465,7 @@ kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream)
     krng_seed(w->rng, ks->r->cfg.seed, "herd", ks->epoch, stream);
     /* the shares of the species, as exact as K allows: walker i takes the species at (i + 1/2) / K of the cumulated shares. The
      * species here is the group of bands with the same coefficient and residue (the first band of the group stands for it), and
-     * every start draws the band at random by the shares: with a few dozen walkers and 51 bands, a fixed band per walker would
+     * every start draws the band at random by the shares: with a few dozen walkers and 50 bands, a fixed band per walker would
      * leave some residues without walkers, and the keys that only those could reach without a solution */
     const int ns = NKSPEC3;
     const kang_species *sp = KSPEC3;
