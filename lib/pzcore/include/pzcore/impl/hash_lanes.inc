@@ -41,9 +41,23 @@ static inline pz_vu pz_v_set(uint32_t x)
     return r;
 }
 
+/* Byte swap of each word. With 64-byte vectors one byte shuffle (vpshufb); with AVX2 the shuffle mask costs a register that the
+ * RIPEMD-160 lines need, and SSE2 has no byte shuffle: shifts there. */
 static inline pz_vu pz_v_bswap(pz_vu x)
 {
+#if PZ_VBYTES == 64
+    typedef uint8_t pz_vb __attribute__((vector_size(64)));
+#define PZ_BSWAP_IDX 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 19, 18, 17, 16, 23, 22, 21, 20, 27, 26, 25, 24, 31, 30, 29, 28, \
+                     35, 34, 33, 32, 39, 38, 37, 36, 43, 42, 41, 40, 47, 46, 45, 44, 51, 50, 49, 48, 55, 54, 53, 52, 59, 58, 57, 56, 63, 62, 61, 60
+#ifdef __clang__
+    return (pz_vu)__builtin_shufflevector((pz_vb)x, (pz_vb)x, PZ_BSWAP_IDX);
+#else
+    return (pz_vu)__builtin_shuffle((pz_vb)x, (pz_vb){PZ_BSWAP_IDX});
+#endif
+#undef PZ_BSWAP_IDX
+#else
     return (x >> 24) | ((x >> 8) & 0xff00u) | ((x << 8) & 0xff0000u) | (x << 24);
+#endif
 }
 
 static inline pz_vu pz_v_load(const uint32_t *p)
