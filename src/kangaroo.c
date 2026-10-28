@@ -186,7 +186,7 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
         if (dup_out) dup_out[i] = (rc == 0);
         if (rc == 2) { solved = true; break; }
     }
-    pthread_mutex_unlock(&ks->mu);
+    kang_table_unlock(ks);
     return solved;
 }
 
@@ -251,6 +251,7 @@ kang_state *kang_create(run_ctx *r)
     kang_state *ks = pz_xcalloc(1, sizeof *ks);
     ks->r = r;
     pthread_mutex_init(&ks->mu, NULL);
+    pthread_mutex_init(&ks->wmu, NULL);
     ks->W = cfg_range_size(&r->cfg);
     const char *rerr = kang_range_error(&ks->W);
     if (rerr) pz_die("%s", rerr);
@@ -397,8 +398,9 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     atomic_store_explicit(&ks->cap_mirror, cap, memory_order_relaxed);
     ks->tab = calloc(cap, sizeof(dp_rec));
     if (!ks->tab) pz_die("not enough memory for the distinguished-point table (%llu entries)", (unsigned long long)cap);
-    ks->caplog = 32768;
+    ks->caplog = ks->capw = KANG_LOG_BUF_INIT;
     ks->logbuf = pz_xmalloc(ks->caplog * sizeof(dp_rec));
+    ks->wbuf = pz_xmalloc(ks->capw * sizeof(dp_rec));
     snprintf(ks->log_path, sizeof ks->log_path, "%s/dp.bin", r->cfg.dir);
 
     if (r->silent_setup) return 0;
@@ -419,7 +421,9 @@ void kang_destroy(kang_state *ks)
     if (ks->log) fclose(ks->log);
     free(ks->tab);
     free(ks->logbuf);
+    free(ks->wbuf);
     pthread_mutex_destroy(&ks->mu);
+    pthread_mutex_destroy(&ks->wmu);
     free(ks);
 }
 

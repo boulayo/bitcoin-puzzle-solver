@@ -27,6 +27,7 @@
 #define KANG_NOTAG 0xFFFFFFFFu   /* "no tag yet" */
 #define KANG_KSHIFT 3            /* bits of the kind code at the bottom of tagk */
 #define KANG_K_THREAD_MAX 4096   /* kangaroos per CPU thread: one field inversion per round of the herd (measured optimum) */
+#define KANG_LOG_BUF_INIT 32768  /* records in each of the two buffers of the log of distinguished points (1 MiB) */
 
 /* signed 192-bit integer (two's complement) */
 typedef struct { u64 w[3]; } i192;
@@ -112,13 +113,21 @@ typedef struct kang_state {
     u64 thin_mask;               /* only DPs whose (tag>>KANG_KSHIFT)&thin_mask == 0 are stored once the table is full */
     unsigned thin_level;
     pthread_mutex_t mu;
-    /* append-only log for resume */
-    FILE *log;
+    /* Append-only log for resume (kang_log.c). The distinguished points that enter the table are collected in logbuf under mu. A full
+     * logbuf is exchanged for the empty wbuf, still under mu, which takes microseconds, and the thread that did it writes the block
+     * after it let go of mu: a slow disk does not hold up the others. wmu serializes everything that touches the file and the fields
+     * marked (w); a thread takes mu before wmu, never the reverse. wbuf holds the records that came out of logbuf and are not in the
+     * file yet (being written, or kept for another try after a failure); they come before those in logbuf. */
+    pthread_mutex_t wmu;
+    FILE *log;                   /* (w) */
     dp_rec *logbuf;
     size_t nlog, caplog;
-    u64 log_recs;                /* whole records known to be in the file (loaded + flushed) */
-    bool log_broken;             /* the last write failed: the file is cut back to whole records and reopened before the next one */
-    bool log_warned;             /* the full-disk warning was given (until a write succeeds again) */
+    dp_rec *wbuf;                /* (w) */
+    size_t nw, capw;             /* (w) */
+    bool log_ready;              /* a block was taken out of logbuf and waits for its writer: the one that unlocks mu writes it */
+    u64 log_recs;                /* (w) whole records known to be in the file (loaded + flushed) */
+    bool log_broken;             /* (w) the last write failed: the file is cut back to whole records and reopened before the next one */
+    _Atomic bool log_warned;     /* the full-disk warning was given (until a write succeeds again) */
     char log_path[620];
     /* statistics */
     _Atomic u64 dups, restarts, rejected, dropped;
@@ -226,7 +235,8 @@ kang_state *kang_create(run_ctx *r);
 int kang_configure(kang_state *ks, int k_gpu_total);
 void kang_destroy(kang_state *ks);
 int kang_load_log(kang_state *ks);
-int kang_flush_log(kang_state *ks);
+int kang_flush_log(kang_state *ks);                                                      /* no lock held: writes every point collected so far; 0, or -1 when the file refuses */
+void kang_table_unlock(kang_state *ks);                                                  /* mu held: lets go of it, then writes the block this thread took out of the log, if any */
 typedef struct { u64 read, added, dups, skipped; bool solved; } kang_merge_stats;
 int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);
 

@@ -2,6 +2,7 @@
 /* kang_selftest.c - self-tests of the kangaroo: the CPU step variants against the portable one, the merge of two computers' logs, the
  * solution of a collision between every pair of kinds of walkers, and the log of distinguished points on a full disk. */
 #include "kangaroo_priv.h"
+#include "platform.h"
 #include "outfmt.h"
 #ifndef _WIN32
 #include <signal.h>
@@ -607,18 +608,234 @@ int kang_log_file_selftest(void)
 }
 
 #ifndef _WIN32
+#define LCHK(cond) do { if (!(cond)) { fails++; printf("  full disk: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
+
+/* The two buffers of the log hold `n` records each, and are empty. */
+static void log_small_buffers(kang_state *ks, size_t n)
+{
+    ks->logbuf = pz_xrealloc(ks->logbuf, n * sizeof(dp_rec));
+    ks->caplog = n;
+    ks->nlog = 0;
+    ks->wbuf = pz_xrealloc(ks->wbuf, n * sizeof(dp_rec));
+    ks->capw = n;
+    ks->nw = 0;
+}
+
+/* A write that stops in the middle of a record (file size limit): `n` points go in, the first ones reach the file, the limit hides the
+ * rest, lifting it and flushing completes the file. With `dps` the points enter as the workers insert them (the thread that fills a buffer
+ * writes it after it let go of the table), otherwise one by one without the unlock that writes (a block that was taken out waits for the
+ * next push or flush). */
+static int log_short_write_check(kang_state *ks, const char *name, u64 first_id, int n, bool dps)
+{
+    int fails = 0;
+    char path[700];
+    snprintf(path, sizeof path, "%s/%s", ks->r->cfg.dir, name);
+    pz_strlcpy(ks->log_path, path, sizeof ks->log_path);
+    u8 fp[32];
+    kang_log_fp(ks, fp);
+    log_small_buffers(ks, 256);
+    if (ks->log) { fclose(ks->log); ks->log = NULL; }
+    ks->log = kang_log_create(ks, path, fp);
+    ks->log_recs = 0;
+    ks->log_broken = false;
+    LCHK(ks->log != NULL);
+    struct rlimit old, lim;
+    void (*old_sig)(int) = signal(SIGXFSZ, SIG_IGN);
+    const bool have_rl = getrlimit(RLIMIT_FSIZE, &old) == 0;
+    if (ks->log && have_rl) {
+        lim = old;
+        lim.rlim_cur = (rlim_t)(38 + 1000 * sizeof(dp_rec) + 7);
+        LCHK(setrlimit(RLIMIT_FSIZE, &lim) == 0);
+        dp_rec rec;
+        memset(&rec, 0, sizeof rec);
+        for (int i = 0; i < n; i++) {
+            rec.tagk = ((first_id + (u64)i) << 20) | KIND_TAME;
+            if (dps) kang_insert_dps(ks, &rec, 1, NULL);
+            else kang_table_insert(ks, &rec, false);
+        }
+        LCHK(ks->log_broken);
+        LCHK(ks->nlog + ks->nw > 0);                                 /* what the file refused is kept */
+        LCHK(setrlimit(RLIMIT_FSIZE, &old) == 0);
+        LCHK(kang_flush_log(ks) == 0 && !ks->log_broken && ks->nlog == 0 && ks->nw == 0);
+        LCHK(kang_flush_log(ks) == 0);
+        fclose(ks->log);
+        ks->log = NULL;
+        FILE *f = fopen(path, "rb");
+        u8 hdr[38];
+        LCHK(f && fread(hdr, 1, 38, f) == 38 && !memcmp(hdr, KANG_LOG_MAGIC, 6));
+        int seen = 0;
+        for (; f && seen < n + 1; seen++) {
+            dp_rec r;
+            if (fread(&r, sizeof r, 1, f) != 1) break;
+            if (r.tagk != (((first_id + (u64)seen) << 20) | KIND_TAME)) { LCHK(0); break; }
+        }
+        LCHK(seen == n);                                             /* every point once, in order, no torn record */
+        if (f) { u8 extra; LCHK(fread(&extra, 1, 1, f) == 0); fclose(f); }
+    }
+    signal(SIGXFSZ, old_sig);
+    return fails;
+}
+
+#ifdef __GLIBC__
+/* A log file that can be slowed down: the first write waits until `go`, and what is written is kept. */
+typedef struct { u8 *data; size_t len, cap; bool gated; _Atomic int started, go; } slow_sink;
+
+static ssize_t slow_write(void *c, const char *buf, size_t n)
+{
+    slow_sink *k = c;
+    if (k->gated && !atomic_exchange(&k->started, 1))
+        for (int i = 0; i < 3000 && !atomic_load(&k->go); i++) pz_sleep(0.005);      /* at most 15 s */
+    if (k->len + n > k->cap) {
+        k->cap = (k->len + n) * 2;
+        k->data = pz_xrealloc(k->data, k->cap);
+    }
+    memcpy(k->data + k->len, buf, n);
+    k->len += n;
+    return (ssize_t)n;
+}
+
+typedef struct { kang_state *ks; u64 first_id; int n, batch; _Atomic int done; } log_feeder;
+
+static void *log_feed_main(void *p)
+{
+    log_feeder *f = p;
+    for (int i = 0; i < f->n;) {
+        dp_rec recs[128];
+        const int m = f->n - i < f->batch ? f->n - i : f->batch;       /* batch <= 128 */
+        memset(recs, 0, sizeof recs);
+        for (int j = 0; j < m; j++) { recs[j].tagk = ((f->first_id + (u64)(i + j)) << 20) | KIND_TAME; recs[j].d.w[0] = f->first_id + (u64)(i + j); }
+        kang_insert_dps(f->ks, recs, m, NULL);
+        i += m;
+    }
+    atomic_store(&f->done, 1);
+    return NULL;
+}
+
+static bool log_wait(_Atomic int *flag, int ms)
+{
+    for (int i = 0; i < ms / 5 && !atomic_load(flag); i++) pz_sleep(0.005);
+    return atomic_load(flag);
+}
+
+/* The n records of a sink from record `from` on are the points first_id .. first_id + n - 1, in this order. */
+static bool sink_has(const slow_sink *k, size_t from, u64 first_id, size_t n)
+{
+    if (k->len < (from + n) * sizeof(dp_rec)) return false;
+    for (size_t i = 0; i < n; i++) {
+        dp_rec r;
+        memcpy(&r, k->data + (from + i) * sizeof r, sizeof r);
+        if (r.tagk != (((first_id + i) << 20) | KIND_TAME)) return false;
+    }
+    return true;
+}
+
+static kang_state *sink_state(slow_sink *k, size_t buf)
+{
+    kang_state *ks = kang_make_test_state(40, 1);
+    if (!ks) return NULL;
+    log_small_buffers(ks, buf);
+    const cookie_io_functions_t io = {NULL, slow_write, NULL, NULL};
+    ks->log = fopencookie(k, "w", io);
+    if (!ks->log) { kang_free_test_state(ks); return NULL; }
+    return ks;
+}
+
+/* The write of the log happens outside the table lock. The disk is stopped in the middle of the write of a full buffer: another thread's
+ * points go into the table meanwhile (nothing waits for the disk); when the other buffer fills as well, the inserting thread waits for the
+ * write, loses nothing and does not enlarge the buffers; and many threads inserting with a flusher at work (the checkpoint) leave every point
+ * in the file exactly once, in the order of each thread. */
+static int log_thread_checks(void)
+{
+    int fails = 0;
+    {   /* 1. points enter while a write is stuck */
+        slow_sink k = {NULL, 0, 0, true, 0, 0};
+        kang_state *ks = sink_state(&k, 64);
+        if (!ks) return 1;
+        log_feeder a = {ks, 1000, 65, 65, 0}, b = {ks, 2000, 10, 10, 0};
+        pthread_t ta, tb;
+        LCHK(pthread_create(&ta, NULL, log_feed_main, &a) == 0);       /* the 65th point fills the buffer: this thread writes it, and is stopped */
+        LCHK(log_wait(&k.started, 5000));
+        LCHK(pthread_create(&tb, NULL, log_feed_main, &b) == 0);
+        LCHK(log_wait(&b.done, 3000));                                 /* with the old code this thread waits for the lock held by the write */
+        atomic_store(&k.go, 1);
+        pthread_join(ta, NULL);
+        pthread_join(tb, NULL);
+        LCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->nw == 0);
+        LCHK(k.len == 75 * sizeof(dp_rec) && atomic_load(&ks->dropped) == 0);
+        LCHK(sink_has(&k, 0, 1000, 65) && sink_has(&k, 65, 2000, 10));
+        fclose(ks->log);
+        ks->log = NULL;
+        kang_free_test_state(ks);
+        free(k.data);
+    }
+    {   /* 2. both buffers full while the write is stuck: the thread waits */
+        slow_sink k = {NULL, 0, 0, true, 0, 0};
+        kang_state *ks = sink_state(&k, 64);
+        if (!ks) return fails + 1;
+        log_feeder a = {ks, 1000, 65, 65, 0}, b = {ks, 2000, 100, 100, 0};
+        pthread_t ta, tb;
+        LCHK(pthread_create(&ta, NULL, log_feed_main, &a) == 0);
+        LCHK(log_wait(&k.started, 5000));
+        LCHK(pthread_create(&tb, NULL, log_feed_main, &b) == 0);
+        LCHK(!log_wait(&b.done, 300));                                 /* 63 points fit, the next one has no buffer: it waits for the disk */
+        LCHK(ks->caplog == 64 && ks->capw == 64);                     /* and nothing was enlarged */
+        atomic_store(&k.go, 1);
+        pthread_join(ta, NULL);
+        pthread_join(tb, NULL);
+        LCHK(atomic_load(&b.done));
+        LCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->nw == 0);
+        LCHK(k.len == 165 * sizeof(dp_rec) && atomic_load(&ks->dropped) == 0);
+        LCHK(sink_has(&k, 0, 1000, 65) && sink_has(&k, 65, 2000, 100));        /* in the order of their insertion */
+        fclose(ks->log);
+        ks->log = NULL;
+        kang_free_test_state(ks);
+        free(k.data);
+    }
+    {   /* 3. four threads and the checkpoint */
+        slow_sink k = {NULL, 0, 0, false, 0, 0};
+        kang_state *ks = sink_state(&k, 64);
+        if (!ks) return fails + 1;
+        enum { T = 4, N = 20000 };
+        log_feeder f[T];
+        pthread_t th[T];
+        for (int t = 0; t < T; t++) {
+            f[t] = (log_feeder){ks, (u64)(t + 1) * 1000000, N, 50, 0};
+            LCHK(pthread_create(&th[t], NULL, log_feed_main, &f[t]) == 0);
+        }
+        while (!atomic_load(&f[0].done) || !atomic_load(&f[1].done) || !atomic_load(&f[2].done) || !atomic_load(&f[3].done)) {
+            LCHK(kang_flush_log(ks) == 0);
+            pz_sleep(0.001);
+        }
+        for (int t = 0; t < T; t++) pthread_join(th[t], NULL);
+        LCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->nw == 0);
+        LCHK(k.len == (size_t)T * N * sizeof(dp_rec) && atomic_load(&ks->dropped) == 0);
+        u64 next[T] = {0};
+        bool ordered = k.len == (size_t)T * N * sizeof(dp_rec);
+        for (size_t i = 0; ordered && i < (size_t)T * N; i++) {
+            dp_rec r;
+            memcpy(&r, k.data + i * sizeof r, sizeof r);
+            const u64 t = r.d.w[0] / 1000000 - 1, j = r.d.w[0] % 1000000;
+            if (t >= T || j != next[t]++) ordered = false;            /* each point once, the points of a thread in the order they were inserted */
+        }
+        LCHK(ordered);
+        fclose(ks->log);
+        ks->log = NULL;
+        kang_free_test_state(ks);
+        free(k.data);
+    }
+    return fails;
+}
+#endif
+
 /* The log of distinguished points when the disk refuses writes: no overflow of the buffer, nothing lost, and after a write that stopped in the
- * middle of a record (file size limit) the file is cut back and completed without gaps or duplicates. */
+ * middle of a record (file size limit) the file is cut back and completed without gaps or duplicates. Then the writes outside the table lock. */
 int kang_log_fault_selftest(void)
 {
     kang_state *ks = kang_make_test_state(40, 1);
     if (!ks) return 1;
     int fails = 0;
-#define LCHK(cond) do { if (!(cond)) { fails++; printf("  full disk: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
     const size_t small = 256;
-    ks->logbuf = pz_xrealloc(ks->logbuf, small * sizeof(dp_rec));
-    ks->caplog = small;
-    ks->nlog = 0;
+    log_small_buffers(ks, small);
     dp_rec rec;
     memset(&rec, 0, sizeof rec);
     /* 1. a device that fails every write */
@@ -631,58 +848,24 @@ int kang_log_fault_selftest(void)
             rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
             kang_table_insert(ks, &rec, false);
         }
-        LCHK(ks->nlog == (size_t)N && ks->caplog >= (size_t)N);        /* the buffer grew instead of overflowing; no point was lost */
+        LCHK(ks->nlog + ks->nw == (size_t)N && ks->caplog >= ks->nlog);       /* the buffer grew instead of overflowing; no point was lost */
+        LCHK(atomic_load(&ks->dropped) == 0);
         LCHK(kang_flush_log(ks) == -1 && ks->log_broken);
+        LCHK(ks->nlog + ks->nw == (size_t)N);                                  /* and they are all still there for the next try */
         ks->log_broken = false;
-        ks->nlog = 0;
+        ks->nlog = ks->nw = 0;
     }
-    /* 2. a file size limit that falls inside a record */
-    ks->logbuf = pz_xrealloc(ks->logbuf, small * sizeof(dp_rec));      /* small again: it grew in step 1 */
-    ks->caplog = small;
-    ks->nlog = 0;
-    char path[700];
-    snprintf(path, sizeof path, "%s/disk.bin", ks->r->cfg.dir);
-    pz_strlcpy(ks->log_path, path, sizeof ks->log_path);
-    u8 fp[32];
-    kang_log_fp(ks, fp);
-    if (ks->log) { fclose(ks->log); ks->log = NULL; }                  /* the stream of step 1 (the resync of the log may have closed it already) */
-    ks->log = kang_log_create(ks, path, fp);
-    ks->log_recs = 0;
-    ks->log_broken = false;
-    LCHK(ks->log != NULL);
-    struct rlimit old, lim;
-    void (*old_sig)(int) = signal(SIGXFSZ, SIG_IGN);
-    const bool have_rl = getrlimit(RLIMIT_FSIZE, &old) == 0;
-    if (ks->log && have_rl) {
-        const int N = 2400;
-        lim = old;
-        lim.rlim_cur = (rlim_t)(38 + 1000 * sizeof(dp_rec) + 7);
-        LCHK(setrlimit(RLIMIT_FSIZE, &lim) == 0);
-        for (int i = 0; i < N; i++) {
-            rec.tagk = ((u64)(i + 100001) << 20) | KIND_TAME;      /* other points than those of step 1, which are still in the table */
-            kang_table_insert(ks, &rec, false);
-        }
-        LCHK(ks->log_broken);
-        LCHK(setrlimit(RLIMIT_FSIZE, &old) == 0);
-        LCHK(kang_flush_log(ks) == 0 && !ks->log_broken && ks->nlog == 0);
-        LCHK(kang_flush_log(ks) == 0);
-        fclose(ks->log);
-        ks->log = NULL;
-        FILE *f = fopen(path, "rb");
-        u8 hdr[38];
-        LCHK(f && fread(hdr, 1, 38, f) == 38 && !memcmp(hdr, KANG_LOG_MAGIC, 6));
-        int seen = 0;
-        for (; f && seen < N + 1; seen++) {
-            dp_rec r;
-            if (fread(&r, sizeof r, 1, f) != 1) break;
-            if (r.tagk != (((u64)(seen + 100001) << 20) | KIND_TAME)) { LCHK(0); break; }
-        }
-        LCHK(seen == N);                                             /* every point once, in order, no torn record */
-        if (f) { u8 extra; LCHK(fread(&extra, 1, 1, f) == 0); fclose(f); }
-    }
+    /* 2. a file size limit that falls inside a record, once for each way in */
+    fails += log_short_write_check(ks, "disk.bin", 100001, 2400, false);      /* other points than those of step 1, which are still in the table */
+    fails += log_short_write_check(ks, "disk2.bin", 200001, 2400, true);
     /* 3. not even the header fits: the creation reports it (it used to hand back a stream whose failed write nobody looked at), and the file
      * that is left, the beginning of a header, is replaced by the next start */
-    if (have_rl) {
+    u8 fp[32];
+    kang_log_fp(ks, fp);
+    struct rlimit old, lim;
+    void (*old_sig)(int) = signal(SIGXFSZ, SIG_IGN);
+    if (getrlimit(RLIMIT_FSIZE, &old) == 0) {
+        char path[700];
         const int was_quiet = pz_log_quiet();
         pz_log_set_quiet(2);
         snprintf(path, sizeof path, "%s/short.bin", ks->r->cfg.dir);
@@ -702,6 +885,18 @@ int kang_log_fault_selftest(void)
     signal(SIGXFSZ, old_sig);
     kang_free_test_state(ks);
     pz_result_line("distinguished-point log on a full disk", "%s", fails ? "FAILED" : "OK");
+    int tf = 0;
+#ifdef __GLIBC__
+    {
+        const int q = pz_log_quiet();
+        pz_log_set_quiet(2);
+        fails += tf = log_thread_checks();
+        pz_log_set_quiet(q);
+    }
+    pz_result_line("distinguished-point log: writes outside the table lock", "%s", tf ? "FAILED" : "OK");
+#else
+    pz_result_line("distinguished-point log: writes outside the table lock", "not tested here");
+#endif
     return fails;
 }
 #else

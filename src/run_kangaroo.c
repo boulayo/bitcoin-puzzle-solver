@@ -48,9 +48,7 @@ static void kang_progress(run_ctx *r, progress_info *pi)
 static int kang_checkpoint(run_ctx *r)
 {
     kang_state *ks = r->kang;
-    pthread_mutex_lock(&ks->mu);
     int rc = kang_flush_log(ks);
-    pthread_mutex_unlock(&ks->mu);
     u64 session = 0;
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
     run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + session);
