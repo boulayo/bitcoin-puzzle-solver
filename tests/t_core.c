@@ -5,12 +5,132 @@
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
 #include <assert.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <dirent.h>
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
+
+/* ---- several writers of one file (the caches are shared by every pzsolve of the user) ---- */
+
+#define WR_SIZE 3000
+#define WR_ROUNDS 150
+
+static const char *g_wr_path;
+static _Atomic int g_wr_bad, g_wr_stop;
+
+/* Every write is WR_SIZE copies of one letter: a torn file mixes letters, a short one has the wrong length. */
+static int writer_loop(int id)
+{
+    char buf[WR_SIZE];
+    int bad = 0;
+    for (int i = 0; i < WR_ROUNDS; i++) {
+        memset(buf, 'a' + (id * 7 + i) % 26, sizeof buf);
+        if (pz_write_file_atomic(g_wr_path, buf, sizeof buf, 0644) != 0) bad++;
+    }
+    return bad;
+}
+
+static void *writer_thread(void *p)
+{
+    atomic_fetch_add(&g_wr_bad, writer_loop((int)(intptr_t)p));
+    return NULL;
+}
+
+static void *reader_thread(void *p)
+{
+    (void)p;
+    while (!atomic_load(&g_wr_stop)) {
+        size_t n = 0;
+        char *t = pz_read_file(g_wr_path, &n);
+        if (!t) continue;                                             /* before the first write */
+        bool uniform = n == WR_SIZE;
+        for (size_t i = 1; i < n && uniform; i++) uniform = t[i] == t[0];
+        if (!uniform) atomic_fetch_add(&g_wr_bad, 1);
+        free(t);
+    }
+    return NULL;
+}
+
+/* One line of the cache file per writer: the lines of the others must survive. */
+static int keyed_loop(const char *path, int id)
+{
+    char key[32], val[32];
+    int bad = 0;
+    snprintf(key, sizeof key, "writer%d", id);
+    for (int i = 0; i < 40; i++) {
+        snprintf(val, sizeof val, "round=%d", i);
+        if (pz_keyed_file_put(path, key, val) != 0) bad++;
+    }
+    return bad;
+}
+
+static void t_writers(void)
+{
+    char dir[600], path[700], tmpn[800];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzwr")) { CHECK(0); return; }
+    snprintf(path, sizeof path, "%s/shared.txt", dir);
+    g_wr_path = path;
+    /* threads of one process: the temporary names differ by the counter */
+    pthread_t w[3], rd;
+    pthread_create(&rd, NULL, reader_thread, NULL);
+    for (int i = 0; i < 3; i++) pthread_create(&w[i], NULL, writer_thread, (void *)(intptr_t)i);
+    for (int i = 0; i < 3; i++) pthread_join(w[i], NULL);
+    atomic_store(&g_wr_stop, 1);
+    pthread_join(rd, NULL);
+    CHECK(atomic_load(&g_wr_bad) == 0);
+#ifndef _WIN32
+    /* processes: the temporary names differ by the process id */
+    pid_t kids[4];
+    fflush(stdout);
+    for (int i = 0; i < 3; i++) {
+        kids[i] = fork();
+        if (kids[i] == 0) _exit(writer_loop(10 + i) == 0 ? 0 : 1);
+    }
+    int failed = 0;
+    for (int i = 0; i < 3; i++) {
+        int st = 0;
+        if (kids[i] < 0 || waitpid(kids[i], &st, 0) < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) failed++;
+    }
+    CHECK(failed == 0);
+    size_t n = 0;
+    char *t = pz_read_file(path, &n);
+    CHECK(t && n == WR_SIZE);
+    free(t);
+    /* nothing but the file and its lock is left in the folder */
+    DIR *d = opendir(dir);
+    int extra = 0;
+    for (struct dirent *e; d && (e = readdir(d));)
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && strcmp(e->d_name, "shared.txt")) extra++;
+    if (d) closedir(d);
+    CHECK(extra == 0);
+    /* keyed lines: no program loses the line of another */
+    snprintf(tmpn, sizeof tmpn, "%s/keyed.txt", dir);
+    for (int i = 0; i < 4; i++) {
+        kids[i] = fork();
+        if (kids[i] == 0) _exit(keyed_loop(tmpn, i) == 0 ? 0 : 1);
+    }
+    for (int i = 0; i < 4; i++) waitpid(kids[i], NULL, 0);
+    t = pz_read_file(tmpn, NULL);
+    CHECK(t != NULL);
+    for (int i = 0; t && i < 4; i++) {
+        char want[48];
+        snprintf(want, sizeof want, "writer%d=round=39\n", i);
+        CHECK(strstr(t, want) != NULL);
+    }
+    free(t);
+#else
+    (void)tmpn;
+    CHECK(keyed_loop(path, 0) == 0);
+#endif
+    pz_remove_tree(dir);
+}
 
 int main(void)
 {
@@ -40,6 +160,7 @@ int main(void)
         }
     }
 #endif
+    t_writers();
     printf(fails ? "t_core: %d FAILED\n" : "t_core: OK\n", fails);
     return fails != 0;
 }

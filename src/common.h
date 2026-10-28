@@ -97,8 +97,12 @@ char *pz_group_digits(const char *in, char *out, size_t n);   /* "1234567" -> "1
 char *pz_fmt_duration(double secs, char *buf, size_t n);
 char *pz_fmt_bytes(double v, char *buf, size_t n);
 
-/* Atomic write: writes data to path.tmp, fsyncs, renames over path. */
+/* Atomic write: writes data to a temporary file of its own next to path (so concurrent writers never share one), fsyncs, renames over path. */
 int pz_write_file_atomic(const char *path, const void *data, size_t len, int mode);
+/* Sets the line "key=value" in the text file `path` (one such line per key, none of the keys contains '='), keeping the other lines: the cache
+ * files shared by every pzsolve of the user. Atomic like pz_write_file_atomic, and serialised between programs by a lock on path.lock when
+ * the system gives one. 0 on success. */
+int pz_keyed_file_put(const char *path, const char *key, const char *val);
 /* Reads a whole file into a malloc'd, NUL-terminated buffer. */
 char *pz_read_file(const char *path, size_t *len);
 int pz_mkdir_p(const char *path);

@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 static pthread_mutex_t g_log_mu = PTHREAD_MUTEX_INITIALIZER;
 static FILE *g_log_fp;
@@ -470,8 +471,11 @@ int pz_mkdir_p(const char *path)
 
 int pz_write_file_atomic(const char *path, const void *data, size_t len, int mode)
 {
+    /* The temporary file has a name of its own (process and counter): programs and threads that write the same file at the same
+     * moment, such as the caches shared by every pzsolve of the user, must not share it. */
+    static _Atomic unsigned seq;
     char tmp[1100];
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    snprintf(tmp, sizeof tmp, "%s.%d.%u.tmp", path, pz_getpid(), atomic_fetch_add(&seq, 1));
     int fd = pz_open_trunc(tmp, mode);        /* FOUND.txt holds the private key: 0600 */
     if (fd < 0) return -1;
     const u8 *p = data;
@@ -491,6 +495,35 @@ int pz_write_file_atomic(const char *path, const void *data, size_t len, int mod
     if (close(fd)) { unlink(tmp); return -1; }
     if (pz_rename_replace(tmp, path)) { unlink(tmp); return -1; }
     return 0;
+}
+
+int pz_keyed_file_put(const char *path, const char *key, const char *val)
+{
+    /* The read-merge-write runs under an exclusive lock of path.lock, so that two programs that save at the same moment keep both
+     * lines. The lock is a courtesy, not a requirement: where the system gives none (a file system without locks) or it is not
+     * obtained within a second, the line is saved without it. */
+    char lockp[1100];
+    snprintf(lockp, sizeof lockp, "%s.lock", path);
+    const int lfd = pz_open_rw(lockp, true);
+    for (int i = 0; lfd >= 0 && i < 100 && pz_lock_try(lfd, true) == 1; i++) pz_sleep(0.01);
+    char *old = pz_read_file(path, NULL);
+    const size_t kl = strlen(key), cap = (old ? strlen(old) : 0) + kl + strlen(val) + 8;
+    char *out = pz_xcalloc(cap, 1);
+    size_t len = 0;
+    for (char *line = old; line && *line;) {
+        char *nl = strchr(line, '\n');
+        size_t ll = nl ? (size_t)(nl - line) : strlen(line);
+        const char *eq = memchr(line, '=', ll);
+        const bool same = eq && (size_t)(eq - line) == kl && !strncmp(line, key, kl);
+        if (!same && ll > 0 && len + ll + 2 < cap) { memcpy(out + len, line, ll); len += ll; out[len++] = '\n'; }
+        line = nl ? nl + 1 : NULL;
+    }
+    len += (size_t)snprintf(out + len, cap - len, "%s=%s\n", key, val);
+    const int rc = pz_write_file_atomic(path, out, len, 0644);
+    free(out);
+    free(old);
+    if (lfd >= 0) close(lfd);                 /* releases the lock */
+    return rc;
 }
 
 char *pz_read_file(const char *path, size_t *len)

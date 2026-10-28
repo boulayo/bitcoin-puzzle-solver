@@ -106,7 +106,7 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 * `campaign.conf`: text `key=value` (`format=1`; since 1.1.0 also `bsgs_entries`, optional: 1.0.x campaigns can still be read); `format` changes only with incompatible changes.
 * `state.dat`: text; header `PZSCHED 1`, `cbits`, `seed_id` (the seed id of the campaign: a state of another seed is refused; files written
   before it was recorded have no such line and are accepted), `v_limit`, `keys_done`, lines `iv start end` (hex), final line
-  `crc=` (first 8 bytes of the SHA-256 of the content). Atomic write (`.tmp` → fsync → rename); the previous file, if valid,
+  `crc=` (first 8 bytes of the SHA-256 of the content). Atomic write (a temporary file of its own next to it → fsync → rename); the previous file, if valid,
   becomes `state.dat.bak`.
 * `dp.bin`: `"PZDP4\n"` + SHA-256 fingerprint (start, W, `"PZDPLOG4"`, pubkey) + 32-byte records `{tagk, d[3]}` little-endian
   (`tagk` = 61-bit abscissa ∥ 3-bit type: 0 tame, 1/2 wild on `Q` with sign, 3/4 wild on `3Q` with sign; `d` = 192-bit signed exponent).

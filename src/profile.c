@@ -64,23 +64,7 @@ static void profile_save(const char *key, const char *val)
 {
     char path[512];
     if (!profile_path(path, sizeof path)) return;
-    char *old = pz_read_file(path, NULL);
-    size_t cap = (old ? strlen(old) : 0) + strlen(key) + strlen(val) + 8;
-    char *out = pz_xcalloc(cap, 1);
-    size_t len = 0;
-    const size_t kl = strlen(key);
-    for (char *line = old; line && *line;) {
-        char *nl = strchr(line, '\n');
-        size_t ll = nl ? (size_t)(nl - line) : strlen(line);
-        const char *eq = memchr(line, '=', ll);
-        const bool same = eq && (size_t)(eq - line) == kl && !strncmp(line, key, kl);
-        if (!same && ll > 0 && len + ll + 2 < cap) { memcpy(out + len, line, ll); len += ll; out[len++] = '\n'; }
-        line = nl ? nl + 1 : NULL;
-    }
-    len += (size_t)snprintf(out + len, cap - len, "%s=%s\n", key, val);
-    pz_write_file_atomic(path, out, len, 0644);
-    free(out);
-    free(old);
+    pz_keyed_file_put(path, key, val);        /* merged with what other programs saved meanwhile, under a lock */
 }
 
 /* Applies a saved or fresh verdict to the campaign. */
