@@ -75,7 +75,8 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
    then the CUDA path with a simulated driver (self-test, bench, machine profile, `--prio-gpu`, resume after a GPU error), `doctor`,
    suspend (frozen process), several computers (kangaroo `merge` and linear-search `--part`), and the Windows exe under Wine;
 3. a build with **AddressSanitizer + UndefinedBehaviorSanitizer**: self-test, **all unit tests** (including the robustness ones on
-   corrupt files, `t_fuzz`) and linear, BSGS (also with the table in a file), kangaroo and kangaroo-with-a-tiny-table campaigns;
+   corrupt files, `t_fuzz`, and on corrupt compressed kernel streams, `t_lz`) and linear, BSGS (also with the table in a file),
+   kangaroo and kangaroo-with-a-tiny-table campaigns;
 4. a build with **ThreadSanitizer**: linear, BSGS and kangaroo campaigns and interruption with Ctrl-C;
 5. **Valgrind** (memcheck with full leak checking) on a linear, a BSGS and a kangaroo campaign, on the portable path
    (Valgrind does not know AVX-512/ADX, which are covered by the previous points).

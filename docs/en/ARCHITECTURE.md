@@ -42,6 +42,7 @@
 | `gpu_rt.h`, `rt.c`, `rt_priv.h` | minimal GPU runtime interface (context, modules, kernels, buffers, launch) and the combined device list (an NVIDIA card seen by both runtimes is recognized by PCI address and used once) |
 | `rt_cuda.c` | CUDA implementation: *driver API* loaded at run time (`nvcuda.dll` / `libcuda.so.1`), embedded PTX modules, context with passive waiting |
 | `rt_cl.c`, `cl_api.h/.c` | OpenCL implementation: dynamic loader, kernels compiled from embedded sources |
+| `lz.h`, `lz.c` | decoder of a small LZ77 format of our own (libc only, every access bounds-checked, checksummed, with an optional dictionary), and `pz_blob_text`, which unpacks an embedded text; the encoder is in `tools/embed.c` |
 | `kernels/*.cl`, `kernels/pz_cuda.h`, `kernels/ptx/*.ptx` | **a single kernel source**: OpenCL C, compiled by the OpenCL driver or, through `pz_cuda.h`, by NVRTC into PTX (`tools/gen_ptx.py`, committed files) |
 | `sysinfo.h/.c` | CPU/RAM/cache, thread affinity |
 | `selftest.c`, `main.c` | self-test, benchmark, command-line interface |
@@ -117,6 +118,7 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 | GPU kernel arithmetic | `tests/t_gpufe.c`: the field of `kernels/pz_common.cl` compiled for the host, portable variant and PTX carry-chain variant (with the carry flag emulated according to the PTX ISA), against the CPU on 5 million combinations with all the edge cases |
 | Permutation, scheduler, SIMD engines | `lib/pzcore/tests/t_perm.c`, `tests/t_jobq.c`, `t_engine.c` |
 | Complete campaigns | `tests/e2e.sh` |
+| Compressed kernels | `tests/t_lz.c`: the decoder and the encoder (round trips of the real PTX modules and of random and adversarial texts, streams built by hand, truncated, extended and corrupted streams must be refused and never touch memory outside the buffers; run under ASan/UBSan by `tools/verify.sh`) |
 | CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the embedded PTX modules and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
 | Windows | `make windows` / `make wintest`: static MinGW-w64 exe, unit tests, self-test and campaigns run under Wine (`tools/verify.sh`) |
 | Sanitizer / Valgrind | `make asan`, `make tsan`, `valgrind` (see `docs/en/RELEASING.md`, section "Before every release") |
