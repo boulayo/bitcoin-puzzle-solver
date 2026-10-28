@@ -328,6 +328,8 @@ int selftest_run(int argc, char **argv)
         CHECK(rc == 0);
         rc = kang_merge_selftest();
         CHECK(rc == 0);
+        rc = kang_log_file_selftest();
+        CHECK(rc == 0);
         rc = kang_log_fault_selftest();
         CHECK(rc == 0);
     }

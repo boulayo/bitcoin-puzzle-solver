@@ -207,6 +207,133 @@ int kang_merge_selftest(void)
     return fails + range_selftest();
 }
 
+/* ---- loading a log of distinguished points ---- */
+
+#define FCHK(cond) do { if (!(cond)) { fails++; printf("  log loading: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
+
+/* Writes the log of the campaign of `ks`: the header, `n` records of distinct points, then `tail` bytes of a record cut short. */
+static bool write_test_log(const kang_state *ks, int n, int tail)
+{
+    u8 fp[32];
+    kang_log_fp(ks, fp);
+    FILE *f = fopen(ks->log_path, "wb");
+    if (!f) return false;
+    fwrite(KANG_LOG_MAGIC, 1, 6, f);
+    fwrite(fp, 1, 32, f);
+    dp_rec rec;
+    memset(&rec, 0, sizeof rec);
+    for (int i = 0; i < n; i++) {
+        rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
+        fwrite(&rec, sizeof rec, 1, f);
+    }
+    for (int i = 0; i < tail; i++) fputc(0xAB, f);
+    return fclose(f) == 0;
+}
+
+static long long file_size(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    const long long size = fseeko(f, 0, SEEK_END) == 0 ? (long long)ftello(f) : -1;
+    fclose(f);
+    return size;
+}
+
+#ifdef __GLIBC__
+/* A stream of bytes that fails with an I/O error once `fail_at` bytes were read (or ends there when it is beyond the data). */
+typedef struct { const u8 *p; size_t len, pos, fail_at; } flaky_src;
+
+static ssize_t flaky_read(void *c, char *buf, size_t n)
+{
+    flaky_src *k = c;
+    const size_t end = k->fail_at < k->len ? k->fail_at : k->len;
+    if (k->pos >= end) return k->fail_at < k->len ? -1 : 0;
+    const size_t m = end - k->pos < n ? end - k->pos : n;
+    memcpy(buf, k->p + k->pos, m);
+    k->pos += m;
+    return (ssize_t)m;
+}
+#endif
+
+/* What the loading of dp.bin does with what it finds: it cuts off a record cut short at the end and nothing else (not the records after
+ * the one that solved the key), and a read error is an error, not the end of the file. */
+int kang_log_file_selftest(void)
+{
+    int fails = 0;
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(1);
+    const struct { int n, tail; } cases[] = {{0, 0}, {100, 0}, {100, 13}, {100, 31}, {100, 1}, {0, 20}};
+    for (size_t c = 0; c < sizeof cases / sizeof *cases; c++) {
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) { fails++; break; }
+        FCHK(write_test_log(ks, cases[c].n, cases[c].tail));
+        FCHK(kang_load_log(ks) == 0 && ks->log);
+        FCHK(ks->loaded == (u64)cases[c].n && ks->count == (u64)cases[c].n && ks->log_recs == (u64)cases[c].n);
+        if (ks->log) { fclose(ks->log); ks->log = NULL; }
+        FCHK(file_size(ks->log_path) == 38 + 32LL * cases[c].n);        /* a torn record is gone, the whole ones are all there */
+        kang_free_test_state(ks);
+    }
+    {   /* a collision in the log: the load stops at the record that solves the key, and the records after it stay in the file */
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) return fails + 1;
+        pz_u256 m = pz_u256_from_u64(123456789);         /* the offset of the key of kang_make_test_state from the base */
+        const i192 X = i192_from_signed(false, &m);
+        const pz_u256 w777 = pz_u256_from_u64(777);
+        const i192 dw = i192_from_signed(false, &w777);
+        i192 dt;
+        i192_add(&dt, &X, &dw);
+        const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
+        dp_rec ta = {(tag_of(&X, 0, &dt) & ~km) | KIND_TAME, dt}, wb = {(tag_of(&X, 1, &dw) & ~km) | KIND_WILD_P, dw};
+        u8 fp[32];
+        kang_log_fp(ks, fp);
+        FILE *f = fopen(ks->log_path, "wb");
+        FCHK(f != NULL);
+        if (f) {
+            fwrite(KANG_LOG_MAGIC, 1, 6, f);
+            fwrite(fp, 1, 32, f);
+            fwrite(&ta, sizeof ta, 1, f);
+            fwrite(&wb, sizeof wb, 1, f);
+            dp_rec rec;
+            memset(&rec, 0, sizeof rec);
+            for (int i = 0; i < 10; i++) {
+                rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
+                fwrite(&rec, sizeof rec, 1, f);
+            }
+            fclose(f);
+        }
+        FCHK(kang_load_log(ks) == 0 && atomic_load(&ks->r->found) && ks->loaded == 2);
+        if (ks->log) { fclose(ks->log); ks->log = NULL; }
+        FCHK(file_size(ks->log_path) == 38 + 32 * 12);
+        kang_free_test_state(ks);
+    }
+#ifdef __GLIBC__
+    {   /* a read error in the middle of the records */
+        enum { N = 100 };
+        dp_rec recs[N];
+        memset(recs, 0, sizeof recs);
+        for (int i = 0; i < N; i++) recs[i].tagk = ((u64)(i + 1) << 20) | KIND_TAME;
+        for (int fail = 0; fail < 2; fail++) {
+            kang_state *ks = kang_make_test_state(40, 1);
+            if (!ks) return fails + 1;
+            flaky_src src = {(const u8 *)recs, sizeof recs, 0, fail ? 40 * sizeof(dp_rec) + 5 : sizeof recs + 1};
+            cookie_io_functions_t io = {flaky_read, NULL, NULL, NULL};
+            FILE *f = fopencookie(&src, "r", io);
+            FCHK(f != NULL);
+            if (f) {
+                const long long n = kang_log_read(ks, f);
+                fclose(f);
+                FCHK(fail ? n == -1 : n == N);
+                FCHK(ks->count == (fail ? 40u : (u64)N));
+            }
+            kang_free_test_state(ks);
+        }
+    }
+#endif
+    pz_log_set_quiet(was_quiet);
+    pz_result_line("distinguished-point log: loading", "%s", fails ? "FAILED" : "OK");
+    return fails;
+}
+
 #ifndef _WIN32
 /* The log of distinguished points when the disk refuses writes: no overflow of the buffer, nothing lost, and after a write that stopped in the
  * middle of a record (file size limit) the file is cut back and completed without gaps or duplicates. */

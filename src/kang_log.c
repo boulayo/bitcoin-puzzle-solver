@@ -5,6 +5,7 @@
 #include <pzcore/hash.h>
 #include "platform.h"
 #include <unistd.h>
+#include <errno.h>
 
 #define KANG_LOG_BUF_MAX ((size_t)1 << 22)      /* records the log buffer may grow to while the disk refuses writes (128 MiB) */
 
@@ -96,6 +97,26 @@ FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32])
     return f;
 }
 
+/* Reads the records of an open log, positioned after the header, into the table; stops at the end of the file or at the record that solves
+ * the key. Returns the number of records read, or -1 on a read error (what was read stays in the table). A record cut short by the end of
+ * the file is not counted. */
+long long kang_log_read(kang_state *ks, FILE *f)
+{
+    dp_rec rec;
+    long long n = 0;
+    pthread_mutex_lock(&ks->mu);
+    while (fread(&rec, sizeof rec, 1, f) == 1) {
+        int rc = kang_table_insert(ks, &rec, true);
+        n++;
+        if (rc == 2) break;
+    }
+    const bool failed = ferror(f);                       /* a failed read is not the end of the file */
+    const int e = errno;
+    pthread_mutex_unlock(&ks->mu);
+    errno = e;
+    return failed ? -1 : n;
+}
+
 int kang_load_log(kang_state *ks)
 {
     FILE *f = fopen(ks->log_path, "rb");
@@ -104,6 +125,14 @@ int kang_load_log(kang_state *ks)
     if (!f) {
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
+    }
+    errno = 0;
+    off_t size = -1;
+    if (fseeko(f, 0, SEEK_END) == 0) size = ftello(f);
+    if (size < 0 || fseeko(f, 0, SEEK_SET) != 0) {
+        pz_log(PZ_LOG_ERR, "cannot read %s: %s (the file is left as it is)", ks->log_path, strerror(errno));
+        fclose(f);
+        return -1;
     }
     u8 hdr[38];
     bool hdr_ok = fread(hdr, 1, 38, f) == 38;
@@ -127,21 +156,21 @@ int kang_load_log(kang_state *ks)
         pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header): ignored", ks->log_path);
         return -1;
     }
-    dp_rec rec;
-    u64 n = 0;
-    pthread_mutex_lock(&ks->mu);
-    while (fread(&rec, sizeof rec, 1, f) == 1) {
-        int rc = kang_table_insert(ks, &rec, true);
-        n++;
-        if (rc == 2) break;
+    const long long n = kang_log_read(ks, f);
+    if (n < 0) {
+        pz_log(PZ_LOG_ERR, "reading %s failed: %s (the file is left as it is)", ks->log_path, strerror(errno));
+        fclose(f);
+        return -1;
     }
-    pthread_mutex_unlock(&ks->mu);
     fclose(f);
-    ks->loaded = n;
-    ks->log_recs = n;
-    /* truncate any partially written tail record and continue appending */
-    off_t good = 38 + (off_t)(n * sizeof(dp_rec));
-    if (truncate(ks->log_path, good) != 0) { /* best effort */ }
+    /* the whole records of the file: a record cut short at the end (the program stopped in the middle of a write) is cut off, and only that */
+    const u64 rest = (u64)size - sizeof hdr, whole = rest / sizeof(dp_rec);
+    if (rest % sizeof(dp_rec) && truncate(ks->log_path, (off_t)(sizeof hdr + whole * sizeof(dp_rec))) != 0) {
+        pz_log(PZ_LOG_ERR, "cannot cut the partly written record off the end of %s: %s", ks->log_path, strerror(errno));
+        return -1;
+    }
+    ks->loaded = (u64)n;
+    ks->log_recs = whole;
     ks->log = fopen(ks->log_path, "ab");
     return ks->log ? 0 : -1;
 }
@@ -167,6 +196,7 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
         else { st->solved = true; break; }
     }
     pthread_mutex_unlock(&ks->mu);
+    const bool failed = ferror(f);
     fclose(f);
-    return 0;
+    return failed ? -1 : 0;                           /* a failed read is not the end of the file */
 }

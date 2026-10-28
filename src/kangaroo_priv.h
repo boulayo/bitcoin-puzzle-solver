@@ -243,6 +243,7 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);
 void kang_log_fp(const kang_state *ks, u8 fp[32]);                                       /* fingerprint of the campaign in a log header */
 FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32]);
 void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
+long long kang_log_read(kang_state *ks, FILE *f);                                        /* the records of an open log into the table: their number, -1 on a read error */
 int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log);                 /* mu held: 1 inserted, 0 duplicate, 2 solved, -1 skipped */
 int kang_kind_coef(unsigned k);                                                          /* coefficient of x in the exponent of a point of kind k */
 

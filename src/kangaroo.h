@@ -16,6 +16,7 @@ const char *kang_round_name(void);
 /* The instruction set of the CPU step variants (fixed for a machine, unlike the measured choice): for keys of saved measurements. */
 const char *kang_round_isa(void);
 int kangaroo_stats(int argc, char **argv);
+int kang_log_file_selftest(void);    /* loading dp.bin: a torn last record is cut off and nothing else, a read error is an error */
 int kang_log_fault_selftest(void);   /* the DP log when the disk refuses writes: no overflow, nothing lost, torn records repaired */
 int kang_merge_selftest(void);   /* kang_merge_file: collision across two logs, refusal of foreign logs */
 /* Builds a synthetic kangaroo state on an interval of 2^wbits keys (for GPU self-tests). Free with kang_free_test_state. The key is at
