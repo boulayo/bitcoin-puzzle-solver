@@ -150,6 +150,7 @@ static void t_die_log(void)
     char dir[600], path[700];
     if (!pz_make_temp_dir(dir, sizeof dir, "pzdie")) return;
     snprintf(path, sizeof path, "%s/log.txt", dir);
+    fflush(NULL);                                                   /* the child would write what is still buffered a second time */
     pid_t pid = fork();
     if (pid == 0) {
         alarm(60);                                                  /* a deadlock ends the child by a signal, not by exit(2) */
@@ -182,6 +183,48 @@ static void t_die_log(void)
 }
 #endif
 
+/* pz_file_count reads in blocks of 64 KiB: a match across the end of a block is found once, and none is lost or counted twice. */
+static void t_file_count(void)
+{
+    char dir[600], path[700];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzcnt")) return;
+    snprintf(path, sizeof path, "%s/log.txt", dir);
+    const char *nd = "system suspension detected";
+    const size_t nl = strlen(nd), total = 200000;
+    char *buf = pz_xmalloc(total);
+    CHECK(pz_file_count(path, nd) == -1);                                     /* no such file */
+    int bad = 0, tried = 0;
+    for (size_t k = 0; k <= 3; k++)
+        for (long d = -(long)nl - 2; d <= 2; d++) {
+            const long pos = (long)(65536 * k) + d;
+            if (pos < 0 || (size_t)pos + nl > total) continue;
+            memset(buf, 'x', total);
+            buf[3] = 0;                                                       /* a NUL in the text does not end the search */
+            memcpy(buf + pos, nd, nl);
+            CHECK(pz_write_file_atomic(path, buf, total, 0644) == 0);
+            tried++;
+            if (pz_file_count(path, nd) != 1) bad++;
+        }
+    memset(buf, 'x', total);
+    memcpy(buf + total - nl, nd, nl);                                         /* at the very end */
+    memcpy(buf, nd, nl);                                                      /* and at the very start */
+    memcpy(buf + 65536 - 3, nd, nl);                                          /* and across the first block boundary */
+    CHECK(pz_write_file_atomic(path, buf, total, 0644) == 0);
+    CHECK(pz_file_count(path, nd) == 3);
+    CHECK(tried > 90 && bad == 0);
+    memset(buf, 'a', 70000);
+    CHECK(pz_write_file_atomic(path, buf, 70000, 0644) == 0);
+    CHECK(pz_file_count(path, "aaaa") == 70000 - 3);                          /* overlapping matches all count, also across a boundary */
+    CHECK(pz_file_count(path, "a") == 70000);
+    CHECK(pz_file_count(path, "b") == 0);
+    CHECK(pz_write_file_atomic(path, "", 0, 0644) == 0);
+    CHECK(pz_file_count(path, nd) == 0);                                      /* empty file */
+    CHECK(pz_write_file_atomic(path, "ab", 2, 0644) == 0);
+    CHECK(pz_file_count(path, "abc") == 0);                                   /* shorter than the needle */
+    free(buf);
+    pz_remove_tree(dir);
+}
+
 int main(void)
 {
     {   /* the library is linked and gives the well-known answer for key 1 */
@@ -211,6 +254,7 @@ int main(void)
     }
 #endif
     t_writers();
+    t_file_count();
 #ifndef _WIN32
     t_die_log();
 #endif

@@ -172,16 +172,11 @@ static void check_campaigns(const char *base)
         snprintf(file, sizeof file, "%s/FOUND.txt", dir);
         const bool found = mtime_of(file) != 0;
         /* suspensions the campaign has gone through (logged by the reporter) */
-        int sleeps = 0;
         snprintf(file, sizeof file, "%s/log.txt", dir);
-        char *lg = pz_read_file(file, NULL);
-        if (lg) {
-            for (const char *p = lg; (p = strstr(p, "system suspension detected")) != NULL; p++) sleeps++;
-            free(lg);
-        }
+        const long long sleeps = pz_file_count(file, "system suspension detected");   /* streamed: after months the log is tens of MB */
         doctor_line(found ? 'o' : 'i', "%-10s %-9s puzzle %d: %s%s, last save %s", e->d_name, mode_name(c.mode), c.puzzle,
                     running ? "RUNNING" : "stopped", found ? ", KEY FOUND" : "", age);
-        if (sleeps) doctor_line('i', "%-10s system suspensions detected during the campaign: %d (handled: suspended time is not counted and the state is saved)", e->d_name, sleeps);
+        if (sleeps > 0) doctor_line('i', "%-10s system suspensions detected during the campaign: %lld (handled: suspended time is not counted and the state is saved)", e->d_name, sleeps);
     }
     closedir(d);
     if (!n) doctor_line('i', "no campaigns");

@@ -575,6 +575,31 @@ char *pz_read_file(const char *path, size_t *len)
     return buf;
 }
 
+long long pz_file_count(const char *path, const char *needle)
+{
+    const size_t nl = strlen(needle);
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    enum { BLOCK = 65536 };
+    char *buf = pz_xmalloc(BLOCK + nl);
+    size_t keep = 0;                          /* the last nl - 1 bytes of the previous block: a match can begin in them */
+    long long count = 0;
+    for (size_t got; nl && (got = fread(buf + keep, 1, BLOCK, f)) > 0;) {
+        const size_t len = keep + got;
+        for (size_t i = 0; i + nl <= len; i++) {   /* every start position is looked at once: the ones that do not fit wait for the next block */
+            const char *q = memchr(buf + i, needle[0], len - nl + 1 - i);
+            if (!q) break;
+            i = (size_t)(q - buf);
+            if (!memcmp(q, needle, nl)) count++;
+        }
+        keep = nl - 1 < len ? nl - 1 : len;
+        memmove(buf, buf + len - keep, keep);
+    }
+    free(buf);
+    fclose(f);
+    return count;
+}
+
 bool pz_env_on(const char *name)
 {
     const char *v = getenv(name);

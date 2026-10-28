@@ -391,6 +391,20 @@ TMPDIR="$DIR/tmp" $BIN kstat 16 1 1 >/dev/null 2>&1
 [ "$(ls "$DIR/tmp" | wc -l)" = 3 ] && ok "the folder of the run itself is removed at its end" || bad "scratch folders left: $(ls "$DIR/tmp" | tr '\n' ' ')"
 wait
 
+echo "== doctor counts the suspensions in a big log (read in blocks, a phrase across the end of a block counts once)"
+rm -rf "$DIR/dr"; mkdir -p "$DIR/dr"; cp -r "$DIR/rc/p71" "$DIR/dr/p71"
+python3 - "$DIR/dr/p71/log.txt" <<'PYEOF'
+import sys
+line = "2026-01-01 00:00:00 [INFO] filler line of an ordinary message\n"
+sus = "2026-01-01 00:00:00 [WARN] system suspension detected (about 1m 0s without computing)\n"
+text = line * 1200
+text = text[:65536 - 40] + sus + text[65536 - 40:]            # across the end of the first block
+text = text + sus + line * 90000 + sus                        # then in the middle and at the end of a log of 5 MB
+open(sys.argv[1], "w").write(text)
+PYEOF
+OUT=$($BIN doctor -d "$DIR/dr" 2>&1)
+echo "$OUT" | grep -q "system suspensions detected during the campaign: 3 " && ok "doctor: 3 suspensions in a log of $(stat -c %s "$DIR/dr/p71/log.txt") bytes" || bad "doctor suspensions: $(echo "$OUT" | grep suspensions)"
+
 echo "== line width: nothing printed is longer than 128 columns"
 chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr
   local label=$1 out w; shift

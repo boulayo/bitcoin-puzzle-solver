@@ -116,6 +116,9 @@ int pz_write_file_atomic_ex(const char *path, const void *data, size_t len, int 
 int pz_keyed_file_put(const char *path, const char *key, const char *val);
 /* Reads a whole file into a malloc'd, NUL-terminated buffer. */
 char *pz_read_file(const char *path, size_t *len);
+/* Number of places where `needle` (not empty) occurs in the file, overlapping ones included. The file is read in blocks of 64 KiB, so a log of
+ * tens of MB costs no memory. -1 when it cannot be opened. */
+long long pz_file_count(const char *path, const char *needle);
 int pz_mkdir_p(const char *path);
 /* Path of a file in the per-user cache directory of the program (created if needed): $XDG_CACHE_HOME/pzsolve, %LOCALAPPDATA%\pzsolve
  * or ~/.cache/pzsolve. False when there is no such directory. */
