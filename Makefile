@@ -200,6 +200,17 @@ all: $(BIN)
 $(BUILD):
 	@mkdir -p $(BUILD)
 
+# PZ_VERSION and PZ_BUILD_INFO reach the compiler as -D options, which make does not see: a new VERSION or a new commit changed no
+# dependency, and an incremental build went on reporting the old ones. The objects whose sources use the macros depend on a stamp file
+# named after the version, the commit and the target. When any of the three changes, the stamp is a new file (the old one is removed),
+# newer than those objects, and they are compiled again; while they stay the same nothing is compiled, and `make -n` is accurate.
+# A header that used the macros would need its includers listed here.
+VSTAMP       := $(BUILD)/version-$(subst /,_,$(VERSION)-$(BUILDINFO)).stamp
+VERSION_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(shell grep -l -E 'PZ_VERSION|PZ_BUILD_INFO' src/*.c))
+$(VERSION_OBJS): $(VSTAMP)
+$(VSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/version-*.stamp; touch $@
+
 # embed runs on the build machine; it holds the encoder of src/lz.c's format and checks every stream it writes with the decoder
 $(BUILD)/embed: tools/embed.c src/lz.c src/lz.h | $(BUILD)
 	$(HOSTCC) -O2 -Isrc -o $@ tools/embed.c src/lz.c
