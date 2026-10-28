@@ -217,6 +217,20 @@ for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-b
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done
 
+echo "== range option: the same messages for a new campaign and for a resume"
+rm -rf "$DIR/rg"; A1=1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
+$BIN hunt -r 1:ffff -a $A1 -c rg -d "$DIR/rg" --ui log -q --no-gpu >/dev/null 2>&1
+for pair in "1000|requires the format START:END" "1:zz|invalid hexadecimal values"; do
+  RNG=${pair%%|*}; MSG=${pair#*|}
+  OUT1=$($BIN hunt -r "$RNG" -a $A1 -c rgnew -d "$DIR/rg" -q --no-gpu 2>&1); RC1=$?
+  OUT2=$($BIN hunt -r "$RNG" -c rg -d "$DIR/rg" -q --no-gpu 2>&1); RC2=$?
+  [ $RC1 -ne 0 ] && [ $RC2 -ne 0 ] && echo "$OUT1" | grep -q "$MSG" && echo "$OUT2" | grep -q "$MSG" && ok "-r $RNG: '$MSG' (new campaign and resume)" || bad "-r $RNG: messages '$OUT1' / '$OUT2'"
+done
+OUT=$($BIN hunt -r 1:fff -c rg -d "$DIR/rg" -q --no-gpu 2>&1); RC=$?
+[ $RC -ne 0 ] && echo "$OUT" | grep -q "does not match the range of the existing campaign" && ok "-r with another range than the campaign's rejected" || bad "resume with another range: rc=$RC"
+$BIN hunt -r 0001:FFFF -c rg -d "$DIR/rg" -q --no-gpu >/dev/null 2>&1 && ok "-r 0001:FFFF is the range 1:ffff (leading zeros and case do not matter)" || bad "-r 0001:FFFF refused on resume"
+[ ! -e "$DIR/rg/rgnew" ] && ok "the refused commands left no folder" || bad "a refused -r left a folder"
+
 echo "== resume: options that conflict with the existing campaign"
 rm -rf "$DIR/rc"
 timeout -s INT 2 $BIN hunt -p 71 -d "$DIR/rc" --ui log -q --no-gpu >/dev/null 2>&1

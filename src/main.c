@@ -411,6 +411,18 @@ static u64 pick_bsgs_entries(const opts_t *o, const pz_u256 *rsz, bool *viable)
     return T;
 }
 
+/* The text of --range, "START:END" in hexadecimal. On failure *why is the message to give. */
+static bool range_parse(const char *text, pz_u256 *a, pz_u256 *b, const char **why)
+{
+    char tmp[200];
+    pz_strlcpy(tmp, text, sizeof tmp);
+    char *colon = strchr(tmp, ':');
+    if (!colon) { *why = "--range requires the format START:END (hexadecimal)"; return false; }
+    *colon = 0;
+    if (!pz_u256_from_hex(a, tmp) || !pz_u256_from_hex(b, colon + 1)) { *why = "--range: invalid hexadecimal values"; return false; }
+    return true;
+}
+
 /* Name used when -c is absent. It depends only on what identifies the search (puzzle, range, target), so repeating the same
  * command resumes the campaign instead of starting a new one. */
 static void derive_campaign_name(const opts_t *o, char *out, size_t n)
@@ -421,11 +433,9 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
     }
     char rng[300] = "", key[900];
     if (o->range[0]) {
-        char tmp[200];
-        pz_strlcpy(tmp, o->range, sizeof tmp);
-        char *colon = strchr(tmp, ':');
         pz_u256 a, b;
-        if (colon && (*colon = 0, pz_u256_from_hex(&a, tmp) && pz_u256_from_hex(&b, colon + 1))) {
+        const char *why;
+        if (range_parse(o->range, &a, &b, &why)) {
             char ha[80], hb[80];
             pz_u256_to_hex(&a, ha);
             pz_u256_to_hex(&b, hb);
@@ -449,12 +459,8 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     pz_strlcpy(c->created_with, PZ_VERSION, sizeof c->created_with);
     c->created_at = pz_now();
     if (o->range[0]) {
-        char tmp[200];
-        pz_strlcpy(tmp, o->range, sizeof tmp);
-        char *colon = strchr(tmp, ':');
-        if (!colon) pz_die("--range requires the format START:END (hexadecimal)");
-        *colon = 0;
-        if (!pz_u256_from_hex(&c->range_start, tmp) || !pz_u256_from_hex(&c->range_end, colon + 1)) pz_die("--range: invalid hexadecimal values");
+        const char *why;
+        if (!range_parse(o->range, &c->range_start, &c->range_end, &why)) pz_die("%s", why);
         c->puzzle = o->puzzle;
     } else if (o->puzzle) {
         if (!puzzle_range(o->puzzle, &c->range_start, &c->range_end)) pz_die("puzzle %d is outside the supported limits (1..256)", o->puzzle);
@@ -603,13 +609,9 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         pz_die("the existing campaign is not associated with a puzzle of the database (use -c %s without -p)", c->name);
     }
     if (o->range[0]) {
-        char tmp[200];
-        pz_strlcpy(tmp, o->range, sizeof tmp);
-        char *colon = strchr(tmp, ':');
         pz_u256 a, b;
-        if (!colon) pz_die("--range requires the format START:END (hexadecimal)");
-        *colon = 0;
-        if (!pz_u256_from_hex(&a, tmp) || !pz_u256_from_hex(&b, colon + 1)) pz_die("--range: invalid hexadecimal values");
+        const char *why;
+        if (!range_parse(o->range, &a, &b, &why)) pz_die("%s", why);
         if (pz_u256_cmp(&a, &c->range_start) != 0 || pz_u256_cmp(&b, &c->range_end) != 0)
             pz_die("--range does not match the range of the existing campaign (the range cannot be changed; use another name with -c)");
     }
