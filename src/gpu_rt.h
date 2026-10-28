@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* gpu_rt.h - the small GPU runtime interface the GPU code (gpu.c) is written against, with two implementations:
- * OpenCL (rt_cl.c, kernels compiled from source by the driver) and CUDA (rt_cuda.c, driver API + embedded PTX).
+/* gpu_rt.h - the small GPU runtime interface the GPU code (gpu.c, gpu_tune.c, gpu_selftest.c) is written against, with two
+ * implementations: OpenCL (rt_cl.c, kernels compiled from source by the driver) and CUDA (rt_cuda.c, driver API + embedded PTX).
  * Both are loaded at run time (dlopen / LoadLibrary): the program starts and works on machines with neither. */
 #ifndef PZ_GPU_RT_H
 #define PZ_GPU_RT_H

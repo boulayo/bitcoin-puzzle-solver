@@ -192,12 +192,12 @@ bool rtcu_build(rt_mod *m, rt_prog_id prog, int param)
 {
     const unsigned char *ptx = NULL;
     switch (prog) {
-    case RT_PROG_LINEAR:   /* half-window | minimum blocks per SM << 16 (see gpu.c) */
+    case RT_PROG_LINEAR:   /* half-window | minimum blocks per SM << 16 (see gpu_priv.h) */
         ptx = param == 128 ? pz_ptx_linear128 : param == 256 ? pz_ptx_linear256 : param == 512 ? pz_ptx_linear512
             : param == (128 | 4 << 16) ? pz_ptx_linear128m4 : param == (256 | 4 << 16) ? pz_ptx_linear256m4
             : param == (512 | 4 << 16) ? pz_ptx_linear512m4 : NULL;
         break;
-    case RT_PROG_KANG:     /* kangaroos per work-item | configuration << 16 (0 products at every walker, 1 at every other, 2 at every fourth, see gpu.c) */
+    case RT_PROG_KANG:     /* kangaroos per work-item | configuration << 16 (0 products at every walker, 1 at every other, 2 at every fourth, see gpu_priv.h) */
         ptx = param == 64 ? pz_ptx_kang64 : param == 128 ? pz_ptx_kang128 : param == 256 ? pz_ptx_kang256
             : param == (64 | 1 << 16) ? pz_ptx_kang64b : param == (128 | 1 << 16) ? pz_ptx_kang128b
             : param == (256 | 1 << 16) ? pz_ptx_kang256b
