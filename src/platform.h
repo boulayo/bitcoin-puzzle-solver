@@ -88,6 +88,7 @@ int pz_thread_prio_level(void);
 void pz_console_init(void);                                /* Windows: UTF-8 output and ANSI escape sequences */
 bool pz_stderr_is_terminal(void);                          /* an interactive terminal that understands the escapes */
 int pz_terminal_cols(void);                                /* 0 when unknown */
+int pz_fd_terminal_cols(int fd);                           /* columns of the terminal that fd 1 or 2 writes to; 0 when it is not one */
 /* Windows: the console window belongs to this process alone (started with a double click from Explorer), so it will
  * close as soon as the program ends. Always false elsewhere. */
 bool pz_console_is_own(void);

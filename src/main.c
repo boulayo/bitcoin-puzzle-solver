@@ -1275,7 +1275,7 @@ static int cmd_puzzles(int argc, char **argv)
         else pz_die("unrecognized option '%s' (see 'pzsolve help puzzles')", argv[i]);
     }
     if (only_open && only_solved) pz_die("--open and --solved are mutually exclusive");
-    printf("%4s  %-9s %-6s %-36s %s\n", "N", "status", "pubkey", "address", "mean effort (method)");
+    printf("%4s  %-9s %-6s %-36s %s\n", "N", "status", "pubkey", "address", "mean effort");
     int shown = 0, nsolved = 0, nopen = 0;
     for (int i = 0; i < PZ_NUM_PUZZLES; i++) {
         const puzzle_info *p = &PZ_PUZZLES[i];
@@ -1284,12 +1284,15 @@ static int cmd_puzzles(int argc, char **argv)
         if ((only_open && solved) || (only_solved && !solved) || (only_pub && !p->pubkey[0])) continue;
         double eff = p->pubkey[0] ? (p->n - 1) / 2.0 + log2(KANG_C_MEAN) : (p->n - 2);
         printf("%4d  %-9s %-6s %-36s 2^%.1f %s\n", p->n, solved ? "solved" : "OPEN", p->pubkey[0] ? "yes" : "no", p->address, eff,
-               p->pubkey[0] ? "steps (kangaroo)" : "keys (linear)");
+               p->pubkey[0] ? "steps" : "keys");             /* steps of the kangaroo, keys of the linear search */
         shown++;
     }
-    printf("\n%d puzzles shown out of %d (%d solved, %d open). The database is verified by 'selftest'.\n", shown, PZ_NUM_PUZZLES, nsolved, nopen);
-    printf("Puzzles 161..256 existed in the original 2015 transaction but the creator withdrew their funds in 2017:\n"
-           "they are not listed here; 'pzsolve puzzle N' shows their address.\n");
+    char tail[300];
+    snprintf(tail, sizeof tail, "\n%d puzzles shown out of %d (%d solved, %d open). The database is verified by 'selftest'. Mean effort: steps of "
+             "the kangaroo with a known public key, keys of the linear search without.\n", shown, PZ_NUM_PUZZLES, nsolved, nopen);
+    pz_fputs_wrap(stdout, tail, PZ_LINE_MAX, 0);
+    pz_fputs_wrap(stdout, "Puzzles 161..256 existed in the original 2015 transaction but the creator withdrew their funds in 2017: they are not listed "
+                          "here; 'pzsolve puzzle N' shows their address.\n", PZ_LINE_MAX, 0);
     return 0;
 }
 

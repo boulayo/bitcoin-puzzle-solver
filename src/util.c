@@ -149,7 +149,7 @@ static int break_score(const char *s, const char *q, const char *end)
  * second half of the line, never leaving a last line of a few characters; NULL when there is no space to break at. */
 static const char *pick_break(const char *s, const char *end, int col0, int width)
 {
-    const int low = col0 + (width - col0) * 45 / 100;
+    const int low = col0 + (width - col0) * 75 / 100;
     const char *best = NULL, *fit = NULL, *first_after = NULL;
     int best_score = -1;
     int col = col0;
@@ -160,7 +160,7 @@ static const char *pick_break(const char *s, const char *end, int col0, int widt
                 if (col <= width) {
                     fit = q;
                     const int rest = text_cols(q + 1, (size_t)(end - q - 1));
-                    const int value = sc * 10 + 40 * col / width;   /* a natural place counts for more, a fuller line for a little */
+                    const int value = sc * 10 + 80 * col / width;   /* a natural place counts for more, a fuller line too */
                     if (col >= low && (rest >= 10 || !best) && value >= best_score) { best = q; best_score = value; }
                 } else if (!first_after) first_after = q;
             }
@@ -189,6 +189,10 @@ static int desc_col(const char *p, size_t len, int width)
 
 void pz_fputs_wrap(FILE *fp, const char *text, int width, int hang)
 {
+    if (width == PZ_LINE_MAX) {               /* the usual width: no wider than the terminal it is written to */
+        const int fd = fileno(fp), cols = fd == 1 || fd == 2 ? pz_fd_terminal_cols(fd) : 0;
+        if (cols >= 40 && cols <= width) width = cols - 1;  /* not the last column: some terminals wrap a line that fills it */
+    }
     bool first = true;
     char *line = NULL;
     size_t cap = 0;

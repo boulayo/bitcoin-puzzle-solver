@@ -368,8 +368,8 @@ int kangaroo_selftest(void)
         if (steps < 0) { fails++; cyc_lost++; }
         else snprintf(cyc + strlen(cyc), sizeof cyc - strlen(cyc), "%s%.2f", cyc[0] ? " " : "", steps / sqrt(ldexp(1.0, 30)));
     }
-    if (cyc_lost) pz_result_line("kangaroo, 8 jumps (frequent cycles), W=2^30", "%d of 2 keys NOT found", cyc_lost);
-    else pz_result_line("kangaroo, 8 jumps (frequent cycles), W=2^30", "2 keys found, steps / sqrt(W): %s", cyc);
+    if (cyc_lost) pz_result_line("kangaroo, 8 jumps (cycles), W=2^30", "%d of 2 keys NOT found", cyc_lost);
+    else pz_result_line("kangaroo, 8 jumps (cycles), W=2^30", "2 keys found, steps / sqrt(W): %s", cyc);
     fails += progress_selftest();
     pz_log_set_quiet(was_quiet);
     return fails;

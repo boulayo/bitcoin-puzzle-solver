@@ -350,6 +350,12 @@ int pz_terminal_cols(void)
     return ioctl(2, TIOCGWINSZ, &ws) == 0 ? ws.ws_col : 0;
 }
 
+int pz_fd_terminal_cols(int fd)
+{
+    struct winsize ws;
+    return isatty(fd) && ioctl(fd, TIOCGWINSZ, &ws) == 0 ? ws.ws_col : 0;
+}
+
 static void (*g_interrupt_fn)(void);
 static void on_posix_signal(int sig) { (void)sig; if (g_interrupt_fn) g_interrupt_fn(); }
 
@@ -727,6 +733,14 @@ int pz_terminal_cols(void)
     CONSOLE_SCREEN_BUFFER_INFO ci;
     HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
     if (h == INVALID_HANDLE_VALUE || !GetConsoleScreenBufferInfo(h, &ci)) return 0;
+    return ci.srWindow.Right - ci.srWindow.Left + 1;
+}
+
+int pz_fd_terminal_cols(int fd)
+{
+    CONSOLE_SCREEN_BUFFER_INFO ci;
+    HANDLE h = fd == 1 ? GetStdHandle(STD_OUTPUT_HANDLE) : fd == 2 ? GetStdHandle(STD_ERROR_HANDLE) : INVALID_HANDLE_VALUE;
+    if (h == INVALID_HANDLE_VALUE || !GetConsoleScreenBufferInfo(h, &ci)) return 0;   /* a pipe or a file: no console */
     return ci.srWindow.Right - ci.srWindow.Left + 1;
 }
 

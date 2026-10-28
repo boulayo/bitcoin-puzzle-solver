@@ -4,7 +4,7 @@
 #include "common.h"
 #include <stdarg.h>
 
-#define PZ_LABEL_COL 50     /* width of the label of a check-list line: the results line up in one column */
+#define PZ_LABEL_COL 41     /* width of the label of a check-list line: the results line up in one column (column 44) */
 
 /* "  label    result": one line of a check list. */
 static inline void pz_result_line(const char *label, const char *fmt, ...) __attribute__((format(PZ_PRINTF, 2, 3)));
@@ -15,6 +15,10 @@ static inline void pz_result_line(const char *label, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(res, sizeof res, fmt, ap);
     va_end(ap);
+    if ((int)strlen(label) > PZ_LABEL_COL) {                      /* a long label: the result below it, in the results column */
+        printf("  %s\n", label);
+        label = "";
+    }
     snprintf(line, sizeof line, "  %-*s %s", PZ_LABEL_COL, label, res);
     pz_fputs_wrap(stdout, line, PZ_LINE_MAX, 3 + PZ_LABEL_COL);   /* a long result continues under the results column */
     putchar('\n');
@@ -23,7 +27,8 @@ static inline void pz_result_line(const char *label, const char *fmt, ...)
 /* The same line in two steps, for a check that takes a while: the label first, the result when it is known. */
 static inline void pz_result_begin(const char *label)
 {
-    printf("  %-*s ", PZ_LABEL_COL, label);
+    if ((int)strlen(label) > PZ_LABEL_COL) printf("  %s\n%*s ", label, PZ_LABEL_COL + 2, "");
+    else printf("  %-*s ", PZ_LABEL_COL, label);
     fflush(stdout);
 }
 
