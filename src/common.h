@@ -92,6 +92,11 @@ u64 pz_strtou64(const char *s);
 /* Strict versions for user input: the whole string must be a decimal number (optional sign for i64) without overflow. */
 bool pz_parse_i64(const char *s, i64 *out);
 bool pz_parse_u64(const char *s, u64 *out);
+/* A number given on the command line (`name` is the option or the parameter): the whole text must be an integer between lo and hi,
+ * otherwise the program ends with "NAME: invalid value 'TEXT' (expected an integer between LO and HI)". */
+long long pz_arg_int(const char *name, const char *s, long long lo, long long hi);
+/* Whether `s` is a list of non-negative integers in decimal, separated by single commas ("0", "0,2"), as --gpu takes. */
+bool pz_index_list_valid(const char *s);
 
 /* Hex helpers. */
 int pz_hex_decode(const char *hex, u8 *out, size_t maxlen);   /* returns bytes or -1 */

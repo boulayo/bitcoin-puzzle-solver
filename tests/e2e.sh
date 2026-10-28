@@ -306,6 +306,15 @@ chk "--table: the value is too long" hunt -p 46 -m bsgs --table "$LONG" -q
 chk "--file: the value is too long" merge -c x -f "$LONG"
 chk "at most 1000000000" hunt -p 20 --mem 1e12 -q
 chk "--mem: invalid value 'inf'" hunt -p 20 --mem inf -q
+chk "-t: invalid value '12abc'" bench --together -t 12abc
+chk "--threads: invalid value '0'" bench --together --threads 0
+chk "--gpu: invalid list '0x'" bench --together --gpu 0x
+chk "kstat BITS: invalid value '12abc'" kstat 12abc 1 1
+chk "kstat RUNS: invalid value '1x'" kstat 16 1x 1
+chk "kstat THREADS: invalid value '1,5'" kstat 16 1 1,5
+chk "kstat R: invalid value '3'" kstat 16 1 1 3
+chk "kstat R: invalid value '4x'" kstat 16 1 1 4x
+chk "kstat DP: invalid value '4x'" kstat 16 1 1 4 4x
 
 echo "== range option: the same messages for a new campaign and for a resume"
 rm -rf "$DIR/rg"; A1=1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH

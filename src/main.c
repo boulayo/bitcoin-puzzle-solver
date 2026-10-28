@@ -206,13 +206,7 @@ static const struct option long_opts[] = {
 
 /* Strict numeric option parsing: the whole string must be a number in range (atoi() would silently accept "12abc").
  * pz_parse_* rather than strtoll: on glibc >= 2.38 strtoll resolves to __isoc23_strtoll and the binary would refuse
- * to start on older distributions. */
-static long long opt_int(const char *opt, const char *s, long long lo, long long hi)
-{
-    i64 v;
-    if (!pz_parse_i64(s, &v) || v < lo || v > hi) pz_die("%s: invalid value '%s' (expected an integer between %lld and %lld)", opt, s, lo, hi);
-    return v;
-}
+ * to start on older distributions. Integers: pz_arg_int (util.c). */
 
 /* A positive number of at most `max`. */
 static double opt_positive_double(const char *opt, const char *s, double max)
@@ -313,7 +307,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
     opterr = 0;
     while ((c = getopt_long(argc, argv, ":p:r:a:H:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
         switch (c) {
-        case 'p': o->puzzle = (int)opt_int("--puzzle", optarg, 1, 256); break;
+        case 'p': o->puzzle = (int)pz_arg_int("--puzzle", optarg, 1, 256); break;
         case 'r': opt_copy("--range", o->range, sizeof o->range, optarg); break;
         case 'a': opt_copy("--address", o->address, sizeof o->address, optarg); break;
         case 'H': opt_copy("--hash160", o->hash160, sizeof o->hash160, optarg); break;
@@ -328,7 +322,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             break;
         case 's': opt_copy("--seed", o->seed, sizeof o->seed, optarg); break;
         case 'm': opt_copy("--mode", o->mode, sizeof o->mode, optarg); break;
-        case 't': o->threads = (int)opt_int("--threads", optarg, 1, MAX_WORKERS - 16); break;
+        case 't': o->threads = (int)pz_arg_int("--threads", optarg, 1, MAX_WORKERS - 16); break;
         case O_NOCPU: o->no_cpu = true; break;
         case O_NOGPU: o->no_gpu = true; break;
         case O_RETUNE: o->retune = true; break;
@@ -348,20 +342,15 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             if (!o->part[0]) pz_strlcpy(o->part, "0/1", sizeof o->part);
             break;
         }
-        case O_LIMIT: o->limit = (int)opt_int("--limit", optarg, 1, 100); break;
-        case O_NODE: o->node = (int)opt_int("--node", optarg, 0, 65535); break;
+        case O_LIMIT: o->limit = (int)pz_arg_int("--limit", optarg, 1, 100); break;
+        case O_NODE: o->node = (int)pz_arg_int("--node", optarg, 0, 65535); break;
         case 'f':
             if (o->nfiles >= 16) pz_die("at most 16 files at a time with -f");
             opt_copy("--file", o->files[o->nfiles], sizeof o->files[0], optarg);
             o->nfiles++;
             break;
         case O_GPU:
-            for (const char *q = optarg;; q++) {   /* digits separated by single commas: "0", "0,2" */
-                bool digit = *q >= '0' && *q <= '9';
-                bool sep_ok = (*q == ',' || *q == 0) && q > optarg && q[-1] >= '0' && q[-1] <= '9';
-                if (!digit && !sep_ok) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", optarg);
-                if (!*q) break;
-            }
+            if (!pz_index_list_valid(optarg)) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", optarg);
             opt_copy("--gpu", o->gpu, sizeof o->gpu, optarg);
             break;
         case O_GPUAPI:
@@ -371,11 +360,11 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else pz_die("--gpu-api must be auto, cuda or opencl");
             break;
         case O_ISA: opt_copy("--isa", o->isa, sizeof o->isa, optarg); break;
-        case O_CHUNK: o->chunk_bits = (int)opt_int("--chunk-bits", optarg, 20, 40); break;   /* smaller blocks starve the GPUs and slow the CPU */
-        case O_DP: o->dp_bits = (int)opt_int("--dp-bits", optarg, 0, 60); break;
+        case O_CHUNK: o->chunk_bits = (int)pz_arg_int("--chunk-bits", optarg, 20, 40); break;   /* smaller blocks starve the GPUs and slow the CPU */
+        case O_DP: o->dp_bits = (int)pz_arg_int("--dp-bits", optarg, 0, 60); break;
         case O_MEM: o->mem_gb = opt_positive_double("--mem", optarg, 1e9); break;   /* GB: 1e9 of them still fit in 64 bits of bytes */
-        case O_REPORT: o->report_interval = (int)opt_int("--report-interval", optarg, 1, 86400); break;
-        case O_CKPT: o->checkpoint_interval = (int)opt_int("--checkpoint-interval", optarg, 1, 86400); break;
+        case O_REPORT: o->report_interval = (int)pz_arg_int("--report-interval", optarg, 1, 86400); break;
+        case O_CKPT: o->checkpoint_interval = (int)pz_arg_int("--checkpoint-interval", optarg, 1, 86400); break;
         case 'q': o->quiet = true; break;
         case 'v': o->verbose = true; break;
         case O_NEW: o->want_new = true; break;
@@ -1189,7 +1178,7 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
 static int cmd_puzzle(int argc, char **argv)
 {
     if (argc < 3) pz_die("usage: pzsolve puzzle N [--rate KEYS_PER_SECOND]");
-    int n = (int)opt_int("puzzle", argv[2], 1, 256);
+    int n = (int)pz_arg_int("puzzle", argv[2], 1, 256);
     double rate_lin = -1, rate_kang = -1;
     for (int i = 3; i < argc; i++)
         if (!strcmp(argv[i], "--rate")) {

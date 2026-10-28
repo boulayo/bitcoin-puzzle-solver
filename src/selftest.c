@@ -447,8 +447,11 @@ int bench_run(int argc, char **argv)
         else if (!strcmp(a, "--gpu-only")) gpu_only = true;
         else if (!strcmp(a, "--linear")) linear = true;
         else if (!strcmp(a, "--retune")) gpu_set_retune(true);
-        else if ((!strcmp(a, "-t") || !strcmp(a, "--threads")) && i + 1 < argc) threads = pz_atoi(argv[++i]);
-        else if (!strcmp(a, "--gpu") && i + 1 < argc) gpus = argv[++i];
+        else if ((!strcmp(a, "-t") || !strcmp(a, "--threads")) && i + 1 < argc) { threads = (int)pz_arg_int(a, argv[i + 1], 1, 512); i++; }
+        else if (!strcmp(a, "--gpu") && i + 1 < argc) {
+            gpus = argv[++i];
+            if (!pz_index_list_valid(gpus)) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", gpus);
+        }
         else if (!strcmp(a, "--prio-gpu") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "auto")) prio = PRIO_AUTO;
@@ -461,7 +464,6 @@ int bench_run(int argc, char **argv)
     }
     if ((threads || gpus || linear || prio_given) && !together) pz_die("bench: -t, --gpu, --prio-gpu and --linear are used together with --together (see 'pzsolve help bench')");
     if (gpus) gpu_check_filter(gpus);
-    if (threads < 0 || threads > 512) pz_die("bench: -t must be between 1 and 512 (see 'pzsolve help bench')");
     if (together) {
         tg_choice ch;
         memset(&ch, 0, sizeof ch);

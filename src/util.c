@@ -345,6 +345,24 @@ bool pz_parse_i64(const char *s, i64 *out)
     return true;
 }
 
+long long pz_arg_int(const char *name, const char *s, long long lo, long long hi)
+{
+    i64 v;
+    if (!pz_parse_i64(s, &v) || v < lo || v > hi) pz_die("%s: invalid value '%s' (expected an integer between %lld and %lld)", name, s, lo, hi);
+    return v;
+}
+
+bool pz_index_list_valid(const char *s)
+{
+    if (!*s) return false;
+    for (const char *q = s;; q++) {
+        const bool digit = *q >= '0' && *q <= '9';
+        const bool end = (*q == ',' || *q == 0) && q > s && q[-1] >= '0' && q[-1] <= '9';
+        if (!digit && !end) return false;
+        if (!*q) return true;
+    }
+}
+
 void *pz_xmalloc(size_t n)
 {
     void *p = malloc(n ? n : 1);
