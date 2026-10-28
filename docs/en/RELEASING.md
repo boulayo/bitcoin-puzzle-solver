@@ -31,8 +31,11 @@
 VERSION                current version
 CHANGELOG.md           history of the changes
 tools/release.sh       release script: checks, bumps VERSION, verifies, tags
-tools/package_release.sh  builds the Linux and Windows packages locally (the workflow does it for all platforms)
+tools/package_release.sh  builds the Linux and Windows packages locally (the workflow packs the binary of every platform with it)
 tools/verify.sh        the full verification run by the release script
+tools/check_binary.sh  the two checks of a binary that is about to be shipped: the glibc ceiling of the Linux one, the DLLs of the Windows one
+tools/ci_apt_install.sh  installs the packages of the workflows (MinGW-w64, QEMU) with a time limit per try and retries
+.github/workflows/     ci.yml (every push and pull request) and release.yml (the release)
 GitHub Releases        the binaries of every published version, with SHA256SUMS
 ```
 
@@ -57,14 +60,17 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    * creates the annotated tag `vX.Y.Z` on the resulting commit.
    It never builds binaries and never pushes: it prints the push command at the end.
 4. Publish the commit and the tag: `git push origin <branch> --follow-tags`.
-5. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Windows, Linux and
-   macOS) and publishes them, together with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page
-   and check that every binary and the checksum file are there.
+5. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
+   Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine), checks the Linux binary
+   (no glibc symbol newer than 2.34) and the Windows one (system DLLs only) with `tools/check_binary.sh`, and publishes the five archives, together
+   with `SHA256SUMS`, as a GitHub Release for the tag. The binary in every archive is a stripped copy. When it has finished, open the release
+   page and check that every archive and the checksum file are there.
 
-The workflow can also be run by hand (Actions tab, "Run workflow", "publish" ticked), which creates the tag on the selected commit.
+The workflow can also be run by hand (Actions tab, "Run workflow"). Without "publish" it only builds the archives and keeps them as artifacts of the
+run. With "publish" ticked it creates the tag on the selected commit and a **draft** release (untick "draft" to publish at once).
 Releases of one version are made one at a time, and a run refuses to create or replace the files of a release whose tag points to
 another commit than the one it built (the log says so). To replace the files of a release on purpose, for example after a failed
-upload, run the workflow by hand from the tagged commit; "replace" is needed only when the selected commit is another one, and
+upload, run the workflow by hand from the tagged commit; the input "replace" is needed only when the selected commit is another one, and
 then the tag and the release notes stay as they are.
 
 Without arguments (`tools/release.sh`) the script releases the version already written in `VERSION`, as for a first release.
@@ -76,18 +82,23 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
 `tools/verify.sh` (also used by `tools/release.sh`) runs in sequence:
 
 0. a re-check of the puzzle database with the independent implementation (`tools/gen_puzzles.py --check`);
-1. a build from scratch and `make test` (unit tests + built-in self-test);
-2. `tests/e2e.sh` (real campaigns on small puzzles; `E2E_QUICK=1`, or `verify.sh quick`, uses the short version);
-   then the CUDA path with a simulated driver (self-test, bench, machine profile, `--prio-gpu`, resume after a GPU error), `doctor`,
-   suspend (frozen process), several computers (kangaroo `merge` and linear-search `--part`), and the Windows exe under Wine;
-3. a build with **AddressSanitizer + UndefinedBehaviorSanitizer**: self-test, **all unit tests** (including the robustness ones on
-   corrupt files, `t_fuzz`, and on corrupt compressed kernel streams, `t_lz`) and linear, BSGS (also with the table in a file),
-   kangaroo and kangaroo-with-a-tiny-table campaigns;
-4. a build with **ThreadSanitizer**: linear, BSGS and kangaroo campaigns and interruption with Ctrl-C;
-5. **Valgrind** (memcheck with full leak checking) on a linear, a BSGS and a kangaroo campaign, on the portable path
-   (Valgrind does not know AVX-512/ADX, which are covered by the previous points).
+1. a build from scratch and `make test` (unit tests + built-in self-test), the examples and tests of the library, also unoptimized (`-O0`) and as C++;
+2. the binary and the paths that need a particular machine: `tools/check_binary.sh` on the Linux binary (no glibc symbol newer than 2.34); the AVX-512 IFMA
+   engine (executed by the CPU if it can, under Intel SDE when `PZ_SDE` is set, else with the emulation of `tools/ifma_emul.h`); the CUDA path with a
+   simulated driver (self-test, bench, machine profile, `--prio-gpu`, two devices, resume after an error injected into a launch, the number of modules
+   loaded), `doctor`, suspend (frozen process), several computers (kangaroo `merge` and linear-search `--part`);
+3. `tests/e2e.sh` (real campaigns on small puzzles; `E2E_QUICK=1`, or `verify.sh quick`, uses the short version);
+4. a build with **AddressSanitizer + UndefinedBehaviorSanitizer** (with `float-cast-overflow`, which neither GCC nor clang include in
+   `undefined`): self-test, **all unit tests** (including the robustness ones on corrupt files, `t_fuzz`, on corrupt compressed kernel
+   streams, `t_lz`, and the reading of the environment, `t_env`) and linear, BSGS (also with the table in a file), kangaroo,
+   kangaroo-with-a-tiny-table and puzzle-140-with-`--dp-bits 2` campaigns;
+5. a build with **ThreadSanitizer**: linear, BSGS and kangaroo campaigns and interruption with Ctrl-C;
+6. **Valgrind** (memcheck with full leak checking) on a linear, a BSGS and a kangaroo campaign, on the portable path
+   (Valgrind does not know AVX-512/ADX, which are covered by the previous points);
+7. the **aarch64** build, cross-compiled and tried under QEMU user-mode emulation (the NEON and SHA-256 code of the library and of the engines);
+8. the **Windows** exe (static MinGW-w64): `check_binary.sh windows`, the unit tests, self-test and campaigns under Wine, with the simulated driver as `nvcuda.dll`.
 
-The release stops at the first error. If the machine has a GPU (CUDA or OpenCL), also run `pzsolve selftest` and `pzsolve bench`
+(The steps whose tools are not installed, such as Valgrind, QEMU or Wine, are skipped with a message.) The release stops at the first error. If the machine has a GPU (CUDA or OpenCL), also run `pzsolve selftest` and `pzsolve bench`
 and check that the GPU self-test passes.
 
 The check that the committed PTX modules (`src/kernels/ptx/`) are what the kernels (`src/kernels/*.cl`) generate is made by `verify.sh`
