@@ -23,6 +23,7 @@ int kang_merge_selftest(void);   /* kang_merge_file: collision across two logs, 
  * the given offset from the start of the interval (the first form: 123456789). */
 struct kang_state *kang_make_test_state(unsigned wbits, int nthreads);
 struct kang_state *kang_make_test_state_at(unsigned wbits, int nthreads, const pz_u256 *offset);
+struct kang_state *kang_make_test_state_dp(unsigned wbits, int nthreads, const pz_u256 *offset, unsigned dp_bits);   /* with --dp-bits (0: automatic) */
 void kang_free_test_state(struct kang_state *ks);
 /* Runs the CPU kangaroo on [lo, lo + 2^wbits) until `key` is found; returns the steps used or -1. Test overrides: R jumps
  * instead of 256 (R > 0, a power of two), dp_bits (dp > 0) and no restart of walkers without distinguished points. */

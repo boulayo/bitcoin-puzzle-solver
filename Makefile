@@ -330,7 +330,7 @@ e2e: $(BIN)
 	tests/e2e.sh $(BIN)
 
 asan:
-	$(MAKE) BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" all
+	$(MAKE) BUILD=build/asan OPT="-O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer" all
 
 tsan:
 	$(MAKE) BUILD=build/tsan OPT="-O1 -fsanitize=thread" all

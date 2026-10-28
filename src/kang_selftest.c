@@ -384,12 +384,36 @@ static int table_grow_checks(void)
     return fails;
 }
 
+/* The size the table starts with: the smallest power of two that holds the points expected at 60 % load, never above what the memory limit
+ * allows. A small --dp-bits on a large interval (puzzle 140 with --dp-bits 2) expects more points than a 64-bit number holds: the limit then
+ * decides. (The number has to be cut before it is converted to an integer: the conversion of a value out of range is undefined, and gives a
+ * table of 4096 entries on x86-64. -fsanitize=float-cast-overflow reports it.) */
+static int table_size_checks(void)
+{
+    int fails = 0;
+    const u64 top = (256ULL << 20) / sizeof(dp_rec);           /* the limit of kang_make_test_state, a power of two */
+    static const struct { unsigned wbits, dp; } cases[] = {{40, 2}, {40, 4}, {40, 10}, {64, 2}, {100, 2}, {139, 2}, {KANG_MAX_W_LOG2, 2},
+                                                           {KANG_MAX_W_LOG2, 3}, {KANG_MAX_W_LOG2, 20}, {KANG_MAX_W_LOG2, 60}};
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        kang_state *ks = kang_make_test_state_dp(cases[i].wbits, 1, &(pz_u256){{123456789, 0, 0, 0}}, cases[i].dp);
+        if (!ks) { TCHK(!"state"); continue; }
+        const long double need = 4.0L * ks->sqrtW / ldexpl(1.0L, (int)ks->P.dp_bits) / 0.6L + 4096;
+        u64 expect = 4096;
+        while ((long double)expect < need && (expect << 1) <= top) expect <<= 1;
+        TCHK(ks->P.dp_bits >= 2 && ks->cap == expect && ks->mask == expect - 1 && ks->tab != NULL);
+        if (need >= (long double)top) TCHK(ks->cap == top);                      /* too many points for any table: the memory limit decides */
+        kang_free_test_state(ks);
+    }
+    return fails;
+}
+
 static int table_selftest(void)
 {
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(2);                                    /* "halving the density of stored points", hundreds of times */
     int fails = table_thin_checks();
     fails += table_grow_checks();
+    fails += table_size_checks();
     pz_log_set_quiet(was_quiet);
     fails += table_collision_checks();
     pz_result_line("distinguished-point table: growth and thinning", "%s", fails ? "FAILED" : "OK");

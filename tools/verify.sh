@@ -243,10 +243,10 @@ run make asan -j"$(nproc)" >/dev/null
 export ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
 run build/asan/pzsolve selftest
 ASAN_TESTS="t_core t_env t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_lz t_kernels"
-run make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" $(for t in $ASAN_TESTS; do echo build/asan/$t; done) >/dev/null
+run make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer" $(for t in $ASAN_TESTS; do echo build/asan/$t; done) >/dev/null
 for t in $ASAN_TESTS; do run env "$IFMA_ENV" build/asan/$t >/dev/null && echo "  OK $t (ASan/UBSan)"; done
 # the library on its own (its tests and examples link nothing but libpzcore.a)
-run env "$IFMA_ENV" make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" lib-test lib-examples >"$T/asan-lib.log" 2>&1 \
+run env "$IFMA_ENV" make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer" lib-test lib-examples >"$T/asan-lib.log" 2>&1 \
   && echo "  OK pzcore tests and examples (ASan/UBSan)" || tail -20 "$T/asan-lib.log"
 rm -rf "$T/a1"; run build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a1" --ui log -q --no-gpu
 check_found "$T/a1/a" "$K" && echo "  OK linear (ASan)" || { echo "  FAIL linear (ASan)"; fail=$((fail+1)); }
@@ -259,6 +259,9 @@ rm -rf "$T/a7"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs --ta
 check_found "$T/a7/a" "$KK" && echo "  OK bsgs with table from file (ASan)" || { echo "  FAIL bsgs with table from file (ASan)"; fail=$((fail+1)); }
 rm -rf "$T/a3"; PZ_TEST_DP_CAP=64 run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c a -d "$T/a3" --ui log -q --no-gpu --mem 0.002 --dp-bits 3
 check_found "$T/a3/a" "$KK" && echo "  OK kangaroo with a tiny table (growth + density reduction)" || { echo "  FAIL kangaroo tiny table"; fail=$((fail+1)); }
+# the table of a huge interval with a tiny --dp-bits: the number of points expected does not fit in 64 bits (float-cast-overflow)
+rm -rf "$T/a8"; timeout -s INT 8 build/asan/pzsolve hunt -p 140 --dp-bits 2 --mem 0.05 -c a -d "$T/a8" --ui log -q --no-gpu -t 1 >"$T/a8.out" 2>&1
+! grep -q "runtime error" "$T/a8.out" && grep -q "table 32.00 MiB (max 51.20 MiB)" "$T/a8/a/log.txt" && echo "  OK kangaroo, puzzle 140 with --dp-bits 2 (ASan/UBSan)" || { echo "  FAIL kangaroo, puzzle 140 with --dp-bits 2 (ASan/UBSan)"; fail=$((fail+1)); }
 rm -rf "$T/a4"; run env PZ_OPENCL_ALL=1 build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a4" --ui log -q --gpu 0 --no-cpu
 check_found "$T/a4/a" "$K" && echo "  OK linear on OpenCL (ASan)" || echo "  (OpenCL not available or not used: ignored)"
 

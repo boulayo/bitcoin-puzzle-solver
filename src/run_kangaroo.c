@@ -248,6 +248,11 @@ struct kang_state *kang_make_test_state(unsigned wbits, int nthreads)
 
 struct kang_state *kang_make_test_state_at(unsigned wbits, int nthreads, const pz_u256 *offset)
 {
+    return kang_make_test_state_dp(wbits, nthreads, offset, 0);
+}
+
+struct kang_state *kang_make_test_state_dp(unsigned wbits, int nthreads, const pz_u256 *offset, unsigned dp_bits)
+{
     const pz_u256 lo = pz_u256_pow2(90);
     pz_u256 k = lo;
     pz_u256_add(&k, &k, offset);
@@ -256,6 +261,7 @@ struct kang_state *kang_make_test_state_at(unsigned wbits, int nthreads, const p
     pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     for (int i = 0; i < 32; i++) r->cfg.seed[i] = (u8)(i * 37 + 11);
     r->nthreads = nthreads;
+    r->cfg.dp_bits = dp_bits;
     r->silent_setup = true;
     r->mem_limit = 256ULL << 20;                           /* a small table: the intervals of the tests would otherwise ask for a huge one */
     kang_state *ks = kang_create(r);
