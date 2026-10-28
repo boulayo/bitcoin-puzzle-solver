@@ -126,27 +126,13 @@ static bool tune_busy(const char *key)
 
 static void tune_cache_put(const rt_dev *d, bool kang, int variant)
 {
-    char path[512], key[400];
+    char path[512], key[400], val[16];
     if (!tune_cache_path(path, sizeof path)) return;
     tune_key(d, kang, key, sizeof key);
+    snprintf(val, sizeof val, "%d", variant);
     pthread_mutex_lock(&g_tune_mu);
-    char *old = pz_read_file(path, NULL);
-    size_t cap = (old ? strlen(old) : 0) + 600;
-    char *out = pz_xcalloc(cap, 1);
-    size_t len = 0;
-    for (char *line = old; line && *line;) {
-        char *nl = strchr(line, '\n');
-        size_t ll = nl ? (size_t)(nl - line) : strlen(line);
-        char *eq = memchr(line, '=', ll);
-        bool same = eq && (size_t)(eq - line) == strlen(key) && !strncmp(line, key, strlen(key));
-        if (!same && ll > 0 && len + ll + 2 < cap) { memcpy(out + len, line, ll); len += ll; out[len++] = '\n'; }
-        line = nl ? nl + 1 : NULL;
-    }
-    len += (size_t)snprintf(out + len, cap - len, "%s=%d\n", key, variant);
-    pz_write_file_atomic(path, out, len, 0644);
+    pz_keyed_file_put(path, key, val);
     pthread_mutex_unlock(&g_tune_mu);
-    free(out);
-    free(old);
 }
 
 /* The saved choice for this device if there is one, waiting for another thread that is measuring the same model; 0 when this thread is to
