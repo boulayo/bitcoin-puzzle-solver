@@ -12,6 +12,8 @@
 #include <errno.h>
 #include <limits.h>
 
+/* The campaign that a stop signal stops, and the signals received. A signal handler is given no argument, so these two are process-wide: there
+ * is one campaign per process (the self-tests and measurements make runs of their own, which no signal reaches). */
 static run_ctx *g_run;
 static _Atomic int g_sig_count;
 static _Atomic long long g_first_sig_ms;

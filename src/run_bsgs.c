@@ -28,13 +28,11 @@ typedef struct {
     pthread_t driver;
 } bs_run;
 
-static bs_run *g_bs;
-
 typedef struct { bs_run *b; int slot; } bs_warg;
 
 static void bs_progress(run_ctx *r, progress_info *pi)
 {
-    bs_run *b = g_bs;
+    bs_run *b = r->bsgs;
     u64 session = 0;
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
     bs_phase ph = (bs_phase)atomic_load(&b->phase);
@@ -71,7 +69,7 @@ static void bs_progress(run_ctx *r, progress_info *pi)
 
 static int bs_checkpoint(run_ctx *r)
 {
-    bs_run *b = g_bs;
+    bs_run *b = r->bsgs;
     int rc = 0;
     if (r->sched && atomic_load(&b->phase) >= PH_SEARCH) rc = sched_save(r->sched, r->path_state);
     u64 session = 0;
@@ -173,11 +171,11 @@ static void *driver_main(void *p)
 
 static void bs_cleanup(run_ctx *r)
 {
-    (void)r;
-    if (g_bs) {
-        bsgs_table_free(&g_bs->tab);
-        free(g_bs);
-        g_bs = NULL;
+    bs_run *b = r->bsgs;
+    if (b) {
+        bsgs_table_free(&b->tab);
+        free(b);
+        r->bsgs = NULL;
     }
 }
 
@@ -223,7 +221,7 @@ int run_bsgs(run_ctx *r)
 {
     pz_ec_init();
     bs_run *b = pz_xcalloc(1, sizeof *b);
-    g_bs = b;
+    r->bsgs = b;
     b->r = r;
     run_bsgs_check(&r->cfg, &r->sys, r->use_cpu, r->mem_limit, r->table_path, &b->P);
     bsgs_sched_cfg(&b->P, &r->cfg, &b->scfg);

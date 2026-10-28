@@ -99,6 +99,13 @@ typedef struct run_ctx {
     _Atomic u64 hits_bad;
 
     int scratch_lock;                /* synthetic campaigns (run_kangaroo.c): descriptor holding the lock of the owner file of the scratch folder (0: none) */
+
+    /* state of the run modes, in the run so that two runs in one process (the self-tests, the measurements) do not share it */
+    void *bsgs;                      /* BSGS mode (bs_run*, run_bsgs.c) */
+    int worker_stop_n;               /* number of flags in worker_stop */
+    _Atomic int active_workers;      /* linear: CPU threads and GPU controllers still running; the last one to leave stops the run */
+    u64 keys_at_start[2];            /* linear: keys already covered when this session began, low and high 64 bits (the progress adds the
+                                      * session's to it); not a u128, which would raise the alignment of the whole run_ctx */
 } run_ctx;
 
 /* Seconds of this session spent computing: the monotonic time since the start minus the suspensions. */

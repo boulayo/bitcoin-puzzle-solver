@@ -268,6 +268,123 @@ static void t_rate_memory(void)
     pz_result_line("speed remembered per configuration", "OK");
 }
 
+/* Campaigns that run at the same time in one process, as the self-tests and the measurements make them: each one keeps its own counters and
+ * tables, finishes by itself, and reports its own totals. Two linear runs (one finds nothing, the other is longer) and two BSGS runs (one
+ * finds its key, the other finds nothing). */
+typedef struct {
+    run_ctx *r;
+    bool bsgs;
+    char dir[600];
+    pz_u256 lo, hi, key;
+    u64 T;
+    _Atomic int done;
+} twin_run;
+
+static void *twin_main(void *p)
+{
+    twin_run *t = p;
+    if (t->bsgs) run_bsgs(t->r);
+    else run_linear(t->r);
+    atomic_store(&t->done, 1);
+    return NULL;
+}
+
+static bool twin_setup(twin_run *t, bool bsgs, unsigned wbits, bool inside, u8 seed)
+{
+    memset(t, 0, sizeof *t);
+    t->bsgs = bsgs;
+    if (!pz_make_temp_dir(t->dir, sizeof t->dir, "pztwin")) return false;
+    const pz_u256 one = pz_u256_from_u64(1), below = pz_u256_pow2(20);
+    t->lo = pz_u256_pow2(30);
+    t->hi = pz_u256_pow2(wbits);
+    pz_u256_add(&t->hi, &t->hi, &t->lo);
+    pz_u256_sub(&t->hi, &t->hi, &one);
+    if (inside) { t->key = pz_u256_from_u64(((u64)seed << 12) + 777); pz_u256_add(&t->key, &t->key, &t->lo); }
+    else pz_u256_sub(&t->key, &t->lo, &below);
+    t->T = 1 << 12;
+    run_ctx *r = pz_xcalloc(1, sizeof *r);
+    run_init(r);
+    pz_ge q;
+    pz_ec_mul_g(&q, &t->key);
+    pz_ge_to_pub33(r->cfg.pubkey33, &q);
+    r->cfg.pubkey = q;
+    r->cfg.has_pubkey = true;
+    pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
+    r->cfg.range_start = t->lo;
+    r->cfg.range_end = t->hi;
+    r->cfg.mode = bsgs ? MODE_BSGS : MODE_LINEAR;
+    r->cfg.bsgs_t = bsgs ? t->T : 0;
+    for (int i = 0; i < 32; i++) r->cfg.seed[i] = (u8)(seed + 7 * i);
+    const pz_u256 sz = cfg_range_size(&r->cfg);
+    r->cfg.chunk_bits = cfg_default_chunk_bits(&sz);
+    pz_strlcpy(r->cfg.dir, t->dir, sizeof r->cfg.dir);
+    run_paths(r);
+    r->engine = cpu_engine_by_name("baseline");
+    r->nthreads = 2;
+    r->use_cpu = true;
+    r->use_gpu = false;
+    r->silent_setup = true;
+    r->ui = UI_LOG;
+    r->sessions = 1;
+    r->t_start = pz_mono();
+    t->r = r;
+    return true;
+}
+
+static void t_twin_runs(void)
+{
+    enum { N = 4 };
+    twin_run t[N];
+    pthread_t th[N];
+    const struct { bool bsgs; unsigned wbits; bool inside; } spec[N] = {{false, 16, false}, {false, 18, false}, {true, 22, false}, {true, 21, true}};
+    pz_ec_init();
+    cpu_tables_init();
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                      /* the BSGS runs warn that a table of 4096 baby steps is small for their range */
+    bool ok = true;
+    for (int i = 0; i < N; i++) ok &= twin_setup(&t[i], spec[i].bsgs, spec[i].wbits, spec[i].inside, (u8)(i + 1));
+    if (!ok) { pz_log_set_quiet(was_quiet); pz_result_line("campaigns running at the same time", "not tested: no temporary folder"); return; }
+    for (int i = 0; i < N; i++) pthread_create(&th[i], NULL, twin_main, &t[i]);
+    const double t0 = pz_mono();
+    bool all = false, timeout = false;
+    while (!all && !timeout) {
+        pz_sleep(0.05);
+        all = true;
+        for (int i = 0; i < N; i++) all &= atomic_load(&t[i].done) != 0;
+        timeout = pz_mono() - t0 > 30;
+    }
+    if (timeout) for (int i = 0; i < N; i++) atomic_store(&t[i].r->stop, 1);     /* a run that does not end by itself: the check below fails */
+    for (int i = 0; i < N; i++) pthread_join(th[i], NULL);
+    CHECK(!timeout);
+    for (int i = 0; i < N; i++) {
+        run_ctx *r = t[i].r;
+        progress_info pi;
+        run_final_progress(r, &pi);
+        if (spec[i].inside) {
+            CHECK(atomic_load(&r->found) && !pz_u256_cmp(&r->found_key, &t[i].key));
+        } else {
+            long double want = ldexpl(1.0L, (int)spec[i].wbits);                       /* linear: the keys of the range */
+            if (spec[i].bsgs) {                                                         /* BSGS: the giant steps */
+                bsgs_params bp;
+                char err[200];
+                CHECK(bsgs_params_init(&bp, &t[i].lo, &t[i].hi, &r->cfg.pubkey, t[i].T, err, sizeof err));
+                want = (long double)bp.Ng;
+            }
+            CHECK(!atomic_load(&r->found) && r->sched && sched_finished(r->sched));
+            CHECK(pi.total == want && pi.done == want);                              /* its own totals, not those of another run */
+        }
+    }
+    for (int i = 0; i < N; i++) {
+        run_ctx *r = t[i].r;
+        if (r->cleanup) r->cleanup(r);
+        if (r->sched) sched_free(r->sched);
+        pz_remove_tree(t[i].dir);
+        free(r);
+    }
+    pz_log_set_quiet(was_quiet);
+    pz_result_line("campaigns running at the same time", "%s", timeout ? "FAILED" : "OK");
+}
+
 /* --limit: the share of threads / work-items, and the order that puts the threads on distinct physical cores first. */
 static void t_limit(void)
 {
@@ -352,6 +469,7 @@ int selftest_run(int argc, char **argv)
         CHECK(rc == 0);
     }
     t_rate_memory();
+    t_twin_runs();
 #undef SECTION
     printf(g_fail ? "\nSELFTEST FAILED: %d of %d checks\n" : "\nSELFTEST PASSED: %d checks, no errors\n", g_fail ? g_fail : g_checks, g_checks);
     pz_log_set_quiet(was_quiet);

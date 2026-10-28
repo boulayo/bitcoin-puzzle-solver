@@ -17,9 +17,6 @@ typedef struct {
     int slot;
 } cpu_arg;
 
-static _Atomic int g_active_workers;
-static u128 g_keys_at_start;
-
 static void on_cpu_hit(void *user, const pz_u256 *key)
 {
     run_submit_key((run_ctx *)user, key, "CPU");
@@ -60,7 +57,7 @@ static void *cpu_worker(void *p)
             if (want < gr) want = gr;
         }
     }
-    if (atomic_fetch_sub(&g_active_workers, 1) == 1) atomic_store(&r->stop, 1);
+    if (atomic_fetch_sub(&r->active_workers, 1) == 1) atomic_store(&r->stop, 1);
     return NULL;
 }
 
@@ -71,7 +68,7 @@ static void linear_progress(run_ctx *r, progress_info *pi)
     const sched_t *sc = r->sched;
     const bool parted = sc->part.total != 0;
     long double total = pz_u256_to_ld(&sc->part_keys);          /* this computer's part (the whole range without a split) */
-    long double done = (long double)g_keys_at_start + (long double)session;
+    long double done = (long double)(((u128)r->keys_at_start[1] << 64) | r->keys_at_start[0]) + (long double)session;
     u128 exact = sched_keys_done(r->sched);
     if ((long double)exact > done) done = (long double)exact;
     if (done > total) done = total;
@@ -113,7 +110,9 @@ int run_linear(run_ctx *r)
         char kd[48];
         pz_log(PZ_LOG_INFO, "campaign resumed: %s keys already covered (%.6f%%)", u128_to_dec(sched_keys_done(r->sched), kd), sched_fraction(r->sched) * 100.0);
     }
-    g_keys_at_start = sched_keys_done(r->sched);
+    const u128 at_start = sched_keys_done(r->sched);
+    r->keys_at_start[0] = (u64)at_start;
+    r->keys_at_start[1] = (u64)(at_start >> 64);
     r->progress = linear_progress;
     r->checkpoint = linear_checkpoint;
 
@@ -136,7 +135,7 @@ int run_linear(run_ctx *r)
         pz_log(PZ_LOG_INFO, "CPU: %d compute threads (one core per OpenCL GPU is reserved to drive it)", ncpu_threads);
     }
     if (ncpu_threads > MAX_WORKERS - 16) ncpu_threads = MAX_WORKERS - 16;
-    atomic_store(&g_active_workers, ncpu_threads + ngpu);
+    atomic_store(&r->active_workers, ncpu_threads + ngpu);
     if (ncpu_threads + ngpu == 0) pz_die("no compute device available (CPU disabled and no GPU)");
 
     for (int i = 0; i < ncpu_threads; i++) {
@@ -148,7 +147,7 @@ int run_linear(run_ctx *r)
         if (pthread_create(&th[nth], NULL, cpu_worker, &args[i]) != 0) pz_die("pthread_create failed");
         nth++;
     }
-    gpu_linear_launch(r, gpus, ngpu, &g_active_workers);
+    gpu_linear_launch(r, gpus, ngpu, &r->active_workers);
 
     run_reporter_loop(r);
 
@@ -159,12 +158,10 @@ int run_linear(run_ctx *r)
 
 /* ---------------- CPU and GPU together ('bench --together', first-run calibration) ---------------- */
 
-static int g_bench_total;
-
 static void lin_set_cpu(void *ctx, int cap)
 {
     run_ctx *r = ctx;
-    for (int i = 0; i < g_bench_total; i++) atomic_store(&r->worker_stop[i], i >= cap);
+    for (int i = 0; i < r->worker_stop_n; i++) atomic_store(&r->worker_stop[i], i >= cap);
 }
 
 int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu_filter, tg_choice *choice)
@@ -205,8 +202,8 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     r->sched = sched_new(&r->cfg);
     _Atomic int *flags = pz_xcalloc((size_t)total, sizeof *flags);
     r->worker_stop = flags;
-    g_bench_total = total;
-    atomic_store(&g_active_workers, 1 << 20);          /* the workers come and go: the last one leaving must not stop the run */
+    r->worker_stop_n = total;
+    atomic_store(&r->active_workers, 1 << 20);          /* the workers come and go: the last one leaving must not stop the run */
     for (int i = 0; i < total; i++) atomic_store(&flags[i], i >= full);
     pthread_t th[MAX_WORKERS];
     cpu_arg args[MAX_WORKERS];
@@ -216,7 +213,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
         args[i] = (cpu_arg){r, run_alloc_worker(r, nm, 'C'), i};
         if (pthread_create(&th[i], NULL, cpu_worker, &args[i]) != 0) pz_die("pthread_create failed");
     }
-    gpu_linear_launch(r, gpus, ngpu, &g_active_workers);
+    gpu_linear_launch(r, gpus, ngpu, &r->active_workers);
     int gw[16], gi = 0, gidx[16];
     for (int j = 0; j < ngpu; j++) gidx[j] = gpu_session_index(gpu_session_at(gpus, j));
     for (int i = 0; i < r->nws && gi < ngpu; i++)
@@ -231,6 +228,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     sched_free(r->sched);
     r->sched = NULL;
     r->worker_stop = NULL;
+    r->worker_stop_n = 0;
     free(flags);
     pz_log_set_quiet(was_quiet);
     if (choice) *choice = ch;
