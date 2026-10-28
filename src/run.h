@@ -30,6 +30,7 @@ typedef struct {
     double fraction;                 /* 0..1 */
     eta_in eta;                      /* completion-time model inputs (done / remaining / scale) */
     const char *unit;                /* "keys", "steps" */
+    bool beyond;                     /* kangaroo: far past the expected effort without a collision: the completion-time model says nothing */
     char detail[320];
 } progress_info;
 
@@ -66,6 +67,11 @@ typedef struct run_ctx {
                                       * started from a remembered rate when there is one (BSGS: slowly smoothed) */
     rate_state est_state;            /* how far to trust rate_eta */
     bool all_started;                /* every worker has produced something (a GPU is counted only when its first launch ends) */
+    _Atomic int rate_restart;        /* set by a mode whose unit changes (BSGS: from baby steps to giant steps): the reporter starts its
+                                      * speeds, the peak and the session average over */
+    u64 units_base;                  /* units of this session before that change (written before rate_restart is set) */
+    double t_base;                   /* seconds of the session at that change */
+    _Atomic int effort_warned;       /* kangaroo: the warning about 5x the expected effort has been logged */
     double rate_prior;               /* remembered rate for the completion times at the start (0 = none) */
     int rate_prior_kind;             /* 0 none, 1 the calibration's (measured cold), 2 the steady rate of an earlier run */
     double rate_cold;                /* the calibration's rate of the profile entry in use (0 = none) */

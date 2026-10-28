@@ -325,8 +325,14 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     pz_u256 rsz = cfg_range_size(&r->cfg);
     unsigned rbits = pz_u256_bits(&rsz) ? pz_u256_bits(&rsz) - 1 : 0;
 
-    char detail[900];
+    char detail[900], tleft[400];
     wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
+    if (pi->beyond)
+        snprintf(tleft, sizeof tleft, "Time left:      unknown (beyond the model: 5x the expected effort without a collision)\n");
+    else
+        snprintf(tleft, sizeof tleft, "Time left:      50%%: %s   90%%: %s   %s: %s   (at the recent average speed)\n"
+                 "Chance within:  %s: %s   %s: %s   %s: %s   %s: %s   %s: %s\n", t50, t90, kang ? "99%" : "100%", tfull,
+                 ETA_WINDOW_NAMES[0], pw[0], ETA_WINDOW_NAMES[1], pw[1], ETA_WINDOW_NAMES[2], pw[2], ETA_WINDOW_NAMES[3], pw[3], ETA_WINDOW_NAMES[4], pw[4]);
     int n = snprintf(buf, bcap,
         "=== pzsolve %s - campaign report ===\n"
         "Updated:        %s\n"
@@ -342,16 +348,14 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "\n"
         "%s%.6f %%   (%s of %s %s)\n"
         "Speed:          %s %s/s   (CPU %s, GPU %s)\n"
-        "Time left:      50%%: %s   90%%: %s   %s: %s   (at the recent average speed)\n"
-        "Chance within:  %s: %s   %s: %s   %s: %s   %s: %s   %s: %s\n"
+        "%s"
         "Detail:         %s\n"
         "Rejected:       %llu candidate%s that failed the verification\n"
         "\nWorkers:\n",
         PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, r->cfg.puzzle, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
-        pi->fraction * 100.0, done, total, pi->unit, rate, pi->unit, cr, gr, t50, t90, kang ? "99%" : "100%", tfull,
-        ETA_WINDOW_NAMES[0], pw[0], ETA_WINDOW_NAMES[1], pw[1], ETA_WINDOW_NAMES[2], pw[2], ETA_WINDOW_NAMES[3], pw[3], ETA_WINDOW_NAMES[4], pw[4],
+        pi->fraction * 100.0, done, total, pi->unit, rate, pi->unit, cr, gr, tleft,
         detail, (unsigned long long)atomic_load(&r->hits_bad), atomic_load(&r->hits_bad) == 1 ? "" : "s");
     for (int i = 0; i < r->nws && (size_t)n + 200 < bcap; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
@@ -364,9 +368,9 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     /* status.json (machine readable; used by the 'list' command) */
     const size_t jcap = 6144 + (size_t)r->nws * 256;     /* one entry per worker: the file must stay whole, and valid JSON, with any number of them */
     char *j = pz_xmalloc(jcap), e50[32], e90[32], efull[32], pj[ETA_NWIN][32];
-    json_num(e50, sizeof e50, es.t50);
-    json_num(e90, sizeof e90, es.t90);
-    json_num(efull, sizeof efull, kang ? es.t99 : es.t_full);
+    json_num(e50, sizeof e50, pi->beyond ? NAN : es.t50);       /* beyond the model: no completion time */
+    json_num(e90, sizeof e90, pi->beyond ? NAN : es.t90);
+    json_num(efull, sizeof efull, pi->beyond ? NAN : kang ? es.t99 : es.t_full);
     for (int i = 0; i < ETA_NWIN; i++) json_num(pj[i], sizeof pj[i], es.p_win[i]);
     int m = snprintf(j, jcap,
         "{\n  \"program\": \"pzsolve\",\n  \"version\": \"%s\",\n  \"campaign\": \"%s\",\n  \"seed_id\": \"%s\",\n  \"part\": \"%s\",\n  \"limit_percent\": %d,\n"

@@ -36,6 +36,11 @@ static void kang_progress(run_ctx *r, progress_info *pi)
     pi->fraction = (double)(1.0L - expl(-z * z));
     pi->unit = "steps";
     pi->eta = (eta_in){ETA_RAYLEIGH, done, 0, c, false, 0};
+    /* far past the expected effort the Rayleigh model only says "any moment now": more likely the key is not in the range, or the public key
+     * is not the one of the address */
+    pi->beyond = ks->expected_steps > 0 && done > 5.0L * ks->expected_steps;
+    if (pi->beyond && !atomic_exchange(&r->effort_warned, 1))
+        pz_log(PZ_LOG_WARN, "kangaroo: 5x the expected effort without a collision: check the public key (-k) and the range");
     /* the size of the table, from the copies that need no lock: a rebuild of the table holds mu for seconds (see kang_state) */
     const u64 cnt = atomic_load_explicit(&ks->count_mirror, memory_order_relaxed), cap = atomic_load_explicit(&ks->cap_mirror, memory_order_relaxed);
     const unsigned thin = atomic_load_explicit(&ks->thin_mirror, memory_order_relaxed);

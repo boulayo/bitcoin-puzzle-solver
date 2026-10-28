@@ -185,6 +185,8 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     if (final && atomic_load(&r->found)) {
         snprintf(ln, sizeof ln, "KEY FOUND: see %s", r->path_found);
         len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
+    } else if (pi->beyond) {
+        len = add_line(buf, n, len, &lines, cols, B0, B1, "Time left     unknown (beyond the model)");
     } else if (pi->eta.model == ETA_NONE) {
         /* the search itself has not started (BSGS table phase): the only meaningful time is the end of this phase */
         if (pi->rate > 0 && pi->total > pi->done) {
@@ -266,6 +268,9 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
         if (pi->rate > 0 && pi->total > pi->done) ui_fmt_eta((double)((pi->total - pi->done) / pi->rate), tt, sizeof tt);
         snprintf(buf, n, "#%d [%s] %s %s %s/s | table phase%s%s", r->cfg.puzzle, bb, pc, rate, pi->unit, tt[0] ? ", done in " : "", tt);
         if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "#%d %s %s %s/s", r->cfg.puzzle, pc, rate, pi->unit);
+    } else if (pi->beyond) {
+        snprintf(buf, n, "#%d [%s] %s %s %s/s | time left unknown (beyond the model)", r->cfg.puzzle, bb, pc, rate, pi->unit);
+        if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "#%d %s %s %s/s | time left unknown", r->cfg.puzzle, pc, rate, pi->unit);
     } else if (pi->rate > 0 && pi->est_state != RATE_MEASURING) {
         /* richest layout that fits, then drop fields from the least important: bar, P(24h), the last quantile */
         for (int v = 0; v < 5; v++) {
