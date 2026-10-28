@@ -11,17 +11,10 @@
 #include "selftest.h"
 #include "profile.h"
 #include "platform.h"
+#include "envopts.h"
 #include <dirent.h>
 #include <stdarg.h>
 #include <sys/stat.h>
-
-#ifdef _WIN32
-#define ENVIRON _environ
-extern char **_environ;
-#else
-extern char **environ;
-#define ENVIRON environ
-#endif
 
 static int g_warn, g_err;
 
@@ -224,12 +217,16 @@ static void check_time(void)
 #endif
 }
 
+static void env_entry_line(const char *entry, void *ctx)
+{
+    (void)ctx;
+    doctor_line('i', "%s", entry);
+}
+
 static void check_env(void)
 {
     section("Environment variables PZ_*");
-    int n = 0;
-    for (char **e = ENVIRON; e && *e; e++)
-        if (!strncmp(*e, "PZ_", 3)) { doctor_line('i', "%s", *e); n++; }
+    const int n = pz_env_each_pz(env_entry_line, NULL);
     if (!n) doctor_line('i', "none set");
     else doctor_line('w', "%d PZ_* variables set: they change the behavior (tuning, GPU, engines); if you did not set them yourself, remove them", n);
 }

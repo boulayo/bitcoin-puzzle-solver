@@ -56,6 +56,10 @@ extern struct pz_env g_env;
 /* Resets g_env and reads the environment. Calling it again reads the environment again. */
 void pz_env_init(void);
 
+/* Calls fn(entry, ctx) for every entry "NAME=VALUE" of the environment whose name starts with PZ_, the ones this program does not know
+ * included (a misspelled name is what `doctor` is there to show); returns how many. */
+int pz_env_each_pz(void (*fn)(const char *entry, void *ctx), void *ctx);
+
 /* The value of PZ_GPU_NK, "128", "128b" (products at every other walker), "128c" (every fourth), with a final "l" for the herd sized to the
  * L2 cache. False if the text is anything else. */
 bool pz_env_parse_nk(const char *text, int *nk, int *cfg, bool *l2);

@@ -2,6 +2,14 @@
 /* envopts.c - the one place that reads the environment (see envopts.h). */
 #include "envopts.h"
 
+#ifdef _WIN32
+#define ENVIRON _environ
+extern char **_environ;
+#else
+extern char **environ;
+#define ENVIRON environ
+#endif
+
 #define ENV_INIT {.bench_scale = 1.0, .test_dp_cap = -1}
 
 struct pz_env g_env = ENV_INIT;
@@ -110,6 +118,14 @@ static void env_bench_scale(void)
     const double x = plain ? strtod(v, &end) : 0;
     if (plain && !*end && x >= 0.01 && x <= 100) g_env.bench_scale = x;
     else env_ignored("PZ_BENCH_SCALE", v, "expected a number between 0.01 and 100");
+}
+
+int pz_env_each_pz(void (*fn)(const char *entry, void *ctx), void *ctx)
+{
+    int n = 0;
+    for (char **e = ENVIRON; e && *e; e++)
+        if (!strncmp(*e, "PZ_", 3)) { fn(*e, ctx); n++; }
+    return n;
 }
 
 void pz_env_init(void)

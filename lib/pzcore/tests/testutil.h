@@ -25,6 +25,13 @@ static TU_UNUSED uint64_t tu_rnd(void)
 }
 static TU_UNUSED void tu_fill(uint8_t *p, size_t n) { for (size_t i = 0; i < n; i++) p[i] = (uint8_t)(tu_rnd() >> 32); }
 
+/* An on/off variable of the environment, as pzsolve reads them: on with any value except "" and "0". */
+static TU_UNUSED int tu_env_on(const char *name)
+{
+    const char *v = getenv(name);
+    return v && v[0] && strcmp(v, "0") != 0;
+}
+
 static TU_UNUSED void tu_hex(const uint8_t *p, size_t n, char *out)
 {
     for (size_t i = 0; i < n; i++) sprintf(out + 2 * i, "%02x", p[i]);

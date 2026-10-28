@@ -7,6 +7,7 @@
 #include <pzcore/cpu.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); if (++fails > 20) exit(1); } } while (0)
@@ -112,9 +113,16 @@ static void check_canonical(const pz_fev *r, const pz_fe *want)
     }
 }
 
+/* PZ_ASSUME_IFMA: on with any value except "" and "0", as for pzsolve */
+static int assume_ifma(void)
+{
+    const char *v = getenv("PZ_ASSUME_IFMA");
+    return v && v[0] && strcmp(v, "0") != 0;
+}
+
 int main(void)
 {
-    if (!pz_cpu_has_ifma() && !getenv("PZ_ASSUME_IFMA")) { printf("t_fev52: CPU without AVX-512 IFMA, skipped\n"); return 0; }
+    if (!pz_cpu_has_ifma() && !assume_ifma()) { printf("t_fev52: CPU without AVX-512 IFMA, skipped\n"); return 0; }
     /* the subtraction constants are multiples of p whose limbs dominate one (K1) or two (K2) tight subtrahends */
     {
         pz_fe base, acc, t;

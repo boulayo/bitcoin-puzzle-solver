@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_batch.c - the batch HASH160: every implementation the CPU can run against the scalar code and against values computed by Python,
  * batches of every awkward size, unaligned buffers, the choice of the implementation, and use from several threads while it changes.
- * With PZ_EXPECT_SHANI=1 in the environment the test fails if the "shani" implementation (the SHA extensions of x86-64) is not available,
+ * With PZ_EXPECT_SHANI set (to 1) in the environment the test fails if the "shani" implementation (the SHA extensions of x86-64) is not available,
  * so that a run on an emulated CPU (make test-shani) cannot pass by skipping it. */
 #include <pzcore/cpu.h>
 #include <pzcore/hash.h>
@@ -199,8 +199,7 @@ int main(void)
 #else
         CHECK(!has512 && !has2 && !hasneon && !hassha);
 #endif
-        const char *expect = getenv("PZ_EXPECT_SHANI");
-        if (expect && !strcmp(expect, "1")) {
+        if (tu_env_on("PZ_EXPECT_SHANI")) {
             CHECK(hassha);
             if (!hassha) printf("t_batch: PZ_EXPECT_SHANI=1 but the CPU does not report the SHA extensions\n");
         }

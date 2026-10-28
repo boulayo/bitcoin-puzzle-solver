@@ -253,6 +253,27 @@ static void t_reinit(void)
     (void)last;
 }
 
+/* The list `doctor` prints: every entry whose name starts with PZ_, the unknown names too, and nothing else. */
+static void count_entry(const char *entry, void *ctx)
+{
+    int *c = ctx;
+    c[0] += !strcmp(entry, "PZ_T_ENV_UNKNOWN=abc");
+    c[1] += !strcmp(entry, "PZ_NO_CUDA=1");
+    c[2] += strncmp(entry, "PZ_", 3) != 0;
+}
+
+static void t_each(void)
+{
+    clear_all();
+    setv("PZ_T_ENV_UNKNOWN", "abc");
+    setv("PZ_NO_CUDA", "1");
+    setv("T_ENV_NOT_PZ", "1");
+    int c[3] = {0, 0, 0};
+    const int n = pz_env_each_pz(count_entry, c);
+    CHECK(c[0] == 1 && c[1] == 1 && c[2] == 0 && n >= 2);
+    setv("T_ENV_NOT_PZ", "");
+}
+
 int main(void)
 {
     pz_log_set_quiet(2);                                       /* the warnings are read from the log file */
@@ -267,6 +288,7 @@ int main(void)
     t_tune_and_nk();
     t_places();
     t_reinit();
+    t_each();
     pz_log_set_file(NULL);
     clear_all();
     pz_env_init();
