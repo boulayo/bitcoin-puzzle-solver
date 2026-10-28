@@ -38,6 +38,9 @@ void pz_fd_drop_cache(int fd, u64 off, u64 len);           /* hint: these bytes 
 /* Replaces `to` with `from` atomically (POSIX rename semantics, also when `to` exists or is briefly held open by a
  * reader on Windows). 0 on success. */
 int pz_rename_replace(const char *from, const char *to);
+/* The same; durable false does not wait for the rename to reach the disk (Windows: no MOVEFILE_WRITE_THROUGH), for files that are made
+ * again at the next write. */
+int pz_rename_replace_ex(const char *from, const char *to, bool durable);
 int pz_mkdir1(const char *path);                           /* one level; 0 also if it already exists as a directory */
 bool pz_is_dir(const char *path);
 int pz_remove_tree(const char *path);                      /* rm -rf, without spawning a shell */

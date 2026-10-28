@@ -341,7 +341,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         n += snprintf(buf + n, bcap - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);
     }
     if (atomic_load(&r->found)) n += snprintf(buf + n, bcap - (size_t)n, "\nKEY FOUND: see %s\n", r->path_found);
-    pz_write_file_atomic(r->path_report, buf, (size_t)n, 0644);
+    pz_write_file_atomic_ex(r->path_report, buf, (size_t)n, 0644, false);   /* derived from the state, rewritten every 5 s: no fsync */
     free(buf);
 
     /* status.json (machine readable; used by the 'list' command) */
@@ -369,7 +369,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
                       r->ws[i].name, r->ws[i].kind, isfinite(wr) && wr >= 0 && wr < 1e18 ? wr : 0.0, (unsigned long long)atomic_load(&r->ws[i].units));
     }
     m += snprintf(j + m, jcap - (size_t)m, "\n  ]\n}\n");
-    pz_write_file_atomic(r->path_status, j, (size_t)m, 0644);
+    pz_write_file_atomic_ex(r->path_status, j, (size_t)m, 0644, false);
     free(j);
 }
 

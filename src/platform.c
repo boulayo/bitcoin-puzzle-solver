@@ -99,7 +99,8 @@ void pz_fd_drop_cache(int fd, u64 off, u64 len)
     (void)fd; (void)off; (void)len;               /* macOS has no equivalent */
 #endif
 }
-int pz_rename_replace(const char *from, const char *to) { return rename(from, to); }
+int pz_rename_replace_ex(const char *from, const char *to, bool durable) { (void)durable; return rename(from, to); }
+int pz_rename_replace(const char *from, const char *to) { return pz_rename_replace_ex(from, to, true); }
 
 int pz_mkdir1(const char *path)
 {
@@ -488,12 +489,12 @@ int pz_fd_truncate(int fd, u64 size)
 
 void pz_fd_drop_cache(int fd, u64 off, u64 len) { (void)fd; (void)off; (void)len; }
 
-int pz_rename_replace(const char *from, const char *to)
+int pz_rename_replace_ex(const char *from, const char *to, bool durable)
 {
     /* MoveFileEx replaces atomically on NTFS; a reader (`list`, an antivirus scan) holding `to` open for a moment
      * makes it fail with a sharing error, so retry for up to ~2 s before giving up */
     for (int attempt = 0; attempt < 80; attempt++) {
-        if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 0;
+        if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | (durable ? MOVEFILE_WRITE_THROUGH : 0))) return 0;
         DWORD e = GetLastError();
         if (e != ERROR_ACCESS_DENIED && e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) { set_errno_from_win(e); return -1; }
         Sleep(25);
@@ -501,6 +502,8 @@ int pz_rename_replace(const char *from, const char *to)
     errno = EACCES;
     return -1;
 }
+
+int pz_rename_replace(const char *from, const char *to) { return pz_rename_replace_ex(from, to, true); }
 
 int pz_mkdir1(const char *path)
 {

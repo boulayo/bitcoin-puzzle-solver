@@ -469,7 +469,9 @@ int pz_mkdir_p(const char *path)
     return pz_mkdir1(tmp);   /* an existing path must be a directory */
 }
 
-int pz_write_file_atomic(const char *path, const void *data, size_t len, int mode)
+int pz_write_file_atomic(const char *path, const void *data, size_t len, int mode) { return pz_write_file_atomic_ex(path, data, len, mode, true); }
+
+int pz_write_file_atomic_ex(const char *path, const void *data, size_t len, int mode, bool durable)
 {
     /* The temporary file has a name of its own (process and counter): programs and threads that write the same file at the same
      * moment, such as the caches shared by every pzsolve of the user, must not share it. */
@@ -491,9 +493,9 @@ int pz_write_file_atomic(const char *path, const void *data, size_t len, int mod
         p += w;
         left -= (size_t)w;
     }
-    if (pz_fd_sync(fd)) { close(fd); unlink(tmp); return -1; }
+    if (durable && pz_fd_sync(fd)) { close(fd); unlink(tmp); return -1; }
     if (close(fd)) { unlink(tmp); return -1; }
-    if (pz_rename_replace(tmp, path)) { unlink(tmp); return -1; }
+    if (pz_rename_replace_ex(tmp, path, durable)) { unlink(tmp); return -1; }
     return 0;
 }
 

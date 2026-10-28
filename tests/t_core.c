@@ -161,6 +161,29 @@ int main(void)
     }
 #endif
     t_writers();
+    {   /* the files made again at the next write (report.txt, status.json) are replaced atomically without the wait for the disk */
+        char dir[600], path[700];
+        if (pz_make_temp_dir(dir, sizeof dir, "pzdur")) {
+            snprintf(path, sizeof path, "%s/derived.txt", dir);
+            CHECK(pz_write_file_atomic_ex(path, "one", 3, 0644, false) == 0);
+            CHECK(pz_write_file_atomic_ex(path, "second", 6, 0644, false) == 0);
+            size_t n = 0;
+            char *t = pz_read_file(path, &n);
+            CHECK(t && n == 6 && !memcmp(t, "second", 6));
+            free(t);
+            CHECK(pz_write_file_atomic_ex(path, "durable", 7, 0644, true) == 0);
+            t = pz_read_file(path, &n);
+            CHECK(t && n == 7 && !memcmp(t, "durable", 7));
+            free(t);
+            DIR *d = opendir(dir);
+            int extra = 0;
+            for (struct dirent *e; d && (e = readdir(d));)
+                if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && strcmp(e->d_name, "derived.txt")) extra++;
+            if (d) closedir(d);
+            CHECK(extra == 0);
+            pz_remove_tree(dir);
+        }
+    }
     {   /* the log is appended in binary mode: lines end in LF on Windows too */
         char dir[600], path[700];
         if (pz_make_temp_dir(dir, sizeof dir, "pzlog")) {

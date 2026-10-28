@@ -99,6 +99,9 @@ char *pz_fmt_bytes(double v, char *buf, size_t n);
 
 /* Atomic write: writes data to a temporary file of its own next to path (so concurrent writers never share one), fsyncs, renames over path. */
 int pz_write_file_atomic(const char *path, const void *data, size_t len, int mode);
+/* The same; durable false skips the fsync, for files that are rewritten every few seconds and made again at the next start (report.txt,
+ * status.json): after a crash the old content, or none, may be seen. */
+int pz_write_file_atomic_ex(const char *path, const void *data, size_t len, int mode, bool durable);
 /* Sets the line "key=value" in the text file `path` (one such line per key, none of the keys contains '='), keeping the other lines: the cache
  * files shared by every pzsolve of the user. Atomic like pz_write_file_atomic, and serialised between programs by a lock on path.lock when
  * the system gives one. 0 on success. */
