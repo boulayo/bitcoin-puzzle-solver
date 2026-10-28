@@ -5,6 +5,7 @@
 #include <pzcore/hash.h>
 #include "platform.h"
 #include <unistd.h>
+#include <ctype.h>
 #include <errno.h>
 
 #define KANG_LOG_BUF_MAX ((size_t)1 << 22)      /* records the log buffer may grow to while the disk refuses writes (128 MiB) */
@@ -105,6 +106,13 @@ FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32])
     return f;
 }
 
+int kang_log_class(const u8 magic[6])
+{
+    if (memcmp(magic, "PZDP", 4) != 0) return KANG_LOG_FOREIGN;
+    if (memcmp(magic, KANG_LOG_MAGIC, 6) == 0) return KANG_LOG_CURRENT;
+    return magic[4] >= '1' && magic[4] <= '3' ? KANG_LOG_OLDER : KANG_LOG_NEWER;
+}
+
 /* Reads the records of an open log, positioned after the header, into the table; stops at the end of the file or at the record that solves
  * the key. Returns the number of records read, or -1 on a read error (what was read stays in the table). A record cut short by the end of
  * the file is not counted. */
@@ -176,7 +184,8 @@ int kang_load_log(kang_state *ks)
         fclose(f);
         return log_unreadable(ks, e);
     }
-    if (!memcmp(hdr, "PZDP", 4) && memcmp(hdr, KANG_LOG_MAGIC, 6) != 0) {
+    const int cls = kang_log_class(hdr);
+    if (cls == KANG_LOG_OLDER) {
         /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
          * small intervals): its points cannot be used. It is kept under another name and the campaign goes on with a new log. */
         char old[640];
@@ -191,7 +200,13 @@ int kang_load_log(kang_state *ks)
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
     }
-    if (memcmp(hdr, KANG_LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) {
+    if (cls == KANG_LOG_NEWER) {
+        fclose(f);
+        pz_log(PZ_LOG_ERR, "file %s was written by a newer version of pzsolve (%.4s%c) and cannot be used by this one: it is left as it is; use that version, "
+               "or move the file away to start the distinguished points again", ks->log_path, (const char *)hdr, isprint(hdr[4]) ? hdr[4] : '?');
+        return -1;
+    }
+    if (cls != KANG_LOG_CURRENT || memcmp(hdr + 6, fp, 32) != 0) {
         fclose(f);
         return log_foreign(ks);
     }

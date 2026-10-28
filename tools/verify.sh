@@ -161,6 +161,12 @@ printf 'PZDP2\n' > "$MC/p140/dp.bin"; head -c 32 /dev/zero >> "$MC/p140/dp.bin";
 ( build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --ui log >"$T/old.log" 2>&1 & p=$!; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
 grep -q "older layout" "$T/old.log" && cmp -s "$MC/p140/dp.bin.v2" "$T/dp.old" && [ "$(head -c 6 "$MC/p140/dp.bin")" = "$(printf 'PZDP4\n')" ] && echo "  OK hunt keeps a dp.bin of an older kangaroo layout as dp.bin.v2 and goes on with a new log" || { echo "  FAIL old dp.bin not set aside by hunt"; fail=$((fail+1)); }
 outhas "older layout" build/pzsolve merge -c p140 -d "$MA" -f "$MC/p140/dp.bin.v2" && echo "  OK merge refuses a log of an older kangaroo layout with an explanation" || { echo "  FAIL merge of an old log"; fail=$((fail+1)); }
+# a dp.bin of a NEWER version ("PZDP5") is not an older layout: hunt refuses it and leaves it alone (no dp.bin.v5), merge says where it comes from
+MD="$T/md"; mkdir -p "$MD/p140"
+printf 'PZDP5\n' > "$MD/p140/dp.bin"; head -c 64 /dev/zero >> "$MD/p140/dp.bin"; cp "$MD/p140/dp.bin" "$T/dp.new"
+build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 3 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MD" --ui log >"$T/new.log" 2>&1 && { echo "  FAIL hunt accepted a dp.bin of a newer version"; fail=$((fail+1)); } \
+  || { grep -q "newer version" "$T/new.log" && cmp -s "$MD/p140/dp.bin" "$T/dp.new" && [ ! -e "$MD/p140/dp.bin.v5" ] && echo "  OK hunt refuses a dp.bin of a newer version and leaves it alone" || { echo "  FAIL dp.bin of a newer version"; fail=$((fail+1)); }; }
+outhas "newer version" build/pzsolve merge -c p140 -d "$MA" -f "$MD/p140/dp.bin" && echo "  OK merge refuses a log of a newer version with an explanation" || { echo "  FAIL merge of a log of a newer version"; fail=$((fail+1)); }
 
 # several computers on one linear search (--part): the shares tile the search order, so exactly one of the two finds the key and the
 # other scans its half to the end; the share belongs to the campaign (resuming with another one is refused, resuming without keeps it)

@@ -241,6 +241,9 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);
  * cannot be mixed with these. */
 #define KANG_LOG_MAGIC "PZDP4\n"
 void kang_log_fp(const kang_state *ks, u8 fp[32]);                                       /* fingerprint of the campaign in a log header */
+/* What the first six bytes of a file say: not a log of pzsolve, the current layout, an older one (PZDP1 to PZDP3), or one that only a newer version of the program writes. */
+enum { KANG_LOG_FOREIGN, KANG_LOG_CURRENT, KANG_LOG_OLDER, KANG_LOG_NEWER };
+int kang_log_class(const u8 magic[6]);
 FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32]);
 void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
 long long kang_log_read(kang_state *ks, FILE *f);                                        /* the records of an open log into the table: their number, -1 on a read error */

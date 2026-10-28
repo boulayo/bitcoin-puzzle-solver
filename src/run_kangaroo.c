@@ -528,8 +528,11 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
             FILE *f = fopen(path, "rb");
             const bool got = f && fread(hdr, 1, 6, f) == 6;
             if (f) fclose(f);
-            if (got && !memcmp(hdr, "PZDP", 4) && memcmp(hdr, "PZDP4\n", 6) != 0)
+            const int cls = got ? kang_log_class((const u8 *)hdr) : KANG_LOG_FOREIGN;
+            if (cls == KANG_LOG_OLDER)
                 say_wrapped("  %s: log of an older layout of the kangaroo (versions up to 1.9.0, small intervals): its points cannot be combined with those of this version\n", path);
+            else if (cls == KANG_LOG_NEWER)
+                say_wrapped("  %s: log written by a newer version of pzsolve: its points cannot be combined with those of this version (the file is not touched)\n", path);
             else
                 say_wrapped("  %s: not the log of this campaign: the range or the public key differ, or it comes from an earlier version (open it with 'hunt' first)\n", path);
             bad++;

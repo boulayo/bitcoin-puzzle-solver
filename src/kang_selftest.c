@@ -256,7 +256,8 @@ static ssize_t flaky_read(void *c, char *buf, size_t n)
 #endif
 
 /* What the loading of dp.bin does with what it finds: it cuts off a record cut short at the end and nothing else (not the records after
- * the one that solved the key), a read error is an error, not the end of the file, and a file shorter than its header is started again. */
+ * the one that solved the key), a read error is an error, not the end of the file, a file shorter than its header is started again, and
+ * a file of a newer version is left alone. */
 static int log_file_checks(void)
 {
     int fails = 0;
@@ -328,6 +329,50 @@ static int log_file_checks(void)
         FCHK(f != NULL);
         if (f) { fputs("hello", f); fclose(f); }
         FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == 5);
+        kang_free_test_state(ks);
+    }
+    {   /* the other magics: only PZDP1 to PZDP3 are older layouts that are set aside; PZDP5 and the like come from a newer version and stay where they are */
+        const u8 m[][6] = {{'P', 'Z', 'D', 'P', '1', '\n'}, {'P', 'Z', 'D', 'P', '3', '\n'}, {'P', 'Z', 'D', 'P', '4', '\n'}, {'P', 'Z', 'D', 'P', '5', '\n'},
+                           {'P', 'Z', 'D', 'P', '0', '\n'}, {'P', 'Z', 'D', 'P', 'x', '\n'}, {'P', 'Z', 'D', 'Q', '5', '\n'}};
+        const int want[] = {KANG_LOG_OLDER, KANG_LOG_OLDER, KANG_LOG_CURRENT, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_FOREIGN};
+        for (size_t c = 0; c < sizeof want / sizeof *want; c++) FCHK(kang_log_class(m[c]) == want[c]);
+        const char digits[] = "25";
+        for (size_t c = 0; c < sizeof digits - 1; c++) {
+            kang_state *ks = kang_make_test_state(40, 1);
+            if (!ks) return fails + 1;
+            u8 body[38 + 3 * 32];
+            memset(body, 0x5A, sizeof body);
+            memcpy(body, "PZDP", 4);
+            body[4] = (u8)digits[c];
+            body[5] = '\n';
+            FILE *f = fopen(ks->log_path, "wb");
+            FCHK(f != NULL);
+            if (f) { fwrite(body, 1, sizeof body, f); fclose(f); }
+            char aside[700];
+            snprintf(aside, sizeof aside, "%s.v%c", ks->log_path, digits[c]);
+            if (digits[c] == '2') {                       /* an older layout: set aside, and a new log */
+                FCHK(kang_load_log(ks) == 1 && ks->log);
+                if (ks->log) { fclose(ks->log); ks->log = NULL; }
+                FCHK(file_size(aside) == (long long)sizeof body && file_size(ks->log_path) == 38);
+            } else {                                      /* a newer version's: an error, the file as it was, nothing set aside */
+                FCHK(kang_load_log(ks) == -1 && !ks->log);
+                FCHK(file_size(ks->log_path) == (long long)sizeof body && file_size(aside) == -1);
+                u8 back[sizeof body];
+                FILE *g = fopen(ks->log_path, "rb");
+                FCHK(g && fread(back, 1, sizeof back, g) == sizeof back && !memcmp(back, body, sizeof body));
+                if (g) fclose(g);
+            }
+            kang_free_test_state(ks);
+        }
+        kang_state *ks = kang_make_test_state(40, 1);      /* this version's magic with another campaign's fingerprint: refused, untouched */
+        if (!ks) return fails + 1;
+        u8 other[38];
+        memcpy(other, KANG_LOG_MAGIC, 6);
+        memset(other + 6, 0x5A, 32);
+        FILE *f = fopen(ks->log_path, "wb");
+        FCHK(f != NULL);
+        if (f) { fwrite(other, 1, sizeof other, f); fclose(f); }
+        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == 38);
         kang_free_test_state(ks);
     }
 #ifdef __GLIBC__
