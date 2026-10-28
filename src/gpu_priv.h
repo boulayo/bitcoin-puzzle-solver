@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* gpu_priv.h - internals of the GPU code shared by gpu.c (devices, sessions, kernel variants, autotuning, worker threads) and
- * gpu_selftest.c (the kernels against the CPU). */
+/* gpu_priv.h - internals of the GPU code shared by gpu.c (devices, sessions, worker threads), gpu_tune.c (kernel variants,
+ * autotuning, benchmark) and gpu_selftest.c (the kernels against the CPU). */
 #ifndef PZ_GPU_PRIV_H
 #define PZ_GPU_PRIV_H
 
@@ -107,18 +107,26 @@ typedef struct {
 
 static inline int enumerate(rt_dev *devs, char *note, size_t nl) { return rt_enumerate(devs, RT_MAX_DEVS, note, nl); }
 
-/* gpu.c: devices, sessions, the programs and launches of the linear kernel and the buffers of the kangaroo kernel, the variants */
+/* gpu.c: devices, sessions, the programs and launches of the linear kernel and the buffers of the kangaroo kernel */
 bool gpu_selftest_allowed(const rt_dev *d);
+const char *gpu_fmt_devused(const rt_dev *d, size_t used, char *out, size_t n);
 bool gpu_session_open(gpu_session *s, const rt_dev *d);
 void gpu_session_release(gpu_session *s);
 void gpu_linear_release_program(gpu_session *s);
+bool gpu_linear_prepare_variant(gpu_session *s, int variant);
 bool gpu_linear_prepare(gpu_session *s);
 bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L);
 void gpu_kang_release(gpu_session *s);
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds);
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
+
+/* gpu_tune.c: the variants of the kernels, their choice for a device (remembered on disk) and the herd size */
 int gpu_variants_of(const rt_dev *d, const int **v);
+int gpu_default_variant(const rt_dev *d);
 int gpu_kvariants_of(const rt_dev *d, int *out);
+size_t gpu_kang_threads(const gpu_session *s);
+void gpu_linear_autotune(gpu_session *s, int idx);
+void gpu_kang_autotune(gpu_session *s, int idx);
 
 /* gpu_selftest.c: the kernels against the CPU */
 bool gpu_test_fe(gpu_session *s);
