@@ -244,6 +244,7 @@ void kang_log_fp(const kang_state *ks, u8 fp[32]);                              
 FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32]);
 void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
 int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log);                 /* mu held: 1 inserted, 0 duplicate, 2 solved, -1 skipped */
+int kang_kind_coef(unsigned k);                                                          /* coefficient of x in the exponent of a point of kind k */
 
 kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream);
 void kang_worker_free(kang_worker *w);
@@ -265,6 +266,9 @@ void kang_round_avx512v(kang_worker *w);
 void kang_round_avx512i(kang_worker *w);
 void kang_round_avx512i2(kang_worker *w);     /* the same, two vectors at a time in the second half of the step (see kv_bwd_step) */
 typedef void (*kang_round_fn)(kang_worker *);
+/* The step variants this build has, the portable one first (kangaroo.c); `supported` tells whether this CPU can run one. */
+typedef struct { const char *id, *name; bool (*supported)(void); kang_round_fn fn; } kang_round_variant;
+const kang_round_variant *kang_round_variants(int *n);
 /* The fastest round on this CPU among those that pass kang_round_check (measured once per process). */
 kang_round_fn kang_pick_round(void);
 const char *kang_round_name(void);
