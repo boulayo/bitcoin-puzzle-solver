@@ -310,7 +310,7 @@ Kangaroo, **mean case** (≈ 1.06·√W steps, `KANG_C_MEAN`, section 8.10):
 | 160 | 9.06e+23 | 2.9e+08 years | 2.9e+07 years | 2.9e+06 years |
 
 Puzzles without a public key are out of reach for the hardware of a single computer from `n ≳ 70`; those with a known public
-key from `n ≳ 110–120`. The program stays correct for any `n ≤ 190` (kangaroo) / `n ≤ 255` (linear),
+key from `n ≳ 110–120`. The program stays correct for any `n ≤ 189` (kangaroo) / `n ≤ 255` (linear),
 but the time grows as `2^(n/2)` and `2^n`.
 
 ## 7. References

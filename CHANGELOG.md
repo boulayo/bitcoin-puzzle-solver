@@ -3,6 +3,52 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
 
+## [1.10.0] — 2026-10-28
+
+### Added
+- `shani`: on x86-64 CPUs with the SHA extensions (AMD Zen 2 and later, Intel Ice Lake and later) a hash160 stage that runs SHA-256 on
+  `sha256rnds2`/`sha256msg1`/`sha256msg2` and RIPEMD-160 on the AVX2 lanes, as the pzcore batch implementation `"shani"` (selected by name)
+  and as the CPU engine `--isa shani`, which `--isa auto` uses only if it measures faster. Without the extensions nothing changes. The
+  start-up check of every engine now also compares each lane of its hash with the scalar code. `make test-shani` runs the SHA-extension code
+  under QEMU.
+- The CI prints the speed of the CPU engines on every Linux runner, runs the self-test against the simulated CUDA driver, checks the puzzle
+  database, and has a job for the SHA-extension code under QEMU.
+
+### Changed
+- Release binaries are shipped without debug information and the CUDA modules are embedded compressed (a small LZ decoder, a dictionary per
+  family of modules): the Linux binary goes from 22.7 MB to 2.8 MB, the release archives from 5 MB to 1.5 MB. Crash backtraces of release
+  builds show no function names.
+- `kangaroo.c` and `gpu.c` are split by concern (`kang_log.c`, `kang_cpu.c`, `kang_selftest.c`, `gpu_tune.c`, `gpu_selftest.c`); the code of
+  the search loops is byte for byte the same.
+- The algorithms document is split: `docs/en/ALGORITHMS.md` describes what the program does, `docs/en/RESEARCH.md` is the log of what was
+  tried and measured. The time tables of the kangaroo and of the BSGS comparison are recomputed with the constant the program uses (1.06).
+- `report.txt` and `status.json` are written without waiting for the disk (fewer syncs); `status.json` lists every worker.
+- `hunt` checks everything that can make a campaign unusable before it creates the folder, and a command that created a campaign can resume it
+  when an option was cut down to fit the range.
+- The kangaroo accepts intervals up to 2^188 keys (puzzles up to 189), not 2^190: above 2^188 the 192-bit exponents of part of the walkers wrapped
+  and a third of the herd was wasted.
+
+### Fixed
+- Two simultaneous starts of the same new campaign could leave the seed of the loser in `campaign.conf`, so that a later resume scanned other blocks
+  than the ones recorded as done. The folder is now locked before the file is written, and `state.dat` records an identifier of the seed
+  (a `state.dat` of another seed is refused; files without it still load).
+- `where` on a BSGS campaign always printed the last step.
+- Two processes writing the shared caches (`machine_profile.txt`, `gpu_tune.txt`) could corrupt them or lose an update; the temporary file of an
+  atomic write is now unique and the profile is merged under a lock.
+- The first-run measurement saved a result even when nothing had been measured, and spent two minutes at every start when the cache folder was not
+  writable; Ctrl-C during it now ends it at once and removes its scratch folder.
+- Options: a rejected option is named correctly (`hunt -xq`), empty or oversized values of `-d`, `-r`, `-f` are refused instead of being cut,
+  `--mem` is capped; campaign names that Windows cannot have (`con`, `nul`, ...) are refused; log files are written in binary mode on Windows.
+- Kangaroo log: a read error was taken for the end of the file and the log was truncated there; a file shorter than its header blocked the
+  campaign; a log of a newer version was moved away as if older. The progress line showed the wrong counter for the points lost.
+- GPU: the start-up check of the linear kernel missed the centre key and the edges of each group, so a defect there would have passed; after a
+  failed launch the launch size is reduced; the recovery counter decays after ten good minutes (a laptop that sleeps every night no longer loses
+  its GPU); the self-tests use a random generator per device; one transient API error at start-up no longer excludes the GPU; Ctrl-C interrupts
+  a recovery wait; the kangaroo kernel is built once at start-up instead of eight times.
+- Build: the objects that print the version are rebuilt when `VERSION` changes; an interrupted generation of an embedded file no longer breaks the
+  next build; Apple clang is recognized from the first line of `--version` only; line endings are fixed for Windows checkouts. The release
+  workflow runs one release per version at a time and refuses to replace the assets of a tag that points to another commit unless asked.
+
 ## [1.9.1] — 2026-10-28
 
 ### Removed
