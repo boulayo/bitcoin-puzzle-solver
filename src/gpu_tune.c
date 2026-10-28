@@ -3,6 +3,7 @@
  * on disk), the size of the kangaroo herd and the GPU benchmark. */
 #include "gpu_priv.h"
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 #include "doctor.h"
 #include <math.h>
@@ -281,20 +282,6 @@ static double kang_measure(gpu_session *s)
     return rate;
 }
 
-/* "128", "128b" (products at every other walker), "128c" (every fourth), with a final "l" for the herd sized to the L2 cache -> variant id, 0 if malformed */
-static int parse_kvariant(const char *t)
-{
-    long n = 0;
-    const char *e = t;
-    while (*e >= '0' && *e <= '9' && n <= 0xFFFF) n = n * 10 + (*e++ - '0');   /* no strtol: glibc >= 2.38 would be needed */
-    if (n <= 0 || n > 0xFFFF) return 0;
-    int v = (int)n;
-    if (*e == 'b') { v |= 1 << 16; e++; }
-    else if (*e == 'c') { v |= 2 << 16; e++; }                  /* products every fourth walker */
-    if (*e == 'l') { v |= KV_L2FLAG; e++; }       /* herd sized to the L2 cache */
-    return *e ? 0 : v;
-}
-
 static void kang_set_variant(gpu_session *s, int v)
 {
     s->kvar = KV_KERNEL(v);
@@ -381,21 +368,25 @@ static void tune_pick(gpu_session *s, int idx, const tune_ops *op)
     tune_end(&s->info, op->kang);
 }
 
+/* PZ_GPU_TUNE=0: no tuning; =1: also the devices that are not GPUs are tuned (for tests). */
+static bool tune_off(const rt_dev *d)
+{
+    return g_env.gpu_tune == PZ_ENV_TUNE_OFF || !(d->is_gpu || g_env.gpu_tune == PZ_ENV_TUNE_ALL);
+}
+
 /* Chooses the variant of the linear kernel for this device (cached on disk per device and program version). */
 void gpu_linear_autotune(gpu_session *s, int idx)
 {
     const rt_dev *d = &s->info;
     s->variant = gpu_default_variant(d);
-    const char *forced = getenv("PZ_GPU_HALF");
-    if (forced && forced[0]) {
-        int h = pz_atoi(forced);
+    if (g_env.gpu_half) {
+        const int h = g_env.gpu_half;
         if (valid_variant(d, h)) { s->variant = h; rt_log(PZ_LOG_INFO, "GPU[%d]: kernel window set by PZ_GPU_HALF: %d", idx, h); }
-        else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_HALF=%s ignored (allowed values with %s: %s)", idx, forced, rt_api_name(d->api),
+        else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_HALF=%d ignored (allowed values with %s: %s)", idx, h, rt_api_name(d->api),
                     d->api == RT_CUDA ? "128, 256, 512" : "64, 128, 256, 512");
         return;
     }
-    const char *dis = getenv("PZ_GPU_TUNE");
-    if ((dis && dis[0] == '0') || !(d->is_gpu || (dis && dis[0] == '1'))) return;
+    if (tune_off(d)) return;
     tune_ops op = {.kang = false, .def = gpu_default_variant(d), .measure = linear_measure_variant, .set = linear_set_variant,
                    .check = gpu_test_linear, .finish = gpu_linear_release_program, .code = linear_code, .name = variant_name,
                    .cached_fmt = "GPU[%d]: kernel with window %s (from earlier tuning)",
@@ -414,16 +405,14 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     const rt_dev *d = &s->info;
     char nb[64];
     kang_set_variant(s, default_kvariant(d));
-    const char *forced = getenv("PZ_GPU_NK");
-    if (forced && forced[0]) {
-        const int v = parse_kvariant(forced);
+    if (g_env.gpu_nk) {
+        const int v = g_env.gpu_nk | g_env.gpu_nk_cfg << 16 | (g_env.gpu_nk_l2 ? KV_L2FLAG : 0);
         if (valid_kvariant(d, v)) { kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, kvariant_name(v, nb, sizeof nb)); }
-        else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, forced, rt_api_name(d->api),
+        else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, g_env.gpu_nk_text, rt_api_name(d->api),
                     d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c" : "32, 64, 128, with suffix b; with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2)");
         return;
     }
-    const char *dis = getenv("PZ_GPU_TUNE");
-    if ((dis && dis[0] == '0') || !(d->is_gpu || (dis && dis[0] == '1'))) return;
+    if (tune_off(d)) return;
     tune_ops op = {.kang = true, .def = default_kvariant(d), .measure = kang_measure_variant, .set = kang_set_variant,
                    .check = gpu_test_kang, .code = kang_code, .name = kvariant_name,
                    .cached_fmt = "GPU[%d]: kangaroo with %s (from earlier tuning)",
@@ -648,11 +637,9 @@ int gpu_tune_selftest(void)
 #define TCHK(cond) do { if (!(cond)) { fails++; printf("  GPU tuning: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
     char tmp[512];
     if (!pz_make_temp_dir(tmp, sizeof tmp, "pztune")) return 0;       /* nothing to test with: the other checks of the self-test say more */
-    static char env_new[640], env_old[640];
-    const char *old = getenv("XDG_CACHE_HOME");
-    snprintf(env_old, sizeof env_old, "XDG_CACHE_HOME=%s", old ? old : "");
-    snprintf(env_new, sizeof env_new, "XDG_CACHE_HOME=%s", tmp);
-    putenv(env_new);                                                    /* the saved choices of the test go to a folder of its own */
+    char old[PZ_ENV_PATH];
+    pz_strlcpy(old, g_env.xdg_cache_home, sizeof old);
+    pz_strlcpy(g_env.xdg_cache_home, tmp, sizeof g_env.xdg_cache_home);       /* the saved choices of the test go to a folder of its own */
     /* rates of the windows 128, 256 (the default) and 512; the window that is picked; the lines logged (the table, when one is made) */
     static const struct { double rate[3]; int picked; const char *table; } cases[] = {
         {{100e6, 102e6, 90e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 90.00 M; picking window 256"},   /* the default is the fastest */
@@ -740,7 +727,7 @@ int gpu_tune_selftest(void)
         rt_logseq_free(q);
         free(s);
     }
-    putenv(env_old);
+    pz_strlcpy(g_env.xdg_cache_home, old, sizeof g_env.xdg_cache_home);
     pz_remove_tree(tmp);
     return fails;
 }

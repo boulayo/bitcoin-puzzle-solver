@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 #include "../src/jobq.h"
+#include "../src/envopts.h"
 #include "../src/platform.h"
 #include <pzcore/hash.h>
 static int fails;
@@ -301,6 +302,7 @@ static void t_parts(void)
 
 int main(void)
 {
+    pz_env_init();
     /* Full coverage, no overlap, custom (non power of two) range with a short last chunk. */
     for (int variant = 0; variant < 3; variant++) {
         u64 start = 1000 + (u64)variant * 77, end = start + 300000 + (u64)variant * 1234 - 1;

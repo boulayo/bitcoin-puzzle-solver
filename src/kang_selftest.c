@@ -3,6 +3,7 @@
  * solution of a collision between every pair of kinds of walkers, and the log of distinguished points on a full disk. */
 #include "kangaroo_priv.h"
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 #ifndef _WIN32
 #include <signal.h>
@@ -215,13 +216,13 @@ static u64 table_occupied(const kang_state *ks)
     return n;
 }
 
-/* A test state whose table starts with 64 slots (PZ_TEST_DP_CAP) and may use `limit` entries' worth of memory. */
+/* A test state whose table starts with 64 slots (as with PZ_TEST_DP_CAP=64) and may use `limit` entries' worth of memory. */
 static kang_state *small_table_state(u64 limit)
 {
-    static char on[] = "PZ_TEST_DP_CAP=64", off[] = "PZ_TEST_DP_CAP=";
-    putenv(on);
+    const long long before = g_env.test_dp_cap;
+    g_env.test_dp_cap = 64;
     kang_state *ks = kang_make_test_state(40, 1);
-    putenv(off);
+    g_env.test_dp_cap = before;
     if (ks) ks->r->mem_limit = limit * sizeof(dp_rec);
     return ks;
 }

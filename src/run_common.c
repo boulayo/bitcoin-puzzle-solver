@@ -6,6 +6,7 @@
 #include <pzcore/hash.h>
 #include "ui.h"
 #include "platform.h"
+#include "envopts.h"
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
@@ -412,8 +413,7 @@ static void ui_draw(run_ctx *r, const progress_info *pi, bool final)
     ui_mode m = effective_ui(r);
     if (m == UI_FULL) {
         char buf[4096];
-        const char *nc = getenv("NO_COLOR");
-        int lines = ui_render_full(r, pi, &es, final, term_cols(), !(nc && nc[0]), buf, sizeof buf);
+        int lines = ui_render_full(r, pi, &es, final, term_cols(), !g_env.no_color, buf, sizeof buf);
         pz_ui_block(buf, lines);
     } else if (m == UI_LINE) {
         char buf[512];

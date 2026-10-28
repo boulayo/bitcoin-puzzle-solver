@@ -5,6 +5,7 @@
 #include "gpu_priv.h"
 #include "doctor.h"
 #include "platform.h"
+#include "envopts.h"
 #include "cpu_engine.h"
 #include <pzcore/hash.h>
 #include "outfmt.h"
@@ -42,9 +43,8 @@ void gpu_set_api_pref(gpu_api_pref p) { g_pref = p; g_pref_from_env = true; }
 static gpu_api_pref api_pref(void)
 {
     if (!g_pref_from_env) {
-        const char *e = getenv("PZ_GPU_API");
-        if (e && !strcmp(e, "cuda")) g_pref = GPU_API_CUDA;
-        else if (e && !strcmp(e, "opencl")) g_pref = GPU_API_OPENCL;
+        if (g_env.gpu_api == PZ_ENV_API_CUDA) g_pref = GPU_API_CUDA;
+        else if (g_env.gpu_api == PZ_ENV_API_OPENCL) g_pref = GPU_API_OPENCL;
         g_pref_from_env = true;
     }
     return g_pref;
@@ -61,7 +61,7 @@ static bool default_choice(const rt_dev *d)
     }
 }
 
-bool gpu_selftest_allowed(const rt_dev *d) { return default_choice(d) || (!d->is_gpu && pz_env_on("PZ_OPENCL_ALL")) || (d->dup_of >= 0 && pz_env_on("PZ_OPENCL_ALL")); }
+bool gpu_selftest_allowed(const rt_dev *d) { return default_choice(d) || (!d->is_gpu && g_env.opencl_all) || (d->dup_of >= 0 && g_env.opencl_all); }
 
 static bool in_filter(const char *f, int idx)
 {

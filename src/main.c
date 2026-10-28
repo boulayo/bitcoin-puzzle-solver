@@ -12,6 +12,7 @@
 #include "campaigns.h"
 #include "bsgs.h"
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 #include <getopt.h>
 #include <math.h>
@@ -852,7 +853,7 @@ static int cmd_hunt(int argc, char **argv)
         r->gpu_boost = false;
     }
     gpu_set_boost(r->use_gpu && r->gpu_boost);
-    if (!o.no_tune && !pz_env_on("PZ_NO_PROFILE")) profile_rate_setup(r);
+    if (!o.no_tune && !g_env.no_profile) profile_rate_setup(r);
 
     char idb[17], rs[80], re[80], rsz[80], addr[80];
     seed_to_id(r->cfg.seed, idb);
@@ -1282,6 +1283,7 @@ static int cmd_devices(void)
 int main(int argc, char **argv)
 {
     pz_console_init();
+    pz_env_init();                                         /* the only place that reads the environment (envopts.h) */
     if (argc < 2) {
         usage_main(stderr);
         if (pz_console_is_own()) {

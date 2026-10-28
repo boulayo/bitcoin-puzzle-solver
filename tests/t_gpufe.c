@@ -3,6 +3,7 @@
  * the carry flag emulated exactly as the PTX ISA defines it) against the CPU implementation: random values and every
  * combination of the limb patterns that trigger the rare carry/borrow paths (values near 0, near p, near 2^256). */
 #include "../src/common.h"
+#include "../src/envopts.h"
 #include <pzcore/fe.h>
 #include <stdio.h>
 
@@ -72,6 +73,7 @@ static void check(const uint a[8], const uint b[8])
 
 int main(void)
 {
+    pz_env_init();
     /* limb patterns around the carry boundaries of p = 2^256 - 2^32 - 977 */
     static const uint pat[] = {0u, 1u, 2u, 0x3D0u, 0x3D1u, 0x3D2u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFC2Eu, 0xFFFFFC2Fu, 0xFFFFFC30u,
                                0xFFFFFFFDu, 0xFFFFFFFEu, 0xFFFFFFFFu};

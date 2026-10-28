@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_eta.c - checks of the completion-time models. */
 #include "../src/eta.h"
+#include "../src/envopts.h"
 #include <stdio.h>
 
 static int fails;
@@ -95,6 +96,7 @@ static void t_rate_est(void)
 
 int main(void)
 {
+    pz_env_init();
     /* uniform: half of the remaining keys for 50%, all of them for certainty */
     eta_in u = {ETA_UNIFORM, 1000, 4000, 0, false, 0};
     CHECK(near((double)eta_units_for_prob(&u, 0.5), 2000, 1e-12));

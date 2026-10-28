@@ -2,6 +2,7 @@
 /* util.c - logging, formatting, file helpers. */
 #include "common.h"
 #include "platform.h"
+#include "envopts.h"
 #include <pzcore/u256.h>
 #include <stdarg.h>
 #include <time.h>
@@ -643,21 +644,15 @@ long long pz_file_count(const char *path, const char *needle)
     return count;
 }
 
-bool pz_env_on(const char *name)
-{
-    const char *v = getenv(name);
-    return v && v[0] && strcmp(v, "0") != 0;
-}
-
 bool pz_cache_file(const char *name, char *out, size_t n)
 {
-    const char *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME"), *la = getenv("LOCALAPPDATA");
-    char dir[480];
-    if (x && x[0]) snprintf(dir, sizeof dir, "%s/pzsolve", x);
+    const char *x = g_env.xdg_cache_home, *h = g_env.home, *la = g_env.local_app_data;
+    char dir[PZ_ENV_PATH + 32];                  /* room for any folder name kept in g_env and the part after it */
+    if (x[0]) snprintf(dir, sizeof dir, "%s/pzsolve", x);
 #ifdef _WIN32
-    else if (la && la[0]) snprintf(dir, sizeof dir, "%s/pzsolve", la);
+    else if (la[0]) snprintf(dir, sizeof dir, "%s/pzsolve", la);
 #endif
-    else if (h && h[0]) snprintf(dir, sizeof dir, "%s/.cache/pzsolve", h);
+    else if (h[0]) snprintf(dir, sizeof dir, "%s/.cache/pzsolve", h);
     else return false;
     (void)la;
     if (pz_mkdir_p(dir) != 0) return false;

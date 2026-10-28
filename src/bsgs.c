@@ -5,6 +5,7 @@
 #include <pzcore/hash.h>
 #include "kangaroo.h"
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -254,8 +255,7 @@ static void vengine_pick(void)
 {
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
     const bs_vengine *cand[] = {&BSV_AVX512I, &BSV_AVX512V, &BSV_AVX2V};    /* fastest first */
-    const char *off = getenv("PZ_BSGS_SCALAR");                             /* diagnostics: scalar windows only */
-    if (off && off[0] == '1') return;
+    if (g_env.bsgs_scalar) return;                                          /* diagnostics: scalar windows only */
     for (size_t i = 0; i < sizeof cand / sizeof *cand; i++) {
         if (!cand[i]->supported()) continue;
         if (vengine_check(cand[i])) { g_vengine = cand[i]; return; }

@@ -9,6 +9,7 @@
 #include "gpu.h"
 #include "bench_tg.h"
 #include "platform.h"
+#include "envopts.h"
 #include "profile.h"
 #include "puzzles.h"
 #include "bsgs.h"
@@ -217,11 +218,9 @@ static void t_rate_memory(void)
 {
     char tmp[512];
     if (!pz_make_temp_dir(tmp, sizeof tmp, "pzrate")) { pz_result_line("speed remembered per configuration", "not tested: no temporary folder"); return; }
-    static char env_new[640], env_old[640];
-    const char *old = getenv("XDG_CACHE_HOME");
-    snprintf(env_old, sizeof env_old, "XDG_CACHE_HOME=%s", old ? old : "");
-    snprintf(env_new, sizeof env_new, "XDG_CACHE_HOME=%s", tmp);
-    putenv(env_new);
+    char old[PZ_ENV_PATH];
+    pz_strlcpy(old, g_env.xdg_cache_home, sizeof old);
+    pz_strlcpy(g_env.xdg_cache_home, tmp, sizeof g_env.xdg_cache_home);
     run_ctx *a = rate_ctx(4, false);
     profile_rate_setup(a);
     CHECK(a->rate_prior == 0 && a->rate_prior_kind == 0 && a->remember_rate != NULL);       /* nothing known yet */
@@ -263,7 +262,7 @@ static void t_rate_memory(void)
     CHECK(b->rate_prior == 700e6);                                                           /* and does not touch the unlimited one */
     free(g); free(h);
     free(a); free(b); free(c); free(d); free(e); free(f);
-    putenv(env_old);
+    pz_strlcpy(g_env.xdg_cache_home, old, sizeof g_env.xdg_cache_home);
     pz_remove_tree(tmp);
     pz_result_line("speed remembered per configuration", "OK");
 }

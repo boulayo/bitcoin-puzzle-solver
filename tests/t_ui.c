@@ -2,6 +2,7 @@
 /* t_ui.c - the dashboard / summary renderers: no overflow, no control characters when colours are off, every line fits the
  * terminal width, sane output for degenerate numbers (zero rate, infinite ETA, empty progress, huge counts). */
 #include "../src/ui.h"
+#include "../src/envopts.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -77,6 +78,7 @@ static void test_wrap(void)
 
 int main(void)
 {
+    pz_env_init();
     static run_ctx r;
     memset(&r, 0, sizeof r);
     r.cfg.puzzle = 71;

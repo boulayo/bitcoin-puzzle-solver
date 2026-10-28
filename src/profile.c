@@ -5,6 +5,7 @@
 #include "kangaroo.h"
 #include "doctor.h"
 #include "platform.h"
+#include "envopts.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -125,7 +126,7 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
 
 void profile_apply(run_ctx *r, bool force, bool disable)
 {
-    if (disable || pz_env_on("PZ_NO_PROFILE")) return;
+    if (disable || g_env.no_profile) return;
     if (r->cfg.mode == MODE_BSGS || r->limit_pct) return;       /* --limit: no measurement at full load, no remembered choice */
     if (r->threads_explicit || r->gpu_filter[0] || !r->use_cpu || !r->use_gpu) return;   /* the user chose: nothing to decide */
     if (gpu_count_usable() <= 0) return;

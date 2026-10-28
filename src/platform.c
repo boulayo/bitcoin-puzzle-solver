@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* platform.c - see platform.h. POSIX implementation first (Linux, macOS), Windows (MinGW-w64) second. */
 #include "platform.h"
+#include "envopts.h"
 #include <errno.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
@@ -118,8 +119,7 @@ bool pz_is_dir(const char *path)
 
 bool pz_make_temp_dir(char *out, size_t n, const char *prefix)
 {
-    const char *t = getenv("TMPDIR");
-    if (!t || !*t) t = "/tmp";
+    const char *t = g_env.tmpdir[0] ? g_env.tmpdir : "/tmp";
     if ((size_t)snprintf(out, n, "%s/%sXXXXXX", t, prefix) >= n) return false;
     return mkdtemp(out) != NULL;
 }
@@ -340,8 +340,7 @@ bool pz_console_is_own(void) { return false; }
 
 bool pz_stderr_is_terminal(void)
 {
-    const char *term = getenv("TERM");
-    return isatty(2) && !(term && !strcmp(term, "dumb"));   /* a dumb terminal cannot move the cursor */
+    return isatty(2) && !g_env.term_dumb;   /* a dumb terminal cannot move the cursor */
 }
 
 int pz_terminal_cols(void)
@@ -573,7 +572,7 @@ void *pz_map_zeroed(size_t bytes, bool *huge)
     if (huge) *huge = false;
     void *m = NULL;
     SIZE_T lp = GetLargePageMinimum();
-    if (lp && bytes >= ((size_t)1 << 30) && !pz_env_on("PZ_NO_LARGE_PAGES") && enable_lock_memory_privilege()) {
+    if (lp && bytes >= ((size_t)1 << 30) && !g_env.no_large_pages && enable_lock_memory_privilege()) {
         size_t rounded = (bytes + lp - 1) / lp * lp;
         m = VirtualAlloc(NULL, rounded, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);   /* zeroed, locked in RAM */
         if (m && huge) *huge = true;

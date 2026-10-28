@@ -71,7 +71,7 @@ endif
 BUILD   ?= build
 BIN     := $(BUILD)/pzsolve$(EXE)
 
-CORE_SRC := platform util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
+CORE_SRC := platform envopts util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c
@@ -271,7 +271,7 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 	$(CC) $(COMMON) -o $@ $^ $(LDLIBS)
 
 # Unit tests (built against the same sources)
-TESTS := t_core t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
+TESTS := t_core t_env t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
 TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_mods.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
 # t_gpufe: the kernel field arithmetic compiled for the host, PTX carry-chain variant (emulated) and portable variant

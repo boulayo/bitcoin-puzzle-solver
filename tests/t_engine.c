@@ -4,6 +4,7 @@
  * With PZ_EXPECT_SHANI=1 in the environment the test fails unless the "shani" engine (the SHA extensions of x86-64) is supported and was
  * tested, so that a run on an emulated CPU (make test-shani) cannot pass by skipping it. */
 #include "../src/cpu_engine.h"
+#include "../src/envopts.h"
 #include <pzcore/hash.h>
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
@@ -198,6 +199,7 @@ static void test_engine(const cpu_engine *e)
 
 int main(int argc, char **argv)
 {
+    pz_env_init();
     cpu_tables_init();
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);
@@ -218,8 +220,7 @@ int main(int argc, char **argv)
         tested++;
         shani_tested |= !strcmp(all[i]->name, "shani");
     }
-    const char *expect = getenv("PZ_EXPECT_SHANI");
-    if (expect && !strcmp(expect, "1") && !shani_tested) { printf("t_engine: PZ_EXPECT_SHANI=1 but the shani engine was not tested\n"); fails++; }
+    if (g_env.expect_shani && !shani_tested) { printf("t_engine: PZ_EXPECT_SHANI=1 but the shani engine was not tested\n"); fails++; }
     CHECK(tested >= 1);
     /* reference scan agrees on a tiny range */
     {

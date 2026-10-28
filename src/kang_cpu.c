@@ -4,6 +4,7 @@
 #include "kangaroo_priv.h"
 #include "cpu_engine.h"
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 
 /* ---------------- CPU worker ---------------- */
@@ -137,8 +138,8 @@ static void kround_pick(void)
 {
     g_kround = 0;
     double best = 0;
-    const char *forced = getenv("PZ_KANG_ROUND");          /* diagnostics: base, x86, avx2v, avx512v, avx512i */
-    if (forced && forced[0]) {
+    const char *forced = g_env.kang_round;                 /* diagnostics: base, x86, avx2v, avx512v, avx512i */
+    if (forced[0]) {
         for (int i = 0; i < NKROUNDS; i++)
             if (!strcmp(forced, KROUNDS[i].id) && KROUNDS[i].supported()) { g_kround = i; return; }
         pz_log(PZ_LOG_WARN, "PZ_KANG_ROUND=%s is not available on this CPU: choosing automatically", forced);
@@ -150,7 +151,7 @@ static void kround_pick(void)
             continue;
         }
         double r = kround_rate(KROUNDS[i].fn);
-        if (pz_env_on("PZ_KANG_VERBOSE")) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, r / 1e6);
+        if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, r / 1e6);
         if (r > best * 1.03) { best = r; g_kround = i; }
     }
     kround_choose_pair();
@@ -257,7 +258,7 @@ static void kround_choose_pair(void)
         r[v] = kbench_run(ks, &s, n, fns, pos, 0.15);
     }
     kang_free_test_state(ks);
-    if (pz_env_on("PZ_KANG_VERBOSE"))
+    if (g_env.kang_verbose)
         fprintf(stderr, "kangaroo CPU: IFMA with %d threads: one vector %.2f, two vectors %.2f M steps/s\n", n, r[0] / 1e6, r[1] / 1e6);
     g_kround = r[1] > r[0] * 1.03 ? two : one;
 }
@@ -329,8 +330,7 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
 static kang_round_fn kang_round_for_slot(const sysinfo_t *s, int slot)
 {
     kang_round_fn fn = kang_pick_round();
-    const char *mix = getenv("PZ_KANG_MIX");
-    if (!mix || mix[0] != '1' || s->ncpu <= 0) return fn;
+    if (!g_env.kang_mix || s->ncpu <= 0) return fn;
     const int pos = slot % s->ncpu;
     int p[1];
     if (sysinfo_core_cpus(s, s->core_of[pos], p, 1) && p[0] == pos) return fn;

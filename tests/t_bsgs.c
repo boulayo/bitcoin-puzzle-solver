@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_bsgs.c - baby-step giant-step: coverage arithmetic, table build/persistence, exhaustive solves with planted keys. */
 #include "../src/bsgs.h"
+#include "../src/envopts.h"
 #include "../src/bsgs_priv.h"
 #include "../src/cpu_engine.h"
 #include "../src/platform.h"
@@ -722,6 +723,7 @@ static void t_group_variants(void)
 
 int main(void)
 {
+    pz_env_init();
     pz_ec_init();
     t_coverage();
     t_sizing();

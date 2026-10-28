@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* cpu_common.c - tables, engine registry and ISA detection for the CPU engines. */
 #include "cpu_engine.h"
+#include "envopts.h"
 #include <pzcore/cpu.h>
 #include <pzcore/hash.h>
 #include <pthread.h>
@@ -68,8 +69,7 @@ bool cpu_has_avx2(void) { return pz_cpu_has_avx2(); }
 bool cpu_has_avx512(void) { return pz_cpu_has_avx512(); }
 bool cpu_has_ifma(void)
 {
-    const char *f = getenv("PZ_ASSUME_IFMA");
-    if (f && !strcmp(f, "1")) return pz_cpu_has_avx512();
+    if (g_env.assume_ifma) return pz_cpu_has_avx512();
     return pz_cpu_has_ifma();
 }
 bool cpu_has_shani(void) { return pz_cpu_has_shani(); }

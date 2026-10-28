@@ -2,6 +2,7 @@
 /* bench_tg.c - the scan shared by 'bench --together' and the first-run calibration (see bench_tg.h). */
 #include "bench_tg.h"
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 #include <math.h>
 #include <stdarg.h>
@@ -32,17 +33,6 @@ void tg_say(const char *fmt, ...)
     }
     pz_fputs_wrap(stdout, buf, PZ_LINE_MAX, 4);
     fflush(stdout);
-}
-
-double tg_scale(void)
-{
-    const char *e = getenv("PZ_BENCH_SCALE");
-    if (e && e[0]) {
-        char *end;
-        double v = strtod(e, &end);
-        if (end != e && !*end && v >= 0.01 && v <= 100) return v;
-    }
-    return 1.0;
 }
 
 /* Sleeps `secs` seconds, less when the run is stopped (r->stop) or the program is interrupted (Ctrl-C): then the stop flag of the run is set, so
@@ -179,7 +169,7 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
             if (!dup && v[i] <= c->full) cand[nc++] = v[i];
         }
     }
-    const double sc = tg_scale(), settle = 2.0 * sc, window = 8.0 * sc;
+    const double sc = g_env.bench_scale, settle = 2.0 * sc, window = 8.0 * sc;
     tg_printf("  each configuration: %.0f s of settling, then %.0f s of measuring (the noise is typically 2-3%%)\n", settle, window);
     /* The first configuration is the default one: measured right after the herds are built, with the GPU clocks still rising, it
      * would look worse than it is. A warm-up at the default settings comes first and is thrown away. */

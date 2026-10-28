@@ -61,8 +61,6 @@ void pz_log_set_file(const char *path);
 void pz_log_set_verbose(int v);
 void pz_log_set_quiet(int q);   /* 0: everything is printed, 1: warnings and errors only, 2: nothing (the self-tests that provoke errors on purpose) */
 int pz_log_quiet(void);
-/* An on/off environment variable: set to anything but "" or "0" (PZ_NO_CUDA=0 does not switch CUDA off). */
-bool pz_env_on(const char *name);
 /* In-place dashboard: `text` is nlines lines joined by '\n' (no trailing newline). It replaces the previous block;
  * log messages erase it first and the reporter redraws it below them. */
 void pz_ui_block(const char *text, int nlines);

@@ -4,6 +4,7 @@
 #include "kangaroo_priv.h"
 #include <pzcore/hash.h>
 #include "platform.h"
+#include "envopts.h"
 #include "outfmt.h"
 #include <math.h>
 
@@ -265,8 +266,7 @@ kang_state *kang_create(run_ctx *r)
         long double k = ks->sqrtW / (256.0L * nthr);
         ks->K_thread = k < 16 ? 16 : (k > KANG_K_THREAD_MAX ? KANG_K_THREAD_MAX : (int)k);
         ks->K_thread = (ks->K_thread + 15) & ~15;          /* whole vectors for the lane-parallel rounds */
-        const char *kt = getenv("PZ_TEST_KTHREAD");        /* tests: walkers per CPU thread (the regime of long walks on a small interval) */
-        if (kt && pz_atoi(kt) >= 16) ks->K_thread = (pz_atoi(kt) + 15) & ~15;
+        if (g_env.test_kthread) ks->K_thread = (g_env.test_kthread + 15) & ~15;   /* tests: walkers per CPU thread (the regime of long walks on a small interval) */
     }
     ks->K_total = ks->K_thread * nthr + k_gpu;
     return ks;
@@ -345,10 +345,9 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     u128 mean3;
     {
         const pz_u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */
-        const char *tj = getenv("PZ_TEST_JUMP");                            /* tests: mean jump in units of sqrt(W) */
         pz_u256 m;
-        if (tj && pz_atoi(tj) > 0) {
-            m = pz_u256_mul_u32(&rw, (u32)pz_atoi(tj));
+        if (g_env.test_jump) {                                              /* tests: mean jump in units of sqrt(W) */
+            m = pz_u256_mul_u32(&rw, (u32)g_env.test_jump);
         } else {
             m = u256_mul_u64(&rw, qw.w[0]);                                 /* W^(3/4); W^(1/4) < 2^48 */
             m = pz_u256_shr(&m, 4);                                            /* the mean jump is W^(3/4) / 16 */
@@ -390,8 +389,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     u64 want = (u64)(n_target / 0.6L) + 4096;
     u64 cap = 4096;
     while (cap < want && (cap << 1) <= max_entries) cap <<= 1;   /* a power of two, never above the memory limit */
-    const char *tc = getenv("PZ_TEST_DP_CAP");                                    /* tests: force a tiny table to exercise growth (empty: unset) */
-    if (tc && *tc) cap = pz_strtou64(tc);
+    if (g_env.test_dp_cap >= 0) cap = (u64)g_env.test_dp_cap;                    /* tests: force a tiny table to exercise growth */
     if (cap < 64) cap = 64;
     ks->cap = cap;
     ks->mask = cap - 1;

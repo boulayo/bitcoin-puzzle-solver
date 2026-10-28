@@ -45,9 +45,6 @@ void tg_section(const char *title);                    /* a "== title" heading, 
 void tg_say(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));      /* printf for the scan: wrapped at 128 columns, flushed */
 #define tg_printf tg_say
 
-/* Seconds scale of the measurements (environment variable PZ_BENCH_SCALE, default 1: 2 s of settling and 8 s of measurement). */
-double tg_scale(void);
-
 /* Runs the scan (prints the table) and returns the verdict. Stops early when r->stop is set. */
 tg_choice tg_scan(const tg_scan_cfg *c);
 /* The GPUs left on in the verdict as a --gpu list ("0,2"); empty string when all are kept. */

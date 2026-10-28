@@ -7,8 +7,10 @@
  * kernels were not compiled for, wrong argument lists - any misuse by the host code fails the call and is printed.
  * What it cannot check is the PTX itself (that is the NVIDIA driver's JIT) - the GPU self-test covers it at start-up.
  *
- * Environment: PZ_MOCK_DEVICES=n shows n devices (PZ_MOCK_SAME_NAME=1: all with one name), PZ_MOCK_COUNT=1 reports the modules loaded and the
- * kernels launched at exit, PZ_MOCK_FAIL_FILE=path fails one launch while that file exists. */
+ * Environment, read once in the first cuInit (mock_env): PZ_MOCK_DEVICES=n shows n devices (PZ_MOCK_SAME_NAME=1: all with one name),
+ * PZ_MOCK_COUNT=1 reports the modules loaded and the kernels launched at exit, PZ_MOCK_FAIL_FILE=path fails one launch while that file
+ * exists. The two-state variables are on with any value except empty and 0, as in pzsolve. This library is not linked with pzsolve, so it
+ * has its own small reader. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +70,8 @@ enum { E_OK = 0, E_INVALID_VALUE = 1, E_OUT_OF_MEMORY = 2, E_INVALID_IMAGE = 200
 static int g_init;
 static int g_ndev = 1;                  /* PZ_MOCK_DEVICES=n (1 to 8): how many devices the driver shows */
 static int g_same_name;                 /* PZ_MOCK_SAME_NAME=1: they all have the same name, like the cards of one model in a machine */
+static int g_count;                     /* PZ_MOCK_COUNT=1: report the counts at exit */
+static char g_fail_file[1024];          /* PZ_MOCK_FAIL_FILE=path (empty: none) */
 static int g_ctx_tokens[MAX_DEVICES];   /* a context is the address of the token of its device */
 static void *g_current;                 /* the context last made current (checked only for "there is one") */
 #define CURRENT() __atomic_load_n(&g_current, __ATOMIC_RELAXED)
@@ -113,16 +117,40 @@ static void report_counts(void)
     fprintf(stderr, "[mock CUDA] cuModuleLoadDataEx: %lu, cuModuleUnload: %lu, cuLaunchKernel: %lu\n", g_loads, g_unloads, g_launches);
 }
 
+static int mock_flag(const char *name)
+{
+    const char *v = getenv(name);
+    return v && v[0] && strcmp(v, "0") != 0;
+}
+
+/* The only place of this file that reads the environment. */
+static void mock_env(void)
+{
+    g_count = mock_flag("PZ_MOCK_COUNT");
+    const char *nd = getenv("PZ_MOCK_DEVICES");
+    if (nd && nd[0]) {
+        char *end;
+        const long n = strtol(nd, &end, 10);
+        if (*end) fprintf(stderr, "[mock CUDA] PZ_MOCK_DEVICES=%s ignored (expected a number from 1 to %d)\n", nd, MAX_DEVICES);
+        else {
+            g_ndev = n < 1 ? 1 : n > MAX_DEVICES ? MAX_DEVICES : (int)n;
+            g_same_name = mock_flag("PZ_MOCK_SAME_NAME");
+        }
+    }
+    const char *ff = getenv("PZ_MOCK_FAIL_FILE");
+    if (ff && strlen(ff) < sizeof g_fail_file) strcpy(g_fail_file, ff);
+}
+
 EXPORT CUresult cuInit(unsigned flags)
 {
     if (flags) return fail(E_INVALID_VALUE, "cuInit flags");
-    if (!g_init && getenv("PZ_MOCK_COUNT")) atexit(report_counts);
-    if (!g_init && getenv("PZ_MOCK_DEVICES")) {
-        const int n = atoi(getenv("PZ_MOCK_DEVICES"));
-        g_ndev = n < 1 ? 1 : n > MAX_DEVICES ? MAX_DEVICES : n;
-        g_same_name = getenv("PZ_MOCK_SAME_NAME") != NULL;
+    lock(&g_lock);                                 /* the GPUs start in one thread each: the environment is read once */
+    if (!g_init) {
+        mock_env();
+        if (g_count) atexit(report_counts);
+        g_init = 1;
     }
-    g_init = 1;
+    unlock(&g_lock);
     return E_OK;
 }
 EXPORT CUresult cuDriverGetVersion(int *v) { *v = 12080; return E_OK; }
@@ -292,14 +320,11 @@ static CUresult launch_kernel(void *fv, unsigned gx, unsigned gy, unsigned gz, u
     COUNT(g_launches);
     /* PZ_MOCK_FAIL_FILE=path: while that file exists, the next launch fails once and removes it, like a device reset after
      * the machine slept (the test creates the file while a campaign runs) */
-    static const char *fault_file;
-    static int fault_init;
     lock(&g_lock);
-    if (!fault_init) { fault_init = 1; fault_file = getenv("PZ_MOCK_FAIL_FILE"); }
-    FILE *fp = fault_file ? fopen(fault_file, "r") : NULL;
+    FILE *fp = g_fail_file[0] ? fopen(g_fail_file, "r") : NULL;
     if (fp) {
         fclose(fp);
-        remove(fault_file);
+        remove(g_fail_file);
     }
     unlock(&g_lock);
     if (fp) return fail(E_LAUNCH, "injected failure (PZ_MOCK_FAIL_FILE)");

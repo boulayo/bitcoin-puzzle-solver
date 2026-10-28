@@ -2,6 +2,7 @@
 /* t_core.c - the platform layer's file helpers. (The primitives - field, curve, hashes, addresses, permutation - are tested in
  * lib/pzcore/tests, which link nothing but the library.) */
 #include "../src/platform.h"
+#include "../src/envopts.h"
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
 #include <assert.h>
@@ -277,6 +278,7 @@ static void t_kv(void)
 
 int main(void)
 {
+    pz_env_init();
     {   /* the library is linked and gives the well-known answer for key 1 */
         pz_u256 k = pz_u256_from_u64(1);
         pz_ge p;

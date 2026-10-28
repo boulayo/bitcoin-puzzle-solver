@@ -2,6 +2,7 @@
 /* t_fuzz.c - robustness against corrupted or hostile input files and strings: nothing may crash, hang, leak or read out of
  * bounds (run it under ASan/UBSan: tools/verify.sh does). Deterministic: a fixed-seed generator mutates valid inputs. */
 #include "../src/bsgs.h"
+#include "../src/envopts.h"
 #include "../src/platform.h"
 #include "../src/campaigns.h"
 #include <pzcore/address.h>
@@ -355,6 +356,7 @@ static void check_shown_state(const char *dir)
 
 int main(void)
 {
+    pz_env_init();
     pz_ec_init();
     char dir[600];
     if (!pz_make_temp_dir(dir, sizeof dir, "pzfuzz")) { puts("mkdtemp"); return 2; }

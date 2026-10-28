@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* rt.c - dispatch of the GPU runtime interface to OpenCL or CUDA, and the combined device list. */
 #include "rt_priv.h"
+#include "envopts.h"
 #include <stdarg.h>
 #include <pthread.h>
 
@@ -97,8 +98,8 @@ int rt_enumerate(rt_dev *out, int max, char *note, size_t nl)
 {
     char n1[160] = "", n2[160] = "";
     int nc = 0, no = 0;
-    if (!pz_env_on("PZ_NO_CUDA")) nc = rtcu_enumerate(out, max, n1, sizeof n1);
-    if (!pz_env_on("PZ_NO_OPENCL")) no = rtcl_enumerate(out + nc, max - nc, n2, sizeof n2);
+    if (!g_env.no_cuda) nc = rtcu_enumerate(out, max, n1, sizeof n1);
+    if (!g_env.no_opencl) no = rtcl_enumerate(out + nc, max - nc, n2, sizeof n2);
     int n = nc + no;
     for (int i = 0; i < n; i++) { out[i].index = i; out[i].dup_of = -1; }
     /* the NVIDIA OpenCL driver exposes the same GPUs that CUDA drives: pair them by PCI location, or by name and order
