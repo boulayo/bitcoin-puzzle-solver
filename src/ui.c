@@ -91,21 +91,44 @@ static void percent(double frac, char *buf, size_t n)
     else snprintf(buf, n, "%.3e%%", pct);
 }
 
-/* Appends a line to buf (truncated to `cols - 1` characters), separated by '\n'. Returns the new length. */
+/* Shortens a line of the panel to at most maxw columns without cutting a word: first a remark in brackets at its end ("(peak ...)",
+ * "[starting: ...]"), then its last fields ("a | b | c", "a  |  b"), and as a last resort its last words. */
+static void fit_line(char *t, int maxw)
+{
+    while ((int)strlen(t) > maxw) {
+        size_t l = strlen(t);
+        size_t cut = 0;
+        if (t[l - 1] == ')' || t[l - 1] == ']') {
+            const char close = t[l - 1], open = close == ')' ? '(' : '[';
+            int depth = 0;
+            for (size_t i = l; i-- > 0;) {
+                if (t[i] == close) depth++;
+                else if (t[i] == open && --depth == 0) { cut = i; break; }
+            }
+        }
+        if (!cut) {
+            const char *bar = NULL;
+            for (const char *q = strstr(t, " |"); q; q = strstr(q + 1, " |")) bar = q;
+            if (bar && bar - t > 14) cut = (size_t)(bar - t);
+        }
+        if (!cut) {
+            for (size_t i = (size_t)maxw; i > 0; i--)
+                if (t[i] == ' ') { cut = i; break; }
+        }
+        if (!cut) { t[maxw] = 0; return; }       /* a single word longer than the line */
+        while (cut > 0 && t[cut - 1] == ' ') cut--;
+        t[cut] = 0;
+    }
+}
+
+/* Appends a line to buf (shortened to `cols - 1` columns by fit_line), separated by '\n'. Returns the new length. */
 static size_t add_line(char *buf, size_t n, size_t len, int *lines, int cols, const char *prefix, const char *suffix, const char *text)
 {
     char t[640];
     snprintf(t, sizeof t, "%s", text);
     int maxw = cols - 1;
     if (maxw < 20) maxw = 20;
-    if ((int)strlen(t) > maxw) {
-        /* drop whole fields ("a | b | c", "a  |  b") rather than cutting one in half; a hard cut only when there is no separator */
-        int cut = maxw;
-        for (int i = maxw - 1; i >= maxw / 2; i--)
-            if (t[i] == '|' && t[i - 1] == ' ') { cut = i - 1; break; }
-        while (cut > 0 && t[cut - 1] == ' ') cut--;
-        t[cut] = 0;
-    }
+    fit_line(t, maxw);
     int w = snprintf(buf + len, n - len, "%s%s%s%s", *lines ? "\n" : "", prefix, t, suffix);
     if (w < 0 || (size_t)w >= n - len) return len;   /* does not fit: drop the line */
     (*lines)++;
@@ -128,6 +151,8 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     if (r->cfg.puzzle) snprintf(pz, sizeof pz, " | puzzle #%d", r->cfg.puzzle);   /* a custom target: the campaign name says it all */
     snprintf(ln, sizeof ln, "pzsolve %s | campaign %s%s | %s | seed %.8s | %s", PZ_VERSION, r->cfg.name, pz,
              mode_name(r->cfg.mode), idb, ui_state_name(r, final));
+    if ((int)strlen(ln) > cols - 1)                    /* a narrow terminal: the state matters more than the version */
+        snprintf(ln, sizeof ln, "campaign %s%s | %s | seed %.8s | %s", r->cfg.name, pz, mode_name(r->cfg.mode), idb, ui_state_name(r, final));
     len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
 
     pz_u256 rsz = cfg_range_size(&r->cfg);
@@ -235,14 +260,18 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
         }
         len = add_line(buf, n, len, &lines, cols, "", "", ln);
         if (pi->est_state == RATE_PROVISIONAL) {
-            const char *why = r->rate_prior_kind == 2 ? "starts from the remembered steady speed, settles in about 2 minutes"
-                            : r->rate_prior_kind == 1 ? "cold speed from the tuning run, settles in about 2 minutes"
-                            : "average of the first seconds, settles in about 1 minute";
-            snprintf(ln, sizeof ln, "              provisional estimate: %s", why);
+            const char *from = r->rate_prior_kind == 2 ? "from the remembered speed" : r->rate_prior_kind == 1 ? "from the tuning run" : "";
+            const double left = r->settle_at > 0 ? r->settle_at - pz_mono() : -1;   /* never a time that has already passed */
+            char when[48] = "";
+            if (left >= 60) snprintf(when, sizeof when, "settles in ~%d min", (int)ceil(left / 60));
+            else if (left > 0) snprintf(when, sizeof when, "settles in ~%d s", (int)ceil(left));
+            if (from[0] && when[0]) snprintf(ln, sizeof ln, "              provisional (%s, %s)", from, when);
+            else if (from[0] || when[0]) snprintf(ln, sizeof ln, "              provisional (%s%s)", from, when);
+            else snprintf(ln, sizeof ln, "              provisional");
             len = add_line(buf, n, len, &lines, cols, D0, D1, ln);
         }
     } else if (pi->rate > 0) {
-        len = add_line(buf, n, len, &lines, cols, "", "", "Time left     measuring: the estimate appears once all CPUs and GPUs are running (a few seconds)");
+        len = add_line(buf, n, len, &lines, cols, "", "", "Time left     measuring...");
     } else {
         len = add_line(buf, n, len, &lines, cols, "", "", "Time left     calculating...");
     }
@@ -296,7 +325,7 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
         }
         if (pi->est_state == RATE_PROVISIONAL) {                       /* the estimate is still settling: say so if it fits */
             const size_t l = strlen(buf);
-            if (l + 11 < n && (!limit || (int)l + 11 <= limit)) memcpy(buf + l, " (prelim.)", 11);
+            if (l + 15 < n && (!limit || (int)l + 14 <= limit)) memcpy(buf + l, " (provisional)", 15);
         }
     } else
         snprintf(buf, n, "%s [%s] %s | measuring speed...", tag, bb, pc);

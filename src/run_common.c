@@ -543,6 +543,7 @@ void run_reporter_loop(run_ctx *r)
                 r->all_started = started;
                 rate_est_add(&est, now, (double)sum, started);
                 r->rate_eta = rate_est_value(&est, now, &r->est_state);
+                r->settle_at = est.ready >= 0 ? est.ready + (est.prior > 0 ? 150 : 60) : 0;   /* as rate_est_value decides */
                 if (r->remember_rate && now >= next_remember) {
                     const double s = rate_est_sustained(&est, now);
                     if (s > 0) r->remember_rate(r, s);

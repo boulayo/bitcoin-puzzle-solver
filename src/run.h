@@ -66,6 +66,7 @@ typedef struct run_ctx {
     double rate_eta;                 /* the rate the completion times are computed from: a window average once every worker produces,
                                       * started from a remembered rate when there is one (BSGS: slowly smoothed) */
     rate_state est_state;            /* how far to trust rate_eta */
+    double settle_at;                /* monotonic time at which a provisional rate_eta becomes steady (0: not known yet) */
     bool all_started;                /* every worker has produced something (a GPU is counted only when its first launch ends) */
     _Atomic int rate_restart;        /* set by a mode whose unit changes (BSGS: from baby steps to giant steps): the reporter starts its
                                       * speeds, the peak and the session average over */
