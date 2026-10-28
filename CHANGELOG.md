@@ -3,6 +3,43 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
 
+## [1.11.0] — 2026-10-28
+
+### Added
+- Exit status of `hunt`: 0 key found, 1 search finished without the key, 130 interrupted (Ctrl-C, SIGTERM, SIGHUP), 2 error. A failed final
+  state save is now 2.
+- A fatal error is also written to the `log.txt` of the campaign, so after a crash the log says why the run stopped.
+- `tests/t_env.c` and the sanitizer flag `float-cast-overflow` in the sanitizer builds.
+
+### Changed
+- BSGS: the baby-step table is made of buckets of 8 cells (one cache line) at 70 % load: 11.4 bytes per baby step instead of 12.3, and a
+  lookup compares the 8 tags of a cache line at once instead of walking a run of cells. The search is 20 to 30 % faster at equal RAM
+  (measured on tables from 256 MiB to 3.5 GiB; on builds without SSE2 only the 8 % more baby steps remain). Tables are saved as `PZBSGS02`;
+  those of earlier versions (`PZBSGS01`) are still read and used as they are (they need 12.3 bytes per baby step), but earlier versions
+  cannot read the new files.
+- The kangaroo thins its table of distinguished points in place: the peak memory drops from twice the limit to the limit (measured 521 to
+  265 MiB at `--mem 0.25`), and the table grows only if the old and the new one fit in the limit together.
+- The dashboard no longer waits for the table of the kangaroo while it is rebuilt (the pause was up to several seconds and could be taken for
+  a system suspension), and the log of distinguished points is written outside the table lock, under a lock of its own: a slow or remote
+  disk no longer stalls the search threads.
+- GPU start-up: the devices are tested and tuned at the same time.
+- Every environment variable is read once at start-up into a single structure (`src/envopts.c`); the names and values documented are the same.
+  The flag variables follow one rule (on for any value but empty and "0"), a malformed number is reported once and ignored, and the warnings
+  print at the start of every command.
+- `bench -t` and the parameters of `kstat` are read strictly (`12abc` is refused, `bench -t 0` too). The Italian spellings of options
+  (`--parte`, `--nodo`, `--limite`, `--ritara`, `--sveglio`, ...) are gone; the Italian state words in old `status.json` files are still read.
+- `doctor` counts the suspensions in `log.txt` without reading the whole file, and `doctor --full` runs the GPU tests once.
+- The state of a run (BSGS, linear workers, benchmark totals) lives in the run, so several runs in one process cannot interfere.
+- One list of CUDA modules, one header for the numbers the kernel and the host share, one procedure for choosing the variant of either GPU
+  kernel, one rule for the per-ISA objects of the Makefile. The code of the search loops is unchanged.
+- The linear search ignores a hit beyond the end of `--range` (the last block is scanned in whole lanes): `-r 1:fff` no longer reports key
+  0x1000.
+- Documentation brought up to date (architecture notes, usage guides, tools table, release notes).
+
+### Fixed
+- A very small `--dp-bits` on a huge range (for example `hunt -p 140 --dp-bits 2`) overflowed a floating-point to integer conversion
+  (undefined behaviour); the table size is now taken from the memory limit.
+
 ## [1.10.0] — 2026-10-28
 
 ### Added
