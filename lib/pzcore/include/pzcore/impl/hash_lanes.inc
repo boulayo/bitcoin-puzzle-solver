@@ -111,7 +111,9 @@ static inline pz_vu pz_rmd_fv(int rd, pz_vu x, pz_vu y, pz_vu z)
     }
 }
 
-static inline void pz_ripemd160_lanes_32(const pz_vu dig[8], pz_vu out[5])
+/* Always inlined: both functions below use it, and an out-of-line copy would compute and store all five words for the first-word
+ * filter too. */
+static inline __attribute__((always_inline)) void pz_ripemd160_lanes_32(const pz_vu dig[8], pz_vu out[5])
 {
     pz_vu m[16];
 #ifdef PZ_HASH_SHA256_EXTERNAL
@@ -151,7 +153,8 @@ static PZ_UNUSED void PZ_HASH_LANES_FN(const uint32_t *X, const uint32_t *pfx, u
 }
 
 /* Only the first word of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). It does not
- * depend on the last step of the left RIPEMD-160 line nor on the last two of the right one, which the compiler drops. */
+ * depend on the last step of the left RIPEMD-160 line nor on the last two of the right one, which the compiler drops once
+ * pz_ripemd160_lanes_32 is inlined here. */
 #define PZ_HASH_W0_FN PZ_CAT(PZ_HASH_LANES_FN, _w0)
 static PZ_UNUSED void PZ_HASH_W0_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *out0)
 {
