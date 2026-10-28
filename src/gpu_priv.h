@@ -122,6 +122,7 @@ void gpu_kang_release(gpu_session *s);
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds);
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
 uint32_t gpu_launch_after_failure(uint32_t n);          /* the size of the launches after a failed one */
+void gpu_sleep_unless_stopped(run_ctx *r, double secs); /* the wait of a recovery: returns at once when the campaign is stopped */
 
 /* How many failed launches a device is allowed: more than GPU_FAIL_STREAK in a row, or more than GPU_FAIL_TOTAL without GPU_FAIL_FORGET
  * seconds of successful launches between them, and it is given up. A laptop that sleeps every night has one or two recoveries a day

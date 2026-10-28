@@ -371,6 +371,13 @@ void gpu_health_ok(gpu_health *h, double now)
     else if (h->total && now - h->since >= GPU_FAIL_FORGET) h->total = 0;      /* long enough without a failure: the earlier ones are forgotten */
 }
 
+/* Waits `secs` seconds, in slices of 0.1 s, and returns as soon as the campaign is stopped. */
+void gpu_sleep_unless_stopped(run_ctx *r, double secs)
+{
+    const double end = pz_mono() + secs;
+    for (double left = secs; left > 0 && !atomic_load(&r->stop); left = end - pz_mono()) pz_sleep(left < 0.1 ? left : 0.1);
+}
+
 /* A failed launch after the machine slept or hibernated usually means that the driver reset the device or its context.
  * Drops the session, waits, reopens and rebuilds it (about two and a half minutes of attempts) and repeats the start-up
  * self-test; false if the device never comes back or fails the test. The caller then restores its own buffers. */
@@ -386,8 +393,9 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
         gpu_session_release(s);                           /* clears everything after the context */
         s->T = keep.T; s->NK = keep.NK; s->kvar = keep.kvar; s->variant = keep.variant; s->l2fit = keep.l2fit;
         atomic_store(&s->paused, paused);
-        pz_sleep(wait);
+        gpu_sleep_unless_stopped(r, wait);                /* Ctrl-C must not wait for up to 30 s */
         wait = wait < 30 ? wait * 2 : 30;
+        if (atomic_load(&r->stop)) break;
         if (!gpu_session_open(s, &info)) continue;
         bool ok = gpu_test_fe(s) && (kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
         if (ok && !kangaroo) { gpu_linear_release_program(s); ok = gpu_linear_prepare_variant(s, keep.variant); }

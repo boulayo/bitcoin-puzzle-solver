@@ -295,6 +295,16 @@ bool gpu_test_kang(gpu_session *s)
     return esc > 0;
 }
 
+typedef struct { run_ctx *r; double after; } stop_job;
+
+static void *stop_thread(void *p)
+{
+    stop_job *j = p;
+    pz_sleep(j->after);
+    atomic_store(&j->r->stop, 1);
+    return NULL;
+}
+
 typedef struct { gpu_session *s; u64 v[4000]; } rnd_job;
 
 static void *rnd_thread(void *p)
@@ -369,7 +379,28 @@ int gpu_policy_selftest(void)
         }
         PCHK(job[0].v[0] != job[1].v[0]);                       /* and the sessions do not draw the same numbers */
     }
-    pz_result_line("GPU recovery: launch size, failure budget, generator", "%s", fails ? "FAILED" : "OK");
+    /* the wait of a recovery (up to 30 s) ends when the campaign is stopped, and lasts its time when it is not */
+    {
+        run_ctx *r = pz_xcalloc(1, sizeof *r);
+        double t0 = pz_mono();
+        gpu_sleep_unless_stopped(r, 0.3);
+        const double full = pz_mono() - t0;
+        PCHK(full >= 0.29 && full < 5.0);
+        stop_job sj = {r, 0.2};
+        pthread_t th;
+        if (pthread_create(&th, NULL, stop_thread, &sj) == 0) {
+            t0 = pz_mono();
+            gpu_sleep_unless_stopped(r, 30.0);
+            const double cut = pz_mono() - t0;
+            pthread_join(th, NULL);
+            PCHK(cut >= 0.15 && cut < 5.0);
+            t0 = pz_mono();
+            gpu_sleep_unless_stopped(r, 30.0);                   /* already stopped: no wait at all */
+            PCHK(pz_mono() - t0 < 1.0);
+        } else fails++;
+        free(r);
+    }
+    pz_result_line("GPU recovery rules", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
