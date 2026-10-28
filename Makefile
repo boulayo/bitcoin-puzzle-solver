@@ -147,20 +147,13 @@ DEPS      += $(LIBOBJ:.o=.d)
 $(BUILD)/pzcore:
 	@mkdir -p $@
 
+# the objects of the library for one instruction set get its flags from the target-specific ISAFLAGS (empty for the others)
 $(BUILD)/pzcore/%.o: lib/pzcore/src/%.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/pzcore/h160_avx2.o: lib/pzcore/src/h160_avx2.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/pzcore/h160_avx512.o: lib/pzcore/src/h160_avx512.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/pzcore/h160_shani.o: lib/pzcore/src/h160_shani.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(SHANI_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/pzcore/h160_neon.o: lib/pzcore/src/h160_neon.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/pzcore/h160_neon2.o: lib/pzcore/src/h160_neon2.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/pzcore/sha256_arm.o: lib/pzcore/src/sha256_arm.c | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(LIBFLAGS)$(if $(ISAFLAGS), $(ISAFLAGS)) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/h160_avx2.o: ISAFLAGS := $(AVX2_FLAGS)
+$(BUILD)/pzcore/h160_avx512.o: ISAFLAGS := $(AVX512_FLAGS)
+$(BUILD)/pzcore/h160_shani.o: ISAFLAGS := $(SHANI_FLAGS)
+$(BUILD)/pzcore/h160_neon.o $(BUILD)/pzcore/h160_neon2.o $(BUILD)/pzcore/sha256_arm.o: ISAFLAGS := $(NEON_FLAGS)
 
 $(LIB): $(LIBOBJ)
 	rm -f $@
@@ -248,45 +241,20 @@ $(BUILD)/ptx_tab.c: $(PTXTAB) $(PTX) $(BUILD)/embed
 $(BUILD)/ptx_tab.o: $(BUILD)/ptx_tab.c src/lz.h
 	$(CC) $(DEPLOY) -O1 -Isrc -c $< -o $@
 
+# The objects of the engines for one instruction set (eng_*, kang_*, bsgs_*) are built by this rule with its flags, in the target-specific ISAFLAGS;
+# the rest, eng_base included, with none.
 $(BUILD)/%.o: src/%.c | $(BUILD)
-	$(CC) $(COMMON) -MMD -MP -c $< -o $@
+	$(CC) $(COMMON)$(if $(ISAFLAGS), $(ISAFLAGS)) -MMD -MP -c $< -o $@
 
-$(BUILD)/eng_base.o: src/eng_base.c | $(BUILD)
-	$(CC) $(COMMON) -MMD -MP -c $< -o $@
-$(BUILD)/eng_neon.o: src/eng_neon.c | $(BUILD)
-	$(CC) $(COMMON) $(NEON_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_neon2.o: src/eng_neon2.c | $(BUILD)
-	$(CC) $(COMMON) $(NEON_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_avx2.o: src/eng_avx2.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_shani.o: src/eng_shani.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) $(SHANI_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_avx512.o: src/eng_avx512.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_avx2v.o: src/eng_avx2v.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_avx512v.o: src/eng_avx512v.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/eng_avx512i.o: src/eng_avx512i.c | $(BUILD)
-	$(CC) $(COMMON) $(IFMA_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/kang_x86.o: src/kang_x86.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/kang_avx2v.o: src/kang_avx2v.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/kang_avx512v.o: src/kang_avx512v.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/kang_avx512i.o: src/kang_avx512i.c | $(BUILD)
-	$(CC) $(COMMON) $(IFMA_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/kang_avx512i2.o: src/kang_avx512i2.c | $(BUILD)
-	$(CC) $(COMMON) $(IFMA_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/bsgs_x86.o: src/bsgs_x86.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/bsgs_avx2v.o: src/bsgs_avx2v.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/bsgs_avx512v.o: src/bsgs_avx512v.c | $(BUILD)
-	$(CC) $(COMMON) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
-$(BUILD)/bsgs_avx512i.o: src/bsgs_avx512i.c | $(BUILD)
-	$(CC) $(COMMON) $(IFMA_FLAGS) -MMD -MP -c $< -o $@
+OBJS_NEON   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_neon eng_neon2))
+OBJS_AVX2   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2 eng_avx2v kang_x86 kang_avx2v bsgs_x86 bsgs_avx2v))
+OBJS_AVX512 := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512 eng_avx512v kang_avx512v bsgs_avx512v))
+OBJS_IFMA   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512i kang_avx512i kang_avx512i2 bsgs_avx512i))
+$(OBJS_NEON): ISAFLAGS := $(NEON_FLAGS)
+$(OBJS_AVX2): ISAFLAGS := $(AVX2_FLAGS)
+$(OBJS_AVX512): ISAFLAGS := $(AVX512_FLAGS)
+$(OBJS_IFMA): ISAFLAGS := $(IFMA_FLAGS)
+$(BUILD)/eng_shani.o: ISAFLAGS := $(AVX2_FLAGS) $(SHANI_FLAGS)
 
 ifeq ($(X86),1)
 ALLENG := $(ENGOBJ) $(KVOBJ) $(BSVOBJ)
@@ -362,7 +330,7 @@ e2e: $(BIN)
 	tests/e2e.sh $(BIN)
 
 asan:
-	$(MAKE) BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" COMMON_EXTRA= all
+	$(MAKE) BUILD=build/asan OPT="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer" all
 
 tsan:
 	$(MAKE) BUILD=build/tsan OPT="-O1 -fsanitize=thread" all
