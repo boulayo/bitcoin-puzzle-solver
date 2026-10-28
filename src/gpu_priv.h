@@ -37,6 +37,7 @@ struct gpu_session {
     run_ctx *r;
     rt_dev info;
     /* owned by the launcher and the thread, before `c`: gpu_session_release() clears everything after it and a recovery keeps these */
+    u64 rs;                      /* state of the generator of the self-tests (gpu_test_rand): one per session, the GPUs recover together after a sleep */
     int widx;
     pthread_t th;
     _Atomic int *active;
@@ -141,6 +142,7 @@ void gpu_kang_autotune(gpu_session *s, int idx);
 
 /* gpu_selftest.c: the kernels against the CPU, and the rules of the recovery (no device needed) */
 int gpu_policy_selftest(void);
+u64 gpu_test_rand(gpu_session *s);                      /* the random numbers of the tests of one session (xorshift64, not shared with the other sessions) */
 bool gpu_test_fe(gpu_session *s);
 bool gpu_test_linear(gpu_session *s);
 bool gpu_test_kang(gpu_session *s);

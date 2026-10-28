@@ -6,8 +6,14 @@
 #include "outfmt.h"
 #include <pzcore/hash.h>
 
-static u64 g_rs = 0x9E3779B97F4A7C15ULL;
-static u64 grnd(void) { g_rs ^= g_rs << 13; g_rs ^= g_rs >> 7; g_rs ^= g_rs << 17; return g_rs; }
+/* The state is in the session: after the system sleeps every GPU thread recovers its device and repeats these tests at the same time. */
+u64 gpu_test_rand(gpu_session *s)
+{
+    u64 x = s->rs ? s->rs : (0x9E3779B97F4A7C15ULL ^ ((u64)(s->info.index + 1) * 0xD1B54A32D192ED03ULL)) | 1;
+    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+    s->rs = x;
+    return x;
+}
 
 /* ---------------- self-test ---------------- */
 
@@ -29,7 +35,7 @@ bool gpu_test_fe(gpu_session *s)
     uint32_t *in = pz_xcalloc((size_t)N * 64, 4), *out = pz_xcalloc((size_t)N * 64, 4);
     pz_fe A[192], B[192];
     for (int i = 0; i < N; i++) {
-        for (int j = 0; j < 4; j++) { A[i].n[j] = grnd(); B[i].n[j] = grnd(); }
+        for (int j = 0; j < 4; j++) { A[i].n[j] = gpu_test_rand(s); B[i].n[j] = gpu_test_rand(s); }
         if (i % 5 == 0) { A[i].n[3] = A[i].n[2] = ~0ULL; }                 /* near p */
         if (i % 7 == 0) { B[i].n[1] = B[i].n[2] = B[i].n[3] = ~0ULL; }
         if (i == 1) { pz_fe_set_u64(&A[i], 0); }
@@ -68,13 +74,13 @@ bool gpu_test_fe(gpu_session *s)
         u8 xb[64][32];
         pz_fe xs[64];
         for (int i = 0; i < H; i++) {
-            for (int j = 0; j < 32; j++) xb[i][j] = (u8)grnd();
+            for (int j = 0; j < 32; j++) xb[i][j] = (u8)gpu_test_rand(s);
             pz_fe_from_be(&xs[i], xb[i]);
             u8 xx[32]; pz_fe_to_be(xx, &xs[i]);
             memcpy(xb[i], xx, 32);
             uint32_t pk[8]; pack_fe(pk, &xs[i]);
             memcpy(hin + i * 9, pk, 32);
-            hin[i * 9 + 8] = (u32)(grnd() & 1);
+            hin[i * 9 + 8] = (u32)(gpu_test_rand(s) & 1);
         }
         rt_buf *hb = rt_buf_new(s->c, (size_t)H * 36, hin);
         rt_buf *ho = rt_buf_new(s->c, (size_t)H * 20, NULL);
@@ -97,10 +103,10 @@ bool gpu_test_fe(gpu_session *s)
         pz_ge pa[24], pd[24];
         u32 ts[24];
         for (int i = 0; i < E; i++) {
-            pz_u256 k1 = pz_u256_from_u64(grnd() | 1), k2 = pz_u256_from_u64(grnd() | 1);
+            pz_u256 k1 = pz_u256_from_u64(gpu_test_rand(s) | 1), k2 = pz_u256_from_u64(gpu_test_rand(s) | 1);
             pz_ec_mul_g(&pa[i], &k1);
             pz_ec_mul_g(&pd[i], &k2);
-            ts[i] = i == 0 ? 0 : (i == 1 ? 1 : (i == 2 ? 0xFFFFFFFFu : (u32)grnd()));
+            ts[i] = i == 0 ? 0 : (i == 1 ? 1 : (i == 2 ? 0xFFFFFFFFu : (u32)gpu_test_rand(s)));
             pack_ge(ein + i * 33, &pa[i]);
             pack_ge(ein + i * 33 + 16, &pd[i]);
             ein[i * 33 + 32] = ts[i];
@@ -146,7 +152,7 @@ bool gpu_test_linear(gpu_session *s)
     s->T_max = s->T_max > 96 ? 96 : s->T_max;
     bool ok = true;
     pz_u256 start = pz_u256_pow2(77);
-    pz_u256_add_u64(&start, &start, grnd() & 0xffffff);
+    pz_u256_add_u64(&start, &start, gpu_test_rand(s) & 0xffffff);
     /* Three launches over 40 work-items (the first and last key of the range and a random one), then one small launch for each position
      * of a group where the kernel takes its own branch: the lowest keys of the window (C - HALF*G, which has no counterpart above the
      * centre), the keys next to the centre (the first denominator, i = 1), the centre itself, and the highest. They are placed in the
@@ -158,7 +164,7 @@ bool gpu_test_linear(gpu_session *s)
     for (int trial = 0; trial < 3 + nfix && ok; trial++) {
         const bool fixed = trial >= 3;
         u64 span = fixed ? 6 * G : 40 * G * 3ULL;
-        u64 off = fixed ? 4 * G + wpos[trial - 3] : trial == 0 ? 0 : (trial == 1 ? span - 1 : grnd() % span);
+        u64 off = fixed ? 4 * G + wpos[trial - 3] : trial == 0 ? 0 : (trial == 1 ? span - 1 : gpu_test_rand(s) % span);
         pz_u256 key = start;
         pz_u256_add_u64(&key, &key, off);
         pz_ge p;
@@ -287,6 +293,15 @@ bool gpu_test_kang(gpu_session *s)
     return esc > 0;
 }
 
+typedef struct { gpu_session *s; u64 v[4000]; } rnd_job;
+
+static void *rnd_thread(void *p)
+{
+    rnd_job *j = p;
+    for (size_t k = 0; k < sizeof j->v / sizeof *j->v; k++) j->v[k] = gpu_test_rand(j->s);
+    return NULL;
+}
+
 /* The rules by which the worker threads recover from a failed launch. */
 int gpu_policy_selftest(void)
 {
@@ -329,7 +344,30 @@ int gpu_policy_selftest(void)
         if (gpu_health_failed(&h)) given_up = i;
     }
     PCHK(!given_up && h.total == 1);
-    pz_result_line("GPU recovery: launch size, failure budget", "%s", fails ? "FAILED" : "OK");
+    /* the random numbers of the tests belong to the session: two threads drawing at once each get the sequence they would get alone */
+    {
+        enum { NR = 4000 };
+        rnd_job job[2];
+        pthread_t th[2];
+        memset(job, 0, sizeof job);
+        for (int i = 0; i < 2; i++) {
+            job[i].s = pz_xcalloc(1, sizeof(gpu_session));
+            job[i].s->info.index = i;
+            if (pthread_create(&th[i], NULL, rnd_thread, &job[i]) != 0) { fails++; th[i] = 0; }
+        }
+        for (int i = 0; i < 2; i++) {
+            if (th[i]) pthread_join(th[i], NULL);
+            gpu_session *alone = pz_xcalloc(1, sizeof *alone);
+            alone->info.index = i;
+            bool same = true;
+            for (int k = 0; k < NR; k++) same &= job[i].v[k] == gpu_test_rand(alone);
+            PCHK(same);
+            free(alone);
+            free(job[i].s);
+        }
+        PCHK(job[0].v[0] != job[1].v[0]);                       /* and the sessions do not draw the same numbers */
+    }
+    pz_result_line("GPU recovery: launch size, failure budget, generator", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
