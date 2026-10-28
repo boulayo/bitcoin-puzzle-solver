@@ -227,7 +227,7 @@ typedef struct {
     prio_mode prio_gpu;
     char part[PART_TEXT];
     int node, nfiles;
-    int limit;                    /* --limit: percentage of the machine to use (1..100; 100 = no limit) */
+    int limit;                    /* --limit: percentage of the machine to use (1..99; 0 = no limit) */
     char files[16][600];
     char key[100];
     char table[600];
@@ -271,19 +271,8 @@ static void opt_copy(const char *opt, char *dst, size_t n, const char *val)
 /* A speed such as 800000000, 800M or 1.5G (suffixes k, M, G, T). */
 static double opt_rate(const char *opt, const char *s)
 {
-    char *end;
-    errno = 0;
-    double v = strtod(s, &end);
-    if (end != s && end[0] && !end[1]) {
-        switch (end[0]) {
-        case 'k': case 'K': v *= 1e3; end++; break;
-        case 'm': case 'M': v *= 1e6; end++; break;
-        case 'g': case 'G': v *= 1e9; end++; break;
-        case 't': case 'T': v *= 1e12; end++; break;
-        default: break;
-        }
-    }
-    if (end == s || *end || errno == ERANGE || !(v > 0) || v > 1e15) pz_die("%s: invalid value '%s' (expected a speed such as 800M or 1.5G)", opt, s);
+    double v;
+    if (!pz_parse_rate(s, &v)) pz_die("%s: invalid value '%s' (expected a speed such as 800M or 1.5G)", opt, s);
     return v;
 }
 
@@ -385,7 +374,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             if (!o->part[0]) pz_strlcpy(o->part, "0/1", sizeof o->part);
             break;
         }
-        case O_LIMIT: o->limit = (int)pz_arg_int("--limit", optarg, 1, 100); break;
+        case O_LIMIT: o->limit = (int)pz_arg_int("--limit", optarg, 1, 99); break;
         case O_NODE: o->node = (int)pz_arg_int("--node", optarg, 0, 65535); break;
         case 'f':
             if (o->nfiles >= 16) pz_die("at most 16 files at a time with -f");
@@ -807,7 +796,7 @@ static int cmd_hunt(int argc, char **argv)
     pz_log_set_verbose(o.verbose);
     check_isa_option(o.isa);
     if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
-    if (o.retune && o.limit > 0 && o.limit < 100) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
+    if (o.retune && o.limit) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
     if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
@@ -881,7 +870,7 @@ static int cmd_hunt(int argc, char **argv)
 
     r->prio_gpu = o.prio_gpu;
     r->gpu_boost = o.prio_gpu == PRIO_YES;
-    r->limit_pct = o.limit > 0 && o.limit < 100 ? o.limit : 0;
+    r->limit_pct = o.limit;
     profile_apply(r, o.retune, o.no_tune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
     if (run_interrupted()) {                 /* Ctrl-C during the measurement: nothing has started, nothing is lost */
         pz_log(PZ_LOG_INFO, "interrupted during the measurement of the machine: the search was not started");
@@ -1069,33 +1058,18 @@ static int cmd_merge(int argc, char **argv)
     return rc;
 }
 
-/* A speed such as 800, 120M or 1.5G is not parsed (no floating point): whole numbers with an optional k, M or G. */
-static bool parse_speed(const char *t, u64 *out)
-{
-    size_t n = strlen(t);
-    u64 mul = 1;
-    char num[40];
-    if (n == 0 || n >= sizeof num) return false;
-    memcpy(num, t, n + 1);
-    if (num[n - 1] == 'k' || num[n - 1] == 'K') mul = 1000;
-    else if (num[n - 1] == 'M') mul = 1000000ULL;
-    else if (num[n - 1] == 'G') mul = 1000000000ULL;
-    if (mul > 1) num[n - 1] = 0;
-    u64 v;
-    if (!pz_parse_u64(num, &v) || v == 0 || v > ((u64)1 << 62) / mul) return false;
-    *out = v * mul;
-    return true;
-}
-
 static int cmd_split(int argc, char **argv)
 {
-    if (argc < 3) pz_die("usage: pzsolve split SPEED_1 SPEED_2 [...]   (whole numbers, optionally with k, M or G: for example 800M 120M)");
+    if (argc < 3) pz_die("usage: pzsolve split SPEED_1 SPEED_2 [...]   (keys per second, with k, M, G or T allowed: for example 800M 1.5G)");
     const unsigned n = (unsigned)(argc - 1);
     if (n > 64) pz_die("at most 64 computers");
     u64 speed[64];
     unsigned counts[64];
-    for (unsigned i = 0; i < n; i++)
-        if (!parse_speed(argv[i + 1], &speed[i])) pz_die("invalid speed '%s' (positive whole number, optionally with k, M or G)", argv[i + 1]);
+    for (unsigned i = 0; i < n; i++) {
+        double v;
+        if (!pz_parse_rate(argv[i + 1], &v) || v < 1) pz_die("split: invalid speed '%s' (expected a speed such as 800M or 1.5G)", argv[i + 1]);
+        speed[i] = (u64)(v + 0.5);
+    }
     const unsigned total = 100;
     u128 wsum = 0;
     for (unsigned i = 0; i < n; i++) wsum += speed[i];

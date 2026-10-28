@@ -371,6 +371,25 @@ const char *pz_kv_find(const char *text, const char *key, char sep, unsigned fla
     return hit;
 }
 
+bool pz_parse_rate(const char *s, double *out)
+{
+    char *end;
+    errno = 0;
+    double v = strtod(s, &end);
+    if (end != s && end[0] && !end[1]) {
+        switch (end[0]) {
+        case 'k': case 'K': v *= 1e3; end++; break;
+        case 'm': case 'M': v *= 1e6; end++; break;
+        case 'g': case 'G': v *= 1e9; end++; break;
+        case 't': case 'T': v *= 1e12; end++; break;
+        default: break;
+        }
+    }
+    if (end == s || *end || errno == ERANGE || !(v > 0) || v > 1e15) return false;
+    *out = v;
+    return true;
+}
+
 long long pz_arg_int(const char *name, const char *s, long long lo, long long hi)
 {
     i64 v;
