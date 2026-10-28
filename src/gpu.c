@@ -1,46 +1,22 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* gpu.c - GPU support: device selection, self-test, autotuning and the worker threads for linear search and the
- * kangaroo. Written against the runtime interface of gpu_rt.h, so the same code drives CUDA and OpenCL devices. */
-#include "gpu.h"
+/* gpu.c - GPU support: device selection, autotuning and the worker threads for linear search and the kangaroo. Written
+ * against the runtime interface of gpu_rt.h, so the same code drives CUDA and OpenCL devices. The self-test is in gpu_selftest.c. */
+#include "gpu_priv.h"
 #include "doctor.h"
-#include "gpu_rt.h"
 #include "platform.h"
 #include "cpu_engine.h"
 #include <pzcore/hash.h>
-#include "kangaroo_priv.h"
 #include "outfmt.h"
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
 
-/* Compile-time variants of the linear kernel: half-window (group = 2*half keys) | minimum resident blocks per SM << 16
- * (CUDA only: 4 caps the kernel at 128 registers, trading a few spills for more resident warps). The autotuner measures
- * them on the device and keeps the fastest. */
-#define VAR_HALF(v) ((v) & 0xFFFF)
-#define VAR_MINB(v) ((v) >> 16)
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
 static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
-/* Kangaroo kernel variants: kangaroos per work-item (NK: one field inversion is shared by NK steps, so larger is cheaper
- * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion
- * for every walker, 1 only for every other one (half the traffic for those products, half a field multiplication more per
- * step). Measured on the device like the linear variants. */
-#define KV_NK(v) ((v) & 0xFFFF)
-#define KV_CFG(v) (((v) >> 16) & 0xF)
-#define KV_L2(v) (((v) >> 24) & 1)            /* the herd is sized to fit the L2 cache (fewer work-items), see kang_l2_threads */
-#define KV_KERNEL(v) ((v) & 0xFFFFF)          /* NK | cfg << 16: what the kernel build takes */
-#define KV_L2FLAG (1 << 24)
 static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16};
 static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16};
-/* GPUs with a large last-level cache (RTX 30/40 series: 6-72 MiB; some laptop GPUs have 2) can keep a herd of some
- * hundred thousand walkers (about 130 bytes each in the work-items' private arrays) on the chip, where the traffic that
- * limits the kernel stays in the cache instead of going to the video memory. */
-#define KANG_L2_MIN (8u << 20)
-#define KANG_WALKER_BYTES 128
-static const int KV_L2_NK[] = {16, 32, 64};
-/* kernels built with products every fourth walker that the self-test checks on every device (the OpenCL tuner does not offer them) */
-static const int KV_MC4_NK[] = {64, 128};
 
-static int variants_of(const rt_dev *d, const int **v)
+int gpu_variants_of(const rt_dev *d, const int **v)
 {
     if (d->api == RT_CUDA) { *v = CU_VARIANTS; return (int)(sizeof CU_VARIANTS / sizeof *CU_VARIANTS); }
     *v = CL_VARIANTS;
@@ -65,7 +41,7 @@ static size_t kang_default_threads_for(const rt_dev *d)
 
 /* The variants the tuner tries on this device (kernel | L2 flag), most plain first; returns how many (at most 32). The
  * cache-sized herds only where they can differ from the default herd and the cache can hold them. */
-static int kvariants_of(const rt_dev *d, int *out)
+int gpu_kvariants_of(const rt_dev *d, int *out)
 {
     const int *base = d->api == RT_CUDA ? CU_KVARIANTS : CL_KVARIANTS;
     const int nb = d->api == RT_CUDA ? (int)(sizeof CU_KVARIANTS / sizeof *CU_KVARIANTS) : (int)(sizeof CL_KVARIANTS / sizeof *CL_KVARIANTS);
@@ -85,14 +61,14 @@ static int default_kvariant(const rt_dev *d) { return d->api == RT_CUDA ? 128 : 
 static bool valid_kvariant(const rt_dev *d, int v)
 {
     int vs[32];
-    int n = kvariants_of(d, vs);
+    int n = gpu_kvariants_of(d, vs);
     for (int i = 0; i < n; i++) if (vs[i] == v) return true;
     return false;
 }
 static bool valid_variant(const rt_dev *d, int v)
 {
     const int *vs;
-    int n = variants_of(d, &vs);
+    int n = gpu_variants_of(d, &vs);
     for (int i = 0; i < n; i++) if (vs[i] == v) return true;
     return false;
 }
@@ -107,36 +83,6 @@ static char *variant_name(int v, char *b, size_t n)
     else snprintf(b, n, "%d", VAR_HALF(v));
     return b;
 }
-
-struct gpu_session {
-    run_ctx *r;
-    rt_dev info;
-    /* owned by the launcher and the thread, before `c`: session_release() clears everything after it and a recovery keeps these */
-    int widx;
-    pthread_t th;
-    _Atomic int *active;
-    bool started;
-    kang_state *ks;
-    int limit_pct;               /* --limit, set by the launcher once the kernels are tuned: the linear kernel runs with that share of its work-items */
-    rt_ctx *c;
-    rt_mod *prog;
-    rt_kern *kern;
-    rt_buf *b_prm, *b_gtab, *b_hits;
-    size_t T_max;
-    int half;                    /* compile-time HALF of the linear kernel (group = 2*half keys) */
-    int variant;                 /* VAR_* code of the prepared / chosen linear kernel (0 = not chosen yet) */
-    /* kangaroo */
-    rt_mod *kprog;
-    rt_kern *kstep;
-    rt_buf *b_state, *b_jump, *b_dps, *b_flags, *b_rc, *b_rl, *b_hist;
-    int T, NK, kvar;             /* kangaroo kernel: walkers per work-item, kernel variant (NK | cfg << 16) */
-    bool l2fit;                  /* the herd is sized to the L2 cache (see kang_l2_threads_for) */
-    u64 dps_cap, rl_cap;
-    uint32_t hist_rounds;        /* depth of the jump history: the most rounds a launch can run */
-    u64 gstep;                   /* steps taken by every walker so far (the step number of the next round) */
-    size_t mem_used;             /* bytes of device buffers of the last kangaroo preparation */
-    _Atomic int paused;          /* the kangaroo thread idles ('bench --together' switches GPUs off to measure them) */
-};
 
 static int kang_code(const gpu_session *s) { return s->kvar | (s->l2fit ? KV_L2FLAG : 0); }   /* what the tuner remembers */
 
@@ -178,8 +124,6 @@ static gpu_api_pref api_pref(void)
     return g_pref;
 }
 
-static int enumerate(rt_dev *devs, char *note, size_t nl) { return rt_enumerate(devs, RT_MAX_DEVS, note, nl); }
-
 /* Devices used when --gpu is not given: every GPU once (through CUDA when both runtimes see it). */
 static bool default_choice(const rt_dev *d)
 {
@@ -190,6 +134,8 @@ static bool default_choice(const rt_dev *d)
     default: return d->api == RT_CUDA || d->dup_of < 0;
     }
 }
+
+bool gpu_selftest_allowed(const rt_dev *d) { return default_choice(d) || (!d->is_gpu && pz_env_on("PZ_OPENCL_ALL")) || (d->dup_of >= 0 && pz_env_on("PZ_OPENCL_ALL")); }
 
 static bool in_filter(const char *f, int idx)
 {
@@ -250,22 +196,7 @@ int gpu_count_usable(void)
 
 /* ---------------- helpers ---------------- */
 
-static void pack_fe(uint32_t out[8], const pz_fe *f)
-{
-    pz_fe t = *f;
-    pz_fe_normalize(&t);
-    for (int i = 0; i < 4; i++) { out[2 * i] = (uint32_t)t.n[i]; out[2 * i + 1] = (uint32_t)(t.n[i] >> 32); }
-}
-static void unpack_fe(pz_fe *f, const uint32_t in[8])
-{
-    for (int i = 0; i < 4; i++) f->n[i] = (u64)in[2 * i] | (u64)in[2 * i + 1] << 32;
-}
-static void pack_ge(uint32_t out[16], const pz_ge *p) { pack_fe(out, &p->x); pack_fe(out + 8, &p->y); }
-
-static u64 g_rs = 0x9E3779B97F4A7C15ULL;
-static u64 grnd(void) { g_rs ^= g_rs << 13; g_rs ^= g_rs >> 7; g_rs ^= g_rs << 17; return g_rs; }
-
-static void session_release(gpu_session *s)
+void gpu_session_release(gpu_session *s)
 {
     rt_buf *bufs[] = {s->b_prm, s->b_gtab, s->b_hits, s->b_state, s->b_jump, s->b_dps, s->b_flags, s->b_rc, s->b_rl, s->b_hist};
     for (size_t i = 0; i < sizeof bufs / sizeof *bufs; i++) rt_buf_free(bufs[i]);
@@ -277,7 +208,7 @@ static void session_release(gpu_session *s)
     memset(&s->c, 0, sizeof *s - offsetof(gpu_session, c));
 }
 
-static bool session_open(gpu_session *s, const rt_dev *d)
+bool gpu_session_open(gpu_session *s, const rt_dev *d)
 {
     s->info = *d;
     s->c = rt_open(d);
@@ -294,7 +225,7 @@ static void make_gtab(uint32_t *tab, int half)
 
 /* ---------------- linear program ---------------- */
 
-static void linear_release_program(gpu_session *s)
+void gpu_linear_release_program(gpu_session *s)
 {
     rt_buf_free(s->b_prm);
     rt_buf_free(s->b_gtab);
@@ -308,7 +239,7 @@ static void linear_release_program(gpu_session *s)
 
 static bool linear_prepare_variant(gpu_session *s, int variant)
 {
-    linear_release_program(s);
+    gpu_linear_release_program(s);
     const int half = VAR_HALF(variant);
     s->variant = variant;
     s->half = half;
@@ -335,19 +266,10 @@ static bool linear_prepare_variant(gpu_session *s, int variant)
     return true;
 }
 
-static bool linear_prepare(gpu_session *s) { return linear_prepare_variant(s, s->variant ? s->variant : default_variant(&s->info)); }
-
-typedef struct {
-    pz_u256 key_start;
-    u64 nkeys;
-    size_t T;
-    uint32_t ngroups;
-    uint32_t nhits, err;
-    u64 hits[64];
-} lin_launch;
+bool gpu_linear_prepare(gpu_session *s) { return linear_prepare_variant(s, s->variant ? s->variant : default_variant(&s->info)); }
 
 /* Runs one launch covering at least nkeys keys; fills hits. Returns false on API errors. */
-static bool linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
+bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
 {
     const int HALFK = s->half;
     const int GRPK = 2 * HALFK;
@@ -473,7 +395,7 @@ static double linear_measure(gpu_session *s)
         L.ngroups = ng;
         L.nkeys = (u64)s->T_max * ng * (u64)(2 * s->half);
         double a = pz_mono();
-        if (!linear_run(s, h, &L) || L.err) return 0;
+        if (!gpu_linear_run(s, h, &L) || L.err) return 0;
         double dt = pz_mono() - a;
         pz_u256_add_u64(&start, &start, L.nkeys);
         if (dt < 0.12 && ng < 4096) { ng *= 2; continue; }      /* too short to time reliably */
@@ -483,8 +405,6 @@ static double linear_measure(gpu_session *s)
     }
     return best;
 }
-
-static bool test_linear(gpu_session *s);
 
 /* Chooses the variant of the linear kernel for this device (cached on disk per device and program version). */
 static void linear_autotune(gpu_session *s, int idx)
@@ -509,13 +429,13 @@ static void linear_autotune(gpu_session *s, int idx)
         return;
     }
     const int *vs;
-    const int nv = variants_of(d, &vs);
+    const int nv = gpu_variants_of(d, &vs);
     pz_log(PZ_LOG_INFO, "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...", idx, nv);
     double rate[16] = {0};
     int best = 0;
     for (int i = 0; i < nv; i++) {
         if (linear_prepare_variant(s, vs[i])) rate[i] = linear_measure(s);
-        linear_release_program(s);
+        gpu_linear_release_program(s);
         if (vs[i] == default_variant(d)) best = i;
     }
     {   /* the default stays unless the fastest variant is clearly (> 3%) faster than it */
@@ -533,240 +453,18 @@ static void linear_autotune(gpu_session *s, int idx)
     pz_log(PZ_LOG_INFO, "%s; picking window %s", line, variant_name(vs[best], nb, sizeof nb));
     s->variant = vs[best];
     /* the winner must pass the correctness test before it is remembered, otherwise a bad choice would exclude the GPU forever */
-    if (!test_linear(s)) {
+    if (!gpu_test_linear(s)) {
         pz_log(PZ_LOG_WARN, "GPU[%d]: variant %s failed the correctness check: using the default and not saving the choice", idx, variant_name(vs[best], nb, sizeof nb));
         s->variant = default_variant(d);
-        linear_release_program(s);
+        gpu_linear_release_program(s);
         return;
     }
-    linear_release_program(s);
+    gpu_linear_release_program(s);
     tune_cache_put(d, false, s->variant);
 }
 
-/* ---------------- self-test ---------------- */
-
-/* Runs kernel `k` (two buffer arguments) on n items. */
-static bool run2(gpu_session *s, rt_kern *k, rt_buf *in, rt_buf *out, size_t n)
-{
-    rt_arg_buf(k, 0, in);
-    rt_arg_buf(k, 1, out);
-    return rt_run(s->c, k, n);
-}
-
-static bool test_fe(gpu_session *s)
-{
-    const int N = 192;
-    rt_mod *p = rt_build(s->c, RT_PROG_TEST, 0);
-    if (!p) return false;
-    rt_kern *kfe = rt_kernel(p, "pz_test_fe", 2), *khash = rt_kernel(p, "pz_test_hash", 2), *kec = rt_kernel(p, "pz_test_ec", 2);
-    bool ok = kfe && khash && kec;
-    uint32_t *in = pz_xcalloc((size_t)N * 64, 4), *out = pz_xcalloc((size_t)N * 64, 4);
-    pz_fe A[192], B[192];
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < 4; j++) { A[i].n[j] = grnd(); B[i].n[j] = grnd(); }
-        if (i % 5 == 0) { A[i].n[3] = A[i].n[2] = ~0ULL; }                 /* near p */
-        if (i % 7 == 0) { B[i].n[1] = B[i].n[2] = B[i].n[3] = ~0ULL; }
-        if (i == 1) { pz_fe_set_u64(&A[i], 0); }
-        if (i == 2) { pz_fe_set_u64(&B[i], 0); }
-        if (i == 3) { A[i] = pz_fe_p; }
-        if (i == 4) { pz_fe_set_u64(&A[i], 1); pz_fe_set_u64(&B[i], 1); }
-        for (int j = 0; j < 4; j++) { in[i * 16 + 2 * j] = (u32)A[i].n[j]; in[i * 16 + 2 * j + 1] = (u32)(A[i].n[j] >> 32); in[i * 16 + 8 + 2 * j] = (u32)B[i].n[j]; in[i * 16 + 8 + 2 * j + 1] = (u32)(B[i].n[j] >> 32); }
-    }
-    rt_buf *bin = ok ? rt_buf_new(s->c, (size_t)N * 64, in) : NULL;
-    rt_buf *bout = ok ? rt_buf_new(s->c, (size_t)N * 256, NULL) : NULL;
-    if (ok && bin && bout) {
-        ok = run2(s, kfe, bin, bout, (size_t)N) && rt_read(s->c, bout, 0, out, (size_t)N * 256);
-        for (int i = 0; ok && i < N; i++) {
-            pz_fe r[8], e[8];
-            for (int k = 0; k < 8; k++) unpack_fe(&r[k], out + i * 64 + k * 8);
-            pz_fe_mul(&e[0], &A[i], &B[i]);
-            pz_fe_sqr(&e[1], &A[i]);
-            pz_fe_add(&e[2], &A[i], &B[i]);
-            pz_fe_sub(&e[3], &A[i], &B[i]);
-            pz_fe a0 = A[i]; pz_fe_normalize(&a0);
-            if (pz_fe_is_zero(&a0)) pz_fe_zero(&e[4]); else pz_fe_inv(&e[4], &A[i]);
-            e[5] = A[i];
-            pz_fe_sub(&e[6], &B[i], &A[i]);
-            pz_fe_add(&e[7], &A[i], &A[i]);
-            for (int k = 0; k < 8; k++) {
-                if (k == 4 && pz_fe_is_zero(&a0)) continue;   /* inverse of zero is undefined */
-                if (!pz_fe_equiv(&r[k], &e[k])) { pz_log(PZ_LOG_ERR, "GPU self-test: operation %d differs from the CPU (item %d)", k, i); ok = false; break; }
-            }
-        }
-    } else ok = false;
-
-    /* hash160 */
-    if (ok) {
-        const int H = 64;
-        uint32_t *hin = pz_xcalloc((size_t)H * 9, 4), *hout = pz_xcalloc((size_t)H * 5, 4);
-        u8 xb[64][32];
-        pz_fe xs[64];
-        for (int i = 0; i < H; i++) {
-            for (int j = 0; j < 32; j++) xb[i][j] = (u8)grnd();
-            pz_fe_from_be(&xs[i], xb[i]);
-            u8 xx[32]; pz_fe_to_be(xx, &xs[i]);
-            memcpy(xb[i], xx, 32);
-            uint32_t pk[8]; pack_fe(pk, &xs[i]);
-            memcpy(hin + i * 9, pk, 32);
-            hin[i * 9 + 8] = (u32)(grnd() & 1);
-        }
-        rt_buf *hb = rt_buf_new(s->c, (size_t)H * 36, hin);
-        rt_buf *ho = rt_buf_new(s->c, (size_t)H * 20, NULL);
-        ok = hb && ho && run2(s, khash, hb, ho, (size_t)H) && rt_read(s->c, ho, 0, hout, (size_t)H * 20);
-        for (int i = 0; ok && i < H; i++) {
-            u8 h[20], got[20];
-            pz_hash160_pub33((u8)hin[i * 9 + 8], xb[i], h);
-            for (int w = 0; w < 5; w++) for (int b = 0; b < 4; b++) got[4 * w + b] = (u8)(hout[i * 5 + w] >> (8 * b));
-            if (memcmp(h, got, 20)) { pz_log(PZ_LOG_ERR, "GPU self-test: hash160 differs from the CPU (item %d)", i); ok = false; }
-        }
-        rt_buf_free(hb);
-        rt_buf_free(ho);
-        free(hin); free(hout);
-    }
-
-    /* point arithmetic: a + t*D */
-    if (ok) {
-        const int E = 24;
-        uint32_t *ein = pz_xcalloc((size_t)E * 33, 4), *eout = pz_xcalloc((size_t)E * 17, 4);
-        pz_ge pa[24], pd[24];
-        u32 ts[24];
-        for (int i = 0; i < E; i++) {
-            pz_u256 k1 = pz_u256_from_u64(grnd() | 1), k2 = pz_u256_from_u64(grnd() | 1);
-            pz_ec_mul_g(&pa[i], &k1);
-            pz_ec_mul_g(&pd[i], &k2);
-            ts[i] = i == 0 ? 0 : (i == 1 ? 1 : (i == 2 ? 0xFFFFFFFFu : (u32)grnd()));
-            pack_ge(ein + i * 33, &pa[i]);
-            pack_ge(ein + i * 33 + 16, &pd[i]);
-            ein[i * 33 + 32] = ts[i];
-        }
-        rt_buf *eb = rt_buf_new(s->c, (size_t)E * 33 * 4, ein);
-        rt_buf *eo = rt_buf_new(s->c, (size_t)E * 17 * 4, NULL);
-        ok = eb && eo && run2(s, kec, eb, eo, (size_t)E) && rt_read(s->c, eo, 0, eout, (size_t)E * 17 * 4);
-        for (int i = 0; ok && i < E; i++) {
-            /* want = pa + ts*pd computed with the host group law */
-            pz_ge want;
-            pz_gej acc;
-            acc.inf = true;
-            for (int bit = 31; bit >= 0; bit--) {
-                pz_gej_double(&acc, &acc);
-                if ((ts[i] >> bit) & 1) pz_gej_add_ge(&acc, &acc, &pd[i]);
-            }
-            pz_gej_add_ge(&acc, &acc, &pa[i]);
-            bool inf = !pz_gej_to_ge(&want, &acc);
-            if (inf || eout[i * 17 + 16] == 0) { if (!(inf && eout[i * 17 + 16] == 0)) ok = false; continue; }
-            pz_ge got;
-            unpack_fe(&got.x, eout + i * 17);
-            unpack_fe(&got.y, eout + i * 17 + 8);
-            if (!pz_ge_equal(&got, &want)) { pz_log(PZ_LOG_ERR, "GPU self-test: point sum differs from the CPU (item %d)", i); ok = false; }
-        }
-        rt_buf_free(eb);
-        rt_buf_free(eo);
-        free(ein); free(eout);
-    }
-    rt_buf_free(bin);
-    rt_buf_free(bout);
-    rt_kern_free(kfe);
-    rt_kern_free(khash);
-    rt_kern_free(kec);
-    rt_mod_free(p);
-    free(in); free(out);
-    return ok;
-}
-
-static bool test_linear(gpu_session *s)
-{
-    if (!linear_prepare(s)) return false;
-    const size_t tmax_production = s->T_max;      /* the test uses a handful of work-items; production keeps the full size */
-    s->T_max = s->T_max > 96 ? 96 : s->T_max;
-    bool ok = true;
-    pz_u256 start = pz_u256_pow2(77);
-    pz_u256_add_u64(&start, &start, grnd() & 0xffffff);
-    for (int trial = 0; trial < 3 && ok; trial++) {
-        u64 span = 40 * (u64)(2 * s->half) * 3ULL;
-        u64 off = trial == 0 ? 0 : (trial == 1 ? span - 1 : grnd() % span);
-        pz_u256 key = start;
-        pz_u256_add_u64(&key, &key, off);
-        pz_ge p;
-        u8 pub[33], h[20];
-        pz_ec_mul_g(&p, &key);
-        pz_ge_to_pub33(pub, &p);
-        pz_hash160(pub, 33, h);
-        lin_launch L;
-        memset(&L, 0, sizeof L);
-        L.key_start = start;
-        L.nkeys = span;
-        L.ngroups = 3;
-        if (!linear_run(s, h, &L)) { ok = false; break; }
-        bool found = false;
-        for (uint32_t i = 0; i < L.nhits; i++) {
-            pz_u256 k = start;
-            pz_u256_add_u64(&k, &k, L.hits[i]);
-            if (!pz_u256_cmp(&k, &key)) found = true; else ok = false;
-        }
-        if (!found || L.nhits != 1 || L.err) {
-            pz_log(PZ_LOG_ERR, "GPU self-test: wrong linear search result (hit=%u err=%u, expected offset %llu)", L.nhits, L.err, (unsigned long long)off);
-            ok = false;
-        }
-    }
-    s->T_max = tmax_production;
-    return ok;
-}
-
-static bool test_kang(gpu_session *s);
 static void kang_autotune(gpu_session *s, int idx);
 static double kang_measure(gpu_session *s);
-
-static bool selftest_allowed(const rt_dev *d) { return default_choice(d) || (!d->is_gpu && pz_env_on("PZ_OPENCL_ALL")) || (d->dup_of >= 0 && pz_env_on("PZ_OPENCL_ALL")); }
-
-int gpu_selftest(void)
-{
-    rt_dev devs[RT_MAX_DEVS];
-    char note[200];
-    int n = enumerate(devs, note, sizeof note);
-    int fails = 0, tested = 0;
-    for (int i = 0; i < n; i++) {
-        if (!selftest_allowed(&devs[i])) continue;
-        gpu_session *s = pz_xcalloc(1, sizeof *s);
-        char lb[96];
-        snprintf(lb, sizeof lb, "GPU[%d] %.30s via %s", i, devs[i].name, rt_api_name(devs[i].api));
-        pz_result_begin(lb);
-        bool ok = session_open(s, &devs[i]) && test_fe(s);
-        const int *vs;
-        const int nv = variants_of(&devs[i], &vs);
-        for (int k = 0; k < nv && ok; k++) {          /* every compile-time variant of the linear kernel */
-            s->variant = vs[k];
-            ok = test_linear(s);
-            linear_release_program(s);
-        }
-        if (ok) { session_release(s); memset(s, 0, sizeof *s); ok = session_open(s, &devs[i]); }
-        int ks[32];
-        const int nk = kvariants_of(&devs[i], ks);
-        for (int k = 0; k < nk && ok; k++) {          /* every variant of the kangaroo kernel (the cache-sized herds use the same kernels) */
-            if (KV_L2(ks[k])) continue;
-            s->kvar = ks[k];
-            s->NK = KV_NK(ks[k]);
-            ok = test_kang(s);
-        }
-        for (size_t k = 0; k < sizeof KV_MC4_NK / sizeof *KV_MC4_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* CUDA tests them as list entries */
-            s->kvar = KV_MC4_NK[k] | 2 << 16;
-            s->NK = KV_MC4_NK[k];
-            ok = test_kang(s);
-        }
-        for (size_t k = 0; k < sizeof KV_L2_NK / sizeof *KV_L2_NK && ok && devs[i].l2_bytes >= KANG_L2_MIN; k++)
-            for (int c = 0; c < 2 && ok; c++) {       /* the kernels only the cache-sized herds use */
-                s->kvar = KV_L2_NK[k] | c << 16;
-                s->NK = KV_L2_NK[k];
-                ok = test_kang(s);
-            }
-        printf(ok ? "kernels identical to the CPU\n" : "FAILED\n");
-        if (!ok) fails++;
-        tested++;
-        session_release(s);
-        free(s);
-    }
-    if (!tested) pz_result_line("GPU", "none found%s%s. To try an OpenCL CPU device set PZ_OPENCL_ALL=1", note[0] ? ": " : "", note);
-    return fails;
-}
 
 /* ---------------- sessions ---------------- */
 
@@ -778,13 +476,13 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
     char mem[160];
     pz_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
            d->api == RT_CUDA ? "SM" : "CU", fmt_devmem(d, mem, sizeof mem));
-    bool ok = session_open(s, d) && test_fe(s);
+    bool ok = gpu_session_open(s, d) && gpu_test_fe(s);
     if (ok && !for_kangaroo) linear_autotune(s, d->index);
     if (ok && for_kangaroo) kang_autotune(s, d->index);
-    ok = ok && (for_kangaroo ? test_kang(s) : test_linear(s));
+    ok = ok && (for_kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
     if (!ok) {
         pz_log(PZ_LOG_ERR, "GPU[%d] %s (%s): self-test failed, device excluded", d->index, d->name, rt_api_name(d->api));
-        session_release(s);
+        gpu_session_release(s);
         return false;
     }
     pz_log(PZ_LOG_INFO, "GPU[%d]: self-test passed", d->index);
@@ -854,8 +552,6 @@ static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
 
 /* ---------------- recovery after a device error ---------------- */
 
-static void kang_release(gpu_session *s);
-
 /* A failed launch after the machine slept or hibernated usually means that the driver reset the device or its context.
  * Drops the session, waits, reopens and rebuilds it (about two and a half minutes of attempts) and repeats the start-up
  * self-test; false if the device never comes back or fails the test. The caller then restores its own buffers. */
@@ -867,15 +563,15 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
     const int paused = atomic_load(&s->paused);
     double wait = 1.0;
     for (int attempt = 0; attempt < 9 && !atomic_load(&r->stop); attempt++) {
-        if (kangaroo) kang_release(s); else linear_release_program(s);
-        session_release(s);                           /* clears everything after the context */
+        if (kangaroo) gpu_kang_release(s); else gpu_linear_release_program(s);
+        gpu_session_release(s);                           /* clears everything after the context */
         s->T = keep.T; s->NK = keep.NK; s->kvar = keep.kvar; s->variant = keep.variant; s->l2fit = keep.l2fit;
         atomic_store(&s->paused, paused);
         pz_sleep(wait);
         wait = wait < 30 ? wait * 2 : 30;
-        if (!session_open(s, &info)) continue;
-        bool ok = test_fe(s) && (kangaroo ? test_kang(s) : test_linear(s));
-        if (ok && !kangaroo) { linear_release_program(s); ok = linear_prepare_variant(s, keep.variant); }
+        if (!gpu_session_open(s, &info)) continue;
+        bool ok = gpu_test_fe(s) && (kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
+        if (ok && !kangaroo) { gpu_linear_release_program(s); ok = linear_prepare_variant(s, keep.variant); }
         s->T = keep.T;                                /* the kangaroo self-test works with 4 work-items */
         if (ok) return true;
         pz_log(PZ_LOG_WARN, "GPU[%d] %s: the device came back but fails the start-up check (attempt %d)", info.index, info.name, attempt + 1);
@@ -916,7 +612,7 @@ static void *gpu_linear_thread(void *p)
         L.nkeys = c.nkeys;
         L.ngroups = ngroups;
         double t0 = pz_mono();
-        if (!linear_run(s, r->cfg.target_h160, &L)) {
+        if (!gpu_linear_run(s, r->cfg.target_h160, &L)) {
             sched_complete(r->sched, &c, 0);                  /* the block goes back to the pool */
             if (atomic_load(&r->stop)) break;
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
@@ -979,7 +675,7 @@ void gpu_linear_join(gpu_session *s, int n)
 {
     for (int i = 0; i < n; i++) {
         if (s[i].started) pthread_join(s[i].th, NULL);
-        session_release(&s[i]);
+        gpu_session_release(&s[i]);
     }
     free(s);
 }
@@ -1095,15 +791,15 @@ void gpu_bench(void)
     run_init(r);
     bool titled = false;
     for (int i = 0; i < n; i++) {
-        if (!selftest_allowed(&devs[i])) continue;
+        if (!gpu_selftest_allowed(&devs[i])) continue;
         gpu_session *s = pz_xcalloc(1, sizeof *s);
         s->r = r;
-        if (!session_open(s, &devs[i])) { session_release(s); free(s); continue; }
+        if (!gpu_session_open(s, &devs[i])) { gpu_session_release(s); free(s); continue; }
         if (!titled) { pz_section("GPUs"); titled = true; }
         printf("GPU[%d] %s via %s\n", devs[i].index, devs[i].name, rt_api_name(devs[i].api));
         fflush(stdout);
         linear_autotune(s, i);
-        if (!linear_prepare(s)) { session_release(s); free(s); continue; }
+        if (!gpu_linear_prepare(s)) { gpu_session_release(s); free(s); continue; }
         u8 h[20] = {0};
         lin_launch L;
         uint32_t ng = 2;
@@ -1116,7 +812,7 @@ void gpu_bench(void)
             L.ngroups = ng;
             L.nkeys = (u64)s->T_max * ng * (u64)(2 * s->half);
             double a = pz_mono();
-            if (!linear_run(s, h, &L)) break;
+            if (!gpu_linear_run(s, h, &L)) break;
             double dt = pz_mono() - a;
             keys += L.nkeys;
             pz_u256_add_u64(&start, &start, L.nkeys);
@@ -1129,7 +825,7 @@ void gpu_bench(void)
         char nb[48];
         pz_prop_line("linear search", "%s keys/s, window %s", pz_fmt_si((double)keys / el, b, sizeof b), variant_name(s->variant, nb, sizeof nb));
         fflush(stdout);
-        linear_release_program(s);
+        gpu_linear_release_program(s);
         kang_autotune(s, i);
         double kr = kang_measure(s);
         if (kr > 0) {
@@ -1151,7 +847,7 @@ void gpu_bench(void)
             pz_prop_line("probes", "the bandwidth and integer throughput probes cannot run");
         }
         fflush(stdout);
-        session_release(s);
+        gpu_session_release(s);
         free(s);
     }
     free(r);
@@ -1159,28 +855,9 @@ void gpu_bench(void)
 
 /* ---------------- kangaroo ---------------- */
 
-#define KSTRIDE 32
 #define JSTRIDE 20
-#define KANG_HIST_ROUNDS 64        /* depth of the jump history (rounds per launch) of a production herd */
 
-static void pack_state(uint32_t *o, const kang_worker *w, int i)
-{
-    pack_fe(o, &w->x[i]);
-    pack_fe(o + 8, &w->y[i]);
-    for (int j = 0; j < 3; j++) { o[16 + 2 * j] = (uint32_t)w->d[i].w[j]; o[17 + 2 * j] = (uint32_t)(w->d[i].w[j] >> 32); }
-    o[22] = w->kind[i] != 0;           /* the kernel only tells tame from wild (the species stay on the host: kang_dp_recode) */
-    o[23] = w->sigma[i] < 0 ? 1u : 0u;
-    o[24] = w->prev[i];
-    o[25] = w->prev2[i];
-    o[26] = w->ck[i];
-    o[27] = w->mn[i];
-    o[28] = w->esc[i];
-    o[29] = (uint32_t)w->lastdp[i];
-    o[30] = (uint32_t)(w->lastdp[i] >> 32);
-    o[31] = 0;
-}
-
-static void kang_release(gpu_session *s)
+void gpu_kang_release(gpu_session *s)
 {
     rt_buf_free(s->b_state); rt_buf_free(s->b_jump); rt_buf_free(s->b_dps); rt_buf_free(s->b_flags); rt_buf_free(s->b_rc); rt_buf_free(s->b_rl);
     rt_buf_free(s->b_hist);
@@ -1193,7 +870,7 @@ static void kang_release(gpu_session *s)
 
 /* Builds the kernel for s->NK kangaroos per work-item and the buffers for T work-items; a launch runs at most
  * `hist_rounds` rounds (the depth of the jump history, 16 bits per walker and round). */
-static bool kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds)
+bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds)
 {
     s->kprog = rt_build(s->c, RT_PROG_KANG, s->kvar);
     if (!s->kprog) return false;
@@ -1225,7 +902,7 @@ static bool kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t
 }
 
 /* One kernel launch of `rounds` rounds; returns the DP and restart counts. */
-static bool kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl)
+bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl)
 {
     if (rounds > s->hist_rounds) rounds = s->hist_rounds;
     uint32_t zero = 0;
@@ -1253,106 +930,6 @@ static bool kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, ui
     return rt_read(s->c, s->b_flags, 0, ndp, 4) && rt_read(s->c, s->b_rc, 0, nrl, 4);
 }
 
-static int cmp_dp(const void *a, const void *b)
-{
-    const uint32_t *x = a, *y = b;
-    if (x[8] != y[8]) return x[8] < y[8] ? -1 : 1;
-    for (int i = 0; i < 8; i++) if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1;
-    return 0;
-}
-static int cmp_u32(const void *a, const void *b) { uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b; return x < y ? -1 : x > y; }
-
-/* Runs the device kangaroo kernel and the CPU round on identical herds and compares everything. With R = 4 jumps
- * instead of 256 the walks fall into cycles every few steps (detection and escape jumps, counted in *escapes). */
-/* `start`: the step number the launch begins at (the ring of tags in the kernel depends on its parity) */
-static bool test_kang_one(gpu_session *s, unsigned R, u64 dp_mask, int ROUNDS, u64 start, u64 *escapes)
-{
-    kang_state *ks = kang_make_test_state(40, 1);
-    if (!ks) return false;
-    ks->P.R = R;
-    ks->P.dp_mask = dp_mask;
-    ks->P.cap_since = (1ULL << 32) + 5;   /* half the walkers have gone 2^32 - 4 steps without a DP (see kang_round_compare) */
-    const int T = 4, K = T * s->NK;
-    bool ok = kang_prepare(s, &ks->P, T, (uint32_t)ROUNDS);
-    kang_worker *w1 = kang_worker_new(ks, K, 77), *w2 = kang_worker_new(ks, K, 77);
-    kang_init_herd(ks, w1);
-    kang_init_herd(ks, w2);
-    w1->round = w2->round = start;
-    if (ok) s->gstep = start;
-    for (int i = 1; i < K; i += 2) w1->lastdp[i] = w2->lastdp[i] = 0 - ((1ULL << 32) - 4);
-    uint32_t *st = pz_xcalloc((size_t)K * KSTRIDE, 4), *back = pz_xcalloc((size_t)K * KSTRIDE, 4);
-    for (int i = 0; i < K; i++) pack_state(st + (size_t)i * KSTRIDE, w1, i);
-    uint32_t ndp = 0, nrl = 0;
-    if (ok) ok = rt_write(s->c, s->b_state, 0, st, (size_t)K * KSTRIDE * 4);
-    if (ok) ok = kang_run(s, &ks->P, ROUNDS, &ndp, &nrl);
-    if (ok) ok = rt_read(s->c, s->b_state, 0, back, (size_t)K * KSTRIDE * 4);
-    if (ok && (ndp > s->dps_cap || nrl > s->rl_cap)) ok = false;
-    if (!ok) ndp = nrl = 0;                                  /* a device that answers nonsense must not decide how much we allocate */
-    uint32_t *dpd = pz_xcalloc(ndp + 1, 40), *rld = pz_xcalloc(nrl + 1, 4);
-    if (ok && ndp) ok = rt_read(s->c, s->b_dps, 0, dpd, (size_t)ndp * 40);
-    if (ok && nrl) ok = rt_read(s->c, s->b_rl, 0, rld, (size_t)nrl * 4);
-    if (ok) {
-        for (int r = 0; r < ROUNDS; r++) {
-            kang_round_base(w2);
-            for (int i = 0; i < K; i++) *escapes += w2->jidx[i] >= R;
-        }
-        for (int i = 0; i < K && ok; i++) {
-            uint32_t ref[KSTRIDE];
-            pack_state(ref, w2, i);
-            if (memcmp(ref, back + (size_t)i * KSTRIDE, KSTRIDE * 4) != 0) {
-                pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: state of kangaroo %d differs from the CPU", i);
-                ok = false;
-            }
-        }
-        if (ok && (int)ndp != w2->ndp) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: %u distinguished points against %d on the CPU", ndp, w2->ndp); ok = false; }
-        if (ok && (int)nrl != w2->nrestart) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: %u restarts against %d on the CPU", nrl, w2->nrestart); ok = false; }
-        if (ok) {
-            uint32_t *cpu = pz_xcalloc((size_t)w2->ndp + 1, 40);
-            for (int i = 0; i < w2->ndp; i++) {
-                uint32_t *o = cpu + (size_t)i * 10;
-                o[0] = (uint32_t)w2->dpbuf[i].tagk; o[1] = (uint32_t)(w2->dpbuf[i].tagk >> 32);
-                for (int j = 0; j < 3; j++) { o[2 + 2 * j] = (uint32_t)w2->dpbuf[i].d.w[j]; o[3 + 2 * j] = (uint32_t)(w2->dpbuf[i].d.w[j] >> 32); }
-                o[8] = (uint32_t)w2->dpidx[i];
-                o[9] = 0;
-            }
-            for (uint32_t i = 0; i < ndp; i++) dpd[i * 10 + 9] = 0;
-            qsort(dpd, ndp, 40, cmp_dp);
-            qsort(cpu, (size_t)w2->ndp, 40, cmp_dp);
-            if (memcmp(dpd, cpu, (size_t)ndp * 40) != 0) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: distinguished points differ from the CPU"); ok = false; }
-            free(cpu);
-            uint32_t *rc = pz_xcalloc((size_t)w2->nrestart + 1, 4);
-            for (int i = 0; i < w2->nrestart; i++) rc[i] = (uint32_t)w2->restart[i];
-            qsort(rc, (size_t)w2->nrestart, 4, cmp_u32);
-            qsort(rld, nrl, 4, cmp_u32);
-            if (nrl && memcmp(rc, rld, nrl * 4) != 0) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: restarts differ from the CPU"); ok = false; }
-            free(rc);
-        }
-        if (ok && R == KANG_R && (w2->ndp == 0 || w2->nrestart == 0)) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: the test did not produce both distinguished points and restarts"); ok = false; }
-    }
-    free(st); free(back); free(dpd); free(rld);
-    kang_worker_free(w1);
-    kang_worker_free(w2);
-    kang_free_test_state(ks);
-    kang_release(s);
-    return ok;
-}
-
-static bool test_kang(gpu_session *s)
-{
-    u64 esc = 0;
-    /* a DP every 64 steps on average and past the first checkpoint step after 64 (restarts of the walkers that have been
-     * without a DP for long) ... */
-    if (!test_kang_one(s, KANG_R, 63, 72, 0, &esc)) return false;
-    /* ... launches that begin and end on odd step numbers (the tags of the two previous points sit in a ring indexed by the parity) */
-    if (!test_kang_one(s, KANG_R, 63, 74, 1, &esc) || !test_kang_one(s, KANG_R, 63, 75, 0, &esc) || !test_kang_one(s, KANG_R, 63, 75, 1, &esc)) return false;
-    esc = 0;
-    /* ... then 4 jumps: cycles and escapes over several checkpoint periods */
-    if (!test_kang_one(s, 4, ~0ULL >> 12, 160, 0, &esc)) return false;
-    if (!test_kang_one(s, 4, ~0ULL >> 12, 99, 5, &esc)) return false;
-    if (esc == 0) pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: the test produced no cycle escapes");
-    return esc > 0;
-}
-
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
  * OpenCL the historical 64 per compute unit; bounded by the state buffer in an eighth of the device memory. */
 static size_t kang_threads(const gpu_session *s)
@@ -1376,7 +953,7 @@ static double kang_measure(gpu_session *s)
     ks->P.cap_since = ~0ULL;
     const int T = (int)kang_threads(s);
     double rate = 0;
-    if (kang_prepare(s, &ks->P, T, KANG_HIST_ROUNDS)) {
+    if (gpu_kang_prepare(s, &ks->P, T, KANG_HIST_ROUNDS)) {
         const size_t K = (size_t)T * s->NK;
         uint32_t *st = pz_xcalloc(K * KSTRIDE, 4);
         u64 x = 0x9E3779B97F4A7C15ULL;
@@ -1391,7 +968,7 @@ static double kang_measure(gpu_session *s)
         const double t_begin = pz_mono();
         while (ok && pz_mono() - t_begin < 4.0) {
             double a = pz_mono();
-            if (!kang_run(s, &ks->P, rounds, &ndp, &nrl)) { rate = 0; break; }
+            if (!gpu_kang_run(s, &ks->P, rounds, &ndp, &nrl)) { rate = 0; break; }
             double dt = pz_mono() - a;
             if (dt < 0.25 && rounds < s->hist_rounds) { rounds *= 2; continue; }
             double r = (double)K * rounds / dt;
@@ -1399,7 +976,7 @@ static double kang_measure(gpu_session *s)
             if (pz_mono() - t_begin > 1.5) break;
         }
     }
-    kang_release(s);
+    gpu_kang_release(s);
     kang_free_test_state(ks);
     return rate;
 }
@@ -1448,7 +1025,7 @@ static void kang_autotune(gpu_session *s, int idx)
         return;
     }
     int vs[32];
-    const int nv = kvariants_of(d, vs);
+    const int nv = gpu_kvariants_of(d, vs);
     pz_log(PZ_LOG_INFO, "GPU[%d]: tuning the kangaroo kernel (one time only: %d variants)...", idx, nv);
     double rate[32] = {0};
     int best = 0;
@@ -1476,7 +1053,7 @@ static void kang_autotune(gpu_session *s, int idx)
     pz_log(PZ_LOG_INFO, "%s; picking %s", line, kvariant_name(vs[best], nb, sizeof nb));
     kang_set_variant(s, vs[best]);
     /* remembered only once the choice has passed the bit-exact test against the CPU */
-    if (!test_kang(s)) {
+    if (!gpu_test_kang(s)) {
         pz_log(PZ_LOG_WARN, "GPU[%d]: variant %s failed the correctness check: using the default", idx, kvariant_name(vs[best], nb, sizeof nb));
         kang_set_variant(s, default_kvariant(d));
         return;
@@ -1512,7 +1089,7 @@ int gpu_kangaroo_start(run_ctx *r, gpu_session **out, int *k_total)
 static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, u64 stream)
 {
     const int K = s->T * s->NK;
-    if (!kang_prepare(s, &ks->P, s->T, KANG_HIST_ROUNDS)) return false;
+    if (!gpu_kang_prepare(s, &ks->P, s->T, KANG_HIST_ROUNDS)) return false;
     if (*mirror) kang_worker_free(*mirror);
     *mirror = kang_worker_new(ks, K, stream);
     kang_init_herd_parallel(ks, *mirror, s->r->sys.ncpu, stream);
@@ -1551,7 +1128,7 @@ static void *gpu_kang_thread(void *p)
         if (atomic_load(&s->paused)) { pz_sleep(0.01); continue; }
         uint32_t ndp = 0, nrl = 0;
         double t0 = pz_mono();
-        if (!kang_run(s, &ks->P, rounds, &ndp, &nrl)) goto device_error;
+        if (!gpu_kang_run(s, &ks->P, rounds, &ndp, &nrl)) goto device_error;
         consecutive = 0;
         double dt = pz_mono() - t0;
         mirror->round = s->gstep;               /* restarts below start counting from here */
@@ -1661,9 +1238,9 @@ void gpu_doctor(bool deep)
         if (d->api == RT_OPENCL && strstr(d->vendor, "NVIDIA") && d->dup_of < 0)
             doctor_line('w', "[%d] NVIDIA card seen only through OpenCL: CUDA (faster) is not available, update the NVIDIA driver", i);
         gpu_session *s = pz_xcalloc(1, sizeof *s);
-        if (session_open(s, d)) {
-            const bool ok = test_fe(s);
-            session_release(s);
+        if (gpu_session_open(s, d)) {
+            const bool ok = gpu_test_fe(s);
+            gpu_session_release(s);
             doctor_line(ok ? 'o' : 'x', "[%d] field arithmetic, hash and curve checked bit by bit against the CPU: %s", i, ok ? "passed" : "ERROR (the GPU would be excluded)");
         } else {
             doctor_line('x', "[%d] cannot open the device (damaged driver or runtime?)", i);
