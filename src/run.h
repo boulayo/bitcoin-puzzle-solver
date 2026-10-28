@@ -79,6 +79,7 @@ typedef struct run_ctx {
     void (*remember_rate)(struct run_ctx *, double);   /* given the steady rate every few minutes and at the end (NULL: not remembered) */
     bool silent_setup;               /* no informational logs from setup code (self-tests) */
     bool threads_explicit;           /* --threads given */
+    bool mode_auto;                  /* no --mode given: the program chose the method */
     int limit_pct;                   /* --limit: use only this percentage (1..99) of the CPU threads and of the GPU work-items, all of them
                                       * running flat out all the time (0 = off). Set by run_limit_setup */
     prio_mode prio_gpu;              /* --prio-gpu */

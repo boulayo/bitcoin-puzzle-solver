@@ -5,6 +5,7 @@
 #include "kangaroo.h"
 #include "platform.h"
 #include "bsgs.h"
+#include "gpu.h"
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
@@ -253,7 +254,8 @@ int run_bsgs(run_ctx *r)
     pz_fmt_si(KANG_C_MEAN * (double)sqrtl(pz_u256_to_ld(&b->P.W)), c2, sizeof c2);
     pz_log(PZ_LOG_INFO, "BSGS: %llu baby steps (table %s, available RAM %s), %llu giant steps; expected mean cost %s operations (kangaroo: %s)",
            (unsigned long long)T, mb, ma, (unsigned long long)b->P.Ng, c1, c2);
-    if (r->use_gpu) pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode (use --mode kangaroo to put them to work)");
+    if (r->use_gpu && gpu_count_usable() > 0)
+        pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode%s", r->mode_auto ? "" : " (use --mode kangaroo to put them to work)");
     if (bsgs_mean_cost(&b->P.W, T) > KANG_C_MEAN * sqrtl(pz_u256_to_ld(&b->P.W)))
         pz_log(PZ_LOG_WARN, "BSGS: with %llu baby steps it costs more than the kangaroo (table too small for this range)", (unsigned long long)T);
 

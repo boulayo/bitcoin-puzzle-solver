@@ -815,6 +815,7 @@ static int cmd_hunt(int argc, char **argv)
         r->nthreads = MAX_WORKERS - 16;
     }
     r->threads_explicit = o.threads > 0;
+    r->mode_auto = !strcmp(o.mode, "auto");
     r->node = (u32)o.node;
     r->use_cpu = !o.no_cpu;
     r->use_gpu = !o.no_gpu;
