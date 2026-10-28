@@ -376,7 +376,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 static void append_stats_csv(run_ctx *r, const progress_info *pi)
 {
     bool fresh = access(r->path_stats, F_OK) != 0;
-    FILE *f = fopen(r->path_stats, "a");
+    FILE *f = fopen(r->path_stats, "ab");           /* binary: LF lines on Windows too */
     if (!f) return;
     if (fresh) fprintf(f, "unix_time,elapsed_s,fraction,done,rate_total,rate_cpu,rate_gpu\n");
     double cpur, gpur;

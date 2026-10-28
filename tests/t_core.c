@@ -161,6 +161,27 @@ int main(void)
     }
 #endif
     t_writers();
+    {   /* the log is appended in binary mode: lines end in LF on Windows too */
+        char dir[600], path[700];
+        if (pz_make_temp_dir(dir, sizeof dir, "pzlog")) {
+            snprintf(path, sizeof path, "%s/log.txt", dir);
+            pz_log_set_quiet(1);
+            pz_log_set_file(path);
+            pz_log(PZ_LOG_INFO, "first line");
+            pz_log_set_file(NULL);
+            pz_log_set_file(path);                                   /* reopened for append: the two lines are kept */
+            pz_log(PZ_LOG_INFO, "second line");
+            pz_log_set_file(NULL);
+            pz_log_set_quiet(0);
+            char *t = pz_read_file(path, NULL);
+            CHECK(t && strstr(t, "first line") && strstr(t, "second line") && !strchr(t, '\r'));
+            int lines = 0;
+            for (const char *q = t ? t : ""; *q; q++) lines += *q == '\n';
+            CHECK(lines == 2);
+            free(t);
+            pz_remove_tree(dir);
+        }
+    }
     printf(fails ? "t_core: %d FAILED\n" : "t_core: OK\n", fails);
     return fails != 0;
 }

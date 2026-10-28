@@ -254,11 +254,26 @@ static u64 opt_u64(const char *opt, const char *s, u64 lo, u64 hi)
     return v;
 }
 
-/* Campaign names become directory names: keep them to a safe alphabet (no path separators, no leading dot). */
+/* A device name of Windows, with or without an extension ("con", "NUL.txt", "com1", "lpt9"): no file or folder can have it there. */
+static bool windows_device_name(const char *n)
+{
+    static const char *const dev[] = {"con", "prn", "aux", "nul"};
+    char head[8];
+    size_t l = strcspn(n, ".");
+    if (l == 0 || l >= sizeof head) return false;
+    for (size_t i = 0; i < l; i++) head[i] = (char)((n[i] >= 'A' && n[i] <= 'Z') ? n[i] + 32 : n[i]);
+    head[l] = 0;
+    for (size_t i = 0; i < sizeof dev / sizeof *dev; i++)
+        if (!strcmp(head, dev[i])) return true;
+    return l == 4 && (!strncmp(head, "com", 3) || !strncmp(head, "lpt", 3)) && head[3] >= '0' && head[3] <= '9';
+}
+
+/* Campaign names become directory names: keep them to a safe alphabet (no path separators, no leading dot), and to names that every
+ * system can have, because a campaign folder is copied between computers (Windows refuses a trailing dot and the device names). */
 static bool valid_campaign_name(const char *n)
 {
     size_t l = strlen(n);
-    if (l == 0 || l > 80 || n[0] == '.') return false;
+    if (l == 0 || l > 80 || n[0] == '.' || n[l - 1] == '.' || windows_device_name(n)) return false;
     for (size_t i = 0; i < l; i++) {
         char c = n[i];
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')) return false;
@@ -301,7 +316,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         case 'H': opt_copy("--hash160", o->hash160, sizeof o->hash160, optarg); break;
         case 'k': opt_copy("--pubkey", o->pubkey, sizeof o->pubkey, optarg); break;
         case 'c':
-            if (!valid_campaign_name(optarg)) pz_die("invalid campaign name '%s' (allowed: letters, digits, '-', '_', '.'; at most 80 characters; cannot start with '.')", optarg);
+            if (!valid_campaign_name(optarg)) pz_die("invalid campaign name '%s' (allowed: letters, digits, '-', '_', '.'; at most 80 characters; cannot start or end with '.' or be a Windows device name such as con, nul, com1 or lpt1)", optarg);
             pz_strlcpy(o->campaign, optarg, sizeof o->campaign);
             break;
         case 'd':
