@@ -18,5 +18,7 @@ char *ui_fmt_prob(double p, char *buf, size_t n);                /* "12.34%", "3
 int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary *es, bool final, int cols, bool color, char *buf, size_t n);
 /* One compact line (no newline). */
 void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, int cols, char *buf, size_t n);
+/* The line of the end of a session: the state and the progress; the completion times only for a campaign that can go on. */
+void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, char *buf, size_t n);
 
 #endif

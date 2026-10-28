@@ -216,8 +216,10 @@ int campaigns_list(const char *base)
         if ((l = (int)strlen(rows[i].eta)) > we) we = l;
     }
     printf("%-*s %6s  %-9s %-*s %*s %*s %*s  %s\n", wn, "CAMPAIGN", "PUZZLE", "MODE", ws, "STATE", wf, "PROGRESS", wr, "SPEED", we, "TIME LEFT (50%)", "UPDATED");
+    bool stopped = false;
     for (int i = 0; i < nc; i++) {
         const row_t *w = &rows[i];
+        if (!w->bad && !strcmp(w->state, "STOPPED")) stopped = true;
         if (w->bad) printf("%-*s  (unreadable configuration: %s)\n", wn, w->name, w->err);
         else {
             char pz[16] = "-";                                         /* a custom target has no puzzle */
@@ -227,6 +229,6 @@ int campaigns_list(const char *base)
         free(w->name);
     }
     free(rows);
-    printf("\nResume a campaign with: pzsolve hunt -c NAME, or pzsolve hunt -p N for a puzzle of the database.\n");
+    if (stopped) printf("\nResume a campaign with: pzsolve hunt -c NAME, or pzsolve hunt -p N for a puzzle of the database.\n");
     return nc;
 }

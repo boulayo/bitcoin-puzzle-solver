@@ -179,7 +179,7 @@ bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
         atomic_store(&r->found, 1);
         atomic_store(&r->stop, 1);
         run_write_found(r);
-        pz_log(PZ_LOG_INFO, "KEY FOUND by %s: see %s (the key is not written to the log)", source, r->path_found);
+        pz_log(PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log)", source);   /* the box at the end gives the file */
     }
     pthread_mutex_unlock(&r->found_mu);
     return true;
@@ -452,15 +452,20 @@ static void ui_draw(run_ctx *r, const progress_info *pi, bool final)
 void run_ui_final(run_ctx *r, const progress_info *pi)
 {
     ui_mode m = effective_ui(r);
-    if (m == UI_FULL || m == UI_LINE) {
+    if (m == UI_FULL) {
         ui_draw(r, pi, true);
         pz_log_terminal_line_break();
     } else {
         char buf[512];
         eta_summary es;
         make_summary(pi, &es);
-        ui_render_line(r, pi, &es, 0, buf, sizeof buf);
-        pz_log(PZ_LOG_INFO, "final state: %s", buf);
+        ui_render_final_line(r, pi, &es, buf, sizeof buf);
+        if (m == UI_LINE) {
+            pz_ui_block(buf, 1);
+            pz_log_terminal_line_break();
+        }
+        pz_log_file(PZ_LOG_INFO, "final state: %s", buf);
+        if (m != UI_LINE) pz_log(PZ_LOG_INFO, "final state: %s", buf);
     }
 }
 

@@ -220,8 +220,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     len = add_line(buf, n, len, &lines, cols, "", "", ln);
 
     if (final && atomic_load(&r->found)) {
-        snprintf(ln, sizeof ln, "KEY FOUND: see %s", r->path_found);
-        len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
+        len = add_line(buf, n, len, &lines, cols, B0, B1, "KEY FOUND");   /* the box below gives the file */
     } else if (pi->beyond) {
         len = add_line(buf, n, len, &lines, cols, B0, B1, "Time left     unknown (beyond the model)");
     } else if (pi->eta.model == ETA_NONE) {
@@ -330,4 +329,18 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
     } else
         snprintf(buf, n, "%s [%s] %s | measuring speed...", tag, bb, pc);
     if (limit && (int)strlen(buf) > limit) buf[limit] = 0;
+}
+
+void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, char *buf, size_t n)
+{
+    char pc[32], tag[96], cnt[48], a[128];
+    ui_target_tag(r, tag, sizeof tag);
+    percent(pi->fraction, pc, sizeof pc);
+    const bool kang = r->cfg.mode == MODE_KANGAROO;
+    const char *state = ui_state_name(r, true);
+    if (kang) snprintf(a, sizeof a, "%s steps, success probability %s", ui_fmt_count(pi->done, cnt, sizeof cnt), pc);
+    else snprintf(a, sizeof a, "%s covered", pc);
+    if (strcmp(state, "STOPPED") != 0) snprintf(buf, n, "%s %s, %s", tag, state, a);   /* FOUND, COMPLETED: nothing left to estimate */
+    else if (pi->rate > 0 && pi->est_state != RATE_MEASURING && !pi->beyond) ui_render_line(r, pi, es, 0, buf, n);
+    else snprintf(buf, n, "%s %s, %s", tag, state, a);
 }
