@@ -122,6 +122,10 @@ Il BSGS usa solo CPU e RAM; con una GPU potente il canguro può essere più velo
 così, forza `--mode kangaroo`. La modalità resta fissata nella campagna (`campaign.conf`). Il canguro accetta intervalli da 2^16 a 2^188
 chiavi (i puzzle dal 190 in su vengono rifiutati con un messaggio; gli esponenti dei suoi camminatori sono numeri a 192 bit).
 
+La tabella del BSGS occupa circa 11,4 byte per baby step (celle da 8 byte, usate al 70 %); `--bsgs-entries` conta i baby step, non i byte.
+Una tabella salvata da una versione precedente (file `PZBSGS01`, 12,3 byte per baby step) viene letta e usata così com'è, con la RAM che richiede;
+le tabelle salvate ora hanno un formato nuovo (`PZBSGS02`) che quelle versioni non sanno leggere.
+
 ## 5. La cartella di una campagna
 
 ```
