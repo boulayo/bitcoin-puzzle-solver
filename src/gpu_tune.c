@@ -115,13 +115,15 @@ static int tune_cache_get(const rt_dev *d, bool kang)
 static pthread_mutex_t g_tune_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_tune_cv = PTHREAD_COND_INITIALIZER;
 static char g_tuning[RT_MAX_DEVS][400];
+static int g_tuning_idx[RT_MAX_DEVS];         /* the device that measures each of them */
 static int g_ntuning;
 
-static bool tune_busy(const char *key)
+/* The device that is measuring `key`, or -1. */
+static int tune_busy(const char *key)
 {
     for (int i = 0; i < g_ntuning; i++)
-        if (!strcmp(g_tuning[i], key)) return true;
-    return false;
+        if (!strcmp(g_tuning[i], key)) return g_tuning_idx[i];
+    return -1;
 }
 
 static void tune_cache_put(const rt_dev *d, bool kang, int variant)
@@ -137,19 +139,26 @@ static void tune_cache_put(const rt_dev *d, bool kang, int variant)
 
 /* The saved choice for this device if there is one, waiting for another thread that is measuring the same model; 0 when this thread is to
  * measure (and then calls tune_end). */
-static int tune_begin(const rt_dev *d, bool kang)
+static int tune_begin(const rt_dev *d, bool kang, int idx)
 {
     char key[400];
     tune_key(d, kang, key, sizeof key);
     int v;
+    bool told = false;
     pthread_mutex_lock(&g_tune_mu);
     for (;;) {
         v = tune_cache_get(d, kang);
         if (v) break;
-        if (!tune_busy(key)) {
-            if (g_ntuning < RT_MAX_DEVS) pz_strlcpy(g_tuning[g_ntuning++], key, sizeof g_tuning[0]);
+        const int other = tune_busy(key);
+        if (other < 0) {
+            if (g_ntuning < RT_MAX_DEVS) {
+                g_tuning_idx[g_ntuning] = idx;
+                pz_strlcpy(g_tuning[g_ntuning++], key, sizeof g_tuning[0]);
+            }
             break;
         }
+        if (!told) rt_log(PZ_LOG_INFO, "GPU[%d]: waiting for the tuning of GPU[%d] (same model)", idx, other);
+        told = true;
         pthread_cond_wait(&g_tune_cv, &g_tune_mu);
     }
     pthread_mutex_unlock(&g_tune_mu);
@@ -162,7 +171,12 @@ static void tune_end(const rt_dev *d, bool kang)
     tune_key(d, kang, key, sizeof key);
     pthread_mutex_lock(&g_tune_mu);
     for (int i = 0; i < g_ntuning; i++)
-        if (!strcmp(g_tuning[i], key)) { pz_strlcpy(g_tuning[i], g_tuning[--g_ntuning], sizeof g_tuning[0]); break; }
+        if (!strcmp(g_tuning[i], key)) {
+            --g_ntuning;
+            pz_strlcpy(g_tuning[i], g_tuning[g_ntuning], sizeof g_tuning[0]);
+            g_tuning_idx[i] = g_tuning_idx[g_ntuning];
+            break;
+        }
     pthread_cond_broadcast(&g_tune_cv);
     pthread_mutex_unlock(&g_tune_mu);
 }
@@ -338,7 +352,7 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
 static void tune_pick(gpu_session *s, int idx, const tune_ops *op)
 {
     char nb[64];
-    const int cached = g_retune ? 0 : tune_begin(&s->info, op->kang);
+    const int cached = g_retune ? 0 : tune_begin(&s->info, op->kang, idx);
     if (cached) {
         op->set(s, cached);
         rt_log(PZ_LOG_INFO, op->cached_fmt, idx, op->name(cached, nb, sizeof nb));
