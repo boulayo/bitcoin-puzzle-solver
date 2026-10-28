@@ -73,6 +73,15 @@ static inline void pz_sha256_lanes_33(const uint32_t *X, const uint32_t *pfx, pz
     for (int i = 9; i < 15; i++) w[i] = pz_v_set(0);
     w[15] = pz_v_set(264);
 
+    /* With AVX2 and AVX-512 the round constants, and the initial state added at the end, are read through pointers the compiler
+     * cannot see through: each is then one broadcast from memory (on AVX-512 an operand of the addition) instead of an immediate
+     * moved to a general register and broadcast from there. The initial state of the rounds stays visible, as the first rounds
+     * fold on it. Not with 16-byte vectors, where the constants are full vectors in memory already, nor for RIPEMD-160, whose
+     * constants fold with the padding words and its two zero constants vanish: both counted more instructions. */
+    const uint32_t *kt = pz_sha256_k, *hv = pz_sha256_h0;
+#if PZ_VBYTES > 16
+    __asm__("" : "+r"(kt), "+r"(hv));
+#endif
     pz_vu a = pz_v_set(pz_sha256_h0[0]), b = pz_v_set(pz_sha256_h0[1]), c = pz_v_set(pz_sha256_h0[2]), d = pz_v_set(pz_sha256_h0[3]);
     pz_vu e = pz_v_set(pz_sha256_h0[4]), f = pz_v_set(pz_sha256_h0[5]), g = pz_v_set(pz_sha256_h0[6]), h = pz_v_set(pz_sha256_h0[7]);
 #pragma GCC unroll 64
@@ -89,14 +98,14 @@ static inline void pz_sha256_lanes_33(const uint32_t *X, const uint32_t *pfx, pz
         }
         pz_vu S1 = PZ_V_ROTR(e, 6) ^ PZ_V_ROTR(e, 11) ^ PZ_V_ROTR(e, 25);
         pz_vu ch = (e & f) ^ (~e & g);
-        pz_vu t1 = h + S1 + ch + wi + pz_sha256_k[i];
+        pz_vu t1 = h + S1 + ch + wi + kt[i];
         pz_vu S0 = PZ_V_ROTR(a, 2) ^ PZ_V_ROTR(a, 13) ^ PZ_V_ROTR(a, 22);
         pz_vu mj = (a & b) ^ (a & c) ^ (b & c);
         pz_vu t2 = S0 + mj;
         h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
     }
-    dig[0] = a + pz_sha256_h0[0]; dig[1] = b + pz_sha256_h0[1]; dig[2] = c + pz_sha256_h0[2]; dig[3] = d + pz_sha256_h0[3];
-    dig[4] = e + pz_sha256_h0[4]; dig[5] = f + pz_sha256_h0[5]; dig[6] = g + pz_sha256_h0[6]; dig[7] = h + pz_sha256_h0[7];
+    dig[0] = a + hv[0]; dig[1] = b + hv[1]; dig[2] = c + hv[2]; dig[3] = d + hv[3];
+    dig[4] = e + hv[4]; dig[5] = f + hv[5]; dig[6] = g + hv[6]; dig[7] = h + hv[7];
 }
 #endif
 
