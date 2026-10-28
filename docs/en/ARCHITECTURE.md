@@ -40,12 +40,25 @@
 | `gpu_tune.c` | variants of the GPU kernels, choice of the fastest for each device (measured once, saved in `gpu_tune.txt`), size of the kangaroo herd, GPU benchmark |
 | `gpu_selftest.c` | the GPU kernels against the CPU, bit by bit: field arithmetic, hash160, curve arithmetic, every variant of the linear and of the kangaroo kernel |
 | `gpu_rt.h`, `rt.c`, `rt_priv.h` | minimal GPU runtime interface (context, modules, kernels, buffers, launch) and the combined device list (an NVIDIA card seen by both runtimes is recognized by PCI address and used once) |
-| `rt_cuda.c` | CUDA implementation: *driver API* loaded at run time (`nvcuda.dll` / `libcuda.so.1`), embedded PTX modules, context with passive waiting |
+| `rt_cuda.c` | CUDA implementation: *driver API* loaded at run time (`nvcuda.dll` / `libcuda.so.1`), embedded PTX modules (compressed, unpacked when one is loaded), context with passive waiting |
 | `rt_cl.c`, `cl_api.h/.c` | OpenCL implementation: dynamic loader, kernels compiled from embedded sources |
-| `lz.h`, `lz.c` | decoder of a small LZ77 format of our own (libc only, every access bounds-checked, checksummed, with an optional dictionary), and `pz_blob_text`, which unpacks an embedded text; the encoder is in `tools/embed.c` |
+| `lz.h`, `lz.c` | decoder of the compressed PTX modules (a small LZ77 of our own with an optional dictionary, libc only, every access bounds-checked, checksummed) and `pz_blob_text`, which unpacks an embedded module; the encoder is in `tools/embed.c` (see below) |
 | `kernels/*.cl`, `kernels/pz_cuda.h`, `kernels/ptx/*.ptx` | **a single kernel source**: OpenCL C, compiled by the OpenCL driver or, through `pz_cuda.h`, by NVRTC into PTX (`tools/gen_ptx.py`, committed files) |
 | `sysinfo.h/.c` | CPU/RAM/cache, thread affinity |
 | `selftest.c`, `main.c` | self-test, benchmark, command-line interface |
+
+**Embedded kernels.** The kernels are compiled into the executable by `tools/embed.c`, which the `Makefile` builds and runs on the build
+machine. The OpenCL sources (52 KB) become plain arrays (`build/kernels_gen.c`). The 19 PTX modules (12 MB of text in `src/kernels/ptx/`,
+committed) are embedded compressed (`build/ptx_gen.c`, `embed -z`) in the format described at the top of `src/lz.c`; the encoder is in
+`embed.c`, which checks each stream it writes with the real decoder, so the build stops if a stream does not unpack to its file. The
+modules of a family differ in few lines (`linear128` and `linear256` in 148 of 38,000), so each module is stored against another one
+(`PTXBASE` in the `Makefile`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
+the modules take about 1 MB instead of 12 MB, and the stripped Linux executable is under 3 MB instead of 14 MB. `rtcu_build` unpacks the
+module it is about to load (a few milliseconds, once per module load; no hot path touches this), hands the NUL-terminated text to the
+driver and frees it. `tools/gen_ptx.py` and the `.ptx` files are unchanged. The simulated CUDA driver embeds the same files plain
+(`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves;
+`tests/t_kernels.c` does the same for every module without a driver. The Makefile builds with `-g`; only the binaries in the release
+archives are stripped (`tools/package_release.sh`, see `RELEASING.md`).
 
 The x86 SIMD engines are optional. When the `Makefile` builds for a target other than x86-64 it defines `PZ_NO_X86_VARIANTS`; the engine
 registry (`cpu_common.c`), BSGS (`bsgs.c`) and the kangaroo (`kang_cpu.c`) then use only the scalar code.
@@ -118,8 +131,8 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 | GPU kernel arithmetic | `tests/t_gpufe.c`: the field of `kernels/pz_common.cl` compiled for the host, portable variant and PTX carry-chain variant (with the carry flag emulated according to the PTX ISA), against the CPU on 5 million combinations with all the edge cases |
 | Permutation, scheduler, SIMD engines | `lib/pzcore/tests/t_perm.c`, `tests/t_jobq.c`, `t_engine.c` |
 | Complete campaigns | `tests/e2e.sh` |
-| Compressed kernels | `tests/t_lz.c`: the decoder and the encoder (round trips of the real PTX modules and of random and adversarial texts, streams built by hand, truncated, extended and corrupted streams must be refused and never touch memory outside the buffers; run under ASan/UBSan by `tools/verify.sh`) |
-| CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the embedded PTX modules and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
+| Compressed kernels | `tests/t_lz.c`: the decoder and the encoder (round trips of the real PTX modules and of random and adversarial texts, streams built by hand, truncated, extended and corrupted streams must be refused and never touch memory outside the buffers; run under ASan/UBSan by `tools/verify.sh`); `tests/t_kernels.c`: every module embedded in the program unpacks to exactly the bytes of its `.ptx` file |
+| CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the PTX modules (by comparing the text it is given with the files, byte for byte) and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
 | Windows | `make windows` / `make wintest`: static MinGW-w64 exe, unit tests, self-test and campaigns run under Wine (`tools/verify.sh`) |
 | Sanitizer / Valgrind | `make asan`, `make tsan`, `valgrind` (see `docs/en/RELEASING.md`, section "Before every release") |
 | Kangaroo parameters | `tools/research/ksim.c` (abstract model) and `pzsolve kstat` (real curve); the results are in `docs/en/ALGORITHMS.md` and `docs/en/RESEARCH.md` |

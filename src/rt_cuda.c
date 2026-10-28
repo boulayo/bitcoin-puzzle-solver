@@ -3,15 +3,17 @@
  *
  * Uses the CUDA *driver* API (nvcuda.dll on Windows, libcuda.so.1 on Linux), which every NVIDIA driver installs:
  * no CUDA toolkit is needed. The kernels are the OpenCL C sources compiled to PTX ahead of time by NVRTC
- * (tools/gen_ptx.py) and embedded in the program; the driver JIT-compiles the PTX for the GPU at hand on first use
- * and keeps the result in its cache. */
+ * (tools/gen_ptx.py) and embedded in the program, compressed (lz.h); the module to load is unpacked just before. The driver
+ * JIT-compiles the PTX for the GPU at hand on first use and keeps the result in its cache. */
 #include "rt_priv.h"
 #include "platform.h"
+#include "lz.h"
 #include <pthread.h>
 
-extern const unsigned char pz_ptx_linear128[], pz_ptx_linear256[], pz_ptx_linear512[], pz_ptx_linear128m4[], pz_ptx_linear256m4[],
-    pz_ptx_linear512m4[], pz_ptx_kang64[], pz_ptx_kang128[], pz_ptx_kang256[], pz_ptx_kang64b[], pz_ptx_kang128b[], pz_ptx_kang256b[], pz_ptx_kang16[], pz_ptx_kang32[], pz_ptx_kang16b[], pz_ptx_kang32b[], pz_ptx_kang64c[], pz_ptx_kang128c[],
-    pz_ptx_test[];
+/* the modules are embedded compressed (tools/embed.c -z): rtcu_build unpacks the one it loads */
+extern const pz_blob pz_ptx_linear128, pz_ptx_linear256, pz_ptx_linear512, pz_ptx_linear128m4, pz_ptx_linear256m4,
+    pz_ptx_linear512m4, pz_ptx_kang64, pz_ptx_kang128, pz_ptx_kang256, pz_ptx_kang64b, pz_ptx_kang128b, pz_ptx_kang256b, pz_ptx_kang16, pz_ptx_kang32, pz_ptx_kang16b, pz_ptx_kang32b, pz_ptx_kang64c, pz_ptx_kang128c,
+    pz_ptx_test;
 
 #define RT_CUDA_BLOCK 128          /* threads per block: the kernels are compiled with __launch_bounds__(128) */
 
@@ -190,30 +192,34 @@ void rtcu_close(rt_ctx *c)
 
 bool rtcu_build(rt_mod *m, rt_prog_id prog, int param)
 {
-    const unsigned char *ptx = NULL;
+    const pz_blob *ptx = NULL;
     switch (prog) {
     case RT_PROG_LINEAR:   /* half-window | minimum blocks per SM << 16 (see gpu_priv.h) */
-        ptx = param == 128 ? pz_ptx_linear128 : param == 256 ? pz_ptx_linear256 : param == 512 ? pz_ptx_linear512
-            : param == (128 | 4 << 16) ? pz_ptx_linear128m4 : param == (256 | 4 << 16) ? pz_ptx_linear256m4
-            : param == (512 | 4 << 16) ? pz_ptx_linear512m4 : NULL;
+        ptx = param == 128 ? &pz_ptx_linear128 : param == 256 ? &pz_ptx_linear256 : param == 512 ? &pz_ptx_linear512
+            : param == (128 | 4 << 16) ? &pz_ptx_linear128m4 : param == (256 | 4 << 16) ? &pz_ptx_linear256m4
+            : param == (512 | 4 << 16) ? &pz_ptx_linear512m4 : NULL;
         break;
     case RT_PROG_KANG:     /* kangaroos per work-item | configuration << 16 (0 products at every walker, 1 at every other, 2 at every fourth, see gpu_priv.h) */
-        ptx = param == 64 ? pz_ptx_kang64 : param == 128 ? pz_ptx_kang128 : param == 256 ? pz_ptx_kang256
-            : param == (64 | 1 << 16) ? pz_ptx_kang64b : param == (128 | 1 << 16) ? pz_ptx_kang128b
-            : param == (256 | 1 << 16) ? pz_ptx_kang256b
-            : param == 16 ? pz_ptx_kang16 : param == 32 ? pz_ptx_kang32
-            : param == (16 | 1 << 16) ? pz_ptx_kang16b : param == (32 | 1 << 16) ? pz_ptx_kang32b
-            : param == (64 | 2 << 16) ? pz_ptx_kang64c : param == (128 | 2 << 16) ? pz_ptx_kang128c : NULL;
+        ptx = param == 64 ? &pz_ptx_kang64 : param == 128 ? &pz_ptx_kang128 : param == 256 ? &pz_ptx_kang256
+            : param == (64 | 1 << 16) ? &pz_ptx_kang64b : param == (128 | 1 << 16) ? &pz_ptx_kang128b
+            : param == (256 | 1 << 16) ? &pz_ptx_kang256b
+            : param == 16 ? &pz_ptx_kang16 : param == 32 ? &pz_ptx_kang32
+            : param == (16 | 1 << 16) ? &pz_ptx_kang16b : param == (32 | 1 << 16) ? &pz_ptx_kang32b
+            : param == (64 | 2 << 16) ? &pz_ptx_kang64c : param == (128 | 2 << 16) ? &pz_ptx_kang128c : NULL;
         break;
-    default: ptx = pz_ptx_test; break;
+    default: ptx = &pz_ptx_test; break;
     }
     if (!ptx) { pz_log(PZ_LOG_ERR, "CUDA: no precompiled module for parameter %d", param); return false; }
     if (!use_ctx(m->c)) return false;
+    size_t len;
+    char *text = pz_blob_text(ptx, &len);      /* a few ms, once per module: the driver keeps its own copy */
+    if (!text) { pz_log(PZ_LOG_ERR, "CUDA: cannot unpack the embedded module for parameter %d", param); return false; }
     char log[4096] = "";
     int opts[2] = {CU_JIT_ERROR_LOG_BUFFER, CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES};
     void *vals[2] = {log, (void *)(uintptr_t)sizeof log};
     CUmodule mod = NULL;
-    CUresult rc = cu.ModuleLoadDataEx(&mod, ptx, 2, opts, vals);
+    CUresult rc = cu.ModuleLoadDataEx(&mod, text, 2, opts, vals);
+    free(text);
     if (rc != 0) {
         cuok(rc, "PTX module load");
         if (log[0]) pz_log(PZ_LOG_ERR, "CUDA: driver JIT compiler:\n%s", log);

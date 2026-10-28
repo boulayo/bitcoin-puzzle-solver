@@ -72,10 +72,18 @@ KERNELS  := src/kernels/pz_common.cl src/kernels/pz_linear.cl src/kernels/pz_kan
 # CUDA modules: PTX generated from the same kernels by tools/gen_ptx.py (committed, so building needs no CUDA toolkit)
 PTXMODS  := linear128 linear256 linear512 linear128m4 linear256m4 linear512m4 kang64 kang128 kang256 kang64b kang128b kang256b kang16 kang32 kang16b kang32b kang64c kang128c test
 PTX      := $(addprefix src/kernels/ptx/,$(addsuffix .ptx,$(PTXMODS)))
+# The PTX modules are embedded compressed (src/lz.c, tools/embed.c -z) and unpacked when one is loaded. The modules of a family differ
+# in few lines (linear128 and linear256 in 148 of 38,000), so each one is compressed against another, its base, whose text serves as
+# the dictionary: all together they take about 1 MB instead of 12 MB. Name:base pairs; a base must come before its dependents in
+# PTXMODS, and a module without a base is compressed on its own. A new module needs no entry, only a place in PTXMODS.
+PTXBASE  := linear256:linear128 linear512:linear128 linear128m4:linear128 linear256m4:linear128m4 linear512m4:linear128m4 \
+            kang128:kang64 kang256:kang64 kang64b:kang64 kang128b:kang64b kang256b:kang64b kang16:kang64 kang32:kang64 \
+            kang16b:kang64b kang32b:kang64b kang64c:kang64b kang128c:kang64c test:linear128
+PTXITEMS := $(foreach p,$(PTXMODS),pz_ptx_$(p)$(addprefix :pz_ptx_,$(patsubst $(p):%,%,$(filter $(p):%,$(PTXBASE)))) src/kernels/ptx/$(p).ptx)
 KANG_SRC := src/kangaroo.c src/kang_log.c src/kang_cpu.c src/kang_selftest.c src/kang_base.c src/bsgs_base.c
 
 GPU_SRC  := cl_api rt rt_cl rt_cuda gpu gpu_tune gpu_selftest
-SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c
+SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c $(BUILD)/ptx_gen.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
 ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_shani.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
 KVOBJ  := $(BUILD)/kang_x86.o $(BUILD)/kang_avx2v.o $(BUILD)/kang_avx512v.o $(BUILD)/kang_avx512i.o $(BUILD)/kang_avx512i2.o
@@ -190,15 +198,28 @@ all: $(BIN)
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-$(BUILD)/embed: tools/embed.c | $(BUILD)
-	$(HOSTCC) -O1 -o $@ $<
+# embed runs on the build machine; it holds the encoder of src/lz.c's format and checks every stream it writes with the decoder
+$(BUILD)/embed: tools/embed.c src/lz.c src/lz.h | $(BUILD)
+	$(HOSTCC) -O2 -Isrc -o $@ tools/embed.c src/lz.c
 
-$(BUILD)/kernels_gen.c: $(KERNELS) $(PTX) $(BUILD)/embed
-	$(BUILD)/embed $@ pz_common_cl src/kernels/pz_common.cl pz_linear_cl src/kernels/pz_linear.cl pz_kang_cl src/kernels/pz_kang.cl pz_test_cl src/kernels/pz_test.cl \
-	  $(foreach p,$(PTXMODS),pz_ptx_$(p) src/kernels/ptx/$(p).ptx)
+$(BUILD)/kernels_gen.c: $(KERNELS) $(BUILD)/embed
+	$(BUILD)/embed $@ pz_common_cl src/kernels/pz_common.cl pz_linear_cl src/kernels/pz_linear.cl pz_kang_cl src/kernels/pz_kang.cl pz_test_cl src/kernels/pz_test.cl
 
 $(BUILD)/kernels_gen.o: $(BUILD)/kernels_gen.c
 	$(CC) $(DEPLOY) -O1 -c $< -o $@
+
+$(BUILD)/ptx_gen.c: $(PTX) $(BUILD)/embed
+	$(BUILD)/embed -z $@ $(PTXITEMS)
+
+$(BUILD)/ptx_gen.o: $(BUILD)/ptx_gen.c src/lz.h
+	$(CC) $(DEPLOY) -O1 -Isrc -c $< -o $@
+
+# the list of the embedded modules and of their files, for tests/t_kernels.c
+$(BUILD)/ptx_tab.c: $(PTX) $(BUILD)/embed
+	$(BUILD)/embed -T $@ $(PTXITEMS)
+
+$(BUILD)/ptx_tab.o: $(BUILD)/ptx_tab.c src/lz.h
+	$(CC) $(DEPLOY) -O1 -Isrc -c $< -o $@
 
 $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
@@ -255,8 +276,8 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 	$(CC) $(COMMON) -o $@ $^ $(LDLIBS)
 
 # Unit tests (built against the same sources)
-TESTS := t_core t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz
-TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
+TESTS := t_core t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
+TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
 # t_gpufe: the kernel field arithmetic compiled for the host, PTX carry-chain variant (emulated) and portable variant
 $(BUILD)/kfe_fast.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kernels/pz_common.cl | $(BUILD)
@@ -266,9 +287,12 @@ $(BUILD)/kfe_port.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/ker
 $(BUILD)/t_gpufe$(EXE): tests/t_gpufe.c $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
-# t_lz tests the decoder of src/lz.c and the encoder in tools/embed.c, which it includes
+# t_lz tests the decoder and the encoder (tools/embed.c, which it includes); t_kernels checks that the modules embedded in the program
+# unpack to the files of src/kernels/ptx, which is what the simulated CUDA driver compares them with
 $(BUILD)/t_lz$(EXE): tests/t_lz.c tools/embed.c src/lz.h $(BUILD)/lz.o | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(BUILD)/lz.o $(LDLIBS)
+$(BUILD)/t_kernels$(EXE): tests/t_kernels.c src/lz.h $(BUILD)/lz.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_tab.o | $(BUILD)
+	$(CC) $(COMMON) -o $@ $< $(BUILD)/lz.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_tab.o $(LDLIBS)
 
 $(BUILD)/t_%$(EXE): tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
