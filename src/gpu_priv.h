@@ -96,7 +96,7 @@ static inline void pack_state(uint32_t *o, const kang_worker *w, int i)
     o[31] = 0;
 }
 
-#define KSTRIDE 32
+#define KSTRIDE KANG_STATE_WORDS   /* words of the state of a kangaroo on the device (pz_kang.h) */
 #define KANG_HIST_ROUNDS 64        /* depth of the jump history (rounds per launch) of a production herd */
 
 typedef struct {

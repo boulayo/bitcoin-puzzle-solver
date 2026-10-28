@@ -8,6 +8,7 @@
 #if defined(MOCK_LINEAR)
 #include "../../src/kernels/pz_linear.cl"
 #elif defined(MOCK_KANG)
+#include "../../src/kernels/pz_kang.h"
 #include "../../src/kernels/pz_kang.cl"
 #else
 #include "../../src/kernels/pz_test.cl"

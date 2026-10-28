@@ -3,8 +3,8 @@
 #include "rt_priv.h"
 #include "cl_api.h"
 
-extern const unsigned char pz_common_cl[], pz_linear_cl[], pz_kang_cl[], pz_test_cl[];
-extern const unsigned int pz_common_cl_len, pz_linear_cl_len, pz_kang_cl_len, pz_test_cl_len;
+extern const unsigned char pz_common_cl[], pz_linear_cl[], pz_kang_h[], pz_kang_cl[], pz_test_cl[];
+extern const unsigned int pz_common_cl_len, pz_linear_cl_len, pz_kang_h_len, pz_kang_cl_len, pz_test_cl_len;
 
 #define CL_DEVICE_PCI_BUS_ID_NV 0x4008
 #define CL_DEVICE_PCI_SLOT_ID_NV 0x4009
@@ -110,18 +110,23 @@ void rtcl_close(rt_ctx *c)
 bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
 {
     const cl_api *cl = cl_load();
-    const char *src[2] = {(const char *)pz_common_cl, NULL};
-    size_t len[2] = {pz_common_cl_len, 0};
+    const char *src[3] = {(const char *)pz_common_cl, NULL, NULL};
+    size_t len[3] = {pz_common_cl_len, 0, 0};
+    cl_uint nsrc = 2;
     char opts[96];
     switch (prog) {
     case RT_PROG_LINEAR: src[1] = (const char *)pz_linear_cl; len[1] = pz_linear_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DHALF=%d", param & 0xFFFF); break;
-    case RT_PROG_KANG: src[1] = (const char *)pz_kang_cl; len[1] = pz_kang_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", param & 0xFFFF, (param >> 16) == 1 ? " -DMC=2" : (param >> 16) == 2 ? " -DMC=4" : ""); break;
+    case RT_PROG_KANG:        /* pz_kang.h, the numbers shared with the host, goes in front of the kernel */
+        src[1] = (const char *)pz_kang_h; len[1] = pz_kang_h_len;
+        src[2] = (const char *)pz_kang_cl; len[2] = pz_kang_cl_len;
+        nsrc = 3;
+        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", param & 0xFFFF, (param >> 16) == 1 ? " -DMC=2" : (param >> 16) == 2 ? " -DMC=4" : ""); break;
     default: src[1] = (const char *)pz_test_cl; len[1] = pz_test_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2"); break;
     }
     cl_int rc;
     cl_context ctx = (cl_context)m->c->a;
     cl_device_id dev = m->c->dev.cl_dev;
-    cl_program p = cl->CreateProgramWithSource(ctx, 2, src, len, &rc);
+    cl_program p = cl->CreateProgramWithSource(ctx, nsrc, src, len, &rc);
     if (!p || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: program creation failed (%d)", rc); return false; }
     rc = cl->BuildProgram(p, 1, &dev, opts, NULL, NULL);
     if (rc != CL_SUCCESS) {

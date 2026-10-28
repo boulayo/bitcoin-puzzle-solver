@@ -19,12 +19,10 @@
 
 #include "common.h"
 #include "kangaroo.h"
+#include "kernels/pz_kang.h"   /* KANG_NESC, KANG_CK_PERIOD, KANG_NOTAG: shared with the GPU kernel */
 #include <pzcore/ec.h>
 
 #define KANG_R 256               /* jump table size */
-#define KANG_NESC 16             /* escape jumps, after the R regular ones: used only to leave a fruitless cycle */
-#define KANG_CK_PERIOD 64        /* steps between the cycle checkpoints (detects cycles up to ~31 steps) */
-#define KANG_NOTAG 0xFFFFFFFFu   /* "no tag yet" */
 #define KANG_KSHIFT 3            /* bits of the kind code at the bottom of tagk */
 #define KANG_K_THREAD_MAX 4096   /* kangaroos per CPU thread: one field inversion per round of the herd (measured optimum) */
 #define KANG_LOG_BUF_INIT 32768  /* records in each of the two buffers of the log of distinguished points (1 MiB) */

@@ -25,7 +25,7 @@ BLOCK = 128           # threads per block the host launches with (must match RT_
 
 # The modules are listed in src/kernels/ptx/modules.txt, the one list that the Makefile, the CUDA runtime and the simulated driver read too:
 # name, kind, cfg, base, defines (see the comments of the file).
-SOURCES = {'linear': ['pz_common.cl', 'pz_linear.cl'], 'kang': ['pz_common.cl', 'pz_kang.cl'], 'test': ['pz_common.cl', 'pz_test.cl']}
+SOURCES = {'linear': ['pz_common.cl', 'pz_linear.cl'], 'kang': ['pz_common.cl', 'pz_kang.h', 'pz_kang.cl'], 'test': ['pz_common.cl', 'pz_test.cl']}
 
 
 def read_modules():

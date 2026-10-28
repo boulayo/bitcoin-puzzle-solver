@@ -562,7 +562,7 @@ void gpu_linear_join(gpu_session *s, int n)
 
 /* ---------------- kangaroo ---------------- */
 
-#define JSTRIDE 20
+#define JSTRIDE KANG_JUMP_WORDS     /* words of an entry of the jump table on the device (pz_kang.h) */
 
 /* The buffers of a herd, not the compiled kernel: the self-tests prepare and release many times with the same kernel. */
 void gpu_kang_release_buffers(gpu_session *s)

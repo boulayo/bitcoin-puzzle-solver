@@ -75,7 +75,7 @@ CORE_SRC := platform util lz campaign campaigns puzzles puzzles_data eta ui bsgs
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c
-KERNELS  := src/kernels/pz_common.cl src/kernels/pz_linear.cl src/kernels/pz_kang.cl src/kernels/pz_test.cl
+KERNELS  := src/kernels/pz_common.cl src/kernels/pz_linear.cl src/kernels/pz_kang.h src/kernels/pz_kang.cl src/kernels/pz_test.cl
 # CUDA modules: PTX generated from the same kernels by tools/gen_ptx.py (committed, so building needs no CUDA toolkit). Their list is
 # src/kernels/ptx/modules.txt, the only one: the lines are read here (through tools/ptx_table.awk), by gen_ptx.py, by the CUDA runtime
 # (build/ptx_mods.c is made from it) and by the simulated driver of tests/mock_cuda.
@@ -223,7 +223,7 @@ $(BUILD)/embed: tools/embed.c src/lz.c src/lz.h | $(BUILD)
 	$(HOSTCC) -O2 -Isrc -o $@ tools/embed.c src/lz.c
 
 $(BUILD)/kernels_gen.c: $(KERNELS) $(BUILD)/embed
-	$(BUILD)/embed $@ pz_common_cl src/kernels/pz_common.cl pz_linear_cl src/kernels/pz_linear.cl pz_kang_cl src/kernels/pz_kang.cl pz_test_cl src/kernels/pz_test.cl
+	$(BUILD)/embed $@ pz_common_cl src/kernels/pz_common.cl pz_linear_cl src/kernels/pz_linear.cl pz_kang_h src/kernels/pz_kang.h pz_kang_cl src/kernels/pz_kang.cl pz_test_cl src/kernels/pz_test.cl
 
 $(BUILD)/kernels_gen.o: $(BUILD)/kernels_gen.c
 	$(CC) $(DEPLOY) -O1 -c $< -o $@

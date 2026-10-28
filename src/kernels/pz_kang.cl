@@ -31,11 +31,8 @@
 #ifndef MC
 #define MC 1                       /* kangaroos per block of stored batch products (1: every one) */
 #endif
-#define KS 32
-#define JS 20
-#define KANG_NESC 16
-#define KANG_CK_PERIOD 64
-#define KANG_NOTAG 0xFFFFFFFFu
+#define KS KANG_STATE_WORDS        /* KANG_* are in pz_kang.h, which the builds put in front of this file (the host reads it too) */
+#define JS KANG_JUMP_WORDS
 #define H_NOP 0xFFFFu
 #define H_FLIP 0x200u
 #define H_JMASK 0x1FFu
