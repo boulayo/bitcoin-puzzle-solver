@@ -8,7 +8,7 @@
 | `pzsolve puzzle N [--rate R]` | data of puzzle N (address, public key, status, interval) and **time estimates** (it measures the speed of this machine, or you give `--rate` in keys/s) |
 | `pzsolve hunt …`    | starts or resumes a campaign |
 | `pzsolve list [-d DIR]` | all the campaigns of the folder: status, progress, speed, time left |
-| `pzsolve info -c NAME` | prints the report of a campaign |
+| `pzsolve info -c NAME` | prints the report of a campaign (its `State` line is the one `list` shows: `FOUND` if `FOUND.txt` exists, `RUNNING` only while a process holds the campaign lock, so a campaign that was killed is `STOPPED`) |
 | `pzsolve where -c NAME --key HEX` | tells at which point of the campaign's path a key will be scanned |
 | `pzsolve split V1 V2 …` | divides the `--part` shares among several computers in proportion to their speeds (for example `split 800M 120M`; see section 8.2) |
 | `pzsolve merge (-c NAME \| -p N) [-d DIR] -f FILE_OR_FOLDER …` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
@@ -72,7 +72,7 @@ it all the same (with a warning): useful only as an exercise, since `2^160` keys
                         [off]; see "Using only part of the machine" (section 7.8)
     --retune            measure again the best combination of CPU threads and GPUs of this machine
     --no-tune           do not measure and do not use the machine profile or the remembered speed
-    --keep-awake        Windows: prevents the system from going to sleep while the campaign runs
+    --keep-awake        Windows and macOS: prevents the system from going to sleep while the campaign runs
 -t, --threads N         CPU threads [available cores; with a GPU one is kept reserved for each]
     --no-cpu / --no-gpu disable the CPU or the GPUs
     --gpu LIST          indices (see `devices`) separated by commas; also allows OpenCL devices on a CPU
@@ -140,7 +140,7 @@ campaigns/NAME/
   report.txt      readable report, rewritten every 5 s (the first time 2 s after the start)
   status.json     state for external programs (includes time left and probabilities), rewritten every 5 s
   stats.csv       time series (one row per minute)
-  log.txt         timestamped events
+  log.txt         timestamped events (also the error that ended a run)
   FOUND.txt       only when the key is found (permissions 0600)
 ```
 
@@ -154,7 +154,8 @@ campaigns/NAME/
 * **Campaign name** (without `-c`): `pN` for a whole puzzle; for a sub-interval (`-r`) or a custom target
   `pN-xxxxxxxx` / `custom-xxxxxxxx`, where `xxxxxxxx` depends on puzzle, interval and target: **the same command always finds
   the same campaign**. For two independent campaigns on the same interval use `-c` with different names (and different seeds). Names
-  allow letters, digits, `-`, `_`, `.` (not at the beginning).
+  allow letters, digits, `-`, `_`, `.` (not at the beginning or at the end), at most 80 characters, and not a Windows device name (`con`, `prn`, `aux`,
+  `nul`, `com0`-`com9`, `lpt0`-`lpt9`, also with an extension): a campaign folder is copied between computers, so the rule is the same on every system.
 * **Exit codes of `hunt`**, for scripts: 0 = the key was found (also when the campaign had already found it: see `FOUND.txt`);
   1 = the search finished without finding the key (the whole interval, or the whole `--part`, was covered);
   130 = interrupted by Ctrl-C, `kill` or the closing of the terminal (the state is saved, the same command resumes it);
@@ -239,13 +240,17 @@ used **only once, through CUDA**. If the CUDA path does not pass the self-test, 
 
 At startup every device runs a **bit-exact self-test against the CPU** (arithmetic, hash160, point addition, linear search in
 all its variants, kangaroo steps with distinguished points and restarts); a device that fails is excluded with a message and the program
-continues with the others. Every candidate key is anyway verified again on the CPU.
+continues with the others. The devices are started at the same time, one thread each, and their messages come out device by device in the
+order of the list. If the tests stop on an error of the driver (not on a result that differs from the CPU's: that excludes the device at once)
+they are repeated, up to three attempts with a short pause, as a transient error such as a display reset would otherwise cost the whole campaign
+a card (the log says `attempt 1 of 3`). Every candidate key is anyway verified again on the CPU.
 
 ### 7.4 First run and kernel tuning
 
 The driver compiles the kernels for your card (with CUDA about 10 s per module; with the tuning of the six variants
 of the linear kernel about one minute, then three kangaroo variants the first time you use it) and keeps the result in its cache:
-from the next runs on, the startup is immediate. The tuning is stored in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` on Windows,
+from the next runs on, the startup is immediate. With several cards the tuning of the devices runs at the same time, and cards of one type are
+measured once (the others read the result: `from earlier tuning`). The tuning is stored in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` on Windows,
 `~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes.
 
 The variants tried by the tuning are: linear search with CUDA window 128, 256 or 512 × registers free or capped at 128, with
@@ -284,7 +289,9 @@ cores, the step/engine used and the GPUs with their driver: if one of these chan
 applied (`machine profile of 2026-10-22: 11 CPU threads, GPU 0`). You change your mind like this: `-t`/`--gpu`/`--no-cpu`/`--no-gpu`
 replace the profile for that run; `--retune` measures it again; `--no-tune` (or `PZ_NO_PROFILE=1`) neither measures nor uses it.
 If no configuration beats the default one by more than the noise of the measurement, the saved profile is "the defaults are already the
-best" and it is not measured again at every start.
+best" and it is not measured again at every start. Ctrl-C during the measurement ends the program at once (the search is not started, nothing
+is saved, and the folder of the measurement is removed). Without a cache folder that can be written to (no `HOME` or `XDG_CACHE_HOME`, as for a
+service) the measurement is skipped with one notice, since it could not be kept.
 
 ### 7.7 Priority of the threads that serve the cards (since 1.7.4)
 
@@ -330,24 +337,36 @@ often the integrated GPU gives less than it takes away. `-t N` tries only N CPU 
 
 ### 7.10 Environment variables
 
-Two-state variables (such as `PZ_NO_CUDA`) take effect with any value except empty and `0`.
+The program reads them once, when it starts. Two-state variables (such as `PZ_NO_CUDA`) take effect with any value except empty and `0`; a variable that is
+set to the empty string counts as not set. A value that cannot be used (a number that is not a whole decimal number in the range given below, a word that is
+not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and the program goes on as if the variable were not set.
 
 | Variable | Effect |
 |----------|--------|
-| `PZ_GPU_API=cuda\|opencl` | same as `--gpu-api` |
+| `PZ_GPU_API=cuda\|opencl` | same as `--gpu-api` (which takes precedence) |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | do not load that runtime |
-| `PZ_GPU_HALF=128\|256\|512` (CUDA) or `64\|128\|256\|512` (OpenCL) | fix the window of the linear kernel (skips the tuning) |
+| `PZ_GPU_HALF=128\|256\|512` (CUDA) or `64\|128\|256\|512` (OpenCL) | fix the window of the linear kernel (skips the tuning); a number that the device does not offer is reported for each device |
 | `PZ_GPU_NK=64\|128\|256` (CUDA) or `32\|64\|128` (OpenCL) | fix the walkers per thread of the kangaroo kernel (skips the tuning); an optional suffix `b` selects the pairwise products (e.g. `128b`), `l` the L2-sized herd (e.g. `64l`) |
-| `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests |
+| `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
 | `PZ_OPENCL_ALL=1` | use OpenCL CPU devices too (section 7.1) |
 | `PZ_NO_PROFILE=1` | same as `--no-tune` |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
-| `PZ_BENCH_SCALE=0.2` | shortens the measurements to a fifth, for tests |
-| `XDG_CACHE_HOME` | cache folder (also on Windows) |
+| `PZ_BENCH_SCALE=0.2` | shortens the measurements to a fifth, for tests (a number from 0.01 to 100) |
+| `XDG_CACHE_HOME` | cache folder (also on Windows); without it `%LOCALAPPDATA%` on Windows, then `HOME` (`~/.cache/pzsolve`) |
+| `TMPDIR` | folder of the scratch campaigns of the measurements and of the tests (Linux and macOS; `/tmp` without it) |
+| `NO_COLOR` | any value but the empty one: no bold type in the panel |
+| `TERM=dumb` | the terminal cannot move the cursor: no panel (`--ui log`) |
 
-For tests and diagnostics: `PZ_KANG_VERBOSE=1` (speed of every step of the chosen kangaroo), `PZ_TEST_DP_CAP=N` (tiny table of distinguished points),
-`PZ_MOCK_FAIL_FILE=path` (the simulated CUDA driver fails a launch when the file appears), `PZ_TEST_KTHREAD=N` and
-`PZ_TEST_JUMP=N` (for tests only: walkers per CPU thread and mean jump in units of √W).
+For tests and diagnostics: `PZ_KANG_VERBOSE=1` (speed of every step of the chosen kangaroo), `PZ_TEST_DP_CAP=N` (the table of distinguished points starts with
+N entries, at least 64: a tiny table, to exercise its growth), `PZ_TEST_KTHREAD=N` (16 to 1048576) and `PZ_TEST_JUMP=N` (1 or more)
+(for tests only: walkers per CPU thread and mean jump in units of √W), `PZ_ASSUME_IFMA=1` (the CPU is taken to have IFMA when it has AVX-512, for
+the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID hides it), `PZ_EXPECT_SHANI=1` (the tests fail if the SHA-extension code cannot run,
+see `make test-shani`).
+
+The simulated CUDA driver of `tests/mock_cuda` (see `ARCHITECTURE.md` section 6 and `tools/verify.sh`) reads four more, which `pzsolve` itself does not:
+`PZ_MOCK_DEVICES=n` (it shows n devices, 1 to 8), `PZ_MOCK_SAME_NAME=1` (all with one name, like the cards of one type), `PZ_MOCK_COUNT=1` (at exit it
+reports how many modules were loaded and kernels launched) and `PZ_MOCK_FAIL_FILE=path` (it fails one launch while that file exists, and removes the
+file: a device reset after sleep).
 
 For the CPU, for diagnostics: `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` imposes the kangaroo step (`avx512i2`: IFMA on pairs of vectors, since 1.7.7),
 `PZ_BSGS_SCALAR=1` disables the lane-based BSGS windows. `PZ_KANG_MIX=1` (experimental): on hyper-threaded cores the first
@@ -397,7 +416,8 @@ says how many points are new and whether there is a collision between a "tame" a
 `FOUND.txt` and shows it. You can also merge the other way round (A into B) or both ways: points already known are recognized. After the merge `hunt`
 resumes where it was, with the enriched table. A log from another campaign (different interval or key) is refused, and so is one written by an older
 layout of the kangaroo (versions up to 1.9.0 on campaigns with fewer than 256 kangaroos, that is small intervals): `hunt` keeps such a `dp.bin` as
-`dp.bin.vN` and goes on with a new log, `merge` says why it cannot use it. For the linear search see section 8.2.
+`dp.bin.vN` and goes on with a new log, `merge` says why it cannot use it. A `dp.bin` written by a later version of the program is not touched:
+`hunt` stops and `merge` refuses it, both saying so (use that version, or move the file away). For the linear search see section 8.2.
 
 ### 8.2 Several computers on a linear search (since 1.7.5)
 
@@ -441,8 +461,12 @@ If the computer goes to sleep or hibernates while a campaign is running, since 1
   or in the speeds, writes `system suspend detected (about …)` in the log and saves the state at once;
 * if after waking up the driver has reset the GPU and a launch fails, the GPU is reopened, checked again with the same self-test as at startup
   and put back to work (`device resumed`; the kangaroo herd on the GPU restarts from new positions: only the path since the last
-  distinguished point is lost, the points already found are safe). Up to 3 errors in a row and 40 in total, then the GPU is excluded as before;
-* `hunt --keep-awake` prevents Windows from going to sleep while the campaign runs (sleep becomes possible again at the end). On Linux: `systemd-inhibit`.
+  distinguished point is lost, the points already found are safe). The launches that follow a failure are a quarter of the size they were (a card shared
+  with a game or the desktop can be slowed down so much that a launch runs past the 2 s of the watchdog of the system, and would fail again), and grow back
+  by themselves; the log says the new size. The wait before a new attempt (up to 30 s) ends at once on Ctrl-C. The GPU is excluded after more than 3
+  failures in a row, or more than 40 in all (ten minutes of good launches after a failure reset that count, so that a laptop that sleeps every night
+  keeps its card);
+* `hunt --keep-awake` prevents Windows (and macOS, through `caffeinate`) from going to sleep while the campaign runs (sleep becomes possible again at the end). On Linux: `systemd-inhibit`.
 
 The state on disk is never at risk: every write is atomic and the checkpoint is every 60 s.
 
@@ -462,6 +486,8 @@ The state on disk is never at risk: every write is atomic and the checkpoint is 
 | `CUDA: the driver is too old for this PTX` | update the NVIDIA driver (525 or later), or use `--gpu-api opencl` |
 | `CUDA driver not found` (in `devices`) | normal without an NVIDIA card; with an NVIDIA card, reinstall the graphics driver |
 | `the CPU does not support the instruction set …` | use `--isa auto` or `--isa baseline` |
+| `NAME=TEXT ignored (…)` | an environment variable has a value the program cannot use and is ignored: correct or remove it (section 7.10) |
+| `file … was written by a newer version of pzsolve` | the `dp.bin` of the campaign comes from a later version: it is left as it is; use that version |
 | `distinguished-points table full … halving the density` | the RAM limit was reached in a run much longer than expected: the campaign goes on with less efficiency; resume with a larger `--mem` to avoid it |
 | very low speed | check `devices` (how many lanes/GPUs are used) and that no other process is running |
 | slow first BSGS run | the freshly allocated RAM is "touched" for the first time (on some virtual machines this costs seconds per GiB) |

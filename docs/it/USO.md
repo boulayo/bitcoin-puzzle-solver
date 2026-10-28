@@ -8,7 +8,7 @@
 | `pzsolve puzzle N [--rate R]` | dati del puzzle N (indirizzo, chiave pubblica, stato, intervallo) e **stime di tempo** (misura la velocità di questa macchina, oppure usa `--rate` in chiavi/s) |
 | `pzsolve hunt …`    | avvia o riprende una campagna |
 | `pzsolve list [-d DIR]` | tutte le campagne della cartella: stato, avanzamento, velocità, tempo residuo |
-| `pzsolve info -c NOME` | stampa il report di una campagna |
+| `pzsolve info -c NOME` | stampa il report di una campagna (la riga `State` è quella che mostra `list`: `FOUND` se esiste `FOUND.txt`, `RUNNING` solo mentre un processo tiene il blocco della campagna, quindi una campagna uccisa risulta `STOPPED`) |
 | `pzsolve where -c NOME --key HEX` | dice a che punto del percorso della campagna verrà scansionata una chiave |
 | `pzsolve split V1 V2 …` | divide le quote di `--part` fra più computer in proporzione alle loro velocità (per esempio `split 800M 120M`; vedi sez. 8) |
 | `pzsolve merge (-c NOME \| -p N) [-d DIR] -f FILE_O_CARTELLA …` | unisce i punti distinti di altri computer a una campagna canguro (vedi sez. 8) |
@@ -73,7 +73,7 @@ cerca lo stesso (con un avviso): utile solo come esercizio, dato che `2^160` chi
                         [spento]; vedi «Usare solo una parte della macchina»
     --retune            misura di nuovo la combinazione migliore di thread CPU e GPU di questa macchina
     --no-tune       non misurare e non usare il profilo della macchina né la velocità ricordata
-    --keep-awake           Windows: impedisce al sistema di andare in sospensione finché la campagna gira
+    --keep-awake           Windows e macOS: impedisce al sistema di andare in sospensione finché la campagna gira
 -t, --threads N         thread CPU [core disponibili; con una GPU ne resta riservato uno per ciascuna]
     --no-cpu / --no-gpu disabilita CPU o GPU
     --gpu LISTA         indici (vedi `devices`) separati da virgola; permette anche dispositivi OpenCL su CPU
@@ -140,7 +140,7 @@ campaigns/NOME/
   report.txt      report leggibile, riscritto ogni 5 s (la prima volta 2 s dopo l'avvio)
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto ogni 5 s
   stats.csv       serie storica (una riga al minuto)
-  log.txt         eventi con data e ora
+  log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
   FOUND.txt       solo a chiave trovata (permessi 0600)
 ```
 
@@ -154,7 +154,8 @@ campaigns/NOME/
 * **Nome della campagna** (senza `-c`): `pN` per un puzzle intero; per un sotto-intervallo (`-r`) o un obiettivo personalizzato
   `pN-xxxxxxxx` / `custom-xxxxxxxx`, dove `xxxxxxxx` dipende da puzzle, intervallo e obiettivo: **lo stesso comando ritrova sempre
   la stessa campagna**. Per due campagne indipendenti sullo stesso intervallo usa `-c` con nomi diversi (e seed diversi). I nomi
-  ammettono lettere, cifre, `-`, `_`, `.` (non all'inizio).
+  ammettono lettere, cifre, `-`, `_`, `.` (non all'inizio né alla fine), al massimo 80 caratteri, e non un nome di dispositivo di Windows (`con`, `prn`,
+  `aux`, `nul`, `com0`-`com9`, `lpt0`-`lpt9`, anche con un'estensione): la cartella di una campagna si copia fra computer, quindi la regola è la stessa su ogni sistema.
 * **Codici di uscita di `hunt`**, per gli script: 0 = chiave trovata (anche quando la campagna l'aveva già trovata: vedi `FOUND.txt`);
   1 = la ricerca è finita senza trovare la chiave (tutto l'intervallo, o tutta la `--part`, è stato coperto);
   130 = interrotto con Ctrl-C, `kill` o chiusura del terminale (lo stato è salvato, lo stesso comando riprende);
@@ -234,11 +235,15 @@ usata **una volta sola, tramite CUDA**. Se la via CUDA non supera il self-test i
 
 All'avvio ogni dispositivo esegue un **self-test bit-esatto contro la CPU** (aritmetica, hash160, somma di punti, ricerca lineare in
 tutte le varianti, passi del canguro con punti distinti e riavvii); chi non lo supera viene escluso con un messaggio e il programma
-prosegue con gli altri. Ogni chiave candidata viene comunque riverificata sulla CPU.
+prosegue con gli altri. I dispositivi partono insieme, un thread ciascuno, e i loro messaggi escono dispositivo per dispositivo nell'ordine dell'elenco.
+Se le prove si fermano per un errore del driver (non per un risultato diverso da quello della CPU: quello esclude subito il dispositivo) vengono ripetute,
+fino a tre tentativi con una breve pausa, perché un errore passeggero come un reset dello schermo costerebbe altrimenti una scheda a tutta la campagna
+(il log dice `tentativo 1 di 3`). Ogni chiave candidata viene comunque riverificata sulla CPU.
 
 **Prima esecuzione.** Il driver compila i kernel per la tua scheda (con CUDA circa 10 s per modulo; con la taratura delle sei varianti
 del kernel lineare circa un minuto, poi tre varianti del canguro la prima volta che lo usi) e conserva il risultato nella sua cache:
-dalle volte successive l'avvio è immediato. La taratura è memorizzata in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` su Windows,
+dalle volte successive l'avvio è immediato. Con più schede la taratura dei dispositivi gira insieme, e le schede dello stesso tipo si misurano una
+volta sola (le altre leggono il risultato: `da una taratura precedente`). La taratura è memorizzata in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` su Windows,
 `~/.cache/pzsolve/gpu_tune.txt` su Linux, e si ripete quando cambia la versione del programma.
 
 Le varianti provate dalla taratura sono: ricerca lineare con CUDA finestra 128, 256 o 512 × registri liberi o limitati a 128, con
@@ -272,7 +277,8 @@ core, al passo/motore usato e alle GPU con il loro driver: se cambia una di ques
 applicato (`profilo di questa macchina del AAAA-MM-GG: 8 thread CPU, GPU 0`). Si cambia idea così: `-t`/`--gpu`/`--no-cpu`/`--no-gpu`
 sostituiscono il profilo per quella esecuzione; `--retune` lo rimisura; `--no-tune` (o `PZ_NO_PROFILE=1`) non lo misura né lo usa.
 Se nessuna configurazione batte quella predefinita di più del rumore della misura, il profilo salvato è "i valori predefiniti sono già i
-migliori" e non si rimisura a ogni avvio.
+migliori" e non si rimisura a ogni avvio. Ctrl-C durante la misura termina subito il programma (la ricerca non parte, non si salva nulla e la cartella della misura
+viene rimossa). Senza una cartella di cache scrivibile (né `HOME` né `XDG_CACHE_HOME`, come in un servizio) la misura viene saltata con un solo avviso, perché non si potrebbe conservare.
 
 **Priorità dei thread che servono le schede (dalla 1.7.4).** Ogni GPU è servita da un thread che lancia i kernel, raccoglie i risultati
 e rilancia. Quando tutti i core sono occupati dal calcolo, quel thread può aspettare il suo turno mentre la scheda resta ferma; sui
@@ -312,9 +318,21 @@ finale della prima che stima il rumore. Alla fine indica la configurazione migli
 quella predefinita di più del rumore. Su un portatile CPU, GPU integrata e GPU discreta condividono potenza e raffreddamento:
 spesso la GPU integrata dà meno di quanto toglie. `-t N` prova solo N thread CPU, `--gpu LISTA` limita le GPU, `--linear` misura la ricerca lineare invece del canguro.
 
-Variabili d'ambiente utili (quelle a due stati, come `PZ_NO_CUDA`, valgono con qualunque valore tranne vuoto e `0`): `PZ_GPU_API=cuda|opencl`, `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1`, `PZ_GPU_HALF=128|256|512` (CUDA) o
-`64|128|256|512` (OpenCL) e `PZ_GPU_NK=64|128|256` (CUDA) o `32|64|128` (OpenCL), con suffisso facoltativo `b` per i prodotti a coppie (es. `128b`) (saltano la taratura), `PZ_GPU_TUNE=0` (nessuna
-taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test). Per i test e la diagnostica: `PZ_KANG_VERBOSE=1` (velocità di ogni passo del canguro scelto), `PZ_TEST_DP_CAP=N` (tabella dei punti distinti minuscola), `PZ_MOCK_FAIL_FILE=percorso` (il driver CUDA simulato fallisce un lancio quando il file compare), `PZ_TEST_KTHREAD=N` e `PZ_TEST_JUMP=N` (solo per le prove: camminatori per thread CPU e salto medio in unità di √W), `XDG_CACHE_HOME` (cartella della cache, anche su Windows). Per la CPU, a scopo diagnostico: `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` impone il passo del canguro (`avx512i2`: IFMA a coppie di vettori, dalla 1.7.7),
+**Variabili d'ambiente.** Il programma le legge una volta sola, all'avvio. Quelle a due stati (come `PZ_NO_CUDA`) valgono con qualunque valore tranne vuoto e `0`; una variabile
+impostata alla stringa vuota conta come non impostata. Un valore che non si può usare (un numero che non è un intero decimale nell'intervallo indicato, una parola che non è fra
+quelle ammesse) viene segnalato una volta sola, come `NOME=TESTO ignorato (…)`, e il programma prosegue come se la variabile non ci fosse.
+`PZ_GPU_API=cuda|opencl` (come `--gpu-api`, che ha la precedenza), `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1`, `PZ_GPU_HALF=128|256|512` (CUDA) o
+`64|128|256|512` (OpenCL) e `PZ_GPU_NK=64|128|256` (CUDA) o `32|64|128` (OpenCL), con suffisso facoltativo `b` per i prodotti a coppie (es. `128b`) (saltano la taratura; un numero che il dispositivo non offre
+viene segnalato per ogni dispositivo), `PZ_GPU_TUNE=0` (nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test; ogni altro valore è rifiutato), `PZ_OPENCL_ALL=1`
+(usa anche i dispositivi OpenCL su CPU), `PZ_NO_PROFILE=1` (come `--no-tune`), `PZ_NO_LARGE_PAGES=1` (niente pagine grandi, Windows), `PZ_BENCH_SCALE=0.2` (accorcia le misure a un quinto, per i test; un numero da 0,01 a 100),
+`XDG_CACHE_HOME` (cartella della cache, anche su Windows; senza, `%LOCALAPPDATA%` su Windows, poi `HOME`), `TMPDIR` (cartella delle campagne di prova delle misure e dei test, Linux e macOS; senza, `/tmp`),
+`NO_COLOR` (qualunque valore non vuoto: niente grassetto nel pannello) e `TERM=dumb` (non è un terminale, niente pannello).
+Per i test e la diagnostica: `PZ_KANG_VERBOSE=1` (velocità di ogni passo del canguro scelto), `PZ_TEST_DP_CAP=N` (la tabella dei punti distinti parte con N voci, almeno 64: una tabella minuscola, per provarne la crescita),
+`PZ_TEST_KTHREAD=N` (da 16 a 1048576) e `PZ_TEST_JUMP=N` (1 o più) (solo per le prove: camminatori per thread CPU e salto medio in unità di √W), `PZ_ASSUME_IFMA=1` (la CPU è considerata dotata di IFMA se ha AVX-512,
+per l'emulatore di `tools/ifma_emul.h` e per gli host il cui CPUID virtuale la nasconde), `PZ_EXPECT_SHANI=1` (i test falliscono se il codice con le istruzioni SHA non può girare, vedi `make test-shani`).
+Il driver CUDA simulato di `tests/mock_cuda` ne legge altre quattro, che `pzsolve` non conosce: `PZ_MOCK_DEVICES=n` (mostra n dispositivi, da 1 a 8), `PZ_MOCK_SAME_NAME=1` (tutti con lo stesso nome, come le schede
+di uno stesso tipo), `PZ_MOCK_COUNT=1` (all'uscita riporta quanti moduli ha caricato e quanti kernel ha lanciato) e `PZ_MOCK_FAIL_FILE=percorso` (fallisce un lancio finché il file esiste, e lo rimuove: un reset del
+dispositivo dopo la sospensione). Per la CPU, a scopo diagnostico: `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` impone il passo del canguro (`avx512i2`: IFMA a coppie di vettori, dalla 1.7.7),
 `PZ_BSGS_SCALAR=1` disattiva le finestre BSGS a corsie. `PZ_KANG_MIX=1` (sperimentale): sui core con hyper-threading il primo
 thread usa il passo vettoriale e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale;
 `bench` misura se conviene (riga "misto") e lo suggerisce.
@@ -360,7 +378,7 @@ ferma**, si unisce: `pzsolve merge -p 140 -f percorso\di\B\p140` (un file `dp.bi
 dice quanti punti sono nuovi e se c'è una collisione fra un punto "domato" e uno "selvatico": in quel caso trova la chiave, la scrive in
 `FOUND.txt` e la mostra. Si può anche unire in senso inverso (A su B) o in entrambi: i punti già noti vengono riconosciuti. Dopo l'unione `hunt`
 riprende da dove era, con la tabella arricchita. Un registro di un'altra campagna (intervallo o chiave diversi) viene rifiutato, e lo stesso vale per uno scritto da una
-vecchia disposizione del canguro (versioni fino alla 1.9.0 nelle campagne con meno di 256 canguri, cioè intervalli piccoli): `hunt` lo conserva come `dp.bin.vN` e prosegue con un registro nuovo, `merge` spiega perché non può usarlo. Per la ricerca lineare vedi la sezione che segue.
+vecchia disposizione del canguro (versioni fino alla 1.9.0 nelle campagne con meno di 256 canguri, cioè intervalli piccoli): `hunt` lo conserva come `dp.bin.vN` e prosegue con un registro nuovo, `merge` spiega perché non può usarlo. Un `dp.bin` scritto da una versione successiva del programma non viene toccato: `hunt` si ferma e `merge` lo rifiuta, e dicono entrambi il perché (usa quella versione, oppure sposta il file). Per la ricerca lineare vedi la sezione che segue.
 
 ### Più computer sulla ricerca lineare (dalla 1.7.5)
 
@@ -400,8 +418,11 @@ Le righe `[XX]` sono errori, `[!!]` avvisi. `doctor --full` esegue anche l'autot
   né nelle velocità, scrive nel log `sospensione del sistema rilevata (circa …)` e salva subito lo stato;
 * se dopo il risveglio il driver ha azzerato la GPU e un lancio fallisce, la GPU viene riaperta, ricontrollata con lo stesso autotest dell'avvio
   e rimessa al lavoro (`dispositivo ripreso`; il branco del canguro sulla GPU riparte da posizioni nuove: si perde solo il percorso dall'ultimo
-  punto distinto, i punti già trovati sono al sicuro). Fino a 3 errori di fila e 40 in tutto, poi la GPU viene esclusa come prima;
-* `hunt --keep-awake` impedisce a Windows di sospendersi finché la campagna gira (la sospensione torna possibile alla fine). Su Linux: `systemd-inhibit`.
+  punto distinto, i punti già trovati sono al sicuro). I lanci che seguono un fallimento sono grandi un quarto di prima (una scheda condivisa con un gioco o con il desktop può rallentare tanto
+  che un lancio supera i 2 s del watchdog del sistema, e fallirebbe di nuovo) e ricrescono da soli; il log dice la nuova dimensione. L'attesa prima
+  di un nuovo tentativo (fino a 30 s) finisce subito con Ctrl-C. La GPU viene esclusa dopo più di 3 fallimenti di fila, o più di 40 in tutto (dieci minuti
+  di lanci buoni dopo un fallimento azzerano il conteggio, così un portatile che va in sospensione ogni notte tiene la sua scheda);
+* `hunt --keep-awake` impedisce a Windows (e a macOS, con `caffeinate`) di sospendersi finché la campagna gira (la sospensione torna possibile alla fine). Su Linux: `systemd-inhibit`.
 Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoint è ogni 60 s.
 
 | Sintomo | Causa probabile |
@@ -418,6 +439,8 @@ Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoin
 | `CUDA: il driver e' troppo vecchio per questo PTX` | aggiorna il driver NVIDIA (525 o successivo), oppure usa `--gpu-api opencl` |
 | `driver CUDA non trovato` (in `devices`) | normale senza scheda NVIDIA; con una NVIDIA, reinstalla il driver grafico |
 | `la CPU non supporta il set di istruzioni …` | usa `--isa auto` o `--isa baseline` |
+| `NOME=TESTO ignorato (…)` | una variabile d'ambiente ha un valore che il programma non può usare e viene ignorata: correggila o toglila (sezione 7, variabili d'ambiente) |
+| `il file … è stato scritto da una versione più recente di pzsolve` | il `dp.bin` della campagna è di una versione successiva: non viene toccato; usa quella versione |
 | `tabella dei punti distinti piena … dimezzo la densità` | il limite di RAM è stato raggiunto in una corsa molto più lunga del previsto: la campagna prosegue con meno efficienza; riprendi con `--mem` più grande per evitarlo |
 | velocità molto bassa | controlla `devices` (quante lane/GPU usate) e che nessun altro processo sia in esecuzione |
 | prima esecuzione del BSGS lenta | la RAM appena allocata viene "toccata" per la prima volta (su alcune macchine virtuali costa secondi per GiB) |
