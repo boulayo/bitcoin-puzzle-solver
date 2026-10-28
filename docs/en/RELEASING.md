@@ -90,6 +90,14 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
 The release stops at the first error. If the machine has a GPU (CUDA or OpenCL), also run `pzsolve selftest` and `pzsolve bench`
 and check that the GPU self-test passes.
 
+The check that the committed PTX modules (`src/kernels/ptx/`) are what the kernels (`src/kernels/*.cl`) generate is made by `verify.sh`
+only when `PZ_NVRTC` is set to the path of `libnvrtc.so.12` (NVRTC 12.0 from pip, `pip download nvidia-cuda-nvrtc-cu12==12.0.140`; it
+runs `python3 -I tools/gen_ptx.py --nvrtc "$PZ_NVRTC" --check` and takes about a minute). **Neither workflow runs it**, and
+`tools/release.sh` does not set it: for a release that changed a kernel, run `PZ_NVRTC=/path/to/libnvrtc.so.12 tools/release.sh`, or
+`verify.sh` by itself, so that a stale module cannot ship. What the CI workflow (`ci.yml`) does run on every push, besides the build
+and the self-test: the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver and, as an
+informational job, `make test-shani` (the SHA-extension code under QEMU).
+
 ## Compatibility of the files between versions
 
 | From → to | Existing campaigns |

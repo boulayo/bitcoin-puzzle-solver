@@ -1,7 +1,10 @@
 # Continuous integration: every push and pull request builds pzsolve for the five release targets and runs its built-in
 # self-test (the independent-reference checks of the field arithmetic, the hashes, every CPU engine, the kangaroo and BSGS solvers).
 #
-#   linux-x86_64   ubuntu-22.04      gcc, clang, and the portable scalar build (X86=0); the glibc floor is checked too
+#   linux-x86_64   ubuntu-22.04      gcc, clang, and the portable scalar build (X86=0); the glibc floor is checked too, and the gcc
+#                                    job also checks the puzzle database against its generator and runs the self-test through the
+#                                    simulated CUDA driver (tests/mock_cuda)
+#   linux-shani    ubuntu-24.04      the SHA-extension code under QEMU (make test-shani); informational, see the job
 #   linux-arm64    ubuntu-22.04-arm  the portable scalar code (what Apple Silicon also runs)
 #   windows-x86_64 cross-compiled with MinGW-w64 on Ubuntu, then run on a real windows-latest machine
 #   macos-arm64    macos-15          Apple Silicon, Apple clang
@@ -15,7 +18,8 @@
 # the diagnostics become annotations through .github/problem-matchers/cc.json, and a failed build prints an error summary and
 # uploads the whole log as an artifact.
 #
-# The CUDA code needs no toolkit here: the PTX modules are committed, the build only embeds them.
+# The CUDA code needs no toolkit here: the PTX modules are committed, the build only embeds them. That they are the ones the kernels
+# generate is not checked here either (tools/gen_ptx.py --check needs NVRTC from pip, see docs/en/RELEASING.md).
 name: CI
 
 on:
@@ -78,6 +82,19 @@ jobs:
       - name: Unit tests
         continue-on-error: ${{ !(matrix.name == 'linux-x86_64' && matrix.variant == 'gcc') }}
         run: make test CC=${{ matrix.cc }} ${{ matrix.args }}
+      # Once per push, on the gcc build: src/puzzles_data.c is what tools/gen_puzzles.py makes of data/puzzles.csv (the generator
+      # re-verifies every row with the independent implementation in tools/ref.py), and the CUDA code path (device selection, module
+      # loading, launches, the kernels run on the CPU behind the driver API) passes the built-in self-test. The mock build takes
+      # about 40 s and the self-test about 15 s.
+      - name: Puzzle database is up to date
+        if: matrix.name == 'linux-x86_64' && matrix.variant == 'gcc'
+        run: python3 -I tools/gen_puzzles.py --check
+      - name: Self-test through the simulated CUDA driver
+        if: matrix.name == 'linux-x86_64' && matrix.variant == 'gcc'
+        run: |
+          make mockcuda CC=${{ matrix.cc }}
+          LD_LIBRARY_PATH="$PWD/build/mockcuda" PZ_NO_OPENCL=1 build/pzsolve selftest | tee build/mockcuda-selftest.log | tail -n 4
+          grep -q 'Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU' build/mockcuda-selftest.log
       - name: Compiler errors
         if: failure()
         run: grep -nE 'error:|Error [0-9]+|undefined reference' build.log | head -100 || true
@@ -88,6 +105,26 @@ jobs:
           name: build-log-${{ matrix.name }}-${{ matrix.variant }}
           path: build.log
           if-no-files-found: ignore
+
+  # The shani engine and the SHA-extension kernel of the library run only on a CPU that has the extensions, which the runners above
+  # may or may not have. QEMU's user-mode emulator (qemu-x86_64 -cpu max) executes them anywhere, so `make test-shani` runs the library
+  # tests, the shani engine test and the self-test under it (about 70 s after the build). This is a job of its own on ubuntu-24.04
+  # because the engine uses AVX2 and needs a QEMU that emulates it: the one of ubuntu-24.04 is 8.2 (tried), the one of ubuntu-22.04 is
+  # 6.2, which does not. Informational: the step may fail (a stalled mirror, no QEMU package) without failing the workflow.
+  linux-shani:
+    name: linux-x86_64 (SHA extensions under QEMU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: make test-shani (informational)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          echo "::add-matcher::.github/problem-matchers/cc.json"
+          tools/ci_apt_install.sh qemu-user
+          qemu-x86_64 --version | sed -n 1p
+          make -j"$(nproc)" test-shani
 
   windows-build:
     name: windows-x86_64 (cross-compile)
