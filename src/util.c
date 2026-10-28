@@ -59,7 +59,7 @@ void pz_die(const char *fmt, ...)
         fprintf(g_log_fp, "%s [ERROR] %s\n", ts, msg);
         fflush(g_log_fp);
     }
-    if (!own) log_unlock();
+    /* the lock stays taken: exit() flushes the log without locking it, so another thread must not be in the middle of a line */
     exit(PZ_EXIT_ERROR);
 }
 
