@@ -106,14 +106,19 @@ kang_insert_dps (under the table mutex): inserts or compares with the existing e
 
 ## 4. On-disk formats
 
-* `campaign.conf`: text `key=value` (`format=1`; since 1.1.0 also `bsgs_entries`, optional: 1.0.x campaigns can still be read); `format` changes only with incompatible changes.
+* `campaign.conf`: text `key=value` (`format=1`, `created_with`, range, target, `mode`, `seed`, `chunk_bits`, `dp_bits`, `bsgs_entries`, `part`); `format` changes only with incompatible changes.
 * `state.dat`: text; header `PZSCHED 1`, `cbits`, `seed_id` (the seed id of the campaign: a state of another seed is refused; files written
   before it was recorded have no such line and are accepted), `v_limit`, `keys_done`, lines `iv start end` (hex), final line
   `crc=` (first 8 bytes of the SHA-256 of the content). Atomic write (a temporary file of its own next to it → fsync → rename); the previous file, if valid,
   becomes `state.dat.bak`.
-* `dp.bin`: `"PZDP4\n"` + SHA-256 fingerprint (start, W, `"PZDPLOG4"`, pubkey) + 32-byte records `{tagk, d[3]}` little-endian
-  (`tagk` = 61-bit abscissa ∥ 3-bit type: 0 tame, 1/2 wild on `Q` with sign, 3/4 wild on `3Q` with sign; `d` = 192-bit signed exponent).
-  The magics `PZDP1` to `PZDP3` are older layouts (versions up to 1.9.0, campaigns with fewer than 256 kangaroos): `hunt` keeps such a file as `dp.bin.vN` and starts a new log. Any other `PZDP` magic is a later version's: `hunt` and `merge` say so and leave the file as it is. A file shorter than the header that is the beginning of this campaign's header (the program stopped while creating it) holds no point and is replaced.
+* `dp.bin`: `"PZDP5\n"` + SHA-256 fingerprint (start, W, `"PZDPLOG4"`, pubkey) + the first 4 bytes of the SHA-256 of the jump table (the
+  jump table id): a header of 42 bytes; then 32-byte records `{tagk, d[3]}` little-endian (`tagk` = 61-bit abscissa ∥ 3-bit type: 0 tame,
+  1/2 wild on `Q` with sign, 3/4 wild on `3Q` with sign; `d` = 192-bit signed exponent). `PZDP4` (versions 1.9.1 to 1.11.0) is the same
+  without the jump table id (a header of 38 bytes): it is loaded, appended to and merged as it is. A file whose jump table id differs from the
+  campaign's is refused by `hunt` and `merge`. The magics `PZDP1` to `PZDP3` are older layouts (versions up to 1.9.0, campaigns with fewer than
+  256 kangaroos): `hunt` keeps such a file as `dp.bin.vN` and starts a new log. Any other `PZDP` magic is a later version's: `hunt` and `merge`
+  say so and leave the file as it is. A file shorter than the header that is the beginning of this campaign's header (the program stopped while
+  creating it) holds no point and is replaced.
 * BSGS table (`--table`): 4 KiB header (magic, SHA-256, `T`, number of cells, abscissa of `T·G`, checksum) + little-endian 8-byte cells
   (24-bit tag from the second word of the abscissa ∥ 40-bit baby index, 0 = empty). `PZBSGS02` (written now): buckets of 8 cells, one cache
   line, 70 % of the cells in use, the bucket of an abscissa is `⌊x.n[0]·buckets/2^64⌋`, a full bucket spills into the next one, and the
@@ -146,7 +151,19 @@ every variable once into `struct pz_env` (`g_env`, declared in `src/envopts.h` w
 fields. A program that does not call it sees the values of a clean environment. The rules are the same for all the variables: unset and empty are the
 same thing; a flag is on with any value except `""` and `"0"`; a value that cannot be used (a number that is not a whole decimal number in its range, a
 name that is not one of the allowed ones, a folder name that does not fit) is reported once, as a warning `NAME=TEXT ignored (...)`, and the default
-stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (section 7.10).
+stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (section 7.10); those for tests and diagnostics are only here:
+
+* `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` imposes the CPU step of the kangaroo (`avx512i2`: IFMA on pairs of vectors), when this
+  CPU can run it; `PZ_KANG_VERBOSE=1` prints the speed of every step variant measured for the choice; `PZ_BSGS_SCALAR=1` disables the lane-based
+  BSGS windows.
+* `PZ_TEST_DP_CAP=N`: the table of distinguished points starts with N entries (at least 64), a tiny table to exercise its growth and thinning;
+  `PZ_TEST_KTHREAD=N` (16 to 1048576): walkers per CPU thread; `PZ_TEST_JUMP=N` (1 or more): the mean jump in units of √W (the regime of long
+  walks on a small range).
+* `PZ_ASSUME_IFMA=1`: the CPU is taken to have IFMA when it has AVX-512 (for the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID
+  hides it); `PZ_EXPECT_SHANI=1`: the tests fail if the SHA-extension code cannot run (`make test-shani`).
+* The simulated CUDA driver of `tests/mock_cuda` (section 6): `PZ_MOCK_DEVICES=n` (it shows n devices, 1 to 8), `PZ_MOCK_SAME_NAME=1` (all with
+  one name, like the cards of one model), `PZ_MOCK_COUNT=1` (at exit it reports how many modules were loaded and kernels launched) and
+  `PZ_MOCK_FAIL_FILE=path` (it fails one launch while that file exists, and removes the file: a device reset after sleep).
 
 | Variable | Field of `g_env` | Used in |
 |----------|------------------|---------|
