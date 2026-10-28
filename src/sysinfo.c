@@ -167,7 +167,7 @@ static bool cpuinfo_field(const char *text, const char *key, char *out, size_t n
 /* The number after "MemTotal:" and the like, in kiB (0 when the line is missing). */
 static u64 meminfo_kib(const char *text, const char *key)
 {
-    const char *p = pz_kv_find(text, key, ':', PZ_KV_ANYWHERE);
+    const char *p = pz_kv_find(text, key, ':', 0);
     return p ? pz_strtou64(p) : 0;
 }
 
