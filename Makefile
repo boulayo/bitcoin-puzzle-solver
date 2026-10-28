@@ -93,6 +93,7 @@ ifeq ($(X86),1)
 AVX2_FLAGS   := -mavx2 -mbmi2 -madx
 AVX512_FLAGS := -mavx512f -mavx512vl -mavx512bw -mavx512dq -mbmi2 -madx
 IFMA_FLAGS   := $(AVX512_FLAGS) -mavx512ifma
+SHANI_FLAGS  := -msha -mavx2 -mssse3 -msse4.1
 else
 COMMON += -DPZ_NO_X86_VARIANTS
 endif
@@ -115,7 +116,7 @@ LIBFLAGS  = $(filter-out -fno-strict-aliasing -Isrc,$(COMMON))
 LIBLDLIBS = $(filter-out -ldl -lbcrypt,$(LDLIBS))
 PZC_SRC   := u256 fe ec hash address perm cpu hash160_batch h160_portable
 ifeq ($(X86),1)
-PZC_SRC   += h160_avx2 h160_avx512
+PZC_SRC   += h160_avx2 h160_avx512 h160_shani
 endif
 ifeq ($(ARM64),1)
 PZC_SRC   += h160_neon h160_neon2 sha256_arm
@@ -133,6 +134,8 @@ $(BUILD)/pzcore/h160_avx2.o: lib/pzcore/src/h160_avx2.c | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/pzcore/h160_avx512.o: lib/pzcore/src/h160_avx512.c | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/pzcore/h160_shani.o: lib/pzcore/src/h160_shani.c | $(BUILD)/pzcore
+	$(CC) $(LIBFLAGS) $(SHANI_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/pzcore/h160_neon.o: lib/pzcore/src/h160_neon.c | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) $(NEON_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/pzcore/h160_neon2.o: lib/pzcore/src/h160_neon2.c | $(BUILD)/pzcore

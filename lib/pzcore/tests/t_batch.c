@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_batch.c - the batch HASH160: every implementation the CPU can run against the scalar code and against values computed by Python,
- * batches of every awkward size, unaligned buffers, the choice of the implementation, and use from several threads while it changes. */
+ * batches of every awkward size, unaligned buffers, the choice of the implementation, and use from several threads while it changes.
+ * With PZ_EXPECT_SHANI=1 in the environment the test fails if the "shani" implementation (the SHA extensions of x86-64) is not available,
+ * so that a run on an emulated CPU (make test-shani) cannot pass by skipping it. */
 #include <pzcore/cpu.h>
 #include <pzcore/hash.h>
 #include <pzcore/hash160_batch.h>
@@ -29,6 +31,42 @@ static void compare_random(size_t n, size_t in_off, size_t out_off)
     for (size_t i = out_off + 20 * n; i < sizeof out_buf; i++) CHECK(out_buf[i] == 0xcd);
 }
 
+/* The awkward keys through batches of every size 0..40 (so that each one lands on every lane position and in every kind of tail): all
+ * zero, all ones, a byte ramp, one bit set at each of the 256 positions, one bit clear at each of them, with both prefix bytes. */
+#define NEDGE (3 + 256 + 256)
+static void compare_edges(void)
+{
+    static uint8_t pool[NEDGE][32];
+    size_t np = 0;
+    memset(pool[np++], 0x00, 32);
+    memset(pool[np++], 0xff, 32);
+    for (int i = 0; i < 32; i++) pool[np][i] = (uint8_t)(0x11 * i + 3);
+    np++;
+    for (int b = 0; b < 256; b++) {
+        pool[np][b / 8] = (uint8_t)(0x80u >> (b % 8));            /* big-endian bit b of x set, the rest clear */
+        memset(pool[np + 256], 0xff, 32);
+        pool[np + 256][b / 8] = (uint8_t)(0xffu ^ (0x80u >> (b % 8)));
+        np++;
+    }
+    np += 256;
+    CHECK(np == NEDGE);
+    uint8_t xs[40 * 32], par[40], out[40 * 20];
+    for (size_t n = 0; n <= 40; n++) {
+        for (size_t start = 0; start < NEDGE; start += 3) {
+            for (size_t i = 0; i < n; i++) {
+                memcpy(xs + 32 * i, pool[(start + i) % NEDGE], 32);
+                par[i] = (uint8_t)((start + i) / 2);               /* the lowest bit changes every second key, not with the lane */
+            }
+            pz_hash160_x_batch(n, xs, par, out);
+            for (size_t i = 0; i < n; i++) {
+                uint8_t want[20];
+                pz_hash160_pub33(par[i], xs + 32 * i, want);
+                if (memcmp(want, out + 20 * i, 20) != 0) { CHECK(!"hash differs on an edge pattern"); return; }
+            }
+        }
+    }
+}
+
 static void test_impl(const char *name)
 {
     CHECK(pz_hash160_batch_select(name));
@@ -36,6 +74,7 @@ static void test_impl(const char *name)
     const unsigned lanes = pz_hash160_batch_lanes();
     CHECK(lanes == 1 || lanes == 4 || lanes == 8 || lanes == 16);
     for (size_t n = 0; n <= 70; n++) compare_random(n, 0, 0);
+    compare_edges();
     const size_t odd[] = {lanes - 1u, lanes, lanes + 1u, 2u * lanes - 1u, 2u * lanes, 2u * lanes + 1u, 100, 333, MAXN};
     for (size_t i = 0; i < sizeof odd / sizeof *odd; i++)
         for (size_t off = 0; off < 8; off += 3) compare_random(odd[i], off, (off * 5) % 8);
@@ -73,18 +112,20 @@ static void test_impl(const char *name)
         CHECK(k != NULL);
         uint32_t X[8 * 16] PZ_ALIGN(64), pfx[16] PZ_ALIGN(64), res[5 * 16] PZ_ALIGN(64);
         uint8_t keys[16][32];
-        tu_fill(&keys[0][0], sizeof keys);
-        for (unsigned l = 0; l < lanes; l++) {
-            for (unsigned w = 0; w < 8; w++)
-                X[w * lanes + l] = (uint32_t)keys[l][4 * w] << 24 | (uint32_t)keys[l][4 * w + 1] << 16 | (uint32_t)keys[l][4 * w + 2] << 8 | keys[l][4 * w + 3];
-            pfx[l] = 2u + (l & 1u);
-        }
-        k(X, pfx, res);
-        for (unsigned l = 0; l < lanes; l++) {
-            uint8_t want[20], got[20];
-            pz_hash160_pub33((uint8_t)(l & 1u), keys[l], want);
-            for (unsigned w = 0; w < 5; w++) for (unsigned b = 0; b < 4; b++) got[4 * w + b] = (uint8_t)(res[w * lanes + l] >> (8 * b));
-            CHECK(!memcmp(want, got, 20));
+        for (unsigned round = 0; round < 50; round++) {
+            tu_fill(&keys[0][0], sizeof keys);
+            for (unsigned l = 0; l < lanes; l++) {
+                for (unsigned w = 0; w < 8; w++)
+                    X[w * lanes + l] = (uint32_t)keys[l][4 * w] << 24 | (uint32_t)keys[l][4 * w + 1] << 16 | (uint32_t)keys[l][4 * w + 2] << 8 | keys[l][4 * w + 3];
+                pfx[l] = 2u + ((l + round) & 1u);
+            }
+            k(X, pfx, res);
+            for (unsigned l = 0; l < lanes; l++) {
+                uint8_t want[20], got[20];
+                pz_hash160_pub33((uint8_t)((l + round) & 1u), keys[l], want);
+                for (unsigned w = 0; w < 5; w++) for (unsigned b = 0; b < 4; b++) got[4 * w + b] = (uint8_t)(res[w * lanes + l] >> (8 * b));
+                CHECK(!memcmp(want, got, 20));
+            }
         }
     }
 }
@@ -142,19 +183,27 @@ int main(void)
     CHECK_STR(pz_hash160_batch_impl(), names[0]);
     /* the list agrees with the CPU */
     {
-        bool has512 = false, has2 = false, hasneon = false;
+        bool has512 = false, has2 = false, hasneon = false, hassha = false;
         for (size_t i = 0; i < n; i++) {
             has512 |= !strcmp(names[i], "avx512");
             has2 |= !strcmp(names[i], "avx2");
             hasneon |= !strcmp(names[i], "neon") || !strcmp(names[i], "neon2");
+            hassha |= !strcmp(names[i], "shani");
         }
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
-        CHECK(has512 == pz_cpu_has_avx512() && has2 == pz_cpu_has_avx2() && !hasneon);
+        CHECK(has512 == pz_cpu_has_avx512() && has2 == pz_cpu_has_avx2() && hassha == pz_cpu_has_shani() && !hasneon);
+        CHECK(!hassha || has2);                                  /* the SHA extensions are used next to the AVX2 lanes */
+        CHECK(!hassha || strcmp(names[0], "shani"));             /* never the default */
 #elif defined(__aarch64__) && !defined(PZ_NO_ARM_SHA2)
-        CHECK(hasneon == pz_cpu_has_sha2() && !has512 && !has2);
+        CHECK(hasneon == pz_cpu_has_sha2() && !has512 && !has2 && !hassha);
 #else
-        CHECK(!has512 && !has2 && !hasneon);
+        CHECK(!has512 && !has2 && !hasneon && !hassha);
 #endif
+        const char *expect = getenv("PZ_EXPECT_SHANI");
+        if (expect && !strcmp(expect, "1")) {
+            CHECK(hassha);
+            if (!hassha) printf("t_batch: PZ_EXPECT_SHANI=1 but the CPU does not report the SHA extensions\n");
+        }
     }
     /* each implementation, then a request for something that cannot be had changes nothing */
     for (size_t i = 0; i < n; i++) test_impl(names[i]);
@@ -165,6 +214,7 @@ int main(void)
     CHECK_STR(pz_hash160_batch_impl(), "portable");
     if (!pz_cpu_has_avx512()) { CHECK(!pz_hash160_batch_select("avx512")); CHECK_STR(pz_hash160_batch_impl(), "portable"); }
     if (!pz_cpu_has_sha2()) { CHECK(!pz_hash160_batch_select("neon")); CHECK(!pz_hash160_batch_select("neon2")); }
+    if (!pz_cpu_has_shani()) { CHECK(!pz_hash160_batch_select("shani")); CHECK_STR(pz_hash160_batch_impl(), "portable"); }
     /* names can be listed with too little room, or with none */
     {
         const char *two[2];

@@ -6,6 +6,9 @@
  *   PZ_VBYTES         the vector width in bytes (16, 32 or 64): the number of lanes is PZ_VBYTES / 4
  *   PZ_HASH_LANES_FN  the name of the function to define (the template also defines PZ_HASH_LANES_FN_w0, see PZ_HASH_W0_FN)
  *   PZ_HASH_EXTERNAL  (optional) a file that implements both functions instead: hash_lanes_neon.inc on aarch64
+ *   PZ_HASH_SHA256_EXTERNAL  (optional) a file that replaces only the SHA-256 stage: hash_lanes_shani.inc on x86-64 (PZ_VBYTES 32). It defines
+ *                     pz_sha256_lanes_33 with the SHA-256 instructions of the CPU and returns the digest words already byte-swapped,
+ *                     as RIPEMD-160 reads them; the rest of this template is used as it is
  * and compile with the matching -m flags (-mavx2, -mavx512f ...; nothing for the 16-byte baseline).
  *
  * The functions it defines take LANES keys at a time:
@@ -55,6 +58,9 @@ static inline void pz_v_store(uint32_t *p, pz_vu v) { memcpy(p, &v, sizeof v); }
 #ifdef PZ_HASH_EXTERNAL
 #include PZ_HASH_EXTERNAL     /* a complete implementation of PZ_HASH_LANES_FN and PZ_HASH_W0_FN for this lane count (aarch64: hash_lanes_neon.inc) */
 #else
+#ifdef PZ_HASH_SHA256_EXTERNAL
+#include PZ_HASH_SHA256_EXTERNAL     /* pz_sha256_lanes_33 for the instruction set of the includer (x86-64: hash_lanes_shani.inc) */
+#else
 static inline void pz_sha256_lanes_33(const uint32_t *X, const uint32_t *pfx, pz_vu dig[8])
 {
     pz_vu w[16];
@@ -92,6 +98,7 @@ static inline void pz_sha256_lanes_33(const uint32_t *X, const uint32_t *pfx, pz
     dig[0] = a + pz_sha256_h0[0]; dig[1] = b + pz_sha256_h0[1]; dig[2] = c + pz_sha256_h0[2]; dig[3] = d + pz_sha256_h0[3];
     dig[4] = e + pz_sha256_h0[4]; dig[5] = f + pz_sha256_h0[5]; dig[6] = g + pz_sha256_h0[6]; dig[7] = h + pz_sha256_h0[7];
 }
+#endif
 
 static inline pz_vu pz_rmd_fv(int rd, pz_vu x, pz_vu y, pz_vu z)
 {
@@ -107,7 +114,11 @@ static inline pz_vu pz_rmd_fv(int rd, pz_vu x, pz_vu y, pz_vu z)
 static inline void pz_ripemd160_lanes_32(const pz_vu dig[8], pz_vu out[5])
 {
     pz_vu m[16];
+#ifdef PZ_HASH_SHA256_EXTERNAL
+    for (int i = 0; i < 8; i++) m[i] = dig[i];                /* already byte-swapped by the SHA-256 stage */
+#else
     for (int i = 0; i < 8; i++) m[i] = pz_v_bswap(dig[i]);
+#endif
     m[8] = pz_v_set(0x80);
     for (int i = 9; i < 14; i++) m[i] = pz_v_set(0);
     m[14] = pz_v_set(256);

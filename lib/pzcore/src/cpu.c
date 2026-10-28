@@ -29,10 +29,21 @@ bool pz_cpu_has_ifma(void)
     if (!pz_cpu_has_avx512()) return false;
     return __builtin_cpu_supports("avx512ifma");
 }
+
+/* The SHA extensions are CPUID leaf 7, EBX bit 29 (no __builtin_cpu_supports name for them in older compilers). The code that uses them is
+ * built with AVX2, SSSE3 and SSE4.1 as well, and runs next to the AVX2 lanes. */
+bool pz_cpu_has_shani(void)
+{
+    unsigned a, b, c, d;
+    __builtin_cpu_init();
+    return pz_cpu_has_avx2() && __builtin_cpu_supports("ssse3") && __builtin_cpu_supports("sse4.1") &&
+           __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b >> 29 & 1);
+}
 #else
 bool pz_cpu_has_avx2(void) { return false; }
 bool pz_cpu_has_avx512(void) { return false; }
 bool pz_cpu_has_ifma(void) { return false; }
+bool pz_cpu_has_shani(void) { return false; }
 #endif
 
 #if defined(__aarch64__) && defined(__linux__)

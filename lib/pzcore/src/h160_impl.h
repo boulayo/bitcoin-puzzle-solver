@@ -20,6 +20,7 @@ void pz_h160_kernel_portable(const uint32_t *X, const uint32_t *pfx, uint32_t *o
 #ifdef PZ_HAVE_X86_SIMD
 void pz_h160_kernel_avx2(const uint32_t *X, const uint32_t *pfx, uint32_t *out);       /* 8 lanes */
 void pz_h160_kernel_avx512(const uint32_t *X, const uint32_t *pfx, uint32_t *out);     /* 16 lanes */
+void pz_h160_kernel_shani(const uint32_t *X, const uint32_t *pfx, uint32_t *out);      /* 8 lanes, SHA extensions for the SHA-256 stage */
 #endif
 #ifdef PZ_HAVE_ARM_SHA2
 void pz_h160_kernel_neon(const uint32_t *X, const uint32_t *pfx, uint32_t *out);       /* 4 lanes, ARMv8 SHA-256 instructions */

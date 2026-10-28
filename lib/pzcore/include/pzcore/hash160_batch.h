@@ -7,8 +7,10 @@
  *
  * The implementation is chosen at run time, the first time it is needed: AVX-512 (16 keys per step), AVX2 (8) on x86-64; NEON with the
  * ARMv8 SHA-256 instructions (8 or 4) on aarch64 CPUs that have them; otherwise portable vector code (4) that needs no particular
- * instruction set; and, only if you ask for it, the scalar reference (1). All of them give the same bits. The names are "avx512",
- * "avx2", "neon2", "neon", "portable" and "scalar".
+ * instruction set; and, only if you ask for it, the scalar reference (1). On x86-64 CPUs that also have the SHA extensions (AMD Zen 2 and
+ * later, Intel Ice Lake and later) "shani" is there too: AVX2 for RIPEMD-160 and the SHA instructions for SHA-256 (8 keys per step). It is
+ * never the default, because whether it is faster depends on the CPU: select it by name and measure. All of them give the same bits.
+ * The names are "avx512", "avx2", "shani", "neon2", "neon", "portable" and "scalar".
  *
  * Thread-safety: everything may be called from any number of threads; pz_hash160_batch_select may be called at any time, and every
  * call of pz_hash160_x_batch uses one consistent implementation. No allocation, no global state beyond the choice of the implementation. */
@@ -29,8 +31,8 @@ void pz_hash160_x_batch(size_t n, const uint8_t *xs, const uint8_t *parity, uint
 const char *pz_hash160_batch_impl(void);
 unsigned pz_hash160_batch_lanes(void);
 
-/* Names of the implementations this CPU can run, best first, ending with "portable" and "scalar". Stores up to cap of them in names and
- * returns how many there are. */
+/* Names of the implementations this CPU can run, the default first (see above: "shani" comes after the AVX ones), ending with "portable"
+ * and "scalar". Stores up to cap of them in names and returns how many there are. */
 size_t pz_hash160_batch_list(const char **names, size_t cap);
 
 /* Chooses the implementation: NULL or "auto" for the best one (the default), "portable" to force the code that needs no instruction set

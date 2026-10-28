@@ -15,11 +15,13 @@ typedef struct {
 } impl_t;
 
 static bool always(void) { return true; }
-/* best first */
+/* best first; "shani" comes after the AVX ones, so that it is never the default: whether the SHA extensions beat the vector SHA-256 depends on the
+ * CPU, and a library call has no benchmark to decide (select it by name, as the pzsolve engine of the same name is chosen by measuring) */
 static const impl_t IMPLS[] = {
 #ifdef PZ_HAVE_X86_SIMD
     {"avx512", 16, pz_h160_kernel_avx512, pz_cpu_has_avx512},
     {"avx2", 8, pz_h160_kernel_avx2, pz_cpu_has_avx2},
+    {"shani", 8, pz_h160_kernel_shani, pz_cpu_has_shani},
 #endif
 #ifdef PZ_HAVE_ARM_SHA2
     {"neon2", 8, pz_h160_kernel_neon2, pz_cpu_has_sha2},

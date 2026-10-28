@@ -20,9 +20,9 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 | `ec.h` | affine and Jacobian points, sums, `k*G` (comb table, built on first use), SEC1 public keys (33 and 65 bytes, strictly validated) |
 | `hash.h` | `pz_sha256`, `pz_sha256d`, `pz_ripemd160`, `pz_hash160`, the compression functions, `pz_hash160_pub33` |
 | `address.h` | Base58Check, bech32 and bech32m (BIP173, BIP350), SegWit addresses, P2PKH / P2WPKH helpers, WIF |
-| `hash160_batch.h` | `pz_hash160_x_batch`: HASH160 of n compressed keys given as x coordinates and parity; run-time choice among avx512, avx2, neon2, neon, portable, scalar; query and override |
+| `hash160_batch.h` | `pz_hash160_x_batch`: HASH160 of n compressed keys given as x coordinates and parity; run-time choice among avx512, avx2, neon2, neon, portable, scalar (and `shani` on request: the SHA instructions of x86-64, never the default); query and override |
 | `perm.h` | `pz_perm_init / apply / invert`: a seed-keyed bijection of `[0, M)`, `M <= 2^192`, expected O(1) per call, identical on every platform and version (pinned by `tests/perm_pins.h`) |
-| `cpu.h` | `pz_cpu_has_avx2 / avx512 / ifma / sha2` |
+| `cpu.h` | `pz_cpu_has_avx2 / avx512 / ifma / shani / sha2` |
 | advanced: `fev.h`, `fev52.h`, `impl/` | lane-parallel field arithmetic (AVX2, AVX-512 IFMA) and the lane hash templates that the pzsolve engines include; not part of the stable interface |
 
 ## Rules
@@ -48,7 +48,7 @@ cc -Ilib/pzcore/include prog.c build/libpzcore.a
 ```
 
 To vendor it, copy `lib/pzcore` and compile `src/*.c` (`bytes.h` and `h160_impl.h` are private). Per-instruction-set files need their flags:
-`h160_avx2.c` `-mavx2 -mbmi2 -madx`, `h160_avx512.c` `-mavx512f -mavx512vl -mavx512bw -mavx512dq -mbmi2 -madx`, `h160_neon.c`, `h160_neon2.c` and
+`h160_avx2.c` `-mavx2 -mbmi2 -madx`, `h160_avx512.c` `-mavx512f -mavx512vl -mavx512bw -mavx512dq -mbmi2 -madx`, `h160_shani.c` `-msha -mavx2 -mssse3 -msse4.1`, `h160_neon.c`, `h160_neon2.c` and
 `sha256_arm.c` `-march=armv8-a+crypto`; omit the ones for other architectures, or define `PZ_NO_X86_VARIANTS` / `PZ_NO_ARM_SHA2`. Compile your
 own code with `-mbmi2 -madx` on x86-64 to get the assembly field multiplication from `fe.h`; the archive itself is built for the baseline.
 Hot loops should include `fe.h`, `fev.h` and the templates and be compiled for their own instruction set, as the pzsolve engines do.
