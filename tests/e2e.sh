@@ -75,7 +75,7 @@ echo "== kangaroo: resume from the distinguished-point log"
 K=$(rndkey 56 4242); PUB=$(field $K pub); A=$(field $K addr)
 timeout -s INT 4 $BIN hunt -p 56 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 SZ=$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)
-[ "$SZ" -gt 38 ] && ok "distinguished-point log written ($SZ bytes)" || bad "dp.bin empty"
+[ "$SZ" -gt 42 ] && ok "distinguished-point log written ($SZ bytes)" || bad "dp.bin empty"
 $BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"
@@ -244,6 +244,17 @@ $BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/nonexistent.bin" >/dev/null 2>&1; RC=
 [ $RC -eq 1 ] && ok "merge of a file that cannot be read: exit status 1" || bad "merge of an unreadable file: exit status $RC"
 $BIN merge -c xn -d "$DIR" -f "$DIR/xm2/xk" >/dev/null 2>&1; RC=$?
 [ $RC -eq 2 ] && ok "merge into a campaign that is not a kangaroo one: exit status 2" || bad "merge into a linear campaign: exit status $RC"
+# the header of dp.bin carries the jump table (PZDP5): a log of another seed is refused, one of version 4 (no jump table) is taken as it is
+python3 - "$DIR/xm2/xk/dp.bin" "$DIR/xm2/seed.bin" "$DIR/xm2/v4.bin" <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read()
+open(sys.argv[2], 'wb').write(d[:41] + bytes([d[41] ^ 1]) + d[42:])
+open(sys.argv[3], 'wb').write(b'PZDP4\n' + d[6:38] + d[42:])
+PY
+OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/seed.bin" 2>&1); RC=$?
+[ $RC -eq 1 ] && echo "$OUT" | grep -q "another jump table" && ok "merge of a log written with another jump table: refused, exit status 1" || bad "merge of a log of another seed: exit status $RC"
+OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/v4.bin" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "already known" && ok "merge of a log of version 4: taken as it is" || bad "merge of a log of version 4: exit status $RC"
 
 echo "== campaign creation: simultaneous starts, and the seed recorded in the state"
 seedid() { python3 -c "import hashlib,sys; print(hashlib.sha256(b'PZID'+bytes.fromhex(sys.argv[1])).hexdigest()[:16])" "$1"; }

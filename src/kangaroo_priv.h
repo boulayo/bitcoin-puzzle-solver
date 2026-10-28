@@ -97,6 +97,7 @@ typedef struct kang_state {
     run_ctx *r;
     pz_u256 W;                      /* interval width */
     char jump_id[9];             /* first 4 bytes of the SHA-256 of the jump table, in hex: equal on all computers of a campaign */
+    u8 jump_tag[4];              /* the same 4 bytes, as the header of the log stores them */
     pz_u256 base;                   /* key = base + x */
     pz_ge Qp;                       /* pubkey - base*G */
     pz_ge Q3;                       /* 3*Qp */
@@ -125,6 +126,7 @@ typedef struct kang_state {
     bool log_ready;              /* a block was taken out of logbuf and waits for its writer: the one that unlocks mu writes it */
     u64 log_recs;                /* (w) whole records known to be in the file (loaded + flushed) */
     bool log_broken;             /* (w) the last write failed: the file is cut back to whole records and reopened before the next one */
+    unsigned log_hdr;            /* (w) length of the header of the open log: KANG_LOG_HDR, or KANG_LOG_HDR4 for a log of version 4 */
     _Atomic bool log_warned;     /* the full-disk warning was given (until a write succeeds again) */
     char log_path[620];
     /* statistics */
@@ -235,18 +237,25 @@ void kang_destroy(kang_state *ks);
 int kang_load_log(kang_state *ks);
 int kang_flush_log(kang_state *ks);                                                      /* no lock held: writes every point collected so far; 0, or -1 when the file refuses */
 void kang_table_unlock(kang_state *ks);                                                  /* mu held: lets go of it, then writes the block this thread took out of the log, if any */
-typedef struct { u64 read, added, dups, skipped; bool solved; } kang_merge_stats;
+typedef struct { u64 read, added, dups, skipped; bool solved; char jump_id[9]; } kang_merge_stats;   /* jump_id: that of the file, when it differs */
 int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);
 
-/* The file of distinguished points (kang_log.c) and the table it feeds (kangaroo.c). Magic of the logs of this campaign: logs of earlier
- * layouts of the walkers ("PZDP1" to "PZDP3", written by versions before 1.9.1) have other kind codes and another base, their points
- * cannot be mixed with these. */
-#define KANG_LOG_MAGIC "PZDP4\n"
+/* The file of distinguished points (kang_log.c) and the table it feeds (kangaroo.c). Header of the logs of this campaign: the magic, the
+ * fingerprint of the campaign (kang_log_fp) and the first 4 bytes of the hash of the jump table (jump_tag): a log written with another
+ * jump table (another seed) holds points the walks of this one never meet. Logs of version 4 ("PZDP4", versions 1.9.1 to 1.11.0) have the
+ * same records and no jump table in their header: they are loaded, appended to and merged as they are. Logs of earlier layouts of the
+ * walkers ("PZDP1" to "PZDP3", written by versions before 1.9.1) have other kind codes and another base, their points cannot be mixed
+ * with these. */
+#define KANG_LOG_MAGIC "PZDP5\n"
+#define KANG_LOG_MAGIC4 "PZDP4\n"
+#define KANG_LOG_HDR 42          /* magic, fingerprint, jump table */
+#define KANG_LOG_HDR4 38         /* magic, fingerprint */
 void kang_log_fp(const kang_state *ks, u8 fp[32]);                                       /* fingerprint of the campaign in a log header */
-/* What the first six bytes of a file say: not a log of pzsolve, the current layout, an older one (PZDP1 to PZDP3), or one that only a newer version of the program writes. */
-enum { KANG_LOG_FOREIGN, KANG_LOG_CURRENT, KANG_LOG_OLDER, KANG_LOG_NEWER };
+/* What the first six bytes of a file say: not a log of pzsolve, the current layout, version 4 (no jump table in the header), an older
+ * layout (PZDP1 to PZDP3), or one that only a newer version of the program writes. */
+enum { KANG_LOG_FOREIGN, KANG_LOG_CURRENT, KANG_LOG_V4, KANG_LOG_OLDER, KANG_LOG_NEWER };
 int kang_log_class(const u8 magic[6]);
-FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32]);
+FILE *kang_log_create(kang_state *ks, const char *path, const u8 fp[32]);               /* a log with the current header; sets log_hdr */
 void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
 long long kang_log_read(kang_state *ks, FILE *f);                                        /* the records of an open log into the table: their number, -1 on a read error */
 int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log);                 /* mu held: 1 inserted, 0 duplicate, 2 solved, -1 skipped */

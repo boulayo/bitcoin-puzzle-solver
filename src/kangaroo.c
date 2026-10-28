@@ -383,6 +383,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
         }
         pz_sha256(jb, sizeof jb, jh);
         snprintf(ks->jump_id, sizeof ks->jump_id, "%02x%02x%02x%02x", jh[0], jh[1], jh[2], jh[3]);
+        memcpy(ks->jump_tag, jh, sizeof ks->jump_tag);
     }
 
     /* The table starts with room for the points expected at 60 % load, as far as the memory limit allows. With a small --dp-bits on a large interval
@@ -401,6 +402,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     atomic_store_explicit(&ks->cap_mirror, cap, memory_order_relaxed);
     ks->tab = calloc(cap, sizeof(dp_rec));
     if (!ks->tab) pz_die("not enough memory for the distinguished-point table (%llu entries)", (unsigned long long)cap);
+    ks->log_hdr = KANG_LOG_HDR;
     ks->caplog = ks->capw = KANG_LOG_BUF_INIT;
     ks->logbuf = pz_xmalloc(ks->caplog * sizeof(dp_rec));
     ks->wbuf = pz_xmalloc(ks->capw * sizeof(dp_rec));

@@ -187,18 +187,24 @@ for n in 0 1; do d=$([ $n = 0 ] && echo "$MA" || echo "$MB"); ( build/pzsolve hu
 outhas "new, 0 already known" build/pzsolve merge -c p140 -d "$MA" -f "$MB/p140" && echo "  OK merge: points of another node added (no overlap between nodes)" || { echo "  FAIL merge between two nodes"; fail=$((fail+1)); }
 outhas "already known" build/pzsolve merge -c p140 -d "$MA" -f "$MB/p140/dp.bin" && echo "  OK repeated merge: all already known" || { echo "  FAIL repeated merge"; fail=$((fail+1)); }
 build/pzsolve merge -c p140 -d "$MA" -f "$T/nonexistent.bin" >/dev/null 2>&1 && { echo "  FAIL merge of a nonexistent file gave no error"; fail=$((fail+1)); } || echo "  OK merge: nonexistent file rejected"
+# the header of dp.bin carries the jump table: a computer started with another seed walks other paths, merge refuses its log; a log of
+# version 4 ("PZDP4", no jump table in the header) is merged as it is
+ME="$T/me"; ( build/pzsolve hunt -p 140 -s "$(python3 -c "print('ef'*32)")" --dp-bits 22 --node 1 --no-gpu -t 2 --mem 0.05 -c p140 -d "$ME" --ui log -q >/dev/null 2>&1 & p=$!; sleep 4; kill -INT $p; wait $p ) 2>/dev/null
+outhas "another jump table" build/pzsolve merge -c p140 -d "$MA" -f "$ME/p140" && echo "  OK merge refuses the log of a computer started with another seed" || { echo "  FAIL merge of a log of another seed"; fail=$((fail+1)); }
+{ printf 'PZDP4\n'; tail -c +7 "$MB/p140/dp.bin" | head -c 32; tail -c +43 "$MB/p140/dp.bin"; } > "$T/dp.v4"
+outhas "already known" build/pzsolve merge -c p140 -d "$MA" -f "$T/dp.v4" && echo "  OK merge takes a log of version 4" || { echo "  FAIL merge of a log of version 4"; fail=$((fail+1)); }
 # a dp.bin written by an older layout of the walkers ("PZDP2", versions up to 1.9.0 on small intervals) cannot be used: hunt keeps it as dp.bin.v2 and goes
 # on with a new file, merge refuses it with an explanation
 MC="$T/mc"; mkdir -p "$MC/p140"
 printf 'PZDP2\n' > "$MC/p140/dp.bin"; head -c 32 /dev/zero >> "$MC/p140/dp.bin"; cp "$MC/p140/dp.bin" "$T/dp.old"
 ( build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --ui log >"$T/old.log" 2>&1 & p=$!; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
-grep -q "older layout" "$T/old.log" && cmp -s "$MC/p140/dp.bin.v2" "$T/dp.old" && [ "$(head -c 6 "$MC/p140/dp.bin")" = "$(printf 'PZDP4\n')" ] && echo "  OK hunt keeps a dp.bin of an older kangaroo layout as dp.bin.v2 and goes on with a new log" || { echo "  FAIL old dp.bin not set aside by hunt"; fail=$((fail+1)); }
+grep -q "older layout" "$T/old.log" && cmp -s "$MC/p140/dp.bin.v2" "$T/dp.old" && [ "$(head -c 6 "$MC/p140/dp.bin")" = "$(printf 'PZDP5\n')" ] && echo "  OK hunt keeps a dp.bin of an older kangaroo layout as dp.bin.v2 and goes on with a new log" || { echo "  FAIL old dp.bin not set aside by hunt"; fail=$((fail+1)); }
 outhas "older layout" build/pzsolve merge -c p140 -d "$MA" -f "$MC/p140/dp.bin.v2" && echo "  OK merge refuses a log of an older kangaroo layout with an explanation" || { echo "  FAIL merge of an old log"; fail=$((fail+1)); }
-# a dp.bin of a NEWER version ("PZDP5") is not an older layout: hunt refuses it and leaves it alone (no dp.bin.v5), merge says where it comes from
+# a dp.bin of a NEWER version ("PZDP6") is not an older layout: hunt refuses it and leaves it alone (no dp.bin.v6), merge says where it comes from
 MD="$T/md"; mkdir -p "$MD/p140"
-printf 'PZDP5\n' > "$MD/p140/dp.bin"; head -c 64 /dev/zero >> "$MD/p140/dp.bin"; cp "$MD/p140/dp.bin" "$T/dp.new"
+printf 'PZDP6\n' > "$MD/p140/dp.bin"; head -c 64 /dev/zero >> "$MD/p140/dp.bin"; cp "$MD/p140/dp.bin" "$T/dp.new"
 build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 3 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MD" --ui log >"$T/new.log" 2>&1 && { echo "  FAIL hunt accepted a dp.bin of a newer version"; fail=$((fail+1)); } \
-  || { grep -q "newer version" "$T/new.log" && cmp -s "$MD/p140/dp.bin" "$T/dp.new" && [ ! -e "$MD/p140/dp.bin.v5" ] && echo "  OK hunt refuses a dp.bin of a newer version and leaves it alone" || { echo "  FAIL dp.bin of a newer version"; fail=$((fail+1)); }; }
+  || { grep -q "newer version" "$T/new.log" && cmp -s "$MD/p140/dp.bin" "$T/dp.new" && [ ! -e "$MD/p140/dp.bin.v6" ] && echo "  OK hunt refuses a dp.bin of a newer version and leaves it alone" || { echo "  FAIL dp.bin of a newer version"; fail=$((fail+1)); }; }
 outhas "newer version" build/pzsolve merge -c p140 -d "$MA" -f "$MD/p140/dp.bin" && echo "  OK merge refuses a log of a newer version with an explanation" || { echo "  FAIL merge of a log of a newer version"; fail=$((fail+1)); }
 
 # several computers on one linear search (--part): the shares tile the search order, so exactly one of the two finds the key and the
