@@ -417,7 +417,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     pz_log(PZ_LOG_INFO, "kangaroo: W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
            log2l(u256_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
-    pz_log(PZ_LOG_INFO, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", ks->jump_id);
+    pz_log(r->node ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", ks->jump_id);
     pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
            pz_fmt_si((double)ks->expected_steps, b3, sizeof b3), (long double)KANG_C_MEAN, pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b1, sizeof b1));
     return 0;
