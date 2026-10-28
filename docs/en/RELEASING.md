@@ -61,6 +61,12 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    macOS) and publishes them, together with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page
    and check that every binary and the checksum file are there.
 
+The workflow can also be run by hand (Actions tab, "Run workflow", "publish" ticked), which creates the tag on the selected commit.
+Releases of one version are made one at a time, and a run refuses to create or replace the files of a release whose tag points to
+another commit than the one it built (the log says so). To replace the files of a release on purpose, for example after a failed
+upload, run the workflow by hand from the tagged commit; "replace" is needed only when the selected commit is another one, and
+then the tag and the release notes stay as they are.
+
 Without arguments (`tools/release.sh`) the script releases the version already written in `VERSION`, as for a first release.
 The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-Authored-By: …`) to the message of the commit created by the script.
 `VERIFY_MODE=full` runs the complete end-to-end test instead of the quick one.

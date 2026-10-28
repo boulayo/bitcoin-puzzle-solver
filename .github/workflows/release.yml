@@ -6,6 +6,11 @@
 # Without "publish" a manual run only builds the packages and keeps them as workflow artifacts. A manual publish creates a DRAFT
 # release by default (untick "draft" to publish at once).
 #
+# The release job runs one at a time for each version (a tag push and a manual run, or two manual runs, cannot both find no release
+# and create two, or replace each other's files). It also refuses to create or replace the files of a release whose tag points to
+# another commit than the one this run built: the files would not come from the tagged commit, while the tag and the notes stay as
+# they are. Tick "replace" in a manual run to do it on purpose; the job log says what happened.
+#
 # Archives (one top folder each, with the binary, README.md, LICENSE if present, CHANGELOG.md, docs/ and BUILD-INFO.txt):
 #   pzsolve-<version>-linux-x86_64.tar.gz    pzsolve-<version>-linux-arm64.tar.gz
 #   pzsolve-<version>-macos-arm64.tar.gz     pzsolve-<version>-macos-x86_64.tar.gz
@@ -40,6 +45,10 @@ on:
         description: 'Create the release as a draft'
         type: boolean
         default: true
+      replace:
+        description: 'Replace the files of the release of this version even though its tag points to another commit than the selected one (the tag and the notes stay as they are)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -167,11 +176,34 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    # one run at a time for each version; a run that has to wait is not cancelled (GitHub keeps one waiting run per group, so of three
+    # runs started together the one in the middle is dropped)
+    concurrency:
+      group: release-${{ needs.version.outputs.version }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+      - name: The tag must point to the commit that was built
+        env:
+          REPLACE: ${{ inputs.replace }}
+        run: |
+          TAG="v$VERSION"
+          BUILT=$(git rev-parse "$GITHUB_SHA^{commit}")
+          # the commit the tag points to on the server: the peeled line for an annotated tag, the plain one for a lightweight tag
+          TAGSHA=$(git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}" | awk 'substr($2, length($2) - 2) == "^{}" { p = $1; next } { t = $1 } END { print (p != "" ? p : t) }')
+          if [ -z "$TAGSHA" ]; then
+            echo "release $TAG: the tag does not exist yet, the release will create it at $BUILT (the commit this run built)"
+          elif [ "$TAGSHA" = "$BUILT" ]; then
+            echo "release $TAG: the tag is at $TAGSHA, the commit this run built: going on"
+          elif [ "$REPLACE" = true ]; then
+            echo "::warning::replace is set: the files of the release $TAG are replaced by the build of $BUILT, but the tag stays at $TAGSHA and the release notes are not changed"
+          else
+            echo "::error::the tag $TAG points to $TAGSHA but this run built $BUILT: the release is left as it is, because its files would not come from the tagged commit. To replace the files on purpose, run the workflow by hand with 'replace' ticked (the tag and the notes stay as they are)."
+            exit 1
+          fi
       - uses: actions/download-artifact@v8
         with:
           pattern: pzsolve-*
