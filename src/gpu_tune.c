@@ -103,14 +103,8 @@ static int tune_cache_get(const rt_dev *d, bool kang)
     char *t = pz_read_file(path, NULL);
     if (!t) return 0;
     tune_key(d, kang, key, sizeof key);
-    int v = 0;
-    for (char *line = t; line && *line;) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = 0;
-        char *eq = strrchr(line, '=');
-        if (eq && (size_t)(eq - line) == strlen(key) && !strncmp(line, key, strlen(key))) v = pz_atoi(eq + 1);
-        line = nl ? nl + 1 : NULL;
-    }
+    const char *e = pz_kv_find(t, key, '=', PZ_KV_LAST);        /* the last line of the key wins */
+    const int v = e && *e != '\n' ? pz_atoi(e) : 0;             /* pz_atoi skips a newline: an empty value must not read the next line */
     free(t);
     return (kang ? valid_kvariant(d, v) : valid_variant(d, v)) ? v : 0;
 }
@@ -725,6 +719,21 @@ int gpu_tune_selftest(void)
         TCHK(s->variant == 256 && lg.n == 2 && !strcmp(lg.line[1], "WARN GPU[1]: table: 128 cannot run; 256 cannot run; 512 cannot run: using the default 256"));
         rt_logseq_done(q, 0);
         rt_logseq_free(q);
+        free(s);
+    }
+    {   /* reading the saved choices: the last line of the key counts, other keys and an empty value do not disturb it */
+        gpu_session *s = fake_session("Test GPU file");
+        char path[512], key[400], text[1700];
+        TCHK(tune_cache_path(path, sizeof path));
+        tune_key(&s->info, false, key, sizeof key);
+        snprintf(text, sizeof text, "%sx=128\n%s=128\nother=64\n%s=512\n", key, key, key);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 512);
+        snprintf(text, sizeof text, "%s=512\n%s=\n128\n", key, key);           /* the last line has no value: the digits below it are another line */
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 0);
+        snprintf(text, sizeof text, "%s=300\n", key);                            /* a window this device does not offer */
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 0);
+        snprintf(text, sizeof text, "%s=256", key);                               /* no newline at the end */
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 256);
         free(s);
     }
     pz_strlcpy(g_env.xdg_cache_home, old, sizeof g_env.xdg_cache_home);
