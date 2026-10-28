@@ -76,7 +76,8 @@ it all the same (with a warning): useful only as an exercise, since `2^160` keys
     --no-cpu / --no-gpu disable the CPU or the GPUs
     --gpu LIST          indices (see `devices`) separated by commas; also allows OpenCL devices on a CPU
     --gpu-api A         auto | cuda | opencl   [auto: CUDA for NVIDIA, OpenCL as a fallback and for the other cards]
-    --isa I             auto | baseline | avx2 | avx512 | avx2v | avx512v | avx512i   [auto: micro-benchmark]
+    --isa I             auto | baseline | avx2 | shani | avx512 | avx2v | avx512v | avx512i   [auto: micro-benchmark]
+                        shani: avx2 with the SHA-256 instructions of the CPU (AMD Zen 2 and later, Intel Ice Lake and later)
                         on arm64: auto | baseline | neon | neon2 (hardware SHA-256 of the CPU, 4 or 8 keys at a time)
     --chunk-bits B      blocks of 2^B keys (20..40) [36, reduced for small intervals]; smaller blocks
                         would slow down the CPU and above all the GPUs (every launch receives a single block)
@@ -346,7 +347,8 @@ thread uses the vector step and the other one the scalar BMI2/ADX step, which us
 
 * Run `pzsolve bench` once: it compares the engines and the number of threads; with a GPU also run
   `pzsolve bench --together` (about 2 minutes), which measures the real CPU+GPU combination and suggests `-t` and `--gpu`. `--isa auto` chooses by itself among
-  `baseline`, `avx2`, `avx512`, the variants `avx2v`/`avx512v` (curve arithmetic on SIMD lanes) and `avx512i` (the same with
+  `baseline`, `avx2`, `shani` (the same lanes with the SHA-256 stage on the CPU's SHA instructions, only on processors that have them,
+  and only if it measures faster), `avx512`, the variants `avx2v`/`avx512v` (curve arithmetic on SIMD lanes) and `avx512i` (the same with
   AVX-512 **IFMA**, on the processors that have it: Ice Lake, Tiger Lake, Rocket Lake, Sapphire Rapids, Zen 4 and
   later; it is about 1.5 times faster than `avx512v`). Every engine, before being used, passes a quick check
   with a known key: an engine that got it wrong would be excluded.

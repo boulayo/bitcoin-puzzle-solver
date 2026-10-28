@@ -75,7 +75,7 @@ KANG_SRC := src/kangaroo.c src/kang_base.c src/bsgs_base.c
 GPU_SRC  := cl_api rt rt_cl rt_cuda gpu
 SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
-ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
+ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_shani.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
 KVOBJ  := $(BUILD)/kang_x86.o $(BUILD)/kang_avx2v.o $(BUILD)/kang_avx512v.o $(BUILD)/kang_avx512i.o $(BUILD)/kang_avx512i2.o
 BSVOBJ := $(BUILD)/bsgs_x86.o $(BUILD)/bsgs_avx2v.o $(BUILD)/bsgs_avx512v.o $(BUILD)/bsgs_avx512i.o
 DEPS   := $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
@@ -209,6 +209,8 @@ $(BUILD)/eng_neon2.o: src/eng_neon2.c | $(BUILD)
 	$(CC) $(COMMON) $(NEON_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/eng_avx2.o: src/eng_avx2.c | $(BUILD)
 	$(CC) $(COMMON) $(AVX2_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/eng_shani.o: src/eng_shani.c | $(BUILD)
+	$(CC) $(COMMON) $(AVX2_FLAGS) $(SHANI_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/eng_avx512.o: src/eng_avx512.c | $(BUILD)
 	$(CC) $(COMMON) $(AVX512_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/eng_avx2v.o: src/eng_avx2v.c | $(BUILD)

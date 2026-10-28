@@ -26,8 +26,8 @@
 #define PZ_ISA_LIST "auto, baseline, neon, neon2"
 #define PZ_ISA_HELP "auto | baseline | neon | neon2\n                          [auto: chosen with a micro-benchmark; neon and neon2 use the hardware SHA-256 of the CPU\n                          with 4 and 8 keys at a time; without it the baseline is used]"
 #else
-#define PZ_ISA_LIST "auto, baseline, avx2, avx512, avx2v, avx512v, avx512i"
-#define PZ_ISA_HELP "auto | baseline | avx2 | avx512 | avx2v | avx512v | avx512i\n                          [auto: chosen with a micro-benchmark; 'v' = curve arithmetic in\n                          parallel on the SIMD lanes; 'i' = like avx512v but with AVX-512 IFMA]"
+#define PZ_ISA_LIST "auto, baseline, avx2, shani, avx512, avx2v, avx512v, avx512i"
+#define PZ_ISA_HELP "auto | baseline | avx2 | shani | avx512 | avx2v | avx512v | avx512i\n                          [auto: chosen with a micro-benchmark; 'v' = curve arithmetic in\n                          parallel on the SIMD lanes; 'i' = like avx512v but with AVX-512 IFMA;\n                          'shani' = avx2 with the SHA-256 instructions of the CPU, if it has them]"
 #endif
 
 static void help_print(FILE *f, const char *text) { pz_fputs_wrap(f, text, PZ_LINE_MAX, -1); }

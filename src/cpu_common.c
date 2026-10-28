@@ -72,6 +72,7 @@ bool cpu_has_ifma(void)
     if (f && !strcmp(f, "1")) return pz_cpu_has_avx512();
     return pz_cpu_has_ifma();
 }
+bool cpu_has_shani(void) { return pz_cpu_has_shani(); }
 bool cpu_has_sha2(void) { return pz_cpu_has_sha2(); }
 
 extern const cpu_engine ENG_BASE;
@@ -81,6 +82,7 @@ extern const cpu_engine ENG_NEON2;
 #endif
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
 extern const cpu_engine ENG_AVX2;
+extern const cpu_engine ENG_SHANI;
 extern const cpu_engine ENG_AVX512;
 extern const cpu_engine ENG_AVX2V;
 extern const cpu_engine ENG_AVX512V;
@@ -100,6 +102,7 @@ static void engines_build(void)
 #endif
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
     g_engines[g_nengines++] = &ENG_AVX2;
+    g_engines[g_nengines++] = &ENG_SHANI;       /* after avx2: the autotune keeps the first of two that measure alike */
     g_engines[g_nengines++] = &ENG_AVX512;
     g_engines[g_nengines++] = &ENG_AVX2V;
     g_engines[g_nengines++] = &ENG_AVX512V;
@@ -131,9 +134,38 @@ static void qc_hit(void *user, const pz_u256 *k)
     q->key = *k;
 }
 
+/* The hash of every lane against the scalar code, on keys of a fixed pattern: a fault in one lane or one word position would show in the
+ * scan below only if its planted key happened to fall there. */
+static bool lanes_check(const cpu_engine *e)
+{
+    const int L = e->lanes;
+    u32 X[8 * 64], pfx[64], out[5 * 64];
+    u8 xb[64][32];
+    u64 st = 0x9E3779B97F4A7C15ULL;
+    for (int round = 0; round < 4; round++) {
+        for (int l = 0; l < L; l++) {
+            for (int i = 0; i < 32; i++) {
+                st ^= st << 13; st ^= st >> 7; st ^= st << 17;
+                xb[l][i] = round == 3 ? (u8)(l * 31 + i) : (u8)st;
+            }
+            pfx[l] = 2 + (u32)((l + round) & 1);
+            for (int i = 0; i < 8; i++) X[i * L + l] = (u32)xb[l][4 * i] << 24 | (u32)xb[l][4 * i + 1] << 16 | (u32)xb[l][4 * i + 2] << 8 | xb[l][4 * i + 3];
+        }
+        e->hash160_lanes(X, pfx, out);
+        for (int l = 0; l < L; l++) {
+            u8 want[20], got[20];
+            pz_hash160_pub33((u8)pfx[l], xb[l], want);
+            for (int w = 0; w < 5; w++) for (int b = 0; b < 4; b++) got[4 * w + b] = (u8)(out[w * L + l] >> (8 * b));
+            if (memcmp(want, got, 20) != 0) return false;
+        }
+    }
+    return true;
+}
+
 bool cpu_engine_quickcheck(const cpu_engine *e)
 {
     cpu_tables_init();
+    if (!lanes_check(e)) return false;
     /* one granule starting at an arbitrary large key, with the target planted at an odd offset in its second half */
     pz_u256 start = pz_u256_pow2(97);
     pz_u256_add_u64(&start, &start, 0x5A5A5ULL);

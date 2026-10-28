@@ -15,6 +15,7 @@
 | `hash.h/.c`, `hash_tables.h` | SHA-256, RIPEMD-160, hash160, Base58Check, WIF (scalar reference) |
 | `hash_simd.inc` | multi-lane SHA-256 + RIPEMD-160 (GCC vector extensions), included once per ISA |
 | `engine_impl.inc` + `eng_base.c` / `eng_avx2.c` / `eng_avx512.c` | CPU engine of the linear search with scalar arithmetic, instantiated per ISA with different flags (`Makefile`) |
+| `eng_shani.c` (+ `hash_lanes_shani.inc`, `h160_shani.c`) | the `avx2` engine with the SHA-256 stage on the x86 SHA instructions (`sha256rnds2`, two blocks in flight), RIPEMD-160 on the 8 AVX2 lanes, a transposition between the two; used only when the CPU has the instructions and the autotune measures it faster; built with `-msha -mavx2 -mssse3 -msse4.1`, tested under QEMU by `make test-shani` |
 | `engine_vec_impl.inc` + `eng_avx2v.c` / `eng_avx512v.c` / `eng_avx512i.c` | CPU engine with curve arithmetic on SIMD lanes (N independent windows per round); `eng_avx512i.c` instantiates it with `fev52.h` |
 | `cpu_common.c` | shared tables (`i·G`, `cpu_gmultiples` for tables of any size), engine registry, ISA detection, quick check of every engine (known key), autotune |
 | `perm.h/.c` | Feistel permutation with SHA-256 rounds (visiting order) |

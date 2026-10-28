@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* t_engine.c - verifies every CPU engine variant against the scalar reference. */
+/* t_engine.c - verifies every CPU engine variant against the scalar reference.
+ *   t_engine [ENGINE...]   only the named engines (a name that is unknown or not supported by this CPU is an error)
+ * With PZ_EXPECT_SHANI=1 in the environment the test fails unless the "shani" engine (the SHA extensions of x86-64) is supported and was
+ * tested, so that a run on an emulated CPU (make test-shani) cannot pass by skipping it. */
 #include "../src/cpu_engine.h"
 #include <pzcore/hash.h>
 static int fails;
@@ -28,10 +31,14 @@ static void test_engine(const cpu_engine *e)
     const u64 G = e->granule;
     /* 1. SIMD hash vs scalar */
     u32 X[8 * 64], pfx[64], out[5 * 64];
-    for (int round = 0; round < 400; round++) {
+    for (int round = 0; round < 400 + 256; round++) {
         u8 xb[64][32];
         for (int l = 0; l < L; l++) {
             for (int i = 0; i < 32; i++) xb[l][i] = round == 0 ? 0 : round == 1 ? 0xff : round == 2 ? (u8)(l * 31 + i) : (u8)rnd();   /* rounds 0-2: edge patterns */
+            if (round >= 400) {                       /* rounds 400-655: a single bit set, at a position that walks over the lanes and the rounds */
+                memset(xb[l], 0, 32);
+                xb[l][((round - 400 + l) % 256) / 8] = (u8)(0x80u >> (((round - 400 + l) % 256) % 8));
+            }
             pfx[l] = 2 + (rnd() & 1);
             for (int i = 0; i < 8; i++) X[i * L + l] = (u32)xb[l][4*i] << 24 | (u32)xb[l][4*i+1] << 16 | (u32)xb[l][4*i+2] << 8 | xb[l][4*i+3];
         }
@@ -189,17 +196,30 @@ static void test_engine(const cpu_engine *e)
     }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     cpu_tables_init();
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);
     int tested = 0;
+    bool shani_tested = false;
+    for (int a = 1; a < argc; a++) {
+        const cpu_engine *e = cpu_engine_by_name(argv[a]);
+        if (!e || !e->supported()) { printf("t_engine: engine %s is unknown or not supported by this CPU\n", argv[a]); fails++; }
+    }
     for (int i = 0; i < n; i++) {
+        if (argc > 1) {
+            bool wanted = false;
+            for (int a = 1; a < argc; a++) wanted |= !strcmp(argv[a], all[i]->name);
+            if (!wanted) continue;
+        }
         if (!all[i]->supported()) { printf("  engine %-9s not supported by this CPU, skipped\n", all[i]->name); continue; }
         test_engine(all[i]);
         tested++;
+        shani_tested |= !strcmp(all[i]->name, "shani");
     }
+    const char *expect = getenv("PZ_EXPECT_SHANI");
+    if (expect && !strcmp(expect, "1") && !shani_tested) { printf("t_engine: PZ_EXPECT_SHANI=1 but the shani engine was not tested\n"); fails++; }
     CHECK(tested >= 1);
     /* reference scan agrees on a tiny range */
     {

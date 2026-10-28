@@ -53,6 +53,7 @@ u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys);
 bool cpu_has_avx2(void);
 bool cpu_has_avx512(void);
 bool cpu_has_ifma(void);
+bool cpu_has_shani(void);
 /* aarch64 probe: the SHA-256 instructions (pzcore/cpu.h). */
 bool cpu_has_sha2(void);
 
