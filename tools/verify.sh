@@ -114,6 +114,9 @@ rm -rf "$T/pr4"; outhas "profile of this machine from " $PROF build/pzsolve hunt
 rm -rf "$T/pr6"; outhas "high priority" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr6" --ui log -t 2 --prio-gpu yes && echo "  OK hunt --prio-gpu yes (with an explicit -t)" || { echo "  FAIL hunt --prio-gpu yes"; fail=$((fail+1)); }
 check_found "$T/pr6/p" "$K" && echo "  OK linear found with high priority for the GPU threads" || { echo "  FAIL linear with --prio-gpu yes"; fail=$((fail+1)); }
 rm -rf "$T/pr5"; outhas "profile\|first run" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr5" --ui log -t 2 && { echo "  FAIL explicit -t ignored by the profile"; fail=$((fail+1)); } || echo "  OK explicit -t: no tuning"
+# no cache folder to keep the result in (a service without HOME): no measurement of two minutes at every start
+rm -rf "$T/pr7"; PO=$(env -u HOME -u XDG_CACHE_HOME LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr7" --ui log 2>&1)
+grep -q "no cache folder that can be written to" <<<"$PO" && ! grep -q "measuring which CPU thread count" <<<"$PO" && echo "  OK no writable cache folder: the machine measurement is skipped" || { echo "  FAIL measurement without a cache folder"; fail=$((fail+1)); }
 
 # doctor, and the protections against suspension: a device error mid-campaign (the mock fails one launch when a file appears,
 # like a driver reset after sleep) must reopen the GPU; a frozen process (SIGSTOP, like sleep) must be noticed

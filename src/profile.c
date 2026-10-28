@@ -6,6 +6,7 @@
 #include "doctor.h"
 #include "platform.h"
 #include <time.h>
+#include <unistd.h>
 
 static bool profile_path(char *out, size_t n) { return pz_cache_file("machine_profile.txt", out, n); }
 
@@ -67,6 +68,20 @@ static void profile_save(const char *key, const char *val)
     pz_keyed_file_put(path, key, val);        /* merged with what other programs saved meanwhile, under a lock */
 }
 
+/* Whether a profile can be kept at all: a cache folder exists and a file can be created in it. Without one (a service or a container user
+ * with no HOME) the measurement of about two minutes would be repeated at every start and never remembered. */
+static bool profile_storable(void)
+{
+    char path[512], probe[560];
+    if (!profile_path(path, sizeof path)) return false;
+    snprintf(probe, sizeof probe, "%s.probeXXXXXX", path);
+    const int fd = pz_create_temp(probe);
+    if (fd < 0) return false;
+    close(fd);
+    unlink(probe);
+    return true;
+}
+
 /* Applies a saved or fresh verdict to the campaign. */
 static void apply_value(run_ctx *r, const char *val, bool fresh)
 {
@@ -118,6 +133,11 @@ void profile_apply(run_ctx *r, bool force, bool disable)
     char key[900], val[200];
     profile_key(r, key, sizeof key);
     if (!force && profile_load(key, val, sizeof val)) { apply_value(r, val, false); return; }
+    if (!profile_storable()) {
+        pz_log(PZ_LOG_INFO, "no cache folder that can be written to (HOME or XDG_CACHE_HOME): the measurement of the best CPU thread count and GPUs "
+               "is skipped, as its result could not be remembered; using all threads and all GPUs");
+        return;
+    }
     const bool kang = r->cfg.mode == MODE_KANGAROO;
     pz_log(PZ_LOG_INFO, "%s: measuring which CPU thread count and which GPUs work best (about 2 minutes, once; --no-tune skips the measurement, --retune repeats it)",
            force ? "tuning requested" : "first run of this version on this machine");
@@ -126,7 +146,12 @@ void profile_apply(run_ctx *r, bool force, bool disable)
     ch.prio = r->prio_gpu;                      /* PRIO_AUTO unless --prio-gpu fixed it: then there is nothing to measure */
     tg_silent = pz_log_quiet();                 /* a quiet hunt gets no tables */
     int rc = kang ? kangaroo_bench_together(0, NULL, &ch) : linear_bench_together(r->engine, 0, NULL, &ch);
-    if (rc) { pz_log(PZ_LOG_WARN, "CPU+GPU tuning failed: using the default values (will try again on the next run)"); return; }
+    if (rc) { tg_silent = 0; pz_log(PZ_LOG_WARN, "CPU+GPU tuning failed: using the default values (will try again on the next run)"); return; }
+    if (!(ch.def_rate > 0)) {                   /* stopped before anything was measured (every GPU worker ended, say): nothing to remember */
+        tg_silent = 0;
+        pz_log(PZ_LOG_WARN, "CPU+GPU tuning measured nothing: using the default values (will try again on the next run)");
+        return;
+    }
     tg_print_advice(&ch, kang ? "steps/s" : "keys/s");
     tg_silent = 0;
     const char *pt = ch.boost && ch.boost_tested ? " prio=1" : "";      /* only a measured result is remembered */
