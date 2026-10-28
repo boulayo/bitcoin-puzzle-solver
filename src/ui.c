@@ -255,7 +255,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
         len = add_line(buf, n, len, &lines, cols, "", "", ln);
         if (pi->est_state == RATE_PROVISIONAL) {
             const char *from = r->rate_prior_kind == 2 ? "from the remembered speed" : r->rate_prior_kind == 1 ? "from the tuning run" : "";
-            const double left = r->settle_at > 0 ? r->settle_at - pz_mono() : -1;   /* never a time that has already passed */
+            const double left = r->settle_at > 0 && !final ? r->settle_at - pz_mono() : -1;   /* never a time that has passed, nor one after a stop */
             char when[48] = "";
             if (left >= 60) snprintf(when, sizeof when, "settles in ~%d min", (int)ceil(left / 60));
             else if (left > 0) snprintf(when, sizeof when, "settles in ~%d s", (int)ceil(left));
