@@ -1,5 +1,5 @@
-> **Documentazione italiana.** Questa cartella (`docs/it/`) contiene il README e la guida all'uso in italiano. I messaggi del programma sono in inglese, quindi gli esempi di output
-> riportati qui possono differire. Per tutto il resto (algoritmi, architettura, rilascio, storia delle versioni) c'è solo la documentazione inglese e fa fede quella.
+> **Documentazione italiana.** Questa cartella (`docs/it/`) contiene il README e la guida all'uso in italiano. Il programma scrive i suoi messaggi in inglese,
+> e la guida li cita così come appaiono. Per tutto il resto (algoritmi, architettura, rilascio, storia delle versioni) c'è solo la documentazione inglese e fa fede quella.
 
 # pzsolve
 
@@ -8,12 +8,11 @@
 pzsolve è un risolutore per il **Bitcoin Puzzle**, la serie di 160 indirizzi in cui la chiave privata *n* sta nell'intervallo
 `[2^(n-1), 2^n - 1]`, scritto in C. Riunisce i tre metodi sensati per questo problema (scansione lineare dell'intervallo, baby-step
 giant-step con tabella in RAM e canguro di Pollard), sceglie quello adatto a ciò che si conosce del bersaglio e lo esegue sulla CPU con
-codice SIMD (AVX2, AVX-512) e sulle GPU con CUDA e OpenCL.
+codice SIMD (AVX2, AVX-512, AVX-512 IFMA, le estensioni SHA) e sulle GPU con CUDA e OpenCL.
 
-Misura la macchina la prima volta e sceglie da solo la combinazione migliore di thread CPU, motore SIMD e GPU. Ogni motore e ogni GPU sono
-confrontati bit per bit con un riferimento prima dell'uso, e ogni chiave candidata è riverificata. Le campagne riprendono dopo qualsiasi
-interruzione e si possono dividere fra più computer. Il canguro richiede circa 1,06·√W passi sulla curva reale (misurato), contro 1,15·√W
-pubblicato per RCKangaroo.
+Sceglie da solo il motore CPU più veloce e, su una macchina con una GPU utilizzabile, la prima volta misura la combinazione migliore di thread
+CPU e GPU. Ogni motore e ogni GPU sono confrontati bit per bit con un riferimento prima dell'uso, e ogni chiave candidata è riverificata. Le
+campagne riprendono dopo qualsiasi interruzione e si possono dividere fra più computer.
 
 Software libero: se ti è utile puoi [sostenere il progetto](#sostieni-il-progetto).
 
@@ -29,21 +28,20 @@ Software libero: se ti è utile puoi [sostenere il progetto](#sostieni-il-proget
 |---|---|---|
 | solo l'**indirizzo** | scansione lineare: inversione batch con simmetria ±, aritmetica della curva SIMD, hash160 SIMD/GPU | ½ · 2^(n-1) chiavi |
 | anche la **chiave pubblica**, tabella in RAM (senza GPU) | **BSGS simmetrico con tabella in RAM** (riusabile da SSD) | **≈ 1,0 · √W** passi (W = 2^(n-1)), deterministico |
-| anche la **chiave pubblica**, tabella troppo grande o con GPU | canguro di Pollard simmetrico ("schema 3") | ≈ 1,06 · √W passi misurati, ≈ 1,02 attesi a scala di puzzle (modello) |
+| anche la **chiave pubblica**, tabella troppo grande o con GPU | canguro di Pollard simmetrico | ≈ 1,06 · √W passi misurati, ≈ 1,02 attesi a scala di puzzle (modello) |
 
 `--mode auto` (il predefinito) sceglie da solo. Un "passo" è un salto del canguro o un passo gigante del BSGS; una "chiave" è una chiave
 candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (in inglese).
 
-* **Tutti i puzzle sono già dentro.** `pzsolve puzzles` li elenca e `pzsolve hunt -p N` avvia una campagna: intervallo, indirizzo
-  e chiave pubblica vengono da un database verificato con un riferimento Python indipendente (compresi i puzzle 161-256). Lo stesso
-  comando **riprende** la campagna. `pzsolve list` mostra avanzamento, velocità e tempo residuo.
+* **Tutti i puzzle sono già dentro.** `pzsolve puzzles` elenca i puzzle 1-160 e `pzsolve hunt -p N` avvia una campagna: intervallo,
+  indirizzo e chiave pubblica vengono da un database verificato con un riferimento Python indipendente. Ci sono anche i puzzle svuotati
+  161-256, che si raggiungono con `pzsolve puzzle N` e `hunt -p N`. Lo stesso comando **riprende** la campagna. `pzsolve list` mostra avanzamento, velocità e tempo residuo.
 * **Un ordine di visita per campagna.** Un seed casuale a 256 bit (riusabile con `--seed`) guida una permutazione pseudo-casuale
   biiettiva dei blocchi: nessun blocco è saltato o ripetuto e dentro il blocco si scansiona in sequenza.
-* **Scansione lineare veloce.** Inversione batch di Montgomery, aritmetica della curva SIMD (AVX2, AVX-512, AVX-512 IFMA) e hash160
-  SIMD/GPU. Il motore è scelto a runtime con un micro-benchmark, dopo una verifica con una chiave nota.
-* **BSGS in RAM.** Tabella dei baby step che non dipende dal bersaglio e si può salvare su SSD (`--table`).
-* **Canguro.** Classi di equivalenza `{P, -P}`, punti distinti in una tabella in RAM, log append-only su disco, rilevamento dei cicli
-  infruttuosi.
+* **Motori CPU.** Inversione batch di Montgomery con la simmetria ±, aritmetica della curva su corsie SIMD (AVX2, AVX-512, AVX-512 IFMA) e
+  hash160 SIMD, con lo stadio SHA-256 sulle istruzioni SHA dove la CPU le ha. Il motore è scelto a runtime con un micro-benchmark, dopo una
+  verifica con una chiave nota: sul runner della CI (AMD EPYC, un thread) `shani` fa 7,19 M chiavi/s contro 6,43 M di `avx2`, e dove c'è
+  AVX-512 IFMA il più veloce è `avx512i`.
 * **GPU: CUDA e OpenCL.** CUDA usa il driver installato con il normale driver NVIDIA (nessun toolkit necessario); OpenCL copre AMD e
   Intel. All'avvio ogni GPU deve superare un **self-test bit-esatto contro la CPU** e ogni chiave candidata è riverificata sulla CPU.
 * **Più computer.** Ricerca lineare: `--part Q/T` (stesso seed) divide il lavoro senza comunicazione e `pzsolve split` lo ripartisce in
@@ -51,8 +49,9 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
 * **Usare solo una parte della macchina.** `--limit X` usa il X % dei thread CPU e dei work-item GPU a pieno ritmo, senza pause.
 * **Campagne persistenti.** Checkpoint atomici, ripresa dopo Ctrl-C, crash, riavvio o sospensione, blocco contro due processi sulla
   stessa campagna. `--keep-awake` impedisce la sospensione su Windows e macOS.
-* **Taratura automatica.** Il primo `hunt` di ogni versione misura la combinazione migliore di thread CPU e GPU (circa 2 minuti, poi
-  ricordata). Si forza con `-t` e `--gpu`, si ripete con `--retune`, si salta con `--no-tune`. `pzsolve bench --together` misura la
+* **Taratura automatica.** Su una macchina con una GPU utilizzabile, il primo `hunt` di ogni versione misura la combinazione migliore di
+  thread CPU e GPU (circa 2 minuti, poi ricordata); non nel BSGS, né con `-t`, `--gpu`, `--no-cpu`, `--no-gpu` o `--limit`. Si ripete con
+  `--retune`, si salta con `--no-tune`. `pzsolve bench --together` misura la
   combinazione e `pzsolve doctor` controlla programma, macchina e campagne.
 * **Pannello e file.** Un pannello aggiornato ogni secondo mostra velocità per dispositivo, tempo residuo e probabilità di successo. La
   cartella della campagna contiene `report.txt`, `status.json`, `stats.csv`, `log.txt` e, a chiave trovata, `FOUND.txt` (permessi 0600).
@@ -89,7 +88,7 @@ volendo, `-r INIZIO:FINE` (esadecimale). Più computer sulla ricerca lineare usa
 
 | Piattaforma | Codice CPU | GPU |
 |---|---|---|
-| Linux x86-64, Windows x86-64 (10/11, exe statico) | portabile, AVX2, AVX-512, AVX-512 IFMA (scelto a runtime) | NVIDIA con CUDA, le altre con OpenCL |
+| Linux x86-64, Windows x86-64 (10/11, exe statico) | portabile, AVX2, estensioni SHA, AVX-512, AVX-512 IFMA (scelto a runtime) | NVIDIA con CUDA, le altre con OpenCL |
 | Linux arm64 | codice portabile, più motori NEON con lo SHA-256 hardware della CPU | quello che offrono i driver CUDA/OpenCL |
 | macOS arm64 (Apple silicon) | codice portabile, più motori NEON con lo SHA-256 hardware | nessuna: solo CPU |
 | macOS Intel | solo codice portabile | nessuna: solo CPU |
@@ -114,8 +113,8 @@ con altri strumenti.
 | canguro classico di Pollard (van Oorschot-Wiener) | ≈ 2·√W | letteratura |
 | canguro simmetrico con classi ± (Galbraith-Ruprai) | ≈ 1,36·√W | teoria |
 | RCKangaroo | 1,15·√W | valore pubblicato dall'autore |
-| pzsolve, schema 3 | 1,06·√W | misurato, W = 2^32 … 2^44, curva reale |
-| pzsolve, schema 3, a scala di puzzle | ≈ 1,02·√W | modellato, non misurato |
+| pzsolve | 1,06·√W | misurato, W = 2^32 … 2^44, curva reale |
+| pzsolve, a scala di puzzle | ≈ 1,02·√W | modellato, non misurato |
 | BSGS con ± e tabella di √W/2 voci | 1,0·√W | serve una tabella che stia in RAM: non fattibile per i puzzle aperti |
 
 Le tabelle complete e il modello sono in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (sezioni 8.8 e 8.10, in inglese) e, per le misure che li sostengono,
@@ -149,9 +148,8 @@ make e2e        # test end-to-end su puzzle piccoli (circa 5 minuti)
 make windows    # build/win/pzsolve.exe, cross-compilato con MinGW-w64
 ```
 
-`tools/verify.sh` esegue la batteria completa: AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer, Valgrind, nuovo controllo
-del database dei puzzle ed exe Windows sotto Wine. I kernel GPU sono verificati bit per bit contro la CPU su pocl (OpenCL sulla CPU)
-e, per CUDA, con un driver simulato. Le build per macOS e arm64 sono compilate e provate dalla CI a ogni push.
+Le build per macOS e arm64 sono compilate e provate dalla CI a ogni push; la verifica completa è descritta in
+[CONTRIBUTING.md](../../CONTRIBUTING.md) (in inglese).
 
 ## Documentazione
 
