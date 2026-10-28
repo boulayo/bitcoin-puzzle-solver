@@ -1,3 +1,17 @@
+# line endings: git decides for the text files (LF in the repository; a checkout on Windows may get CRLF, which the compilers and the
+# editors accept). Files that are run or read by tools that break on a CR are LF in every checkout: a CRLF in a shell script gives
+# "bad interpreter" or "$'\r': command not found", in VERSION it ends up inside $(shell cat VERSION) and the -DPZ_VERSION string,
+# and in the CSV files it ends up in the last field that tests/e2e.sh reads with awk.
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+VERSION text eol=lf
+Makefile text eol=lf
+*.cl text eol=lf
+*.ptx text eol=lf
+*.inc text eol=lf
+*.csv text eol=lf
+
 # old releases and the current binaries stay out of the source tarballs (otherwise each tarball contains the previous ones)
 archive/ export-ignore
 dist/ export-ignore
