@@ -113,7 +113,7 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 | CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the embedded PTX modules and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
 | Windows | `make windows` / `make wintest`: static MinGW-w64 exe, unit tests, self-test and campaigns run under Wine (`tools/verify.sh`) |
 | Sanitizer / Valgrind | `make asan`, `make tsan`, `valgrind` (see `docs/en/RELEASING.md`, section "Before every release") |
-| Kangaroo parameters | `tools/research/ksim.c` (abstract model) and `pzsolve kstat` (real curve) |
+| Kangaroo parameters | `tools/research/ksim.c` (abstract model) and `pzsolve kstat` (real curve); the results are in `docs/en/ALGORITHMS.md` and `docs/en/RESEARCH.md` |
 
 ## 7. Roadmap
 

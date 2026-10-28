@@ -118,7 +118,8 @@ con altri strumenti.
 | pzsolve, schema 3, a scala di puzzle | ≈ 1,02·√W | modellato, non misurato |
 | BSGS con ± e tabella di √W/2 voci | 1,0·√W | serve una tabella che stia in RAM: non fattibile per i puzzle aperti |
 
-Le tabelle complete e il modello sono in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (sezioni 8.8 e 8.10, in inglese).
+Le tabelle complete e il modello sono in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (sezioni 8.8 e 8.10, in inglese) e, per le misure che li sostengono,
+in [`docs/en/RESEARCH.md`](../en/RESEARCH.md) (stesse sezioni, in inglese).
 
 ## Limiti e cosa aspettarsi
 
@@ -155,7 +156,7 @@ e, per CUDA, con un driver simulato. Le build per macOS e arm64 sono compilate e
 ## Documentazione
 
 * [`docs/it/USO.md`](USO.md): comandi, tutte le opzioni, cartella della campagna, GPU, più computer, problemi comuni, Windows.
-* In inglese: [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (algoritmi, misure, limiti teorici), [`docs/en/ARCHITECTURE.md`](../en/ARCHITECTURE.md) (sorgente), [`docs/en/RELEASING.md`](../en/RELEASING.md) (rilascio), [`CHANGELOG.md`](../../CHANGELOG.md) e [`tools/README.md`](../../tools/README.md).
+* In inglese: [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (algoritmi, tempi, limiti teorici), [`docs/en/RESEARCH.md`](../en/RESEARCH.md) (diario di ricerca: cosa è stato provato e misurato), [`docs/en/ARCHITECTURE.md`](../en/ARCHITECTURE.md) (sorgente), [`docs/en/RELEASING.md`](../en/RELEASING.md) (rilascio), [`CHANGELOG.md`](../../CHANGELOG.md) e [`tools/README.md`](../../tools/README.md).
 
 ## Uso responsabile
 

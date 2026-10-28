@@ -111,7 +111,8 @@ on hardware and kernel quality. Run `pzsolve bench` to measure yours, and please
 | pzsolve, schema 3, at puzzle scale | ≈ 1.02·√W | modelled, not measured |
 | BSGS with ± and a table of √W/2 entries | 1.0·√W | needs a table that fits in RAM: not feasible for the open puzzles |
 
-The full tables and the model are in [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md) (sections 8.8 and 8.10).
+The full tables and the model are in [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md) (sections 8.8 and 8.10) and, for the measurements behind them,
+in [`docs/en/RESEARCH.md`](docs/en/RESEARCH.md) (same sections).
 
 ## Limits and what to expect
 
@@ -148,7 +149,8 @@ CUDA, with a simulated driver. The macOS and arm64 builds are built and tested b
 ## Documentation
 
 * [`docs/en/USAGE.md`](docs/en/USAGE.md): commands, all options, the campaign folder, GPUs, several computers, troubleshooting, Windows.
-* [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md): the algorithms, measurements and theoretical limits.
+* [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md): the algorithms, the running times and the theoretical limits.
+* [`docs/en/RESEARCH.md`](docs/en/RESEARCH.md): the research log, what was tried and what was measured (variants that were discarded, intermediate measurements).
 * [`docs/en/ARCHITECTURE.md`](docs/en/ARCHITECTURE.md): how the source is organized.
 * [`docs/en/RELEASING.md`](docs/en/RELEASING.md): versioning and the release procedure.
 * [`CHANGELOG.md`](CHANGELOG.md) and [`tools/README.md`](tools/README.md): what changed, and the helper tools.
