@@ -269,7 +269,7 @@ The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` o
   with a bit-by-bit comparison of states, DPs and restarts** (with a low step limit, so that restarts really happen). A device
   that fails is excluded; an NVIDIA card that fails through CUDA is retried through OpenCL. Every key found is
   re-verified on the CPU anyway.
-* Performance: measured on the reference laptop GPU up to 1.4.0; the 1.5.0 kernels must be re-measured with `bench` on other cards. Functional verification: OpenCL on pocl (OpenCL on CPU); CUDA with a simulated driver that
+* Performance: measured on the reference laptop GPU (RESEARCH.md section 8.4 has the figures); run `bench` to measure your own cards. Functional verification: OpenCL on pocl (OpenCL on CPU); CUDA with a simulated driver that
   runs the same kernel sources behind the driver APIs (`tests/mock_cuda/`), while the translation of PTX into GPU code by the real driver is
   covered by the self-test at startup. `ptxas` accepts all the modules for sm_86.
 
@@ -292,22 +292,22 @@ Linear search, **mean case** (half the interval), at constant speed:
 | 135 | 1.09e+40 | 3.5e+24 years | 3.5e+23 years | 3.5e+22 years |
 | 160 | 3.65e+47 | 1.2e+32 years | 1.2e+31 years | 1.2e+30 years |
 
-Kangaroo, **mean case** (≈ 1.15·√W steps from 1.6.0; ≈ 1.10·√W from 1.7.8, that is about 4% fewer than in the table; ≈ 1.06·√W from 1.7.9, section 8.10):
+Kangaroo, **mean case** (≈ 1.06·√W steps, `KANG_C_MEAN`, section 8.10):
 
 | puzzle | steps (mean) | 100 M/s (CPU) | 1 G/s | 10 G/s |
 |--------|--------------|---------------|-------|--------|
-| 60 | 9.64e+08 | 9.64 s | 964 ms | 96.4 ms |
-| 70 | 3.09e+10 | 309 s | 30.9 s | 3.09 s |
-| 80 | 9.87e+11 | 2.74 hours | 987 s | 98.7 s |
-| 90 | 3.16e+13 | 3.66 days | 8.78 hours | 3.16e+03 s |
-| 100 | 1.01e+15 | 117 days | 11.7 days | 1.17 days |
-| 110 | 3.24e+16 | 10.3 years | 1.03 years | 37.4 days |
-| 120 | 1.04e+18 | 328 years | 32.8 years | 3.28 years |
-| 130 | 3.31e+19 | 1.0e+04 years | 1.0e+03 years | 105 years |
-| 135 | 1.87e+20 | 5.9e+04 years | 5.9e+03 years | 594 years |
-| 140 | 1.06e+21 | 3.4e+05 years | 3.4e+04 years | 3.4e+03 years |
-| 150 | 3.39e+22 | 1.1e+07 years | 1.1e+06 years | 1.1e+05 years |
-| 160 | 1.09e+24 | 3.4e+08 years | 3.4e+07 years | 3.4e+06 years |
+| 60 | 8.05e+08 | 8.05 s | 805 ms | 80.5 ms |
+| 70 | 2.58e+10 | 258 s | 25.8 s | 2.58 s |
+| 80 | 8.24e+11 | 2.29 hours | 824 s | 82.4 s |
+| 90 | 2.64e+13 | 3.05 days | 7.33 hours | 2.64e+03 s |
+| 100 | 8.44e+14 | 97.7 days | 9.77 days | 23.4 hours |
+| 110 | 2.70e+16 | 8.56 years | 313 days | 31.3 days |
+| 120 | 8.64e+17 | 274 years | 27.4 years | 2.74 years |
+| 130 | 2.77e+19 | 8.8e+03 years | 876 years | 87.6 years |
+| 135 | 1.56e+20 | 5.0e+04 years | 5.0e+03 years | 496 years |
+| 140 | 8.85e+20 | 2.8e+05 years | 2.8e+04 years | 2.8e+03 years |
+| 150 | 2.83e+22 | 9.0e+06 years | 9.0e+05 years | 9.0e+04 years |
+| 160 | 9.06e+23 | 2.9e+08 years | 2.9e+07 years | 2.9e+06 years |
 
 Puzzles without a public key are out of reach for the hardware of a single computer from `n ≳ 70`; those with a known public
 key from `n ≳ 110–120`. The program stays correct for any `n ≤ 190` (kangaroo) / `n ≤ 255` (linear),
@@ -352,7 +352,7 @@ With `n` elements there are at most `n²/2` pairs × 2 values, so the probabilit
 `|b₁ − b₂| > 1` almost never give an integer `x` in the interval), not a construction: no known algorithm reaches it.
 
 **Where it is used.** BSGS with `q = 1.0` needs `T = √W/2` entries (≈ 12 bytes each): for puzzle 135 that would be `2^66` entries,
-out of reach for any machine, and for the open puzzles with a known public key (140–160) `2^69…2^79`. The gain (≈ 20 % of time compared
+out of reach for any machine, and for the open puzzles with a known public key (140–160) `2^69…2^79`. The gain (≈ 6 % of steps compared
 with the kangaroo, plus a *deterministic* cost without the long tail of the kangaroo) exists for `W ≲ 2^68` with 128 GB of RAM and is
 implemented in 1.1.0 (section 9). With little memory the best known minimum remains ≈ 1.2–1.3.
 
@@ -533,10 +533,8 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
   Mean from `2^32` to `2^44`: **1.060** against 1.100 (schema 2) and 1.164 (schema 1); it is the constant of the time estimates (`KANG_C_MEAN`). At the scales of the
   open puzzles the model gives ≈ 1.02.
 
-**Compatibility.** Schema 3 writes the log in the `PZDP4` format (fingerprint `PZDPLOG4`). The campaigns of schemas 1 and 2
-stay as they are, because changing the jumps would make the points already found useless. If their `P` is below 64 the program says so at startup and
-recommends a new campaign: the work of a few weeks is a negligible fraction of the expected effort on the open puzzles, while schema 3
-costs about 25 % less.
+**Compatibility.** Schema 3 writes the log in the `PZDP4` format (fingerprint `PZDPLOG4`). Schemas 1 and 2 were removed in 1.9.1: a `dp.bin`
+of an older layout is kept aside by `hunt` and not used (section 4, introduction).
 
 ## 9. Symmetric BSGS with a RAM table (`--mode bsgs`, from 1.1.0)
 
@@ -581,23 +579,23 @@ path, which is also triggered by every zero denominator in the batch inversion.
   256 baby steps recomputed at random). For a fixed `T` the cost of a new key drops to
   `W/(4T)` giants.
 * **Automatic selection**: with a known public key and an interval ≥ 2^20 the program chooses `bsgs` if the optimal table (or the
-  largest one that fits in 70% of free RAM, or in `--mem`) costs less than the kangaroo (`KANG_C_MEAN`: 1.06·√W from 1.7.9, 1.10 in 1.7.8, 1.15 before) and **there are no GPUs** (or the job
+  largest one that fits in 70% of free RAM, or in `--mem`) costs less than the kangaroo (`KANG_C_MEAN`: 1.06·√W) and **there are no GPUs** (or the job
   is a few seconds, or the table already exists on disk); otherwise it uses the kangaroo, which exploits the GPUs. `T` is fixed at
   campaign creation and saved in `campaign.conf` (`bsgs_entries`).
 * CPU and RAM only: the GPUs do not take part (the kangaroo remains the choice for using them).
 
 ### 9.3 When it pays off
 
-| `W` | optimal `T` | table RAM | BSGS cost | kangaroo (1.15·√W; with schema 2 it is 4% less) |
-|-----|-------------|-----------|-----------|--------------------------------------------------|
-| 2^50 | 2^24 | 0.19 GiB | 3.4e7 | 3.9e7 |
-| 2^60 | 2^29 | 6.2 GiB | 1.1e9 | 1.2e9 |
-| 2^64 | 2^31 | 25 GiB | 4.3e9 | 4.9e9 |
-| 2^68 | 2^33 | 98 GiB | 1.7e10 | 2.0e10 |
-| 2^70 | 2^34 | 197 GiB | 3.4e10 | 4.0e10 |
+| `W` | optimal `T` | table RAM | BSGS cost | kangaroo (1.06·√W) |
+|-----|-------------|-----------|-----------|--------------------|
+| 2^50 | 2^24 | 0.19 GiB | 3.4e7 | 3.6e7 |
+| 2^60 | 2^29 | 6.2 GiB | 1.1e9 | 1.1e9 |
+| 2^64 | 2^31 | 25 GiB | 4.3e9 | 4.6e9 |
+| 2^68 | 2^33 | 98 GiB | 1.7e10 | 1.8e10 |
+| 2^70 | 2^34 | 197 GiB | 3.4e10 | 3.6e10 |
 
 With 128 GB of RAM (table ≤ 90 GiB) the optimal BSGS fits up to `W ≈ 2^67.7`; with a table smaller than `√W/2` the cost is
-`T + W/(4T)`, which stays below the kangaroo for `T ≥ 0.29·√W`, that is up to `W ≈ 2^69` (with the kangaroo constant of 1.26 used
+`T + W/(4T)`, which stays below the kangaroo (1.06·√W) for `T ≥ 0.35·√W`, that is up to `W ≈ 2^68.7` (with the kangaroo constant of 1.26 used
 up to 1.5.0 it was `0.24·√W` and `2^70`).
 
 **Honesty about applicability.** The open puzzles with a known public key (135, 140, 145, 150, 155, 160) have `W = 2^134…2^159`:
@@ -630,7 +628,7 @@ success in the next 1 h / 24 h / 7 d / 30 d / 365 d:
   With `--part` the computer can scan only its own part (`reach` units still to do) while the key is uniform over all
   the `remaining` units it has not yet checked: `P(within e) = min(e, reach) / remaining`, and probabilities `q` beyond `reach/remaining`
   cannot be reached alone (time "n/a").
-* **Kangaroo**: cost `n` with `P(found within n) = 1 − exp(−(n/c)²)`, `c = k/0.8862·√W` with `k` the mean cost of the campaign's schema: 1.06 for schema 3 (from 1.7.9, section 8.10, `c ≈ 1.20·√W`), 1.10 for schema 2 (from 1.7.8, section 8.8, `c ≈ 1.24·√W`), 1.15 for schema 1 (from 1.6.0, RESEARCH.md section 4.5, `c ≈ 1.30·√W`; `c = 1.43·√W` before). Given that after `n₀` steps it has
+* **Kangaroo**: cost `n` with `P(found within n) = 1 − exp(−(n/c)²)`, `c = k/0.8862·√W` with `k = 1.06` (`KANG_C_MEAN`, section 8.10), that is `c ≈ 1.20·√W`. Given that after `n₀` steps it has
   not been found yet: `P(within n₀+e | not found) = 1 − exp(−e(2n₀+e)/c²)` and `e_q = c²·L/(n_q + n₀)` with `L = −ln(1−q)`
   (the form without numerical cancellation).
 
