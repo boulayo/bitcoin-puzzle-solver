@@ -230,6 +230,17 @@ static pz_u256 u256_mul_u64(const pz_u256 *a, u64 q)
     return lo;
 }
 
+#define STR_(x) #x
+#define STR(x) STR_(x)
+
+const char *kang_range_error(const pz_u256 *W)
+{
+    if (pz_u256_bits(W) < 17) return "range too small for the kangaroo (at least 2^16 keys needed): use --mode linear";
+    const pz_u256 max = pz_u256_pow2(KANG_MAX_W_LOG2);
+    if (pz_u256_cmp(W, &max) > 0) return "range too large for the kangaroo (maximum 2^" STR(KANG_MAX_W_LOG2) " keys)";
+    return NULL;
+}
+
 kang_state *kang_create(run_ctx *r)
 {
     pz_ec_init();
@@ -237,8 +248,8 @@ kang_state *kang_create(run_ctx *r)
     ks->r = r;
     pthread_mutex_init(&ks->mu, NULL);
     ks->W = cfg_range_size(&r->cfg);
-    if (pz_u256_bits(&ks->W) < 17) pz_die("range too small for the kangaroo (at least 2^16 keys needed): use --mode linear");
-    if (pz_u256_bits(&ks->W) > 190) pz_die("range too large for the kangaroo (maximum 2^190)");
+    const char *rerr = kang_range_error(&ks->W);
+    if (rerr) pz_die("%s", rerr);
     ks->sqrtW = sqrtl(u256_ld(&ks->W));
     ks->epoch = (u64)r->sessions | (u64)r->node << 32;   /* node 0 keeps the streams of the single-computer campaigns */
 

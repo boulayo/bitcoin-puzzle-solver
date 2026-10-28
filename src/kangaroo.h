@@ -4,6 +4,10 @@
 #define PZ_KANGAROO_H
 #include "run.h"
 #define KANG_C_MEAN 1.06         /* measured mean cost of the kangaroo, in units of sqrt(W) (W = 2^32..2^44) */
+#define KANG_MAX_W_LOG2 188      /* the largest interval, 2^188 keys: the exponents are signed 192-bit numbers (+-2^191), the wild walkers on 3Q start
+                                  * as far as 3W below zero and the collision of two of them, 6x = d2 - d1, needs 6W < 2^191 */
+/* NULL if the kangaroo can work on an interval of W keys, else the reason it cannot (too small, or beyond KANG_MAX_W_LOG2). */
+const char *kang_range_error(const pz_u256 *W);
 int kangaroo_selftest(void);
 /* Every CPU variant of the kangaroo step against the portable one, bit for bit (prints one line each). */
 int kang_round_selftest(void);
@@ -14,8 +18,10 @@ const char *kang_round_isa(void);
 int kangaroo_stats(int argc, char **argv);
 int kang_log_fault_selftest(void);   /* the DP log when the disk refuses writes: no overflow, nothing lost, torn records repaired */
 int kang_merge_selftest(void);   /* kang_merge_file: collision across two logs, refusal of foreign logs */
-/* Builds a synthetic kangaroo state on an interval of 2^wbits keys (for GPU self-tests). Free with kang_free_test_state. */
+/* Builds a synthetic kangaroo state on an interval of 2^wbits keys (for GPU self-tests). Free with kang_free_test_state. The key is at
+ * the given offset from the start of the interval (the first form: 123456789). */
 struct kang_state *kang_make_test_state(unsigned wbits, int nthreads);
+struct kang_state *kang_make_test_state_at(unsigned wbits, int nthreads, const pz_u256 *offset);
 void kang_free_test_state(struct kang_state *ks);
 /* Runs the CPU kangaroo on [lo, lo + 2^wbits) until `key` is found; returns the steps used or -1. Test overrides: R jumps
  * instead of 256 (R > 0, a power of two), dp_bits (dp > 0) and no restart of walkers without distinguished points. */

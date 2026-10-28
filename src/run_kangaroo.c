@@ -245,15 +245,21 @@ double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthre
 
 struct kang_state *kang_make_test_state(unsigned wbits, int nthreads)
 {
+    return kang_make_test_state_at(wbits, nthreads, &(pz_u256){{123456789, 0, 0, 0}});
+}
+
+struct kang_state *kang_make_test_state_at(unsigned wbits, int nthreads, const pz_u256 *offset)
+{
     const pz_u256 lo = pz_u256_pow2(90);
     pz_u256 k = lo;
-    pz_u256_add_u64(&k, &k, 123456789);
+    pz_u256_add(&k, &k, offset);
     run_ctx *r = synth_new(&lo, wbits, &k);
     if (!r) return NULL;
     pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     for (int i = 0; i < 32; i++) r->cfg.seed[i] = (u8)(i * 37 + 11);
     r->nthreads = nthreads;
     r->silent_setup = true;
+    r->mem_limit = 256ULL << 20;                           /* a small table: the intervals of the tests would otherwise ask for a huge one */
     kang_state *ks = kang_create(r);
     r->kang = ks;
     kang_configure(ks, 0);

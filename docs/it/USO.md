@@ -119,7 +119,8 @@ pzsolve hunt -r 40000000000:7fffffffff -a <INDIRIZZO> -c zona1
 | chiave pubblica nota, altrimenti | `kangaroo`: ≈ 1,06·√W (campagne iniziate prima della 1.7.9: vedi «Più computer sulla stessa campagna canguro»), usa anche le GPU |
 
 Il BSGS usa solo CPU e RAM; con una GPU potente il canguro può essere più veloce nonostante il costo maggiore: se sai che è
-così, forza `--mode kangaroo`. La modalità resta fissata nella campagna (`campaign.conf`).
+così, forza `--mode kangaroo`. La modalità resta fissata nella campagna (`campaign.conf`). Il canguro accetta intervalli da 2^16 a 2^188
+chiavi (i puzzle dal 190 in su vengono rifiutati con un messaggio; gli esponenti dei suoi camminatori sono numeri a 192 bit).
 
 ## 5. La cartella di una campagna
 

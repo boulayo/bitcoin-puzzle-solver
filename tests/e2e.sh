@@ -210,6 +210,14 @@ timeout -s INT 2 $BIN hunt -p 161 -c p161 -d "$DIR" --ui log --no-gpu -t 1 >"$DI
 grep -q "emptied by the creator" "$DIR/p161.out" && grep -q "^address=1JkqBQcC4tHcb1JfdCH6nrWYwTPGznHANh" "$DIR/p161/campaign.conf" 2>/dev/null \
   && ok "puzzle 161 (emptied): warning and address from the database" || bad "puzzle 161: warning or address missing"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH -k 02e0cd1ed3ab4d2d3d6f3c2b1a5c4f3e2d1c0b9a8f7e6d5c4b3a291807f6e5d4c3 -c bad3 -d "$DIR" -q >/dev/null 2>&1 && bad "invalid pubkey accepted" || ok "invalid pubkey rejected"
+# the kangaroo takes at most 2^188 keys: one key more (puzzle 190 and above, or a custom interval) is refused with the reason, before a campaign is created
+KP=$(field 0x1234567 pub); KA=$(field 0x1234567 addr)
+for kopts in "-m kangaroo" "-m auto"; do
+  rm -rf "$DIR/wide"
+  OUT=$($BIN hunt -r 1:$(printf '1%047d' 1) -a "$KA" -k "$KP" $kopts -c wide -d "$DIR/wide" --ui log -q --no-gpu 2>&1); RC=$?
+  [ $RC -ne 0 ] && echo "$OUT" | grep -q "range too large for the kangaroo (maximum 2^188" && { [ ! -e "$DIR/wide" ] || [ -z "$(ls -A "$DIR/wide" 2>/dev/null)" ]; } \
+    && ok "interval of 2^188 + 1 keys refused ($kopts), nothing left behind" || bad "interval of 2^188 + 1 keys with $kopts (rc=$RC): $OUT"
+done
 
 echo "== invalid options: clear error and no half-created campaign left behind"
 for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--report-interval 0" "--bsgs-entries 0" "--isa foo" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "--new --resume" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50"; do

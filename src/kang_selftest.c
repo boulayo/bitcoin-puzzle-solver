@@ -113,38 +113,43 @@ static i192 i192_mul_small(const i192 *X, int c)
 }
 
 /* Two distinguished points on the same class reveal the key for every two kinds of different coefficient
- * (tame, wild on Q and on 3Q, either sign), the division by c_a - c_b included. */
+ * (tame, wild on Q and on 3Q, either sign), the division by c_a - c_b included. Once on a small interval, and once on the largest one
+ * the kangaroo takes with the key near its end, where the pairs of walkers on 3Q give 6x = d2 - d1 with 6x close to the limit of an i192. */
 static int solve_selftest(void)
 {
     int fails = 0, pairs = 0;
     const i192 zero = i192_zero();
     const int was_quiet = pz_log_quiet();
-    pz_log_set_quiet(1);                                   /* "key found" twenty times */
-    for (unsigned ka = 0; ka < 5; ka++)
-        for (unsigned kb = 0; kb < 5; kb++) {
-            if (kang_kind_coef(ka) == kang_kind_coef(kb)) continue;
-            kang_state *ks = kang_make_test_state(40, 1);
-            if (!ks) return fails + 1;
-            pz_u256 key = pz_u256_pow2(90), m;
-            pz_u256_add_u64(&key, &key, 123456789);       /* the key of kang_make_test_state */
-            pz_u256_sub(&m, &key, &ks->base);
-            const i192 X = i192_from_signed(false, &m);
-            const pz_u256 dm = pz_u256_from_u64(1000003 + 7919 * (u64)(ka * 5 + kb));
-            dp_rec a, b;
-            b.d = i192_from_signed((ka + kb) & 1, &dm);
-            i192 E = i192_mul_small(&X, kang_kind_coef(kb)), cx = i192_mul_small(&X, kang_kind_coef(ka));
-            i192_add(&E, &E, &b.d);                      /* E = c_b X + d_b = c_a X + d_a */
-            i192_sub(&a.d, &E, &cx);
-            const u64 tag = tag_of(&zero, 0, &E) & ~7ULL;
-            a.tagk = tag | ka;
-            b.tagk = tag | kb;
-            if (kang_insert_dps(ks, &a, 1, NULL) || !kang_insert_dps(ks, &b, 1, NULL) || !atomic_load(&ks->r->found) || pz_u256_cmp(&ks->r->found_key, &key) != 0) {
-                fails++;
-                printf("  solution between kinds %u and %u: FAILED\n", ka, kb);
+    pz_log_set_quiet(1);                                   /* "key found" forty times */
+    for (int big = 0; big < 2; big++) {
+        const unsigned wbits = big ? KANG_MAX_W_LOG2 : 40;
+        pz_u256 off = pz_u256_from_u64(123456789);         /* the offset of the key from the base */
+        if (big) { off = pz_u256_pow2(wbits); pz_u256_sub(&off, &off, &(pz_u256){{1234568, 0, 0, 0}}); }
+        for (unsigned ka = 0; ka < 5; ka++)
+            for (unsigned kb = 0; kb < 5; kb++) {
+                if (kang_kind_coef(ka) == kang_kind_coef(kb)) continue;
+                kang_state *ks = kang_make_test_state_at(wbits, 1, &off);
+                if (!ks) return fails + 1;
+                pz_u256 key = pz_u256_pow2(90);
+                pz_u256_add(&key, &key, &off);                 /* the key of kang_make_test_state_at */
+                const i192 X = i192_from_signed(false, &off);
+                const pz_u256 dm = pz_u256_from_u64(1000003 + 7919 * (u64)(ka * 5 + kb));
+                dp_rec a, b;
+                b.d = i192_from_signed((ka + kb) & 1, &dm);
+                i192 E = i192_mul_small(&X, kang_kind_coef(kb)), cx = i192_mul_small(&X, kang_kind_coef(ka));
+                i192_add(&E, &E, &b.d);                      /* E = c_b X + d_b = c_a X + d_a */
+                i192_sub(&a.d, &E, &cx);
+                const u64 tag = tag_of(&zero, 0, &E) & ~7ULL;
+                a.tagk = tag | ka;
+                b.tagk = tag | kb;
+                if (kang_insert_dps(ks, &a, 1, NULL) || !kang_insert_dps(ks, &b, 1, NULL) || !atomic_load(&ks->r->found) || pz_u256_cmp(&ks->r->found_key, &key) != 0) {
+                    fails++;
+                    printf("  solution between kinds %u and %u on 2^%u keys: FAILED\n", ka, kb, wbits);
+                }
+                pairs++;
+                kang_free_test_state(ks);
             }
-            pairs++;
-            kang_free_test_state(ks);
-        }
+    }
     pz_log_set_quiet(was_quiet);
     char lb[64];
     snprintf(lb, sizeof lb, "collisions between all kinds of walkers (%d pairs)", pairs);
@@ -152,7 +157,55 @@ static int solve_selftest(void)
     return fails;
 }
 
-int kang_merge_selftest(void) { return merge_selftest() + solve_selftest(); }
+/* The limits of the interval, and the walkers on the largest one: every start must be the point (sigma*c*X + d)*G of its exponent. The
+ * wild walkers on 3Q start as far as 3W below zero, and an exponent beyond +-2^191 would wrap in the i192 while its point does not. */
+static int range_selftest(void)
+{
+    int fails = 0;
+#define RCHK(cond) do { if (!(cond)) { fails++; printf("  range: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
+    const pz_u256 one = pz_u256_from_u64(1), max = pz_u256_pow2(KANG_MAX_W_LOG2);
+    pz_u256 t;
+    RCHK(kang_range_error(&max) == NULL);
+    pz_u256_add(&t, &max, &one);
+    RCHK(kang_range_error(&t) != NULL);                    /* one key beyond the limit */
+    t = pz_u256_pow2(KANG_MAX_W_LOG2 + 2);
+    RCHK(kang_range_error(&t) != NULL);
+    t = pz_u256_pow2(16);
+    RCHK(kang_range_error(&t) == NULL);
+    pz_u256_sub(&t, &t, &one);
+    RCHK(kang_range_error(&t) != NULL);                    /* too small */
+    pz_u256 off = pz_u256_pow2(KANG_MAX_W_LOG2);
+    pz_u256_sub(&off, &off, &(pz_u256){{1234568, 0, 0, 0}});     /* the key near the end of the interval */
+    kang_state *ks = kang_make_test_state_at(KANG_MAX_W_LOG2, 1, &off);
+    if (!ks) return fails + 1;
+    const i192 X = i192_from_signed(false, &off);
+    const int K = 600;
+    kang_worker *w = kang_worker_new(ks, K, 3);
+    kang_init_herd(ks, w);
+    int wrong = 0, wild3 = 0;
+    for (int i = 0; i < K; i++) {
+        const i192 cx = i192_mul_small(&X, (int)w->kind[i] * w->sigma[i]);
+        pz_fe x = w->x[i];
+        pz_fe_normalize(&x);
+        wrong += x.n[2] != tag_of(&cx, 1, &w->d[i]);
+        wild3 += w->kind[i] == 3;
+    }
+    RCHK(wild3 > K / 10);                                  /* the walkers that start farthest from zero are there */
+    RCHK(wrong == 0);
+    kang_worker_free(w);
+    kang_free_test_state(ks);
+    char lb[64];
+    snprintf(lb, sizeof lb, "kangaroo, intervals up to 2^%d keys", KANG_MAX_W_LOG2);
+    pz_result_line(lb, "%s", fails ? "FAILED" : "OK");
+    return fails;
+}
+
+int kang_merge_selftest(void)
+{
+    int fails = merge_selftest();
+    fails += solve_selftest();
+    return fails + range_selftest();
+}
 
 #ifndef _WIN32
 /* The log of distinguished points when the disk refuses writes: no overflow of the buffer, nothing lost, and after a write that stopped in the

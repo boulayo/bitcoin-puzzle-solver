@@ -641,6 +641,10 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
             } else c->mode = MODE_KANGAROO;
         }
     } else pz_die("--mode must be auto, linear, kangaroo or bsgs");
+    if (c->mode == MODE_KANGAROO) {                  /* before anything is created on disk */
+        const char *why = kang_range_error(&rsz);
+        if (why) pz_die("%s", why);
+    }
 
     if (o->part[0] && strcmp(o->part, "0/1") != 0) {
         if (c->mode != MODE_LINEAR) pz_die("--part is only used in linear search (with a known public key use -m linear; the kangaroo has --node and 'merge')");

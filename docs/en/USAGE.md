@@ -120,7 +120,8 @@ pzsolve hunt -r 40000000000:7fffffffff -a <ADDRESS> -c zone1
 | known public key, otherwise | `kangaroo`: ≈ 1.06·√W (campaigns started before 1.7.9: see "Several computers on one kangaroo campaign", section 8.1), it uses the GPUs as well |
 
 BSGS uses only CPU and RAM; with a powerful GPU the kangaroo can be faster despite its higher cost: if you know that this is the
-case, force `--mode kangaroo`. The mode stays fixed in the campaign (`campaign.conf`).
+case, force `--mode kangaroo`. The mode stays fixed in the campaign (`campaign.conf`). The kangaroo takes intervals of 2^16 to 2^188 keys
+(puzzles 190 and above are refused with a message; the exponents of its walkers are 192-bit numbers).
 
 ## 5. The folder of a campaign
 
