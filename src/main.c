@@ -202,10 +202,7 @@ static const struct option long_opts[] = {
     {"checkpoint-interval", 1, 0, O_CKPT}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
     {"new", 0, 0, O_NEW}, {"resume", 0, 0, O_RESUME}, {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN}, {"gpu-api", 1, 0, O_GPUAPI},
     {"retune", 0, 0, O_RETUNE}, {"no-tune", 0, 0, O_NOTUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE}, {"prio-gpu", 1, 0, O_PRIO},
-    {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
-    /* former Italian spellings: still accepted, not documented */
-    {"ritara", 0, 0, O_RETUNE}, {"no-taratura", 0, 0, O_NOTUNE}, {"sveglio", 0, 0, O_AWAKE}, {"nodo", 1, 0, O_NODE}, {"parte", 1, 0, O_PART},
-    {"limite", 1, 0, O_LIMIT}, {0, 0, 0, 0}};
+    {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
 
 /* Strict numeric option parsing: the whole string must be a number in range (atoi() would silently accept "12abc").
  * pz_parse_* rather than strtoll: on glibc >= 2.38 strtoll resolves to __isoc23_strtoll and the binary would refuse
@@ -339,7 +336,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         case O_AWAKE: o->keep_awake = true; break;
         case O_PRIO:
             if (!strcmp(optarg, "auto")) o->prio_gpu = PRIO_AUTO;
-            else if (!strcmp(optarg, "yes") || !strcmp(optarg, "si")) o->prio_gpu = PRIO_YES;   /* "si": former spelling */
+            else if (!strcmp(optarg, "yes")) o->prio_gpu = PRIO_YES;
             else if (!strcmp(optarg, "no")) o->prio_gpu = PRIO_NO;
             else pz_die("--prio-gpu must be auto, yes or no");
             break;
@@ -1250,8 +1247,8 @@ static int cmd_puzzles(int argc, char **argv)
 {
     bool only_open = false, only_solved = false, only_pub = false;
     for (int i = 2; i < argc; i++) {
-        if (!strcmp(argv[i], "--open") || !strcmp(argv[i], "--aperti")) only_open = true;           /* "--aperti", "--risolti": former spellings */
-        else if (!strcmp(argv[i], "--solved") || !strcmp(argv[i], "--risolti")) only_solved = true;
+        if (!strcmp(argv[i], "--open")) only_open = true;
+        else if (!strcmp(argv[i], "--solved")) only_solved = true;
         else if (!strcmp(argv[i], "--pubkey")) only_pub = true;
         else pz_die("unknown option: %s (valid: --open, --solved, --pubkey)", argv[i]);
     }

@@ -452,7 +452,7 @@ int bench_run(int argc, char **argv)
         else if (!strcmp(a, "--prio-gpu") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "auto")) prio = PRIO_AUTO;
-            else if (!strcmp(v, "yes") || !strcmp(v, "si")) prio = PRIO_YES;
+            else if (!strcmp(v, "yes")) prio = PRIO_YES;
             else if (!strcmp(v, "no")) prio = PRIO_NO;
             else pz_die("--prio-gpu must be auto, yes or no (see 'pzsolve help bench')");
             prio_given = true;

@@ -159,6 +159,9 @@ SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/stab/p33/session.txt")
 [ "$SEED1" = "$SEED2" ] && [ "$SES" = 2 ] && ok "running the same command again resumes the campaign (2 sessions, same seed)" || bad "automatic resume: sessions '$SES'"
 [ "$($BIN puzzles | grep -cE '^ *[0-9]+ +(solved|OPEN) ')" = 160 ] && ok "list of the 160 puzzles" || bad "puzzle list incomplete"
 $BIN puzzles --open | grep -qE '^ *[0-9]+ +solved ' && bad "--open shows solved puzzles" || ok "--open filter"
+for old_opt in --aperti --risolti; do
+  $BIN puzzles $old_opt >/dev/null 2>&1 && bad "puzzles $old_opt accepted" || ok "puzzles $old_opt (former Italian spelling) rejected"
+done
 
 echo "== campaign lock and the list command"
 rm -rf "$DIR/lk"
@@ -275,7 +278,7 @@ for kopts in "-m kangaroo" "-m auto"; do
 done
 
 echo "== invalid options: clear error and no half-created campaign left behind"
-for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--report-interval 0" "--bsgs-entries 0" "--isa foo" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "--new --resume" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50"; do
+for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--report-interval 0" "--bsgs-entries 0" "--isa foo" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "--new --resume" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50" "--prio-gpu si"; do
   rm -rf "$DIR/opt"
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done

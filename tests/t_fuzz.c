@@ -215,22 +215,72 @@ static void fuzz_parsers(void)
     CHECK(pz_address_to_hash160("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", h));
 }
 
-static void fuzz_list(const char *dir)
+/* A campaign folder `dir`/`name` with a valid campaign.conf; the folder's path in d. */
+static void make_campaign(const char *dir, const char *name, char *d, size_t dn)
 {
-    /* `list` must survive campaign directories with garbage status.json / campaign.conf */
-    char d1[700], p[800];
-    snprintf(d1, sizeof d1, "%s/camp", dir);
-    CHECK(pz_mkdir1(d1) == 0);
-    snprintf(p, sizeof p, "%s/campaign.conf", d1);
+    char p[800];
+    snprintf(d, dn, "%s/%s", dir, name);
+    CHECK(pz_mkdir1(d) == 0);
+    snprintf(p, sizeof p, "%s/campaign.conf", d);
     campaign_cfg c;
     memset(&c, 0, sizeof c);
     c.format_version = PZ_FORMAT_VERSION;
-    snprintf(c.name, sizeof c.name, "camp");
+    snprintf(c.name, sizeof c.name, "%s", name);
     c.range_start = pz_u256_from_u64(1);
     c.range_end = pz_u256_from_u64(100);
     snprintf(c.address, sizeof c.address, "x");
     c.chunk_bits = 4;
     CHECK(cfg_save(&c, p) == 0);
+}
+
+/* What campaigns_list(dir) prints, via the file `tmp`. */
+static char *list_text(const char *dir, const char *tmp)
+{
+    fflush(stdout);
+    int saved = dup(1), fd = pz_open_trunc(tmp, 0644);
+    CHECK(saved >= 0 && fd >= 0);
+    dup2(fd, 1);
+    campaigns_list(dir);
+    fflush(stdout);
+    dup2(saved, 1);
+    close(saved);
+    close(fd);
+    return pz_read_file(tmp, NULL);
+}
+
+/* status.json files written before 1.8.0 hold Italian state names: they are still read, and shown in English. */
+static void check_old_state_words(const char *dir)
+{
+    static const char *const old[][2] = {{"IN CORSO", "STOPPED"}, {"INTERROTTA", "STOPPED"}, {"COMPLETATA", "COMPLETED"}, {"TROVATA", "FOUND"}};
+    char d[700], p[800], tmp[800];
+    make_campaign(dir, "oldwords", d, sizeof d);
+    snprintf(p, sizeof p, "%s/status.json", d);
+    snprintf(tmp, sizeof tmp, "%s/list.out", dir);
+    for (size_t i = 0; i < sizeof old / sizeof *old; i++) {
+        char js[200];
+        snprintf(js, sizeof js, "{\n \"state\": \"%s\",\n \"fraction\": 0.5,\n \"updated_unix\": 100\n}\n", old[i][0]);
+        put(p, js, strlen(js));
+        char *t = list_text(dir, tmp);
+        const char *row = t ? strstr(t, "oldwords") : NULL;
+        CHECK(row && strstr(row, old[i][1]) && !strstr(t, old[i][0]));   /* a stopped campaign (nobody holds the lock) */
+        free(t);
+    }
+    const char *busy = "{\n \"state\": \"IN CORSO\"\n}\n";                       /* "in progress" is RUNNING while the lock is held */
+    put(p, busy, strlen(busy));
+    int fd = campaign_lock(d);
+    char *t = list_text(dir, tmp);
+    const char *row = t ? strstr(t, "oldwords") : NULL;
+    CHECK(row && strstr(row, "RUNNING") && !strstr(t, "IN CORSO"));
+    free(t);
+    close(fd);
+    CHECK(pz_remove_tree(d) == 0);
+}
+
+static void fuzz_list(const char *dir)
+{
+    /* `list` must survive campaign directories with garbage status.json / campaign.conf */
+    char d1[700], p[800];
+    make_campaign(dir, "camp", d1, sizeof d1);
     snprintf(p, sizeof p, "%s/status.json", d1);
     const char *good = "{\n \"state\": \"IN CORSO\",\n \"fraction\": 0.5,\n \"rate_per_second\": 1000.0,\n \"eta_seconds_50\": 12.5,\n \"updated_unix\": 100\n}\n";
     for (int it = 0; it < 300; it++) {
@@ -313,6 +363,7 @@ int main(void)
     fuzz_sched(dir);
     fuzz_table(dir);
     fuzz_parsers();
+    check_old_state_words(dir);
     fuzz_list(dir);
     check_shown_state(dir);
     CHECK(pz_remove_tree(dir) == 0);

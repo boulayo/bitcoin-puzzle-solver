@@ -29,7 +29,7 @@ static void profile_key(const run_ctx *r, char *out, size_t n)
     const bool kang = r->cfg.mode == MODE_KANGAROO;
     snprintf(out, n, "%s|%s|%s|%d/%d|%s|%s%s", kang ? "kang" : "lin", PZ_VERSION, r->sys.model, r->sys.ncpu, r->sys.ncore,
              kang ? kang_round_isa() : engine_isa(), gsig,           /* not the measured choices: they may change between runs */
-             r->prio_gpu == PRIO_YES ? "|prio-si" : r->prio_gpu == PRIO_NO ? "|prio-no" : "");     /* a measurement under a fixed priority is its own entry */
+             r->prio_gpu == PRIO_YES ? "|prio-yes" : r->prio_gpu == PRIO_NO ? "|prio-no" : "");     /* a measurement under a fixed priority is its own entry */
     for (char *c = out; *c; c++) if (*c == '\n' || *c == '\r' || *c == '=') *c = '_';
 }
 
