@@ -47,7 +47,7 @@ enum {
 
 /* Fatal error helper: prints and exits with status PZ_EXIT_ERROR. */
 void pz_die(const char *fmt, ...) __attribute__((noreturn, format(PZ_PRINTF, 1, 2)));
-void pz_help(const char *topic, FILE *f);               /* the help text: "hunt", "bench" or the general one (NULL) */
+bool pz_help(const char *topic, FILE *f);               /* the help of a command, or the general one (NULL); false: no such command */
 
 /* Wall-clock helpers (implemented in platform.c). */
 double pz_now(void);                 /* seconds since the epoch */

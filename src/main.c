@@ -41,7 +41,7 @@ static void usage_main(FILE *f)
 "\n"
 "USAGE\n"
 "  pzsolve <command> [options]\n"
-"  pzsolve help <command>    the options of a command (hunt, bench)\n"
+"  pzsolve help <command>    the options of a command\n"
 "\n"
 "COMMANDS\n"
 "  hunt       start (or resume) a search campaign\n"
@@ -165,12 +165,54 @@ static void usage_bench(FILE *f)
 "      --retune            ignore the saved choice of the GPU kernel variant and measure it again\n");
 }
 
-/* The help of a command: "pzsolve help hunt", "pzsolve hunt --help". */
-void pz_help(const char *topic, FILE *f)
+/* The short help of the other commands: usage line, then one line per option. */
+static const struct { const char *cmd, *text; } short_help[] = {
+    {"info", "pzsolve info - show the state of an existing campaign (its report.txt)\n\nUSAGE\n  pzsolve info (-c NAME | -p N) [-d DIR]\n\nOPTIONS\n"
+             "  -c, --campaign NAME     the campaign\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
+             "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"},
+    {"list", "pzsolve list - list all campaigns in the folder with progress, speed and time left\n\nUSAGE\n  pzsolve list [-d DIR]\n\nOPTIONS\n"
+             "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"},
+    {"where", "pzsolve where - tell when a given key will be visited in the order of a linear or BSGS campaign\n\nUSAGE\n"
+              "  pzsolve where (-c NAME | -p N) --key HEX [-d DIR]\n\nOPTIONS\n"
+              "  -c, --campaign NAME     the campaign\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
+              "      --key HEX           the private key, in hexadecimal\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"},
+    {"merge", "pzsolve merge - merge the distinguished points of other computers into a kangaroo campaign\n\nUSAGE\n"
+              "  pzsolve merge (-c NAME | -p N) -f FILE_OR_FOLDER [-f ...] [-d DIR] [--mem GB]\n\nOPTIONS\n"
+              "  -c, --campaign NAME     the campaign (it must not be running)\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
+              "  -f, --file PATH         the dp.bin of another computer, or its campaign folder (up to 16)\n"
+              "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
+              "      --mem GB            maximum RAM for the table of distinguished points [auto]\n  -q, --quiet             fewer messages\n"},
+    {"split", "pzsolve split - divide the --part shares among several computers in proportion to their speeds\n\nUSAGE\n"
+              "  pzsolve split SPEED_1 SPEED_2 [...]\n\nARGUMENTS\n"
+              "  SPEED                   keys per second of each computer, with k, M, G or T allowed (800M, 1.5G); at most 64\n"},
+    {"doctor", "pzsolve doctor - check the program, machine, GPUs, cache and campaigns and report what is wrong\n\nUSAGE\n"
+               "  pzsolve doctor [-d DIR] [--full]\n\nOPTIONS\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
+               "      --full              also run the full selftest, GPUs included\n"},
+    {"puzzle", "pzsolve puzzle - show the data of a puzzle and the effort to solve it\n\nUSAGE\n  pzsolve puzzle N [--rate SPEED]\n\nOPTIONS\n"
+               "      --rate SPEED        the speed of the times, keys per second with k, M, G or T allowed (800M, 1.5G) [measured on\n"
+               "                          the CPU of this machine]\n"},
+    {"puzzles", "pzsolve puzzles - list the 160 built-in puzzles\n\nUSAGE\n  pzsolve puzzles [--open | --solved] [--pubkey]\n\nOPTIONS\n"
+                "      --open              only the puzzles still unsolved\n      --solved            only the solved puzzles\n"
+                "      --pubkey            only the puzzles whose public key is known\n"},
+    {"devices", "pzsolve devices - list the detected CPU, SIMD instructions, RAM and GPUs\n\nUSAGE\n  pzsolve devices\n"},
+    {"selftest", "pzsolve selftest - run the built-in correctness checks (CPU engines, kangaroo, BSGS, GPUs)\n\nUSAGE\n  pzsolve selftest\n"},
+    {"kstat", "pzsolve kstat - statistics of the kangaroo cost over intervals of 2^BITS keys (cycle study)\n\nUSAGE\n"
+              "  pzsolve kstat BITS TRIALS [THREADS [R [DP]]]\n\nARGUMENTS\n  BITS                    size of the intervals, 2^BITS keys (4..64)\n"
+              "  TRIALS                  number of keys to find\n  THREADS                 CPU threads [1]\n"
+              "  R, DP                   number of jumps and bits of the distinguished points (then the kangaroos without\n"
+              "                          distinguished points are not restarted)\n"},
+    {"version", "pzsolve version - print the version\n\nUSAGE\n  pzsolve version\n"},
+};
+
+/* The help of a command: "pzsolve help hunt", "pzsolve hunt --help". False when there is no such command. */
+bool pz_help(const char *topic, FILE *f)
 {
-    if (topic && !strcmp(topic, "hunt")) usage_hunt(f);
-    else if (topic && !strcmp(topic, "bench")) usage_bench(f);
-    else usage_main(f);
+    if (!topic) { usage_main(f); return true; }
+    if (!strcmp(topic, "hunt")) { usage_hunt(f); return true; }
+    if (!strcmp(topic, "bench")) { usage_bench(f); return true; }
+    for (size_t i = 0; i < sizeof short_help / sizeof *short_help; i++)
+        if (!strcmp(topic, short_help[i].cmd)) { help_print(f, short_help[i].text); return true; }
+    return false;
 }
 
 static const char *g_cmd = "";
@@ -380,7 +422,9 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else if (!strcmp(optarg, "log")) o->ui = UI_LOG;
             else pz_die("--ui must be auto, full, line or log");
             break;
-        case 'h': pz_help(g_cmd, stdout); exit(0);
+        case 'h':
+            if (!pz_help(g_cmd, stdout)) usage_main(stdout);
+            exit(0);
         case ':': pz_die("the option '%s' needs a value (see 'pzsolve help %s')", bad_option(argv, optbuf, sizeof optbuf), g_cmd);
         default: pz_die("unrecognized option '%s' (see 'pzsolve help %s')", bad_option(argv, optbuf, sizeof optbuf), g_cmd);
         }
@@ -1298,6 +1342,7 @@ int main(int argc, char **argv)
     }
     const char *cmd = argv[1];
     g_cmd = cmd;
+    if (argc == 3 && (!strcmp(argv[2], "--help") || !strcmp(argv[2], "-h")) && pz_help(cmd, stdout)) return 0;   /* every command: "pzsolve puzzle --help" */
     const bool noargs = !strcmp(cmd, "devices") || !strcmp(cmd, "selftest") || !strcmp(cmd, "version");
     if (noargs && argc > 2) pz_die("the command '%s' takes no arguments ('%s' not recognized)", cmd, argv[2]);
     if (!strcmp(cmd, "hunt")) return cmd_hunt(argc - 1, argv + 1);
@@ -1317,7 +1362,11 @@ int main(int argc, char **argv)
         printf("pzsolve %s (%s)\n", PZ_VERSION, PZ_BUILD_INFO);
         return 0;
     }
-    if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") || !strcmp(cmd, "-h")) { pz_help(argc > 2 ? argv[2] : NULL, stdout); return 0; }
+    if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") || !strcmp(cmd, "-h")) {
+        if (argc > 3) pz_die("help takes one command at most ('%s' not recognized)", argv[3]);
+        if (!pz_help(argc > 2 ? argv[2] : NULL, stdout)) pz_die("no help for '%s': not a command (see 'pzsolve help')", argv[2]);
+        return 0;
+    }
     pz_die("unknown command '%s' (see 'pzsolve help')", cmd);
     return PZ_EXIT_ERROR;
 }
