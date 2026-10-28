@@ -147,9 +147,18 @@ bool gpu_test_linear(gpu_session *s)
     bool ok = true;
     pz_u256 start = pz_u256_pow2(77);
     pz_u256_add_u64(&start, &start, grnd() & 0xffffff);
-    for (int trial = 0; trial < 3 && ok; trial++) {
-        u64 span = 40 * (u64)(2 * s->half) * 3ULL;
-        u64 off = trial == 0 ? 0 : (trial == 1 ? span - 1 : grnd() % span);
+    /* Three launches over 40 work-items (the first and last key of the range and a random one), then one small launch for each position
+     * of a group where the kernel takes its own branch: the lowest keys of the window (C - HALF*G, which has no counterpart above the
+     * centre), the keys next to the centre (the first denominator, i = 1), the centre itself, and the highest. They are placed in the
+     * second group of the second work-item (4 groups in: the start of the group comes from the previous one and the centre from the
+     * multiple of the step), which the first and last key of the range never reach. */
+    const u64 H = (u64)s->half, G = 2 * H;
+    const u64 wpos[] = {0, 1, H - 2, H - 1, H, H + 1, H + 2, G - 2, G - 1};
+    const int nfix = (int)(sizeof wpos / sizeof *wpos);
+    for (int trial = 0; trial < 3 + nfix && ok; trial++) {
+        const bool fixed = trial >= 3;
+        u64 span = fixed ? 6 * G : 40 * G * 3ULL;
+        u64 off = fixed ? 4 * G + wpos[trial - 3] : trial == 0 ? 0 : (trial == 1 ? span - 1 : grnd() % span);
         pz_u256 key = start;
         pz_u256_add_u64(&key, &key, off);
         pz_ge p;
