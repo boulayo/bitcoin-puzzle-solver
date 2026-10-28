@@ -18,7 +18,7 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
 3. Unique visiting order (seed)
 4. The interval kangaroo (public key known): 4.1 Setup (from 1.6.0), 4.2 Why it costs less, 4.3 Unproductive cycles and drift,
    4.4 Parameters (chosen automatically), 4.5 Measurements, 4.6 Things evaluated and rejected, 4.7 Resuming (4.5 and 4.6 are in RESEARCH.md)
-5. GPU (CUDA and OpenCL)
+5. GPU (CUDA and OpenCL) (the instruction-level detail is in RESEARCH.md)
 6. How long it takes (orders of magnitude)
 7. References
 8. Theoretical limits: how much can still be improved? 8.1 The constant in front of sqrt(W), 8.2 The exponent, 8.3 Summary,
@@ -26,7 +26,7 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
    8.7 How low can it go, 8.8 Species with fixed residues (schema 2), 8.9 More RAM or a precalculation, 8.10 Local walks, long jumps and banded zones
    (schema 3). Sections 8.6, 8.7 and 8.9 are in RESEARCH.md; of 8.4, 8.8 and 8.10 the measurements are there
 9. Symmetric BSGS with a RAM table (`--mode bsgs`, from 1.1.0): 9.1 Algorithm, 9.2 How it is implemented, 9.3 When it pays off
-10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`): 10.0 Lane kangaroo, 10.1 AVX-512 IFMA variant
+10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`) (the details are in RESEARCH.md)
 11. Time-estimation model (`src/eta.c`)
 
 ## 1. The problem
@@ -240,15 +240,9 @@ The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` o
   (each kernel receives the number of work-items as its last argument); hash160 and modular inversion are compiled once as real
   functions (smaller PTX and fewer registers: 128 for the linear kernel on sm_86, no significant spill); the context waits
   for the kernels to finish without busy-waiting, so the core is left to the CPU compute threads.
-* **CUDA arithmetic (from 1.3.0).** Measured on the sm_86 (Ampere) code: per key the linear kernel executes ≈ 4200 integer
-  instructions, half in hash160 (≈ 2100, already close to the optimum) and half in the field. At ≈ 513 M keys/s the reference laptop GPU (20 SM, 4 GB, 192 GB/s, 2 MiB of L2; the card on which the GPU speeds in this document were
-  measured) is at the limit of its integer throughput (20 SM × 64 operations per cycle): more threads are of no use, what matters is the instruction count. For this reason
-  addition, subtraction and the reduction after a product use PTX carry chains (`add.cc`/`addc`, `sub.cc`/`subc`,
-  `mad.lo.cc`/`madc.hi.cc` for the multiplication by 977): add+sub from 176 to 88 instructions, multiplication from 328 to 288, a dedicated
-  square (36 products instead of 64) from 328 to ≈ 232. The 8×8 product stays in C because Ampere has no native `madc.hi` (the all-PTX
-  version measured 368). Estimate: ≈ 11% fewer instructions per key. The logic of the chains is verified with an
-  exact emulation of the PTX semantics (`tests/t_gpufe.c`, 5 million combinations, edge cases of the double carries; mutation testing);
-  on the device it is confirmed by the self-test.
+* **CUDA arithmetic (from 1.3.0)**: carry chains in PTX for the addition, the subtraction and the reduction, and a dedicated square. The instruction counts and
+  the measurements, made on the sm_86 (Ampere) code and on the reference laptop GPU (20 SM, 4 GB, 192 GB/s, 2 MiB of L2; the card on which the GPU speeds
+  in this document were measured): RESEARCH.md section 5.
 * **Variants of the linear kernel (CUDA)**: window 128, 256 or 512 × free registers (≈ 160) or limited to 128 (`__launch_bounds__(128, 4)`:
   more resident warps). Tuning measures all six on the device and keeps the fastest.
 * **Linear kernel with "fused" inversion (1.5.0)**: the backward pass of Montgomery's trick derives each inverse and uses it
@@ -269,13 +263,7 @@ The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` o
   as the linear kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. State in
   global memory (128 bytes per walker: x, y, 192-bit distance, type, sign, 32-bit anti-cycle labels, last DP);
   the DPs go out in a buffer and are inserted in the same table as the CPU's. Restarts are handled by the host.
-  **Kernel v2 (1.7.0)**, built around memory traffic (RESEARCH.md sec. 8.4): (a) the distance does not travel from step to step: every
-  step adds 16 bits to a *history* buffer (jump index, "negated" bit) and `d` is rebuilt by replaying the history, at the end of the
-  launch for everyone and, for the rare distinguished points, on the spot; (b) one pass per round instead of two: the pass that moves the
-  walkers also computes the denominators of the next round and their running products, which alternate between prefixes and suffixes (the pass
-  goes down, then up, ...): Montgomery's trick works with both, and each pass reads and overwrites the products
-  left by the previous one; (c) the inversion is by divstep (RESEARCH.md sec. 8.4); (d) a launch does at most 64 rounds (depth of the history),
-  starting from the step number common to the whole herd.
+  Kernel v2 (1.7.0), built around memory traffic (the history buffer, one pass per round, the inversion by divstep): RESEARCH.md section 5.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,
   with a bit-by-bit comparison of states, DPs and restarts** (with a low step limit, so that restarts really happen). A device
@@ -625,61 +613,8 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 
 * **Representation** (`lib/pzcore/include/pzcore/fev.h`): 9 limbs of 29 bits per element, "structure of arrays" (limb `i` of all lanes is one
   register). `vpmuludq` (32×32→64) does 4 or 8 products per instruction and a column of 9 products of ≤ 2^60 fits in 64 bits.
-* **Reduction**: `2^261 ≡ 32·(2^32 + 977) = 0x7A20 + 256·2^29 (mod p)`: the high columns propagate into 29-bit limbs
-  and fold with two small products each.
-* **Limb bounds** (documented in `fev.h`, derived by hand and verified): "tight" results ≤ 2^29 + 2^23;
-  "wide" operands (the sum of two tight ones) ≤ 2^30 + 2^24 are accepted by `fev_mul`/`fev_sqr`; subtraction adds a multiple of
-  `p` with limbs larger than the subtrahend (`FEV_K1`, `FEV_K2`, verified by the tests to be multiples of `p`).
-* **Windows and order**: round `g` covers `N` consecutive windows of 512 keys starting at `start + g·N·512` (lane `l`
-  takes window `g·N + l`): after any number of rounds the covered keys are a **prefix** of the requested block, as the scheduler
-  requires. Zero denominators (a center that coincides with the step) make the whole round fall back to an exact slow path,
-  exercised by the tests.
-* **Measurements** (x86-64 server CPU with AVX-512 and no IFMA, 4 threads): scalar `avx512` engine 23.9 M keys/s, `avx512v`
-  **41.6 M keys/s (×1.74)**. Per lane, `fev_mul` costs ≈ 19 cycles (AVX-512) or ≈ 28 (AVX2) against 37 for the scalar one, `fev_sqr`
-  ≈ 11 / 23 against 34; the vector unit is the bottleneck (`vpmuludq` zmm: 1 per cycle on this CPU). With AVX2 the gain
-  is modest (≈ ×1.15) and the autotune picks the best engine for the CPU in use.
-
-### 10.0 Lane kangaroo (1.5.0, `src/kang_vec_impl.inc`)
-
-The same step as the scalar kangaroo (`kang_isa.inc`) on 4 or 8 walkers per instruction: walker `c·N + l` sits in
-lane `l` of vector `c`, and all of its state stays in vector form between rounds (coordinates, 192-bit distance
-as three 64-bit lanes with vector carries, sign, anti-cycle labels, counter). Only distinguished points and restarts, which are rare,
-go through the single lane, and they are sorted by index as the scalar code produces them. The rules are identical (jump choice,
-escape from cycles of length 2, even `y`, DP, restarts): `kang_round_check` runs the variant and the reference on the same herds
-(many DPs and restarts, half of the counters beyond 2^32, one walker forced onto its own jump point, which sends the round to the scalar
-fallback) and compares everything bit by bit; the selftest does it for every variant and the automatic choice excludes any that
-does not match. Mutation testing: 8 errors introduced in the vector code, 8 detected.
-
-Speed (1 thread, steps/s, same test machine): portable 4.4 M, BMI2/ADX (the version up to 1.4.0) 6.4 M, AVX2 lanes
-8.3 M, AVX-512 lanes 12.7 M, **AVX-512 IFMA lanes 24.9 M (×3.9)**. With 4 threads: from 25.3 to 95 M steps/s.
-
-### 10.1 AVX-512 IFMA variant (`avx512i`, `lib/pzcore/include/pzcore/fev52.h`)
-
-`vpmadd52luq` / `vpmadd52huq` add to a 64-bit accumulator the low / high half (52 bits each) of the product of two 52-bit
-operands. With **5 limbs of 52 bits** a full product costs 25 + 25 of these instructions, against 81 `vpmuludq` plus the
-additions of the 29-bit representation. The engine (`engine_vec_impl.inc`) is the same: only the field header changes.
-
-* **Constraint**: the instructions read only the low 52 bits of the operands, so every value that can end up in a product must
-  have exact limbs. All operations return the "tight" form: limbs 0..3 < 2^52, limb 4 ≤ 2^49 (value < 2^257);
-  addition also propagates the carries (there is no "wide" form).
-* **Product**: 10 columns of < 2^57. The high half (weight `2^260 ≡ R = 16·(2^32+977) = 0x1000003D10`) is brought to exact limbs
-  (its value is < `a·b/2^260 < 2^254`, so the top limb stays < 2^46) and folded with 10 IFMA instructions; the bits beyond
-  `2^256` (limb 4 above bit 48, plus the high part of the last fold, < 2^36) are multiplied by `c = 2^32+977` with
-  2 more; **a single** carry propagation follows. The square computes the 10 cross products once and doubles the
-  columns (doubling an operand would exceed 52 bits): 30 IFMA instructions instead of 50.
-* **Subtraction**: `4p` (or `8p` for `a − b − c`) is added, written with limbs that dominate the subtrahend (`FEV_K1`, `FEV_K2`).
-* **Normalization**: a single fold leaves limb 4 ≤ 2^48, that is `r < 2^256 + 2^208`; then `r ≥ p ⇔ r + c ≥ 2^256`
-  and `r − p < p` (the second fold of the 29-bit version is superfluous here: shown by the mutation test).
-* **Verification**: `lib/pzcore/tests/t_fev52.c` (random values and values at the bounds of every limb, multiples of `p` ± small, long chains, inversion;
-  8 mutations of the code, all detected except the one shown to be harmless), `t_engine` and `selftest` on the complete engine. Run
-  both directly on the CPU of the test machine (its virtual CPUID hides IFMA but the processor executes it:
-  `PZ_ASSUME_IFMA=1` skips the check, **for tests only**) and under **Intel SDE** in Tiger Lake mode, which also emulates
-  CPUID. The program chooses `avx512i` only if CPUID declares IFMA, and each engine must find a known key before use
-  (quick check, a few milliseconds).
-* **Measurements** (same machine, 4 threads): `avx512v` 42.0, `avx512i` **64.9 M keys/s (×1.55)**; 1 thread 10.7 and 16.2.
-  With IFMA the curve costs ≈ 21 ns per key and the two hashes ≈ 39 ns: **the CPU bottleneck is now the hash** (≈ 65%).
-* **SHA-NI, tried and rejected**: one SHA-256 block with the SHA-NI instructions costs ≈ 63 ns on the same CPU, while SHA-256 +
-  RIPEMD-160 on the 16 AVX-512 lanes cost ≈ 39 ns per key in total. It does not pay off.
+* The reduction, the limb bounds, the order of the windows, the lane kangaroo (RESEARCH.md 10.0), the AVX-512 IFMA variant (RESEARCH.md 10.1),
+  their verification and the measurements on the test machine mentioned above: RESEARCH.md section 10.
 
 ## 11. Time-estimation model (`src/eta.c`)
 
