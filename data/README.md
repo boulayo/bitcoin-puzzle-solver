@@ -1,6 +1,6 @@
 # Puzzle database
 
-`puzzles.csv` holds the 160 puzzles of the "1000 BTC puzzle": number `n`, P2PKH address, compressed public key (if it has ever appeared
+`puzzles.csv` holds the 160 puzzles of the Bitcoin Puzzle (the 1000 BTC puzzle): number `n`, P2PKH address, compressed public key (if it has ever appeared
 on the blockchain) and private key (only for solved puzzles, which are public). `tools/gen_puzzles.py` turns this file into
 `src/puzzles_data.c`, which is compiled into the executable.
 
@@ -15,7 +15,7 @@ on the blockchain) and private key (only for solved puzzles, which are public). 
 ## Checks performed (at every regeneration and at every `pzsolve selftest`)
 
 * Base58Check checksum and type (mainnet P2PKH) of every address;
-* the key of a solved puzzle lies in its interval `[2^(n-1), 2^n-1]`, `k·G` has the hash160 of the address and matches the stated
+* the key of a solved puzzle lies in its range `[2^(n-1), 2^n-1]`, `k·G` has the hash160 of the address and matches the stated
   public key;
 * the public key of an open puzzle is a point of the curve and its hash160 (compressed form) matches the address.
 

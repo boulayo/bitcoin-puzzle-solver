@@ -21,7 +21,7 @@ file name is to a section of the same file. The term "schema" is explained at th
    * 4.2 Why it costs less: from the centered layout to schema 1
    * 4.3 Unproductive cycles and drift: how the defences came
    * 4.4 Parameters of schema 1
-   * 4.5 Measurements (real curve, `pzsolve kstat BITS RUNS THREADS`)
+   * 4.5 Measurements (real curve, `pzsolve kstat BITS TRIALS THREADS`)
    * 4.6 Things evaluated and rejected
    * 4.7 Resuming: the log formats of the older layouts
 5. GPU (CUDA and OpenCL)
@@ -154,7 +154,7 @@ steps. Since the table thins itself in place when it is full (ALGORITHMS.md sect
 margin of 4 cost one or two bits wherever memory decides, on puzzles 135 and 140 with 2^20 to 2^22 walkers (GPUs) and 8 to 64 GiB of RAM up
 to 29 % more steps (8 % at 32 GiB); the file of distinguished points is now 2 to 4 times larger.
 
-### 4.5 Measurements (real curve, `pzsolve kstat BITS RUNS THREADS`)
+### 4.5 Measurements (real curve, `pzsolve kstat BITS TRIALS THREADS`)
 
 Schema 1. Mean cost in units of `√W` (4 threads, key uniform in the interval, automatic `dp-bits`):
 

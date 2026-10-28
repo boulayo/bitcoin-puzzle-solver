@@ -14,7 +14,7 @@ body:
     attributes:
       label: Version
       description: Output of `pzsolve version`.
-      placeholder: pzsolve 1.8.0 (git-xxxxxxx/x86_64-linux-gnu)
+      placeholder: pzsolve X.Y.Z (git-xxxxxxx/x86_64-linux-gnu)
     validations:
       required: true
   - type: input
