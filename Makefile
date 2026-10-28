@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pzsolve - Makefile
-# Targets: all (default), test, asan, tsan, windows, wintest, clean
+# Targets: all (default), test, test-shani, asan, tsan, windows, wintest, clean
 #   make windows   cross-compiles build/win/pzsolve.exe with MinGW-w64 (static, no DLLs needed)
 #   make wintest   builds the Windows unit tests and runs them (and the self-test) under Wine
+#   make test-shani   runs the library tests, the shani engine test and the self-test under qemu-x86_64 -cpu max, which executes the SHA
+#                  extensions on any x86-64 Linux machine (skipped when qemu-x86_64 is not installed; see the rule below)
 #
 # Platforms: Linux x86-64 and arm64 (gcc or clang), macOS arm64 and x86-64 (Apple clang), Windows x86-64 (MinGW-w64).
 #   Build:  make -j"$(nproc)"                  (Linux)       make -j"$(sysctl -n hw.ncpu)"   (macOS)
@@ -181,7 +183,7 @@ lib-cxx: $(LIB) lib/pzcore/tests/cxx_check.cpp
 lib-examples: $(addsuffix $(EXE),$(addprefix $(BUILD)/pzcore/ex_,$(LIBEXAMPLES)))
 	@for e in $(LIBEXAMPLES); do echo "== $$e"; $(RUN) ./$(BUILD)/pzcore/ex_$$e$(EXE) || exit 1; done
 
-.PHONY: all lib lib-test lib-cxx lib-examples test e2e asan tsan clean windows wintest mockcuda winmockcuda
+.PHONY: all lib lib-test lib-cxx lib-examples test test-shani e2e asan tsan clean windows wintest mockcuda winmockcuda
 
 all: $(BIN)
 
@@ -270,6 +272,29 @@ $(BUILD)/t_%$(EXE): tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 test: lib-test $(BIN) $(addsuffix $(EXE),$(addprefix $(BUILD)/,$(TESTS)))
 	@for t in $(TESTS); do $(RUN) ./$(BUILD)/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(BIN) selftest
+
+# test-shani: the SHA-extension code (the "shani" kernel of the library and the "shani" engine) runs only on a CPU that has the extensions (AMD
+# Zen 2 and later, Intel Ice Lake and later). QEMU's user-mode emulator executes them on any x86-64 Linux machine, so this target runs the
+# library tests, the shani engine test and the self-test under `qemu-x86_64 -cpu max`, and is skipped when that is not installed. With
+# PZ_EXPECT_SHANI=1 the tests fail if the emulated CPU does not report the extensions, so the shani paths cannot be skipped by accident.
+# The emulated CPU has no AVX-512, so the other engines are the AVX2 ones. The same by hand, for a build in build/:
+#   PZ_EXPECT_SHANI=1 make RUN="qemu-x86_64 -cpu max" lib-test
+#   PZ_EXPECT_SHANI=1 qemu-x86_64 -cpu max build/t_engine shani
+#   PZ_EXPECT_SHANI=1 qemu-x86_64 -cpu max build/pzsolve selftest
+QEMU_X86 ?= qemu-x86_64
+ifeq ($(X86)$(WIN)$(DARWIN),100)
+test-shani: $(addsuffix $(EXE),$(addprefix $(BUILD)/pzcore/,$(LIBTESTS))) $(BIN) $(BUILD)/t_engine$(EXE)
+	@if ! command -v $(QEMU_X86) >/dev/null 2>&1; then echo "test-shani: $(QEMU_X86) is not installed: skipped"; exit 0; fi; \
+	export PZ_EXPECT_SHANI=1; Q="$(QEMU_X86) -cpu max"; \
+	for t in $(LIBTESTS); do $$Q ./$(BUILD)/pzcore/$$t || exit 1; done; \
+	$$Q ./$(BUILD)/t_engine shani || exit 1; \
+	$$Q ./$(BIN) selftest >$(BUILD)/selftest-shani.log 2>&1 || { tail -n 30 $(BUILD)/selftest-shani.log; exit 1; }; \
+	grep -q 'CPU engine shani  *OK' $(BUILD)/selftest-shani.log || { echo "test-shani: the self-test did not run the shani engine"; exit 1; }; \
+	tail -n 1 $(BUILD)/selftest-shani.log; echo "test-shani: OK"
+else
+test-shani:
+	@echo "test-shani: only for a Linux x86-64 build: skipped"
+endif
 
 WINCC ?= x86_64-w64-mingw32-gcc-posix
 windows:
