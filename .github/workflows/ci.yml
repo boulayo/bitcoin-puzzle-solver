@@ -64,6 +64,9 @@ jobs:
         run: build/pzsolve selftest
       - name: Detected hardware and engines
         run: build/pzsolve devices
+      - name: CPU engine speeds (informational)
+        continue-on-error: true
+        run: PZ_BENCH_SCALE=0.5 build/pzsolve bench
       - name: Smoke test (find the key of puzzle 20)
         run: |
           build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --ui log -q --no-gpu
