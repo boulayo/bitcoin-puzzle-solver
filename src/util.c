@@ -10,33 +10,64 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+/* g_log_mu guards the log file, the terminal output of the messages and the dashboard block. pz_die can be called from any thread, also
+ * from code that holds the lock, so the thread that holds it is recorded: pz_die must not wait for a lock that it holds itself. */
 static pthread_mutex_t g_log_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Thread_local bool t_log_held;
 static FILE *g_log_fp;
 static int g_verbose, g_quiet;
 static int g_block_lines;   /* lines of the in-place dashboard currently on screen (0 = none), guarded by g_log_mu */
 
+static void log_lock(void)
+{
+    pthread_mutex_lock(&g_log_mu);
+    t_log_held = true;
+}
+
+static void log_unlock(void)
+{
+    t_log_held = false;
+    pthread_mutex_unlock(&g_log_mu);
+}
+
+static void log_stamp(char *ts, size_t n)
+{
+    time_t t = time(NULL);
+    struct tm tmv;
+    pz_localtime(t, &tmv);
+    strftime(ts, n, "%Y-%m-%d %H:%M:%S", &tmv);
+}
+
 void pz_die(const char *fmt, ...)
 {
+    char msg[1024], ts[32];
     va_list ap;
-    if (g_block_lines) { fputc('\n', stderr); g_block_lines = 0; }
-    char msg[1024];
     va_start(ap, fmt);
     vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
+    log_stamp(ts, sizeof ts);
+    const bool own = t_log_held;   /* called from inside the logging code: the lock is already ours */
+    if (!own) log_lock();
+    if (g_block_lines) { fputc('\n', stderr); g_block_lines = 0; }
     char ln[1100];
     snprintf(ln, sizeof ln, "ERROR: %s", msg);
     pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 7);
     fputc('\n', stderr);
+    if (g_log_fp) {   /* the campaign log says why the run stopped */
+        fprintf(g_log_fp, "%s [ERROR] %s\n", ts, msg);
+        fflush(g_log_fp);
+    }
+    if (!own) log_unlock();
     exit(PZ_EXIT_ERROR);
 }
 
 void pz_log_set_file(const char *path)
 {
-    pthread_mutex_lock(&g_log_mu);
+    log_lock();
     if (g_log_fp) fclose(g_log_fp);
     g_log_fp = path ? fopen(path, "ab") : NULL;   /* binary: on Windows the text mode would write CRLF */
     if (g_log_fp) setvbuf(g_log_fp, NULL, _IOLBF, 0);
-    pthread_mutex_unlock(&g_log_mu);
+    log_unlock();
 }
 void pz_log_set_verbose(int v) { g_verbose = v; }
 void pz_log_set_quiet(int q) { g_quiet = q; }
@@ -54,22 +85,22 @@ static void block_erase_locked(void)
 
 void pz_ui_block(const char *text, int nlines)
 {
-    pthread_mutex_lock(&g_log_mu);
+    log_lock();
     block_erase_locked();
     fputs(text, stderr);
     fflush(stderr);
     g_block_lines = nlines;
-    pthread_mutex_unlock(&g_log_mu);
+    log_unlock();
 }
 
 void pz_log_terminal_line_break(void)
 {
-    pthread_mutex_lock(&g_log_mu);
+    log_lock();
     if (g_block_lines) {
         fputc('\n', stderr);
         g_block_lines = 0;
     }
-    pthread_mutex_unlock(&g_log_mu);
+    log_unlock();
 }
 
 static int text_cols(const char *s, size_t n)
@@ -236,15 +267,12 @@ void pz_log(pz_loglevel lvl, const char *fmt, ...)
     vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
 
-    time_t t = time(NULL);
-    struct tm tmv;
-    pz_localtime(t, &tmv);
     char ts[32];
-    strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
+    log_stamp(ts, sizeof ts);
 
-    pthread_mutex_lock(&g_log_mu);
+    log_lock();
     if (g_log_fp) fprintf(g_log_fp, "%s [%s] %s\n", ts, tag[lvl], msg);
-    if (lvl == PZ_LOG_DEBUG && !g_verbose) { pthread_mutex_unlock(&g_log_mu); return; }
+    if (lvl == PZ_LOG_DEBUG && !g_verbose) { log_unlock(); return; }
     if (g_quiet < 2 && (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN)) {
         block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
         char ln[1100 + 32];
@@ -252,7 +280,7 @@ void pz_log(pz_loglevel lvl, const char *fmt, ...)
         pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 18);
         fputc('\n', stderr);
     }
-    pthread_mutex_unlock(&g_log_mu);
+    log_unlock();
 }
 
 void pz_strlcpy(char *dst, const char *src, size_t n)

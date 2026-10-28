@@ -125,6 +125,10 @@ timeout -s INT 3 $BIN hunt -p 60 -m bsgs --bsgs-entries 3000000 -c bsr -d "$DIR"
 timeout -s INT 3 $BIN hunt -c bsr -d "$DIR" --ui log --no-gpu >"$DIR/bsr.out" 2>&1
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/bsr/session.txt")
 grep -q "campaign resumed" "$DIR/bsr.out" && [ "$SES" = 2 ] && ok "BSGS resumed from the checkpoint (2 sessions)" || bad "BSGS resume: sessions '$SES'"
+# a fatal error after the campaign is open is also written to its log (the terminal alone leaves no trace of why a run stopped)
+OUT=$($BIN hunt -c bsr -d "$DIR" --no-cpu --ui log 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "drop --no-cpu" && tail -n 1 "$DIR/bsr/log.txt" | grep -q -E '^[0-9-]+ [0-9:]+ \[ERROR\] bsgs mode uses the CPU and RAM .*drop --no-cpu$' \
+  && ok "a refused resume (BSGS with --no-cpu): the error is the last line of log.txt" || bad "fatal error not in log.txt (rc=$RC): $(tail -n 1 "$DIR/bsr/log.txt")"
 # 'where' on a BSGS campaign: the step of a key a quarter and three quarters into the range are different, in order, and below the number of steps
 bstep() { $BIN where -c bsr -d "$DIR" --key "$1" | sed -n 's/.*the key will be found at step \([0-9,]*\) of \([0-9,]*\).*/\1 \2/p' | tr -d ,; }
 read S1 N1 <<< "$(bstep a00000000000000)"; read S2 N2 <<< "$(bstep e00000000000000)"
@@ -241,6 +245,7 @@ grep -q '^seed_id=' "$DIR/sd/sa/state.dat" && ok "the state records the seed id"
 cp "$DIR/sd/sa/state.dat" "$DIR/sd/sb/state.dat"; rm -f "$DIR/sd/sb/state.dat.bak"; cp "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep"
 OUT=$(timeout -s INT 5 $BIN hunt -c sb -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1); RC=$?
 [ $RC -ne 0 ] && echo "$OUT" | grep -q "another seed" && cmp -s "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep" && ok "a state of another seed is refused and left untouched" || bad "state of another seed accepted (rc=$RC)"
+grep -q '\[ERROR\].*another seed' "$DIR/sd/sb/log.txt" && ok "the refusal is in the log of the campaign" || bad "the refusal is not in sb/log.txt"
 python3 - "$DIR/sd/sa/state.dat" "$DIR/sd/sc/state.dat" <<'PYEOF'
 import hashlib, sys
 t = open(sys.argv[1]).read()

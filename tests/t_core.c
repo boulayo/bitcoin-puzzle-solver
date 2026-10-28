@@ -132,6 +132,56 @@ static void t_writers(void)
     pz_remove_tree(dir);
 }
 
+#ifndef _WIN32
+/* Messages and dashboard redraws from another thread while the main thread dies. */
+static void *noisy_thread(void *p)
+{
+    (void)p;
+    for (int i = 0; i < 200000; i++) {
+        pz_log(PZ_LOG_INFO, "noise from another thread");
+        pz_ui_block("block", 1);
+    }
+    return NULL;
+}
+
+/* pz_die writes its message to the campaign log (under the lock of the log, as the other threads do), then exits with status 2. */
+static void t_die_log(void)
+{
+    char dir[600], path[700];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzdie")) return;
+    snprintf(path, sizeof path, "%s/log.txt", dir);
+    pid_t pid = fork();
+    if (pid == 0) {
+        alarm(60);                                                  /* a deadlock ends the child by a signal, not by exit(2) */
+        if (!freopen("/dev/null", "w", stderr)) _exit(99);
+        pz_log_set_quiet(2);
+        pz_log_set_file(path);
+        pthread_t th;
+        pthread_create(&th, NULL, noisy_thread, NULL);
+        pthread_detach(th);                                         /* nobody joins it: the process ends in pz_die (no "thread leak" under TSan) */
+        pz_log(PZ_LOG_INFO, "before");
+        pz_die("fatal %s, %d", "reason", 7);
+    }
+    int st = 0;
+    CHECK(pid > 0 && waitpid(pid, &st, 0) == pid);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 2);
+    char *t = pz_read_file(path, NULL);
+    CHECK(t != NULL);
+    int errors = 0, odd = 0;
+    for (char *l = t; l && *l;) {
+        char *nl = strchr(l, '\n');
+        if (nl) *nl = 0;
+        const char *e = strstr(l, "[ERROR] fatal reason, 7");
+        if (e && !e[sizeof "[ERROR] fatal reason, 7" - 1]) errors++;
+        else if (!strstr(l, "[INFO] noise from another thread") && !strstr(l, "[INFO] before")) odd++;
+        l = nl ? nl + 1 : NULL;
+    }
+    CHECK(errors == 1 && odd == 0);                                 /* the message once, and no line torn by the other thread */
+    free(t);
+    pz_remove_tree(dir);
+}
+#endif
+
 int main(void)
 {
     {   /* the library is linked and gives the well-known answer for key 1 */
@@ -161,6 +211,9 @@ int main(void)
     }
 #endif
     t_writers();
+#ifndef _WIN32
+    t_die_log();
+#endif
     {   /* the files made again at the next write (report.txt, status.json) are replaced atomically without the wait for the disk */
         char dir[600], path[700];
         if (pz_make_temp_dir(dir, sizeof dir, "pzdur")) {
