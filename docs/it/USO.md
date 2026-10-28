@@ -149,9 +149,14 @@ campaigns/NOME/
   `pN-xxxxxxxx` / `custom-xxxxxxxx`, dove `xxxxxxxx` dipende da puzzle, intervallo e obiettivo: **lo stesso comando ritrova sempre
   la stessa campagna**. Per due campagne indipendenti sullo stesso intervallo usa `-c` con nomi diversi (e seed diversi). I nomi
   ammettono lettere, cifre, `-`, `_`, `.` (non all'inizio).
-* **Codici di uscita**: 0 = comando riuscito (chiave trovata, campagna interrotta con stato salvato o intervallo esaurito: guarda
-  `FOUND.txt` o `list`); 1 = la sessione è finita ma il salvataggio finale dello stato non è riuscito; 2 = errore (opzioni non valide o
-  incoerenti, campagna in uso, file illeggibili...) o uso errato della riga di comando.
+* **Codici di uscita di `hunt`**, per gli script: 0 = chiave trovata (anche quando la campagna l'aveva già trovata: vedi `FOUND.txt`);
+  1 = la ricerca è finita senza trovare la chiave (tutto l'intervallo, o tutta la `--part`, è stato coperto);
+  130 = interrotto con Ctrl-C, `kill` o chiusura del terminale (lo stato è salvato, lo stesso comando riprende);
+  2 = errore: opzioni non valide o incoerenti, campagna in uso, file illeggibili, salvataggio finale dello stato non riuscito, o un
+  arresto che nessuno ha chiesto (tutte le GPU in errore e CPU spenta), oppure uso errato della riga di comando.
+  Gli altri comandi escono con 0 se riescono e con 2 in caso di errore; `selftest` e `doctor` escono con 1 se un controllo è fallito e
+  `merge` con 1 se qualche file non è stato unito (esce con 0 sia quando l'unione ha trovato la chiave, che mostra e salva in
+  `FOUND.txt`, sia quando non c'è ancora nessuna collisione).
 * Un riavvio perde al massimo il lavoro dei blocchi in corso (pochi secondi per worker); il resto non viene mai rifatto. Nel BSGS la
   tabella viene ricostruita (pochi minuti) a meno che tu non usi `--table`.
 * Una campagna che ha già trovato la chiave non riparte: mostra `FOUND.txt`.

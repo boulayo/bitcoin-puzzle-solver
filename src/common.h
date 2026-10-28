@@ -37,7 +37,15 @@ typedef uint8_t u8;
 #define PZ_PRINTF printf
 #endif
 
-/* Fatal error helper: prints and exits with status 2. */
+/* Exit status of 'hunt' (see 'pzsolve help hunt'). Every other command uses 0 for success and PZ_EXIT_ERROR for an error. */
+enum {
+    PZ_EXIT_FOUND = 0,           /* the key was found */
+    PZ_EXIT_NOT_FOUND = 1,       /* the search finished (the whole range, or the whole --part) without the key */
+    PZ_EXIT_ERROR = 2,           /* an error: invalid options, campaign in use, unreadable files, a state that could not be saved */
+    PZ_EXIT_INTERRUPTED = 130    /* stopped by Ctrl-C, SIGTERM or the closing of the terminal: the state is saved */
+};
+
+/* Fatal error helper: prints and exits with status PZ_EXIT_ERROR. */
 void pz_die(const char *fmt, ...) __attribute__((noreturn, format(PZ_PRINTF, 1, 2)));
 void pz_help(const char *topic, FILE *f);               /* the help text: "hunt", "bench" or the general one (NULL) */
 

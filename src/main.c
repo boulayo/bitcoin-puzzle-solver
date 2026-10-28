@@ -133,7 +133,13 @@ static void usage_hunt(FILE *f)
 "      --report-interval S seconds between panel updates [1]\n"
 "      --checkpoint-interval S   seconds between state saves [60]\n"
 "  -q, --quiet             fewer messages\n"
-"  -v, --verbose           more messages\n");
+"  -v, --verbose           more messages\n"
+"\n"
+"EXIT STATUS\n"
+"  0                       the key was found (also when the campaign had already found it: it is in FOUND.txt)\n"
+"  1                       the search finished without finding the key (the whole range, or the whole --part, was covered)\n"
+"  130                     interrupted by Ctrl-C, SIGTERM or the closing of the terminal: the state is saved, the same command resumes\n"
+"  2                       error: invalid options, campaign in use, unreadable files, a state that could not be saved\n");
     help_print(f, text);
 }
 
@@ -810,7 +816,7 @@ static int cmd_hunt(int argc, char **argv)
         printf("This campaign has already found the key (%s):\n\n%s\n", r->path_found, t ? t : "");
         free(t);
         free(r);
-        return 0;
+        return PZ_EXIT_FOUND;
     }
     if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
     pz_log_set_file(r->path_log);
@@ -851,7 +857,7 @@ static int cmd_hunt(int argc, char **argv)
         pz_interrupt_done();
         pz_log_set_file(NULL);
         free(r);
-        return 0;
+        return PZ_EXIT_INTERRUPTED;
     }
     const int thr_full = r->nthreads;
     run_limit_setup(r);
@@ -912,7 +918,7 @@ static int cmd_hunt(int argc, char **argv)
     if (r->checkpoint && r->checkpoint(r) != 0) {
         /* the progress of this session may not be on disk: say so loudly and fail the command */
         pz_log(PZ_LOG_ERR, "final state save FAILED in %s (disk full or not writable?): the progress of the last session may be lost", r->cfg.dir);
-        rc = 1;
+        rc = PZ_EXIT_ERROR;
     }
     progress_info pi;
     run_final_progress(r, &pi);
@@ -933,8 +939,9 @@ static int cmd_hunt(int argc, char **argv)
         print_found_banner(r, addr, hx, wif);
         pz_log_set_file(NULL);
         free(r);
-        return 0;
+        return PZ_EXIT_FOUND;
     }
+    int status = PZ_EXIT_NOT_FOUND;
     if (finished) {
         if (r->cfg.part[0]) {
             printf("\nPart %s was scanned in full without finding the key: the shares of the other computers remain.\n", r->cfg.part);
@@ -944,10 +951,13 @@ static int cmd_hunt(int argc, char **argv)
         }
     } else {
         print_resume_hint(r, o.dir);
+        /* a stop that no signal asked for: the workers ended on their own (every GPU failed and the CPU is off), the log says why */
+        status = run_interrupted() ? PZ_EXIT_INTERRUPTED : PZ_EXIT_ERROR;
     }
+    if (rc) status = PZ_EXIT_ERROR;
     pz_log_set_file(NULL);
     free(r);
-    return rc;
+    return status;
 }
 
 static int cmd_info(int argc, char **argv)
@@ -1294,7 +1304,7 @@ int main(int argc, char **argv)
                             "and run for example  .\\pzsolve.exe puzzles --open\n\nPress Enter to close...");
             getchar();
         }
-        return 2;
+        return PZ_EXIT_ERROR;
     }
     const char *cmd = argv[1];
     g_cmd = cmd;
@@ -1319,5 +1329,5 @@ int main(int argc, char **argv)
     }
     if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") || !strcmp(cmd, "-h")) { pz_help(argc > 2 ? argv[2] : NULL, stdout); return 0; }
     pz_die("unknown command '%s' (see 'pzsolve help')", cmd);
-    return 2;
+    return PZ_EXIT_ERROR;
 }

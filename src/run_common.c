@@ -28,7 +28,7 @@ static void on_signal(void)
         atomic_store(&g_first_sig_ms, now);
         atomic_store(&g_sig_count, 1);
     } else if (now - atomic_load(&g_first_sig_ms) > 500) {
-        _exit(130);
+        _exit(PZ_EXIT_INTERRUPTED);
     }
     if (g_run) atomic_store(&g_run->stop, 1);
 }

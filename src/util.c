@@ -27,7 +27,7 @@ void pz_die(const char *fmt, ...)
     snprintf(ln, sizeof ln, "ERROR: %s", msg);
     pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 7);
     fputc('\n', stderr);
-    exit(2);
+    exit(PZ_EXIT_ERROR);
 }
 
 void pz_log_set_file(const char *path)

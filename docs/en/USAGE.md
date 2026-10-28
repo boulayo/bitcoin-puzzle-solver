@@ -150,9 +150,14 @@ campaigns/NAME/
   `pN-xxxxxxxx` / `custom-xxxxxxxx`, where `xxxxxxxx` depends on puzzle, interval and target: **the same command always finds
   the same campaign**. For two independent campaigns on the same interval use `-c` with different names (and different seeds). Names
   allow letters, digits, `-`, `_`, `.` (not at the beginning).
-* **Exit codes**: 0 = command succeeded (key found, campaign interrupted with its state saved, or interval exhausted: look at
-  `FOUND.txt` or `list`); 1 = the session ended but the final save of the state failed; 2 = error (invalid or
-  inconsistent options, campaign in use, unreadable files...) or wrong use of the command line.
+* **Exit codes of `hunt`**, for scripts: 0 = the key was found (also when the campaign had already found it: see `FOUND.txt`);
+  1 = the search finished without finding the key (the whole interval, or the whole `--part`, was covered);
+  130 = interrupted by Ctrl-C, `kill` or the closing of the terminal (the state is saved, the same command resumes it);
+  2 = error: invalid or inconsistent options, campaign in use, unreadable files, a final save of the state that failed, or a stop that
+  nothing asked for (every GPU failed and the CPU is off), or wrong use of the command line.
+  The other commands exit with 0 when they succeed and 2 on an error; `selftest` and `doctor` exit with 1 when a check failed, and
+  `merge` with 1 when some file could not be merged (it exits with 0 both when the merge found the key, which it shows and saves in
+  `FOUND.txt`, and when there is no collision yet).
 * A restart loses at most the work of the blocks in progress (a few seconds per worker); the rest is never redone. In BSGS the
   table is rebuilt (a few minutes) unless you use `--table`.
 * A campaign that has already found the key does not start again: it shows `FOUND.txt`.

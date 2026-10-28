@@ -161,12 +161,52 @@ rm -rf "$DIR/lk"
 ( $BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1 & echo $! > "$DIR/lk.pid" )
 sleep 3
 OUT=$($BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu 2>&1); RC=$?
-[ $RC -ne 0 ] && echo "$OUT" | grep -q "already running" && ok "second instance on the same campaign rejected" || bad "double instance not rejected (rc=$RC)"
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "already running" && ok "second instance on the same campaign rejected (exit status 2)" || bad "double instance not rejected (rc=$RC)"
 LST=$($BIN list -d "$DIR/lk"); echo "$LST" | grep -q "RUNNING" && ok "list shows the running campaign" || bad "list does not see the running campaign"
 kill -INT $(cat "$DIR/lk.pid") 2>/dev/null; sleep 2
 LST=$($BIN list -d "$DIR/lk"); echo "$LST" | grep -q "STOPPED" && ok "list shows the stopped campaign" || bad "list: state after the stop"
 $BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1 & sleep 2; kill -INT $! 2>/dev/null; wait 2>/dev/null
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/lk/p71/session.txt"); [ "$SES" = 2 ] && ok "after the stop the campaign resumes (2 sessions)" || bad "resume after the lock: sessions '$SES'"
+
+echo "== exit status of hunt: 0 key found, 1 finished without the key, 130 interrupted, 2 error"
+K=$(rndkey 18 5); A=$(field $K addr)
+$BIN hunt -p 18 -a "$A" -c xf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "key found: exit status 0" || bad "key found: exit status $RC"
+$BIN hunt -c xf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "campaign that had already found the key: exit status 0" || bad "already found: exit status $RC"
+A=$(field 0x20000 addr)   # well above the range 1:ffff (the last block may be scanned a few keys past the end)
+$BIN hunt -r 1:ffff -a "$A" -c xn -d "$DIR" --ui log -q --no-gpu >"$DIR/xn.out" 2>&1; RC=$?
+[ $RC -eq 1 ] && grep -q "Campaign completed" "$DIR/xn.out" && ok "range covered without the key: exit status 1" || bad "range covered without the key: exit status $RC"
+$BIN hunt -c xn -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
+[ $RC -eq 1 ] && ok "campaign already completed: exit status 1" || bad "already completed: exit status $RC"
+A=$(field 0x200000 addr)
+$BIN hunt -r 1:fffff -a "$A" --part 0/2 -c xp -d "$DIR" --ui log -q --no-gpu >"$DIR/xp.out" 2>&1; RC=$?
+[ $RC -eq 1 ] && grep -q "Part 0/2 was scanned in full" "$DIR/xp.out" && ok "share of a split range covered without the key: exit status 1" || bad "share covered without the key: exit status $RC"
+for sig in INT TERM; do
+  rm -rf "$DIR/xi"
+  $BIN hunt -p 71 -c xi -d "$DIR/xi" --ui log -q --no-gpu >/dev/null 2>&1 & XPID=$!
+  for _ in $(seq 1 300); do [ -s "$DIR/xi/xi/report.txt" ] && break; sleep 0.1; done   # running: the first report comes 2 s after the start
+  kill -$sig $XPID 2>/dev/null; wait $XPID; RC=$?
+  [ $RC -eq 130 ] && [ -s "$DIR/xi/xi/state.dat" ] && ok "SIG$sig: state saved, exit status 130" || bad "SIG$sig: exit status $RC"
+done
+$BIN hunt -p 40 -t 0 -c xe -d "$DIR" -q >/dev/null 2>&1; RC=$?
+[ $RC -eq 2 ] && ok "invalid option: exit status 2" || bad "invalid option: exit status $RC"
+$BIN hunt -p 40 --resume -c xe -d "$DIR" -q >/dev/null 2>&1; RC=$?
+[ $RC -eq 2 ] && ok "--resume of a campaign that does not exist: exit status 2" || bad "--resume without a campaign: exit status $RC"
+$BIN frobnicate >/dev/null 2>&1; RC=$?
+[ $RC -eq 2 ] && ok "unknown command: exit status 2" || bad "unknown command: exit status $RC"
+# merge: 0 when the files are merged without a collision, 1 when a file cannot be merged, 2 for a campaign that cannot take it
+rm -rf "$DIR/xm" "$DIR/xm2"
+$BIN hunt -p 120 -c xk -d "$DIR/xm" --ui log -q --no-gpu >/dev/null 2>&1 & XPID=$!
+for _ in $(seq 1 300); do [ -s "$DIR/xm/xk/report.txt" ] && break; sleep 0.1; done
+kill -INT $XPID 2>/dev/null; wait $XPID
+mkdir -p "$DIR/xm2"; cp -r "$DIR/xm/xk" "$DIR/xm2/xk"
+OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/xk" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "No collision" && ok "merge without a collision: exit status 0" || bad "merge without a collision: exit status $RC"
+$BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/nonexistent.bin" >/dev/null 2>&1; RC=$?
+[ $RC -eq 1 ] && ok "merge of a file that cannot be read: exit status 1" || bad "merge of an unreadable file: exit status $RC"
+$BIN merge -c xn -d "$DIR" -f "$DIR/xm2/xk" >/dev/null 2>&1; RC=$?
+[ $RC -eq 2 ] && ok "merge into a campaign that is not a kangaroo one: exit status 2" || bad "merge into a linear campaign: exit status $RC"
 
 echo "== campaign creation: simultaneous starts, and the seed recorded in the state"
 seedid() { python3 -c "import hashlib,sys; print(hashlib.sha256(b'PZID'+bytes.fromhex(sys.argv[1])).hexdigest()[:16])" "$1"; }
@@ -277,7 +317,7 @@ rm -rf "$DIR/cb"; A1=1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
 # a range of 2^18 keys is smaller than a block of 2^30: the campaign gets blocks of its own size, and the same command must resume it
 for i in 1 2; do
   OUT=$($BIN hunt -r 100000000000:10000003ffff -a $A1 --chunk-bits 30 -c cb -d "$DIR/cb" --ui log --no-gpu -t 1 2>&1); RC=$?
-  [ $RC -eq 0 ] && ok "--chunk-bits 30 on a range of 2^18 keys: run $i" || bad "--chunk-bits 30 on a small range, run $i: rc=$RC $(echo "$OUT" | grep ERROR)"
+  [ $RC -eq 1 ] && ok "--chunk-bits 30 on a range of 2^18 keys: run $i (exit status 1: covered without the key)" || bad "--chunk-bits 30 on a small range, run $i: rc=$RC $(echo "$OUT" | grep ERROR)"
 done
 grep -q '^chunk_bits=18$' "$DIR/cb/cb/campaign.conf" && ok "the campaign has blocks of 2^18 keys" || bad "chunk_bits: $(grep chunk_bits "$DIR/cb/cb/campaign.conf")"
 # a table file that exists decides the size of the table, whatever --bsgs-entries says: the same command resumes the campaign
