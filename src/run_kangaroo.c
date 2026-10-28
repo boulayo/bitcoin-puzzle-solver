@@ -122,12 +122,17 @@ int run_kangaroo(run_ctx *r)
 
 static u64 st_rnd(u64 *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; return *s; }
 
-double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
+/* ---------------- synthetic campaigns (self-tests and measurements) ---------------- */
+
+/* A synthetic kangaroo campaign on the interval [lo, lo + 2^wbits - 1] with the public key of `key`, in a scratch folder of its own: the base of the
+ * self-tests and measurements. The caller sets the rest (seed, hash of the target, threads, devices) and ends it with synth_free(). NULL when
+ * there is no temporary folder. */
+static run_ctx *synth_new(const pz_u256 *lo, unsigned wbits, const pz_u256 *key)
 {
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
     char dir[600];
-    if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return -1; }
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return NULL; }
     pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
     run_paths(r);
     r->cfg.range_start = *lo;
@@ -140,14 +145,27 @@ double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthre
     r->cfg.pubkey = q;
     pz_ge_to_pub33(r->cfg.pubkey33, &q);
     r->cfg.has_pubkey = true;
-    pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     r->cfg.mode = MODE_KANGAROO;
+    r->use_cpu = true;
+    r->sessions = 1;
+    return r;
+}
+
+static void synth_free(run_ctx *r)
+{
+    pz_remove_tree(r->cfg.dir);
+    free(r);
+}
+
+double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
+{
+    run_ctx *r = synth_new(lo, wbits, key);
+    if (!r) return -1;
+    pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     u64 s = seedn * 0x9E3779B97F4A7C15ULL + 1;
     for (int i = 0; i < 4; i++) memcpy(r->cfg.seed + 8 * i, &(u64){st_rnd(&s)}, 8);
     r->nthreads = nthreads;
-    r->use_cpu = true;
     r->use_gpu = false;
-    r->sessions = 1;
     r->silent_setup = true;
     kang_state *ks = kang_create(r);
     r->kang = ks;
@@ -173,37 +191,20 @@ double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthre
         for (int i = 0; i < r->nws; i++) steps += (double)atomic_load(&r->ws[i].units);
     }
     kang_destroy(ks);
-    pz_remove_tree(dir);
-    free(r);
+    synth_free(r);
     return steps;
 }
 
 struct kang_state *kang_make_test_state(unsigned wbits, int nthreads)
 {
-    run_ctx *r = pz_xcalloc(1, sizeof *r);
-    run_init(r);
-    char dir[600];
-    if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return NULL; }
-    pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
-    run_paths(r);
-    r->cfg.range_start = pz_u256_pow2(90);
-    r->cfg.range_end = pz_u256_pow2(wbits);
-    pz_u256 one = pz_u256_from_u64(1);
-    pz_u256_add(&r->cfg.range_end, &r->cfg.range_end, &r->cfg.range_start);
-    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    pz_u256 k = pz_u256_pow2(90);
+    const pz_u256 lo = pz_u256_pow2(90);
+    pz_u256 k = lo;
     pz_u256_add_u64(&k, &k, 123456789);
-    pz_ge q;
-    pz_ec_mul_g(&q, &k);
-    r->cfg.pubkey = q;
-    pz_ge_to_pub33(r->cfg.pubkey33, &q);
-    r->cfg.has_pubkey = true;
+    run_ctx *r = synth_new(&lo, wbits, &k);
+    if (!r) return NULL;
     pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
-    r->cfg.mode = MODE_KANGAROO;
     for (int i = 0; i < 32; i++) r->cfg.seed[i] = (u8)(i * 37 + 11);
     r->nthreads = nthreads;
-    r->use_cpu = true;
-    r->sessions = 1;
     r->silent_setup = true;
     kang_state *ks = kang_create(r);
     r->kang = ks;
@@ -215,8 +216,7 @@ void kang_free_test_state(struct kang_state *ks)
 {
     run_ctx *r = ks->r;
     kang_destroy(ks);
-    pz_remove_tree(r->cfg.dir);
-    free(r);
+    synth_free(r);
 }
 
 int kangaroo_selftest(void)
@@ -268,29 +268,14 @@ int kangaroo_selftest(void)
 
 double kangaroo_bench(double secs, bool print)
 {
-    run_ctx *r = pz_xcalloc(1, sizeof *r);
-    run_init(r);
+    const pz_u256 lo = pz_u256_pow2(120);
+    pz_u256 k = lo;
+    pz_u256_add_u64(&k, &k, 987654321);
+    run_ctx *r = synth_new(&lo, 120, &k);
+    if (!r) return 0;
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);
-    char dir[600];
-    if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return 0; }
-    pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
-    run_paths(r);
-    r->cfg.range_start = pz_u256_pow2(120);
-    r->cfg.range_end = pz_u256_pow2(121);
-    pz_u256 one = pz_u256_from_u64(1);
-    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    pz_u256 k = pz_u256_pow2(120);
-    pz_u256_add_u64(&k, &k, 987654321);
-    pz_ge q;
-    pz_ec_mul_g(&q, &k);
-    r->cfg.pubkey = q;
-    pz_ge_to_pub33(r->cfg.pubkey33, &q);
-    r->cfg.has_pubkey = true;
-    r->cfg.mode = MODE_KANGAROO;
     r->nthreads = r->sys.ncpu;
-    r->use_cpu = true;
-    r->sessions = 1;
     kang_state *ks = kang_create(r);
     r->kang = ks;
     kang_configure(ks, 0);
@@ -316,8 +301,7 @@ double kangaroo_bench(double secs, bool print)
     double rate = (double)steps / dt;
     if (print) printf("  in a campaign (%d threads, step %s): %s steps/s\n", r->nthreads, kang_round_name(), pz_fmt_si(rate, b, sizeof b));
     kang_destroy(ks);
-    pz_remove_tree(dir);
-    free(r);
+    synth_free(r);
     return rate;
 }
 
@@ -374,28 +358,13 @@ static void kang_set_cpu(void *ctx, int cap) { atomic_store(&((run_ctx *)ctx)->c
 
 int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choice)
 {
-    run_ctx *r = pz_xcalloc(1, sizeof *r);
-    run_init(r);
-    if (gpu_filter && gpu_filter[0]) pz_strlcpy(r->gpu_filter, gpu_filter, sizeof r->gpu_filter);
-    char dir[600];
-    if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return 1; }
-    pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
-    run_paths(r);
-    r->cfg.range_start = pz_u256_pow2(139);                   /* the shape of the puzzle 140 campaign */
-    r->cfg.range_end = pz_u256_pow2(140);
-    pz_u256 one = pz_u256_from_u64(1);
-    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &one);
-    pz_u256 k = pz_u256_pow2(139);
+    const pz_u256 lo = pz_u256_pow2(139);                      /* the shape of the puzzle 140 campaign */
+    pz_u256 k = lo;
     pz_u256_add_u64(&k, &k, 987654321);
-    pz_ge q;
-    pz_ec_mul_g(&q, &k);
-    r->cfg.pubkey = q;
-    pz_ge_to_pub33(r->cfg.pubkey33, &q);
-    r->cfg.has_pubkey = true;
-    r->cfg.mode = MODE_KANGAROO;
-    r->use_cpu = true;
+    run_ctx *r = synth_new(&lo, 139, &k);
+    if (!r) return 1;
+    if (gpu_filter && gpu_filter[0]) pz_strlcpy(r->gpu_filter, gpu_filter, sizeof r->gpu_filter);
     r->use_gpu = true;
-    r->sessions = 1;
     r->mem_limit = 256ULL << 20;                           /* a small table of distinguished points: the walk is what is measured */
     pz_ec_init();
     tg_section("CPU and GPUs together: kangaroo, as in a campaign on puzzle 140");
@@ -404,8 +373,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     int ngpu = gpu_kangaroo_start(r, &gpus, &k_gpu);
     if (ngpu <= 0) {
         tg_printf("  no usable GPU: nothing to compare (the CPU-only benchmark is the plain 'bench')\n");
-        pz_remove_tree(dir);
-        free(r);
+        synth_free(r);
         return 1;
     }
     if (ngpu > 16) ngpu = 16;
@@ -451,10 +419,9 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
     gpu_kangaroo_join(gpus, ngpu);
     kang_destroy(ks);
-    pz_remove_tree(dir);
     pz_log_set_quiet(was_quiet);
     if (choice) *choice = ch;
-    free(r);
+    synth_free(r);
     return 0;
 }
 
