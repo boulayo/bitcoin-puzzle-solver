@@ -1171,7 +1171,7 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
                      measured ? "measured now on the CPU of this machine" : "given with --rate");
     pz_section("Mean effort");
     const long double W = ldexpl(1.0L, n - 1);
-    pz_prop_line("linear search", "%.3Le keys on average (2^%.1f), %.3Le in the worst case", W / 2, (double)(n - 2), W);
+    pz_prop_line("linear search", "%.3Le keys on average (2^%d), %.3Le in the worst case", W / 2, n - 2, W);
     if (rate_lin > 0)
         pz_prop_line("", "time: 50%% in %s, 100%% in %s", pz_fmt_duration((double)(W / 2) / rate_lin, t1, sizeof t1), pz_fmt_duration((double)W / rate_lin, t2, sizeof t2));
     if (p->pubkey[0]) {
@@ -1234,7 +1234,8 @@ static int cmd_puzzle(int argc, char **argv)
     pz_prop_line("range", "0x%s to 0x%s", ha, hb);
     pz_prop_line("keys", "%s (2^%d)", pz_group_digits(ds, dsg, sizeof dsg), n - 1);
     if (p) {
-        pz_prop_line("best method", "%s", recommended_method(p));
+        const bool solved = p->privkey[0] != 0;
+        if (!solved) pz_prop_line("best method", "%s", recommended_method(p));
         bool measured = rate_lin < 0;
         if (measured) {
             const bool tty = pz_stderr_is_terminal();
@@ -1244,13 +1245,15 @@ static int cmd_puzzle(int argc, char **argv)
             if (tty) fprintf(stderr, "\x1b[K");
         }
         print_puzzle_effort(p, rate_lin, rate_kang, measured);
-        printf("\nGPUs, if present, add to the CPU: give the overall speed with --rate.\n");
-        printf("To start the campaign: pzsolve hunt -p %d\n", n);
+        printf("\n");
+        if (measured) printf("GPUs, if present, add to the CPU: give the overall speed with --rate.\n");
+        if (solved) printf("A test run (the key is known): pzsolve hunt -p %d\n", n);
+        else printf("To start the campaign: pzsolve hunt -p %d\n", n);
     } else {
-        long double w = ldexpl(1.0L, n - 1);
+        long double w = ldexpl(1.0L, n - 1), st = KANG_C_MEAN * sqrtl(w);
         pz_section("Mean effort");
-        pz_prop_line("linear search", "%.3Le keys in the worst case, %.3Le on average (no public key)", w, w / 2);
-        pz_prop_line("kangaroo", "about %.3Le steps on average (with the public key)", KANG_C_MEAN * sqrtl(w));
+        pz_prop_line("linear search", "%.3Le keys on average (2^%d), %.3Le in the worst case", w / 2, n - 2, w);
+        pz_prop_line("kangaroo", "%.3Le steps on average (2^%.1f), with the public key", st, (double)log2l(st));
     }
     return 0;
 }
