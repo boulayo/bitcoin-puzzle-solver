@@ -13,7 +13,7 @@ best ones, optimize the share of every (species, residue) pair by exponentiated 
     python3 -I tools/research/kspecies.py 0,1,3 12 768 0.023 40
 prints the cost of the best scheme and the shares (b, residue, share) above 0.5%, up to a translation x -> x + t that
 shifts the residue of each species by b * t (KSPEC is the printed solution with t = 1). Needs numpy. The result for
-0,1,3 mod 12 (cost ~1.045 in the model, against ~1.09 for the mixtures without residues of 8.7) is the KSPEC table of
+0,1,3 mod 12 (cost ~1.045 in the model, against ~1.09 for the mixtures without residues of docs/en/RESEARCH.md 8.7) is the KSPEC table of
 src/kangaroo.c; tools/research/kang_schema2.txt is the same for tools/research/ksim.c (design=).
 """
 import numpy as np, itertools, sys, math

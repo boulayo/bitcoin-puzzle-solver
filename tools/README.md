@@ -12,4 +12,4 @@
 | `release.sh` | Versioned release: checks, `VERSION` bump, `verify.sh`, annotated tag; prints the push command (see `docs/en/RELEASING.md`) |
 | `package_release.sh` | Builds the Linux x86-64 and Windows x86-64 packages on this machine into `dist-release/` (archives and `SHA256SUMS`), with the same checks as `verify.sh` (glibc ceiling, only system DLLs); `--pack BINARY OS ARCH` packages an existing binary (used by the release workflow on every runner). Needs MinGW-w64 and `zip`; Wine optional |
 
-The simulators, the layout files of the kangaroo and the scripts behind the measurements in `docs/en/ALGORITHMS.md` are in [`research/`](research/README.md): they are not needed to build or use the program.
+The simulators, the layout files of the kangaroo and the scripts behind the measurements in `docs/en/RESEARCH.md` are in [`research/`](research/README.md): they are not needed to build or use the program.

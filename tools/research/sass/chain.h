@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* chain.h - 8x8-limb product by rows with one carry chain per row: a mad.wide per limb product (the limb of the row before as a
  * 64-bit addend) and a single add chain of the low and high halves (PTX add.cc/addc.cc through the ADD_CC macros of pz_cuda.h).
- * Measured in docs/en/ALGORITHMS.md section 8.6: -4% instructions on the bare product, nothing on the whole multiplication. */
+ * Measured in docs/en/RESEARCH.md section 8.6: -4% instructions on the bare product, nothing on the whole multiplication. */
 inline void mul512_chain(uint t[16], const uint *a, const uint *b)
 {
     {   /* row 0: nothing to add */

@@ -3,7 +3,7 @@
  *
  * Linear search: the key is uniformly distributed over the keys still to scan, so
  *   P(found within e more keys) = e / remaining.
- * Kangaroo: the number of steps n at which the key is found follows (measured, docs/en/ALGORITHMS.md 4.5)
+ * Kangaroo: the number of steps n at which the key is found follows (measured, docs/en/RESEARCH.md 4.5)
  *   P(found by n) = 1 - exp(-(n/c)^2),  c = c_mean / 0.8862 * sqrt(W), c_mean the constant of the kangaroo (KANG_C_MEAN);
  * conditioning on "not found yet after n0 steps" gives the residual distribution used below. */
 #ifndef PZ_ETA_H

@@ -988,12 +988,12 @@ void gpu_linear_join(gpu_session *s, int n)
 
 typedef struct { double copy_gbs, lo_gops, hi_gops, add3_gops; } gpu_diag;
 
-/* per step of the CUDA kangaroo kernel (mc=0/1, NK 64..256): device memory traffic and integer instructions (SASS counts, docs/en/ALGORITHMS.md 8.4) */
+/* per step of the CUDA kangaroo kernel (mc=0/1, NK 64..256): device memory traffic and integer instructions (SASS counts, docs/en/RESEARCH.md 8.4) */
 #define KANG_MODEL_BYTES 215
 #define KANG_MODEL_INSNS 2200
 
 /* Throughput probes: memory copy bandwidth and 32-bit integer instruction rates (the two limits of the kangaroo kernel:
- * it is bound by both, see docs/en/ALGORITHMS.md 8.4). About two seconds. False when a probe cannot run. */
+ * it is bound by both, see docs/en/RESEARCH.md 8.4). About two seconds. False when a probe cannot run. */
 static bool gpu_diag_run(gpu_session *s, gpu_diag *g)
 {
     memset(g, 0, sizeof *g);
@@ -1140,7 +1140,7 @@ void gpu_bench(void)
         gpu_diag dg;
         if (gpu_diag_run(s, &dg)) {
             gpu_diag_print(s, &dg, kr > 0 ? s->mem_used : 0);
-            if (kr > 0 && devs[i].api == RT_CUDA) {   /* the static counts of the CUDA kernel (docs/en/ALGORITHMS.md 8.4) */
+            if (kr > 0 && devs[i].api == RT_CUDA) {   /* the static counts of the CUDA kernel (docs/en/RESEARCH.md 8.4) */
                 char c1[32], c2[32], c3[32];
                 pz_prop_line("kangaroo ceilings", "%s steps/s by bandwidth, %s by integer work; measured %s",
                              pz_fmt_si(dg.copy_gbs * 1e9 / KANG_MODEL_BYTES, c2, sizeof c2), pz_fmt_si(dg.lo_gops * 1e9 / KANG_MODEL_INSNS, c3, sizeof c3),

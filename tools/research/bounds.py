@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Bounds of docs/en/ALGORITHMS.md section 8.7: counting of the pairs of elements that certify the unknown x of an interval-DLP search.
+"""Bounds of docs/en/RESEARCH.md section 8.7: counting of the pairs of elements that certify the unknown x of an interval-DLP search.
 
 Elements are classes {E, -E} with E = b*x + a. Two of them collide in two ways, E1 = E2 and E1 = -E2, which give x = (a2-a1)/(b1-b2)
 and x = -(a1+a2)/(b1+b2); each is an integer with probability 1/|delta| unless the offsets are chosen to make it one (the 'even distance'

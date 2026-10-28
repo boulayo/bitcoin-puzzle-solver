@@ -517,7 +517,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
      * to a multiple of KANG_MOD, in integer arithmetic (identical on every architecture). Without drift a walker stays within about
      * sqrt(n) jumps of its start (n ~ sqrt(W)/K steps each), so two walks can cross only if their starts are that close: the number
      * of such pairs is about (mean / W^(3/4)) * K^1.5, hence the mean of W^(3/4)/16: K^1.5/16 pairs, and each walk covers a
-     * fraction 1/(16 sqrt(K)) of W (8.10) */
+     * fraction 1/(16 sqrt(K)) of W (docs/en/ALGORITHMS.md 8.10) */
     u128 mean3;
     {
         const pz_u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */

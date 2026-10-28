@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* kara.h - Karatsuba forms of the 8x32 -> 16x32-bit limb product, as measured in docs/en/ALGORITHMS.md section 8.6. Plain C: used by the
+/* kara.h - Karatsuba forms of the 8x32 -> 16x32-bit limb product, as measured in docs/en/RESEARCH.md section 8.6. Plain C: used by the
  * kernels of variants.cl (NVRTC dialect, see tools/research/sass_count.py) and by kara_check.c (host check of the arithmetic). */
 
 /* 4x4 -> 8 limbs, schoolbook */

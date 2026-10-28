@@ -10,7 +10,7 @@ The sources are concatenated after pz_cuda.h and pz_common.cl (as tools/gen_ptx.
 nvdisasm lists every kernel of the file). The tools come from NVIDIA's pip wheels (nvidia-cuda-nvrtc-cu12, nvidia-cuda-nvcc-cu12:
 see tools/README.md) and the CUDA 12 repository package cuda-nvdisasm-12-0.
 
-Used for docs/en/ALGORITHMS.md section 8.6: tools/research/sass_count.py ... tools/research/sass/kara.h tools/research/sass/chain.h tools/research/sass/variants.cl"""
+Used for docs/en/RESEARCH.md section 8.6: tools/research/sass_count.py ... tools/research/sass/kara.h tools/research/sass/chain.h tools/research/sass/variants.cl"""
 import collections, ctypes, os, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
