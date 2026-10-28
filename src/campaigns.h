@@ -10,6 +10,13 @@
 int campaign_lock(const char *dir);
 /* True when some process currently holds the campaign lock. */
 bool campaign_is_running(const char *dir);
+/* The state to show for a campaign, given the one its files say (`written`: "RUNNING", "STOPPED", "COMPLETED"...), whether FOUND.txt
+ * exists and whether some process holds the lock. The files say RUNNING until the next write, so a process that was killed leaves
+ * it behind: without the lock the state is STOPPED. 'list' and 'info' both use it. Returns `written` itself or a constant. */
+const char *campaign_shown_state(const char *written, bool found, bool running);
+/* The text of report.txt of the campaign in `dir`, with its "State:" line corrected by campaign_shown_state; NULL when there is no
+ * report. Free with free(). */
+char *campaign_report(const char *dir);
 /* Prints a table of every campaign found under `base`; returns the number of campaigns. */
 int campaigns_list(const char *base);
 

@@ -81,6 +81,14 @@ typedef struct {
 
 static int cmp_rows(const void *a, const void *b) { return strcmp(((const row_t *)a)->name, ((const row_t *)b)->name); }
 
+const char *campaign_shown_state(const char *written, bool found, bool running)
+{
+    /* the files say "RUNNING" until the next write: if nobody holds the lock the process died without a final report */
+    if (found) return "FOUND";
+    if (running) return "RUNNING";
+    return !strcmp(written, "RUNNING") ? "STOPPED" : written;
+}
+
 /* status.json written before 1.8.0 holds Italian state names. */
 static const char *state_name(const char *s)
 {
@@ -131,12 +139,39 @@ static void fill_row(row_t *w, const char *base, time_t now)
         }
         free(js);
     }
-    /* the file says "RUNNING" until the next write: if nobody holds the lock the process died without a final report */
-    if (found) pz_strlcpy(w->state, "FOUND", sizeof w->state);
-    else if (running) pz_strlcpy(w->state, "RUNNING", sizeof w->state);
-    else if (!strcmp(w->state, "RUNNING")) pz_strlcpy(w->state, "STOPPED", sizeof w->state);
+    pz_strlcpy(w->state, campaign_shown_state(w->state, found, running), sizeof w->state);
     if (!running || found) pz_strlcpy(w->rate, "-", sizeof w->rate);
     if (found || !strcmp(w->state, "COMPLETED")) pz_strlcpy(w->eta, "-", sizeof w->eta);
+}
+
+char *campaign_report(const char *dir)
+{
+    char p[4200];
+    snprintf(p, sizeof p, "%s/report.txt", dir);
+    char *t = pz_read_file(p, NULL);
+    if (!t) return NULL;
+    /* only the value of the State: line is corrected; the rest is what the campaign wrote */
+    static const char key[] = "State:";
+    char *line = strncmp(t, key, sizeof key - 1) == 0 ? t : strstr(t, "\nState:");
+    if (!line) return t;
+    if (line != t) line++;
+    char *val = line + sizeof key - 1;
+    while (*val == ' ') val++;
+    char *end = val;
+    while (*end && *end != '\n' && *end != '\r') end++;
+    char written[32];
+    pz_strlcpy(written, val, sizeof written);
+    if ((size_t)(end - val) < sizeof written) written[end - val] = 0;
+    snprintf(p, sizeof p, "%s/FOUND.txt", dir);
+    const char *shown = campaign_shown_state(state_name(written), access(p, F_OK) == 0, campaign_is_running(dir));
+    if (!strcmp(shown, written)) return t;
+    const size_t head = (size_t)(val - t), tail = strlen(end);
+    char *out = pz_xmalloc(head + strlen(shown) + tail + 1);
+    memcpy(out, t, head);
+    strcpy(out + head, shown);
+    strcpy(out + head + strlen(shown), end);
+    free(t);
+    return out;
 }
 
 int campaigns_list(const char *base)

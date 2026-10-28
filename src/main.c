@@ -967,8 +967,8 @@ static int cmd_info(int argc, char **argv)
     if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
     if (!o.campaign[0]) pz_die("specify the campaign with -c NAME or -p N");
     char p[700];
-    snprintf(p, sizeof p, "%s/%s/report.txt", o.dir, o.campaign);
-    char *t = pz_read_file(p, NULL);
+    snprintf(p, sizeof p, "%s/%s", o.dir, o.campaign);
+    char *t = campaign_report(p);
     if (t) {
         fputs(t, stdout);
         free(t);

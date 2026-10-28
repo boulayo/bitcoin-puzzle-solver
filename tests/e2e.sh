@@ -168,6 +168,16 @@ LST=$($BIN list -d "$DIR/lk"); echo "$LST" | grep -q "STOPPED" && ok "list shows
 $BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1 & sleep 2; kill -INT $! 2>/dev/null; wait 2>/dev/null
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/lk/p71/session.txt"); [ "$SES" = 2 ] && ok "after the stop the campaign resumes (2 sessions)" || bad "resume after the lock: sessions '$SES'"
 
+echo "== info: the state comes from the lock, not only from the report (kill -9 leaves RUNNING in the file)"
+rm -rf "$DIR/k9"
+( $BIN hunt -p 71 -d "$DIR/k9" --ui log -q --no-gpu -t 2 >/dev/null 2>&1 & echo $! > "$DIR/k9.pid" )
+for _ in $(seq 1 200); do [ -s "$DIR/k9/p71/report.txt" ] && break; sleep 0.1; done   # the first report comes 2 s after the start
+$BIN info -p 71 -d "$DIR/k9" | grep -q '^State: *RUNNING' && ok "info shows RUNNING while the campaign runs" || bad "info of a running campaign"
+kill -9 $(cat "$DIR/k9.pid") 2>/dev/null; sleep 0.5
+grep -q '^State: *RUNNING' "$DIR/k9/p71/report.txt" && ok "the report file still says RUNNING after kill -9" || bad "report.txt after kill -9: $(grep '^State:' "$DIR/k9/p71/report.txt")"
+$BIN info -p 71 -d "$DIR/k9" | grep -q '^State: *STOPPED' && ok "info shows STOPPED, like list" || bad "info after kill -9: $($BIN info -p 71 -d "$DIR/k9" | grep '^State:')"
+$BIN list -d "$DIR/k9" | grep -q 'STOPPED' || bad "list after kill -9"
+
 echo "== exit status of hunt: 0 key found, 1 finished without the key, 130 interrupted, 2 error"
 K=$(rndkey 18 5); A=$(field $K addr)
 $BIN hunt -p 18 -a "$A" -c xf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?

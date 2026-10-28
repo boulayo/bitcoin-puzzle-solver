@@ -254,6 +254,55 @@ static void fuzz_list(const char *dir)
     }
 }
 
+/* The state shown by 'list' and 'info': FOUND.txt first, then the lock, and RUNNING in a file whose process is gone becomes STOPPED. */
+static void check_shown_state(const char *dir)
+{
+    CHECK(!strcmp(campaign_shown_state("RUNNING", false, false), "STOPPED"));
+    CHECK(!strcmp(campaign_shown_state("RUNNING", false, true), "RUNNING"));
+    CHECK(!strcmp(campaign_shown_state("STOPPED", false, true), "RUNNING"));
+    CHECK(!strcmp(campaign_shown_state("COMPLETED", false, false), "COMPLETED"));
+    CHECK(!strcmp(campaign_shown_state("NEW", false, false), "NEW"));
+    CHECK(!strcmp(campaign_shown_state("RUNNING", true, true), "FOUND"));
+    CHECK(!strcmp(campaign_shown_state("STOPPED", true, false), "FOUND"));
+
+    char d[700], p[800];
+    snprintf(d, sizeof d, "%s/view", dir);
+    CHECK(pz_mkdir1(d) == 0);
+    CHECK(campaign_report(d) == NULL);                                         /* no report */
+    snprintf(p, sizeof p, "%s/report.txt", d);
+    const char *rep = "=== pzsolve - campaign report ===\nUpdated:        2026-01-01 00:00:00\nState:          RUNNING\nCampaign:       x\n";
+    put(p, rep, strlen(rep));
+    char *t = campaign_report(d);                                              /* nobody holds the lock */
+    CHECK(t && strstr(t, "\nState:          STOPPED\nCampaign:       x\n") && !strstr(t, "RUNNING"));
+    free(t);
+    int fd = campaign_lock(d);                                                 /* a process that runs the campaign */
+    t = campaign_report(d);
+    CHECK(t && !strcmp(t, rep));
+    free(t);
+    const char *rep2 = "State:          STOPPED\nCampaign:       x\n";         /* the state on the first line */
+    put(p, rep2, strlen(rep2));
+    t = campaign_report(d);
+    CHECK(t && !strcmp(t, "State:          RUNNING\nCampaign:       x\n"));
+    free(t);
+    close(fd);
+    snprintf(p, sizeof p, "%s/FOUND.txt", d);
+    put(p, "x", 1);
+    snprintf(p, sizeof p, "%s/report.txt", d);
+    put(p, rep, strlen(rep));
+    t = campaign_report(d);
+    CHECK(t && strstr(t, "\nState:          FOUND\n"));
+    free(t);
+    const char *odd = "no state line here\nState without a colon\n";           /* a file of another shape is passed on as it is */
+    put(p, odd, strlen(odd));
+    t = campaign_report(d);
+    CHECK(t && !strcmp(t, odd));
+    free(t);
+    put(p, "State:", 6);                                                       /* a state line cut short */
+    t = campaign_report(d);
+    CHECK(t && !strncmp(t, "State:", 6));
+    free(t);
+}
+
 int main(void)
 {
     pz_ec_init();
@@ -265,6 +314,7 @@ int main(void)
     fuzz_table(dir);
     fuzz_parsers();
     fuzz_list(dir);
+    check_shown_state(dir);
     CHECK(pz_remove_tree(dir) == 0);
     puts(fails ? "t_fuzz: FAILED" : "t_fuzz: ok");
     return fails != 0;
