@@ -280,6 +280,11 @@ OUT=$(timeout -s INT 3 $BIN hunt -c sc -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1)
 echo "$OUT" | grep -q "campaign resumed" && ok "a state without seed id (earlier versions) is still accepted" || bad "state of an earlier version refused"
 grep -q '^seed_id=' "$DIR/sd/sc/state.dat" && ok "the next save records the seed id" || bad "seed_id not recorded after resuming an old state"
 
+echo "== environment variables: a value that cannot be used is reported once, and ignored"
+OUT=$(PZ_GPU_API=vulkan PZ_TEST_JUMP=-1 PZ_BENCH_SCALE=100 PZ_NO_CUDA=0 $BIN version 2>&1 >/dev/null)
+[ "$(grep -c ' ignored ' <<<"$OUT")" = 2 ] && grep -q "PZ_GPU_API=vulkan ignored (expected cuda or opencl)" <<<"$OUT" && grep -q "PZ_TEST_JUMP=-1 ignored (expected an integer between 1 and 2147483647)" <<<"$OUT" \
+  && ok "two unusable values reported once each; a valid number and PZ_NO_CUDA=0 are not" || bad "environment warnings: $OUT"
+
 echo "== input error checks"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX -c bad -d "$DIR" -q >/dev/null 2>&1 && bad "address with a wrong checksum accepted" || ok "address with a wrong checksum rejected"
 $BIN hunt -r 1:ffff -c bad2 -d "$DIR" -q >/dev/null 2>&1 && bad "missing target accepted" || ok "missing target rejected"
