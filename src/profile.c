@@ -147,6 +147,7 @@ void profile_apply(run_ctx *r, bool force, bool disable)
     tg_silent = pz_log_quiet();                 /* a quiet hunt gets no tables */
     int rc = kang ? kangaroo_bench_together(0, NULL, &ch) : linear_bench_together(r->engine, 0, NULL, &ch);
     if (rc) { tg_silent = 0; pz_log(PZ_LOG_WARN, "CPU+GPU tuning failed: using the default values (will try again on the next run)"); return; }
+    if (run_interrupted()) { tg_silent = 0; return; }       /* Ctrl-C: what was measured so far is not the verdict, and the caller stops */
     if (!(ch.def_rate > 0)) {                   /* stopped before anything was measured (every GPU worker ended, say): nothing to remember */
         tg_silent = 0;
         pz_log(PZ_LOG_WARN, "CPU+GPU tuning measured nothing: using the default values (will try again on the next run)");

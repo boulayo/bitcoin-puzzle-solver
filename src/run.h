@@ -97,6 +97,8 @@ typedef struct run_ctx {
 
     /* statistics of hits */
     _Atomic u64 hits_bad;
+
+    int scratch_lock;                /* synthetic campaigns (run_kangaroo.c): descriptor holding the lock of the owner file of the scratch folder (0: none) */
 } run_ctx;
 
 /* Seconds of this session spent computing: the monotonic time since the start minus the suspensions. */
@@ -106,6 +108,9 @@ static inline double run_session_elapsed(const run_ctx *r) { return pz_mono() - 
 void run_init(run_ctx *r);
 int run_alloc_worker(run_ctx *r, const char *name, char kind);
 void run_install_signals(run_ctx *r);
+/* Whether a stop signal (Ctrl-C, SIGTERM, SIGHUP, a closing console) has arrived since run_install_signals. The measurements that run before
+ * a campaign poll it, so that they end at once and clean up. */
+bool run_interrupted(void);
 /* Verifies a candidate private key against the campaign target and, if valid,
  * records it and stops everything. Returns true if the key is correct. */
 bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source);

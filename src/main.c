@@ -707,6 +707,18 @@ static void print_found_banner(const run_ctx *r, const char *addr, const char *h
     printf("  saved in:       %s\n=========================================================\n", r->path_found);
 }
 
+/* The line that tells how to resume an interrupted campaign. */
+static void print_resume_hint(const run_ctx *r, const char *dir)
+{
+    char byp[32];
+    snprintf(byp, sizeof byp, "p%d", r->cfg.puzzle);
+    const bool other_dir = strcmp(dir, "campaigns") != 0;
+    if (r->cfg.puzzle && !strcmp(r->cfg.name, byp))
+        printf("\nCampaign interrupted. Resume with:  pzsolve hunt -p %d%s%s\n", r->cfg.puzzle, other_dir ? " -d " : "", other_dir ? dir : "");
+    else
+        printf("\nCampaign interrupted. Resume with:  pzsolve hunt -c %s%s%s\n", r->cfg.name, other_dir ? " -d " : "", other_dir ? dir : "");
+}
+
 static int cmd_hunt(int argc, char **argv)
 {
     opts_t o;
@@ -759,6 +771,7 @@ static int cmd_hunt(int argc, char **argv)
     }
     if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
     pz_log_set_file(r->path_log);
+    run_install_signals(r);   /* before the measurement of the machine, which takes minutes: a Ctrl-C ends it and cleans up instead of killing the program */
 
     r->nthreads = o.threads > 0 ? o.threads : r->sys.ncpu;
     if (r->nthreads > MAX_WORKERS - 16) {
@@ -789,6 +802,14 @@ static int cmd_hunt(int argc, char **argv)
     r->gpu_boost = o.prio_gpu == PRIO_YES;
     r->limit_pct = o.limit > 0 && o.limit < 100 ? o.limit : 0;
     profile_apply(r, o.retune, o.no_tune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
+    if (run_interrupted()) {                 /* Ctrl-C during the measurement: nothing has started, nothing is lost */
+        pz_log(PZ_LOG_INFO, "interrupted during the measurement of the machine: the search was not started");
+        print_resume_hint(r, o.dir);
+        pz_interrupt_done();
+        pz_log_set_file(NULL);
+        free(r);
+        return 0;
+    }
     const int thr_full = r->nthreads;
     run_limit_setup(r);
     if (r->gpu_boost && !pz_boost_possible()) {
@@ -840,7 +861,6 @@ static int cmd_hunt(int argc, char **argv)
     run_session_load(r);
     r->sessions++;
     r->t_start = pz_mono();
-    run_install_signals(r);
     if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
 
     int rc = r->cfg.mode == MODE_KANGAROO ? run_kangaroo(r) : r->cfg.mode == MODE_BSGS ? run_bsgs(r) : run_linear(r);
@@ -880,12 +900,7 @@ static int cmd_hunt(int argc, char **argv)
             printf("(Check that the puzzle/address are correct; the computation was tested with 'pzsolve selftest'.)\n");
         }
     } else {
-        char byp[32];
-        snprintf(byp, sizeof byp, "p%d", r->cfg.puzzle);
-        if (r->cfg.puzzle && !strcmp(r->cfg.name, byp))
-            printf("\nCampaign interrupted. Resume with:  pzsolve hunt -p %d%s%s\n", r->cfg.puzzle, strcmp(o.dir, "campaigns") ? " -d " : "", strcmp(o.dir, "campaigns") ? o.dir : "");
-        else
-            printf("\nCampaign interrupted. Resume with:  pzsolve hunt -c %s%s%s\n", r->cfg.name, strcmp(o.dir, "campaigns") ? " -d " : "", strcmp(o.dir, "campaigns") ? o.dir : "");
+        print_resume_hint(r, o.dir);
     }
     pz_log_set_file(NULL);
     free(r);

@@ -45,6 +45,17 @@ double tg_scale(void)
     return 1.0;
 }
 
+/* Sleeps `secs` seconds, less when the run is stopped (r->stop) or the program is interrupted (Ctrl-C): then the stop flag of the run is set, so
+ * that the scan ends at the next check instead of after the measurements that are left. */
+static void tg_sleep(run_ctx *r, double secs)
+{
+    const double end = pz_mono() + secs;
+    for (double now; !atomic_load(&r->stop) && (now = pz_mono()) < end;) {
+        if (run_interrupted()) { atomic_store(&r->stop, 1); break; }
+        pz_sleep(end - now < 0.05 ? end - now : 0.05);
+    }
+}
+
 /* Rates (units/s) with `cap` CPU workers running and the GPUs whose bit is set in `off` idle. After `settle` seconds,
  * over `window` seconds: the GPU counts only change at the end of a launch (about every 0.35 s), so a long window keeps
  * that granularity near 2%. */
@@ -53,14 +64,15 @@ static tg_res tg_run(const tg_scan_cfg *c, int cap, unsigned off, double settle,
     run_ctx *r = c->r;
     c->set_cpu(c->ctx, cap);
     for (int j = 0; j < c->ngpu; j++) gpu_pause(gpu_session_at(c->g, j), (off >> j) & 1);
-    pz_sleep(settle);
+    tg_sleep(r, settle);
     u64 a[MAX_WORKERS];
     const int nws = r->nws;
     for (int i = 0; i < nws; i++) a[i] = atomic_load(&r->ws[i].units);
     const double t0 = pz_mono();
-    pz_sleep(window);
+    tg_sleep(r, window);
     const double dt = pz_mono() - t0;
     tg_res o = {cap, off, 0, {0}, 0};
+    if (atomic_load(&r->stop)) return o;            /* abandoned: a window cut short measures nothing */
     for (int i = 0; i < nws; i++)
         if (r->ws[i].kind == 'C') o.cpu += (double)(atomic_load(&r->ws[i].units) - a[i]) / dt;
     o.total = o.cpu;

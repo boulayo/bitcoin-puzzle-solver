@@ -117,6 +117,19 @@ rm -rf "$T/pr5"; outhas "profile\|first run" $PROF build/pzsolve hunt -p 26 -a "
 # no cache folder to keep the result in (a service without HOME): no measurement of two minutes at every start
 rm -rf "$T/pr7"; PO=$(env -u HOME -u XDG_CACHE_HOME LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr7" --ui log 2>&1)
 grep -q "no cache folder that can be written to" <<<"$PO" && ! grep -q "measuring which CPU thread count" <<<"$PO" && echo "  OK no writable cache folder: the machine measurement is skipped" || { echo "  FAIL measurement without a cache folder"; fail=$((fail+1)); }
+# Ctrl-C during the first-run measurement (kangaroo: it has a scratch folder): the program stops at once, removes the folder, remembers nothing
+# and says how to resume; the campaign itself is not started
+rm -rf "$T/pr8" "$T/tmp8" "$T/prof8"; mkdir "$T/tmp8"
+env TMPDIR="$T/tmp8" XDG_CACHE_HOME="$T/prof8" LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr8" --ui log >"$T/pr8.out" 2>&1 &
+PID8=$!
+for _ in $(seq 1 600); do grep -q "warm-up" "$T/pr8.out" && break; sleep 0.1; done
+sleep 0.7; kill -INT $PID8 2>/dev/null
+for _ in $(seq 1 100); do kill -0 $PID8 2>/dev/null || break; sleep 0.1; done
+if kill -0 $PID8 2>/dev/null; then kill -KILL $PID8; echo "  FAIL Ctrl-C during the first-run measurement: still running 10 s later"; fail=$((fail+1)); else
+  wait $PID8 2>/dev/null
+  grep -q "interrupted during the measurement of the machine" "$T/pr8.out" && [ -z "$(ls -A "$T/tmp8")" ] && ! grep -q "kang|" "$T/prof8/pzsolve/machine_profile.txt" 2>/dev/null \
+    && echo "  OK Ctrl-C during the first-run measurement: stopped, scratch folder removed, nothing remembered" || { echo "  FAIL Ctrl-C during the first-run measurement"; fail=$((fail+1)); }
+fi
 
 # doctor, and the protections against suspension: a device error mid-campaign (the mock fails one launch when a file appears,
 # like a driver reset after sleep) must reopen the GPU; a frozen process (SIGSTOP, like sleep) must be noticed

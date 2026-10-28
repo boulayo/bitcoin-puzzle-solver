@@ -283,6 +283,21 @@ if kill -0 $(cat "$DIR/hup.pid") 2>/dev/null; then bad "the process did not stop
 fi
 fi
 
+echo "== scratch folders of the self-tests and measurements: an abandoned one is removed, the others are left alone"
+mkdir -p "$DIR/tmp"
+for n in DEAD01 LIVE01 FRESH1 FOREIGN; do mkdir -p "$DIR/tmp/pzkang$n"; done
+for n in DEAD01 LIVE01 FRESH1; do : > "$DIR/tmp/pzkang$n/owner"; done
+: > "$DIR/tmp/pzkangDEAD01/dp.bin"
+python3 -c "import fcntl,sys,time; f=open(sys.argv[1]); fcntl.flock(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(3)" "$DIR/tmp/pzkangLIVE01/owner" >"$DIR/lock.out" &
+for _ in $(seq 1 50); do grep -q locked "$DIR/lock.out" && break; sleep 0.1; done
+touch -d '10 minutes ago' "$DIR/tmp/pzkangDEAD01" "$DIR/tmp/pzkangLIVE01" "$DIR/tmp/pzkangFOREIGN"   # FRESH1 stays new: it may be being made
+TMPDIR="$DIR/tmp" $BIN kstat 16 1 1 >/dev/null 2>&1
+[ ! -e "$DIR/tmp/pzkangDEAD01" ] && ok "the folder of a program that is gone (free lock, not new) is removed" || bad "abandoned scratch folder left"
+[ -d "$DIR/tmp/pzkangLIVE01" ] && ok "a folder whose lock is held is left alone" || bad "scratch folder in use removed"
+[ -d "$DIR/tmp/pzkangFRESH1" ] && [ -d "$DIR/tmp/pzkangFOREIGN" ] && ok "a new folder and one without owner file are left alone" || bad "a scratch folder that is not abandoned was removed"
+[ "$(ls "$DIR/tmp" | wc -l)" = 3 ] && ok "the folder of the run itself is removed at its end" || bad "scratch folders left: $(ls "$DIR/tmp" | tr '\n' ' ')"
+wait
+
 echo "== line width: nothing printed is longer than 128 columns"
 chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr
   local label=$1 out w; shift

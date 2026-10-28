@@ -39,6 +39,8 @@ void run_install_signals(run_ctx *r)
     pz_on_interrupt(on_signal);
 }
 
+bool run_interrupted(void) { return atomic_load(&g_sig_count) > 0; }
+
 void run_init(run_ctx *r)
 {
     memset(r, 0, sizeof *r);

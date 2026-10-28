@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
+#include <dirent.h>
 #include <sys/stat.h>
 
 typedef struct { kang_state *ks; int widx, slot; u64 stream; _Atomic int *active; } kth_arg;
@@ -124,6 +125,52 @@ static u64 st_rnd(u64 *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; retur
 
 /* ---------------- synthetic campaigns (self-tests and measurements) ---------------- */
 
+/* The scratch folder of a synthetic campaign (pzkang*, in the temporary folder) holds a file "owner" whose lock the program keeps for as long as
+ * the folder exists. A folder whose lock is free and that is not new was left by a program that did not get to remove it (a second Ctrl-C, a
+ * crash): it can hold up to 256 MiB of distinguished points, on a RAM disk on many systems. The first synthetic campaign of a program removes
+ * such folders. */
+static void sweep_scratch_dirs(const char *mine)
+{
+    static _Atomic int swept;
+    if (atomic_exchange(&swept, 1)) return;
+    char base[700];
+    pz_strlcpy(base, mine, sizeof base);
+    char *sep = NULL;
+    for (char *c = base; *c; c++)
+        if (*c == '/' || *c == '\\') sep = c;
+    if (!sep) return;
+    *sep = 0;
+    const char *own_name = mine + (sep - base) + 1;
+    DIR *d = opendir(base);
+    if (!d) return;
+    const time_t now = time(NULL);
+    for (struct dirent *e; (e = readdir(d));) {
+        if (strncmp(e->d_name, "pzkang", 6) != 0 || !strcmp(e->d_name, own_name)) continue;
+        char path[1400], owner[1500];
+        struct stat st;
+        snprintf(path, sizeof path, "%s/%s", base, e->d_name);
+        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode) || now - st.st_mtime < 60) continue;   /* a folder that is just being made is left alone */
+        snprintf(owner, sizeof owner, "%s/owner", path);
+        const int fd = pz_open_rw(owner, false);
+        if (fd < 0) continue;                      /* not one of ours */
+        const bool abandoned = pz_lock_try(fd, true) == 0;
+        close(fd);
+        if (abandoned) pz_remove_tree(path);
+    }
+    closedir(d);
+}
+
+static bool scratch_dir(run_ctx *r, char *dir, size_t n)
+{
+    if (!pz_make_temp_dir(dir, n, "pzkang")) return false;
+    char owner[700];
+    snprintf(owner, sizeof owner, "%s/owner", dir);
+    r->scratch_lock = pz_open_rw(owner, true);
+    if (r->scratch_lock > 0) (void)pz_lock_try(r->scratch_lock, true);    /* held until synth_free() or the end of the program */
+    sweep_scratch_dirs(dir);
+    return true;
+}
+
 /* A synthetic kangaroo campaign on the interval [lo, lo + 2^wbits - 1] with the public key of `key`, in a scratch folder of its own: the base of the
  * self-tests and measurements. The caller sets the rest (seed, hash of the target, threads, devices) and ends it with synth_free(). NULL when
  * there is no temporary folder. */
@@ -132,7 +179,7 @@ static run_ctx *synth_new(const pz_u256 *lo, unsigned wbits, const pz_u256 *key)
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
     char dir[600];
-    if (!pz_make_temp_dir(dir, sizeof dir, "pzkang")) { free(r); return NULL; }
+    if (!scratch_dir(r, dir, sizeof dir)) { free(r); return NULL; }
     pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
     run_paths(r);
     r->cfg.range_start = *lo;
@@ -153,6 +200,7 @@ static run_ctx *synth_new(const pz_u256 *lo, unsigned wbits, const pz_u256 *key)
 
 static void synth_free(run_ctx *r)
 {
+    if (r->scratch_lock > 0) close(r->scratch_lock);
     pz_remove_tree(r->cfg.dir);
     free(r);
 }
@@ -409,7 +457,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
             if (r->ws[i].kind == 'C' && i >= full) continue;        /* parked from the start */
             if (!atomic_load(&r->ws[i].units)) ready = false;
         }
-        if (ready || pz_mono() - tw > 300 || atomic_load(&r->stop)) break;
+        if (ready || pz_mono() - tw > 300 || atomic_load(&r->stop) || run_interrupted()) break;
         pz_sleep(0.2);
     }
     const tg_scan_cfg cfg = {r, gpus, ngpu, gw, gidx, total, full, threads > 0, "steps/s", kang_set_cpu, r, choice ? choice->prio : PRIO_AUTO};
