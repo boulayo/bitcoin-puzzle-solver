@@ -3,6 +3,43 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
 
+## [1.12.0] — 2026-10-29
+
+### Removed
+- `--limit 100` is refused (no `--limit` means no limit, as before). Scripts that passed 100 must drop the option.
+- **Upgrade note.** The kangaroo log `dp.bin` now starts with `PZDP5` and records the jump table: versions before 1.12.0 cannot read a log written
+  by 1.12.0. Logs written by 1.9.1 to 1.11.0 (`PZDP4`) are still read, appended to and merged.
+
+### Changed
+- Faster hash160 stage: the filter on the first word of the hash no longer computes the unused part of RIPEMD-160, the SHA-256 round constants
+  are read as broadcasts from memory and the byte swap is one shuffle on AVX-512. Instructions per key: -7.4 % (AVX-512), -3.6 % (AVX2); time
+  measured in interleaved runs: about -4 % on both.
+- Faster lane kangaroo: the second pass of a step reads only the parts of the jump it needs. Time per step: -4.5 % (AVX2 lanes), -3.8 %
+  (AVX-512 lanes); about -2 % of instructions on the IFMA variants.
+- The kangaroo picks its distinguished-point density with a margin of 1.3 instead of 4 when memory decides it, now that the table is thinned in
+  place: the expected cost on machines where memory sets `dp_bits` drops (modelled, puzzle 140 with 2^22 kangaroos: 1.19 to 1.10 times
+  the square root of the range at 32 GB, 1.33 to 1.15 at 16 GB), and `dp.bin` grows 2 to 4 times.
+- `merge` refuses a log written with another jump table (another seed or another setup) instead of merging points that can never meet.
+- Terminal output reviewed: fewer lines at start-up (one line per GPU, the machine profile only when it changes something, the jump table id
+  only with `--node`) and at the end (the path of `FOUND.txt` once, no time left after the end); one format for numbers, percentages,
+  durations and labels; output wraps at the width of the terminal (at most 128 columns); every command has a short help
+  (`pzsolve help CMD`, `CMD --help`); errors say what to do next; `where` says whether the key was already scanned; `info` and `list` show
+  the time left at the last speed for a stopped campaign and hide it for a finished one. Labels of `report.txt` changed slightly (the keys of
+  `status.json` did not; its ETAs are null when beyond the model).
+- The documentation describes what the program does now; history and discarded variants are in `docs/en/RESEARCH.md`; the Italian guide has
+  the same sections as the English one.
+
+### Fixed
+- Windows: a `dp.bin` larger than 2 GiB could not be cut back after a torn write (resume failed) or, above 4 GiB, was cut to the wrong size.
+- The kangaroo now warns when it has done 5 times the expected effort without a collision (wrong public key or range) instead of showing
+  "100 %" and "<0.1 s" forever.
+- BSGS: the speed shown after the table was built was the speed of the baby steps, and so were the time left and `list`.
+- Custom targets were shown as "puzzle #0"; the BSGS notice about GPUs was printed without any GPU; the panel cut words at 80 columns;
+  `help CMD` printed the main help; `split` refused decimal speeds such as `1.5G`.
+- A big batch of points from a GPU could write the kangaroo log while holding the table lock.
+- A fatal error could leave a torn line at the end of `log.txt` when another thread was logging at the same moment.
+- The CI check of the puzzle database failed where Python's hashlib lacks RIPEMD-160 (`tools/ref.py` has its own now).
+
 ## [1.11.0] — 2026-10-28
 
 ### Added
