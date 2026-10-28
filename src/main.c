@@ -868,7 +868,8 @@ static int cmd_hunt(int argc, char **argv)
     char memb[32];
     pz_fmt_bytes((double)r->sys.mem_total, memb, sizeof memb);
     pz_log(PZ_LOG_INFO, "pzsolve %s - campaign '%s' %s", PZ_VERSION, r->cfg.name, resuming ? "(resumed)" : "(new)");
-    pz_log(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
+    if (r->cfg.puzzle) pz_log(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
+    else pz_log(PZ_LOG_INFO, "target: address %s", addr);
     pz_log(PZ_LOG_INFO, "range: 0x%s - 0x%s (%s)", rs, re, rsz_short);
     if (r->cfg.mode == MODE_LINEAR)
         pz_log(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);

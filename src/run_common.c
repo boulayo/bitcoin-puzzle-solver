@@ -201,7 +201,7 @@ bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
 
 void run_write_found(run_ctx *r)
 {
-    char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80];
+    char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80], pz[48] = "";
     u8 kb[32], h[20], pub[33];
     pz_ge p;
     pz_u256_to_hex(&r->found_key, hx);
@@ -218,11 +218,12 @@ void run_write_found(run_ctx *r)
     struct tm tmv;
     pz_localtime(t, &tmv);
     strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
+    if (r->cfg.puzzle) snprintf(pz, sizeof pz, "puzzle:          %d\n", r->cfg.puzzle);
     int n = snprintf(buf, sizeof buf,
         "*** PRIVATE KEY FOUND ***\n\n"
         "date:            %s\n"
         "campaign:        %s\n"
-        "puzzle:          %d\n"
+        "%s"
         "address:         %s\n"
         "private key hex: %s\n"
         "WIF compressed:  %s\n"
@@ -230,7 +231,7 @@ void run_write_found(run_ctx *r)
         "campaign seed:   %s\n"
         "version:         %s\n\n"
         "KEEP THIS FILE IN A SAFE PLACE and move the funds as soon as possible.\n",
-        ts, r->cfg.name, r->cfg.puzzle, addr, hx, wif, pk, seed, PZ_VERSION);
+        ts, r->cfg.name, pz, addr, hx, wif, pk, seed, PZ_VERSION);
     if (pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) != 0)
         pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
 }
@@ -324,6 +325,8 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     }
     pz_u256 rsz = cfg_range_size(&r->cfg);
     unsigned rbits = pz_u256_bits(&rsz) ? pz_u256_bits(&rsz) - 1 : 0;
+    char pzt[32] = "";
+    if (r->cfg.puzzle) snprintf(pzt, sizeof pzt, "puzzle #%d  ", r->cfg.puzzle);
 
     char detail[900], tleft[400];
     wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
@@ -339,7 +342,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "State:          %s\n"
         "Campaign:       %s   (seed id %s)\n"
         "Seed:           %s\n"
-        "Target:         puzzle #%d  address %s\n"
+        "Target:         %saddress %s\n"
         "                hash160 %s%s\n"
         "Mode:           %s\n"
         "Range:          0x%s - 0x%s  (~2^%u keys)\n"
@@ -352,7 +355,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "Detail:         %s\n"
         "Rejected:       %llu candidate%s that failed the verification\n"
         "\nWorkers:\n",
-        PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, r->cfg.puzzle, addr, hx,
+        PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
         pi->fraction * 100.0, done, total, pi->unit, rate, pi->unit, cr, gr, tleft,

@@ -28,6 +28,13 @@ const char *ui_state_name(const run_ctx *r, bool final)
     return final ? "STOPPED" : "RUNNING";
 }
 
+char *ui_target_tag(const run_ctx *r, char *buf, size_t n)
+{
+    if (r->cfg.puzzle) snprintf(buf, n, "#%d", r->cfg.puzzle);
+    else snprintf(buf, n, "%s", r->cfg.name);
+    return buf;
+}
+
 char *ui_fmt_count(long double v, char *buf, size_t n)
 {
     if (v < 1e15L) return pz_fmt_si((double)v, buf, n);
@@ -117,7 +124,9 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     const char *D0 = color ? "\x1b[2m" : "", *D1 = color ? "\x1b[0m" : "";
     const bool kang = r->cfg.mode == MODE_KANGAROO;
 
-    snprintf(ln, sizeof ln, "pzsolve %s | campaign %s | puzzle #%d | %s | seed %.8s | %s", PZ_VERSION, r->cfg.name, r->cfg.puzzle,
+    char pz[32] = "";
+    if (r->cfg.puzzle) snprintf(pz, sizeof pz, " | puzzle #%d", r->cfg.puzzle);   /* a custom target: the campaign name says it all */
+    snprintf(ln, sizeof ln, "pzsolve %s | campaign %s%s | %s | seed %.8s | %s", PZ_VERSION, r->cfg.name, pz,
              mode_name(r->cfg.mode), idb, ui_state_name(r, final));
     len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
 
@@ -256,7 +265,8 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
 
 void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, int cols, char *buf, size_t n)
 {
-    char rate[32], bb[24], pc[32], t1[48], t2[48], t3[48], pr[32];
+    char rate[32], bb[24], pc[32], t1[48], t2[48], t3[48], pr[32], tag[96];
+    ui_target_tag(r, tag, sizeof tag);
     pz_fmt_si(pi->rate, rate, sizeof rate);
     bar(bb, 20, pi->fraction);
     percent(pi->fraction, pc, sizeof pc);
@@ -269,19 +279,19 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
     if (pi->eta.model == ETA_NONE) {
         char tt[48] = "";
         if (pi->rate > 0 && pi->total > pi->done) ui_fmt_eta((double)((pi->total - pi->done) / pi->rate), tt, sizeof tt);
-        snprintf(buf, n, "#%d [%s] %s %s %s/s | table phase%s%s", r->cfg.puzzle, bb, pc, rate, pi->unit, tt[0] ? ", done in " : "", tt);
-        if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "#%d %s %s %s/s", r->cfg.puzzle, pc, rate, pi->unit);
+        snprintf(buf, n, "%s [%s] %s %s %s/s | table phase%s%s", tag, bb, pc, rate, pi->unit, tt[0] ? ", done in " : "", tt);
+        if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "%s %s %s %s/s", tag, pc, rate, pi->unit);
     } else if (pi->beyond) {
-        snprintf(buf, n, "#%d [%s] %s %s %s/s | time left unknown (beyond the model)", r->cfg.puzzle, bb, pc, rate, pi->unit);
-        if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "#%d %s %s %s/s | time left unknown", r->cfg.puzzle, pc, rate, pi->unit);
+        snprintf(buf, n, "%s [%s] %s %s %s/s | time left unknown (beyond the model)", tag, bb, pc, rate, pi->unit);
+        if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "%s %s %s %s/s | time left unknown", tag, pc, rate, pi->unit);
     } else if (pi->rate > 0 && pi->est_state != RATE_MEASURING) {
         /* richest layout that fits, then drop fields from the least important: bar, P(24h), the last quantile */
         for (int v = 0; v < 5; v++) {
-            if (v == 0) snprintf(buf, n, "#%d [%s] %s %s %s/s | 50%%:%s 90%%:%s %s:%s | P(24h)=%s", r->cfg.puzzle, bb, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
-            else if (v == 1) snprintf(buf, n, "#%d %s %s %s/s | 50%%:%s 90%%:%s %s:%s | P(24h)=%s", r->cfg.puzzle, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
-            else if (v == 2) snprintf(buf, n, "#%d %s %s %s/s | 50%%:%s 90%%:%s %s:%s", r->cfg.puzzle, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3);
-            else if (v == 3) snprintf(buf, n, "#%d %s %s %s/s | 50%%:%s 90%%:%s", r->cfg.puzzle, pc, rate, pi->unit, t1, t2);
-            else snprintf(buf, n, "#%d %s %s/s | 50%%:%s", r->cfg.puzzle, pc, rate, t1);
+            if (v == 0) snprintf(buf, n, "%s [%s] %s %s %s/s | 50%%:%s 90%%:%s %s:%s | P(24h)=%s", tag, bb, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
+            else if (v == 1) snprintf(buf, n, "%s %s %s %s/s | 50%%:%s 90%%:%s %s:%s | P(24h)=%s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
+            else if (v == 2) snprintf(buf, n, "%s %s %s %s/s | 50%%:%s 90%%:%s %s:%s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3);
+            else if (v == 3) snprintf(buf, n, "%s %s %s %s/s | 50%%:%s 90%%:%s", tag, pc, rate, pi->unit, t1, t2);
+            else snprintf(buf, n, "%s %s %s/s | 50%%:%s", tag, pc, rate, t1);
             if (!limit || (int)strlen(buf) <= limit) break;
         }
         if (pi->est_state == RATE_PROVISIONAL) {                       /* the estimate is still settling: say so if it fits */
@@ -289,6 +299,6 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
             if (l + 11 < n && (!limit || (int)l + 11 <= limit)) memcpy(buf + l, " (prelim.)", 11);
         }
     } else
-        snprintf(buf, n, "#%d [%s] %s | measuring speed...", r->cfg.puzzle, bb, pc);
+        snprintf(buf, n, "%s [%s] %s | measuring speed...", tag, bb, pc);
     if (limit && (int)strlen(buf) > limit) buf[limit] = 0;
 }

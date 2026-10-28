@@ -219,7 +219,11 @@ int campaigns_list(const char *base)
     for (int i = 0; i < nc; i++) {
         const row_t *w = &rows[i];
         if (w->bad) printf("%-*s  (unreadable configuration: %s)\n", wn, w->name, w->err);
-        else printf("%-*s %6d  %-9s %-*s %*s %*s %*s  %s\n", wn, w->name, w->puzzle, w->mode, ws, w->state, wf, w->frac, wr, w->rate, we, w->eta, w->upd);
+        else {
+            char pz[16] = "-";                                         /* a custom target has no puzzle */
+            if (w->puzzle) snprintf(pz, sizeof pz, "%d", w->puzzle);
+            printf("%-*s %6s  %-9s %-*s %*s %*s %*s  %s\n", wn, w->name, pz, w->mode, ws, w->state, wf, w->frac, wr, w->rate, we, w->eta, w->upd);
+        }
         free(w->name);
     }
     free(rows);
