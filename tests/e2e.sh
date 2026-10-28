@@ -173,10 +173,10 @@ seedid() { python3 -c "import hashlib,sys; print(hashlib.sha256(b'PZID'+bytes.fr
 for attempt in 1 2; do
   rm -rf "$DIR/race"; pids=""
   for i in 1 2 3 4 5 6 7 8; do
-    $BIN hunt -p 66 -m linear -c rc -d "$DIR/race" --ui log --no-gpu -t 1 >"$DIR/race$i.out" 2>&1 &
+    timeout -s INT 3 $BIN hunt -p 66 -m linear -c rc -d "$DIR/race" --ui log --no-gpu -t 1 >"$DIR/race$i.out" 2>&1 &
     pids="$pids $!"
   done
-  sleep 2; kill -INT $pids 2>/dev/null; wait $pids 2>/dev/null
+  wait $pids 2>/dev/null
   CONFSEED=$(awk -F= '$1=="seed"{print $2}' "$DIR/race/rc/campaign.conf")
   REPSEED=$(grep -o 'seed id [0-9a-f]*' "$DIR/race/rc/report.txt" | awk '{print $3}')
   NLOSE=$(grep -l "already running" "$DIR"/race[1-8].out | wc -l)
