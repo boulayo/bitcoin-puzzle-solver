@@ -483,6 +483,7 @@ void run_reporter_loop(run_ctx *r)
     r->est_state = use_est ? RATE_MEASURING : RATE_STEADY;
     r->all_started = !use_est;
     double t_any = -1, next_remember = t_last + 300;   /* first moment a worker produced; next time the steady rate is remembered */
+    double t_peak = r->t_start;                         /* the peak counts from 5 s after this */
     while (!atomic_load(&r->stop)) {
         pz_sleep(0.1);
         double now = pz_mono();
@@ -505,6 +506,14 @@ void run_reporter_loop(run_ctx *r)
                 pz_log(PZ_LOG_WARN, "system suspension detected (about %s without computing): not counted in times and speeds; saving the state", pz_fmt_duration(gap, gb, sizeof gb));
                 next_ckpt = now;                       /* save at once: a hibernation may end in a power cut */
             }
+        }
+        if (atomic_exchange(&r->rate_restart, 0)) {        /* the unit changed (BSGS: the search begins after the table) */
+            for (int i = 0; i < r->nws; i++) { r->ws[i].last_units = atomic_load(&r->ws[i].units); r->ws[i].rate = 0; }
+            r->rate_eta = 0;
+            r->peak_rate = 0;
+            r->t_base = run_session_elapsed(r);
+            t_last = now;
+            t_peak = now;
         }
         if (now - t_last >= 1.0) {
             double dt = now - t_last;
@@ -539,7 +548,7 @@ void run_reporter_loop(run_ctx *r)
             } else {
                 r->rate_eta = r->rate_eta == 0 ? tot : alpha_eta * tot + (1 - alpha_eta) * r->rate_eta;
             }
-            if (now - r->t_start > 5.0 && tot > r->peak_rate) r->peak_rate = tot;
+            if (now - t_peak > 5.0 && tot > r->peak_rate) r->peak_rate = tot;
             t_last = now;
         }
         bool need_pi = now >= next_term || now >= next_files || now >= next_ckpt || now >= next_csv;

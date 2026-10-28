@@ -44,12 +44,12 @@ static void bs_progress(run_ctx *r, progress_info *pi)
         pi->done = done;
         pi->total = total;
         pi->fraction = (double)(done / total);
-        pi->unit = "giants";
+        pi->unit = "giant steps";
         pi->eta = (eta_in){ETA_UNIFORM, done, total - done, 0, false, 0};
         pz_fmt_bytes((double)b->table_bytes, a, sizeof a);
         snprintf(det, sizeof det, "table: %llu baby steps (%s, %s%s) | table false positives: %llu", (unsigned long long)b->P.T, a,
                  b->tab.thp ? "huge pages" : "normal pages", b->table_from_file ? ", from file" : "", (unsigned long long)atomic_load(&b->falsepos));
-        snprintf(pi->detail, sizeof pi->detail, "%s\nrandom order: blocks of 2^%u giants, %zu open intervals", det, r->sched->cbits, sched_open_intervals(r->sched));
+        snprintf(pi->detail, sizeof pi->detail, "%s\nrandom order: blocks of 2^%u giant steps, %zu open intervals", det, r->sched->cbits, sched_open_intervals(r->sched));
         return;
     }
     /* table phase: progress is the number of baby steps inserted so far */
@@ -74,7 +74,10 @@ static int bs_checkpoint(run_ctx *r)
     if (r->sched && atomic_load(&b->phase) >= PH_SEARCH) rc = sched_save(r->sched, r->path_state);
     u64 session = 0;
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
-    run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + session);
+    /* the units of a campaign are its giant steps: the baby steps of the table (built again by every session) are not counted */
+    const u64 base = atomic_load(&r->units_base);
+    const u64 giants = atomic_load(&b->phase) >= PH_SEARCH && session > base ? session - base : 0;
+    run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + giants);
     return rc;
 }
 
@@ -154,6 +157,11 @@ static void *driver_main(void *p)
     pz_log(PZ_LOG_INFO, "BSGS: table ready in %s, starting the giant-step search", pz_fmt_duration(b->table_seconds, tb, sizeof tb));
 
     bsgs_job_init(&b->job, &b->tab, &b->P);
+    /* the same counters count the giant steps from now on: the speeds, the peak and the session average start over */
+    u64 built = 0;
+    for (int i = 0; i < r->nws; i++) built += atomic_load(&r->ws[i].units);
+    atomic_store(&r->units_base, built);
+    atomic_store(&r->rate_restart, 1);
     atomic_store(&b->phase, PH_SEARCH);
     pthread_t th[MAX_WORKERS];
     bs_warg args[MAX_WORKERS];

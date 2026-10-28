@@ -69,8 +69,8 @@ typedef struct run_ctx {
     bool all_started;                /* every worker has produced something (a GPU is counted only when its first launch ends) */
     _Atomic int rate_restart;        /* set by a mode whose unit changes (BSGS: from baby steps to giant steps): the reporter starts its
                                       * speeds, the peak and the session average over */
-    u64 units_base;                  /* units of this session before that change (written before rate_restart is set) */
-    double t_base;                   /* seconds of the session at that change */
+    _Atomic u64 units_base;          /* units of this session before that change (stored before rate_restart is set) */
+    double t_base;                   /* seconds of the session at that change (the reporter's) */
     _Atomic int effort_warned;       /* kangaroo: the warning about 5x the expected effort has been logged */
     double rate_prior;               /* remembered rate for the completion times at the start (0 = none) */
     int rate_prior_kind;             /* 0 none, 1 the calibration's (measured cold), 2 the steady rate of an earlier run */

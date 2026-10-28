@@ -146,7 +146,10 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     double el_session = run_session_elapsed(r);
     u64 session_units = 0;
     for (int i = 0; i < r->nws; i++) session_units += atomic_load(&r->ws[i].units);
-    double avg = el_session > 1 ? (double)session_units / el_session : 0;
+    /* the session average of the current unit: BSGS counts its giant steps from the end of the table phase */
+    const double el_unit = el_session - r->t_base;
+    const u64 base = r->t_base > 0 ? atomic_load(&r->units_base) : 0;
+    double avg = el_unit > 1 && session_units > base ? (double)(session_units - base) / el_unit : 0;
     pz_fmt_si(pi->rate, a, sizeof a);
     pz_fmt_si(r->peak_rate, b, sizeof b);
     pz_fmt_si(avg, c, sizeof c);
