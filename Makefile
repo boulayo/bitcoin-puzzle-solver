@@ -18,6 +18,11 @@
 # the first rule of the file would be the default goal: say which one it is (lib/pzcore adds rules above `all`)
 .DEFAULT_GOAL := all
 
+# a rule whose recipe fails does not leave its target behind: a generated file that embed (or the compiler) wrote only in part would be
+# newer than its inputs, and the next make would take it as up to date and fail on it until `make clean`. Only the targets of the rules
+# are affected (the objects, the archive, the generated sources, the test programs, the mock driver); the phony ones such as `test` stay.
+.DELETE_ON_ERROR:
+
 VERSION  := $(shell cat VERSION)
 GITREV   := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
 BUILDINFO := git-$(GITREV)/$(shell $(CC) -dumpmachine)
