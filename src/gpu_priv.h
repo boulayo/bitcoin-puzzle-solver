@@ -37,6 +37,7 @@ struct gpu_session {
     run_ctx *r;
     rt_dev info;
     /* owned by the launcher and the thread, before `c`: gpu_session_release() clears everything after it and a recovery keeps these */
+    bool mismatch;               /* a self-test found a result that differs from the CPU (as opposed to an error of the API): the device is not retried */
     u64 rs;                      /* state of the generator of the self-tests (gpu_test_rand): one per session, the GPUs recover together after a sleep */
     int widx;
     pthread_t th;

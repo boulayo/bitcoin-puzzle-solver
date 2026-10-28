@@ -145,6 +145,14 @@ gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while t
 }
 gpu_fault_test linear 40 && echo "  OK GPU error mid-campaign: reopened (linear)" || { echo "  FAIL GPU recovery (linear)"; fail=$((fail+1)); }
 gpu_fault_test kangaroo 135 && echo "  OK GPU error mid-campaign: reopened (kangaroo)" || { echo "  FAIL GPU recovery (kangaroo)"; fail=$((fail+1)); }
+# a transient error of the driver while the start-up tests run (the simulated driver fails the first launch when the file exists at start): the tests
+# are repeated and the GPU is used (before, it was left out of the whole campaign); a wrong result still excludes it at once
+rm -rf "$T/st1"; touch "$T/st1.fault"
+outhas "attempt 1 of 3" $MOCK PZ_MOCK_FAIL_FILE="$T/st1.fault" PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/st1" --no-cpu --ui log \
+  && check_found "$T/st1/c" "$K" && echo "  OK GPU error during the start-up tests: repeated, the GPU is used (linear)" || { echo "  FAIL start-up retry (linear)"; fail=$((fail+1)); }
+rm -rf "$T/st2"; touch "$T/st2.fault"
+outhas "attempt 1 of 3" $MOCK PZ_MOCK_FAIL_FILE="$T/st2.fault" build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/st2" --no-cpu --ui log \
+  && check_found "$T/st2/c" "$KK" && echo "  OK GPU error during the start-up tests: repeated, the GPU is used (kangaroo)" || { echo "  FAIL start-up retry (kangaroo)"; fail=$((fail+1)); }
 rm -rf "$T/sus"; ( build/pzsolve hunt -p 45 -m linear -c s -d "$T/sus" --no-gpu --ui log -t 2 > "$T/sus.log" 2>&1 & p=$!; sleep 6; kill -STOP $p; sleep 18; kill -CONT $p; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
 grep -q "system suspension detected" "$T/sus.log" && echo "  OK frozen process (like a suspension): detected" || { echo "  FAIL suspension detection"; fail=$((fail+1)); }
 

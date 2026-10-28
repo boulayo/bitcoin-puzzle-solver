@@ -253,6 +253,8 @@ bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
 
 /* ---------------- sessions ---------------- */
 
+#define GPU_STARTUP_TRIES 3         /* attempts at the start-up tests of a device that stops on an error of the API */
+
 /* Opens and self-tests one device; false (logged, session released) when it cannot be used. */
 static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kangaroo)
 {
@@ -261,10 +263,21 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
     char mem[160];
     pz_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
            d->api == RT_CUDA ? "SM" : "CU", fmt_devmem(d, mem, sizeof mem));
-    bool ok = gpu_session_open(s, d) && gpu_test_fe(s);
-    if (ok && !for_kangaroo) gpu_linear_autotune(s, d->index);
-    if (ok && for_kangaroo) gpu_kang_autotune(s, d->index);
-    ok = ok && (for_kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
+    bool ok = false;
+    for (int attempt = 1; !ok; attempt++) {
+        s->mismatch = false;
+        ok = gpu_session_open(s, d) && gpu_test_fe(s);
+        if (ok && !for_kangaroo) gpu_linear_autotune(s, d->index);
+        if (ok && for_kangaroo) gpu_kang_autotune(s, d->index);
+        ok = ok && (for_kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
+        if (ok || s->mismatch || attempt >= GPU_STARTUP_TRIES) break;
+        /* an error of the API (a driver that is still busy, a display reset at that moment) is not a wrong result: the same error in the middle
+         * of a campaign is retried nine times, and a wrong result is what excludes a device at once */
+        pz_log(PZ_LOG_WARN, "GPU[%d]: the start-up check stopped on an error of the %s API (attempt %d of %d): trying again", d->index, rt_api_name(d->api),
+               attempt, GPU_STARTUP_TRIES);
+        gpu_session_release(s);
+        pz_sleep(0.5 * attempt);
+    }
     if (!ok) {
         pz_log(PZ_LOG_ERR, "GPU[%d] %s (%s): self-test failed, device excluded", d->index, d->name, rt_api_name(d->api));
         gpu_session_release(s);
