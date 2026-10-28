@@ -14,6 +14,8 @@ bool campaign_is_running(const char *dir);
  * exists and whether some process holds the lock. The files say RUNNING until the next write, so a process that was killed leaves
  * it behind: without the lock the state is STOPPED. 'list' and 'info' both use it. Returns `written` itself or a constant. */
 const char *campaign_shown_state(const char *written, bool found, bool running);
+/* The state of the campaign in `dir` as 'list' shows it (NEW when it has never written its status), in out. */
+char *campaign_state(const char *dir, char *out, size_t n);
 /* The text of report.txt of the campaign in `dir`, with its "State:" line corrected by campaign_shown_state; NULL when there is no
  * report. Free with free(). */
 char *campaign_report(const char *dir);

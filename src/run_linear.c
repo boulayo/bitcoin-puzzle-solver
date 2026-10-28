@@ -85,7 +85,9 @@ static void linear_progress(run_ctx *r, progress_info *pi)
     } else {
         pi->eta = (eta_in){ETA_UNIFORM, done, left, 0, false, 0};
     }
-    int n = snprintf(pi->detail, sizeof pi->detail, "random order: blocks of 2^%u keys, open intervals: %zu", sc->cbits, sched_open_intervals(r->sched));
+    int n = snprintf(pi->detail, sizeof pi->detail, "random order: blocks of 2^%u keys", sc->cbits);
+    if (pz_log_verbose() && n > 0 && (size_t)n < sizeof pi->detail)
+        n += snprintf(pi->detail + n, sizeof pi->detail - (size_t)n, ", open intervals: %zu", sched_open_intervals(r->sched));
     if (parted && n > 0 && (size_t)n < sizeof pi->detail)
         snprintf(pi->detail + n, sizeof pi->detail - (size_t)n, "\npart %.120s, %.3Lg%% of the range: probabilities refer to the whole range; n/a = beyond this computer's part",
                  sc->part_text, total * 100.0L / pz_u256_to_ld(&sc->range_size));

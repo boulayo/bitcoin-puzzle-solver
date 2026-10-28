@@ -144,10 +144,10 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
 
     char pz[32] = "";
     if (r->cfg.puzzle) snprintf(pz, sizeof pz, " | puzzle #%d", r->cfg.puzzle);   /* a custom target: the campaign name says it all */
-    snprintf(ln, sizeof ln, "pzsolve %s | campaign %s%s | %s | seed %.8s | %s", PZ_VERSION, r->cfg.name, pz,
+    snprintf(ln, sizeof ln, "pzsolve %s | campaign %s%s | %s | seed id %s | %s", PZ_VERSION, r->cfg.name, pz,
              mode_name(r->cfg.mode), idb, ui_state_name(r, final));
     if ((int)strlen(ln) > cols - 1)                    /* a narrow terminal: the state matters more than the version */
-        snprintf(ln, sizeof ln, "campaign %s%s | %s | seed %.8s | %s", r->cfg.name, pz, mode_name(r->cfg.mode), idb, ui_state_name(r, final));
+        snprintf(ln, sizeof ln, "campaign %s%s | %s | seed id %s | %s", r->cfg.name, pz, mode_name(r->cfg.mode), idb, ui_state_name(r, final));
     len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
 
     pz_u256 rsz = cfg_range_size(&r->cfg);
@@ -242,11 +242,11 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
         }
         len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
         ln[0] = 0;
-        size_t o = (size_t)snprintf(ln, sizeof ln, "Chance to find it from now:");
+        size_t o = (size_t)snprintf(ln, sizeof ln, "Chance        ");     /* to find the key within each window from now */
         for (int i = 0; i < ETA_NWIN; i++) {
             char one[48];
             ui_fmt_prob(es->p_win[i], a, sizeof a);
-            int w = snprintf(one, sizeof one, "%s %s %s", i ? " |" : "", ETA_WINDOW_NAMES[i], a);
+            int w = snprintf(one, sizeof one, "%s%s: %s", i ? " | " : "", ETA_WINDOW_NAMES[i], a);
             if (i > 0 && (int)(o + (size_t)w) >= cols - 1) break;   /* drop whole windows rather than cutting one in half */
             if (o + (size_t)w >= sizeof ln) break;
             memcpy(ln + o, one, (size_t)w + 1);

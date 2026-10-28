@@ -61,6 +61,7 @@ void pz_log(pz_loglevel lvl, const char *fmt, ...) __attribute__((format(PZ_PRIN
 void pz_log_file(pz_loglevel lvl, const char *fmt, ...) __attribute__((format(PZ_PRINTF, 2, 3)));
 void pz_log_set_file(const char *path);
 void pz_log_set_verbose(int v);
+int pz_log_verbose(void);       /* -v: also the debug lines and the internal counters of the panel */
 void pz_log_set_quiet(int q);   /* 0: everything is printed, 1: warnings and errors only, 2: nothing (the self-tests that provoke errors on purpose) */
 int pz_log_quiet(void);
 /* In-place dashboard: `text` is nlines lines joined by '\n' (no trailing newline). It replaces the previous block;

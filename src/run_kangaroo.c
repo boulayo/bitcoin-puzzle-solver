@@ -45,11 +45,11 @@ static void kang_progress(run_ctx *r, progress_info *pi)
     const u64 cnt = atomic_load_explicit(&ks->count_mirror, memory_order_relaxed), cap = atomic_load_explicit(&ks->cap_mirror, memory_order_relaxed);
     const unsigned thin = atomic_load_explicit(&ks->thin_mirror, memory_order_relaxed);
     char nd[32], nk[32], nr[32], nx[32];
-    snprintf(pi->detail, sizeof pi->detail,
-             "P(found) ~ %.1f%% | distinguished points %s (table %.1f%%%s) | kangaroos %s | dp-bits %u | restarts %s | discarded %s",
-             pi->fraction * 100.0, pz_fmt_u64(cnt, nd, sizeof nd), 100.0 * (double)cnt / (double)cap, thin ? ", RAM exhausted: density reduced" : "",
-             pz_fmt_u64((u64)ks->K_total, nk, sizeof nk), ks->P.dp_bits, pz_fmt_u64(atomic_load(&ks->restarts) + atomic_load(&ks->dups), nr, sizeof nr),
-             pz_fmt_u64(atomic_load(&ks->dropped), nx, sizeof nx));
+    int n = snprintf(pi->detail, sizeof pi->detail, "distinguished points %s (table %.1f%%%s) | kangaroos %s | dp-bits %u", pz_fmt_u64(cnt, nd, sizeof nd),
+                     100.0 * (double)cnt / (double)cap, thin ? ", RAM exhausted: density reduced" : "", pz_fmt_u64((u64)ks->K_total, nk, sizeof nk), ks->P.dp_bits);
+    if (pz_log_verbose() && n > 0 && (size_t)n < sizeof pi->detail)          /* internal counters: for -v */
+        snprintf(pi->detail + n, sizeof pi->detail - (size_t)n, " | restarts %s | discarded %s",
+                 pz_fmt_u64(atomic_load(&ks->restarts) + atomic_load(&ks->dups), nr, sizeof nr), pz_fmt_u64(atomic_load(&ks->dropped), nx, sizeof nx));
 }
 
 static int kang_checkpoint(run_ctx *r)
@@ -309,7 +309,10 @@ static int progress_selftest(void)
     progress_call c;
     memset(&c, 0, sizeof c);
     c.r = ks->r;
+    const int was_verbose = pz_log_verbose();
+    pz_log_set_verbose(1);                                /* the counters are in the line with -v */
     kang_progress(ks->r, &c.pi);
+    pz_log_set_verbose(was_verbose);
     ok = ok && strstr(c.pi.detail, "| discarded 7") != NULL && strstr(c.pi.detail, "distinguished points 100 (table ") != NULL;
     pthread_mutex_lock(&ks->mu);                          /* as in the middle of table_grow or table_thin */
     pthread_t th;
@@ -420,9 +423,9 @@ static int cmp_double(const void *a, const void *b)
 
 int kangaroo_stats(int argc, char **argv)
 {
-    if (argc < 4) pz_die("usage: pzsolve kstat BITS RUNS [THREADS [R [DP]]]  (with R or DP the kangaroos without distinguished points are not restarted)");
+    if (argc < 4) pz_die("usage: pzsolve kstat BITS TRIALS [THREADS [R [DP]]]  (see 'pzsolve help kstat')");
     const unsigned bits = (unsigned)pz_arg_int("kstat BITS", argv[2], 4, 64);
-    const int runs = (int)pz_arg_int("kstat RUNS", argv[3], 1, 1000000);
+    const int runs = (int)pz_arg_int("kstat TRIALS", argv[3], 1, 1000000);
     const int thr = argc > 4 ? (int)pz_arg_int("kstat THREADS", argv[4], 1, MAX_WORKERS - 16) : 1;
     kang_try_opts o = {argc > 5 ? (unsigned)pz_arg_int("kstat R", argv[5], 0, KANG_R) : 0, argc > 6 ? (unsigned)pz_arg_int("kstat DP", argv[6], 0, 40) : 0, argc > 5};
     if (o.R && (o.R < 2 || (o.R & (o.R - 1)))) pz_die("kstat R: invalid value '%s' (expected a power of 2 between 2 and %d)", argv[5], KANG_R);
@@ -444,13 +447,13 @@ int kangaroo_stats(int argc, char **argv)
         v[n++] = steps / sqrt(ldexp(1.0, (int)bits));
         sum += v[n - 1];
     }
-    if (n == 0) { free(v); printf("W = 2^%u: none of the %d runs succeeded\n", bits, runs); return 1; }
+    if (n == 0) { free(v); printf("W = 2^%u: none of the %d trials succeeded\n", bits, runs); return 1; }
     qsort(v, (size_t)n, sizeof(double), cmp_double);
-    printf("kangaroo cost over %d run%s on W = 2^%u (%d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits, thr, thr == 1 ? "" : "s");
+    printf("kangaroo cost over %d trial%s on W = 2^%u (%d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits, thr, thr == 1 ? "" : "s");
     pz_prop_line("mean", "%.3f", sum / n);
     pz_prop_line("median", "%.3f", v[n / 2]);
     pz_prop_line("90th percentile", "%.3f", v[n * 9 / 10]);
-    if (fails) pz_prop_line("failed runs", "%d", fails);
+    if (fails) pz_prop_line("failed trials", "%d", fails);
     free(v);
     return 0;
 }

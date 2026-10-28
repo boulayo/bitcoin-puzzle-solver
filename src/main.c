@@ -364,7 +364,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             if (!strcmp(optarg, "auto")) o->prio_gpu = PRIO_AUTO;
             else if (!strcmp(optarg, "yes")) o->prio_gpu = PRIO_YES;
             else if (!strcmp(optarg, "no")) o->prio_gpu = PRIO_NO;
-            else pz_die("--prio-gpu must be auto, yes or no");
+            else pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", optarg);
             break;
         case O_PART: {
             part_spec ps;
@@ -389,7 +389,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             if (!strcmp(optarg, "auto")) gpu_set_api_pref(GPU_API_AUTO);
             else if (!strcmp(optarg, "cuda")) gpu_set_api_pref(GPU_API_CUDA);
             else if (!strcmp(optarg, "opencl")) gpu_set_api_pref(GPU_API_OPENCL);
-            else pz_die("--gpu-api must be auto, cuda or opencl");
+            else pz_die("--gpu-api: invalid value '%s' (expected auto, cuda or opencl)", optarg);
             break;
         case O_ISA: opt_copy("--isa", o->isa, sizeof o->isa, optarg); break;
         case O_CHUNK: o->chunk_bits = (int)pz_arg_int("--chunk-bits", optarg, 20, 40); break;   /* smaller blocks starve the GPUs and slow the CPU */
@@ -409,7 +409,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else if (!strcmp(optarg, "full")) o->ui = UI_FULL;
             else if (!strcmp(optarg, "line")) o->ui = UI_LINE;
             else if (!strcmp(optarg, "log")) o->ui = UI_LOG;
-            else pz_die("--ui must be auto, full, line or log");
+            else pz_die("--ui: invalid value '%s' (expected auto, full, line or log)", optarg);
             break;
         case 'h':
             if (!pz_help(g_cmd, stdout)) usage_main(stdout);
@@ -435,7 +435,7 @@ static void check_isa_option(const char *isa)
 {
     if (!strcmp(isa, "auto")) return;
     const cpu_engine *e = cpu_engine_by_name(isa);
-    if (!e) pz_die("unknown --isa: %s (valid: %s)", isa, PZ_ISA_LIST);
+    if (!e) pz_die("--isa: invalid value '%s' (expected %s)", isa, PZ_ISA_LIST);
     if (!e->supported()) pz_die("the CPU does not support the instruction set '%s' (see 'pzsolve devices')", isa);
 }
 
@@ -666,7 +666,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
                 c->bsgs_t = T;
             } else c->mode = MODE_KANGAROO;
         }
-    } else pz_die("--mode must be auto, linear, kangaroo or bsgs");
+    } else pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", o->mode);
     if (c->mode == MODE_KANGAROO) {                  /* before anything is created on disk */
         const char *why = kang_range_error(&rsz);
         if (why) pz_die("%s", why);
@@ -729,7 +729,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         pz_die("--chunk-bits cannot be changed on an existing campaign (it is %u)", c->chunk_bits);
     if (strcmp(o->mode, "auto") != 0) {
         const char *want = !strcmp(o->mode, "linear") ? "linear" : !strcmp(o->mode, "kangaroo") ? "kangaroo" : !strcmp(o->mode, "bsgs") ? "bsgs" : NULL;
-        if (!want) pz_die("--mode must be auto, linear, kangaroo or bsgs");
+        if (!want) pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", o->mode);
         if (strcmp(want, mode_name(c->mode)) != 0)
             pz_die("the existing campaign uses mode %s, not %s (the mode cannot be changed: use another name with -c)", mode_name(c->mode), want);
     }
@@ -772,7 +772,7 @@ static void print_found_banner(const run_ctx *r, const char *addr, const char *h
 {
     printf("\a\n======================= KEY FOUND =======================\n");
     if (r->cfg.puzzle) printf("  puzzle:         #%d\n", r->cfg.puzzle);
-    printf("  address:        %s\n  key (hex):      %s\n  WIF compressed: %s\n", addr, hx, wif);
+    printf("  address:        %s\n  key (hex):      0x%s\n  WIF compressed: %s\n", addr, hx, wif);
     printf("  saved in:       %s\n=========================================================\n", r->path_found);
 }
 
@@ -1215,7 +1215,7 @@ static int cmd_puzzle(int argc, char **argv)
             if (i + 1 >= argc) pz_die("--rate requires a value (keys per second, for example --rate 800M or --rate 1.5G)");
             rate_lin = rate_kang = opt_rate("--rate", argv[++i]);
         }
-        else pz_die("unknown option: %s", argv[i]);
+        else pz_die("unrecognized option '%s' (see 'pzsolve help puzzle')", argv[i]);
     pz_u256 a, b;
     if (!puzzle_range(n, &a, &b)) pz_die("puzzle out of range (1..256)");
     char ha[80], hb[80], ds[100];
@@ -1238,7 +1238,7 @@ static int cmd_puzzle(int argc, char **argv)
         pz_prop_line("status", "emptied: the creator withdrew the funds in 2017 (block 475240), together with all puzzles 161..256");
     }
     char dsg[96];
-    pz_prop_line("range", "0x%s to 0x%s", ha, hb);
+    pz_prop_line("range", "0x%s - 0x%s", ha, hb);
     pz_prop_line("keys", "%s (2^%d)", pz_group_digits(ds, dsg, sizeof dsg), n - 1);
     if (p) {
         const bool solved = p->privkey[0] != 0;
@@ -1272,7 +1272,7 @@ static int cmd_puzzles(int argc, char **argv)
         if (!strcmp(argv[i], "--open")) only_open = true;
         else if (!strcmp(argv[i], "--solved")) only_solved = true;
         else if (!strcmp(argv[i], "--pubkey")) only_pub = true;
-        else pz_die("unknown option: %s (valid: --open, --solved, --pubkey)", argv[i]);
+        else pz_die("unrecognized option '%s' (see 'pzsolve help puzzles')", argv[i]);
     }
     if (only_open && only_solved) pz_die("--open and --solved are mutually exclusive");
     printf("%4s  %-9s %-6s %-36s %s\n", "N", "status", "pubkey", "address", "mean effort (method)");

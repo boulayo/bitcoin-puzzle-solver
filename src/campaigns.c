@@ -133,6 +133,18 @@ static void fill_row(row_t *w, const char *base, time_t now)
     if (found || !strcmp(w->state, "COMPLETED")) pz_strlcpy(w->eta, "-", sizeof w->eta);
 }
 
+char *campaign_state(const char *dir, char *out, size_t n)
+{
+    char p[4200], v[64] = "NEW";
+    snprintf(p, sizeof p, "%s/status.json", dir);
+    char *js = pz_read_file(p, NULL);
+    if (js && json_get(js, "state", v, sizeof v)) pz_strlcpy(v, state_name(v), sizeof v);
+    free(js);
+    snprintf(p, sizeof p, "%s/FOUND.txt", dir);
+    pz_strlcpy(out, campaign_shown_state(v, access(p, F_OK) == 0, campaign_is_running(dir)), n);
+    return out;
+}
+
 char *campaign_report(const char *dir)
 {
     char p[4200];

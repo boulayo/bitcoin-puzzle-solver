@@ -84,7 +84,7 @@ static void tg_header(const tg_scan_cfg *c)
     if (c->ngpu <= TG_MAXCOLS) {
         for (int j = 0; j < c->ngpu; j++) {
             char h[16];
-            snprintf(h, sizeof h, "GPU%d", c->gidx[j]);
+            snprintf(h, sizeof h, "GPU[%d]", c->gidx[j]);
             n += (size_t)snprintf(line + n, sizeof line - n, "%12s", h);
         }
     } else n += (size_t)snprintf(line + n, sizeof line - n, "%12s", "GPUs");

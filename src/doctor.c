@@ -46,12 +46,13 @@ static void check_program(void)
 static void check_system(const sysinfo_t *s)
 {
     section("System");
-    char os[200], host[128], m1[32], m2[32];
+    char os[200], host[128], m1[32], m2[32], c2[32], c3[32];
     pz_os_description(os, sizeof os);
     pz_hostname(host, sizeof host);
     doctor_line('i', "%s, computer \"%s\"", os, host);
     doctor_line('i', "CPU: %s", s->model);
-    doctor_line('i', "%d usable logical threads, %d physical cores, L2 cache %d KiB, L3 cache %d KiB", s->ncpu, s->ncore, s->l2_kib, s->l3_kib);
+    doctor_line('i', "%d usable logical threads, %d physical cores, L2 cache %s, L3 cache %s", s->ncpu, s->ncore,
+                pz_fmt_bytes((double)s->l2_kib * 1024, c2, sizeof c2), pz_fmt_bytes((double)s->l3_kib * 1024, c3, sizeof c3));
     if (s->ncpu > s->ncore && s->ncore > 0)
         doctor_line('i', "hyper-threading/SMT is on: kangaroo runs faster with all threads; for the linear search see 'bench' (one thread per core is sometimes better)");
     pz_fmt_bytes((double)s->mem_total, m1, sizeof m1);
@@ -157,14 +158,14 @@ static void check_campaigns(const char *base)
             if (t > mt) mt = t;
         }
         if (mt) pz_fmt_age((double)(time(NULL) - mt), age, sizeof age);
-        const bool running = campaign_is_running(dir);
-        snprintf(file, sizeof file, "%s/FOUND.txt", dir);
-        const bool found = mtime_of(file) != 0;
+        char state[32], pz[32] = "custom target";
+        campaign_state(dir, state, sizeof state);
+        const bool found = !strcmp(state, "FOUND");
+        if (c.puzzle) snprintf(pz, sizeof pz, "puzzle %d", c.puzzle);
         /* suspensions the campaign has gone through (logged by the reporter) */
         snprintf(file, sizeof file, "%s/log.txt", dir);
         const long long sleeps = pz_file_count(file, "system suspension detected");   /* streamed: after months the log is tens of MB */
-        doctor_line(found ? 'o' : 'i', "%-10s %-9s puzzle %d: %s%s, last save %s", e->d_name, mode_name(c.mode), c.puzzle,
-                    running ? "RUNNING" : "stopped", found ? ", KEY FOUND" : "", age);
+        doctor_line(found ? 'o' : 'i', "%-10s %-9s %s: %s, last save %s", e->d_name, mode_name(c.mode), pz, state, age);
         if (sleeps > 0) doctor_line('i', "%-10s system suspensions detected during the campaign: %lld (handled: suspended time is not counted and the state is saved)", e->d_name, sleeps);
     }
     closedir(d);
@@ -237,7 +238,7 @@ int doctor_run(int argc, char **argv)
             if (!base[0]) pz_die("--dir: invalid value '' (expected the name of a folder)");
         }
         else if (!strcmp(argv[i], "--full")) deep = true;
-        else pz_die("unrecognized option '%s' (doctor accepts -d DIR and --full)", argv[i]);
+        else pz_die("unrecognized option '%s' (see 'pzsolve help doctor')", argv[i]);
     }
     sysinfo_t s;
     sysinfo_detect(&s);
@@ -258,8 +259,8 @@ int doctor_run(int argc, char **argv)
         doctor_line(rc ? 'x' : 'o', "full selftest: %s", rc ? "ERRORS" : "passed");
     }
     printf("\n");
-    if (g_err) printf("RESULT: %d errors, %d warnings, see the [XX] and [!!] lines\n", g_err, g_warn);
-    else if (g_warn) printf("RESULT: no errors, %d warnings, see the [!!] lines\n", g_warn);
+    if (g_err) printf("RESULT: %d error%s, %d warning%s, see the [XX] and [!!] lines\n", g_err, g_err == 1 ? "" : "s", g_warn, g_warn == 1 ? "" : "s");
+    else if (g_warn) printf("RESULT: no errors, %d warning%s, see the [!!] lines\n", g_warn, g_warn == 1 ? "" : "s");
     else printf("RESULT: all good\n");
     return g_err ? 1 : 0;
 }

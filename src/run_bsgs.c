@@ -51,7 +51,9 @@ static void bs_progress(run_ctx *r, progress_info *pi)
         char tb[32], fp[32];
         snprintf(det, sizeof det, "table: %s baby steps (%s, %s%s) | table false positives: %s", pz_fmt_u64(b->P.T, tb, sizeof tb), a,
                  b->tab.thp ? "huge pages" : "normal pages", b->table_from_file ? ", from file" : "", pz_fmt_u64(atomic_load(&b->falsepos), fp, sizeof fp));
-        snprintf(pi->detail, sizeof pi->detail, "%s\nrandom order: blocks of 2^%u giant steps, %zu open intervals", det, r->sched->cbits, sched_open_intervals(r->sched));
+        char iv[48] = "";
+        if (pz_log_verbose()) snprintf(iv, sizeof iv, ", open intervals: %zu", sched_open_intervals(r->sched));
+        snprintf(pi->detail, sizeof pi->detail, "%s\nrandom order: blocks of 2^%u giant steps%s", det, r->sched->cbits, iv);
         return;
     }
     /* table phase: progress is the number of baby steps inserted so far */

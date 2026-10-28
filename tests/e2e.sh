@@ -346,7 +346,7 @@ chk "-t: invalid value '12abc'" bench --together -t 12abc
 chk "--threads: invalid value '0'" bench --together --threads 0
 chk "--gpu: invalid list '0x'" bench --together --gpu 0x
 chk "kstat BITS: invalid value '12abc'" kstat 12abc 1 1
-chk "kstat RUNS: invalid value '1x'" kstat 16 1x 1
+chk "kstat TRIALS: invalid value '1x'" kstat 16 1x 1
 chk "kstat THREADS: invalid value '1,5'" kstat 16 1 1,5
 chk "kstat R: invalid value '3'" kstat 16 1 1 3
 chk "kstat R: invalid value '4x'" kstat 16 1 1 4x

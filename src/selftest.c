@@ -630,7 +630,7 @@ int bench_run(int argc, char **argv)
             if (!strcmp(v, "auto")) prio = PRIO_AUTO;
             else if (!strcmp(v, "yes")) prio = PRIO_YES;
             else if (!strcmp(v, "no")) prio = PRIO_NO;
-            else pz_die("--prio-gpu must be auto, yes or no (see 'pzsolve help bench')");
+            else pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", v);
             prio_given = true;
         }
         else pz_die("bench: unrecognized option '%s' (see 'pzsolve help bench')", a);

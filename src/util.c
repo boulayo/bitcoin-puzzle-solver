@@ -72,6 +72,7 @@ void pz_log_set_file(const char *path)
     log_unlock();
 }
 void pz_log_set_verbose(int v) { g_verbose = v; }
+int pz_log_verbose(void) { return g_verbose; }
 void pz_log_set_quiet(int q) { g_quiet = q; }
 int pz_log_quiet(void) { return g_quiet; }
 

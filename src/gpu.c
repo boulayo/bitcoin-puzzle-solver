@@ -83,12 +83,12 @@ int gpu_list_devices(void)
         char mem[160], extra[96] = "";
         if (d->api == RT_CUDA) snprintf(extra, sizeof extra, ", compute %d.%d", d->cc / 10, d->cc % 10);
         const char *use = default_choice(d) ? "used by default"
-                        : d->dup_of >= 0 ? "the same GPU as [%d] via OpenCL: a fallback if CUDA fails, or choose it with --gpu %d"
+                        : d->dup_of >= 0 ? "the same GPU as GPU[%d] via OpenCL: a fallback if CUDA fails, or choose it with --gpu %d"
                                          : "not used by default: choose it with --gpu %d";
         char usebuf[160];
         snprintf(usebuf, sizeof usebuf, use, d->dup_of >= 0 && !default_choice(d) ? d->dup_of : i, i);
         char ln[900];
-        printf("  [%d] %s via %s\n", i, d->name, rt_api_name(d->api));
+        printf("  GPU[%d] %s via %s\n", i, d->name, rt_api_name(d->api));
         snprintf(ln, sizeof ln, "      %s, %u %s at %u MHz%s, %s; %s", d->is_gpu ? "GPU" : "CPU device", d->cu, d->api == RT_CUDA ? "SM" : "CU", d->mhz, extra,
                  fmt_devmem(d, mem, sizeof mem), usebuf);
         pz_fputs_wrap(stdout, ln, PZ_LINE_MAX, 8);
@@ -542,7 +542,7 @@ void gpu_linear_launch(run_ctx *r, gpu_session *s, int n, _Atomic int *active)
 {
     for (int i = 0; i < n; i++) {
         char nm[40];
-        snprintf(nm, sizeof nm, "GPU%d", s[i].info.index);
+        snprintf(nm, sizeof nm, "GPU[%d]", s[i].info.index);
         s[i].widx = run_alloc_worker(r, nm, 'G');
         s[i].active = active;
         s[i].limit_pct = r->limit_pct;
@@ -784,7 +784,7 @@ void gpu_kangaroo_launch(run_ctx *r, void *ksv, gpu_session *s, int n, _Atomic i
 {
     for (int i = 0; i < n; i++) {
         char nm[40];
-        snprintf(nm, sizeof nm, "GPU%d", s[i].info.index);
+        snprintf(nm, sizeof nm, "GPU[%d]", s[i].info.index);
         s[i].widx = run_alloc_worker(r, nm, 'G');
         s[i].active = active;
         s[i].ks = ksv;
@@ -820,22 +820,23 @@ void gpu_doctor(bool deep)
         fmt_devmem(d, mem, sizeof mem);
         if (d->l2_bytes) pz_fmt_bytes((double)d->l2_bytes, l2, sizeof l2);
         if (!default_choice(d)) {
-            doctor_line('i', "[%d] %s %s: not used by default (%s)", i, rt_api_name(d->api), d->name, d->dup_of >= 0 ? "same card as one already used via CUDA" : d->is_gpu ? "select with --gpu" : "not a GPU");
+            if (d->dup_of >= 0) doctor_line('i', "GPU[%d] %s via %s: not used by default (the same card as GPU[%d] via CUDA)", i, d->name, rt_api_name(d->api), d->dup_of);
+            else doctor_line('i', "GPU[%d] %s via %s: %s, not used by default: choose it with --gpu %d", i, d->name, rt_api_name(d->api), d->is_gpu ? "GPU" : "CPU device", i);
             continue;
         }
         used++;
-        doctor_line('i', "[%d] %s %s: %u %s @ %u MHz, memory %s, L2 cache %s, %s", i, rt_api_name(d->api), d->name, d->cu, d->api == RT_CUDA ? "SM" : "CU", d->mhz, mem, l2, d->plat_name);
+        doctor_line('i', "GPU[%d] %s via %s: %u %s @ %u MHz, memory %s, L2 cache %s, %s", i, d->name, rt_api_name(d->api), d->cu, d->api == RT_CUDA ? "SM" : "CU", d->mhz, mem, l2, d->plat_name);
         if (d->unified)
-            doctor_line('w', "[%d] integrated GPU: it shares the CPU's RAM and power (in a laptop they share the same cooling): 'bench --together' tells whether it is worth keeping", i);
+            doctor_line('w', "GPU[%d] integrated GPU: it shares the CPU's RAM and power (in a laptop they share the same cooling): 'bench --together' tells whether it is worth keeping", i);
         if (d->api == RT_OPENCL && strstr(d->vendor, "NVIDIA") && d->dup_of < 0)
-            doctor_line('w', "[%d] NVIDIA card seen only through OpenCL: CUDA (faster) is not available, update the NVIDIA driver", i);
+            doctor_line('w', "GPU[%d] NVIDIA card seen only through OpenCL: CUDA (faster) is not available, update the NVIDIA driver", i);
         gpu_session *s = pz_xcalloc(1, sizeof *s);
         if (gpu_session_open(s, d)) {
             const bool ok = gpu_test_fe(s);
             gpu_session_release(s);
-            doctor_line(ok ? 'o' : 'x', "[%d] field arithmetic, hash and curve checked bit by bit against the CPU: %s", i, ok ? "passed" : "ERROR (the GPU would be excluded)");
+            doctor_line(ok ? 'o' : 'x', "GPU[%d] field arithmetic, hash and curve checked bit by bit against the CPU: %s", i, ok ? "passed" : "ERROR (the GPU would be excluded)");
         } else {
-            doctor_line('x', "[%d] cannot open the device (damaged driver or runtime?)", i);
+            doctor_line('x', "GPU[%d] cannot open the device (damaged driver or runtime?)", i);
         }
         free(s);
     }
