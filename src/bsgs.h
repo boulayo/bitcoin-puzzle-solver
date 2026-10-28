@@ -7,8 +7,15 @@
  *                Q_a = +-b*G, hence k = c + a*S +- b.
  * Every one of the (2A+1)*S >= 2H+1 values of d is covered exactly once, so the search is exhaustive and deterministic:
  * with the giants visited in a random order the expected cost is T + W/(4T) group operations, minimal (1.0*sqrt(W))
- * for T = sqrt(W)/2, against 1.06*sqrt(W) (KANG_C_MEAN) for the kangaroo, at the price of 8/0.65 ~ 12 bytes of RAM per baby step.
- * The table does not depend on the target nor on the range: it can be saved to disk and reused. */
+ * for T = sqrt(W)/2, against 1.06*sqrt(W) (KANG_C_MEAN) for the kangaroo, at the price of 8/0.70 ~ 11.4 bytes of RAM per baby step.
+ * The table does not depend on the target nor on the range: it can be saved to disk and reused.
+ *
+ * Table layout: 8-byte cells (24-bit tag of the x-coordinate | 40-bit baby index b, 0 = empty) grouped in buckets of BS_BUCKET
+ * cells, one 64-byte cache line each.  An x-coordinate belongs to the bucket floor(x.n[0]*nbuckets/2^64); a baby goes into the
+ * first free cell of its bucket, or, when the bucket is full, of the next ones (wrapping around), so the cells of a bucket are
+ * always filled from the first one on.  A lookup reads its bucket (one line) and goes on to the next only when the last cell of
+ * the bucket is in use.  Tables saved by the earlier versions ("PZBSGS01") are one array of cells probed linearly; they are still
+ * read and used as they are (bsgs_table.linear), they only need more RAM per baby step (8/0.65 ~ 12.3 bytes). */
 #ifndef PZ_BSGS_H
 #define PZ_BSGS_H
 
@@ -18,15 +25,19 @@
 #define BS_HALF 512                 /* points on each side of a group centre (one batch inversion per group) */
 #define BS_GRP (2 * BS_HALF)
 #define BS_MAX_T (((u64)1 << 40) - 1)   /* the baby index is stored in 40 bits */
-#define BS_LOAD_FACTOR 0.65
+#define BS_BUCKET 8                 /* cells per bucket: 64 bytes, one cache line */
+#define BS_LOAD_NUM 7               /* a new table has BS_LOAD_NUM / BS_LOAD_DEN of its cells in use (integers: its size must be */
+#define BS_LOAD_DEN 10              /* the same on every platform, the header of a saved table is checked against it) */
+#define BS_LOAD_FACTOR ((double)BS_LOAD_NUM / BS_LOAD_DEN)
 
 typedef struct {
-    u64 *slots;          /* (tag:24 | b:40); 0 = empty */
-    u64 nslots;
+    u64 *slots;          /* cells (tag:24 | b:40); 0 = empty; 64-byte aligned */
+    u64 nslots;          /* number of cells (a multiple of BS_BUCKET) */
     u64 T;               /* baby steps stored: b = 1..T */
     void *map;           /* mmap'd region (slots lives inside it) */
     size_t map_bytes;
     bool thp;            /* transparent huge pages accepted by the kernel */
+    bool linear;         /* table read from a PZBSGS01 file: one array of cells, linear probing (never true for a table that was built) */
 } bsgs_table;
 
 typedef struct {
@@ -39,10 +50,10 @@ typedef struct {
     bool Pp_inf;         /* P == c*G: the key is c */
 } bsgs_params;
 
-/* ---- sizing ---- */
-u64 bsgs_slots_for(u64 T);
-u64 bsgs_bytes_for(u64 T);
-u64 bsgs_max_T_for_bytes(u64 bytes);
+/* ---- sizing (for a table that is built, in the bucketed layout) ---- */
+u64 bsgs_slots_for(u64 T);                  /* cells */
+u64 bsgs_bytes_for(u64 T);                  /* RAM of the table */
+u64 bsgs_max_T_for_bytes(u64 bytes);        /* the largest T whose table fits in `bytes` */
 /* ceil(sqrt(W)/2), the table size minimising the mean cost; 0 when it exceeds BS_MAX_T. */
 u64 bsgs_optimal_T(const pz_u256 *W);
 /* Mean number of group operations (builds + giants) for table size T on a range of W keys. */
@@ -66,9 +77,11 @@ bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic 
 u64 bsgs_table_count(const bsgs_table *t, int nthreads);
 /* Looks the baby index up: true when the table has an entry for the x-coordinate (lo, hi are x.n[0], x.n[1], normalized). */
 bool bsgs_table_contains(const bsgs_table *t, u64 xlo, u64 xhi, u64 *b_out);
-/* Persistence. peek() reads only the header. */
+/* Persistence. peek() reads only the header; peek_ram() also gives the RAM the table takes once loaded (more for an old-format file
+ * than bsgs_bytes_for(T)). A table read from an old-format file is written back in that format. */
 bool bsgs_table_save(const bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen);
 bool bsgs_table_peek(const char *path, u64 *T, char *err, size_t errlen);
+bool bsgs_table_peek_ram(const char *path, u64 *T, u64 *ram_bytes, char *err, size_t errlen);
 bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen);
 
 /* ---- giant steps ---- */

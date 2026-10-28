@@ -14,21 +14,34 @@
 
 /* ------------------------------------------------------------------ sizing */
 
-u64 bsgs_slots_for(u64 T)
+/* A table that is built: ceil(T / (BS_BUCKET * load)) buckets and 8 more (so that a tiny table still has room). Integer arithmetic. */
+static u64 buckets_for(u64 T)
 {
-    u64 n = (u64)ceill((long double)T / (long double)BS_LOAD_FACTOR) + 64;
-    return (n + 7) & ~(u64)7;
+    const u64 per = (u64)BS_BUCKET * BS_LOAD_NUM;
+    return (T * BS_LOAD_DEN + per - 1) / per + 8;
 }
+
+u64 bsgs_slots_for(u64 T) { return buckets_for(T) * BS_BUCKET; }
 
 u64 bsgs_bytes_for(u64 T) { return bsgs_slots_for(T) * 8; }
 
 u64 bsgs_max_T_for_bytes(u64 bytes)
 {
-    u64 slots = bytes / 8;
-    if (slots <= 72) return 0;
-    long double t = (long double)(slots - 72) * (long double)BS_LOAD_FACTOR;
-    if (t >= (long double)BS_MAX_T) return BS_MAX_T;
-    return (u64)t;
+    u64 nb = bytes / ((u64)BS_BUCKET * 8);
+    if (nb <= 8) return 0;
+    nb -= 8;
+    if (nb >= BS_MAX_T) return BS_MAX_T;
+    u64 T = nb * BS_BUCKET * BS_LOAD_NUM / BS_LOAD_DEN;
+    return T > BS_MAX_T ? BS_MAX_T : T;
+}
+
+/* Cells of a PZBSGS01 table (the old layout, load 0.65, probed linearly) for T babies: what the header of such a file must say. The
+ * quotient is in long double, so a platform whose long double is a double may round differently by one group: see header_check. */
+#define BS_LINEAR_LOAD 0.65
+static u64 linear_slots_for(u64 T)
+{
+    u64 n = (u64)ceill((long double)T / (long double)BS_LINEAR_LOAD) + 64;
+    return (n + 7) & ~(u64)7;
 }
 
 u64 bsgs_optimal_T(const pz_u256 *W)
@@ -295,12 +308,14 @@ void bsgs_job_init(bsgs_job *j, const bsgs_table *t, const bsgs_params *p)
 
 /* --------------------------------------------------------------- the table */
 
-bool bsgs_table_alloc(bsgs_table *t, u64 T, char *err, size_t errlen)
+/* nslots cells for T babies; `linear` marks the old layout (only a table read from a PZBSGS01 file) */
+static bool table_alloc(bsgs_table *t, u64 T, u64 nslots, bool linear, char *err, size_t errlen)
 {
     memset(t, 0, sizeof *t);
     if (T < 1 || T > BS_MAX_T) { snprintf(err, errlen, "invalid table size"); return false; }
     t->T = T;
-    t->nslots = bsgs_slots_for(T);
+    t->nslots = nslots;
+    t->linear = linear;
     const size_t align = (size_t)2 << 20;
     size_t bytes = (size_t)t->nslots * 8;
     t->map_bytes = bytes + align;
@@ -312,10 +327,15 @@ bool bsgs_table_alloc(bsgs_table *t, u64 T, char *err, size_t errlen)
         return false;
     }
     t->map = m;
-    uintptr_t a = ((uintptr_t)m + align - 1) & ~(uintptr_t)(align - 1);
+    uintptr_t a = ((uintptr_t)m + align - 1) & ~(uintptr_t)(align - 1);     /* 2 MiB: every bucket starts on a cache line */
     t->slots = (u64 *)a;
     t->thp = huge;
     return true;
+}
+
+bool bsgs_table_alloc(bsgs_table *t, u64 T, char *err, size_t errlen)
+{
+    return table_alloc(t, T, T >= 1 && T <= BS_MAX_T ? bsgs_slots_for(T) : 0, false, err, errlen);
 }
 
 void bsgs_table_free(bsgs_table *t)
@@ -342,6 +362,7 @@ static void *build_thread(void *p)
 {
     build_arg *a = p;
     bsgs_table *t = a->t;
+    const u64 nb = t->nslots / BS_BUCKET;
     const bs_vengine *ve = pick_vengine();
     void *vt = ve ? ve->prepare(a->st) : NULL;
     const int nl = vt ? ve->lanes : 1;
@@ -364,8 +385,8 @@ static void *build_thread(void *p)
                 if (!ve->groups(vt, Cv, xlo, xhi, scr)) pz_die("BSGS: zero denominator while building the table");
                 const int tot = BS_GRP * nl;
                 for (int k = 0; k < tot; k++) {
-                    if (k + 16 < tot) __builtin_prefetch(&t->slots[bs_slot_index(t->nslots, xlo[k + 16])], 1, 1);
-                    if (bs_insert(t->slots, t->nslots, xlo[k], xhi[k], first + (u64)(k % nl) * BS_GRP + (u64)(k / nl))) a->inserted++;
+                    if (k + 16 < tot) __builtin_prefetch(&t->slots[bs_bucket_index(nb, xlo[k + 16]) * BS_BUCKET], 1, 1);
+                    if (bs_insert(t->slots, nb, xlo[k], xhi[k], first + (u64)(k % nl) * BS_GRP + (u64)(k / nl))) a->inserted++;
                 }
                 if (a->units) atomic_fetch_add_explicit(a->units, (u64)tot, memory_order_relaxed);
             }
@@ -378,8 +399,8 @@ static void *build_thread(void *p)
             if (!a->gf(a->st, &C, xlo, xhi, dx, tmp)) pz_die("BSGS: zero denominator while building the table");
             u64 cnt = bend - first < BS_GRP ? bend - first : BS_GRP;
             for (u64 i = 0; i < cnt; i++) {
-                if (i + 16 < cnt) __builtin_prefetch(&t->slots[bs_slot_index(t->nslots, xlo[i + 16])], 1, 1);
-                if (bs_insert(t->slots, t->nslots, xlo[i], xhi[i], first + i)) a->inserted++;
+                if (i + 16 < cnt) __builtin_prefetch(&t->slots[bs_bucket_index(nb, xlo[i + 16]) * BS_BUCKET], 1, 1);
+                if (bs_insert(t->slots, nb, xlo[i], xhi[i], first + i)) a->inserted++;
             }
             if (a->units) atomic_fetch_add_explicit(a->units, cnt, memory_order_relaxed);
         }
@@ -417,42 +438,73 @@ bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic 
     return true;
 }
 
-typedef struct { const u64 *s; u64 n, cnt; } count_arg;
+/* One pass over the cells: how many are in use, and (bucketed layout) whether every bucket is filled from its first cell on, the
+ * property that ends every lookup. A file whose checksum is right can still have been written by something else. */
+typedef struct { const u64 *s; u64 n, cnt; bool linear, ordered; } count_arg;
 static void *count_thread(void *p)
 {
     count_arg *a = p;
     u64 c = 0;
-    for (u64 i = 0; i < a->n; i++) c += a->s[i] != 0;
+    bool ordered = true;
+    if (a->linear) {
+        for (u64 i = 0; i < a->n; i++) c += a->s[i] != 0;
+    } else {
+        for (u64 i = 0; i < a->n; i += BS_BUCKET) {            /* n is a multiple of the bucket: threads get whole buckets */
+            const u64 *bk = a->s + i;
+            int used = 0;
+            for (int j = 0; j < BS_BUCKET; j++) used += bk[j] != 0;
+            for (int j = used; j < BS_BUCKET; j++) ordered &= bk[j] == 0;
+            c += (u64)used;
+        }
+    }
     a->cnt = c;
+    a->ordered = ordered;
     return NULL;
 }
 
-u64 bsgs_table_count(const bsgs_table *t, int nthreads)
+static u64 table_count(const bsgs_table *t, int nthreads, bool *ordered)
 {
     if (nthreads < 1) nthreads = 1;
     count_arg *a = pz_xcalloc((size_t)nthreads, sizeof *a);
     pthread_t *th = pz_xcalloc((size_t)nthreads, sizeof *th);
     u64 per = (t->nslots + (u64)nthreads - 1) / (u64)nthreads;
+    per = (per + BS_BUCKET - 1) / BS_BUCKET * BS_BUCKET;
     for (int i = 0; i < nthreads; i++) {
         u64 from = (u64)i * per, to = from + per < t->nslots ? from + per : t->nslots;
-        a[i] = (count_arg){t->slots + (from < to ? from : t->nslots), from < to ? to - from : 0, 0};
+        a[i] = (count_arg){t->slots + (from < to ? from : t->nslots), from < to ? to - from : 0, 0, t->linear, true};
         if (pthread_create(&th[i], NULL, count_thread, &a[i]) != 0) pz_die("pthread_create failed");
     }
     u64 total = 0;
-    for (int i = 0; i < nthreads; i++) { pthread_join(th[i], NULL); total += a[i].cnt; }
+    bool ok = true;
+    for (int i = 0; i < nthreads; i++) { pthread_join(th[i], NULL); total += a[i].cnt; ok &= a[i].ordered; }
     free(a); free(th);
+    if (ordered) *ordered = ok;
     return total;
 }
 
+u64 bsgs_table_count(const bsgs_table *t, int nthreads) { return table_count(t, nthreads, NULL); }
+
 bool bsgs_table_contains(const bsgs_table *t, u64 xlo, u64 xhi, u64 *b_out)
 {
-    const u64 tag = xhi & (((u64)1 << BS_TAG_BITS) - 1);
-    u64 i = bs_slot_index(t->nslots, xlo);
+    const u64 tag = xhi & BS_TAG_MASK;
+    if (t->linear) {
+        u64 i = bs_slot_index(t->nslots, xlo);
+        for (;;) {
+            u64 s = t->slots[i];
+            if (s == 0) return false;
+            if ((s >> BS_VAL_BITS) == tag) { if (b_out) *b_out = s & BS_VAL_MASK; return true; }
+            if (++i == t->nslots) i = 0;
+        }
+    }
+    const u64 nb = t->nslots / BS_BUCKET;
+    u64 i = bs_bucket_index(nb, xlo);
     for (;;) {
-        u64 s = t->slots[i];
-        if (s == 0) return false;
-        if ((s >> BS_VAL_BITS) == tag) { if (b_out) *b_out = s & BS_VAL_MASK; return true; }
-        if (++i == t->nslots) i = 0;
+        const u64 *bk = t->slots + i * BS_BUCKET;
+        for (int j = 0; j < BS_BUCKET; j++) {
+            if (bk[j] == 0) return false;                   /* the cells are taken in order: nothing beyond this one */
+            if ((bk[j] >> BS_VAL_BITS) == tag) { if (b_out) *b_out = bk[j] & BS_VAL_MASK; return true; }
+        }
+        if (++i == nb) i = 0;
     }
 }
 
@@ -460,25 +512,44 @@ bool bsgs_table_contains(const bsgs_table *t, u64 xlo, u64 xhi, u64 *b_out)
 static bool table_has_entry(const bsgs_table *t, u64 xlo, u64 xhi, u64 b)
 {
     const u64 e = bs_entry(xhi, b);
-    u64 i = bs_slot_index(t->nslots, xlo);
+    if (t->linear) {
+        u64 i = bs_slot_index(t->nslots, xlo);
+        for (;;) {
+            u64 s = t->slots[i];
+            if (s == 0) return false;
+            if (s == e) return true;
+            if (++i == t->nslots) i = 0;
+        }
+    }
+    const u64 nb = t->nslots / BS_BUCKET;
+    u64 i = bs_bucket_index(nb, xlo);
     for (;;) {
-        u64 s = t->slots[i];
-        if (s == 0) return false;
-        if (s == e) return true;
-        if (++i == t->nslots) i = 0;
+        const u64 *bk = t->slots + i * BS_BUCKET;
+        for (int j = 0; j < BS_BUCKET; j++) {
+            if (bk[j] == 0) return false;
+            if (bk[j] == e) return true;
+        }
+        if (++i == nb) i = 0;
     }
 }
 
 /* -------------------------------------------------------------- persistence */
 
-#define BS_FILE_MAGIC "PZBSGS01"
+/* Two formats, the same 4 KiB header and the same body (the cells, little-endian, 8 bytes each, in memory order):
+ *   PZBSGS01  one array of cells, linear probing, about 0.65 of the cells in use; read as it is (bsgs_table.linear)
+ *   PZBSGS02  buckets of BS_BUCKET cells, BS_LOAD_NUM / BS_LOAD_DEN of the cells in use; what a built table is saved as
+ * The old format cannot be turned into the new one without computing the baby steps again: a cell holds the 24 low bits of the
+ * second word of x and the index b, but its home position is only known to within the length of the run it sits in. */
+#define BS_MAGIC_V1 "PZBSGS01"
+#define BS_MAGIC_V2 "PZBSGS02"
 #define BS_HDR_BYTES 4096
 
 typedef struct {
     char magic[8];
     u64 endian, version, T, nslots, tag_bits, val_bits, count, body_sum;
     u8 gx[32], tx[32];
-    u8 pad[BS_HDR_BYTES - 8 - 8 * 8 - 64 - 32];
+    u64 bucket_cells;          /* version 2: cells per bucket; the padding of version 1, which is zero */
+    u8 pad[BS_HDR_BYTES - 8 - 8 * 8 - 64 - 8 - 32];
     u8 sha[32];
 } bs_header;
 
@@ -491,18 +562,19 @@ static u64 mix_slot(u64 v, u64 i)
     return x ^ (x >> 29);
 }
 
-static void header_fill(bs_header *h, u64 T, u64 nslots, u64 body_sum)
+static void header_fill(bs_header *h, u64 T, u64 nslots, u64 body_sum, bool linear)
 {
     memset(h, 0, sizeof *h);
-    memcpy(h->magic, BS_FILE_MAGIC, 8);
+    memcpy(h->magic, linear ? BS_MAGIC_V1 : BS_MAGIC_V2, 8);
     h->endian = 0x0102030405060708ULL;
-    h->version = 1;
+    h->version = linear ? 1 : 2;
     h->T = T;
     h->nslots = nslots;
     h->tag_bits = BS_TAG_BITS;
     h->val_bits = BS_VAL_BITS;
     h->count = T;
     h->body_sum = body_sum;
+    h->bucket_cells = linear ? 0 : BS_BUCKET;
     pz_fe_to_be(h->gx, &pz_ec_g.x);
     pz_ge tg;
     if (!pz_ec_mul_g(&tg, &(pz_u256){{T, 0, 0, 0}})) pz_die("BSGS: invalid T*G");
@@ -510,17 +582,28 @@ static void header_fill(bs_header *h, u64 T, u64 nslots, u64 body_sum)
     pz_sha256((const u8 *)h, offsetof(bs_header, sha), h->sha);
 }
 
-static bool header_check(const bs_header *h, char *err, size_t errlen)
+static bool header_check(const bs_header *h, bool *linear, char *err, size_t errlen)
 {
     u8 dg[32];
-    if (memcmp(h->magic, BS_FILE_MAGIC, 8) != 0) { snprintf(err, errlen, "not a pzsolve BSGS table"); return false; }
+    const bool v1 = memcmp(h->magic, BS_MAGIC_V1, 8) == 0, v2 = memcmp(h->magic, BS_MAGIC_V2, 8) == 0;
+    if (!v1 && !v2) {
+        snprintf(err, errlen, memcmp(h->magic, "PZBSGS", 6) == 0 ? "table format not supported by this version of pzsolve" : "not a pzsolve BSGS table");
+        return false;
+    }
     pz_sha256((const u8 *)h, offsetof(bs_header, sha), dg);
     if (memcmp(dg, h->sha, 32) != 0) { snprintf(err, errlen, "table header corrupted"); return false; }
-    if (h->endian != 0x0102030405060708ULL || h->version != 1 || h->tag_bits != BS_TAG_BITS || h->val_bits != BS_VAL_BITS) {
+    if (h->endian != 0x0102030405060708ULL || h->version != (v1 ? 1 : 2) || h->tag_bits != BS_TAG_BITS || h->val_bits != BS_VAL_BITS || h->bucket_cells != (v1 ? 0 : BS_BUCKET)) {
         snprintf(err, errlen, "unsupported table format (version %llu)", (unsigned long long)h->version);
         return false;
     }
-    if (h->T < 1 || h->T > BS_MAX_T || h->nslots != bsgs_slots_for(h->T) || h->count != h->T) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
+    if (h->T < 1 || h->T > BS_MAX_T || h->count != h->T) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
+    if (v2) {
+        if (h->nslots != bsgs_slots_for(h->T)) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
+    } else {
+        /* the size of the old tables came from a long double quotient: allow the one group of cells by which another platform may differ */
+        const u64 want = linear_slots_for(h->T);
+        if (h->nslots % 8 != 0 || h->nslots + 8 < want || h->nslots > want + 8 || h->nslots <= h->T) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
+    }
     pz_ec_init();
     u8 gx[32], tx[32];
     pz_ge tg;
@@ -528,6 +611,7 @@ static bool header_check(const bs_header *h, char *err, size_t errlen)
     if (!pz_ec_mul_g(&tg, &(pz_u256){{h->T, 0, 0, 0}})) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
     pz_fe_to_be(tx, &tg.x);
     if (memcmp(gx, h->gx, 32) != 0 || memcmp(tx, h->tx, 32) != 0) { snprintf(err, errlen, "the table does not match the secp256k1 curve"); return false; }
+    *linear = v1;
     return true;
 }
 
@@ -613,14 +697,14 @@ bool bsgs_table_save(const bsgs_table *t, const char *path, int nthreads, char *
     bool ok = io_all(fd, t->slots, t->nslots, nthreads, true, &sum);
     if (!ok) { snprintf(err, errlen, "writing %s failed: %s", tmp, strerror(errno)); close(fd); unlink(tmp); return false; }
     bs_header h;
-    header_fill(&h, t->T, t->nslots, sum);
+    header_fill(&h, t->T, t->nslots, sum, t->linear);
     ok = full_pwrite(fd, &h, sizeof h, 0) && pz_fd_sync(fd) == 0;   /* the header goes last: a partial file never validates */
     if (close(fd) != 0) ok = false;
     if (!ok || pz_rename_replace(tmp, path) != 0) { snprintf(err, errlen, "saving %s failed: %s", path, strerror(errno)); unlink(tmp); return false; }
     return true;
 }
 
-bool bsgs_table_peek(const char *path, u64 *T, char *err, size_t errlen)
+bool bsgs_table_peek_ram(const char *path, u64 *T, u64 *ram_bytes, char *err, size_t errlen)
 {
     int fd = pz_open_read(path);
     if (fd < 0) { snprintf(err, errlen, "cannot open %s: %s", path, strerror(errno)); return false; }
@@ -628,10 +712,14 @@ bool bsgs_table_peek(const char *path, u64 *T, char *err, size_t errlen)
     bool ok = full_pread(fd, &h, sizeof h, 0);
     close(fd);
     if (!ok) { snprintf(err, errlen, "%s is too short", path); return false; }
-    if (!header_check(&h, err, errlen)) return false;
+    bool linear;
+    if (!header_check(&h, &linear, err, errlen)) return false;
     if (T) *T = h.T;
+    if (ram_bytes) *ram_bytes = h.nslots * 8;
     return true;
 }
+
+bool bsgs_table_peek(const char *path, u64 *T, char *err, size_t errlen) { return bsgs_table_peek_ram(path, T, NULL, err, errlen); }
 
 bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen)
 {
@@ -639,7 +727,8 @@ bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, s
     if (fd < 0) { snprintf(err, errlen, "cannot open %s: %s", path, strerror(errno)); return false; }
     bs_header h;
     if (!full_pread(fd, &h, sizeof h, 0)) { snprintf(err, errlen, "%s is too short", path); close(fd); return false; }
-    if (!header_check(&h, err, errlen)) { close(fd); return false; }
+    bool linear;
+    if (!header_check(&h, &linear, err, errlen)) { close(fd); return false; }
     i64 want = (i64)BS_HDR_BYTES + (i64)h.nslots * 8;
     i64 have = pz_fd_size(fd);
     if (have != want) {
@@ -647,13 +736,15 @@ bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, s
         close(fd);
         return false;
     }
-    if (!bsgs_table_alloc(t, h.T, err, errlen)) { close(fd); return false; }
+    if (!table_alloc(t, h.T, h.nslots, linear, err, errlen)) { close(fd); return false; }
     u64 sum = 0;
     bool ok = io_all(fd, t->slots, t->nslots, nthreads, false, &sum);
     close(fd);
     if (!ok) { snprintf(err, errlen, "reading %s failed", path); bsgs_table_free(t); return false; }
     if (sum != h.body_sum) { snprintf(err, errlen, "the contents of %s are corrupted (different checksum)", path); bsgs_table_free(t); return false; }
-    if (bsgs_table_count(t, nthreads) != t->T) { snprintf(err, errlen, "wrong number of entries in %s", path); bsgs_table_free(t); return false; }
+    bool ordered;
+    if (table_count(t, nthreads, &ordered) != t->T) { snprintf(err, errlen, "wrong number of entries in %s", path); bsgs_table_free(t); return false; }
+    if (!ordered) { snprintf(err, errlen, "%s is not laid out as a BSGS table is", path); bsgs_table_free(t); return false; }
     /* spot check against freshly computed points */
     u64 rs = 0x9E3779B97F4A7C15ULL ^ h.T;
     for (int i = 0; i < 256; i++) {
@@ -693,16 +784,66 @@ static void try_candidate(scan_ctx *c, int64_t a, u64 b)
     if (c->falsepos) atomic_fetch_add_explicit(c->falsepos, 1, memory_order_relaxed);
 }
 
-static inline void probe(scan_ctx *c, u64 xlo, u64 xhi, int64_t a)
+/* The giant that entry k of a batch belongs to: the batch holds nl windows of BS_GRP giants, the x words interleaved by lane
+ * (the scalar routine is the case nl = 1). It is only worked out for the rare entries that match. */
+static inline int64_t giant_of(int64_t a_first, int nl, int k) { return a_first + (int64_t)(k % nl) * BS_GRP + k / nl; }
+
+/* Old layout: every cell of the run that starts at the home cell and ends at the first free one, whose tag matches, is a candidate */
+static inline void probe_linear(scan_ctx *c, u64 xlo, u64 xhi, int64_t a_first, int nl, int k)
 {
     const bsgs_table *t = c->j->tab;
-    const u64 tag = xhi & (((u64)1 << BS_TAG_BITS) - 1);
+    const u64 tag = xhi & BS_TAG_MASK;
     u64 i = bs_slot_index(t->nslots, xlo);
     for (;;) {
         u64 s = t->slots[i];
         if (s == 0) return;
-        if ((s >> BS_VAL_BITS) == tag) try_candidate(c, a, s & BS_VAL_MASK);
+        if ((s >> BS_VAL_BITS) == tag) try_candidate(c, giant_of(a_first, nl, k), s & BS_VAL_MASK);
         if (++i == t->nslots) i = 0;
+    }
+}
+
+/* Buckets: the home bucket, and the following ones while the last cell of the bucket is in use. One cache line each; the tags of the
+ * 8 cells are compared at once, and the cells one by one only when one of them matches (about once in 10^6 lookups). */
+static inline void probe_bucket(scan_ctx *c, u64 nb, u64 xlo, u64 xhi, int64_t a_first, int nl, int k)
+{
+    const u64 *cells = c->j->tab->slots;
+    const u64 tag = xhi & BS_TAG_MASK;
+    u64 i = bs_bucket_index(nb, xlo);
+    for (;;) {
+        const u64 *bk = cells + i * BS_BUCKET;
+        if (UNLIKELY(bs_bucket_maybe(bk, tag)))
+            for (int j = 0; j < BS_BUCKET; j++)
+                if (bk[j] != 0 && (bk[j] >> BS_VAL_BITS) == tag) try_candidate(c, giant_of(a_first, nl, k), bk[j] & BS_VAL_MASK);
+        if (bk[BS_BUCKET - 1] == 0) return;         /* a free cell: nothing was ever pushed past this bucket */
+        if (++i == nb) i = 0;
+    }
+}
+
+/* One x-coordinate, for the giant a (the exact slow path) */
+static void probe(scan_ctx *c, u64 xlo, u64 xhi, int64_t a)
+{
+    const bsgs_table *t = c->j->tab;
+    if (t->linear) probe_linear(c, xlo, xhi, a, 1, 0);
+    else probe_bucket(c, t->nslots / BS_BUCKET, xlo, xhi, a, 1, 0);
+}
+
+/* The n x-coordinates of a batch, the lookups started 16 entries ahead so that their cache lines are on the way */
+static void probe_batch(scan_ctx *c, const u64 *xlo, const u64 *xhi, int n, int nl, int64_t a_first)
+{
+    const bsgs_table *t = c->j->tab;
+    const int ahead = 16;
+    if (t->linear) {
+        for (int k = 0; k < n; k++) {
+            if (k + ahead < n) __builtin_prefetch(&t->slots[bs_slot_index(t->nslots, xlo[k + ahead])], 0, 1);
+            probe_linear(c, xlo[k], xhi[k], a_first, nl, k);
+        }
+        return;
+    }
+    const u64 nb = t->nslots / BS_BUCKET;
+    for (int k = 0; k < ahead && k < n; k++) __builtin_prefetch(&t->slots[bs_bucket_index(nb, xlo[k]) * BS_BUCKET], 0, 1);
+    for (int k = 0; k < n; k++) {
+        if (k + ahead < n) __builtin_prefetch(&t->slots[bs_bucket_index(nb, xlo[k + ahead]) * BS_BUCKET], 0, 1);
+        probe_bucket(c, nb, xlo[k], xhi[k], a_first, nl, k);
     }
 }
 
@@ -726,7 +867,6 @@ static void slow_giants(scan_ctx *c, int64_t a_first, int count)
 u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *user, _Atomic u64 *progress, _Atomic u64 *falsepos, _Atomic int *stop)
 {
     const bsgs_params *p = j->p;
-    const bsgs_table *t = j->tab;
     if (p->Pp_inf) pz_die("bsgs_scan: the key is the centre of the range (to be handled first)");
     bs_group_fn gf = pick_group();
     const bs_vengine *ve = pick_vengine();
@@ -752,11 +892,7 @@ u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *u
                 for (int l = 0; l < nl && vvalid; l++) vvalid = giant_point(p, a_first + (int64_t)l * BS_GRP + BS_HALF, &Cv[l]);
             }
             if (vvalid && ve->groups(vt, Cv, xlo, xhi, scr)) {
-                const int tot = BS_GRP * nl;
-                for (int k = 0; k < tot; k++) {
-                    if (k + 16 < tot) __builtin_prefetch(&t->slots[bs_slot_index(t->nslots, xlo[k + 16])], 0, 1);
-                    probe(&ctx, xlo[k], xhi[k], a_first + (int64_t)(k % nl) * BS_GRP + k / nl);
-                }
+                probe_batch(&ctx, xlo, xhi, BS_GRP * nl, nl, a_first);
             } else {
                 for (int l = 0; l < nl; l++) slow_giants(&ctx, a_first + (int64_t)l * BS_GRP, BS_GRP);
                 vvalid = false;
@@ -769,10 +905,7 @@ u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *u
         const int64_t a_c = a_first + BS_HALF;
         if (!cvalid) cvalid = giant_point(p, a_c, &C);
         if (cvalid && gf(&j->giant, &C, xlo, xhi, dx, tmp)) {
-            for (int i = 0; i < BS_GRP; i++) {
-                if (i + 16 < BS_GRP) __builtin_prefetch(&t->slots[bs_slot_index(t->nslots, xlo[i + 16])], 0, 1);
-                probe(&ctx, xlo[i], xhi[i], a_first + i);
-            }
+            probe_batch(&ctx, xlo, xhi, BS_GRP, 1, a_first);
         } else {
             /* some point of the window is the point at infinity (the key sits exactly on a giant step) or collides with
              * the centre: process the window exactly and restart the incremental chain at the next centre */

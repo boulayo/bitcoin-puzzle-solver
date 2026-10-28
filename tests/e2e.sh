@@ -113,10 +113,18 @@ done
 rm -rf "$DIR/bst"
 $BIN hunt -p 46 -m bsgs --table "$DIR/t.tbl" -c bst1 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -s "$DIR/t.tbl" ] && ok "baby-step table saved to file" || bad "table not saved"
+[ "$(head -c 8 "$DIR/t.tbl")" = "PZBSGS02" ] && ok "table saved in the bucket format" || bad "table saved with magic '$(head -c 8 "$DIR/t.tbl")'"
 OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" -c bst2 -d "$DIR" --ui log --no-gpu 2>&1)
 echo "$OUT" | grep -q "reading the table" && ok "table read back from file for another puzzle" || bad "table not read back"
 GOT=$(awk '/private key hex/{print $4}' "$DIR/bst2/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "$(dbfield 47 4)" ] && ok "bsgs with table from file: key found" || bad "bsgs with table from file: '$GOT'"
+# a table of the first format (PZBSGS01: one array of cells, linear probing; 500 baby steps, written by the version that had it) is still read, used as it is, and left alone
+cp tests/data/bsgs_v1_t500.bin "$DIR/old.tbl"
+OUT=$($BIN hunt -p 20 -m bsgs --table "$DIR/old.tbl" -c bsold -d "$DIR" --ui log --no-gpu 2>&1)
+echo "$OUT" | grep -q "reading the table" && ok "table of the old format read" || bad "table of the old format not read"
+GOT=$(awk '/private key hex/{print $4}' "$DIR/bsold/FOUND.txt" 2>/dev/null)
+[ "$GOT" = "$(dbfield 20 4)" ] && ok "bsgs with a table of the old format: key found" || bad "bsgs with a table of the old format: '$GOT'"
+cmp -s tests/data/bsgs_v1_t500.bin "$DIR/old.tbl" && ok "table of the old format not rewritten" || bad "table of the old format modified"
 head -c 100000 "$DIR/t.tbl" > "$DIR/trunc.tbl"
 $BIN hunt -p 48 -m bsgs --table "$DIR/trunc.tbl" -c bst3 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1 && bad "truncated table accepted" || ok "truncated table rejected"
 rm -rf "$DIR/bsr"

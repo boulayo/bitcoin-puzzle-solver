@@ -4,6 +4,8 @@
 #include "../src/bsgs_priv.h"
 #include "../src/cpu_engine.h"
 #include "../src/platform.h"
+#include <pzcore/hash.h>
+#include <math.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -64,6 +66,20 @@ static void t_sizing(void)
     bsgs_choose_T(&big, (u64)128 << 30, &viable);
     CHECK(!viable);                                     /* the open puzzles with a public key are out of reach */
     CHECK(bsgs_bytes_for(1000000) >= 8 * 1000000 && bsgs_max_T_for_bytes(bsgs_bytes_for(1000000)) >= 999000);
+    /* sizes: whole buckets, 8 / 0.70 bytes per baby step, and the two directions agree */
+    CHECK(bsgs_bytes_for(1000000000ULL) < 11.5e9 && bsgs_bytes_for(1000000000ULL) > 11.4e9);
+    const u64 sizes[] = {1, 2, 3, 7, 64, 100, 999, 4096, 12345, 1000003, 987654321, BS_MAX_T};
+    for (size_t i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+        const u64 n = sizes[i];
+        CHECK(bsgs_slots_for(n) % BS_BUCKET == 0 && bsgs_slots_for(n) * BS_LOAD_NUM >= n * BS_LOAD_DEN && bsgs_slots_for(n) > n);
+        CHECK(bsgs_max_T_for_bytes(bsgs_bytes_for(n)) >= n);                          /* the table of n babies holds n babies... */
+        CHECK(bsgs_bytes_for(bsgs_max_T_for_bytes(bsgs_bytes_for(n))) == bsgs_bytes_for(n));   /* ...and no more fit in its RAM */
+        const u64 budget = n * 11;                                                        /* any budget: the table fits, one more baby step would not */
+        const u64 m = bsgs_max_T_for_bytes(budget);
+        CHECK(m == 0 || (bsgs_bytes_for(m) <= budget && (m == BS_MAX_T || bsgs_bytes_for(m + 1) > budget)));
+    }
+    CHECK(bsgs_max_T_for_bytes(0) == 0 && bsgs_max_T_for_bytes(64 * 8) == 0 && bsgs_max_T_for_bytes(64 * 9) >= 1);
+    CHECK(bsgs_max_T_for_bytes(~(u64)0) == BS_MAX_T);
     CHECK(bsgs_mean_cost(&W, (u64)1 << 31) < 1.01L * 4294967296.0L && bsgs_mean_cost(&W, (u64)1 << 31) > 0.99L * 4294967296.0L);
 }
 
@@ -142,6 +158,354 @@ static void t_table(void)
     CHECK(!bsgs_table_peek(path, &pt, err, sizeof err));
     CHECK(pz_remove_tree(tdir) == 0);
     bsgs_table_free(&t);
+}
+
+typedef struct { pz_u256 key; int hits; _Atomic int *stop; bool stop_on_hit; } hit_rec;
+static void on_hit(void *u, const pz_u256 *k) { hit_rec *h = u; h->hits++; h->key = *k; if (h->stop_on_hit) atomic_store(h->stop, 1); }
+
+/* ---- the layout of the table: buckets, overflow, threads, the old format ---- */
+
+static int cmp_u64(const void *a, const void *b) { u64 x = *(const u64 *)a, y = *(const u64 *)b; return x < y ? -1 : x > y; }
+
+/* every bucket must be filled from its first cell on, and the cells in use must be `want` */
+static void check_bucket_order(const bsgs_table *t, u64 want)
+{
+    u64 used = 0;
+    for (u64 i = 0; i < t->nslots; i += BS_BUCKET)
+        for (int j = 0, gap = 0; j < BS_BUCKET; j++) {
+            if (t->slots[i + j] == 0) gap = 1;
+            else { used++; CHECK(!gap); }
+        }
+    CHECK(used == want);
+}
+
+/* A full bucket: the baby goes to the next one (the table wraps around), lookups follow the same chain and stop at the first
+ * bucket that still has a free cell. A bounded probe is not needed: a table always has more cells than babies, so such a bucket exists. */
+static void t_bucket_overflow(void)
+{
+    const u64 nb = 16;
+    u64 *cells = pz_xaligned(64, nb * BS_BUCKET * 8);
+    bsgs_table t;
+    memset(&t, 0, sizeof t);
+    t.slots = cells;
+    t.nslots = nb * BS_BUCKET;
+    u64 next_b = 1, tag = 100;
+    /* xlo in [h * 2^60, (h + 1) * 2^60) belongs to bucket h of 16 */
+#define HOME(h, i) (((u64)(h) << 60) + (i))
+    u64 homed5[20], tags5[20];
+    for (u64 i = 0; i < 20; i++) {
+        tags5[i] = tag++;
+        homed5[i] = next_b++;
+        CHECK(bs_insert(cells, nb, HOME(5, i), tags5[i], homed5[i]));
+    }
+    for (u64 i = 0; i < 20; i++)                                   /* 8 in bucket 5, 8 in bucket 6, 4 in bucket 7, in order */
+        CHECK(cells[(5 + i / 8) * BS_BUCKET + i % 8] == bs_entry(tags5[i], homed5[i]));
+    check_bucket_order(&t, 20);
+    for (u64 i = 0; i < 20; i++) {
+        u64 b = 0;
+        CHECK(bsgs_table_contains(&t, HOME(5, i), tags5[i], &b) && b == homed5[i]);
+        CHECK(!bs_insert(cells, nb, HOME(5, i), tags5[i], homed5[i]));          /* the same entry again changes nothing */
+    }
+    check_bucket_order(&t, 20);
+    CHECK(!bsgs_table_contains(&t, HOME(5, 3), 99999, NULL));         /* no such tag: the chain 5, 6, 7 ends at bucket 7, which has room */
+    /* a key of bucket 7 reads bucket 7 and stops there (free cells): it does not see the babies of bucket 5 that sit in bucket 6,
+     * but it does match one that sits in bucket 7, whatever its own bucket (an equal tag) */
+    CHECK(!bsgs_table_contains(&t, HOME(7, 3), tags5[0], NULL));
+    u64 b = 0;
+    CHECK(bsgs_table_contains(&t, HOME(7, 3), tags5[17], &b) && b == homed5[17]);
+    /* wrap-around: ten babies of the last bucket, two end in bucket 0 */
+    u64 b15[10], t15[10];
+    for (u64 i = 0; i < 10; i++) {
+        t15[i] = tag++;
+        b15[i] = next_b++;
+        CHECK(bs_insert(cells, nb, HOME(15, i), t15[i], b15[i]));
+    }
+    CHECK(cells[0] == bs_entry(t15[8], b15[8]) && cells[1] == bs_entry(t15[9], b15[9]) && cells[2] == 0);
+    for (u64 i = 0; i < 10; i++) CHECK(bsgs_table_contains(&t, HOME(15, i), t15[i], &b) && b == b15[i]);
+    check_bucket_order(&t, 30);
+    /* fill everything but bucket 9, then put one more baby of a bucket far from it: it lands in bucket 9 after crossing the table */
+    for (u64 h = 0; h < nb; h++) {
+        if (h == 9) continue;
+        int used = 0;
+        for (int j = 0; j < BS_BUCKET; j++) used += cells[h * BS_BUCKET + j] != 0;
+        for (int j = used; j < BS_BUCKET; j++) CHECK(bs_insert(cells, nb, HOME(h, j + 40), tag++, next_b++));
+    }
+    int in9 = 0;
+    for (int j = 0; j < BS_BUCKET; j++) in9 += cells[9 * BS_BUCKET + j] != 0;
+    const u64 used_now = 15 * BS_BUCKET + (u64)in9;
+    check_bucket_order(&t, used_now);
+    CHECK(!bsgs_table_contains(&t, HOME(10, 5), 123456, NULL));      /* a miss walks 10 .. 15, 0 .. 9 and ends at the only bucket with room */
+    CHECK(!bsgs_table_contains(&t, HOME(8, 5), 123456, NULL));
+    const u64 tl = tag++, bl = next_b++;
+    CHECK(bs_insert(cells, nb, HOME(10, 77), tl, bl));
+    CHECK(cells[9 * BS_BUCKET + in9] == bs_entry(tl, bl));
+    CHECK(bsgs_table_contains(&t, HOME(10, 77), tl, &b) && b == bl);
+    check_bucket_order(&t, used_now + 1);
+    pz_afree(cells);
+#undef HOME
+}
+
+/* random babies in small tables at loads up to 95 %: long chains and wrap-arounds; every baby is found by its own tag and a tag that
+ * is not there is never found */
+static void t_bucket_random(void)
+{
+    const u64 loads[] = {50, 70, 85, 95};
+    for (size_t li = 0; li < sizeof loads / sizeof *loads; li++)
+        for (u64 nb = 3; nb <= 96; nb = nb * 3 + 1) {
+            u64 *cells = pz_xaligned(64, nb * BS_BUCKET * 8);
+            bsgs_table t;
+            memset(&t, 0, sizeof t);
+            t.slots = cells;
+            t.nslots = nb * BS_BUCKET;
+            const u64 n = t.nslots * loads[li] / 100;
+            u64 *xs = malloc(n * 8);
+            for (u64 i = 0; i < n; i++) {
+                xs[i] = rnd();
+                CHECK(bs_insert(cells, nb, xs[i], 5 + i, 1 + i));            /* the tag of baby i is 5 + i: all different, none 0 */
+            }
+            check_bucket_order(&t, n);
+            for (u64 i = 0; i < n; i++) {
+                u64 b = 0;
+                CHECK(bsgs_table_contains(&t, xs[i], 5 + i, &b) && b == 1 + i);
+            }
+            for (int m = 0; m < 2000; m++) CHECK(!bsgs_table_contains(&t, rnd(), 5 + n + (rnd() & 0xFFFF), NULL));
+            free(xs);
+            pz_afree(cells);
+        }
+}
+
+/* the SSE2 and the portable comparison of the 8 tags of a bucket must always agree */
+static void t_bucket_compare(void)
+{
+    u64 *bk = pz_xaligned(64, BS_BUCKET * 8);
+    const u64 edge_tags[] = {0, 1, 0xFFFFFF, 0x800000, 0x000100, 0xFFFF00};
+    const u64 edge_b[] = {1, 2, BS_VAL_MASK, (u64)1 << 39, (u64)1 << 32, 0xFFFFFFFFULL};
+    int yes = 0, no = 0;
+    for (int iter = 0; iter < 300000; iter++) {
+        int n = (int)(rnd() % (BS_BUCKET + 1));
+        for (int j = 0; j < BS_BUCKET; j++) {
+            u64 tg = (rnd() & 3) == 0 ? edge_tags[rnd() % 6] : rnd() & BS_TAG_MASK;
+            u64 bb = (rnd() & 3) == 0 ? edge_b[rnd() % 6] : 1 + rnd() % BS_VAL_MASK;
+            bk[j] = j < n ? (tg << BS_VAL_BITS) | bb : 0;
+        }
+        u64 tag;
+        switch (rnd() % 6) {
+        case 0: tag = 0; break;
+        case 1: tag = BS_TAG_MASK; break;
+        case 2: tag = edge_tags[rnd() % 6]; break;
+        case 3: case 4: tag = n ? bk[rnd() % (u64)n] >> BS_VAL_BITS : 5; break;      /* present */
+        default: tag = rnd() & BS_TAG_MASK; break;
+        }
+        bool a = bs_bucket_maybe(bk, tag), c = bs_bucket_maybe_scalar(bk, tag), exact = false;
+        for (int j = 0; j < n; j++) exact |= (bk[j] >> BS_VAL_BITS) == tag;
+        CHECK(a == c);
+        CHECK(!exact || a);                                  /* never a miss for a tag that is in the bucket */
+        CHECK(tag == 0 || a == exact);                       /* and exact for any tag but 0 (an empty cell has the tag 0) */
+        yes += a; no += !a;
+    }
+    CHECK(yes > 1000 && no > 1000);
+    pz_afree(bk);
+}
+
+/* the table built by one thread and by several holds the same babies (where each one sits in its bucket may differ) */
+static void t_build_threads(void)
+{
+    char err[200];
+    const u64 T = 20000;
+    bsgs_table a, b;
+    CHECK(bsgs_table_alloc(&a, T, err, sizeof err) && bsgs_table_alloc(&b, T, err, sizeof err));
+    CHECK(a.nslots == bsgs_slots_for(T) && !a.linear && ((uintptr_t)a.slots & 63) == 0);
+    CHECK(bsgs_table_build(&a, 1, NULL, NULL));
+    CHECK(bsgs_table_build(&b, 4, NULL, NULL));
+    CHECK(bsgs_table_count(&a, 3) == T && bsgs_table_count(&b, 3) == T);
+    check_bucket_order(&a, T);
+    check_bucket_order(&b, T);
+    u64 *sa = malloc(T * 8), *sb = malloc(T * 8), n = 0;
+    for (u64 i = 0; i < a.nslots; i++) if (a.slots[i]) sa[n++] = a.slots[i];
+    CHECK(n == T);
+    n = 0;
+    for (u64 i = 0; i < b.nslots; i++) if (b.slots[i]) sb[n++] = b.slots[i];
+    CHECK(n == T);
+    qsort(sa, T, 8, cmp_u64);
+    qsort(sb, T, 8, cmp_u64);
+    CHECK(memcmp(sa, sb, T * 8) == 0);
+    /* every baby step is found in both, with its own index */
+    int wrong = 0;
+    for (u64 k = 1; k <= T; k++) {
+        pz_ge q = pub_of(&(pz_u256){{k, 0, 0, 0}});
+        pz_fe x = q.x;
+        pz_fe_normalize(&x);
+        u64 ga = 0, gb = 0;
+        CHECK(bsgs_table_contains(&a, x.n[0], x.n[1], &ga) && bsgs_table_contains(&b, x.n[0], x.n[1], &gb));
+        wrong += (ga != k) + (gb != k);                    /* only a tag collision inside a bucket can return another index */
+    }
+    CHECK(wrong <= 2);
+    free(sa); free(sb);
+    bsgs_table_free(&a);
+    bsgs_table_free(&b);
+}
+
+/* ---- the old format (PZBSGS01), written here from its description, and checked against a file written by the version that had it ---- */
+
+static u64 old_slots(u64 T) { u64 n = (u64)ceill((long double)T / (long double)0.65) + 64; return (n + 7) & ~(u64)7; }
+
+static u64 old_mix(u64 v, u64 i)
+{
+    u64 x = (v + i * 0x9E3779B97F4A7C15ULL) * 0xC2B2AE3D27D4EB4FULL;
+    x = (x << 31 | x >> 33) * 0x165667B19E3779F9ULL;
+    return x ^ (x >> 29);
+}
+
+static void put64(unsigned char *p, u64 v) { for (int i = 0; i < 8; i++) p[i] = (unsigned char)(v >> (8 * i)); }
+
+/* The file of the first version for T baby steps added in order b = 1..T to a single array of cells (linear probing, load 0.65),
+ * as one thread of that version did it; returns the bytes (header and cells) and their number. */
+static unsigned char *old_file(u64 T, size_t *len)
+{
+    const u64 n = old_slots(T);
+    unsigned char *f = calloc(1, 4096 + n * 8);
+    u64 *cells = calloc(n, 8);
+    for (u64 b = 1; b <= T; b++) {
+        pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
+        pz_fe x = q.x;
+        pz_fe_normalize(&x);
+        u64 i = (u64)(((u128)x.n[0] * n) >> 64);
+        while (cells[i]) i = i + 1 == n ? 0 : i + 1;
+        cells[i] = ((x.n[1] & 0xFFFFFF) << 40) | b;
+    }
+    u64 sum = 0;
+    for (u64 i = 0; i < n; i++) { sum += old_mix(cells[i], i); put64(f + 4096 + i * 8, cells[i]); }
+    memcpy(f, "PZBSGS01", 8);
+    put64(f + 8, 0x0102030405060708ULL);
+    put64(f + 16, 1);
+    put64(f + 24, T);
+    put64(f + 32, n);
+    put64(f + 40, 24);
+    put64(f + 48, 40);
+    put64(f + 56, T);
+    put64(f + 64, sum);
+    pz_fe_to_be(f + 72, &pz_ec_g.x);
+    pz_ge tg = pub_of(&(pz_u256){{T, 0, 0, 0}});
+    pz_fe_to_be(f + 104, &tg.x);
+    pz_sha256(f, 4096 - 32, f + 4096 - 32);
+    free(cells);
+    *len = 4096 + n * 8;
+    return f;
+}
+
+static bool write_file(const char *path, const unsigned char *d, size_t n)
+{
+    int fd = pz_open_rw(path, true);
+    if (fd < 0) return false;
+    bool ok = pz_pwrite(fd, d, n, 0) == (i64)n;
+    close(fd);
+    return ok;
+}
+
+static unsigned char *read_file(const char *path, size_t *n)
+{
+    int fd = pz_open_read(path);
+    if (fd < 0) return NULL;
+    i64 sz = pz_fd_size(fd);
+    unsigned char *d = malloc((size_t)sz);
+    bool ok = pz_pread(fd, d, (size_t)sz, 0) == sz;
+    close(fd);
+    if (!ok) { free(d); return NULL; }
+    *n = (size_t)sz;
+    return d;
+}
+
+static void t_old_format(void)
+{
+    char err[200], tdir[600], path[700], path2[700];
+    CHECK(pz_make_temp_dir(tdir, sizeof tdir, "pzbsgs1"));
+    snprintf(path, sizeof path, "%s/old.bin", tdir);
+    snprintf(path2, sizeof path2, "%s/resaved.bin", tdir);
+
+    /* the file for 500 baby steps is, byte for byte, the one that the version with this format wrote with one thread */
+    size_t len;
+    unsigned char *f = old_file(500, &len), dg[32];
+    char hex[65];
+    pz_sha256(f, len, dg);
+    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", dg[i]);
+    CHECK(len == 10816 && strcmp(hex, "ab8979a87569961b08aa4453f421b35442f50e37726d48d69da598a78d2a3d51") == 0);
+    free(f);
+
+    const u64 Ts[] = {500, 3000};
+    for (size_t ti = 0; ti < 2; ti++) {
+        const u64 T = Ts[ti];
+        f = old_file(T, &len);
+        CHECK(write_file(path, f, len));
+        u64 pt = 0, ram = 0;
+        CHECK(bsgs_table_peek(path, &pt, err, sizeof err) && pt == T);
+        CHECK(bsgs_table_peek_ram(path, &pt, &ram, err, sizeof err) && pt == T && ram == old_slots(T) * 8 && ram > bsgs_bytes_for(T));
+        bsgs_table l;
+        CHECK(bsgs_table_load(&l, path, 3, err, sizeof err));
+        CHECK(l.linear && l.T == T && l.nslots == old_slots(T));
+        /* every baby step is there */
+        int wrong = 0;
+        for (u64 b = 1; b <= T; b++) {
+            pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
+            pz_fe x = q.x;
+            pz_fe_normalize(&x);
+            u64 got = 0;
+            CHECK(bsgs_table_contains(&l, x.n[0], x.n[1], &got));
+            wrong += got != b;
+        }
+        CHECK(wrong <= 1);
+        /* a search with it finds the key, like one with a table of the new layout */
+        {
+            const u64 lo0 = 1ULL << 22, W = 1ULL << 20, key0 = lo0 + 777777;
+            pz_u256 lo = pz_u256_from_u64(lo0), hi = pz_u256_from_u64(lo0 + W - 1), key = pz_u256_from_u64(key0);
+            pz_ge P = pub_of(&key);
+            bsgs_params p;
+            CHECK(bsgs_params_init(&p, &lo, &hi, &P, T, err, sizeof err));
+            bsgs_job job;
+            bsgs_job_init(&job, &l, &p);
+            hit_rec h = {pz_u256_zero(), 0, NULL, false};
+            CHECK(bsgs_scan(&job, -(int64_t)p.A, p.Ng, on_hit, &h, NULL, NULL, NULL) == p.Ng);
+            CHECK(h.hits == 1 && !pz_u256_cmp(&h.key, &key));
+        }
+        /* saved again, it is the same file: the old format stays the old format */
+        CHECK(bsgs_table_save(&l, path2, 2, err, sizeof err));
+        size_t len2;
+        unsigned char *g = read_file(path2, &len2);
+        CHECK(g && len2 == len && memcmp(g, f, len) == 0);
+        free(g);
+        bsgs_table_free(&l);
+        /* damage is found as in the new format */
+        unsigned char *bad = malloc(len);
+        memcpy(bad, f, len);
+        bad[4096 + (len - 4096) / 2] ^= 0x10;
+        CHECK(write_file(path, bad, len));
+        CHECK(!bsgs_table_load(&l, path, 2, err, sizeof err));
+        memcpy(bad, f, len);
+        bad[16] ^= 1;                                                    /* the version, in the header */
+        CHECK(write_file(path, bad, len));
+        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err) && !bsgs_table_load(&l, path, 2, err, sizeof err));
+        free(bad);
+        free(f);
+    }
+    /* a table of the new layout is not read as the old one and the other way round: the magic decides */
+    {
+        bsgs_table t;
+        CHECK(bsgs_table_alloc(&t, 300, err, sizeof err) && bsgs_table_build(&t, 2, NULL, NULL));
+        CHECK(bsgs_table_save(&t, path, 2, err, sizeof err));
+        size_t n = 0;
+        unsigned char *d = read_file(path, &n);
+        CHECK(d && n == 4096 + t.nslots * 8 && memcmp(d, "PZBSGS02", 8) == 0);
+        u64 pt, ram;
+        CHECK(bsgs_table_peek_ram(path, &pt, &ram, err, sizeof err) && pt == 300 && ram == bsgs_bytes_for(300));
+        memcpy(d, "PZBSGS01", 8);                                       /* the checksum of the header no longer fits */
+        CHECK(write_file(path, d, n));
+        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err));
+        memcpy(d, "PZBSGS03", 8);
+        CHECK(write_file(path, d, n));
+        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err) && strstr(err, "not supported"));
+        free(d);
+        bsgs_table_free(&t);
+    }
+    CHECK(pz_remove_tree(tdir) == 0);
 }
 
 static void solve_expect(const pz_u256 *lo, const pz_u256 *hi, const pz_u256 *key, u64 T, int nthreads)
@@ -253,8 +617,6 @@ static void t_window_edges(void)
     CHECK(done > 60);
 }
 
-typedef struct { pz_u256 key; int hits; _Atomic int *stop; bool stop_on_hit; } hit_rec;
-static void on_hit(void *u, const pz_u256 *k) { hit_rec *h = u; h->hits++; h->key = *k; if (h->stop_on_hit) atomic_store(h->stop, 1); }
 
 /* bsgs_scan: return value, progress accounting and the stop flag */
 static void t_scan_contract(void)
@@ -364,6 +726,11 @@ int main(void)
     t_coverage();
     t_sizing();
     t_table();
+    t_bucket_overflow();
+    t_bucket_random();
+    t_bucket_compare();
+    t_build_threads();
+    t_old_format();
     t_solve();
     t_window_edges();
     t_scan_contract();
