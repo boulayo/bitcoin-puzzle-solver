@@ -195,11 +195,7 @@ static const kang_species KSPEC3[] = {
 
 _Static_assert(sizeof KSPEC3 / sizeof *KSPEC3 <= 255, "the species index of a walker is a byte");
 
-static const kang_species *spec_table(int *n)
-{
-    *n = (int)(sizeof KSPEC3 / sizeof *KSPEC3);
-    return KSPEC3;
-}
+#define NKSPEC3 ((int)(sizeof KSPEC3 / sizeof *KSPEC3))
 
 /* floor(sqrt(n)) with integers only: the jump table must come out the same on every architecture (long double is
  * 80 bits on x86, 64 on Apple arm64 and 128 on Linux arm64, so a table computed with it could differ between computers). */
@@ -271,7 +267,6 @@ kang_state *kang_create(run_ctx *r)
 static void kang_setup(kang_state *ks)
 {
     run_ctx *r = ks->r;
-    ks->c_mean = KANG_C_MEAN;
     ks->base = r->cfg.range_start;
     if (pz_u256_is_zero(&ks->base)) {
         ks->Qp = r->cfg.pubkey;
@@ -286,7 +281,7 @@ static void kang_setup(kang_state *ks)
     }
     pz_ge q2;
     if (!pz_ge_add(&q2, &ks->Qp, &ks->Qp) || !pz_ge_add(&ks->Q3, &q2, &ks->Qp)) ks->Q3 = ks->Qp;   /* only if Qp is not a point: the key was found above */
-    ks->expected_steps = ks->c_mean * ks->sqrtW;
+    ks->expected_steps = KANG_C_MEAN * ks->sqrtW;
 }
 
 /* Called once the total number of walkers (CPU + GPU) is known. */
@@ -347,7 +342,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
             m = pz_u256_mul_u32(&rw, (u32)pz_atoi(tj));
         } else {
             m = u256_mul_u64(&rw, qw.w[0]);                                 /* W^(3/4); W^(1/4) < 2^48 */
-            m = pz_u256_shr(&m, 4);                                            /* / KANG_JUMP_DIV (16) */
+            m = pz_u256_shr(&m, 4);                                            /* the mean jump is W^(3/4) / 16 */
         }
         if (pz_u256_bits(&m) > 120) m = pz_u256_pow2(120);                        /* jump distances are 128-bit (W above 2^165) */
         mean3 = (u128)m.w[1] << 64 | m.w[0];
@@ -403,7 +398,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
     pz_log(PZ_LOG_INFO, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", ks->jump_id);
     pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
-           pz_fmt_si((double)ks->expected_steps, b3, sizeof b3), ks->c_mean, pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b1, sizeof b1));
+           pz_fmt_si((double)ks->expected_steps, b3, sizeof b3), (long double)KANG_C_MEAN, pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b1, sizeof b1));
     return 0;
 }
 
@@ -449,8 +444,8 @@ kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream)
      * species here is the group of bands with the same coefficient and residue (the first band of the group stands for it), and
      * every start draws the band at random by the shares: with a few dozen walkers and 51 bands, a fixed band per walker would
      * leave some residues without walkers, and the keys that only those could reach without a solution */
-    int ns;
-    const kang_species *sp = spec_table(&ns);
+    const int ns = NKSPEC3;
+    const kang_species *sp = KSPEC3;
     u64 gw[256] = {0}, tot = 0;
     int first[256];
     for (int s = 0; s < ns; s++) {
@@ -550,8 +545,8 @@ void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
         i192 d;
         int8_t sg = 1;
         {
-            int ns;
-            const kang_species *sp = spec_table(&ns), *band = &sp[w->spec[i]];
+            const int ns = NKSPEC3;
+            const kang_species *sp = KSPEC3, *band = &sp[w->spec[i]];
             u64 tot = 0;                                 /* a band of the walker's group, by the shares */
             for (int s = 0; s < ns; s++)
                 if (sp[s].coef == band->coef && sp[s].res == band->res) tot += sp[s].w;

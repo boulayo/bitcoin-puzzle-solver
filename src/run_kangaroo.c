@@ -29,7 +29,7 @@ static void kang_progress(run_ctx *r, progress_info *pi)
     u64 session = 0;
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
     long double done = (long double)(r->prev_units_total + session);
-    long double c = ks->c_mean / 0.8862269254527580L * ks->sqrtW;
+    long double c = KANG_C_MEAN / 0.8862269254527580L * ks->sqrtW;
     long double z = done / c;
     pi->done = done;
     pi->total = ks->expected_steps;

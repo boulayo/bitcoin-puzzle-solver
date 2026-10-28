@@ -25,7 +25,6 @@
 #define KANG_NESC 16             /* escape jumps, after the R regular ones: used only to leave a fruitless cycle */
 #define KANG_CK_PERIOD 64        /* steps between the cycle checkpoints (detects cycles up to ~31 steps) */
 #define KANG_NOTAG 0xFFFFFFFFu   /* "no tag yet" */
-#define KANG_JUMP_DIV 16.0L      /* mean jump W^(3/4) / KANG_JUMP_DIV */
 #define KANG_KSHIFT 3            /* bits of the kind code at the bottom of tagk */
 #define KANG_K_THREAD_MAX 4096   /* kangaroos per CPU thread: one field inversion per round of the herd (measured optimum) */
 
@@ -64,13 +63,6 @@ static inline void i192_sub(i192 *r, const i192 *a, const i192 *b)
     i192_neg(&nb);
     i192_add(r, a, &nb);
 }
-/* arithmetic shift right by one */
-static inline void i192_sar1(i192 *a)
-{
-    a->w[0] = a->w[0] >> 1 | a->w[1] << 63;
-    a->w[1] = a->w[1] >> 1 | a->w[2] << 63;
-    a->w[2] = (u64)((int64_t)a->w[2] >> 1);
-}
 static inline i192 i192_from_signed(bool neg, const pz_u256 *mag)
 {
     i192 r = {{mag->w[0], mag->w[1], mag->w[2]}};
@@ -105,7 +97,6 @@ typedef struct {
 typedef struct kang_state {
     run_ctx *r;
     pz_u256 W;                      /* interval width */
-    long double c_mean;          /* expected cost in units of sqrt(W) */
     char jump_id[9];             /* first 4 bytes of the SHA-256 of the jump table, in hex: equal on all computers of a campaign */
     pz_u256 base;                   /* key = base + x */
     pz_ge Qp;                       /* pubkey - base*G */
@@ -134,8 +125,6 @@ typedef struct kang_state {
     u64 loaded;
     u64 epoch;
     long double expected_steps;
-    pthread_t *threads;
-    int nthreads;
 } kang_state;
 
 /* per-worker (CPU or host-side GPU) kangaroo herd */
@@ -216,7 +205,7 @@ static inline void kang_dp_reserve(kang_worker *w)
 
 /* The kind code of a distinguished point of walker i, written by a step (tame / wild with its sign), becomes the code of its
  * species (three bits). */
-static inline void kang_dp_recode(const kang_state *ks, const kang_worker *w, dp_rec *r, int i)
+static inline void kang_dp_recode(const kang_worker *w, dp_rec *r, int i)
 {
     unsigned k = (unsigned)(r->tagk & 3);
     if (k && w->kind[i] == 3) k += 2;

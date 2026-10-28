@@ -622,7 +622,7 @@ static void *gpu_kang_thread(void *p)
             const uint32_t *o = dpraw + (size_t)i * 10;
             recs[i].tagk = (u64)o[0] | (u64)o[1] << 32;
             for (int j = 0; j < 3; j++) recs[i].d.w[j] = (u64)o[2 + 2 * j] | (u64)o[3 + 2 * j] << 32;
-            if (o[8] < (uint32_t)K) kang_dp_recode(ks, mirror, &recs[i], (int)o[8]);
+            if (o[8] < (uint32_t)K) kang_dp_recode(mirror, &recs[i], (int)o[8]);
         }
         atomic_fetch_add_explicit(&r->ws[s->widx].units, (u64)K * rounds, memory_order_relaxed);
         bool solved = nd && kang_insert_dps(ks, recs, (int)nd, dups);

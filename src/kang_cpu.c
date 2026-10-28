@@ -359,7 +359,7 @@ void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)
         atomic_fetch_add_explicit(&r->ws[widx].units, (u64)w->K, memory_order_relaxed);
         if (w->ndp > 0) {
             if (UNLIKELY(w->ndp > dupcap)) { dupcap = w->dpcap; dups = pz_xrealloc(dups, (size_t)dupcap * sizeof(bool)); }
-            for (int k = 0; k < w->ndp; k++) kang_dp_recode(ks, w, &w->dpbuf[k], w->dpidx[k]);
+            for (int k = 0; k < w->ndp; k++) kang_dp_recode(w, &w->dpbuf[k], w->dpidx[k]);
             if (kang_insert_dps(ks, w->dpbuf, w->ndp, dups)) { w->ndp = 0; break; }
             for (int k = 0; k < w->ndp; k++)
                 if (dups[k]) {
