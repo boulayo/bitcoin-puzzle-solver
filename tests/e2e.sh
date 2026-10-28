@@ -221,6 +221,27 @@ done
 rm -rf "$DIR/opt"
 $BIN hunt -p 130 -m bsgs -d "$DIR/opt" -q >/dev/null 2>&1 && bad "bsgs on puzzle 130 accepted" || { [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "bsgs on puzzle 130 rejected without leaving files" || bad "bsgs on puzzle 130 left a campaign behind"; }
 
+echo "== option values: errors named after the right option, values that do not fit are refused, not cut"
+mkdir -p "$DIR/ov"; BINABS=$(readlink -f "$BIN"); LONG=$(python3 -c "print('x'*700)")
+chk() {   # chk FRAGMENT COMMAND...: fails with that text, in a folder of its own where nothing may be created
+  local frag=$1 out rc label; shift
+  label=$(printf '%s ' "$@" | sed -E 's/[^ ]{40,}/<long>/g')
+  out=$(cd "$DIR/ov" && timeout 20 "$BINABS" "$@" 2>&1 </dev/null); rc=$?
+  [ $rc -ne 0 ] && echo "$out" | grep -q -- "$frag" && [ -z "$(ls -A "$DIR/ov")" ] && ok "$label: '$frag'" || bad "$label: rc=$rc: $(echo "$out" | head -1 | cut -c1-120)"
+}
+chk "unrecognized option '-x'" hunt -xq
+chk "unrecognized option '-x'" hunt -p 20 -qx
+chk "unrecognized option '--nonsense'" hunt --nonsense
+chk "the option '-p' needs a value" hunt -qp
+chk "--dir: invalid value ''" hunt -p 20 -d "" -q
+chk "--dir: invalid value ''" list -d ""
+chk "--dir: the value is too long" hunt -p 20 -d "$LONG" -q
+chk "--range: the value is too long" hunt -r "$LONG" -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH -q
+chk "--table: the value is too long" hunt -p 46 -m bsgs --table "$LONG" -q
+chk "--file: the value is too long" merge -c x -f "$LONG"
+chk "at most 1000000000" hunt -p 20 --mem 1e12 -q
+chk "--mem: invalid value 'inf'" hunt -p 20 --mem inf -q
+
 echo "== range option: the same messages for a new campaign and for a resume"
 rm -rf "$DIR/rg"; A1=1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
 $BIN hunt -r 1:ffff -a $A1 -c rg -d "$DIR/rg" --ui log -q --no-gpu >/dev/null 2>&1

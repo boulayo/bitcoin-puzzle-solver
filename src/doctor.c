@@ -244,7 +244,10 @@ int doctor_run(int argc, char **argv)
     const char *base = "campaigns";
     bool deep = false;
     for (int i = 1; i < argc; i++) {
-        if ((!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) && i + 1 < argc) base = argv[++i];
+        if ((!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) && i + 1 < argc) {
+            base = argv[++i];
+            if (!base[0]) pz_die("--dir: invalid value '' (expected the name of a folder)");
+        }
         else if (!strcmp(argv[i], "--full")) deep = true;
         else pz_die("unrecognized option '%s' (doctor accepts -d DIR and --full)", argv[i]);
     }

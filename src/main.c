@@ -211,13 +211,21 @@ static long long opt_int(const char *opt, const char *s, long long lo, long long
     return v;
 }
 
-static double opt_positive_double(const char *opt, const char *s)
+/* A positive number of at most `max`. */
+static double opt_positive_double(const char *opt, const char *s, double max)
 {
     char *end;
     errno = 0;
     double v = strtod(s, &end);
-    if (end == s || *end || errno == ERANGE || !(v > 0) || v > 1e12) pz_die("%s: invalid value '%s' (expected a positive number)", opt, s);
+    if (end == s || *end || errno == ERANGE || !(v > 0) || v > max) pz_die("%s: invalid value '%s' (expected a positive number, at most %.0f)", opt, s, max);
     return v;
+}
+
+/* Copies the value of an option into a field of the options: a value that does not fit is refused, not cut. */
+static void opt_copy(const char *opt, char *dst, size_t n, const char *val)
+{
+    if (strlen(val) >= n) pz_die("%s: the value is too long (at most %zu characters)", opt, n - 1);
+    memcpy(dst, val, strlen(val) + 1);
 }
 
 /* A speed such as 800000000, 800M or 1.5G (suffixes k, M, G, T). */
@@ -258,6 +266,17 @@ static bool valid_campaign_name(const char *n)
     return true;
 }
 
+/* The text of the option getopt_long has just rejected (unknown, or missing its value). A short option, alone or in a cluster ("-xq"), is
+ * named by optopt: the element of argv that getopt is working on is not the one before optind then. A long one has been consumed whole. */
+static const char *bad_option(char **argv, char *buf, size_t n)
+{
+    if (optopt > 32 && optopt < 127) {
+        snprintf(buf, n, "-%c", optopt);
+        return buf;
+    }
+    return argv[optind - 1];
+}
+
 static void parse_opts(int argc, char **argv, opts_t *o)
 {
     memset(o, 0, sizeof *o);
@@ -272,21 +291,25 @@ static void parse_opts(int argc, char **argv, opts_t *o)
     snprintf(o->isa, sizeof o->isa, "auto");
     optind = 1;
     int c;
+    char optbuf[8];
     opterr = 0;
     while ((c = getopt_long(argc, argv, ":p:r:a:H:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
         switch (c) {
         case 'p': o->puzzle = (int)opt_int("--puzzle", optarg, 1, 256); break;
-        case 'r': pz_strlcpy(o->range, optarg, sizeof o->range); break;
-        case 'a': pz_strlcpy(o->address, optarg, sizeof o->address); break;
-        case 'H': pz_strlcpy(o->hash160, optarg, sizeof o->hash160); break;
-        case 'k': pz_strlcpy(o->pubkey, optarg, sizeof o->pubkey); break;
+        case 'r': opt_copy("--range", o->range, sizeof o->range, optarg); break;
+        case 'a': opt_copy("--address", o->address, sizeof o->address, optarg); break;
+        case 'H': opt_copy("--hash160", o->hash160, sizeof o->hash160, optarg); break;
+        case 'k': opt_copy("--pubkey", o->pubkey, sizeof o->pubkey, optarg); break;
         case 'c':
             if (!valid_campaign_name(optarg)) pz_die("invalid campaign name '%s' (allowed: letters, digits, '-', '_', '.'; at most 80 characters; cannot start with '.')", optarg);
             pz_strlcpy(o->campaign, optarg, sizeof o->campaign);
             break;
-        case 'd': pz_strlcpy(o->dir, optarg, sizeof o->dir); break;
-        case 's': pz_strlcpy(o->seed, optarg, sizeof o->seed); break;
-        case 'm': pz_strlcpy(o->mode, optarg, sizeof o->mode); break;
+        case 'd':
+            if (!optarg[0]) pz_die("--dir: invalid value '' (expected the name of a folder)");
+            opt_copy("--dir", o->dir, sizeof o->dir, optarg);
+            break;
+        case 's': opt_copy("--seed", o->seed, sizeof o->seed, optarg); break;
+        case 'm': opt_copy("--mode", o->mode, sizeof o->mode, optarg); break;
         case 't': o->threads = (int)opt_int("--threads", optarg, 1, MAX_WORKERS - 16); break;
         case O_NOCPU: o->no_cpu = true; break;
         case O_NOGPU: o->no_gpu = true; break;
@@ -311,7 +334,8 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         case O_NODE: o->node = (int)opt_int("--node", optarg, 0, 65535); break;
         case 'f':
             if (o->nfiles >= 16) pz_die("at most 16 files at a time with -f");
-            pz_strlcpy(o->files[o->nfiles++], optarg, sizeof o->files[0]);
+            opt_copy("--file", o->files[o->nfiles], sizeof o->files[0], optarg);
+            o->nfiles++;
             break;
         case O_GPU:
             for (const char *q = optarg;; q++) {   /* digits separated by single commas: "0", "0,2" */
@@ -320,7 +344,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
                 if (!digit && !sep_ok) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", optarg);
                 if (!*q) break;
             }
-            pz_strlcpy(o->gpu, optarg, sizeof o->gpu);
+            opt_copy("--gpu", o->gpu, sizeof o->gpu, optarg);
             break;
         case O_GPUAPI:
             if (!strcmp(optarg, "auto")) gpu_set_api_pref(GPU_API_AUTO);
@@ -328,18 +352,18 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else if (!strcmp(optarg, "opencl")) gpu_set_api_pref(GPU_API_OPENCL);
             else pz_die("--gpu-api must be auto, cuda or opencl");
             break;
-        case O_ISA: pz_strlcpy(o->isa, optarg, sizeof o->isa); break;
+        case O_ISA: opt_copy("--isa", o->isa, sizeof o->isa, optarg); break;
         case O_CHUNK: o->chunk_bits = (int)opt_int("--chunk-bits", optarg, 20, 40); break;   /* smaller blocks starve the GPUs and slow the CPU */
         case O_DP: o->dp_bits = (int)opt_int("--dp-bits", optarg, 0, 60); break;
-        case O_MEM: o->mem_gb = opt_positive_double("--mem", optarg); break;
+        case O_MEM: o->mem_gb = opt_positive_double("--mem", optarg, 1e9); break;   /* GB: 1e9 of them still fit in 64 bits of bytes */
         case O_REPORT: o->report_interval = (int)opt_int("--report-interval", optarg, 1, 86400); break;
         case O_CKPT: o->checkpoint_interval = (int)opt_int("--checkpoint-interval", optarg, 1, 86400); break;
         case 'q': o->quiet = true; break;
         case 'v': o->verbose = true; break;
         case O_NEW: o->want_new = true; break;
         case O_RESUME: o->want_resume = true; break;
-        case O_KEY: pz_strlcpy(o->key, optarg, sizeof o->key); break;
-        case O_TABLE: pz_strlcpy(o->table, optarg, sizeof o->table); break;
+        case O_KEY: opt_copy("--key", o->key, sizeof o->key, optarg); break;
+        case O_TABLE: opt_copy("--table", o->table, sizeof o->table, optarg); break;
         case O_BSGSN: o->bsgs_entries = opt_u64("--bsgs-entries", optarg, 1, BS_MAX_T); break;
         case O_UI:
             if (!strcmp(optarg, "auto")) o->ui = UI_AUTO;
@@ -349,8 +373,8 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else pz_die("--ui must be auto, full, line or log");
             break;
         case 'h': pz_help(g_cmd, stdout); exit(0);
-        case ':': pz_die("the option '%s' needs a value (see 'pzsolve help %s')", argv[optind - 1], g_cmd);
-        default: pz_die("unrecognized option '%s' (see 'pzsolve help %s')", argv[optind - 1], g_cmd);
+        case ':': pz_die("the option '%s' needs a value (see 'pzsolve help %s')", bad_option(argv, optbuf, sizeof optbuf), g_cmd);
+        default: pz_die("unrecognized option '%s' (see 'pzsolve help %s')", bad_option(argv, optbuf, sizeof optbuf), g_cmd);
         }
     }
     if (optind < argc) {
