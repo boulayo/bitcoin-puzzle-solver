@@ -236,6 +236,15 @@ int kang_flush_log(kang_state *ks);
 typedef struct { u64 read, added, dups, skipped; bool solved; } kang_merge_stats;
 int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);
 
+/* The file of distinguished points (kang_log.c) and the table it feeds (kangaroo.c). Magic of the logs of this campaign: logs of earlier
+ * layouts of the walkers ("PZDP1" to "PZDP3", written by versions before 1.9.1) have other kind codes and another base, their points
+ * cannot be mixed with these. */
+#define KANG_LOG_MAGIC "PZDP4\n"
+void kang_log_fp(const kang_state *ks, u8 fp[32]);                                       /* fingerprint of the campaign in a log header */
+FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32]);
+void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
+int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log);                 /* mu held: 1 inserted, 0 duplicate, 2 solved, -1 skipped */
+
 kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream);
 void kang_worker_free(kang_worker *w);
 void kang_restart_one(kang_state *ks, kang_worker *w, int i);

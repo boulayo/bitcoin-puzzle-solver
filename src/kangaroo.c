@@ -95,9 +95,6 @@ static bool solve_pair(kang_state *ks, const dp_rec *a, const dp_rec *b)
     return run_submit_key(ks->r, &key, "kangaroo");
 }
 
-#define KANG_LOG_BUF_MAX ((size_t)1 << 22)      /* records the log buffer may grow to while the disk refuses writes (128 MiB) */
-static void log_push(kang_state *ks, const dp_rec *rec);
-
 /* False (nothing changed) when the memory for the larger table is not there. */
 static bool table_grow(kang_state *ks)
 {
@@ -147,7 +144,7 @@ static void table_thin(kang_state *ks)
 }
 
 /* mu held. Returns 1 inserted, 0 duplicate of same kind, 2 solved, -1 skipped (thinned out) */
-static int table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
+int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
 {
     if (ks->thin_mask && ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask)) { atomic_fetch_add(&ks->dropped, 1); return -1; }
     if (ks->count * 10 >= ks->cap * 8) {
@@ -165,7 +162,7 @@ static int table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
         if (dp_empty(e)) {
             *e = *rec;
             ks->count++;
-            if (!from_log) log_push(ks, rec);
+            if (!from_log) kang_log_push(ks, rec);
             return 1;
         }
         if ((e->tagk >> KANG_KSHIFT) == (rec->tagk >> KANG_KSHIFT)) {
@@ -183,179 +180,12 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
     bool solved = false;
     pthread_mutex_lock(&ks->mu);
     for (int i = 0; i < n; i++) {
-        int rc = table_insert(ks, &recs[i], false);
+        int rc = kang_table_insert(ks, &recs[i], false);
         if (dup_out) dup_out[i] = (rc == 0);
         if (rc == 2) { solved = true; break; }
     }
     pthread_mutex_unlock(&ks->mu);
     return solved;
-}
-
-/* ---------------- log persistence ---------------- */
-
-/* Fingerprint of the campaign in a DP log: base, W and public key. */
-static void log_fingerprint(const kang_state *ks, const pz_u256 *base, const char *tag, u8 fp[32])
-{
-    u8 buf[32 * 3 + 33];
-    pz_u256_to_be(base, buf);
-    pz_u256_to_be(&ks->W, buf + 32);
-    memcpy(buf + 64, tag, 8);
-    memcpy(buf + 72, ks->r->cfg.pubkey33, 33);
-    pz_sha256(buf, 72 + 33, fp);
-}
-
-/* A write failed (disk full, quota, I/O error): what reached the file is unknown, maybe a torn record, maybe whole ones. Reopens the file,
- * cuts it back to whole records and drops from the buffer the records that did get there, so the next write appends exactly the rest. */
-static int log_resync(kang_state *ks)
-{
-    if (ks->log) { fclose(ks->log); ks->log = NULL; }
-    FILE *f = fopen(ks->log_path, "rb");
-    if (!f) return -1;
-    const off_t size = fseeko(f, 0, SEEK_END) == 0 ? ftello(f) : -1;
-    fclose(f);
-    if (size < 38) return -1;
-    const u64 whole = (u64)(size - 38) / sizeof(dp_rec);
-    if (truncate(ks->log_path, 38 + (off_t)(whole * sizeof(dp_rec))) != 0) return -1;
-    const u64 on_file = whole > ks->log_recs ? whole - ks->log_recs : 0;      /* of the buffered records, already written */
-    const size_t drop = on_file > ks->nlog ? ks->nlog : (size_t)on_file;
-    memmove(ks->logbuf, ks->logbuf + drop, (ks->nlog - drop) * sizeof(dp_rec));
-    ks->nlog -= drop;
-    ks->log_recs = whole;
-    ks->log = fopen(ks->log_path, "ab");
-    if (!ks->log) return -1;
-    ks->log_broken = false;
-    return 0;
-}
-
-int kang_flush_log(kang_state *ks)
-{
-    if (!ks->log && !ks->log_broken) return 0;                       /* no log at all (test states) */
-    if (ks->log_broken && log_resync(ks) != 0) return -1;
-    if (ks->nlog && (fwrite(ks->logbuf, sizeof(dp_rec), ks->nlog, ks->log) != ks->nlog || fflush(ks->log) != 0)) {
-        ks->log_broken = true;
-        return -1;
-    }
-    if (ks->nlog) {
-        ks->log_recs += ks->nlog;
-        ks->nlog = 0;
-        ks->log_warned = false;
-        return 0;
-    }
-    if (fflush(ks->log) != 0) { ks->log_broken = true; return -1; }
-    return 0;
-}
-
-/* mu held. Appends to the log buffer, writing it out when it is full. When the disk refuses, the buffer grows (up to KANG_LOG_BUF_MAX
- * records) instead of overflowing, and the next checkpoint tries again; beyond that new points stay in the table only. */
-static void log_push(kang_state *ks, const dp_rec *rec)
-{
-    if (!ks->log && !ks->log_broken) return;
-    if (ks->nlog == ks->caplog) {
-        kang_flush_log(ks);
-        if (ks->nlog == ks->caplog) {
-            if (ks->caplog >= KANG_LOG_BUF_MAX) {
-                atomic_fetch_add(&ks->dropped, 1);
-                if (!ks->log_warned) {
-                    ks->log_warned = true;
-                    pz_log(PZ_LOG_ERR, "writing %s failed (disk full?): new distinguished points stay in RAM only and will be lost if the program stops", ks->log_path);
-                }
-                return;
-            }
-            ks->caplog *= 2;
-            ks->logbuf = pz_xrealloc(ks->logbuf, ks->caplog * sizeof(dp_rec));
-        }
-    }
-    ks->logbuf[ks->nlog++] = *rec;
-}
-
-/* Magic and fingerprint of the logs of this campaign. Logs of earlier layouts of the walkers ("PZDP1" to "PZDP3", written by
- * versions before 1.9.1) have other kind codes and another base: their points cannot be mixed with these. */
-#define LOG_MAGIC "PZDP4\n"
-static void log_fp(const kang_state *ks, u8 fp[32]) { log_fingerprint(ks, &ks->base, "PZDPLOG4", fp); }
-
-static FILE *log_create(const kang_state *ks, const char *path, const u8 fp[32])
-{
-    FILE *f = fopen(path, "wb");
-    if (!f) return NULL;
-    fwrite(LOG_MAGIC, 1, 6, f);
-    fwrite(fp, 1, 32, f);
-    fflush(f);
-    return f;
-}
-
-int kang_load_log(kang_state *ks)
-{
-    FILE *f = fopen(ks->log_path, "rb");
-    u8 fp[32];
-    log_fp(ks, fp);
-    if (!f) {
-        ks->log = log_create(ks, ks->log_path, fp);
-        return ks->log ? 1 : -1;
-    }
-    u8 hdr[38];
-    bool hdr_ok = fread(hdr, 1, 38, f) == 38;
-    if (hdr_ok && !memcmp(hdr, "PZDP", 4) && memcmp(hdr, LOG_MAGIC, 6) != 0) {
-        /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
-         * small intervals): its points cannot be used. It is kept under another name and the campaign goes on with a new log. */
-        char old[640];
-        snprintf(old, sizeof old, "%s.v%c", ks->log_path, hdr[4]);
-        fclose(f);
-        if (rename(ks->log_path, old) != 0) {
-            pz_log(PZ_LOG_ERR, "file %s was written by an older layout of the kangaroo and cannot be used, and it could not be moved away", ks->log_path);
-            return -1;
-        }
-        pz_log(PZ_LOG_WARN, "distinguished points: %s was written by an older layout of the kangaroo (versions up to 1.9.0, small intervals) and cannot be "
-               "used; it is kept as %s and the campaign goes on with a new file", ks->log_path, old);
-        ks->log = log_create(ks, ks->log_path, fp);
-        return ks->log ? 1 : -1;
-    }
-    if (!hdr_ok || memcmp(hdr, LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) {
-        fclose(f);
-        pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header): ignored", ks->log_path);
-        return -1;
-    }
-    dp_rec rec;
-    u64 n = 0;
-    pthread_mutex_lock(&ks->mu);
-    while (fread(&rec, sizeof rec, 1, f) == 1) {
-        int rc = table_insert(ks, &rec, true);
-        n++;
-        if (rc == 2) break;
-    }
-    pthread_mutex_unlock(&ks->mu);
-    fclose(f);
-    ks->loaded = n;
-    ks->log_recs = n;
-    /* truncate any partially written tail record and continue appending */
-    off_t good = 38 + (off_t)(n * sizeof(dp_rec));
-    if (truncate(ks->log_path, good) != 0) { /* best effort */ }
-    ks->log = fopen(ks->log_path, "ab");
-    return ks->log ? 0 : -1;
-}
-
-/* Adds the distinguished points of another computer's log of the same campaign (same range and public key; the jump table must
- * be the same too, i.e. the same seed, or the walks of the two computers never meet): returns 0, -1 if the file cannot be
- * opened, -2 if it is not a log of this campaign. A collision between a tame and a wild point solves the key. */
-int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f) return -1;
-    u8 hdr[38], fp[32];
-    log_fp(ks, fp);
-    if (fread(hdr, 1, 38, f) != 38 || memcmp(hdr, LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) { fclose(f); return -2; }
-    dp_rec rec;
-    pthread_mutex_lock(&ks->mu);
-    while (fread(&rec, sizeof rec, 1, f) == 1) {      /* a partly written last record is ignored */
-        st->read++;
-        const int rc = table_insert(ks, &rec, false);
-        if (rc == 1) st->added++;
-        else if (rc == 0) st->dups++;
-        else if (rc < 0) st->skipped++;
-        else { st->solved = true; break; }
-    }
-    pthread_mutex_unlock(&ks->mu);
-    fclose(f);
-    return 0;
 }
 
 /* x.n[2] of (sign*X + d)*G for the self-tests of the merge and of the collisions */
@@ -1183,7 +1013,7 @@ static int merge_selftest(void)
     pz_u256_sub(&m, &key, &ks->base);
     const i192 X = i192_from_signed(false, &m);   /* the unknown offset from the base */
     u8 fp[32];
-    log_fp(ks, fp);
+    kang_log_fp(ks, fp);
     const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
     char dir[700], pa[760], pb[760], pc[760];
     pz_strlcpy(dir, ks->r->cfg.dir, sizeof dir);
@@ -1200,11 +1030,11 @@ static int merge_selftest(void)
         kang_free_test_state(ks);
         return 1;
     }
-    fwrite(LOG_MAGIC, 1, 6, fa); fwrite(fp, 1, 32, fa);
-    fwrite(LOG_MAGIC, 1, 6, fb); fwrite(fp, 1, 32, fb);
+    fwrite(KANG_LOG_MAGIC, 1, 6, fa); fwrite(fp, 1, 32, fa);
+    fwrite(KANG_LOG_MAGIC, 1, 6, fb); fwrite(fp, 1, 32, fb);
     u8 other[32];
     memset(other, 0x5A, sizeof other);
-    fwrite(LOG_MAGIC, 1, 6, fc); fwrite(other, 1, 32, fc);
+    fwrite(KANG_LOG_MAGIC, 1, 6, fc); fwrite(other, 1, 32, fc);
     for (int i = 0; i < 3; i++) {
         const pz_u256 dw256 = pz_u256_from_u64(dws[i]);
         const i192 dw = i192_from_signed(false, &dw256);
@@ -1311,7 +1141,7 @@ int kang_log_fault_selftest(void)
         const int N = 3000;
         for (int i = 0; i < N; i++) {
             rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
-            table_insert(ks, &rec, false);
+            kang_table_insert(ks, &rec, false);
         }
         LCHK(ks->nlog == (size_t)N && ks->caplog >= (size_t)N);        /* the buffer grew instead of overflowing; no point was lost */
         LCHK(kang_flush_log(ks) == -1 && ks->log_broken);
@@ -1326,9 +1156,9 @@ int kang_log_fault_selftest(void)
     snprintf(path, sizeof path, "%s/disk.bin", ks->r->cfg.dir);
     pz_strlcpy(ks->log_path, path, sizeof ks->log_path);
     u8 fp[32];
-    log_fp(ks, fp);
+    kang_log_fp(ks, fp);
     if (ks->log) { fclose(ks->log); ks->log = NULL; }                  /* the stream of step 1 (the resync of the log may have closed it already) */
-    ks->log = log_create(ks, path, fp);
+    ks->log = kang_log_create(ks, path, fp);
     ks->log_recs = 0;
     ks->log_broken = false;
     LCHK(ks->log != NULL);
@@ -1342,7 +1172,7 @@ int kang_log_fault_selftest(void)
         LCHK(setrlimit(RLIMIT_FSIZE, &lim) == 0);
         for (int i = 0; i < N; i++) {
             rec.tagk = ((u64)(i + 100001) << 20) | KIND_TAME;      /* other points than those of step 1, which are still in the table */
-            table_insert(ks, &rec, false);
+            kang_table_insert(ks, &rec, false);
         }
         LCHK(ks->log_broken);
         LCHK(setrlimit(RLIMIT_FSIZE, &old) == 0);
@@ -1352,7 +1182,7 @@ int kang_log_fault_selftest(void)
         ks->log = NULL;
         FILE *f = fopen(path, "rb");
         u8 hdr[38];
-        LCHK(f && fread(hdr, 1, 38, f) == 38 && !memcmp(hdr, LOG_MAGIC, 6));
+        LCHK(f && fread(hdr, 1, 38, f) == 38 && !memcmp(hdr, KANG_LOG_MAGIC, 6));
         int seen = 0;
         for (; f && seen < N + 1; seen++) {
             dp_rec r;
