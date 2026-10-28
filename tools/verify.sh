@@ -139,6 +139,10 @@ fi
 # like a driver reset after sleep) must reopen the GPU; a frozen process (SIGSTOP, like sleep) must be noticed
 outhas "RESULT: " build/pzsolve doctor -d "$T" && echo "  OK doctor" || { echo "  FAIL doctor"; fail=$((fail+1)); }
 $MOCK build/pzsolve doctor -d "$T" >/dev/null && echo "  OK doctor with a simulated GPU (no errors)" || { echo "  FAIL doctor with a simulated GPU"; fail=$((fail+1)); }
+# doctor --full tests the GPU kernels once (in the full self-test), not in the GPU section and again in the self-test
+$MOCK build/pzsolve doctor --full -d "$T" >"$T/dfull.out" 2>&1; DRC=$?
+NG=$(grep -c '^  GPU\[0\]' "$T/dfull.out"); NR=$(grep -c 'GPU recovery rules' "$T/dfull.out")
+[ $DRC -eq 0 ] && [ "$NG" = 1 ] && [ "$NR" = 1 ] && echo "  OK doctor --full: the GPU tests run once" || { echo "  FAIL doctor --full: GPU[0] test $NG times, recovery rules $NR times (rc=$DRC)"; fail=$((fail+1)); }
 gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while the campaign runs
   local f="$T/fault.$1" d="$T/fl.$1" o="$T/fl.$1.log"
   rm -rf "$d" "$f"

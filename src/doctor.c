@@ -125,10 +125,10 @@ static void check_cache(void)
     profile_doctor();
 }
 
-static void check_gpus(bool deep)
+static void check_gpus(void)
 {
     section("GPU");
-    gpu_doctor(deep);
+    gpu_doctor(false);   /* the kernel tests of --full run once, in the full self-test at the end: it covers the GPUs too */
 }
 
 static long long mtime_of(const char *path)
@@ -253,7 +253,7 @@ int doctor_run(int argc, char **argv)
     check_system(&s);
     check_primitives();
     check_cpu_engines();
-    check_gpus(deep);
+    check_gpus();
     check_cache();
     check_campaigns(base);
     check_disk(base);
