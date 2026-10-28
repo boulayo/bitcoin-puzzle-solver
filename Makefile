@@ -263,6 +263,7 @@ else
 ALLENG := $(BUILD)/eng_base.o
 ifeq ($(ARM64),1)
 ALLENG += $(BUILD)/eng_neon.o $(BUILD)/eng_neon2.o
+DEPS   += $(OBJS_NEON:.o=.d)   # a change to a header they include rebuilds them
 endif
 TESTENG := $(ALLENG) $(LIB)
 endif
