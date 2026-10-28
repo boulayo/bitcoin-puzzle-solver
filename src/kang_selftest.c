@@ -256,12 +256,10 @@ static ssize_t flaky_read(void *c, char *buf, size_t n)
 #endif
 
 /* What the loading of dp.bin does with what it finds: it cuts off a record cut short at the end and nothing else (not the records after
- * the one that solved the key), and a read error is an error, not the end of the file. */
-int kang_log_file_selftest(void)
+ * the one that solved the key), a read error is an error, not the end of the file, and a file shorter than its header is started again. */
+static int log_file_checks(void)
 {
     int fails = 0;
-    const int was_quiet = pz_log_quiet();
-    pz_log_set_quiet(1);
     const struct { int n, tail; } cases[] = {{0, 0}, {100, 0}, {100, 13}, {100, 31}, {100, 1}, {0, 20}};
     for (size_t c = 0; c < sizeof cases / sizeof *cases; c++) {
         kang_state *ks = kang_make_test_state(40, 1);
@@ -306,6 +304,32 @@ int kang_log_file_selftest(void)
         FCHK(file_size(ks->log_path) == 38 + 32 * 12);
         kang_free_test_state(ks);
     }
+    {   /* a file shorter than its header is an interrupted creation: the log starts again. Another short file is not ours */
+        u8 want[38];
+        const int lens[] = {0, 1, 6, 20, 37};
+        for (size_t c = 0; c < sizeof lens / sizeof *lens; c++) {
+            kang_state *ks = kang_make_test_state(40, 1);
+            if (!ks) return fails + 1;
+            memcpy(want, KANG_LOG_MAGIC, 6);
+            kang_log_fp(ks, want + 6);
+            FILE *f = fopen(ks->log_path, "wb");
+            FCHK(f != NULL);
+            if (f) { fwrite(want, 1, (size_t)lens[c], f); fclose(f); }
+            FCHK(kang_load_log(ks) == 1 && ks->log);
+            if (ks->log) { fclose(ks->log); ks->log = NULL; }
+            FCHK(file_size(ks->log_path) == 38);
+            FCHK(kang_load_log(ks) == 0 && ks->loaded == 0);          /* the next start loads the new file */
+            if (ks->log) { fclose(ks->log); ks->log = NULL; }
+            kang_free_test_state(ks);
+        }
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) return fails + 1;
+        FILE *f = fopen(ks->log_path, "wb");
+        FCHK(f != NULL);
+        if (f) { fputs("hello", f); fclose(f); }
+        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == 5);
+        kang_free_test_state(ks);
+    }
 #ifdef __GLIBC__
     {   /* a read error in the middle of the records */
         enum { N = 100 };
@@ -329,6 +353,14 @@ int kang_log_file_selftest(void)
         }
     }
 #endif
+    return fails;
+}
+
+int kang_log_file_selftest(void)
+{
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                                  /* the messages about files that are refused or repaired are the point of the test */
+    const int fails = log_file_checks();
     pz_log_set_quiet(was_quiet);
     pz_result_line("distinguished-point log: loading", "%s", fails ? "FAILED" : "OK");
     return fails;
@@ -407,6 +439,25 @@ int kang_log_fault_selftest(void)
         }
         LCHK(seen == N);                                             /* every point once, in order, no torn record */
         if (f) { u8 extra; LCHK(fread(&extra, 1, 1, f) == 0); fclose(f); }
+    }
+    /* 3. not even the header fits: the creation reports it (it used to hand back a stream whose failed write nobody looked at), and the file
+     * that is left, the beginning of a header, is replaced by the next start */
+    if (have_rl) {
+        const int was_quiet = pz_log_quiet();
+        pz_log_set_quiet(2);
+        snprintf(path, sizeof path, "%s/short.bin", ks->r->cfg.dir);
+        pz_strlcpy(ks->log_path, path, sizeof ks->log_path);
+        lim = old;
+        lim.rlim_cur = 10;
+        LCHK(setrlimit(RLIMIT_FSIZE, &lim) == 0);
+        FILE *g = kang_log_create(ks, path, fp);
+        LCHK(setrlimit(RLIMIT_FSIZE, &old) == 0);
+        if (g) fclose(g);
+        LCHK(g == NULL);
+        LCHK(file_size(path) == 10);
+        LCHK(kang_load_log(ks) == 1 && ks->log && file_size(path) == 38);
+        if (ks->log) { fclose(ks->log); ks->log = NULL; }
+        pz_log_set_quiet(was_quiet);
     }
     signal(SIGXFSZ, old_sig);
     kang_free_test_state(ks);

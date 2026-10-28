@@ -87,13 +87,21 @@ void kang_log_push(kang_state *ks, const dp_rec *rec)
 /* Fingerprint of the logs of this campaign (see KANG_LOG_MAGIC). */
 void kang_log_fp(const kang_state *ks, u8 fp[32]) { log_fingerprint(ks, &ks->base, "PZDPLOG4", fp); }
 
+/* Creates the file with its header. NULL when the header could not be written (what reached the file is the beginning of a header, which
+ * the next start recognizes as an interrupted creation). */
 FILE *kang_log_create(const kang_state *ks, const char *path, const u8 fp[32])
 {
     FILE *f = fopen(path, "wb");
-    if (!f) return NULL;
-    fwrite(KANG_LOG_MAGIC, 1, 6, f);
-    fwrite(fp, 1, 32, f);
-    fflush(f);
+    if (!f) {
+        pz_log(PZ_LOG_ERR, "cannot create %s: %s", path, strerror(errno));
+        return NULL;
+    }
+    if (fwrite(KANG_LOG_MAGIC, 1, 6, f) != 6 || fwrite(fp, 1, 32, f) != 32 || fflush(f) != 0) {
+        const int e = errno;
+        fclose(f);
+        pz_log(PZ_LOG_ERR, "cannot write the header of %s: %s", path, strerror(e));
+        return NULL;
+    }
     return f;
 }
 
@@ -117,6 +125,18 @@ long long kang_log_read(kang_state *ks, FILE *f)
     return failed ? -1 : n;
 }
 
+static int log_unreadable(const kang_state *ks, int err)
+{
+    pz_log(PZ_LOG_ERR, "cannot read %s: %s (the file is left as it is)", ks->log_path, err ? strerror(err) : "read error");
+    return -1;
+}
+
+static int log_foreign(const kang_state *ks)
+{
+    pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header): ignored", ks->log_path);
+    return -1;
+}
+
 int kang_load_log(kang_state *ks)
 {
     FILE *f = fopen(ks->log_path, "rb");
@@ -130,13 +150,33 @@ int kang_load_log(kang_state *ks)
     off_t size = -1;
     if (fseeko(f, 0, SEEK_END) == 0) size = ftello(f);
     if (size < 0 || fseeko(f, 0, SEEK_SET) != 0) {
-        pz_log(PZ_LOG_ERR, "cannot read %s: %s (the file is left as it is)", ks->log_path, strerror(errno));
+        const int e = errno;
         fclose(f);
-        return -1;
+        return log_unreadable(ks, e);
     }
     u8 hdr[38];
-    bool hdr_ok = fread(hdr, 1, 38, f) == 38;
-    if (hdr_ok && !memcmp(hdr, "PZDP", 4) && memcmp(hdr, KANG_LOG_MAGIC, 6) != 0) {
+    if (size < (off_t)sizeof hdr) {
+        /* Shorter than the header: a creation that did not finish (disk full, power cut) leaves nothing, or the beginning of the header. That
+         * file holds no point: the log starts again. Any other short file is not ours. */
+        u8 want[38];
+        memcpy(want, KANG_LOG_MAGIC, 6);
+        memcpy(want + 6, fp, 32);
+        const bool read_ok = fread(hdr, 1, (size_t)size, f) == (size_t)size;
+        const int e = errno;
+        fclose(f);
+        if (!read_ok) return log_unreadable(ks, e);
+        if (memcmp(hdr, want, (size_t)size) != 0) return log_foreign(ks);
+        pz_log(PZ_LOG_WARN, "distinguished points: %s is shorter than its header (%lld of %zu bytes: an interrupted creation, disk full?); starting a new file",
+               ks->log_path, (long long)size, sizeof hdr);
+        ks->log = kang_log_create(ks, ks->log_path, fp);
+        return ks->log ? 1 : -1;
+    }
+    if (fread(hdr, 1, sizeof hdr, f) != sizeof hdr) {
+        const int e = errno;
+        fclose(f);
+        return log_unreadable(ks, e);
+    }
+    if (!memcmp(hdr, "PZDP", 4) && memcmp(hdr, KANG_LOG_MAGIC, 6) != 0) {
         /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
          * small intervals): its points cannot be used. It is kept under another name and the campaign goes on with a new log. */
         char old[640];
@@ -151,18 +191,14 @@ int kang_load_log(kang_state *ks)
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
     }
-    if (!hdr_ok || memcmp(hdr, KANG_LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) {
+    if (memcmp(hdr, KANG_LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) {
         fclose(f);
-        pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header): ignored", ks->log_path);
-        return -1;
+        return log_foreign(ks);
     }
     const long long n = kang_log_read(ks, f);
-    if (n < 0) {
-        pz_log(PZ_LOG_ERR, "reading %s failed: %s (the file is left as it is)", ks->log_path, strerror(errno));
-        fclose(f);
-        return -1;
-    }
+    const int e = errno;
     fclose(f);
+    if (n < 0) return log_unreadable(ks, e);
     /* the whole records of the file: a record cut short at the end (the program stopped in the middle of a write) is cut off, and only that */
     const u64 rest = (u64)size - sizeof hdr, whole = rest / sizeof(dp_rec);
     if (rest % sizeof(dp_rec) && truncate(ks->log_path, (off_t)(sizeof hdr + whole * sizeof(dp_rec))) != 0) {

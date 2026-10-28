@@ -245,7 +245,7 @@ void pz_log(pz_loglevel lvl, const char *fmt, ...)
     pthread_mutex_lock(&g_log_mu);
     if (g_log_fp) fprintf(g_log_fp, "%s [%s] %s\n", ts, tag[lvl], msg);
     if (lvl == PZ_LOG_DEBUG && !g_verbose) { pthread_mutex_unlock(&g_log_mu); return; }
-    if (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN) {
+    if (g_quiet < 2 && (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN)) {
         block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
         char ln[1100 + 32];
         snprintf(ln, sizeof ln, "[%s] %-6s %s", ts + 11, tag[lvl], msg);
