@@ -513,11 +513,17 @@ void gpu_linear_join(gpu_session *s, int n)
 
 #define JSTRIDE 20
 
-void gpu_kang_release(gpu_session *s)
+/* The buffers of a herd, not the compiled kernel: the self-tests prepare and release many times with the same kernel. */
+void gpu_kang_release_buffers(gpu_session *s)
 {
     rt_buf_free(s->b_state); rt_buf_free(s->b_jump); rt_buf_free(s->b_dps); rt_buf_free(s->b_flags); rt_buf_free(s->b_rc); rt_buf_free(s->b_rl);
     rt_buf_free(s->b_hist);
     s->b_state = s->b_jump = s->b_dps = s->b_flags = s->b_rc = s->b_rl = s->b_hist = NULL;
+}
+
+void gpu_kang_release(gpu_session *s)
+{
+    gpu_kang_release_buffers(s);
     rt_kern_free(s->kstep);
     rt_mod_free(s->kprog);
     s->kstep = NULL;
@@ -525,13 +531,18 @@ void gpu_kang_release(gpu_session *s)
 }
 
 /* Builds the kernel for s->NK kangaroos per work-item and the buffers for T work-items; a launch runs at most
- * `hist_rounds` rounds (the depth of the jump history, 16 bits per walker and round). */
+ * `hist_rounds` rounds (the depth of the jump history, 16 bits per walker and round). The kernel of the variant s->kvar that an earlier
+ * preparation built is kept (on CUDA a build is a JIT compilation by the driver): the start-up tests prepare it seven times. */
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds)
 {
-    s->kprog = rt_build(s->c, RT_PROG_KANG, s->kvar);
-    if (!s->kprog) return false;
-    s->kstep = rt_kernel(s->kprog, "pz_kang_step", 17);
-    if (!s->kstep) return false;
+    if (s->kprog && s->kprog_var != s->kvar) gpu_kang_release(s);
+    if (!s->kprog) {
+        s->kprog = rt_build(s->c, RT_PROG_KANG, s->kvar);
+        if (!s->kprog) return false;
+        s->kstep = rt_kernel(s->kprog, "pz_kang_step", 17);
+        if (!s->kstep) return false;
+        s->kprog_var = s->kvar;
+    }
     s->T = T;
     s->hist_rounds = hist_rounds;
     s->gstep = 0;

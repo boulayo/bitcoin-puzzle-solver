@@ -87,7 +87,20 @@ static module_t g_mods[64];
 static func_t g_funcs[256];
 static int g_nfuncs;
 
-EXPORT CUresult cuInit(unsigned flags) { if (flags) return fail(E_INVALID_VALUE, "cuInit flags"); g_init = 1; return E_OK; }
+/* PZ_MOCK_COUNT=1: at exit, how many modules were loaded (each one is a JIT compilation on a real driver) and kernels launched. */
+static unsigned long g_loads, g_unloads, g_launches;
+static void report_counts(void)
+{
+    fprintf(stderr, "[mock CUDA] cuModuleLoadDataEx: %lu, cuModuleUnload: %lu, cuLaunchKernel: %lu\n", g_loads, g_unloads, g_launches);
+}
+
+EXPORT CUresult cuInit(unsigned flags)
+{
+    if (flags) return fail(E_INVALID_VALUE, "cuInit flags");
+    if (!g_init && getenv("PZ_MOCK_COUNT")) atexit(report_counts);
+    g_init = 1;
+    return E_OK;
+}
 EXPORT CUresult cuDriverGetVersion(int *v) { *v = 12080; return E_OK; }
 EXPORT CUresult cuDeviceGetCount(int *n) { if (!g_init) return 3; *n = 1; return E_OK; }
 EXPORT CUresult cuDeviceGet(int *d, int ord) { if (ord != 0) return fail(E_INVALID_VALUE, "device ordinal"); *d = 0; return E_OK; }
@@ -128,6 +141,7 @@ EXPORT CUresult cuCtxSynchronize(void) { return g_current ? E_OK : fail(E_INVALI
 EXPORT CUresult cuModuleLoadDataEx(void **mod, const void *image, unsigned nopt, int *opts, void **vals)
 {
     (void)opts; (void)vals;
+    g_loads++;
     if (!g_current) return fail(E_INVALID_CONTEXT, "module load without a context");
     if (nopt > 8) return fail(E_INVALID_VALUE, "opzioni JIT");
     for (int k = 0; k < M_COUNT; k++) {
@@ -143,6 +157,7 @@ EXPORT CUresult cuModuleUnload(void *mod)
 {
     module_t *m = mod;
     if (!m || m < g_mods || m >= g_mods + 64 || !m->kind) return fail(E_INVALID_VALUE, "cuModuleUnload");
+    g_unloads++;
     m->kind = 0;
     return E_OK;
 }
@@ -227,6 +242,7 @@ EXPORT CUresult cuLaunchKernel(void *fv, unsigned gx, unsigned gy, unsigned gz, 
                                void **params, void **extra)
 {
     func_t *f = fv;
+    g_launches++;
     /* PZ_MOCK_FAIL_FILE=path: while that file exists, the next launch fails once and removes it, like a device reset after
      * the machine slept (the test creates the file while a campaign runs) */
     static const char *fault_file;

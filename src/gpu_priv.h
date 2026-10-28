@@ -55,6 +55,7 @@ struct gpu_session {
     /* kangaroo */
     rt_mod *kprog;
     rt_kern *kstep;
+    int kprog_var;               /* the kernel variant (kvar) that kprog was built for */
     rt_buf *b_state, *b_jump, *b_dps, *b_flags, *b_rc, *b_rl, *b_hist;
     int T, NK, kvar;             /* kangaroo kernel: walkers per work-item, kernel variant (NK | cfg << 16) */
     bool l2fit;                  /* the herd is sized to the L2 cache (see kang_l2_threads_for) */
@@ -119,6 +120,7 @@ bool gpu_linear_prepare_variant(gpu_session *s, int variant);
 bool gpu_linear_prepare(gpu_session *s);
 bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L);
 void gpu_kang_release(gpu_session *s);
+void gpu_kang_release_buffers(gpu_session *s);
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds);
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
 uint32_t gpu_launch_after_failure(uint32_t n);          /* the size of the launches after a failed one */

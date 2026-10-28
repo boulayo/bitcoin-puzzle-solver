@@ -78,6 +78,10 @@ rm -rf "$T/c1"; run $MOCK PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m line
 check_found "$T/c1/c" "$K" && echo "  OK linear via CUDA" || { echo "  FAIL linear via CUDA"; fail=$((fail+1)); }
 rm -rf "$T/c2"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c2" --no-cpu --ui log -q
 check_found "$T/c2/c" "$KK" && echo "  OK kangaroo via CUDA" || { echo "  FAIL kangaroo via CUDA"; fail=$((fail+1)); }
+# the compiled kernel of the kangaroo is built once and kept by the start-up tests (a module load is a JIT compilation by the real driver): the
+# simulated driver counts them, two in all (the field test and the kernel), against eight before
+rm -rf "$T/c2n"; NLOAD=$($MOCK PZ_MOCK_COUNT=1 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c2n" --no-cpu --ui log -q 2>&1 | sed -n 's/.*cuModuleLoadDataEx: \([0-9]*\),.*/\1/p')
+[ "${NLOAD:-99}" -le 2 ] && echo "  OK kangaroo via CUDA: $NLOAD modules loaded (the kernel is built once)" || { echo "  FAIL kangaroo via CUDA loads ${NLOAD:-?} modules"; fail=$((fail+1)); }
 rm -rf "$T/c3"; outhas "limit 40%: .* work-items per launch" $MOCK PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/c3" --no-cpu --ui log --limit 40 \
   && check_found "$T/c3/c" "$K" && echo "  OK linear via CUDA with --limit (fewer work-items per launch)" || { echo "  FAIL linear via CUDA with --limit"; fail=$((fail+1)); }
 rm -rf "$T/c4"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c4" --no-cpu --ui log -q --limit 40

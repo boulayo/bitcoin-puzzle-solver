@@ -275,7 +275,7 @@ static bool test_kang_one(gpu_session *s, unsigned R, u64 dp_mask, int ROUNDS, u
     kang_worker_free(w1);
     kang_worker_free(w2);
     kang_free_test_state(ks);
-    gpu_kang_release(s);
+    gpu_kang_release_buffers(s);                               /* the kernel stays for the next test and for the herd of the campaign */
     return ok;
 }
 
