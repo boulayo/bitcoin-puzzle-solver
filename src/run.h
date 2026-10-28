@@ -121,6 +121,12 @@ bool run_interrupted(void);
 /* Verifies a candidate private key against the campaign target and, if valid,
  * records it and stops everything. Returns true if the key is correct. */
 bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source);
+/* Whether the key lies in the range of the campaign (range_start to range_end, both included; the whole range, not the share of --part). */
+bool run_key_in_range(const run_ctx *r, const pz_u256 *key);
+/* A hit of the linear search. The engines scan whole lanes, so the last block of a range can reach a few keys past its end; a hit there is the
+ * right key, but this campaign was not asked for it and whether its scan gets there depends on how the end of the range falls on the lanes. It
+ * is ignored (false) with a line in the debug log, which does not show the key. Any other hit goes to run_submit_key. */
+bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source);
 void run_write_found(run_ctx *r);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */

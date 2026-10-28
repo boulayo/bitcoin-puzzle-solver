@@ -205,9 +205,15 @@ $BIN hunt -p 18 -a "$A" -c xf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC
 [ $RC -eq 0 ] && ok "key found: exit status 0" || bad "key found: exit status $RC"
 $BIN hunt -c xf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "campaign that had already found the key: exit status 0" || bad "already found: exit status $RC"
-A=$(field 0x20000 addr)   # well above the range 1:ffff (the last block may be scanned a few keys past the end)
+A=$(field 0x20000 addr)   # well above the range 1:ffff
 $BIN hunt -r 1:ffff -a "$A" -c xn -d "$DIR" --ui log -q --no-gpu >"$DIR/xn.out" 2>&1; RC=$?
 [ $RC -eq 1 ] && grep -q "Campaign completed" "$DIR/xn.out" && ok "range covered without the key: exit status 1" || bad "range covered without the key: exit status $RC"
+# the engines scan whole lanes, so the last block of 1:fff reaches 0x1000 on most of them: that key is right but is not in the range, and is not reported
+A=$(field 0x1000 addr)
+$BIN hunt -r 1:fff -a "$A" -c xe1 -d "$DIR" --ui log -q --no-gpu >"$DIR/xe1.out" 2>&1; RC=$?
+[ $RC -eq 1 ] && [ ! -e "$DIR/xe1/FOUND.txt" ] && grep -q "Campaign completed" "$DIR/xe1.out" && ok "a key one past the end of the range is not reported: exit status 1" || bad "key past the end of the range: exit status $RC"
+$BIN hunt -r 1:1000 -a "$A" -c xe2 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && [ -s "$DIR/xe2/FOUND.txt" ] && ok "the same key with the range extended to it: found" || bad "last key of the range: exit status $RC"
 $BIN hunt -c xn -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
 [ $RC -eq 1 ] && ok "campaign already completed: exit status 1" || bad "already completed: exit status $RC"
 A=$(field 0x200000 addr)

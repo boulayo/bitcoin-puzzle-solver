@@ -19,7 +19,7 @@ typedef struct {
 
 static void on_cpu_hit(void *user, const pz_u256 *key)
 {
-    run_submit_key((run_ctx *)user, key, "CPU");
+    run_submit_scan_hit((run_ctx *)user, key, "CPU");
 }
 
 static void *cpu_worker(void *p)

@@ -384,6 +384,61 @@ static void t_twin_runs(void)
     pz_result_line("campaigns running at the same time", "%s", timeout ? "FAILED" : "OK");
 }
 
+static bool have_file(const char *path)
+{
+    char *t = pz_read_file(path, NULL);
+    free(t);
+    return t != NULL;
+}
+
+static void set_target(run_ctx *r, u64 key)
+{
+    pz_u256 k = pz_u256_from_u64(key);
+    pz_ge p;
+    u8 pub[33];
+    CHECK(pz_ec_mul_g(&p, &k));
+    pz_ge_to_pub33(pub, &p);
+    pz_hash160(pub, 33, r->cfg.target_h160);
+}
+
+/* The linear search scans whole lanes, so its last block can reach keys past the end of the range: such a hit is ignored, one inside the range
+ * (both ends included, the whole campaign's range) is taken. The first check is the one the end-to-end test does with `hunt -r 1:fff`. */
+static void t_scan_hits(void)
+{
+    char dir[600];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzhit")) { pz_result_line("hits beyond the end of the range", "not tested: no temporary folder"); return; }
+    const int f0 = g_fail;
+    run_ctx *r = pz_xcalloc(1, sizeof *r);
+    run_init(r);
+    pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
+    run_paths(r);
+    r->cfg.range_start = pz_u256_from_u64(1);
+    r->cfg.range_end = pz_u256_from_u64(0xfff);
+    const pz_u256 k0 = pz_u256_from_u64(0), k1 = pz_u256_from_u64(1), kf = pz_u256_from_u64(0xfff), kg = pz_u256_from_u64(0x1000);
+    CHECK(!run_key_in_range(r, &k0) && run_key_in_range(r, &k1) && run_key_in_range(r, &kf) && !run_key_in_range(r, &kg));
+    set_target(r, 0x1000);                                                           /* the key is one past the end */
+    CHECK(!run_submit_scan_hit(r, &kg, "test"));
+    CHECK(!atomic_load(&r->found) && atomic_load(&r->hits_bad) == 0 && !have_file(r->path_found));
+    CHECK(run_submit_key(r, &kg, "test") && atomic_load(&r->found));                  /* the plain submission does not look at the range */
+    atomic_store(&r->found, 0);
+    r->found_valid = false;
+    remove(r->path_found);
+    set_target(r, 0xfff);                                                            /* the last key of the range is taken */
+    CHECK(run_submit_scan_hit(r, &kf, "test") && atomic_load(&r->found) && have_file(r->path_found));
+    atomic_store(&r->found, 0);
+    r->found_valid = false;
+    remove(r->path_found);
+    r->cfg.range_start = pz_u256_from_u64(0x1000);                                   /* the first one too, with a range that does not start at 1 */
+    r->cfg.range_end = pz_secp256k1_n;
+    pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &k1);                          /* the largest range: up to n - 1 */
+    set_target(r, 0x1000);
+    CHECK(run_submit_scan_hit(r, &kg, "test") && atomic_load(&r->found));
+    CHECK(!run_key_in_range(r, &kf) && run_key_in_range(r, &r->cfg.range_end) && !run_key_in_range(r, &pz_secp256k1_n));
+    free(r);
+    pz_remove_tree(dir);
+    pz_result_line("hits beyond the end of the range", "%s", g_fail == f0 ? "OK" : "FAILED");
+}
+
 /* --limit: the share of threads / work-items, and the order that puts the threads on distinct physical cores first. */
 static void t_limit(void)
 {
@@ -463,6 +518,7 @@ int selftest_run(int argc, char **argv)
     f0 = g_fail;
     t_limit();
     pz_result_line("--limit shares and thread order", "%s", g_fail == f0 ? "OK" : "FAILED");
+    t_scan_hits();
     {
         int rc = gpu_selftest();
         CHECK(rc == 0);

@@ -53,7 +53,9 @@ cerca lo stesso (con un avviso): utile solo come esercizio, dato che `2^160` chi
 -p, --puzzle N          puzzle 1..256: intervallo, indirizzo e (se nota) chiave pubblica dal database integrato
                         (161..256: solo l'indirizzo, fondi ritirati nel 2017, vedi sotto). Con -r sceglie solo il
                         bersaglio, l'intervallo è quello di -r
--r, --range S:E         intervallo personalizzato (esadecimale, inclusivo): p. es. una sola parte del puzzle
+-r, --range S:E         intervallo personalizzato (esadecimale, inclusivo): p. es. una sola parte del puzzle. Una chiave fuori
+                        dall'intervallo non viene segnalata dalla ricerca lineare, nemmeno quando l'ultimo blocco la raggiunge
+                        (i motori scandiscono corsie intere)
 -a, --address ADDR      indirizzo mainnet diverso da quello del database: P2PKH (`1...`, Base58Check) o SegWit nativo P2WPKH (`bc1q...`, bech32)
 -H, --hash160 HEX       alternativa all'indirizzo (40 cifre hex)
 -k, --pubkey HEX        chiave pubblica nota (33 byte compressa o 65 non compressa)

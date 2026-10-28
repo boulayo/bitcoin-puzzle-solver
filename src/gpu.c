@@ -386,7 +386,7 @@ static int open_sessions(run_ctx *r, gpu_session **out, bool for_kangaroo)
 
 /* ---------------- linear worker ---------------- */
 
-static void cpu_support_hit(void *user, const pz_u256 *key) { run_submit_key((run_ctx *)user, key, "CPU (GPU support)"); }
+static void cpu_support_hit(void *user, const pz_u256 *key) { run_submit_scan_hit((run_ctx *)user, key, "CPU (GPU support)"); }
 
 static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
 {
@@ -513,7 +513,7 @@ static void *gpu_linear_thread(void *p)
         for (uint32_t i = 0; i < L.nhits; i++) {
             pz_u256 k = c.key_start;
             pz_u256_add_u64(&k, &k, L.hits[i]);
-            run_submit_key(r, &k, "GPU");
+            run_submit_scan_hit(r, &k, "GPU");
         }
         sched_complete(r->sched, &c, covered);
         atomic_fetch_add(&r->ws[s->widx].units, c.nkeys);

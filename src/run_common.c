@@ -185,6 +185,20 @@ bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
     return true;
 }
 
+bool run_key_in_range(const run_ctx *r, const pz_u256 *key)
+{
+    return pz_u256_cmp(key, &r->cfg.range_start) >= 0 && pz_u256_cmp(key, &r->cfg.range_end) <= 0;
+}
+
+bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
+{
+    if (!run_key_in_range(r, key)) {
+        pz_log(PZ_LOG_DEBUG, "hit from %s beyond the end of the range ignored (the last block is scanned in whole lanes)", source);
+        return false;
+    }
+    return run_submit_key(r, key, source);
+}
+
 void run_write_found(run_ctx *r)
 {
     char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80];

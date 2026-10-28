@@ -72,7 +72,8 @@ main ─ cmd_hunt ─ creates/loads campaign.conf ─ run_linear
                         ├─ GPU thread j:  loop { sched_claim → kernel pz_search → hit → sched_complete }
                         └─ main thread: reporter (1 Hz) → terminal, report.txt, status.json, stats.csv,
                                         checkpoint every 60 s
-Every hit (CPU or GPU) → run_submit_key: recomputes k·G, compares hash160/pubkey → FOUND.txt → global stop
+Every hit (CPU or GPU) → run_submit_scan_hit: ignored if the key lies beyond the end of the range (the engines scan whole lanes, so the last
+block can reach a few keys past it) → run_submit_key: recomputes k·G, compares hash160/pubkey → FOUND.txt → global stop
 ```
 
 The scheduler hands out contiguous portions of a block (≈ 3 s of work for the CPUs, ≈ 0.35 s per launch on the GPUs, adjusted by the

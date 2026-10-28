@@ -53,7 +53,8 @@ it all the same (with a warning): useful only as an exercise, since `2^160` keys
 -p, --puzzle N          puzzle 1..256: interval, address and (if known) public key from the built-in database
                         (161..256: the address only, funds withdrawn in 2017, see above). With -r it only
                         selects the target, the interval is the one of -r
--r, --range S:E         custom interval (hexadecimal, inclusive): e.g. a single part of a puzzle
+-r, --range S:E         custom interval (hexadecimal, inclusive): e.g. a single part of a puzzle. A key outside it is not reported
+                        by the linear search, not even when its last block happens to reach it (the engines scan whole lanes)
 -a, --address ADDR      mainnet address different from the one in the database: P2PKH (`1...`, Base58Check) or native SegWit P2WPKH (`bc1q...`, bech32)
 -H, --hash160 HEX       alternative to the address (40 hex digits)
 -k, --pubkey HEX        known public key (33 bytes compressed or 65 uncompressed)
