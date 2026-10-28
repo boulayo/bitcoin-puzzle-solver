@@ -237,8 +237,8 @@ limit_check linear "$T/lim2" 1 4 1 && echo "  OK --limit 1: at least one thread 
 LP=44 LA=$KA LK="-k $KP" LKEY=$KK
 limit_check kangaroo "$T/lim3" 50 2 1 && echo "  OK --limit 50 with 2 threads: 1 thread, key found (kangaroo)" || { echo "  FAIL --limit (kangaroo)"; fail=$((fail+1)); }
 limit_check bsgs "$T/lim4" 50 4 2 && echo "  OK --limit 50 with 4 threads: 2 threads, key found (bsgs)" || { echo "  FAIL --limit (bsgs)"; fail=$((fail+1)); }
-rm -rf "$T/lim5"; build/pzsolve hunt -p 26 -a "$A" -m linear -c l -d "$T/lim5" --limit 100 -t 4 --no-gpu --ui log -q >/dev/null 2>&1
-[ "$(grep -c '"name": "CPU' "$T/lim5/l/status.json")" = 4 ] && ! grep -q '^Limit: ' "$T/lim5/l/report.txt" && echo "  OK --limit 100 = no limit" || { echo "  FAIL --limit 100"; fail=$((fail+1)); }
+rm -rf "$T/lim5"; build/pzsolve hunt -p 26 -a "$A" -m linear -c l -d "$T/lim5" --limit 100 -t 4 --no-gpu --ui log -q >/dev/null 2>&1; LRC=$?
+[ $LRC -eq 2 ] && [ ! -e "$T/lim5" ] && echo "  OK --limit 100 refused (1..99; no --limit is no limit)" || { echo "  FAIL --limit 100 (rc=$LRC)"; fail=$((fail+1)); }
 for bad in 0 101 x 5.5; do build/pzsolve hunt -p 26 -a "$A" -m linear -c bad -d "$T/limbad" --limit "$bad" --no-gpu --ui log -q >/dev/null 2>&1 && { echo "  FAIL --limit $bad accepted"; fail=$((fail+1)); }; done; echo "  OK invalid --limit values rejected"
 build/pzsolve hunt -p 26 -a "$A" -m linear -c bad -d "$T/limbad" --limit 50 --retune --no-gpu --ui log -q >/dev/null 2>&1 && { echo "  FAIL --limit with --retune accepted"; fail=$((fail+1)); } || echo "  OK --limit with --retune: rejected"
 
