@@ -7,7 +7,9 @@
  * round (checked by kang_round_check). Kangaroo c*NL + l lives in lane l of vector c, and its whole walking state stays
  * in vector form between rounds: coordinates, 192-bit distance (three 64-bit lanes with vector carries), sign, the tags
  * of the 2-cycle escape and the step counter; only distinguished points and restarts (rare) are handled lane by lane.
- * The jump entries are read with ordinary loads, one row per lane, and transposed (faster than hardware gathers). Code that writes the scalar state of a kangaroo (restarts)
+ * The jump entries are read with ordinary loads, one row per lane, and transposed (faster than hardware gathers): the forward pass
+ * reads the x of the jump point, the backward pass its y and distance (x3 needs only x - jx, kept from the forward pass), and the
+ * entry is laid out so that each reads as few 64-byte rows as it can. Code that writes the scalar state of a kangaroo (restarts)
  * marks it in w->vstale and it is reloaded at the next round; kang_worker_sync copies everything back. A round whose
  * batch product is zero (a kangaroo on its jump point: practically never) is run by the scalar code. */
 
@@ -22,8 +24,25 @@
 #define NL PZ_FEV_LANES
 #define KV_WORDS (2 * PZ_FEV_NLIMB + 2)          /* table entry: x limbs, y limbs, distance (two words) */
 #define KV_STRIDE ((KV_WORDS + 7) & ~7)        /* padded to whole 64-byte rows */
+/* Word offsets in an entry. The backward pass reads y and the distance (KV_BN words from KV_B), the forward pass x: with 5 limbs
+ * y and the distance fill the first row and x the second; with 9 limbs x takes words 0-8 and the distance and y words 9-19,
+ * two rows each. */
+#if PZ_FEV_NLIMB + 2 <= 8
+#define KV_Y 0
+#define KV_V PZ_FEV_NLIMB
+#define KV_X 8
+#else
+#define KV_X 0
+#define KV_V PZ_FEV_NLIMB
+#define KV_Y (PZ_FEV_NLIMB + 2)
+#endif
+#define KV_B (KV_Y < KV_V ? KV_Y : KV_V)
+#define KV_BN (PZ_FEV_NLIMB + 2)
+_Static_assert(KV_X + PZ_FEV_NLIMB <= KV_STRIDE && KV_B + KV_BN <= KV_STRIDE && (KV_X >= KV_B + KV_BN || KV_X + PZ_FEV_NLIMB <= KV_B),
+               "jump entry layout");
 
-typedef struct { pz_vl d0, d1, d2, prev, prev2, lastdp, sig, ck, mn, esc; } kv_aux;   /* sig, esc: 0 or all ones; tags in the low 32 bits */
+/* sig, esc: 0 or all ones; tags in the low 32 bits; jb: the table offsets of this round's jumps, from the forward pass */
+typedef struct { pz_vl d0, d1, d2, prev, prev2, lastdp, sig, ck, mn, esc, jb; } kv_aux;
 
 /* bits [64k, 64k + 64) of a canonical element */
 static inline PZ_VABI pz_vl kv_word64(const pz_fev *x, int k)
@@ -87,21 +106,22 @@ static inline PZ_VABI void kv_tr8(__m512i r[8])
 }
 #endif
 
-/* words [0, nw) of the table entries of the lanes, as one vector per word */
-static inline PZ_VABI void kv_load_words(pz_vl *out, int nw, const u64 *vjt, pz_vl jb)
+/* words [first, first + nw) of the table entries of the lanes, as one vector per word: out[i] = word first + i */
+static inline PZ_VABI void kv_load_words(pz_vl *out, int first, int nw, const u64 *vjt, pz_vl jb)
 {
 #if PZ_VBYTES == 64
-    for (int blk = 0; blk * 8 < nw; blk++) {
+    for (int blk = first / 8; blk * 8 < first + nw; blk++) {
         __m512i r[8];
 #pragma GCC unroll 8
         for (int l = 0; l < 8; l++) r[l] = _mm512_load_si512((const void *)(vjt + jb[l] + 8 * blk));
         kv_tr8(r);
-        for (int k = 0; k < 8 && blk * 8 + k < nw; k++) out[blk * 8 + k] = (pz_vl)r[k];
+        for (int k = 0; k < 8; k++)
+            if (blk * 8 + k >= first && blk * 8 + k < first + nw) out[blk * 8 + k - first] = (pz_vl)r[k];
     }
 #else
     u64 t[KV_STRIDE][NL] PZ_ALIGN(64);
     for (int l = 0; l < NL; l++)
-        for (int i = 0; i < nw; i++) t[i][l] = vjt[jb[l] + (u64)i];
+        for (int i = 0; i < nw; i++) t[i][l] = vjt[jb[l] + (u64)(first + i)];
     memcpy(out, t, sizeof(pz_vl) * (size_t)nw);
 #endif
 }
@@ -174,11 +194,11 @@ static void CAT(kv_setup_, ISA)(kang_worker *w)
         u64 *e = t + (size_t)j * KV_STRIDE;
         pz_fev a;
         pz_fev_set_lane(&a, 0, &w->P->jx[j]);
-        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[i] = a.l[i][0];
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[KV_X + i] = a.l[i][0];
         pz_fev_set_lane(&a, 0, &w->P->jy[j]);
-        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[PZ_FEV_NLIMB + i] = a.l[i][0];
-        e[2 * PZ_FEV_NLIMB] = (u64)w->P->jv[j];
-        e[2 * PZ_FEV_NLIMB + 1] = (u64)(w->P->jv[j] >> 64);
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[KV_Y + i] = a.l[i][0];
+        e[KV_V] = (u64)w->P->jv[j];
+        e[KV_V + 1] = (u64)(w->P->jv[j] >> 64);
     }
     w->vjt = t;
     memset(w->vstale, 1, (size_t)w->K);
@@ -192,7 +212,6 @@ typedef struct {
     pz_fev *vx, *vy, *vdx, *vtmp;
     kv_aux *A;
     const u64 *vjt;
-    const kang_params_t *P;
     const pz_vl *pl;                      /* p as limbs */
     pz_vl one, dpmask, cap, bndv;
     bool bnd;
@@ -201,7 +220,7 @@ typedef struct {
 
 typedef struct {
     kv_aux *a;
-    pz_fev ic, jx, jy, t, lam, x3, y3;
+    pz_fev ic, jx, jy, t, lam, x3, y3;          /* jx: x - dx, the x of the jump point up to a multiple of p */
     pz_vl jv0, jv1, sel, dpm, rsm, s0, s1, s2;
 } kv_ctx;
 
@@ -214,7 +233,6 @@ typedef struct {
 static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_env *E, pz_fev *inv, int c, int nu)
 {
     kang_worker *w = E->w;
-    const kang_params_t *P = E->P;
     const pz_vl one = E->one;
     kv_ctx x[2];
 #pragma GCC unroll 2
@@ -230,13 +248,12 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
     }
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
-        const pz_vl jb = kv_jbase(&E->vx[c - u], x[u].a, P->R);
-        pz_vl e[KV_STRIDE];
-        kv_load_words(e, KV_WORDS, E->vjt, jb);
-        memcpy(x[u].jx.l, e, sizeof x[u].jx.l);
-        memcpy(x[u].jy.l, e + PZ_FEV_NLIMB, sizeof x[u].jy.l);
-        x[u].jv0 = e[2 * PZ_FEV_NLIMB];
-        x[u].jv1 = e[2 * PZ_FEV_NLIMB + 1];
+        pz_vl e[KV_BN];
+        kv_load_words(e, KV_B, KV_BN, E->vjt, x[u].a->jb);
+        memcpy(x[u].jy.l, e + KV_Y - KV_B, sizeof x[u].jy.l);
+        x[u].jv0 = e[KV_V - KV_B];
+        x[u].jv1 = e[KV_V - KV_B + 1];
+        pz_fev_sub(&x[u].jx, &E->vx[c - u], &E->vdx[c - u]);
     }
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vy[c - u], &x[u].jy);
@@ -359,7 +376,8 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     pz_fev acc;
     for (int c = 0; c < nc; c++) {
         pz_fev jx;
-        kv_load_words(jx.l, PZ_FEV_NLIMB, vjt, kv_jbase(&vx[c], &A[c], P->R));
+        A[c].jb = kv_jbase(&vx[c], &A[c], P->R);
+        kv_load_words(jx.l, KV_X, PZ_FEV_NLIMB, vjt, A[c].jb);
         pz_fev_sub(&vdx[c], &vx[c], &jx);
         if (c == 0) acc = vdx[0];
         else pz_fev_mul(&acc, &acc, &vdx[c]);
@@ -400,7 +418,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     const int ndp0 = w->ndp, nrs0 = w->nrestart;
     const pz_vl one = pz_vl_set(1), dpmask = pz_vl_set(P->dp_mask), cap = pz_vl_set(P->cap_since);
 #ifdef KV_PAIR
-    const kv_env E = {w, vx, vy, vdx, vtmp, A, vjt, P, pl, one, dpmask, cap, bndv, bnd, n};
+    const kv_env E = {w, vx, vy, vdx, vtmp, A, vjt, pl, one, dpmask, cap, bndv, bnd, n};
     int c = nc - 1;
     for (; c >= 1; c -= 2) kv_bwd_step(&E, &inv, c, 2);     /* two vectors at a time: see kv_bwd_step */
     if (c == 0) kv_bwd_step(&E, &inv, 0, 1);
@@ -414,13 +432,12 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         } else {
             ic = inv;
         }
-        const pz_vl jb = kv_jbase(&vx[c], a, P->R);
         pz_fev jx, jy, t, lam, x3, y3, ny;
-        pz_vl e[KV_STRIDE];
-        kv_load_words(e, KV_WORDS, vjt, jb);
-        memcpy(jx.l, e, sizeof jx.l);
-        memcpy(jy.l, e + PZ_FEV_NLIMB, sizeof jy.l);
-        const pz_vl jv0 = e[2 * PZ_FEV_NLIMB], jv1 = e[2 * PZ_FEV_NLIMB + 1];
+        pz_vl e[KV_BN];
+        kv_load_words(e, KV_B, KV_BN, vjt, a->jb);
+        memcpy(jy.l, e + KV_Y - KV_B, sizeof jy.l);
+        const pz_vl jv0 = e[KV_V - KV_B], jv1 = e[KV_V - KV_B + 1];
+        pz_fev_sub(&jx, &vx[c], &vdx[c]);                   /* the x of the jump point up to a multiple of p: x3 = lam^2 - x - jx */
         pz_fev_sub(&t, &vy[c], &jy);
         pz_fev_mul(&lam, &t, &ic);
         pz_fev_sqr(&x3, &lam);
