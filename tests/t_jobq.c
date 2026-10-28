@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 #include "../src/jobq.h"
+#include "../src/platform.h"
+#include <pzcore/hash.h>
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
@@ -37,6 +39,73 @@ static u64 scan_part(const campaign_cfg *base, const char *spec, u8 *cov, u64 st
     CHECK(sched_fraction(s) == 1.0);
     if (keep) *keep = s; else sched_free(s);
     return got;
+}
+
+/* ---- the seed is part of a checkpoint ---- */
+
+/* Rewrites a checkpoint as an earlier version wrote it: without the seed_id line (the checksum is computed again). */
+static void make_legacy_state(const char *from, const char *to)
+{
+    char *t = pz_read_file(from, NULL);
+    CHECK(t != NULL);
+    char *sid = strstr(t, "seed_id=");
+    char *crc = strstr(t, "crc=");
+    CHECK(sid && crc && sid < crc);
+    char *eol = strchr(sid, '\n');
+    char out[8192];
+    size_t n = (size_t)(sid - t);
+    memcpy(out, t, n);
+    memcpy(out + n, eol + 1, (size_t)(crc - (eol + 1)));
+    n += (size_t)(crc - (eol + 1));
+    u8 dg[32];
+    char hx[17];
+    pz_sha256((u8 *)out, n, dg);
+    pz_hex_encode(dg, 8, hx);
+    n += (size_t)snprintf(out + n, sizeof out - n, "crc=%s\n", hx);
+    CHECK(pz_write_file_atomic(to, out, n, 0644) == 0);
+    free(t);
+}
+
+static void t_seed(void)
+{
+    char err[300];
+    campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);
+    sched_t *a = sched_new(&c);
+    claim_t cl;
+    CHECK(sched_claim(a, 4096, &cl) == CLAIM_OK);
+    sched_complete(a, &cl, cl.nkeys);
+    CHECK(sched_save(a, "build/t_jobq_seed.state") == 0);
+    char *t = pz_read_file("build/t_jobq_seed.state", NULL);
+    CHECK(t && strstr(t, "\nseed_id=") && strstr(t, a->seed_id));
+    free(t);
+    /* the same seed resumes */
+    sched_t *same = sched_new(&c);
+    CHECK(sched_load(same, "build/t_jobq_seed.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
+    /* another seed is refused, and nothing is loaded: the positions of the file point at other blocks */
+    campaign_cfg o = c;
+    o.seed[7] ^= 1;
+    sched_t *other = sched_new(&o);
+    CHECK(strcmp(other->seed_id, a->seed_id) != 0);
+    CHECK(sched_load(other, "build/t_jobq_seed.state", err, sizeof err) == -2 && strstr(err, "another seed"));
+    CHECK(sched_keys_done(other) == 0 && other->ndone == 0);
+    /* a checkpoint of an earlier version carries no seed: it is accepted, whatever the seed, and the next save records it */
+    make_legacy_state("build/t_jobq_seed.state", "build/t_jobq_seed_old.state");
+    t = pz_read_file("build/t_jobq_seed_old.state", NULL);
+    CHECK(t && !strstr(t, "seed_id") && !strncmp(t, "PZSCHED 1\ncbits=12\nv_limit=", 27));
+    free(t);
+    sched_t *old = sched_new(&c);
+    CHECK(sched_load(old, "build/t_jobq_seed_old.state", err, sizeof err) == 0 && sched_keys_done(old) == 4096);
+    CHECK(sched_save(old, "build/t_jobq_seed_old.state") == 0);
+    t = pz_read_file("build/t_jobq_seed_old.state", NULL);
+    CHECK(t && strstr(t, old->seed_id));
+    free(t);
+    /* a checkpoint cut or altered in the seed line fails the checksum like any other damage */
+    FILE *f = fopen("build/t_jobq_seed.state", "r+b");
+    CHECK(f != NULL);
+    if (f) { fseek(f, 40, SEEK_SET); int ch = fgetc(f); fseek(f, 40, SEEK_SET); fputc(ch == 'a' ? 'b' : 'a', f); fclose(f); }
+    sched_t *bad = sched_new(&c);
+    CHECK(sched_load(bad, "build/t_jobq_seed.state", err, sizeof err) == -1);
+    sched_free(a); sched_free(same); sched_free(other); sched_free(old); sched_free(bad);
 }
 
 static void t_parts(void)
@@ -308,6 +377,7 @@ int main(void)
         CHECK(!sched_check_part(&c, err, sizeof err));
     }
     t_parts();
+    t_seed();
     printf(fails ? "t_jobq: %d FAILED\n" : "t_jobq: OK\n", fails);
     return fails != 0;
 }

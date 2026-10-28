@@ -131,7 +131,7 @@ sched_t *run_load_sched(run_ctx *r, const campaign_cfg *scfg, bool *resumed)
     *resumed = false;
     int lr = sched_load(s, r->path_state, err, sizeof err);
     if (lr == 0) { *resumed = true; return s; }
-    if (lr == -2) pz_die("%s\n  (the state %s is intact but belongs to another campaign or to another part of the range: it was not touched)", err, r->path_state);
+    if (lr == -2) pz_die("%s\n  (the state %s is intact but belongs to another campaign, another seed or another part of the range: it was not touched)", err, r->path_state);
     /* corrupt or missing (a crash between the rename and the write leaves only the backup) */
     if (lr < 0) pz_log(PZ_LOG_WARN, "main checkpoint unusable (%s): trying the backup", err);
     sched_free(s);

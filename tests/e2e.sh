@@ -164,6 +164,40 @@ LST=$($BIN list -d "$DIR/lk"); echo "$LST" | grep -q "STOPPED" && ok "list shows
 $BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1 & sleep 2; kill -INT $! 2>/dev/null; wait 2>/dev/null
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/lk/p71/session.txt"); [ "$SES" = 2 ] && ok "after the stop the campaign resumes (2 sessions)" || bad "resume after the lock: sessions '$SES'"
 
+echo "== campaign creation: simultaneous starts, and the seed recorded in the state"
+seedid() { python3 -c "import hashlib,sys; print(hashlib.sha256(b'PZID'+bytes.fromhex(sys.argv[1])).hexdigest()[:16])" "$1"; }
+for attempt in 1 2; do
+  rm -rf "$DIR/race"; pids=""
+  for i in 1 2 3 4 5 6 7 8; do
+    $BIN hunt -p 66 -m linear -c rc -d "$DIR/race" --ui log --no-gpu -t 1 >"$DIR/race$i.out" 2>&1 &
+    pids="$pids $!"
+  done
+  sleep 2; kill -INT $pids 2>/dev/null; wait $pids 2>/dev/null
+  CONFSEED=$(awk -F= '$1=="seed"{print $2}' "$DIR/race/rc/campaign.conf")
+  REPSEED=$(grep -o 'seed id [0-9a-f]*' "$DIR/race/rc/report.txt" | awk '{print $3}')
+  NLOSE=$(grep -l "already running" "$DIR"/race[1-8].out | wc -l)
+  [ -n "$CONFSEED" ] && [ "$(seedid "$CONFSEED")" = "$REPSEED" ] && [ "$NLOSE" = 7 ] || break
+done
+[ -n "$CONFSEED" ] && [ "$(seedid "$CONFSEED")" = "$REPSEED" ] && [ "$NLOSE" = 7 ] && ok "8 simultaneous starts: one campaign, one seed in campaign.conf and in the report (2 attempts)" || bad "simultaneous starts: conf seed id '$(seedid "$CONFSEED")', report '$REPSEED', $NLOSE refused"
+rm -rf "$DIR/sd"
+for c in sa sb sc; do
+  timeout -s INT 2 $BIN hunt -p 40 -m linear -s seed-$c -c $c -d "$DIR/sd" --ui log -q --no-gpu -t 1 >/dev/null 2>&1
+done
+grep -q '^seed_id=' "$DIR/sd/sa/state.dat" && ok "the state records the seed id" || bad "state.dat without seed_id"
+cp "$DIR/sd/sa/state.dat" "$DIR/sd/sb/state.dat"; rm -f "$DIR/sd/sb/state.dat.bak"; cp "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep"
+OUT=$(timeout -s INT 5 $BIN hunt -c sb -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1); RC=$?
+[ $RC -ne 0 ] && echo "$OUT" | grep -q "another seed" && cmp -s "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep" && ok "a state of another seed is refused and left untouched" || bad "state of another seed accepted (rc=$RC)"
+python3 - "$DIR/sd/sa/state.dat" "$DIR/sd/sc/state.dat" <<'PYEOF'
+import hashlib, sys
+t = open(sys.argv[1]).read()
+body = "".join(l + "\n" for l in t[:t.index("crc=")].splitlines() if not l.startswith("seed_id="))
+open(sys.argv[2], "w").write(body + "crc=" + hashlib.sha256(body.encode()).hexdigest()[:16] + "\n")
+PYEOF
+rm -f "$DIR/sd/sc/state.dat.bak"
+OUT=$(timeout -s INT 3 $BIN hunt -c sc -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1)
+echo "$OUT" | grep -q "campaign resumed" && ok "a state without seed id (earlier versions) is still accepted" || bad "state of an earlier version refused"
+grep -q '^seed_id=' "$DIR/sd/sc/state.dat" && ok "the next save records the seed id" || bad "seed_id not recorded after resuming an old state"
+
 echo "== input error checks"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX -c bad -d "$DIR" -q >/dev/null 2>&1 && bad "address with a wrong checksum accepted" || ok "address with a wrong checksum rejected"
 $BIN hunt -r 1:ffff -c bad2 -d "$DIR" -q >/dev/null 2>&1 && bad "missing target accepted" || ok "missing target rejected"

@@ -689,21 +689,29 @@ static int cmd_hunt(int argc, char **argv)
     if (!o.campaign[0]) derive_campaign_name(&o, o.campaign, sizeof o.campaign);   /* stable name: re-running resumes */
     snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
     snprintf(conf, sizeof conf, "%s/campaign.conf", cdir);
-    bool resuming = file_exists(conf);
+    bool resuming = file_exists(conf), locked = false;
     if (o.want_new && resuming) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o.campaign);
     if (o.want_resume && !resuming) pz_die("--resume: campaign '%s' does not exist", o.campaign);
+    if (!resuming) {
+        build_new_cfg(&o, &r->cfg);
+        snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o.dir, r->cfg.name);
+        if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
+        /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the
+         * lock decides, and only then is it known whether the configuration exists. Writing it before the lock would let the loser
+         * leave its seed in campaign.conf while the winner checkpoints with another one. */
+        campaign_lock(r->cfg.dir);   /* released at process exit */
+        locked = true;
+        snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
+        if (file_exists(conf)) {      /* created by a command that has finished meanwhile: this one resumes it */
+            if (o.want_new) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o.campaign);
+            resuming = true;
+        } else if (cfg_save(&r->cfg, conf) != 0) pz_die("cannot save %s", conf);
+    }
     if (resuming) {
         char err[256];
         if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
         check_resume_consistency(&o, &r->cfg);
         pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
-    } else {
-        build_new_cfg(&o, &r->cfg);
-        snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o.dir, r->cfg.name);
-        if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
-        snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
-        if (file_exists(conf)) pz_die("campaign '%s' already exists", r->cfg.name);
-        if (cfg_save(&r->cfg, conf) != 0) pz_die("cannot save %s", conf);
     }
     run_paths(r);
     if (resuming && file_exists(r->path_found)) {
@@ -713,7 +721,7 @@ static int cmd_hunt(int argc, char **argv)
         free(r);
         return 0;
     }
-    campaign_lock(r->cfg.dir);   /* released at process exit */
+    if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
     pz_log_set_file(r->path_log);
 
     r->nthreads = o.threads > 0 ? o.threads : r->sys.ncpu;

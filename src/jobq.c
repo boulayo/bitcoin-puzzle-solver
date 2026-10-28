@@ -80,6 +80,7 @@ sched_t *sched_new(const campaign_cfg *cfg)
     s->range_start = cfg->range_start;
     s->range_end = cfg->range_end;
     s->cbits = cfg->chunk_bits;
+    seed_to_id(cfg->seed, s->seed_id);
     if (s->cbits < 1 || s->cbits > 40) pz_die("chunk_bits must be between 1 and 40 (got %u)", s->cbits);
     s->range_size = cfg_range_size(cfg);
     pz_u256 m, own;
@@ -363,7 +364,7 @@ int sched_save(sched_t *s, const char *path)
     char *buf = pz_xmalloc(cap + 64);
     char h1[48], h2[48], pl[PART_TEXT + 8] = "";
     if (s->part.total) snprintf(pl, sizeof pl, "part=%s\n", s->part_text);        /* absent without a split: the format of earlier versions */
-    int n = snprintf(buf, cap, "PZSCHED 1\ncbits=%u\n%sv_limit=%s\nkeys_done=%s\nndone=%zu\n", s->cbits, pl,
+    int n = snprintf(buf, cap, "PZSCHED 1\ncbits=%u\n%sseed_id=%s\nv_limit=%s\nkeys_done=%s\nndone=%zu\n", s->cbits, pl, s->seed_id,
                      u128_to_hex(s->v_limit, h1), u128_to_hex(s->keys_done, h2), s->ndone);
     for (size_t i = 0; i < s->ndone; i++) {
         n += snprintf(buf + n, cap - (size_t)n, "iv %s %s\n", u128_to_hex(s->done[i].a, h1), u128_to_hex(s->done[i].b, h2));
@@ -432,6 +433,16 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
         if (strcmp(pt, s->part_text) != 0) {
             snprintf(err, errlen, "the checkpoint belongs to a different split between computers (--part %s, the campaign uses %s): use another campaign name with -c",
                      pt[0] ? pt : "none", s->part_text[0] ? s->part_text : "none");
+            free(text);
+            return -2;
+        }
+    }
+    {
+        char sid[40] = "";
+        /* absent in checkpoints written before the seed was recorded (up to 1.9.1): those are accepted as they were */
+        if (state_field(text, "seed_id", sid, sizeof sid) && strcmp(sid, s->seed_id) != 0) {
+            snprintf(err, errlen, "the checkpoint was written by a campaign with another seed (seed id %.16s, this campaign has %s): its positions point at other blocks",
+                     sid, s->seed_id);
             free(text);
             return -2;
         }

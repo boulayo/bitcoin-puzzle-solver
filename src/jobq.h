@@ -49,6 +49,7 @@ typedef struct sched {
     pz_perm perm;
     part_spec part;        /* this computer's shares of the search order (total == 0: all of it, see campaign.h) */
     char part_text[PART_TEXT];
+    char seed_id[17];         /* fingerprint of the seed (seed_to_id): the checkpoint records it, so that one of another seed is refused */
     pz_u256 blocks_all;       /* blocks of the whole search order */
     pz_u256 blocks_part;      /* blocks of this computer's part (all of them without a split) */
     pz_u256 part_keys;        /* keys of this computer's part (the range size without a split) */
@@ -80,7 +81,8 @@ void sched_complete(sched_t *s, const claim_t *c, u64 covered);
 
 /* Persistence (text, with checksum). */
 int sched_save(sched_t *s, const char *path);
-/* 0 loaded; 1 the file is missing; -1 unreadable or damaged; -2 intact but it belongs to another campaign or another share of the order. */
+/* 0 loaded; 1 the file is missing; -1 unreadable or damaged; -2 intact but it belongs to another campaign, another seed or another share
+ * of the order. Checkpoints written before the seed was recorded (no seed_id line) are accepted. */
 int sched_load(sched_t *s, const char *path, char *err, size_t errlen);
 
 u128 sched_keys_done(sched_t *s);
