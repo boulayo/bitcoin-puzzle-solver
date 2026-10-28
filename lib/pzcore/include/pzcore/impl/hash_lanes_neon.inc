@@ -149,8 +149,9 @@ static PZ_UNUSED void PZ_HASH_LANES_FN(const uint32_t *X, const uint32_t *pfx, u
         for (int v = 0; v < PZ_NV; v++) vst1q_u32(out + i * PZ_LANES + 4 * v, r[i][v]);
 }
 
-/* Only the first word of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). The words that do not
- * reach out[0] are dead code after the inlining and the unrolling. */
+/* Only the first word of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). GCC keeps one
+ * out-of-line copy of the hash for both functions, so this computes all five words; forcing the inlining (as hash_lanes.inc
+ * does) counted more instructions here, not fewer: with two vectors the inlined RIPEMD-160 lines spill more. */
 #define PZ_HASH_W0_FN PZ_CAT(PZ_HASH_LANES_FN, _w0)
 static PZ_UNUSED void PZ_HASH_W0_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *out0)
 {
