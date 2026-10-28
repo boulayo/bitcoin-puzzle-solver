@@ -121,6 +121,16 @@ bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hi
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
 uint32_t gpu_launch_after_failure(uint32_t n);          /* the size of the launches after a failed one */
 
+/* How many failed launches a device is allowed: more than GPU_FAIL_STREAK in a row, or more than GPU_FAIL_TOTAL without GPU_FAIL_FORGET
+ * seconds of successful launches between them, and it is given up. A laptop that sleeps every night has one or two recoveries a day
+ * and must not lose its GPU on the 41st. */
+#define GPU_FAIL_STREAK 3
+#define GPU_FAIL_TOTAL 40
+#define GPU_FAIL_FORGET 600.0
+typedef struct { int streak, total; bool good; double since; } gpu_health;   /* zero: no failure yet; `since`: the launches have been fine since then */
+bool gpu_health_failed(gpu_health *h);                  /* a launch failed: true when the device is to be given up */
+void gpu_health_ok(gpu_health *h, double now);          /* a launch succeeded (now: seconds on a monotonic clock) */
+
 /* gpu_tune.c: the variants of the kernels, their choice for a device (remembered on disk) and the herd size */
 int gpu_variants_of(const rt_dev *d, const int **v);
 int gpu_default_variant(const rt_dev *d);

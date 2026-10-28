@@ -343,6 +343,21 @@ static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
  * after the successful launches by the timing rule of the loops. */
 uint32_t gpu_launch_after_failure(uint32_t n) { return n >= 4 ? n / 4 : 1; }
 
+bool gpu_health_failed(gpu_health *h)
+{
+    h->good = false;
+    h->streak++;
+    h->total++;
+    return h->streak > GPU_FAIL_STREAK || h->total > GPU_FAIL_TOTAL;
+}
+
+void gpu_health_ok(gpu_health *h, double now)
+{
+    h->streak = 0;
+    if (!h->good) { h->good = true; h->since = now; }
+    else if (h->total && now - h->since >= GPU_FAIL_FORGET) h->total = 0;      /* long enough without a failure: the earlier ones are forgotten */
+}
+
 /* A failed launch after the machine slept or hibernated usually means that the driver reset the device or its context.
  * Drops the session, waits, reopens and rebuilds it (about two and a half minutes of attempts) and repeats the start-up
  * self-test; false if the device never comes back or fails the test. The caller then restores its own buffers. */
@@ -376,7 +391,7 @@ static void *gpu_linear_thread(void *p)
     run_ctx *r = s->r;
     uint32_t ngroups = 2;
     const double target_s = 0.35;
-    int consecutive = 0, total_fails = 0;                  /* failed launches in a row / in all */
+    gpu_health health = {0};
     int boosted = 0;
     while (!atomic_load(&r->stop)) {
         boost_sync(&boosted);
@@ -408,15 +423,16 @@ static void *gpu_linear_thread(void *p)
             if (atomic_load(&r->stop)) break;
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
             ngroups = gpu_launch_after_failure(ngroups);
-            if (++consecutive > 3 || ++total_fails > 40 || !gpu_recover(s, false)) {
+            if (gpu_health_failed(&health) || !gpu_recover(s, false)) {
                 pz_log(PZ_LOG_ERR, "GPU %s: the device does not respond, excluding it", s->info.name);
                 break;
             }
             pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed (launches reduced to %u groups per work-item, growing back while they succeed)", s->info.index, ngroups);
             continue;
         }
-        consecutive = 0;
-        double dt = pz_mono() - t0;
+        const double t1 = pz_mono();
+        gpu_health_ok(&health, t1);
+        double dt = t1 - t0;
         u64 covered = c.nkeys;
         if (L.err) {
             pz_log(PZ_LOG_WARN, "GPU %s: numeric anomaly in the block, rescanning on the CPU", s->info.name);
@@ -596,7 +612,8 @@ static void *gpu_kang_thread(void *p)
     int T = s->T;
     const int K = T * s->NK;
     kang_worker *mirror = NULL;
-    int consecutive = 0, total_fails = 0;                  /* failed launches in a row / in all */
+    gpu_health health = {0};
+    int recoveries = 0;                                    /* the herds rebuilt so far: each one starts from other points */
     if (!kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index)) { pz_log(PZ_LOG_ERR, "GPU %s: kangaroo setup failed", s->info.name); goto done; }
     {
         char mu[80];
@@ -617,8 +634,9 @@ static void *gpu_kang_thread(void *p)
         uint32_t ndp = 0, nrl = 0;
         double t0 = pz_mono();
         if (!gpu_kang_run(s, &ks->P, rounds, &ndp, &nrl)) goto device_error;
-        consecutive = 0;
-        double dt = pz_mono() - t0;
+        const double t1 = pz_mono();
+        gpu_health_ok(&health, t1);
+        double dt = t1 - t0;
         mirror->round = s->gstep;               /* restarts below start counting from here */
         uint32_t nd = ndp > s->dps_cap ? (uint32_t)s->dps_cap : ndp;
         if (ndp > s->dps_cap) atomic_fetch_add(&ks->dropped, ndp - s->dps_cap);
@@ -664,7 +682,7 @@ static void *gpu_kang_thread(void *p)
         if (atomic_load(&r->stop)) break;
         pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
         rounds = gpu_launch_after_failure(rounds);
-        if (++consecutive > 3 || ++total_fails > 40 || !gpu_recover(s, true) || !kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index + 7919ULL * (u64)total_fails)) {
+        if (gpu_health_failed(&health) || !gpu_recover(s, true) || !kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index + 7919ULL * (u64)++recoveries)) {
             pz_log(PZ_LOG_ERR, "GPU %s: the device does not respond, excluding it", s->info.name);
             break;
         }

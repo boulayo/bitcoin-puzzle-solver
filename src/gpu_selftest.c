@@ -299,7 +299,37 @@ int gpu_policy_selftest(void)
     int steps = 0;
     while (n > 1 && steps < 20) { n = gpu_launch_after_failure(n); steps++; }
     PCHK(n == 1 && steps == 6);                               /* 4096 to 1 in six failures */
-    pz_result_line("GPU recovery: size of the launches", "%s", fails ? "FAILED" : "OK");
+    /* the budget of failures: 3 in a row are recovered from, the 4th gives up the device */
+    gpu_health h = {0};
+    PCHK(!gpu_health_failed(&h) && !gpu_health_failed(&h) && !gpu_health_failed(&h) && gpu_health_failed(&h));
+    h = (gpu_health){0};
+    for (int i = 0; i < 3; i++) { PCHK(!gpu_health_failed(&h)); gpu_health_ok(&h, 0.0); }      /* a success in between: the streak starts again */
+    PCHK(!gpu_health_failed(&h));
+    /* 40 failures in all are recovered from, whatever the spacing, if good launches never last 10 minutes; the 41st gives up */
+    h = (gpu_health){0};
+    double t = 100.0;
+    int given_up = 0;
+    for (int i = 1; i <= 45 && !given_up; i++) {
+        t += 1.0;
+        gpu_health_ok(&h, t);
+        t += GPU_FAIL_FORGET - 1.0;                                 /* 599 s of good launches after the first, just short of the limit */
+        gpu_health_ok(&h, t);
+        if (gpu_health_failed(&h)) given_up = i;
+    }
+    PCHK(given_up == 41);
+    /* a failure every night: 10 minutes of good launches between two failures wipe the count, so the device is never given up */
+    h = (gpu_health){0};
+    t = 100.0;
+    given_up = 0;
+    for (int i = 1; i <= 400 && !given_up; i++) {
+        t += 1.0;
+        gpu_health_ok(&h, t);
+        t += GPU_FAIL_FORGET;
+        gpu_health_ok(&h, t);
+        if (gpu_health_failed(&h)) given_up = i;
+    }
+    PCHK(!given_up && h.total == 1);
+    pz_result_line("GPU recovery: launch size, failure budget", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
