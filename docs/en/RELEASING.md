@@ -38,6 +38,13 @@ GitHub Releases        the binaries of every published version, with SHA256SUMS
 
 The repository does not keep binaries in git. The binaries of each version are release assets on GitHub.
 
+The Makefile always builds with `-g`, so that the binaries in `build/` can be used with gdb, Valgrind and the sanitizers. The binaries
+in the release archives are stripped copies: `tools/package_release.sh` (both when it builds, and for `--pack BINARY OS ARCH`, which the
+release workflow runs on every runner) strips the staged file with `strip` on Linux, `strip -x` on macOS (a signed binary is signed
+ad hoc again afterwards, since stripping invalidates the signature) and the MinGW `strip` for the Windows exe. If no strip tool is
+found, or it fails, the script only prints a warning and packages the binary as it is. After stripping it runs `pzsolve version` on the
+copy (when the binary can run on the packaging machine) and stops if the original starts and the stripped one does not.
+
 ## How to release
 
 1. Develop and commit the changes.

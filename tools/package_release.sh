@@ -18,7 +18,10 @@
 # The builds are the ones of the Makefile, from scratch, in build/release/<target>: Linux dynamic against glibc (the code avoids
 # the __isoc23_* symbols and anything newer than glibc 2.34, so the binary starts on older distributions; checked below), Windows
 # static with MinGW-w64 (only system DLLs; checked below). Release builds never use -march=native, the program picks its SIMD
-# engine at run time. Environment: OUT, JOBS, WINCC (default x86_64-w64-mingw32-gcc-posix), SKIP_TESTS=1 (skip the self-test).
+# engine at run time. The Makefile builds with -g (the build/ folders keep the debug information for gdb, valgrind and the
+# sanitizers); the binary that goes into an archive is a copy with the debug information and the symbol table stripped (strip,
+# `strip -x` on macOS, the MinGW strip for Windows; a missing strip only warns and the package is then simply bigger).
+# Environment: OUT, JOBS, WINCC (default x86_64-w64-mingw32-gcc-posix), SKIP_TESTS=1 (skip the self-test).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -34,6 +37,7 @@ if tar --version 2>/dev/null | grep -q 'GNU tar'; then TAROPTS=(--owner=0 --grou
 elif tar --version 2>/dev/null | grep -q bsdtar; then TAROPTS=(--uid 0 --gid 0 --numeric-owner); fi
 
 die() { echo "package_release: $*" >&2; exit 1; }
+warn() { echo "package_release: warning: $*" >&2; }
 say() { echo "== $*"; }
 
 sha256_files() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
@@ -41,6 +45,39 @@ sha256_files() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; e
 STAGES=()
 cleanup() { if [ ${#STAGES[@]} -gt 0 ]; then rm -rf "${STAGES[@]}"; fi; }
 trap cleanup EXIT
+
+# strip_binary FILE OS: strips the staged copy of a binary in place; it never fails the packaging (it warns and leaves the file as it was)
+strip_binary() {
+  local f=$1 os=$2 tool="" t before signed=0 flags
+  flags=()
+  case "$os" in
+    macos)   tool=strip; flags=(-x) ;;                                # keeps the global symbols, drops the local ones and the debug map
+    windows) for t in "${WINCC%gcc*}strip" x86_64-w64-mingw32-strip; do
+               if command -v "$t" >/dev/null 2>&1; then tool=$t; break; fi
+             done
+             case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) [ -n "$tool" ] || tool=strip ;; esac ;;
+    *)       tool=strip ;;
+  esac
+  if [ -z "$tool" ] || ! command -v "$tool" >/dev/null 2>&1; then warn "no strip tool for $os: the binary keeps its debug information"; return 0; fi
+  # a macOS binary that is signed (the release workflow signs it before packaging) loses its signature when it is modified
+  if [ "$os" = macos ] && command -v codesign >/dev/null 2>&1 && codesign -v "$f" >/dev/null 2>&1; then signed=1; fi
+  before=$(wc -c < "$f" | tr -d ' ')
+  cp "$f" "$f.unstripped"
+  if ! "$tool" ${flags[@]+"${flags[@]}"} "$f" >/dev/null 2>&1; then
+    warn "$tool failed on $(basename "$f"): the binary keeps its debug information"
+    mv "$f.unstripped" "$f"; return 0
+  fi
+  if [ $signed = 1 ] && ! codesign -s - --force "$f" >/dev/null 2>&1; then
+    warn "could not sign the stripped binary again: the binary keeps its debug information"
+    mv "$f.unstripped" "$f"; return 0
+  fi
+  # the stripped copy must still start wherever the original starts (it cannot be tried when the binary is for another system)
+  if "$f.unstripped" version >/dev/null 2>&1 && ! "$f" version >/dev/null 2>&1; then
+    rm -f "$f.unstripped"; die "the stripped $(basename "$f") does not start"
+  fi
+  rm -f "$f.unstripped"
+  echo "  stripped $(basename "$f"): $before -> $(wc -c < "$f" | tr -d ' ') bytes"
+}
 
 # pack BINARY OS ARCH: stages <name>/ and writes <name>.tar.gz (linux, macos) or <name>.zip (windows) into $OUT
 pack() {
@@ -55,6 +92,7 @@ pack() {
   mkdir -p "$d" "$OUT"
   cp "$bin" "$d/$exe"
   chmod 755 "$d/$exe"
+  strip_binary "$d/$exe" "$os"
   cp README.md "$d/"
   for f in LICENSE LICENSE.md LICENSE.txt COPYING CHANGELOG.md; do [ -f "$f" ] && cp "$f" "$d/"; done
   [ -d docs ] && cp -R docs "$d/docs"

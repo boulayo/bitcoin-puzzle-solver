@@ -11,6 +11,8 @@
 #   pzsolve-<version>-macos-arm64.tar.gz     pzsolve-<version>-macos-x86_64.tar.gz
 #   pzsolve-<version>-windows-x86_64.zip     SHA256SUMS
 # The same archives can be made on a Linux machine without Actions: tools/package_release.sh.
+# The binary inside every archive is a stripped copy (tools/package_release.sh does it in the Package step, after the macOS
+# signature, which it applies again); the builds themselves keep their debug information.
 #
 # Release builds are portable: the Makefile never passes -march=native (the program picks its SIMD engine at run time).
 # Linux binaries are built on Ubuntu 22.04 so that they need at most glibc 2.34. The Windows exe is cross-compiled with
