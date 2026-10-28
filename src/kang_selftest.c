@@ -200,10 +200,205 @@ static int range_selftest(void)
     return fails;
 }
 
+/* ---- the table of distinguished points: growth and thinning ---- */
+
+static int table_noise;      /* failures printed: one broken rule would print thousands */
+#define TCHK(cond) do { if (!(cond)) { fails++; if (table_noise++ < 10) printf("  table: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
+
+static u64 table_rnd(u64 *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; return *s; }
+
+static u64 table_occupied(const kang_state *ks)
+{
+    u64 n = 0;
+    for (u64 i = 0; i < ks->cap; i++) n += ks->tab[i].tagk != 0 || (ks->tab[i].d.w[0] | ks->tab[i].d.w[1] | ks->tab[i].d.w[2]);
+    return n;
+}
+
+/* A test state whose table starts with 64 slots (PZ_TEST_DP_CAP) and may use `limit` entries' worth of memory. */
+static kang_state *small_table_state(u64 limit)
+{
+    static char on[] = "PZ_TEST_DP_CAP=64", off[] = "PZ_TEST_DP_CAP=";
+    putenv(on);
+    kang_state *ks = kang_make_test_state(40, 1);
+    putenv(off);
+    if (ks) ks->r->mem_limit = limit * sizeof(dp_rec);
+    return ks;
+}
+
+/* A random record of the tame kind; d tells the records apart. */
+static dp_rec table_record(u64 *s, u64 id)
+{
+    dp_rec r;
+    memset(&r, 0, sizeof r);
+    r.tagk = (table_rnd(s) & ~7ULL) | KIND_TAME;
+    r.d.w[0] = id + 1;
+    return r;
+}
+
+/* After the table was rebuilt: the entries that were inserted and satisfy the present rule are all in it, nothing else is, the count
+ * and the copies for the progress line are right, and a lookup finds every one of them (inserting a point that is there again is a
+ * duplicate and changes nothing; one that the rule drops is refused). rc[i] is what the insertion of recs[i] returned. */
+static int table_check(kang_state *ks, const dp_rec *recs, const int *rc, int n)
+{
+    int fails = 0;
+    u64 want = 0;
+    for (int i = 0; i < n; i++) want += rc[i] == 1 && !((recs[i].tagk >> KANG_KSHIFT) & ks->thin_mask);
+    TCHK(ks->count == want);
+    TCHK(table_occupied(ks) == ks->count);
+    TCHK(atomic_load(&ks->count_mirror) == ks->count && atomic_load(&ks->cap_mirror) == ks->cap && atomic_load(&ks->thin_mirror) == ks->thin_level);
+    if (ks->count * 10 >= ks->cap * 8) { TCHK(!"room for the lookups"); return fails; }      /* they would rebuild the table again */
+    const u64 before = ks->count;
+    for (int i = 0; i < n; i++) {
+        if (rc[i] != 1) continue;
+        const bool stays = !((recs[i].tagk >> KANG_KSHIFT) & ks->thin_mask);
+        TCHK(kang_table_insert(ks, &recs[i], true) == (stays ? 0 : -1));
+    }
+    TCHK(ks->count == before);
+    return fails;
+}
+
+/* Thinning is done in place: on many small tables filled until they thinned four times, every entry that stays is found afterwards. */
+static int table_thin_checks(void)
+{
+    int fails = 0;
+    kang_state *ks = small_table_state(64);
+    if (!ks) return 1;
+    enum { N = 1500 };
+    dp_rec *recs = pz_xmalloc(N * sizeof *recs);
+    int *rc = pz_xmalloc(N * sizeof *rc);
+    unsigned deepest = 99;
+    for (int trial = 0; trial < 300; trial++) {
+        memset(ks->tab, 0, ks->cap * sizeof(dp_rec));
+        ks->count = 0;
+        ks->thin_mask = 0;
+        ks->thin_level = 0;
+        atomic_store(&ks->count_mirror, 0);
+        atomic_store(&ks->thin_mirror, 0);
+        u64 s = 0x9E3779B97F4A7C15ULL * (u64)(trial + 1);
+        int n = 0;
+        unsigned level = 0;
+        while (n < N && ks->thin_level < 4) {
+            recs[n] = table_record(&s, (u64)n);
+            rc[n] = kang_table_insert(ks, &recs[n], false);
+            n++;
+            if (ks->thin_level != level) {
+                level = ks->thin_level;
+                fails += table_check(ks, recs, rc, n);
+            }
+        }
+        if (level < deepest) deepest = level;
+        fails += table_check(ks, recs, rc, n);
+    }
+    TCHK(deepest == 4);
+    free(recs);
+    free(rc);
+    kang_free_test_state(ks);
+    return fails;
+}
+
+/* A point that meets one in the table still solves the key after the table was thinned (and the entry moved in the process). */
+static int table_collision_checks(void)
+{
+    int fails = 0;
+    const pz_u256 m = pz_u256_from_u64(123456789);      /* the offset of the key of kang_make_test_state from the base */
+    pz_u256 want = pz_u256_pow2(90);
+    pz_u256_add(&want, &want, &m);
+    const i192 X = i192_from_signed(false, &m);
+    const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
+    dp_rec ta = {0, i192_zero()}, wb = ta;
+    for (u64 dw0 = 777;; dw0++) {      /* a pair of points that meet, whose tag has the bits clear that four levels of thinning look at */
+        const pz_u256 dw256 = pz_u256_from_u64(dw0);
+        const i192 dw = i192_from_signed(false, &dw256);
+        const u64 tag = tag_of(&X, 1, &dw) & ~km;
+        if (!tag || ((tag >> KANG_KSHIFT) & 15)) continue;
+        i192 dt;
+        i192_add(&dt, &X, &dw);
+        ta.tagk = tag | KIND_TAME; ta.d = dt;
+        wb.tagk = tag | KIND_WILD_P; wb.d = dw;
+        break;
+    }
+    int moved = 0;
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                                    /* the thinning warns, and "key found" */
+    for (int sc = 0; sc < 40; sc++) {
+        kang_state *ks = small_table_state(64);
+        if (!ks) return fails + 1;
+        u64 s = 0xD1B54A32D192ED03ULL * (u64)(sc + 1), at = 0;
+        unsigned level = 0;
+        for (int i = 0; i < 3000 && ks->thin_level < 4; i++) {
+            if (i == 20 + sc) {                              /* among the others, so that it can be pushed behind its first probe */
+                TCHK(kang_table_insert(ks, &ta, false) == 1);
+                while (at < ks->cap && ks->tab[at].tagk != ta.tagk) at++;
+            }
+            const dp_rec f = table_record(&s, (u64)i);
+            kang_table_insert(ks, &f, false);
+            if (ks->thin_level == level) continue;
+            level = ks->thin_level;
+            u64 now = 0;
+            while (now < ks->cap && ks->tab[now].tagk != ta.tagk) now++;
+            TCHK(now < ks->cap);                            /* the entry is still there */
+            if (now != at) moved++;
+            at = now;
+        }
+        TCHK(ks->thin_level == 4);
+        TCHK(kang_table_insert(ks, &wb, false) == 2 && atomic_load(&ks->r->found) && !pz_u256_cmp(&ks->r->found_key, &want));
+        kang_free_test_state(ks);
+    }
+    pz_log_set_quiet(was_quiet);
+    TCHK(moved > 0);                                        /* the thinning did move the entry in some of the tables */
+    return fails;
+}
+
+/* Growth: by doubling, with the old and the new table together within the limit; nothing lost, and a thinning when the next size would not fit. */
+static int table_grow_checks(void)
+{
+    int fails = 0;
+    enum { N = 6000 };
+    dp_rec *recs = pz_xmalloc(N * sizeof *recs);
+    int *rc = pz_xmalloc(N * sizeof *rc);
+    for (int tight = 0; tight < 2; tight++) {
+        const u64 limit = tight ? 512 : (1 << 20);          /* entries */
+        kang_state *ks = small_table_state(limit);
+        if (!ks) return fails + 1;
+        u64 s = 0xA0761D6478BD642FULL, cap = ks->cap;
+        TCHK(cap == 64);
+        for (int n = 0; n < N;) {
+            recs[n] = table_record(&s, (u64)n);
+            rc[n] = kang_table_insert(ks, &recs[n], false);
+            n++;
+            if (ks->cap != cap) {
+                TCHK(ks->cap == 2 * cap && 3 * cap <= limit);
+                cap = ks->cap;
+                fails += table_check(ks, recs, rc, n);
+            }
+        }
+        if (tight) TCHK(ks->cap == 256 && ks->thin_level >= 1);     /* 128 -> 256 needs 384 entries, 256 -> 512 would need 768 */
+        else TCHK(ks->cap == 8192 && ks->thin_level == 0);
+        fails += table_check(ks, recs, rc, N);
+        kang_free_test_state(ks);
+    }
+    free(recs);
+    free(rc);
+    return fails;
+}
+
+static int table_selftest(void)
+{
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                                    /* "halving the density of stored points", hundreds of times */
+    int fails = table_thin_checks();
+    fails += table_grow_checks();
+    pz_log_set_quiet(was_quiet);
+    fails += table_collision_checks();
+    pz_result_line("distinguished-point table: growth and thinning", "%s", fails ? "FAILED" : "OK");
+    return fails;
+}
+
 int kang_merge_selftest(void)
 {
     int fails = merge_selftest();
     fails += solve_selftest();
+    fails += table_selftest();
     return fails + range_selftest();
 }
 

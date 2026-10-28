@@ -111,29 +111,32 @@ static bool table_grow(kang_state *ks)
     return true;
 }
 
-/* Halves the table load when the RAM budget is exhausted: from now on only DPs whose tag has one more
- * zero bit are kept (stored entries that do not satisfy the stricter rule are dropped). */
+/* Halves the table load when the RAM budget is exhausted: from now on only DPs whose tag has one more zero bit are kept (stored
+ * entries that do not satisfy the stricter rule are dropped). It is done in place, so the table never exists twice in memory.
+ *
+ * Why the entries that stay are still found: a lookup goes from the first probe h of a tag to the first empty slot, so an entry at
+ * slot p is found when the slots h .. p-1 are all taken. The sweep starts after an empty slot, which no probe crosses, and visits the
+ * slots in order. The entry at slot p is lifted out and, if it stays, put back by the same rule: from h to the first empty slot,
+ * with p counting as empty (so at p at the latest). The slots before p hold only entries put by that rule and the entries not visited
+ * yet are after p, so the slots h .. p-1 are taken when it is put, and later steps empty only slots after p. */
 static void table_thin(kang_state *ks)
 {
-    dp_rec *old = ks->tab;
-    dp_rec *nt = calloc(ks->cap, sizeof(dp_rec));
-    if (!nt) {                                    /* no memory to rebuild the table: keep it as it is (records that do not fit are dropped) */
-        static _Atomic int warned;
-        if (!atomic_exchange(&warned, 1)) pz_log(PZ_LOG_ERR, "not enough memory to shrink the distinguished-point table: new points that do not fit are discarded");
-        return;
-    }
     ks->thin_mask = ks->thin_mask << 1 | 1;
     ks->thin_level++;
+    const dp_rec none = {0, {{0, 0, 0}}};
+    u64 start = 0;
+    while (!dp_empty(&ks->tab[start])) start++;       /* there is one: the last slot is never filled */
     u64 kept = 0;
-    ks->tab = nt;
-    for (u64 i = 0; i < ks->cap; i++) {
-        if (dp_empty(&old[i]) || ((old[i].tagk >> KANG_KSHIFT) & ks->thin_mask)) continue;
-        u64 s = slot_of(ks, old[i].tagk);
-        while (!dp_empty(&nt[s])) s = (s + 1) & ks->mask;
-        nt[s] = old[i];
+    for (u64 i = 1; i <= ks->cap; i++) {
+        const u64 p = (start + i) & ks->mask;
+        const dp_rec e = ks->tab[p];
+        if (dp_empty(&e)) continue;
+        if ((e.tagk >> KANG_KSHIFT) & ks->thin_mask) { ks->tab[p] = none; continue; }
+        u64 s = slot_of(ks, e.tagk);
+        while (s != p && !dp_empty(&ks->tab[s])) s = (s + 1) & ks->mask;
+        if (s != p) { ks->tab[s] = e; ks->tab[p] = none; }
         kept++;
     }
-    free(old);
     ks->count = kept;
     atomic_store_explicit(&ks->count_mirror, kept, memory_order_relaxed);
     atomic_store_explicit(&ks->thin_mirror, ks->thin_level, memory_order_relaxed);
@@ -146,7 +149,8 @@ int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
     if (ks->thin_mask && ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask)) { atomic_fetch_add(&ks->dropped, 1); return -1; }
     if (ks->count * 10 >= ks->cap * 8) {
         u64 max_entries = ks->r->mem_limit / sizeof(dp_rec);
-        const bool grown = ks->cap * 2 <= max_entries && table_grow(ks);
+        /* the old table and the larger one exist together while the entries move: both must fit in the limit */
+        const bool grown = ks->cap * 3 <= max_entries && table_grow(ks);
         if (!grown && ks->count * 100 >= ks->cap * 93) {
             table_thin(ks);
             if ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask) { atomic_fetch_add(&ks->dropped, 1); return -1; }
@@ -385,7 +389,8 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     u64 want = (u64)(n_target / 0.6L) + 4096;
     u64 cap = 4096;
     while (cap < want && (cap << 1) <= max_entries) cap <<= 1;   /* a power of two, never above the memory limit */
-    if (getenv("PZ_TEST_DP_CAP")) cap = pz_strtou64(getenv("PZ_TEST_DP_CAP"));   /* tests: force a tiny table to exercise growth */
+    const char *tc = getenv("PZ_TEST_DP_CAP");                                    /* tests: force a tiny table to exercise growth (empty: unset) */
+    if (tc && *tc) cap = pz_strtou64(tc);
     if (cap < 64) cap = 64;
     ks->cap = cap;
     ks->mask = cap - 1;
