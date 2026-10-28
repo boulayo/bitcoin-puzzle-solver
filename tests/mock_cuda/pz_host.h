@@ -11,7 +11,14 @@ typedef unsigned char uchar;
 typedef unsigned short ushort;
 typedef long long s64;
 
-extern unsigned pz_mock_gid;
+/* Several simulated devices run kernels at the same time (one thread each): the work-item index and the carry flag belong to the thread.
+ * Where the compiler has no usable thread-local storage in a DLL (Windows), the driver runs one launch at a time instead. */
+#ifdef _WIN32
+#define PZ_MOCK_TLS
+#else
+#define PZ_MOCK_TLS _Thread_local
+#endif
+extern PZ_MOCK_TLS unsigned pz_mock_gid;
 
 #define PZ_CUDA 1                         /* take the CUDA branches of the kernels (same as the PTX build) */
 #define __kernel
@@ -28,7 +35,7 @@ extern unsigned pz_mock_gid;
 
 /* C emulation of the PTX carry-chain instructions (semantics of the PTX ISA: CC.CF is the carry out of add/mad and the
  * borrow out of sub; the .cc-less forms read the flag but leave it unchanged). */
-static uint pz_cf;
+static PZ_MOCK_TLS uint pz_cf;
 #define ADD_CC(d, a, b)       do { ulong s_ = (ulong)(uint)(a) + (uint)(b); (d) = (uint)s_; pz_cf = (uint)(s_ >> 32); } while (0)
 #define ADDC_CC(d, a, b)      do { ulong s_ = (ulong)(uint)(a) + (uint)(b) + pz_cf; (d) = (uint)s_; pz_cf = (uint)(s_ >> 32); } while (0)
 #define ADDC(d, a, b)         do { (d) = (uint)((ulong)(uint)(a) + (uint)(b) + pz_cf); } while (0)

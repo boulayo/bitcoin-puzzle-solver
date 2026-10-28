@@ -62,7 +62,7 @@ bool gpu_test_fe(gpu_session *s)
             pz_fe_add(&e[7], &A[i], &A[i]);
             for (int k = 0; k < 8; k++) {
                 if (k == 4 && pz_fe_is_zero(&a0)) continue;   /* inverse of zero is undefined */
-                if (!pz_fe_equiv(&r[k], &e[k])) { pz_log(PZ_LOG_ERR, "GPU self-test: operation %d differs from the CPU (item %d)", k, i); ok = false; s->mismatch = true; break; }
+                if (!pz_fe_equiv(&r[k], &e[k])) { rt_log(PZ_LOG_ERR, "GPU self-test: operation %d differs from the CPU (item %d)", k, i); ok = false; s->mismatch = true; break; }
             }
         }
     } else ok = false;
@@ -89,7 +89,7 @@ bool gpu_test_fe(gpu_session *s)
             u8 h[20], got[20];
             pz_hash160_pub33((u8)hin[i * 9 + 8], xb[i], h);
             for (int w = 0; w < 5; w++) for (int b = 0; b < 4; b++) got[4 * w + b] = (u8)(hout[i * 5 + w] >> (8 * b));
-            if (memcmp(h, got, 20)) { pz_log(PZ_LOG_ERR, "GPU self-test: hash160 differs from the CPU (item %d)", i); ok = false; s->mismatch = true; }
+            if (memcmp(h, got, 20)) { rt_log(PZ_LOG_ERR, "GPU self-test: hash160 differs from the CPU (item %d)", i); ok = false; s->mismatch = true; }
         }
         rt_buf_free(hb);
         rt_buf_free(ho);
@@ -129,7 +129,7 @@ bool gpu_test_fe(gpu_session *s)
             pz_ge got;
             unpack_fe(&got.x, eout + i * 17);
             unpack_fe(&got.y, eout + i * 17 + 8);
-            if (!pz_ge_equal(&got, &want)) { pz_log(PZ_LOG_ERR, "GPU self-test: point sum differs from the CPU (item %d)", i); ok = false; s->mismatch = true; }
+            if (!pz_ge_equal(&got, &want)) { rt_log(PZ_LOG_ERR, "GPU self-test: point sum differs from the CPU (item %d)", i); ok = false; s->mismatch = true; }
         }
         rt_buf_free(eb);
         rt_buf_free(eo);
@@ -185,7 +185,7 @@ bool gpu_test_linear(gpu_session *s)
             if (!pz_u256_cmp(&k, &key)) found = true; else { ok = false; s->mismatch = true; }
         }
         if (!found || L.nhits != 1 || L.err) {
-            pz_log(PZ_LOG_ERR, "GPU self-test: wrong linear search result (hit=%u err=%u, expected offset %llu)", L.nhits, L.err, (unsigned long long)off);
+            rt_log(PZ_LOG_ERR, "GPU self-test: wrong linear search result (hit=%u err=%u, expected offset %llu)", L.nhits, L.err, (unsigned long long)off);
             ok = false;
             s->mismatch = true;
         }
@@ -241,13 +241,13 @@ static bool test_kang_one(gpu_session *s, unsigned R, u64 dp_mask, int ROUNDS, u
             uint32_t ref[KSTRIDE];
             pack_state(ref, w2, i);
             if (memcmp(ref, back + (size_t)i * KSTRIDE, KSTRIDE * 4) != 0) {
-                pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: state of kangaroo %d differs from the CPU", i);
+                rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: state of kangaroo %d differs from the CPU", i);
                 ok = false;
                 s->mismatch = true;
             }
         }
-        if (ok && (int)ndp != w2->ndp) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: %u distinguished points against %d on the CPU", ndp, w2->ndp); ok = false; s->mismatch = true; }
-        if (ok && (int)nrl != w2->nrestart) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: %u restarts against %d on the CPU", nrl, w2->nrestart); ok = false; s->mismatch = true; }
+        if (ok && (int)ndp != w2->ndp) { rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: %u distinguished points against %d on the CPU", ndp, w2->ndp); ok = false; s->mismatch = true; }
+        if (ok && (int)nrl != w2->nrestart) { rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: %u restarts against %d on the CPU", nrl, w2->nrestart); ok = false; s->mismatch = true; }
         if (ok) {
             uint32_t *cpu = pz_xcalloc((size_t)w2->ndp + 1, 40);
             for (int i = 0; i < w2->ndp; i++) {
@@ -260,16 +260,16 @@ static bool test_kang_one(gpu_session *s, unsigned R, u64 dp_mask, int ROUNDS, u
             for (uint32_t i = 0; i < ndp; i++) dpd[i * 10 + 9] = 0;
             qsort(dpd, ndp, 40, cmp_dp);
             qsort(cpu, (size_t)w2->ndp, 40, cmp_dp);
-            if (memcmp(dpd, cpu, (size_t)ndp * 40) != 0) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: distinguished points differ from the CPU"); ok = false; s->mismatch = true; }
+            if (memcmp(dpd, cpu, (size_t)ndp * 40) != 0) { rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: distinguished points differ from the CPU"); ok = false; s->mismatch = true; }
             free(cpu);
             uint32_t *rc = pz_xcalloc((size_t)w2->nrestart + 1, 4);
             for (int i = 0; i < w2->nrestart; i++) rc[i] = (uint32_t)w2->restart[i];
             qsort(rc, (size_t)w2->nrestart, 4, cmp_u32);
             qsort(rld, nrl, 4, cmp_u32);
-            if (nrl && memcmp(rc, rld, nrl * 4) != 0) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: restarts differ from the CPU"); ok = false; s->mismatch = true; }
+            if (nrl && memcmp(rc, rld, nrl * 4) != 0) { rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: restarts differ from the CPU"); ok = false; s->mismatch = true; }
             free(rc);
         }
-        if (ok && R == KANG_R && (w2->ndp == 0 || w2->nrestart == 0)) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: the test did not produce both distinguished points and restarts"); ok = false; s->mismatch = true; }
+        if (ok && R == KANG_R && (w2->ndp == 0 || w2->nrestart == 0)) { rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: the test did not produce both distinguished points and restarts"); ok = false; s->mismatch = true; }
     }
     free(st); free(back); free(dpd); free(rld);
     kang_worker_free(w1);
@@ -291,7 +291,7 @@ bool gpu_test_kang(gpu_session *s)
     /* ... then 4 jumps: cycles and escapes over several checkpoint periods */
     if (!test_kang_one(s, 4, ~0ULL >> 12, 160, 0, &esc)) return false;
     if (!test_kang_one(s, 4, ~0ULL >> 12, 99, 5, &esc)) return false;
-    if (esc == 0) { pz_log(PZ_LOG_ERR, "GPU kangaroo self-test: the test produced no cycle escapes"); s->mismatch = true; }
+    if (esc == 0) { rt_log(PZ_LOG_ERR, "GPU kangaroo self-test: the test produced no cycle escapes"); s->mismatch = true; }
     return esc > 0;
 }
 
@@ -306,6 +306,53 @@ static void *stop_thread(void *p)
 }
 
 typedef struct { gpu_session *s; u64 v[4000]; } rnd_job;
+
+/* A sink for the log lines of the sequence test, and the threads of its slots. */
+typedef struct { pthread_mutex_t mu; char line[16][24]; int n; } log_capture;
+
+static void capture_line(void *ctx, pz_loglevel lvl, const char *msg)
+{
+    (void)lvl;
+    log_capture *c = ctx;
+    pthread_mutex_lock(&c->mu);
+    if (c->n < 16) pz_strlcpy(c->line[c->n++], msg, sizeof c->line[0]);
+    pthread_mutex_unlock(&c->mu);
+}
+
+static int capture_count(log_capture *c)
+{
+    pthread_mutex_lock(&c->mu);
+    const int n = c->n;
+    pthread_mutex_unlock(&c->mu);
+    return n;
+}
+
+static bool capture_wait(log_capture *c, int n)
+{
+    for (int i = 0; i < 400 && capture_count(c) < n; i++) pz_sleep(0.005);
+    return capture_count(c) >= n;
+}
+
+/* the lines of a slot: the first, then (after `gate`, when it is given) the second */
+typedef struct { rt_logseq *q; int slot; _Atomic int *gate; } seq_job;
+
+static void *seq_thread(void *p)
+{
+    seq_job *j = p;
+    rt_logseq_enter(j->q, j->slot);
+    rt_log(PZ_LOG_INFO, "slot %d a", j->slot);
+    for (int i = 0; j->gate && i < 400 && !atomic_load(j->gate); i++) pz_sleep(0.005);
+    rt_log(PZ_LOG_INFO, "slot %d b", j->slot);
+    rt_logseq_done(j->q, j->slot);
+    return NULL;
+}
+
+static bool capture_is(log_capture *c, int n, const char *const *want)
+{
+    bool ok = capture_count(c) == n;
+    for (int i = 0; ok && i < n; i++) ok = !strcmp(c->line[i], want[i]);
+    return ok;
+}
 
 static void *rnd_thread(void *p)
 {
@@ -378,6 +425,48 @@ int gpu_policy_selftest(void)
             free(job[i].s);
         }
         PCHK(job[0].v[0] != job[1].v[0]);                       /* and the sessions do not draw the same numbers */
+    }
+    /* the log lines of devices that start at the same time: in the order of the devices, the first one still running prints at once */
+    {
+        log_capture c;
+        memset(&c, 0, sizeof c);
+        pthread_mutex_init(&c.mu, NULL);
+        rt_logseq *q = rt_logseq_new(3, capture_line, &c);
+        seq_job j[3] = {{q, 0, NULL}, {q, 1, NULL}, {q, 2, NULL}};
+        pthread_t th[3];
+        bool made[3] = {false, false, false};
+        for (int k = 2; k >= 1; k--) {                           /* the later devices finish first: nothing comes out yet */
+            made[k] = pthread_create(&th[k], NULL, seq_thread, &j[k]) == 0;
+            if (made[k]) pthread_join(th[k], NULL);
+        }
+        PCHK(made[1] && made[2] && capture_count(&c) == 0);
+        _Atomic int gate = 0;
+        j[0].gate = &gate;
+        made[0] = pthread_create(&th[0], NULL, seq_thread, &j[0]) == 0;
+        PCHK(made[0] && capture_wait(&c, 1) && capture_count(&c) == 1);   /* device 0 is not held back by the others, and they wait for it */
+        atomic_store(&gate, 1);
+        if (made[0]) pthread_join(th[0], NULL);
+        const char *want[] = {"slot 0 a", "slot 0 b", "slot 1 a", "slot 1 b", "slot 2 a", "slot 2 b"};
+        PCHK(capture_is(&c, 6, want));
+        rt_logseq_free(q);
+        /* the next device takes over while it runs: what it has written comes out when the one before it is done, the rest at once */
+        memset(&c.line, 0, sizeof c.line);
+        c.n = 0;
+        q = rt_logseq_new(2, capture_line, &c);
+        _Atomic int gate1 = 0;
+        seq_job k1 = {q, 1, &gate1}, k0 = {q, 0, NULL};
+        made[1] = pthread_create(&th[1], NULL, seq_thread, &k1) == 0;
+        pz_sleep(0.05);                                           /* its first line is written, and kept */
+        PCHK(made[1] && capture_count(&c) == 0);
+        made[0] = pthread_create(&th[0], NULL, seq_thread, &k0) == 0;
+        if (made[0]) pthread_join(th[0], NULL);
+        PCHK(capture_wait(&c, 3) && capture_count(&c) == 3);     /* slot 0 a, slot 0 b, then the kept line of slot 1 */
+        atomic_store(&gate1, 1);
+        if (made[1]) pthread_join(th[1], NULL);
+        const char *want2[] = {"slot 0 a", "slot 0 b", "slot 1 a", "slot 1 b"};
+        PCHK(capture_is(&c, 4, want2));
+        rt_logseq_free(q);
+        pthread_mutex_destroy(&c.mu);
     }
     /* the wait of a recovery (up to 30 s) ends when the campaign is stopped, and lasts its time when it is not */
     {

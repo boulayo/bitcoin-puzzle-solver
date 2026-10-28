@@ -1,8 +1,97 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* rt.c - dispatch of the GPU runtime interface to OpenCL or CUDA, and the combined device list. */
 #include "rt_priv.h"
+#include <stdarg.h>
+#include <pthread.h>
 
 const char *rt_api_name(rt_api a) { return a == RT_CUDA ? "CUDA" : "OpenCL"; }
+
+/* ---------------- log lines of devices that start at the same time ---------------- */
+
+typedef struct { pz_loglevel lvl; char *msg; } log_line;
+typedef struct { log_line *v; int n, cap; bool done; } log_slot;
+struct rt_logseq {
+    pthread_mutex_t mu;
+    int n, head;                 /* slots; the first one that is not done */
+    log_slot *slot;
+    rt_log_sink sink;
+    void *ctx;
+};
+
+static _Thread_local struct { rt_logseq *q; int slot; } t_log;
+
+static void log_emit(rt_logseq *q, pz_loglevel lvl, const char *msg)
+{
+    if (q->sink) q->sink(q->ctx, lvl, msg);
+    else pz_log(lvl, "%s", msg);
+}
+
+void rt_log(pz_loglevel lvl, const char *fmt, ...)
+{
+    char msg[1024];                                         /* what pz_log keeps of a line */
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    rt_logseq *q = t_log.q;
+    if (!q) { pz_log(lvl, "%s", msg); return; }
+    pthread_mutex_lock(&q->mu);
+    if (t_log.slot == q->head) {
+        log_emit(q, lvl, msg);
+    } else {
+        log_slot *s = &q->slot[t_log.slot];
+        if (s->n == s->cap) {
+            s->cap = s->cap ? s->cap * 2 : 16;
+            s->v = pz_xrealloc(s->v, (size_t)s->cap * sizeof *s->v);
+        }
+        s->v[s->n].lvl = lvl;
+        s->v[s->n++].msg = pz_xstrdup(msg);
+    }
+    pthread_mutex_unlock(&q->mu);
+}
+
+rt_logseq *rt_logseq_new(int slots, rt_log_sink sink, void *ctx)
+{
+    rt_logseq *q = pz_xcalloc(1, sizeof *q);
+    pthread_mutex_init(&q->mu, NULL);
+    q->n = slots;
+    q->slot = pz_xcalloc((size_t)slots, sizeof *q->slot);
+    q->sink = sink;
+    q->ctx = ctx;
+    return q;
+}
+
+void rt_logseq_enter(rt_logseq *q, int slot)
+{
+    t_log.q = q;
+    t_log.slot = slot;
+}
+
+void rt_logseq_done(rt_logseq *q, int slot)
+{
+    t_log.q = NULL;
+    pthread_mutex_lock(&q->mu);
+    q->slot[slot].done = true;
+    while (q->head < q->n && q->slot[q->head].done) {
+        if (++q->head >= q->n) break;
+        log_slot *s = &q->slot[q->head];                    /* the next slot is the one that prints at once now: what it kept comes first */
+        for (int i = 0; i < s->n; i++) { log_emit(q, s->v[i].lvl, s->v[i].msg); free(s->v[i].msg); }
+        s->n = 0;
+    }
+    pthread_mutex_unlock(&q->mu);
+}
+
+void rt_logseq_free(rt_logseq *q)
+{
+    if (!q) return;
+    for (int i = 0; i < q->n; i++) {
+        for (int k = 0; k < q->slot[i].n; k++) free(q->slot[i].v[k].msg);
+        free(q->slot[i].v);
+    }
+    pthread_mutex_destroy(&q->mu);
+    free(q->slot);
+    free(q);
+}
 
 int rt_enumerate(rt_dev *out, int max, char *note, size_t nl)
 {

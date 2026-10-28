@@ -5,23 +5,48 @@
  * the embedded copies of src/kernels/ptx/*.ptx; launches run the very same kernel sources compiled as C (kern.c), one
  * work-item after the other. Every call is checked: unknown pointers, copies outside an allocation, launch shapes the
  * kernels were not compiled for, wrong argument lists - any misuse by the host code fails the call and is printed.
- * What it cannot check is the PTX itself (that is the NVIDIA driver's JIT) - the GPU self-test covers it at start-up. */
+ * What it cannot check is the PTX itself (that is the NVIDIA driver's JIT) - the GPU self-test covers it at start-up.
+ *
+ * Environment: PZ_MOCK_DEVICES=n shows n devices (PZ_MOCK_SAME_NAME=1: all with one name), PZ_MOCK_COUNT=1 reports the modules loaded and the
+ * kernels launched at exit, PZ_MOCK_FAIL_FILE=path fails one launch while that file exists. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
+#include <windows.h>
 #define EXPORT __declspec(dllexport)
+#define PZ_MOCK_TLS
 #else
+#include <sched.h>
 #define EXPORT __attribute__((visibility("default")))
+#define PZ_MOCK_TLS _Thread_local   /* see pz_host.h */
 #endif
 
 typedef unsigned int uint;
 typedef unsigned long long CUdeviceptr;
 typedef int CUresult;
 
-unsigned pz_mock_gid;
+PZ_MOCK_TLS unsigned pz_mock_gid;
+
+/* The driver is used by several threads at once when PZ_MOCK_DEVICES asks for more than one device (the start-up of the GPUs runs one thread
+ * for each). The tables below are guarded by a small lock; on Windows, where the work-item index of the kernels is not thread-local, a second
+ * lock lets one launch run at a time. */
+static int g_lock;
+#ifdef _WIN32
+static int g_emul_lock;
+#endif
+static void spin_wait(void)
+{
+#ifdef _WIN32
+    Sleep(0);
+#else
+    sched_yield();
+#endif
+}
+static void lock(int *l) { while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) spin_wait(); }
+static void unlock(int *l) { __atomic_store_n(l, 0, __ATOMIC_RELEASE); }
 
 extern const unsigned char mock_ptx_linear128[], mock_ptx_linear256[], mock_ptx_linear512[], mock_ptx_linear128m4[], mock_ptx_linear256m4[],
     mock_ptx_linear512m4[], mock_ptx_kang64[], mock_ptx_kang128[], mock_ptx_kang256[], mock_ptx_kang64b[], mock_ptx_kang128b[],
@@ -45,9 +70,14 @@ void pz_diag_alu(uint *out, const uint mode, const uint iters, const uint pz_n);
 
 enum { E_OK = 0, E_INVALID_VALUE = 1, E_OUT_OF_MEMORY = 2, E_INVALID_IMAGE = 200, E_INVALID_CONTEXT = 201, E_NOT_FOUND = 500, E_LAUNCH = 701 };
 
+#define MAX_DEVICES 8
 static int g_init;
-static int g_ctx_token = 0x5a5a;
-static void *g_current;
+static int g_ndev = 1;                  /* PZ_MOCK_DEVICES=n (1 to 8): how many devices the driver shows */
+static int g_same_name;                 /* PZ_MOCK_SAME_NAME=1: they all have the same name, like the cards of one model in a machine */
+static int g_ctx_tokens[MAX_DEVICES];   /* a context is the address of the token of its device */
+static void *g_current;                 /* the context last made current (checked only for "there is one") */
+#define CURRENT() __atomic_load_n(&g_current, __ATOMIC_RELAXED)
+#define SET_CURRENT(c) __atomic_store_n(&g_current, (c), __ATOMIC_RELAXED)
 
 static int fail(int code, const char *what)
 {
@@ -62,9 +92,12 @@ static alloc_t g_allocs[4096];
 static alloc_t *find_alloc(CUdeviceptr d, size_t n)
 {
     char *p = (char *)(uintptr_t)d;
-    for (int i = 0; i < 4096; i++)
-        if (g_allocs[i].p && p >= g_allocs[i].p && p + n <= g_allocs[i].p + g_allocs[i].n) return &g_allocs[i];
-    return NULL;
+    alloc_t *found = NULL;
+    lock(&g_lock);
+    for (int i = 0; i < 4096 && !found; i++)
+        if (g_allocs[i].p && p >= g_allocs[i].p && p + n <= g_allocs[i].p + g_allocs[i].n) found = &g_allocs[i];
+    unlock(&g_lock);
+    return found;
 }
 
 /* ---- modules and functions ---- */
@@ -84,11 +117,12 @@ static const struct { const unsigned char *ptx; int kind; search_fn search; kang
 typedef struct { int kind; } module_t;          /* kind = index in MODS + 1 (0 = free slot) */
 typedef struct { int kind; int which; } func_t;   /* kind = index in MODS */
 static module_t g_mods[64];
-static func_t g_funcs[256];
+static func_t g_funcs[4096];
 static int g_nfuncs;
 
 /* PZ_MOCK_COUNT=1: at exit, how many modules were loaded (each one is a JIT compilation on a real driver) and kernels launched. */
 static unsigned long g_loads, g_unloads, g_launches;
+#define COUNT(c) __atomic_fetch_add(&(c), 1, __ATOMIC_RELAXED)
 static void report_counts(void)
 {
     fprintf(stderr, "[mock CUDA] cuModuleLoadDataEx: %lu, cuModuleUnload: %lu, cuLaunchKernel: %lu\n", g_loads, g_unloads, g_launches);
@@ -98,18 +132,27 @@ EXPORT CUresult cuInit(unsigned flags)
 {
     if (flags) return fail(E_INVALID_VALUE, "cuInit flags");
     if (!g_init && getenv("PZ_MOCK_COUNT")) atexit(report_counts);
+    if (!g_init && getenv("PZ_MOCK_DEVICES")) {
+        const int n = atoi(getenv("PZ_MOCK_DEVICES"));
+        g_ndev = n < 1 ? 1 : n > MAX_DEVICES ? MAX_DEVICES : n;
+        g_same_name = getenv("PZ_MOCK_SAME_NAME") != NULL;
+    }
     g_init = 1;
     return E_OK;
 }
 EXPORT CUresult cuDriverGetVersion(int *v) { *v = 12080; return E_OK; }
-EXPORT CUresult cuDeviceGetCount(int *n) { if (!g_init) return 3; *n = 1; return E_OK; }
-EXPORT CUresult cuDeviceGet(int *d, int ord) { if (ord != 0) return fail(E_INVALID_VALUE, "device ordinal"); *d = 0; return E_OK; }
-EXPORT CUresult cuDeviceGetName(char *name, int len, int d) { (void)d; snprintf(name, (size_t)len, "Mock CUDA GPU (CPU)"); return E_OK; }
+EXPORT CUresult cuDeviceGetCount(int *n) { if (!g_init) return 3; *n = g_ndev; return E_OK; }
+EXPORT CUresult cuDeviceGet(int *d, int ord) { if (ord < 0 || ord >= g_ndev) return fail(E_INVALID_VALUE, "device ordinal"); *d = ord; return E_OK; }
+EXPORT CUresult cuDeviceGetName(char *name, int len, int d)
+{
+    if (g_ndev == 1 || g_same_name) snprintf(name, (size_t)len, "Mock CUDA GPU (CPU)");
+    else snprintf(name, (size_t)len, "Mock CUDA GPU %d (CPU)", d);
+    return E_OK;
+}
 EXPORT CUresult cuDeviceTotalMem_v2(size_t *b, int d) { (void)d; *b = (size_t)1 << 30; return E_OK; }
 
 EXPORT CUresult cuDeviceGetAttribute(int *v, int attr, int d)
 {
-    (void)d;
     switch (attr) {
     case 13: *v = 1500000; return E_OK;   /* clock, kHz */
     case 16: *v = 2; return E_OK;         /* SMs (small: the mock runs on the CPU) */
@@ -118,7 +161,7 @@ EXPORT CUresult cuDeviceGetAttribute(int *v, int attr, int d)
     case 38: *v = 10 << 20; return E_OK;  /* L2 cache (large enough to exercise the cache-sized herd variants) */
     case 81: *v = 102400; return E_OK;    /* shared memory per SM */
     case 37: *v = 128; return E_OK;       /* memory bus width, bits */
-    case 33: *v = 99; return E_OK;        /* PCI bus */
+    case 33: *v = 99 + d; return E_OK;    /* PCI bus */
     case 34: *v = 0; return E_OK;
     case 75: *v = 8; return E_OK;         /* compute capability 8.6 */
     case 76: *v = 6; return E_OK;
@@ -126,29 +169,34 @@ EXPORT CUresult cuDeviceGetAttribute(int *v, int attr, int d)
     }
 }
 
+static int valid_ctx(const void *ctx) { return ctx >= (const void *)g_ctx_tokens && ctx < (const void *)(g_ctx_tokens + g_ndev); }
+
 EXPORT CUresult cuCtxCreate_v2(void **ctx, unsigned flags, int d)
 {
-    (void)d;
     if (flags & ~7u) return fail(E_INVALID_VALUE, "context flags");
-    *ctx = &g_ctx_token;
-    g_current = *ctx;
+    if (d < 0 || d >= g_ndev) return fail(E_INVALID_VALUE, "context for an unknown device");
+    *ctx = &g_ctx_tokens[d];
+    SET_CURRENT(*ctx);
     return E_OK;
 }
-EXPORT CUresult cuCtxDestroy_v2(void *ctx) { if (ctx != &g_ctx_token) return fail(E_INVALID_CONTEXT, "cuCtxDestroy"); return E_OK; }
-EXPORT CUresult cuCtxSetCurrent(void *ctx) { if (ctx != &g_ctx_token) return fail(E_INVALID_CONTEXT, "cuCtxSetCurrent"); g_current = ctx; return E_OK; }
-EXPORT CUresult cuCtxSynchronize(void) { return g_current ? E_OK : fail(E_INVALID_CONTEXT, "no current context"); }
+EXPORT CUresult cuCtxDestroy_v2(void *ctx) { if (!valid_ctx(ctx)) return fail(E_INVALID_CONTEXT, "cuCtxDestroy"); return E_OK; }
+EXPORT CUresult cuCtxSetCurrent(void *ctx) { if (!valid_ctx(ctx)) return fail(E_INVALID_CONTEXT, "cuCtxSetCurrent"); SET_CURRENT(ctx); return E_OK; }
+EXPORT CUresult cuCtxSynchronize(void) { return CURRENT() ? E_OK : fail(E_INVALID_CONTEXT, "no current context"); }
 
 EXPORT CUresult cuModuleLoadDataEx(void **mod, const void *image, unsigned nopt, int *opts, void **vals)
 {
     (void)opts; (void)vals;
-    g_loads++;
-    if (!g_current) return fail(E_INVALID_CONTEXT, "module load without a context");
+    COUNT(g_loads);
+    if (!CURRENT()) return fail(E_INVALID_CONTEXT, "module load without a context");
     if (nopt > 8) return fail(E_INVALID_VALUE, "opzioni JIT");
     for (int k = 0; k < M_COUNT; k++) {
         if (strcmp((const char *)image, (const char *)MODS[k].ptx) != 0) continue;
+        CUresult rc = E_OUT_OF_MEMORY;
+        lock(&g_lock);
         for (int i = 0; i < 64; i++)
-            if (!g_mods[i].kind) { g_mods[i].kind = k + 1; *mod = &g_mods[i]; return E_OK; }
-        return fail(E_OUT_OF_MEMORY, "too many modules");
+            if (!g_mods[i].kind) { g_mods[i].kind = k + 1; *mod = &g_mods[i]; rc = E_OK; break; }
+        unlock(&g_lock);
+        return rc == E_OK ? rc : fail(rc, "too many modules");
     }
     return fail(E_INVALID_IMAGE, "unknown PTX image");
 }
@@ -157,8 +205,10 @@ EXPORT CUresult cuModuleUnload(void *mod)
 {
     module_t *m = mod;
     if (!m || m < g_mods || m >= g_mods + 64 || !m->kind) return fail(E_INVALID_VALUE, "cuModuleUnload");
-    g_unloads++;
+    COUNT(g_unloads);
+    lock(&g_lock);
     m->kind = 0;
+    unlock(&g_lock);
     return E_OK;
 }
 
@@ -173,9 +223,11 @@ EXPORT CUresult cuModuleGetFunction(void **f, void *mod, const char *name)
         which = !strcmp(name, "pz_test_fe") ? 0 : !strcmp(name, "pz_test_hash") ? 1 : !strcmp(name, "pz_test_ec") ? 2
               : !strcmp(name, "pz_diag_bw") ? 3 : !strcmp(name, "pz_diag_alu") ? 4 : -1;
     if (which < 0) return E_NOT_FOUND;
-    if (g_nfuncs >= 256) return fail(E_OUT_OF_MEMORY, "too many functions");
+    lock(&g_lock);
+    if (g_nfuncs >= 4096) { unlock(&g_lock); return fail(E_OUT_OF_MEMORY, "too many functions"); }
     g_funcs[g_nfuncs] = (func_t){kind, which};
     *f = &g_funcs[g_nfuncs++];
+    unlock(&g_lock);
     return E_OK;
 }
 
@@ -189,25 +241,35 @@ EXPORT CUresult cuFuncGetAttribute(int *v, int attr, void *f)
 
 EXPORT CUresult cuMemAlloc_v2(CUdeviceptr *d, size_t n)
 {
-    if (!g_current) return fail(E_INVALID_CONTEXT, "allocation without a context");
+    if (!CURRENT()) return fail(E_INVALID_CONTEXT, "allocation without a context");
     if (n == 0) return fail(E_INVALID_VALUE, "allocation of 0 bytes");
+    char *p = malloc(n);
+    if (!p) return E_OUT_OF_MEMORY;
+    memset(p, 0xA5, n);   /* like real device memory: garbage until written */
+    CUresult rc = E_OUT_OF_MEMORY;
+    lock(&g_lock);
     for (int i = 0; i < 4096; i++) {
         if (g_allocs[i].p) continue;
-        char *p = malloc(n);
-        if (!p) return E_OUT_OF_MEMORY;
-        memset(p, 0xA5, n);   /* like real device memory: garbage until written */
         g_allocs[i] = (alloc_t){p, n};
         *d = (CUdeviceptr)(uintptr_t)p;
-        return E_OK;
+        rc = E_OK;
+        break;
     }
-    return E_OUT_OF_MEMORY;
+    unlock(&g_lock);
+    if (rc != E_OK) free(p);
+    return rc;
 }
 
 EXPORT CUresult cuMemFree_v2(CUdeviceptr d)
 {
+    char *p = NULL;
+    lock(&g_lock);
     for (int i = 0; i < 4096; i++)
-        if (g_allocs[i].p == (char *)(uintptr_t)d) { free(g_allocs[i].p); g_allocs[i].p = NULL; return E_OK; }
-    return fail(E_INVALID_VALUE, "cuMemFree of an unknown pointer");
+        if (g_allocs[i].p == (char *)(uintptr_t)d) { p = g_allocs[i].p; g_allocs[i].p = NULL; break; }
+    unlock(&g_lock);
+    if (!p) return fail(E_INVALID_VALUE, "cuMemFree of an unknown pointer");
+    free(p);
+    return E_OK;
 }
 
 EXPORT CUresult cuMemcpyHtoD_v2(CUdeviceptr d, const void *src, size_t n)
@@ -238,26 +300,26 @@ static void *ptr_arg(void **params, int i, int *bad)
     return (void *)(uintptr_t)d;
 }
 
-EXPORT CUresult cuLaunchKernel(void *fv, unsigned gx, unsigned gy, unsigned gz, unsigned bx, unsigned by, unsigned bz, unsigned shmem, void *stream,
-                               void **params, void **extra)
+static CUresult launch_kernel(void *fv, unsigned gx, unsigned gy, unsigned gz, unsigned bx, unsigned by, unsigned bz, unsigned shmem, void *stream,
+                              void **params, void **extra)
 {
     func_t *f = fv;
-    g_launches++;
+    COUNT(g_launches);
     /* PZ_MOCK_FAIL_FILE=path: while that file exists, the next launch fails once and removes it, like a device reset after
      * the machine slept (the test creates the file while a campaign runs) */
     static const char *fault_file;
     static int fault_init;
+    lock(&g_lock);
     if (!fault_init) { fault_init = 1; fault_file = getenv("PZ_MOCK_FAIL_FILE"); }
-    if (fault_file) {
-        FILE *fp = fopen(fault_file, "r");
-        if (fp) {
-            fclose(fp);
-            remove(fault_file);
-            return fail(E_LAUNCH, "injected failure (PZ_MOCK_FAIL_FILE)");
-        }
+    FILE *fp = fault_file ? fopen(fault_file, "r") : NULL;
+    if (fp) {
+        fclose(fp);
+        remove(fault_file);
     }
-    if (!g_current) return fail(E_INVALID_CONTEXT, "launch without a context");
-    if (!f || f < g_funcs || f >= g_funcs + g_nfuncs) return fail(E_INVALID_VALUE, "unknown function");
+    unlock(&g_lock);
+    if (fp) return fail(E_LAUNCH, "injected failure (PZ_MOCK_FAIL_FILE)");
+    if (!CURRENT()) return fail(E_INVALID_CONTEXT, "launch without a context");
+    if (!f || f < g_funcs || f >= g_funcs + __atomic_load_n(&g_nfuncs, __ATOMIC_RELAXED)) return fail(E_INVALID_VALUE, "unknown function");
     if (gy != 1 || gz != 1 || by != 1 || bz != 1 || shmem || stream || extra || !params) return fail(E_INVALID_VALUE, "launch shape");
     if (bx == 0 || bx > 128 || gx == 0) return fail(E_INVALID_VALUE, "block above __launch_bounds__(128) or empty grid");
     const unsigned long long total = (unsigned long long)gx * bx;
@@ -314,6 +376,19 @@ EXPORT CUresult cuLaunchKernel(void *fv, unsigned gx, unsigned gy, unsigned gz, 
     void (*k)(const uint *, uint *, const uint) = f->which == 0 ? pz_test_fe : f->which == 1 ? pz_test_hash : pz_test_ec;
     for (unsigned long long g = 0; g < total; g++) { pz_mock_gid = (unsigned)g; k(in, out, n); }
     return E_OK;
+}
+
+EXPORT CUresult cuLaunchKernel(void *fv, unsigned gx, unsigned gy, unsigned gz, unsigned bx, unsigned by, unsigned bz, unsigned shmem, void *stream,
+                               void **params, void **extra)
+{
+#ifdef _WIN32
+    lock(&g_emul_lock);                 /* the kernels' work-item index is a plain global there */
+#endif
+    const CUresult rc = launch_kernel(fv, gx, gy, gz, bx, by, bz, shmem, stream, params, extra);
+#ifdef _WIN32
+    unlock(&g_emul_lock);
+#endif
+    return rc;
 }
 
 EXPORT CUresult cuGetErrorString(CUresult rc, const char **s)

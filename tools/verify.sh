@@ -161,6 +161,23 @@ outhas "attempt 1 of 3" $MOCK PZ_MOCK_FAIL_FILE="$T/st1.fault" PZ_GPU_TUNE=1 bui
 rm -rf "$T/st2"; touch "$T/st2.fault"
 outhas "attempt 1 of 3" $MOCK PZ_MOCK_FAIL_FILE="$T/st2.fault" build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/st2" --no-cpu --ui log \
   && check_found "$T/st2/c" "$KK" && echo "  OK GPU error during the start-up tests: repeated, the GPU is used (kangaroo)" || { echo "  FAIL start-up retry (kangaroo)"; fail=$((fail+1)); }
+# two simulated devices (PZ_MOCK_DEVICES=2): their start-up tests run at the same time, one thread each, but the log lines come out in the order of
+# the devices and both devices are used; an error of the driver during the tests is repeated for the device it hit; two devices of one model measure
+# the kernel variants once (whichever gets there first measures, the other takes the result from the file, as when they started one after the other)
+MD2="env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_MOCK_DEVICES=2"
+dev_order() { grep -E 'GPU\[[01]\]: (Mock|self-test)' <<<"$1" | sed -E 's/.*GPU\[([01])\].*/\1/' | tr -d '\n'; }
+rm -rf "$T/md1"; MO=$($MD2 PZ_GPU_TUNE=0 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md1" --no-cpu --ui log 2>&1)
+[ "$(dev_order "$MO")" = 0011 ] && grep -q "GPU\[1\]: .* kangaroos" <<<"$MO" && check_found "$T/md1/c" "$KK" \
+  && echo "  OK two simulated GPUs, kangaroo: tested together, log lines in the order of the devices, both used" || { echo "  FAIL two simulated GPUs (kangaroo)"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
+rm -rf "$T/md2"; MO=$($MD2 PZ_GPU_TUNE=0 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/md2" --no-cpu --ui log 2>&1)
+[ "$(dev_order "$MO")" = 0011 ] && check_found "$T/md2/c" "$K" \
+  && echo "  OK two simulated GPUs, linear: log lines in the order of the devices" || { echo "  FAIL two simulated GPUs (linear)"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
+rm -rf "$T/md3"; touch "$T/md3.fault"; MO=$($MD2 PZ_MOCK_FAIL_FILE="$T/md3.fault" PZ_GPU_TUNE=0 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md3" --no-cpu --ui log 2>&1)
+grep -q "attempt 1 of 3" <<<"$MO" && [ "$(dev_order "$MO" | tr -d '\n' | wc -c)" = 4 ] && grep -q "GPU\[1\]: .* kangaroos" <<<"$MO" && check_found "$T/md3/c" "$KK" \
+  && echo "  OK two simulated GPUs: an error during the tests is repeated for the device it hit, both are used" || { echo "  FAIL start-up retry with two simulated GPUs"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
+rm -rf "$T/md4" "$T/md4c"; MO=$($MD2 PZ_MOCK_SAME_NAME=1 PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/md4c" build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md4" --no-cpu --ui log 2>&1)
+[ "$(grep -c 'tuning the kangaroo kernel' <<<"$MO")" = 1 ] && [ "$(grep -c 'GPU\[[01]\]: kangaroo with .* (from earlier tuning)' <<<"$MO")" = 1 ] && check_found "$T/md4/c" "$KK" \
+  && echo "  OK two simulated GPUs of one model: the kernel variants are measured once" || { echo "  FAIL tuning of two simulated GPUs of one model"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
 rm -rf "$T/sus"; ( build/pzsolve hunt -p 45 -m linear -c s -d "$T/sus" --no-gpu --ui log -t 2 > "$T/sus.log" 2>&1 & p=$!; sleep 6; kill -STOP $p; sleep 18; kill -CONT $p; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
 grep -q "system suspension detected" "$T/sus.log" && echo "  OK frozen process (like a suspension): detected" || { echo "  FAIL suspension detection"; fail=$((fail+1)); }
 

@@ -59,4 +59,16 @@ bool rt_run(rt_ctx *c, rt_kern *k, size_t n);
 
 const char *rt_api_name(rt_api a);
 
+/* Messages of the runtimes and of the start-up of a device (its tests, the choice of its kernels) are logged with rt_log. It is pz_log,
+ * except in a thread that works for a slot of a log sequence: devices that start at the same time, one thread each, then do not mix
+ * their lines. The first slot not yet done prints at once, the lines of the others are kept and come out, slot by slot in order, when
+ * the slots before them are done. */
+typedef struct rt_logseq rt_logseq;
+typedef void (*rt_log_sink)(void *ctx, pz_loglevel lvl, const char *msg);
+void rt_log(pz_loglevel lvl, const char *fmt, ...) __attribute__((format(PZ_PRINTF, 2, 3)));
+rt_logseq *rt_logseq_new(int slots, rt_log_sink sink, void *ctx);   /* sink NULL: pz_log */
+void rt_logseq_enter(rt_logseq *q, int slot);                       /* the calling thread logs for `slot` from now on */
+void rt_logseq_done(rt_logseq *q, int slot);                        /* it is finished (and logs for no slot any more) */
+void rt_logseq_free(rt_logseq *q);
+
 #endif

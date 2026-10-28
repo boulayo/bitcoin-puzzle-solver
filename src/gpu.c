@@ -261,7 +261,7 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
     memset(s, 0, sizeof *s);
     s->r = r;
     char mem[160];
-    pz_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
+    rt_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
            d->api == RT_CUDA ? "SM" : "CU", fmt_devmem(d, mem, sizeof mem));
     bool ok = false;
     for (int attempt = 1; !ok; attempt++) {
@@ -273,17 +273,17 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
         if (ok || s->mismatch || attempt >= GPU_STARTUP_TRIES) break;
         /* an error of the API (a driver that is still busy, a display reset at that moment) is not a wrong result: the same error in the middle
          * of a campaign is retried nine times, and a wrong result is what excludes a device at once */
-        pz_log(PZ_LOG_WARN, "GPU[%d]: the start-up check stopped on an error of the %s API (attempt %d of %d): trying again", d->index, rt_api_name(d->api),
+        rt_log(PZ_LOG_WARN, "GPU[%d]: the start-up check stopped on an error of the %s API (attempt %d of %d): trying again", d->index, rt_api_name(d->api),
                attempt, GPU_STARTUP_TRIES);
         gpu_session_release(s);
         pz_sleep(0.5 * attempt);
     }
     if (!ok) {
-        pz_log(PZ_LOG_ERR, "GPU[%d] %s (%s): self-test failed, device excluded", d->index, d->name, rt_api_name(d->api));
+        rt_log(PZ_LOG_ERR, "GPU[%d] %s (%s): self-test failed, device excluded", d->index, d->name, rt_api_name(d->api));
         gpu_session_release(s);
         return false;
     }
-    pz_log(PZ_LOG_INFO, "GPU[%d]: self-test passed", d->index);
+    rt_log(PZ_LOG_INFO, "GPU[%d]: self-test passed", d->index);
     return true;
 }
 
@@ -301,6 +301,44 @@ void gpu_check_filter(const char *filter)
     }
 }
 
+/* The start-up of one device of the selection: its session if it passes, or else, for a CUDA device, the same card through OpenCL. */
+typedef struct {
+    run_ctx *r;
+    const rt_dev *devs;
+    int ndevs, dev;              /* the list of devices, and the position of this one in it */
+    bool for_kangaroo, fallback; /* fallback: a CUDA device that fails may be tried through its OpenCL driver */
+    rt_logseq *seq;
+    int slot;
+    gpu_session s;               /* the result, when ok */
+    bool ok;
+} dev_start;
+
+static void start_device(dev_start *j)
+{
+    const rt_dev *devs = j->devs;
+    j->ok = try_device(j->r, &j->s, &devs[j->dev], j->for_kangaroo);
+    if (j->ok || !j->fallback || devs[j->dev].api != RT_CUDA) return;
+    /* a GPU that fails through CUDA may still work through its OpenCL driver */
+    for (int k = 0; k < j->ndevs; k++) {
+        if (devs[k].dup_of != j->dev) continue;
+        rt_log(PZ_LOG_WARN, "GPU[%d]: trying the same card through OpenCL ([%d])", j->dev, k);
+        j->ok = try_device(j->r, &j->s, &devs[k], j->for_kangaroo);
+        break;
+    }
+}
+
+static void *start_device_thread(void *p)
+{
+    dev_start *j = p;
+    rt_logseq_enter(j->seq, j->slot);
+    start_device(j);
+    rt_logseq_done(j->seq, j->slot);
+    return NULL;
+}
+
+/* Starts the selected devices, all at once when there are several: the tests and the tuning of the GPUs take seconds each (minutes the first
+ * time), and the devices do not depend on each other. The sessions come out in the order of the devices, and so do the log lines
+ * (the first device prints at once, the others when the ones before them are done). */
 static int open_sessions(run_ctx *r, gpu_session **out, bool for_kangaroo)
 {
     *out = NULL;
@@ -309,20 +347,33 @@ static int open_sessions(run_ctx *r, gpu_session **out, bool for_kangaroo)
     int n = enumerate(devs, note, sizeof note);
     const bool explicit_sel = r->gpu_filter[0] != 0;
     if (explicit_sel) gpu_check_filter(r->gpu_filter);
+    dev_start *job = pz_xcalloc(RT_MAX_DEVS, sizeof *job);
+    int nj = 0;
+    for (int i = 0; i < n && nj < RT_MAX_DEVS; i++) {
+        if (explicit_sel ? !in_filter(r->gpu_filter, i) : !default_choice(&devs[i])) continue;
+        job[nj] = (dev_start){.r = r, .devs = devs, .ndevs = n, .dev = i, .for_kangaroo = for_kangaroo, .fallback = !explicit_sel, .slot = nj};
+        nj++;
+    }
+    if (nj == 1) {
+        start_device(&job[0]);
+    } else if (nj > 1) {
+        rt_logseq *seq = rt_logseq_new(nj, NULL, NULL);
+        pthread_t th[RT_MAX_DEVS];
+        bool started[RT_MAX_DEVS];
+        for (int k = 0; k < nj; k++) {
+            job[k].seq = seq;
+            started[k] = pthread_create(&th[k], NULL, start_device_thread, &job[k]) == 0;
+            if (!started[k]) start_device_thread(&job[k]);          /* no thread to be had: this one in turn, here */
+        }
+        for (int k = 0; k < nj; k++)
+            if (started[k]) pthread_join(th[k], NULL);
+        rt_logseq_free(seq);
+    }
     gpu_session *arr = pz_xcalloc(RT_MAX_DEVS, sizeof *arr);
     int cnt = 0;
-    for (int i = 0; i < n && cnt < RT_MAX_DEVS; i++) {
-        if (explicit_sel ? !in_filter(r->gpu_filter, i) : !default_choice(&devs[i])) continue;
-        if (try_device(r, &arr[cnt], &devs[i], for_kangaroo)) { cnt++; continue; }
-        /* a GPU that fails through CUDA may still work through its OpenCL driver */
-        if (explicit_sel || devs[i].api != RT_CUDA) continue;
-        for (int j = 0; j < n; j++) {
-            if (devs[j].dup_of != i) continue;
-            pz_log(PZ_LOG_WARN, "GPU[%d]: trying the same card through OpenCL ([%d])", i, j);
-            if (try_device(r, &arr[cnt], &devs[j], for_kangaroo)) cnt++;
-            break;
-        }
-    }
+    for (int k = 0; k < nj; k++)
+        if (job[k].ok) memcpy(&arr[cnt++], &job[k].s, sizeof *arr);
+    free(job);
     if (!cnt) {
         free(arr);
         if (!explicit_sel) pz_log(PZ_LOG_INFO, "GPU: no usable GPU%s%s%s, using the CPU only", note[0] ? " (" : "", note, note[0] ? ")" : "");

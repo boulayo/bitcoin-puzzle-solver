@@ -3,7 +3,7 @@
  * with -DPZ_FAST_FE (PTX carry chains, emulated by pz_host.h) and without (portable version); the prefix of the
  * exported functions is chosen with -DGK=... */
 #include "pz_host.h"
-unsigned pz_mock_gid;
+PZ_MOCK_TLS unsigned pz_mock_gid;
 #pragma GCC diagnostic ignored "-Wunknown-pragmas"
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "../../src/kernels/pz_common.cl"

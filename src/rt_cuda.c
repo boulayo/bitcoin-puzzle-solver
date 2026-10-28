@@ -124,7 +124,7 @@ static bool cuok(CUresult rc, const char *what)
     if (rc == 0) return true;
     const char *s = NULL;
     if (cu.GetErrorString) cu.GetErrorString(rc, &s);
-    pz_log(PZ_LOG_ERR, "CUDA: %s failed (code %d%s%s)", what, rc, s ? ": " : "", s ? s : "");
+    rt_log(PZ_LOG_ERR, "CUDA: %s failed (code %d%s%s)", what, rc, s ? ": " : "", s ? s : "");
     return false;
 }
 
@@ -175,7 +175,7 @@ bool rtcu_open(rt_ctx *c)
 {
     if (!cu_ready()) return false;
     if (c->dev.cc && c->dev.cc < 52) {
-        pz_log(PZ_LOG_ERR, "CUDA: %s has compute capability %d.%d, 5.2 (Maxwell) or newer is required", c->dev.name, c->dev.cc / 10, c->dev.cc % 10);
+        rt_log(PZ_LOG_ERR, "CUDA: %s has compute capability %d.%d, 5.2 (Maxwell) or newer is required", c->dev.name, c->dev.cc / 10, c->dev.cc % 10);
         return false;
     }
     CUdevice d;
@@ -209,11 +209,11 @@ bool rtcu_build(rt_mod *m, rt_prog_id prog, int param)
         break;
     default: ptx = &pz_ptx_test; break;
     }
-    if (!ptx) { pz_log(PZ_LOG_ERR, "CUDA: no precompiled module for parameter %d", param); return false; }
+    if (!ptx) { rt_log(PZ_LOG_ERR, "CUDA: no precompiled module for parameter %d", param); return false; }
     if (!use_ctx(m->c)) return false;
     size_t len;
     char *text = pz_blob_text(ptx, &len);      /* a few ms, once per module: the driver keeps its own copy */
-    if (!text) { pz_log(PZ_LOG_ERR, "CUDA: cannot unpack the embedded module for parameter %d", param); return false; }
+    if (!text) { rt_log(PZ_LOG_ERR, "CUDA: cannot unpack the embedded module for parameter %d", param); return false; }
     char log[4096] = "";
     int opts[2] = {CU_JIT_ERROR_LOG_BUFFER, CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES};
     void *vals[2] = {log, (void *)(uintptr_t)sizeof log};
@@ -222,8 +222,8 @@ bool rtcu_build(rt_mod *m, rt_prog_id prog, int param)
     free(text);
     if (rc != 0) {
         cuok(rc, "PTX module load");
-        if (log[0]) pz_log(PZ_LOG_ERR, "CUDA: driver JIT compiler:\n%s", log);
-        if (rc == 222) pz_log(PZ_LOG_ERR, "CUDA: the driver is too old for this PTX: update the NVIDIA driver (version 525 or later is required)");
+        if (log[0]) rt_log(PZ_LOG_ERR, "CUDA: driver JIT compiler:\n%s", log);
+        if (rc == 222) rt_log(PZ_LOG_ERR, "CUDA: the driver is too old for this PTX: update the NVIDIA driver (version 525 or later is required)");
         return false;
     }
     m->h = mod;

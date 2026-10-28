@@ -21,7 +21,7 @@ extern const unsigned int pz_common_cl_len, pz_linear_cl_len, pz_kang_cl_len, pz
 static bool clok(cl_int rc, const char *what)
 {
     if (rc == CL_SUCCESS) return true;
-    pz_log(PZ_LOG_ERR, "OpenCL: %s failed (code %d)", what, rc);
+    rt_log(PZ_LOG_ERR, "OpenCL: %s failed (code %d)", what, rc);
     return false;
 }
 
@@ -92,9 +92,9 @@ bool rtcl_open(rt_ctx *c)
     cl_int rc;
     cl_device_id dev = c->dev.cl_dev;
     cl_context ctx = cl->CreateContext(NULL, 1, &dev, NULL, NULL, &rc);
-    if (!ctx || rc != CL_SUCCESS) { pz_log(PZ_LOG_ERR, "OpenCL: could not create a context on %s (%d)", c->dev.name, rc); return false; }
+    if (!ctx || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: could not create a context on %s (%d)", c->dev.name, rc); return false; }
     cl_command_queue q = cl->CreateCommandQueue(ctx, dev, 0, &rc);
-    if (!q || rc != CL_SUCCESS) { pz_log(PZ_LOG_ERR, "OpenCL: could not create the command queue (%d)", rc); cl->ReleaseContext(ctx); return false; }
+    if (!q || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: could not create the command queue (%d)", rc); cl->ReleaseContext(ctx); return false; }
     c->a = ctx;
     c->b = q;
     return true;
@@ -122,14 +122,14 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
     cl_context ctx = (cl_context)m->c->a;
     cl_device_id dev = m->c->dev.cl_dev;
     cl_program p = cl->CreateProgramWithSource(ctx, 2, src, len, &rc);
-    if (!p || rc != CL_SUCCESS) { pz_log(PZ_LOG_ERR, "OpenCL: program creation failed (%d)", rc); return false; }
+    if (!p || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: program creation failed (%d)", rc); return false; }
     rc = cl->BuildProgram(p, 1, &dev, opts, NULL, NULL);
     if (rc != CL_SUCCESS) {
         size_t sz = 0;
         cl->GetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &sz);
         char *log = pz_xcalloc(sz + 1, 1);
         cl->GetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, sz, log, NULL);
-        pz_log(PZ_LOG_ERR, "OpenCL: kernel build failed on %s (%d):\n%s", m->c->dev.name, rc, log);
+        rt_log(PZ_LOG_ERR, "OpenCL: kernel build failed on %s (%d):\n%s", m->c->dev.name, rc, log);
         free(log);
         cl->ReleaseProgram(p);
         return false;
@@ -144,7 +144,7 @@ bool rtcl_kernel(rt_kern *k, const char *name)
 {
     cl_int rc;
     cl_kernel h = cl_load()->CreateKernel((cl_program)k->m->h, name, &rc);
-    if (!h || rc != CL_SUCCESS) { pz_log(PZ_LOG_ERR, "OpenCL: kernel %s not found (%d)", name, rc); return false; }
+    if (!h || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: kernel %s not found (%d)", name, rc); return false; }
     k->h = h;
     return true;
 }
@@ -156,7 +156,7 @@ bool rtcl_buf_new(rt_buf *b, const void *init)
     cl_int rc;
     cl_mem_flags fl = CL_MEM_READ_WRITE | (init ? CL_MEM_COPY_HOST_PTR : 0);
     cl_mem m = cl_load()->CreateBuffer((cl_context)b->c->a, fl, b->bytes, (void *)init, &rc);
-    if (!m || rc != CL_SUCCESS) { pz_log(PZ_LOG_ERR, "OpenCL: allocation of a %zu-byte buffer failed (%d)", b->bytes, rc); return false; }
+    if (!m || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: allocation of a %zu-byte buffer failed (%d)", b->bytes, rc); return false; }
     b->h = m;
     return true;
 }

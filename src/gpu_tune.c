@@ -114,11 +114,27 @@ static int tune_cache_get(const rt_dev *d, bool kang)
     return (kang ? valid_kvariant(d, v) : valid_variant(d, v)) ? v : 0;
 }
 
+/* Devices start at the same time, one thread each. g_tune_mu makes the update of the file one step (two devices that finish together would each
+ * keep only their own line), and g_tuning lists the keys being measured: a second device of the same model waits for the first and takes its
+ * result from the file, as it did when the devices started one after the other. */
+static pthread_mutex_t g_tune_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_tune_cv = PTHREAD_COND_INITIALIZER;
+static char g_tuning[RT_MAX_DEVS][400];
+static int g_ntuning;
+
+static bool tune_busy(const char *key)
+{
+    for (int i = 0; i < g_ntuning; i++)
+        if (!strcmp(g_tuning[i], key)) return true;
+    return false;
+}
+
 static void tune_cache_put(const rt_dev *d, bool kang, int variant)
 {
     char path[512], key[400];
     if (!tune_cache_path(path, sizeof path)) return;
     tune_key(d, kang, key, sizeof key);
+    pthread_mutex_lock(&g_tune_mu);
     char *old = pz_read_file(path, NULL);
     size_t cap = (old ? strlen(old) : 0) + 600;
     char *out = pz_xcalloc(cap, 1);
@@ -133,8 +149,41 @@ static void tune_cache_put(const rt_dev *d, bool kang, int variant)
     }
     len += (size_t)snprintf(out + len, cap - len, "%s=%d\n", key, variant);
     pz_write_file_atomic(path, out, len, 0644);
+    pthread_mutex_unlock(&g_tune_mu);
     free(out);
     free(old);
+}
+
+/* The saved choice for this device if there is one, waiting for another thread that is measuring the same model; 0 when this thread is to
+ * measure (and then calls tune_end). */
+static int tune_begin(const rt_dev *d, bool kang)
+{
+    char key[400];
+    tune_key(d, kang, key, sizeof key);
+    int v;
+    pthread_mutex_lock(&g_tune_mu);
+    for (;;) {
+        v = tune_cache_get(d, kang);
+        if (v) break;
+        if (!tune_busy(key)) {
+            if (g_ntuning < RT_MAX_DEVS) pz_strlcpy(g_tuning[g_ntuning++], key, sizeof g_tuning[0]);
+            break;
+        }
+        pthread_cond_wait(&g_tune_cv, &g_tune_mu);
+    }
+    pthread_mutex_unlock(&g_tune_mu);
+    return v;
+}
+
+static void tune_end(const rt_dev *d, bool kang)
+{
+    char key[400];
+    tune_key(d, kang, key, sizeof key);
+    pthread_mutex_lock(&g_tune_mu);
+    for (int i = 0; i < g_ntuning; i++)
+        if (!strcmp(g_tuning[i], key)) { pz_strlcpy(g_tuning[i], g_tuning[--g_ntuning], sizeof g_tuning[0]); break; }
+    pthread_cond_broadcast(&g_tune_cv);
+    pthread_mutex_unlock(&g_tune_mu);
 }
 
 /* Keys per second of the prepared linear kernel; 0 on failure. About two seconds at most. */
@@ -163,31 +212,14 @@ static double linear_measure(gpu_session *s)
     return best;
 }
 
-/* Chooses the variant of the linear kernel for this device (cached on disk per device and program version). */
-void gpu_linear_autotune(gpu_session *s, int idx)
+/* Measures the variants of the linear kernel on this device and keeps the fastest in s (and on disk, once it passes the test). */
+static void linear_tune(gpu_session *s, int idx)
 {
     const rt_dev *d = &s->info;
     char nb[48];
-    s->variant = gpu_default_variant(d);
-    const char *forced = getenv("PZ_GPU_HALF");
-    if (forced && forced[0]) {
-        int h = pz_atoi(forced);
-        if (valid_variant(d, h)) { s->variant = h; pz_log(PZ_LOG_INFO, "GPU[%d]: kernel window set by PZ_GPU_HALF: %d", idx, h); }
-        else pz_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_HALF=%s ignored (allowed values with %s: %s)", idx, forced, rt_api_name(d->api),
-                    d->api == RT_CUDA ? "128, 256, 512" : "64, 128, 256, 512");
-        return;
-    }
-    const char *dis = getenv("PZ_GPU_TUNE");
-    if ((dis && dis[0] == '0') || !(d->is_gpu || (dis && dis[0] == '1'))) return;
-    int cached = g_retune ? 0 : tune_cache_get(d, false);
-    if (cached) {
-        s->variant = cached;
-        pz_log(PZ_LOG_INFO, "GPU[%d]: kernel with window %s (from earlier tuning)", idx, variant_name(cached, nb, sizeof nb));
-        return;
-    }
     const int *vs;
     const int nv = gpu_variants_of(d, &vs);
-    pz_log(PZ_LOG_INFO, "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...", idx, nv);
+    rt_log(PZ_LOG_INFO, "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...", idx, nv);
     double rate[16] = {0};
     int best = 0;
     for (int i = 0; i < nv; i++) {
@@ -207,17 +239,43 @@ void gpu_linear_autotune(gpu_session *s, int idx)
         char r[32];
         o += (size_t)snprintf(line + o, sizeof line - o, "%s window %s %s", i ? ";" : "", variant_name(vs[i], nb, sizeof nb), pz_fmt_si(rate[i], r, sizeof r));
     }
-    pz_log(PZ_LOG_INFO, "%s; picking window %s", line, variant_name(vs[best], nb, sizeof nb));
+    rt_log(PZ_LOG_INFO, "%s; picking window %s", line, variant_name(vs[best], nb, sizeof nb));
     s->variant = vs[best];
     /* the winner must pass the correctness test before it is remembered, otherwise a bad choice would exclude the GPU forever */
     if (!gpu_test_linear(s)) {
-        pz_log(PZ_LOG_WARN, "GPU[%d]: variant %s failed the correctness check: using the default and not saving the choice", idx, variant_name(vs[best], nb, sizeof nb));
+        rt_log(PZ_LOG_WARN, "GPU[%d]: variant %s failed the correctness check: using the default and not saving the choice", idx, variant_name(vs[best], nb, sizeof nb));
         s->variant = gpu_default_variant(d);
         gpu_linear_release_program(s);
         return;
     }
     gpu_linear_release_program(s);
     tune_cache_put(d, false, s->variant);
+}
+
+/* Chooses the variant of the linear kernel for this device (cached on disk per device and program version). */
+void gpu_linear_autotune(gpu_session *s, int idx)
+{
+    const rt_dev *d = &s->info;
+    char nb[48];
+    s->variant = gpu_default_variant(d);
+    const char *forced = getenv("PZ_GPU_HALF");
+    if (forced && forced[0]) {
+        int h = pz_atoi(forced);
+        if (valid_variant(d, h)) { s->variant = h; rt_log(PZ_LOG_INFO, "GPU[%d]: kernel window set by PZ_GPU_HALF: %d", idx, h); }
+        else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_HALF=%s ignored (allowed values with %s: %s)", idx, forced, rt_api_name(d->api),
+                    d->api == RT_CUDA ? "128, 256, 512" : "64, 128, 256, 512");
+        return;
+    }
+    const char *dis = getenv("PZ_GPU_TUNE");
+    if ((dis && dis[0] == '0') || !(d->is_gpu || (dis && dis[0] == '1'))) return;
+    int cached = g_retune ? 0 : tune_begin(d, false);
+    if (cached) {
+        s->variant = cached;
+        rt_log(PZ_LOG_INFO, "GPU[%d]: kernel with window %s (from earlier tuning)", idx, variant_name(cached, nb, sizeof nb));
+        return;
+    }
+    linear_tune(s, idx);
+    tune_end(d, false);
 }
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
@@ -292,31 +350,14 @@ static void kang_set_variant(gpu_session *s, int v)
     s->l2fit = KV_L2(v) != 0;
 }
 
-/* Chooses the kangaroo kernel variant for this device (cached on disk like the linear variant) and leaves it in s. */
-void gpu_kang_autotune(gpu_session *s, int idx)
+/* Measures the variants of the kangaroo kernel on this device and keeps the fastest in s (and on disk, once it passes the test). */
+static void kang_tune(gpu_session *s, int idx)
 {
     const rt_dev *d = &s->info;
     char nb[64];
-    kang_set_variant(s, default_kvariant(d));
-    const char *forced = getenv("PZ_GPU_NK");
-    if (forced && forced[0]) {
-        const int v = parse_kvariant(forced);
-        if (valid_kvariant(d, v)) { kang_set_variant(s, v); pz_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, kvariant_name(v, nb, sizeof nb)); }
-        else pz_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, forced, rt_api_name(d->api),
-                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c" : "32, 64, 128, with suffix b; with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2)");
-        return;
-    }
-    const char *dis = getenv("PZ_GPU_TUNE");
-    if ((dis && dis[0] == '0') || !(d->is_gpu || (dis && dis[0] == '1'))) return;
-    int cached = g_retune ? 0 : tune_cache_get(d, true);
-    if (cached) {
-        kang_set_variant(s, cached);
-        pz_log(PZ_LOG_INFO, "GPU[%d]: kangaroo with %s (from earlier tuning)", idx, kvariant_name(cached, nb, sizeof nb));
-        return;
-    }
     int vs[32];
     const int nv = gpu_kvariants_of(d, vs);
-    pz_log(PZ_LOG_INFO, "GPU[%d]: tuning the kangaroo kernel (one time only: %d variants)...", idx, nv);
+    rt_log(PZ_LOG_INFO, "GPU[%d]: tuning the kangaroo kernel (one time only: %d variants)...", idx, nv);
     double rate[32] = {0};
     int best = 0;
     for (int i = 0; i < nv; i++) {
@@ -337,18 +378,44 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     }
     if (rate[best] <= 0) {
         kang_set_variant(s, default_kvariant(d));
-        pz_log(PZ_LOG_WARN, "%s: using the default %s", line, kvariant_name(kang_code(s), nb, sizeof nb));
+        rt_log(PZ_LOG_WARN, "%s: using the default %s", line, kvariant_name(kang_code(s), nb, sizeof nb));
         return;
     }
-    pz_log(PZ_LOG_INFO, "%s; picking %s", line, kvariant_name(vs[best], nb, sizeof nb));
+    rt_log(PZ_LOG_INFO, "%s; picking %s", line, kvariant_name(vs[best], nb, sizeof nb));
     kang_set_variant(s, vs[best]);
     /* remembered only once the choice has passed the bit-exact test against the CPU */
     if (!gpu_test_kang(s)) {
-        pz_log(PZ_LOG_WARN, "GPU[%d]: variant %s failed the correctness check: using the default", idx, kvariant_name(vs[best], nb, sizeof nb));
+        rt_log(PZ_LOG_WARN, "GPU[%d]: variant %s failed the correctness check: using the default", idx, kvariant_name(vs[best], nb, sizeof nb));
         kang_set_variant(s, default_kvariant(d));
         return;
     }
     tune_cache_put(d, true, kang_code(s));
+}
+
+/* Chooses the kangaroo kernel variant for this device (cached on disk like the linear variant) and leaves it in s. */
+void gpu_kang_autotune(gpu_session *s, int idx)
+{
+    const rt_dev *d = &s->info;
+    char nb[64];
+    kang_set_variant(s, default_kvariant(d));
+    const char *forced = getenv("PZ_GPU_NK");
+    if (forced && forced[0]) {
+        const int v = parse_kvariant(forced);
+        if (valid_kvariant(d, v)) { kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, kvariant_name(v, nb, sizeof nb)); }
+        else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, forced, rt_api_name(d->api),
+                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c" : "32, 64, 128, with suffix b; with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2)");
+        return;
+    }
+    const char *dis = getenv("PZ_GPU_TUNE");
+    if ((dis && dis[0] == '0') || !(d->is_gpu || (dis && dis[0] == '1'))) return;
+    int cached = g_retune ? 0 : tune_begin(d, true);
+    if (cached) {
+        kang_set_variant(s, cached);
+        rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo with %s (from earlier tuning)", idx, kvariant_name(cached, nb, sizeof nb));
+        return;
+    }
+    kang_tune(s, idx);
+    tune_end(d, true);
 }
 
 /* ---------------- benchmark ---------------- */
