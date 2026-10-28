@@ -186,6 +186,10 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
         int rc = kang_table_insert(ks, &recs[i], false);
         if (dup_out) dup_out[i] = (rc == 0);
         if (rc == 2) { solved = true; break; }
+        if (ks->log_ready && i + 1 < n) {                /* a full block of the log (a big batch of a GPU): written without the lock, */
+            kang_table_unlock(ks);                       /* not by the next full buffer under it */
+            pthread_mutex_lock(&ks->mu);
+        }
     }
     kang_table_unlock(ks);
     return solved;

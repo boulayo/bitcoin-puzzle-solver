@@ -775,8 +775,8 @@ static void *log_feed_main(void *p)
 {
     log_feeder *f = p;
     for (int i = 0; i < f->n;) {
-        dp_rec recs[128];
-        const int m = f->n - i < f->batch ? f->n - i : f->batch;       /* batch <= 128 */
+        dp_rec recs[256];
+        const int m = f->n - i < f->batch ? f->n - i : f->batch;       /* batch <= 256 */
         memset(recs, 0, sizeof recs);
         for (int j = 0; j < m; j++) { recs[j].tagk = ((f->first_id + (u64)(i + j)) << 20) | KIND_TAME; recs[j].d.w[0] = f->first_id + (u64)(i + j); }
         kang_insert_dps(f->ks, recs, m, NULL);
@@ -838,6 +838,27 @@ static int log_thread_checks(void)
         LCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->nw == 0);
         LCHK(k.len == 75 * sizeof(dp_rec) && atomic_load(&ks->dropped) == 0);
         LCHK(sink_has(&k, 0, 1000, 65) && sink_has(&k, 65, 2000, 10));
+        fclose(ks->log);
+        ks->log = NULL;
+        kang_free_test_state(ks);
+        free(k.data);
+    }
+    {   /* 1b. the same when one batch fills more than two buffers (a GPU with a low dp_bits): each block is written without the lock */
+        slow_sink k = {NULL, 0, 0, true, 0, 0};
+        kang_state *ks = sink_state(&k, 64);
+        if (!ks) return fails + 1;
+        log_feeder a = {ks, 1000, 200, 200, 0}, b = {ks, 2000, 10, 10, 0};
+        pthread_t ta, tb;
+        LCHK(pthread_create(&ta, NULL, log_feed_main, &a) == 0);       /* the 65th point takes the first block out: written, and stopped */
+        LCHK(log_wait(&k.started, 5000));
+        LCHK(pthread_create(&tb, NULL, log_feed_main, &b) == 0);
+        LCHK(log_wait(&b.done, 3000));                                 /* with the old code the 129th point wrote the block under the lock */
+        atomic_store(&k.go, 1);
+        pthread_join(ta, NULL);
+        pthread_join(tb, NULL);
+        LCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->nw == 0);
+        LCHK(k.len == 210 * sizeof(dp_rec) && atomic_load(&ks->dropped) == 0 && ks->caplog == 64 && ks->capw == 64);
+        LCHK(sink_has(&k, 0, 1000, 65) && sink_has(&k, 65, 2000, 10) && sink_has(&k, 75, 1065, 135));
         fclose(ks->log);
         ks->log = NULL;
         kang_free_test_state(ks);
