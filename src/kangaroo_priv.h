@@ -26,6 +26,13 @@
 #define KANG_KSHIFT 3            /* bits of the kind code at the bottom of tagk */
 #define KANG_K_THREAD_MAX 4096   /* kangaroos per CPU thread: one field inversion per round of the herd (measured optimum) */
 #define KANG_LOG_BUF_INIT 32768  /* records in each of the two buffers of the log of distinguished points (1 MiB) */
+/* Steps, in units of sqrt(W), whose distinguished points the table must hold at 80 % load when memory sets dp_bits; the table starts with
+ * room for them too. The search costs 1.06 sqrt(W) on average and goes beyond 1.3 sqrt(W) about once in three: then the table thins
+ * itself (table_thin) and a collision is seen with the delay of dp_bits + 1, the one a margin twice as large would have had from the start.
+ * Each bit less halves the delay of the distinguished points (about 1 to 2 K 2^dp / sqrt(W) steps, docs/en/RESEARCH.md 8.7). The margin
+ * of 4 of the versions before the thinning cost one or two bits wherever memory decides: on puzzles 135 and 140 with 2^20 to 2^22
+ * walkers (GPUs) and 8 to 64 GiB of RAM, up to 29 % more steps (8 % at 32 GiB). The file of distinguished points is 2 to 4 times larger. */
+#define KANG_DP_MEM_MARGIN 1.3L
 
 /* signed 192-bit integer (two's complement) */
 typedef struct { u64 w[3]; } i192;

@@ -408,7 +408,7 @@ static int table_size_checks(void)
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         kang_state *ks = kang_make_test_state_dp(cases[i].wbits, 1, &(pz_u256){{123456789, 0, 0, 0}}, cases[i].dp);
         if (!ks) { TCHK(!"state"); continue; }
-        const long double need = 4.0L * ks->sqrtW / ldexpl(1.0L, (int)ks->P.dp_bits) / 0.6L + 4096;
+        const long double need = KANG_DP_MEM_MARGIN * ks->sqrtW / ldexpl(1.0L, (int)ks->P.dp_bits) / 0.6L + 4096;
         u64 expect = 4096;
         while ((long double)expect < need && (expect << 1) <= top) expect <<= 1;
         TCHK(ks->P.dp_bits >= 2 && ks->cap == expect && ks->mask == expect - 1 && ks->tab != NULL);

@@ -312,7 +312,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     long double ov = 0.01L * ks->sqrtW / ks->K_total;
     if (ov >= 1.0L) dp_ov = (int)floorl(log2l(ov));
     int dp_mem = 0;
-    long double need = 4.0L * ks->sqrtW / (0.8L * (long double)max_entries);
+    long double need = KANG_DP_MEM_MARGIN * ks->sqrtW / (0.8L * (long double)max_entries);
     if (need > 1.0L) dp_mem = (int)ceill(log2l(need));
     int dp = dp_ov > dp_mem ? dp_ov : dp_mem;
     if (dp < 2) dp = 2;
@@ -389,7 +389,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     /* The table starts with room for the points expected at 60 % load, as far as the memory limit allows. With a small --dp-bits on a large interval
      * that is more than a u64 holds (2^69 points on puzzle 140 with --dp-bits 2), and the conversion of such a number is undefined: the number is
      * cut at 2^62, far above any table that memory can hold, and the limit decides. */
-    const long double n_target = 4.0L * ks->sqrtW / ldexpl(1.0L, dp);
+    const long double n_target = KANG_DP_MEM_MARGIN * ks->sqrtW / ldexpl(1.0L, dp);
     const long double want_max = ldexpl(1.0L, 62);
     const long double want_f = n_target / 0.6L;
     const u64 want = (want_f < want_max ? (u64)want_f : (u64)1 << 62) + 4096;
