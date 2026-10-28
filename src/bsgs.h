@@ -7,7 +7,7 @@
  *                Q_a = +-b*G, hence k = c + a*S +- b.
  * Every one of the (2A+1)*S >= 2H+1 values of d is covered exactly once, so the search is exhaustive and deterministic:
  * with the giants visited in a random order the expected cost is T + W/(4T) group operations, minimal (1.0*sqrt(W))
- * for T = sqrt(W)/2, against 1.15*sqrt(W) for the kangaroo, at the price of 8/0.65 ~ 12 bytes of RAM per baby step.
+ * for T = sqrt(W)/2, against 1.06*sqrt(W) (KANG_C_MEAN) for the kangaroo, at the price of 8/0.65 ~ 12 bytes of RAM per baby step.
  * The table does not depend on the target nor on the range: it can be saved to disk and reused. */
 #ifndef PZ_BSGS_H
 #define PZ_BSGS_H
@@ -47,7 +47,7 @@ u64 bsgs_max_T_for_bytes(u64 bytes);
 u64 bsgs_optimal_T(const pz_u256 *W);
 /* Mean number of group operations (builds + giants) for table size T on a range of W keys. */
 long double bsgs_mean_cost(const pz_u256 *W, u64 T);
-/* Table size to use given a memory budget; *viable tells whether it beats the kangaroo (1.15*sqrt(W)). */
+/* Table size to use given a memory budget; *viable tells whether it beats the kangaroo (KANG_C_MEAN*sqrt(W), 1.06). */
 u64 bsgs_choose_T(const pz_u256 *W, u64 budget_bytes, bool *viable);
 
 /* ---- parameters of a search ---- */
