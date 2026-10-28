@@ -61,12 +61,11 @@ static void kang_cleanup(run_ctx *r)
     r->kang = NULL;
 }
 
-/* Starts workers; returns the number of CPU threads started. */
+/* Starts workers; returns the number of CPU threads started. r->nthreads is at most MAX_WORKERS - 16 (main, and the callers here). */
 static int kang_launch_cpu(run_ctx *r, kang_state *ks, pthread_t *th, kth_arg *args, _Atomic int *active)
 {
     int n = 0;
-    int nthr = r->use_cpu ? r->nthreads : 0;
-    if (nthr > MAX_WORKERS - 16) nthr = MAX_WORKERS - 16;
+    const int nthr = r->use_cpu ? r->nthreads : 0;
     for (int i = 0; i < nthr; i++) {
         char nm[40];
         snprintf(nm, sizeof nm, "CPU%d", i);
@@ -102,9 +101,7 @@ int run_kangaroo(run_ctx *r)
     pthread_t th[MAX_WORKERS];
     kth_arg args[MAX_WORKERS];
     int nth = 0;
-    int ncpu = r->use_cpu ? r->nthreads : 0;
-    if (ncpu > MAX_WORKERS - 16) ncpu = MAX_WORKERS - 16;
-    atomic_store(&active, ncpu + ngpu);
+    atomic_store(&active, (r->use_cpu ? r->nthreads : 0) + ngpu);
     if (!atomic_load(&r->stop)) {
         nth = kang_launch_cpu(r, ks, th, args, &active);
         gpu_kangaroo_launch(r, ks, gpus, ngpu, &active);
@@ -376,7 +373,7 @@ double kangaroo_bench(double secs, bool print)
     if (!r) return 0;
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);
-    r->nthreads = r->sys.ncpu;
+    r->nthreads = r->sys.ncpu > MAX_WORKERS - 16 ? MAX_WORKERS - 16 : r->sys.ncpu;
     kang_state *ks = kang_create(r);
     r->kang = ks;
     kang_configure(ks, 0);

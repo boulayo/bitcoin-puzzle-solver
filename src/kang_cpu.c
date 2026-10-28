@@ -22,6 +22,14 @@ static const kang_round_variant KROUNDS[] = {
 };
 #define NKROUNDS ((int)(sizeof KROUNDS / sizeof *KROUNDS))
 
+/* Index of the variant with this id, -1 when this build has none. */
+static int kround_find(const char *id)
+{
+    for (int i = 0; i < NKROUNDS; i++)
+        if (!strcmp(KROUNDS[i].id, id)) return i;
+    return -1;
+}
+
 const kang_round_variant *kang_round_variants(int *n)
 {
     *n = NKROUNDS;
@@ -107,6 +115,7 @@ bool kang_round_check(kang_round_fn fn, int K, int rounds)
 
 static pthread_once_t g_kround_once = PTHREAD_ONCE_INIT;
 static int g_kround;
+static bool g_kround_ok[NKROUNDS];      /* supported by this CPU and equal to the portable round (set by kround_pick) */
 
 /* Steps per second of `fn` on one thread (a short run on a test herd). */
 static double kround_rate(kang_round_fn fn)
@@ -140,8 +149,8 @@ static void kround_pick(void)
     double best = 0;
     const char *forced = g_env.kang_round;                 /* diagnostics: base, x86, avx2v, avx512v, avx512i */
     if (forced[0]) {
-        for (int i = 0; i < NKROUNDS; i++)
-            if (!strcmp(forced, KROUNDS[i].id) && KROUNDS[i].supported()) { g_kround = i; return; }
+        const int f = kround_find(forced);
+        if (f >= 0 && KROUNDS[f].supported()) { g_kround = f; return; }
         pz_log(PZ_LOG_WARN, "PZ_KANG_ROUND=%s is not available on this CPU: choosing automatically", forced);
     }
     for (int i = 0; i < NKROUNDS; i++) {
@@ -150,6 +159,7 @@ static void kround_pick(void)
             pz_log(PZ_LOG_WARN, "kangaroo CPU: variant %s does not match the reference, excluded", KROUNDS[i].name);
             continue;
         }
+        g_kround_ok[i] = true;
         double r = kround_rate(KROUNDS[i].fn);
         if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, r / 1e6);
         if (r > best * 1.03) { best = r; g_kround = i; }
@@ -176,7 +186,7 @@ const char *kang_round_isa(void)
     int best = 0;
     for (int v = 0; v < NKROUNDS; v++)
         if (KROUNDS[v].supported()) best = v;
-    return !strcmp(KROUNDS[best].id, "avx512i2") ? "avx512i" : KROUNDS[best].id;
+    return best == kround_find("avx512i2") ? "avx512i" : KROUNDS[best].id;
 }
 
 /* ---------------- CPU benchmark of the step variants ---------------- */
@@ -231,17 +241,14 @@ static double kbench_run(kang_state *ks, const sysinfo_t *s, int n, const kang_r
 }
 
 /* The IFMA step comes in two forms that do the same (kv_bwd_step): one vector at a time, or two, which keeps the units busier
- * when a core runs a single thread but gains nothing when the sibling thread fills the gaps. So when the single-vector form has
- * won, the two are timed again with every logical CPU busy, and the pair replaces it only if it is faster there too. */
+ * when a core runs a single thread but gains nothing when the sibling thread fills the gaps. So when one of the two has won, they
+ * are timed again with every logical CPU busy, and the pair is kept only if it is faster there too. Only variants that kround_pick
+ * found equal to the portable round take part (the winner is one of them). */
 static void kround_choose_pair(void)
 {
-    int one = -1, two = -1;
-    for (int i = 0; i < NKROUNDS; i++) {
-        if (!strcmp(KROUNDS[i].id, "avx512i")) one = i;
-        if (!strcmp(KROUNDS[i].id, "avx512i2")) two = i;
-    }
+    const int one = kround_find("avx512i"), two = kround_find("avx512i2");
     if (one < 0 || two < 0 || (g_kround != one && g_kround != two)) return;
-    if (!KROUNDS[one].supported() || !kang_round_check(KROUNDS[two].fn, 96, 75)) { g_kround = one; return; }
+    if (!g_kround_ok[one] || !g_kround_ok[two]) return;
     sysinfo_t s;
     sysinfo_detect(&s);
     const int n = s.ncpu > 64 ? 64 : s.ncpu;
@@ -305,10 +312,8 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
     }
     /* SMT: the vector variant on the first thread of each core, the scalar one (integer multiplier, not the vector
      * unit) on its sibling */
-    int vx86 = -1;
-    for (int v = 0; v < NKROUNDS; v++)
-        if (!strcmp(KROUNDS[v].id, "x86") && KROUNDS[v].supported()) vx86 = v;
-    if (nall > ncore && vx86 >= 0 && best_v >= 0 && best_v != vx86) {
+    const int vx86 = kround_find("x86");
+    if (nall > ncore && vx86 >= 0 && KROUNDS[vx86].supported() && best_v >= 0 && best_v != vx86) {
         int n = 0;
         for (int c = 0; c < s->ncore && n < 256; c++) {
             int p[8];
@@ -334,9 +339,8 @@ static kang_round_fn kang_round_for_slot(const sysinfo_t *s, int slot)
     const int pos = slot % s->ncpu;
     int p[1];
     if (sysinfo_core_cpus(s, s->core_of[pos], p, 1) && p[0] == pos) return fn;
-    for (int v = 0; v < NKROUNDS; v++)
-        if (!strcmp(KROUNDS[v].id, "x86") && KROUNDS[v].supported() && kang_round_check(KROUNDS[v].fn, 96, 75)) return KROUNDS[v].fn;
-    return fn;
+    const int v = kround_find("x86");
+    return v >= 0 && KROUNDS[v].supported() && kang_round_check(KROUNDS[v].fn, 96, 75) ? KROUNDS[v].fn : fn;
 }
 
 void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)

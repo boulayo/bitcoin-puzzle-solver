@@ -98,8 +98,7 @@ int kang_flush_log(kang_state *ks)
         }
         if (ks->nlog) log_take_block(ks);
         pthread_mutex_unlock(&ks->mu);                                   /* the write itself needs only wmu */
-        int wr = log_write_block(ks);
-        if (wr == 0 && ks->log && fflush(ks->log) != 0) { ks->log_broken = true; wr = -1; }
+        const int wr = log_write_block(ks);                              /* flushed there */
         pthread_mutex_unlock(&ks->wmu);
         return wr;
     }
@@ -110,7 +109,7 @@ int kang_flush_log(kang_state *ks)
  * keep up) it waits for that write, with mu held, so the inserting threads wait as well and no point is lost. */
 static bool log_make_room(kang_state *ks)
 {
-    if (pthread_mutex_trylock(&ks->wmu) != 0) pthread_mutex_lock(&ks->wmu);
+    pthread_mutex_lock(&ks->wmu);
     if (ks->nw) log_write_block(ks);                                     /* one that was taken out and not written yet, or refused: it goes first */
     bool room = true;
     if (!ks->nw) {
