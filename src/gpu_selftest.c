@@ -489,6 +489,7 @@ int gpu_policy_selftest(void)
         } else fails++;
         free(r);
     }
+    fails += gpu_tune_selftest();
     pz_result_line("GPU recovery rules", "%s", fails ? "FAILED" : "OK");
     return fails;
 }

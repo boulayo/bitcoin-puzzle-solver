@@ -143,6 +143,7 @@ int gpu_kvariants_of(const rt_dev *d, int *out);
 size_t gpu_kang_threads(const gpu_session *s);
 void gpu_linear_autotune(gpu_session *s, int idx);
 void gpu_kang_autotune(gpu_session *s, int idx);
+int gpu_tune_selftest(void);                             /* the choice of a variant from invented rates (no device needed) */
 
 /* gpu_selftest.c: the kernels against the CPU, and the rules of the recovery (no device needed) */
 int gpu_policy_selftest(void);
