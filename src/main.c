@@ -674,6 +674,14 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
     }
 }
 
+/* What the options must agree on with the campaign, tested as soon as its configuration is known. For a new campaign this happens before
+ * its folder is created (fresh), so that a refused command leaves nothing behind; a campaign that exists is checked when it starts. */
+static void check_options_for_campaign(const opts_t *o, const campaign_cfg *c, const run_ctx *r, bool fresh)
+{
+    if (o->node && c->mode != MODE_KANGAROO) pz_die("--node is only used with the kangaroo (in linear search split the range with -r)");
+    if (fresh && c->mode == MODE_BSGS) run_bsgs_check(c, &r->sys, !o->no_cpu, o->mem_gb > 0 ? (u64)(o->mem_gb * 1073741824.0) : 0, o->table, NULL);
+}
+
 static void parse_gpu_filter(run_ctx *r, const char *list) { pz_strlcpy(r->gpu_filter, list, sizeof r->gpu_filter); }
 
 /* The size of a range in words: "8,388,608 keys", "2^43 keys", "about 6.65e35 keys". */
@@ -707,6 +715,7 @@ static int cmd_hunt(int argc, char **argv)
     pz_log_set_verbose(o.verbose);
     check_isa_option(o.isa);
     if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
+    if (o.retune && o.limit > 0 && o.limit < 100) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
     if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
@@ -719,6 +728,7 @@ static int cmd_hunt(int argc, char **argv)
     if (o.want_resume && !resuming) pz_die("--resume: campaign '%s' does not exist", o.campaign);
     if (!resuming) {
         build_new_cfg(&o, &r->cfg);
+        check_options_for_campaign(&o, &r->cfg, r, true);
         snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o.dir, r->cfg.name);
         if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
         /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the
@@ -736,6 +746,7 @@ static int cmd_hunt(int argc, char **argv)
         char err[256];
         if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
         check_resume_consistency(&o, &r->cfg);
+        check_options_for_campaign(&o, &r->cfg, r, false);
         pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
     }
     run_paths(r);
@@ -755,7 +766,6 @@ static int cmd_hunt(int argc, char **argv)
         r->nthreads = MAX_WORKERS - 16;
     }
     r->threads_explicit = o.threads > 0;
-    if (o.node && r->cfg.mode != MODE_KANGAROO) pz_die("--node is only used with the kangaroo (in linear search split the range with -r)");
     r->node = (u32)o.node;
     r->use_cpu = !o.no_cpu;
     r->use_gpu = !o.no_gpu;
@@ -778,7 +788,6 @@ static int cmd_hunt(int argc, char **argv)
     r->prio_gpu = o.prio_gpu;
     r->gpu_boost = o.prio_gpu == PRIO_YES;
     r->limit_pct = o.limit > 0 && o.limit < 100 ? o.limit : 0;
-    if (r->limit_pct && o.retune) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
     profile_apply(r, o.retune, o.no_tune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
     const int thr_full = r->nthreads;
     run_limit_setup(r);

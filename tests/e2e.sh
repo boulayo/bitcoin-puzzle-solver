@@ -212,10 +212,14 @@ grep -q "emptied by the creator" "$DIR/p161.out" && grep -q "^address=1JkqBQcC4t
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH -k 02e0cd1ed3ab4d2d3d6f3c2b1a5c4f3e2d1c0b9a8f7e6d5c4b3a291807f6e5d4c3 -c bad3 -d "$DIR" -q >/dev/null 2>&1 && bad "invalid pubkey accepted" || ok "invalid pubkey rejected"
 
 echo "== invalid options: clear error and no half-created campaign left behind"
-for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--report-interval 0" "--bsgs-entries 0" "--isa foo" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "--new --resume"; do
+for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--report-interval 0" "--bsgs-entries 0" "--isa foo" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "--new --resume" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50"; do
   rm -rf "$DIR/opt"
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done
+
+# a refusal that needs the whole configuration (the range of puzzle 130 is too large for BSGS) comes before the folder is created too
+rm -rf "$DIR/opt"
+$BIN hunt -p 130 -m bsgs -d "$DIR/opt" -q >/dev/null 2>&1 && bad "bsgs on puzzle 130 accepted" || { [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "bsgs on puzzle 130 rejected without leaving files" || bad "bsgs on puzzle 130 left a campaign behind"; }
 
 echo "== range option: the same messages for a new campaign and for a resume"
 rm -rf "$DIR/rg"; A1=1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH

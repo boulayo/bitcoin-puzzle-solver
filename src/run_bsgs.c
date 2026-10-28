@@ -181,32 +181,58 @@ static void bs_cleanup(run_ctx *r)
     }
 }
 
+/* What decides whether a BSGS campaign can run at all: the CPU, the size of the range for the table, the RAM, and a folder that the
+ * table can be saved to. 'hunt' asks it before it creates the folder of a new campaign, so that a refused command leaves nothing
+ * behind, and run_bsgs() asks it again (a resumed campaign, another machine). Exits with a message when the campaign cannot run;
+ * *out (optional) gets the parameters of the search. */
+void run_bsgs_check(const campaign_cfg *cfg, const sysinfo_t *sys, bool use_cpu, u64 mem_limit, const char *table_path, bsgs_params *out)
+{
+    bsgs_params local;
+    bsgs_params *P = out ? out : &local;
+    char err[256], mb[48], ma[48];
+    if (!cfg->has_pubkey) pz_die("bsgs mode needs the public key");
+    if (!use_cpu) pz_die("bsgs mode uses the CPU and RAM (GPUs do not take part): drop --no-cpu");
+    const u64 T = cfg->bsgs_t;
+    if (!T) pz_die("bsgs campaign without a table size (bsgs_entries)");
+    if (!bsgs_params_init(P, &cfg->range_start, &cfg->range_end, &cfg->pubkey, T, err, sizeof err)) pz_die("%s", err);
+
+    const u64 bytes = bsgs_bytes_for(T);
+    pz_fmt_bytes((double)bytes, mb, sizeof mb);
+    pz_fmt_bytes((double)sys->mem_avail, ma, sizeof ma);
+    const bool have_table = table_path[0] && access(table_path, F_OK) == 0;
+    if (!have_table) {
+        if ((double)bytes > 0.95 * (double)sys->mem_avail)
+            pz_die("the BSGS table needs %s but only %s of RAM are available: free some memory, or create a new campaign with fewer baby steps (--bsgs-entries) or with the kangaroo (--mode kangaroo): the number of baby steps of this campaign cannot be changed", mb, ma);
+        if (mem_limit && bytes > mem_limit)
+            pz_die("the BSGS table needs %s, above the --mem limit given", mb);
+    } else if ((double)bytes > 0.95 * (double)sys->mem_avail) {
+        pz_die("the BSGS table needs %s but only %s of RAM are available", mb, ma);
+    }
+    if (table_path[0] && !have_table) {
+        /* the table will be saved after it is built (minutes or hours): find out now whether that is possible */
+        char probe[700];
+        snprintf(probe, sizeof probe, "%s.probeXXXXXX", table_path);
+        int fd = pz_create_temp(probe);
+        if (fd < 0) pz_die("--table %s: cannot write to that folder (%s)", table_path, strerror(errno));
+        close(fd);
+        unlink(probe);
+    }
+}
+
 int run_bsgs(run_ctx *r)
 {
     pz_ec_init();
-    if (!r->cfg.has_pubkey) pz_die("bsgs mode needs the public key");
-    if (!r->use_cpu) pz_die("bsgs mode uses the CPU and RAM (GPUs do not take part): drop --no-cpu");
     bs_run *b = pz_xcalloc(1, sizeof *b);
     g_bs = b;
     b->r = r;
-    char err[256];
-    u64 T = r->cfg.bsgs_t;
-    if (!T) pz_die("bsgs campaign without a table size (bsgs_entries)");
-    if (!bsgs_params_init(&b->P, &r->cfg.range_start, &r->cfg.range_end, &r->cfg.pubkey, T, err, sizeof err)) pz_die("%s", err);
+    run_bsgs_check(&r->cfg, &r->sys, r->use_cpu, r->mem_limit, r->table_path, &b->P);
     bsgs_sched_cfg(&b->P, &r->cfg, &b->scfg);
 
-    u64 bytes = bsgs_bytes_for(T);
+    const u64 T = r->cfg.bsgs_t;
+    const u64 bytes = bsgs_bytes_for(T);
     char mb[48], ma[48], c1[48], c2[48];
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
     pz_fmt_bytes((double)r->sys.mem_avail, ma, sizeof ma);
-    if (!r->table_path[0] || access(r->table_path, F_OK) != 0) {
-        if ((double)bytes > 0.95 * (double)r->sys.mem_avail)
-            pz_die("the BSGS table needs %s but only %s of RAM are available: free some memory, or create a new campaign with fewer baby steps (--bsgs-entries) or with the kangaroo (--mode kangaroo): the number of baby steps of this campaign cannot be changed", mb, ma);
-        if (r->mem_limit && bytes > r->mem_limit)
-            pz_die("the BSGS table needs %s, above the --mem limit given", mb);
-    } else if ((double)bytes > 0.95 * (double)r->sys.mem_avail) {
-        pz_die("the BSGS table needs %s but only %s of RAM are available", mb, ma);
-    }
     pz_fmt_si((double)bsgs_mean_cost(&b->P.W, T), c1, sizeof c1);
     pz_fmt_si(KANG_C_MEAN * (double)sqrtl(pz_u256_to_ld(&b->P.W)), c2, sizeof c2);
     pz_log(PZ_LOG_INFO, "BSGS: %llu baby steps (table %s, available RAM %s), %llu giant steps; expected mean cost %s operations (kangaroo: %s)",
@@ -214,15 +240,6 @@ int run_bsgs(run_ctx *r)
     if (r->use_gpu) pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode (use --mode kangaroo to put them to work)");
     if (bsgs_mean_cost(&b->P.W, T) > KANG_C_MEAN * sqrtl(pz_u256_to_ld(&b->P.W)))
         pz_log(PZ_LOG_WARN, "BSGS: with %llu baby steps it costs more than the kangaroo (table too small for this range)", (unsigned long long)T);
-    if (r->table_path[0] && access(r->table_path, F_OK) != 0) {
-        /* the table will be saved after it is built (minutes or hours): find out now whether that is possible */
-        char probe[700];
-        snprintf(probe, sizeof probe, "%s.probeXXXXXX", r->table_path);
-        int fd = pz_create_temp(probe);
-        if (fd < 0) pz_die("--table %s: cannot write to that folder (%s)", r->table_path, strerror(errno));
-        close(fd);
-        unlink(probe);
-    }
 
     b->table_bytes = bytes;
     r->progress = bs_progress;

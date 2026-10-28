@@ -4,6 +4,7 @@
 #define PZ_RUN_H
 
 #include "campaign.h"
+#include "bsgs.h"
 #include "jobq.h"
 #include "cpu_engine.h"
 #include "sysinfo.h"
@@ -140,6 +141,9 @@ void run_ui_final(run_ctx *r, const progress_info *pi);   /* last frame of the l
 int run_linear(run_ctx *r);       /* defined in run_linear.c */
 int run_kangaroo(run_ctx *r);     /* defined in run_kangaroo.c */
 int run_bsgs(run_ctx *r);         /* defined in run_bsgs.c */
+/* The checks that decide whether a BSGS campaign can run (CPU enabled, range, RAM, folder of --table): exits with a message when it cannot.
+ * `hunt` calls it before it creates the folder of a new campaign. *out (optional) gets the parameters of the search. */
+void run_bsgs_check(const campaign_cfg *cfg, const sysinfo_t *sys, bool use_cpu, u64 mem_limit, const char *table_path, bsgs_params *out);
 /* Loads the scheduler state of a campaign (main file, then backup); *resumed tells whether progress was restored. */
 sched_t *run_load_sched(run_ctx *r, const campaign_cfg *scfg, bool *resumed);
 
