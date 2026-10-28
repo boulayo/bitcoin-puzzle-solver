@@ -387,25 +387,31 @@ static bool parse_pubkey(const char *hex, campaign_cfg *c)
     return true;
 }
 
-/* Table size for a bsgs campaign: forced with --bsgs-entries, taken from an existing --table file, or the best one that
+/* The baby steps the options ask for: the table of an existing --table file (it decides, whatever --bsgs-entries says), otherwise
+ * --bsgs-entries; 0 when they ask for none. *from_table tells which of the two it is. */
+static u64 requested_bsgs_entries(const opts_t *o, bool *from_table)
+{
+    u64 T;
+    char err[256];
+    *from_table = o->table[0] && access(o->table, F_OK) == 0;
+    if (!*from_table) return o->bsgs_entries;
+    if (!bsgs_table_peek(o->table, &T, err, sizeof err)) pz_die("table %s is not usable: %s", o->table, err);
+    return T;
+}
+
+/* Table size for a bsgs campaign: taken from an existing --table file, forced with --bsgs-entries, or the best one that
  * fits the memory budget (70% of the available RAM, or --mem). *viable (optional) tells whether it beats the kangaroo. */
 static u64 pick_bsgs_entries(const opts_t *o, const pz_u256 *rsz, bool *viable)
 {
+    bool from_table;
+    u64 T = requested_bsgs_entries(o, &from_table);
+    if (T) {
+        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(rsz));
+        return T;
+    }
     sysinfo_t si;
     sysinfo_detect(&si);
     u64 budget = o->mem_gb > 0 ? (u64)(o->mem_gb * 1073741824.0) : (u64)(0.70 * (double)si.mem_avail);
-    u64 T;
-    char err[256];
-    if (o->table[0] && access(o->table, F_OK) == 0) {
-        if (!bsgs_table_peek(o->table, &T, err, sizeof err)) pz_die("table %s is not usable: %s", o->table, err);
-        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(rsz));
-        return T;
-    }
-    if (o->bsgs_entries) {
-        T = o->bsgs_entries;
-        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(rsz));
-        return T;
-    }
     T = bsgs_choose_T(rsz, budget, viable);
     if (T < 1) pz_die("not enough memory for a BSGS table");
     return T;
@@ -449,6 +455,20 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
     pz_hex_encode(h, 4, id);
     if (o->puzzle) snprintf(out, n, "p%d-%s", o->puzzle, id);
     else snprintf(out, n, "custom-%s", id);
+}
+
+/* The block size (bits) of a campaign over rsz keys: the one asked for with --chunk-bits or the default of the range, and never more than
+ * the range holds. A new campaign takes this value and a resumed command is compared through it, so that the command that created a
+ * campaign can resume it also when its --chunk-bits was cut down. */
+static unsigned effective_chunk_bits(const pz_u256 *rsz, int requested)
+{
+    unsigned cb = requested > 0 ? (unsigned)requested : cfg_default_chunk_bits(rsz);
+    pz_u256 chunk = pz_u256_pow2(cb);
+    if (pz_u256_cmp(&chunk, rsz) > 0) {   /* chunk larger than the range: shrink */
+        unsigned b = pz_u256_bits(rsz) - 1;
+        cb = b < 1 ? 1 : b;
+    }
+    return cb;
 }
 
 /* Builds a new campaign configuration from the command line. */
@@ -556,12 +576,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     else seed_generate(c->seed);
 
     pz_u256 rsz = cfg_range_size(c);
-    c->chunk_bits = o->chunk_bits > 0 ? (unsigned)o->chunk_bits : cfg_default_chunk_bits(&rsz);
-    pz_u256 chunk = pz_u256_pow2(c->chunk_bits);
-    if (pz_u256_cmp(&chunk, &rsz) > 0) {   /* chunk larger than the range: shrink */
-        unsigned b = pz_u256_bits(&rsz) - 1;
-        c->chunk_bits = b < 1 ? 1 : b;
-    }
+    c->chunk_bits = effective_chunk_bits(&rsz, o->chunk_bits);
     c->dp_bits = o->dp_bits > 0 ? (unsigned)o->dp_bits : 0;
 
     if (!strcmp(o->mode, "linear")) c->mode = MODE_LINEAR;
@@ -640,15 +655,23 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
             pz_die("--part %s does not match the split of the existing campaign (%s): the split cannot be changed, use another name with -c",
                    o->part, c->part[0] ? c->part : "none");
     }
-    if (o->chunk_bits > 0 && (unsigned)o->chunk_bits != c->chunk_bits) pz_die("--chunk-bits cannot be changed on an existing campaign (it is %u)", c->chunk_bits);
+    const pz_u256 rsz = cfg_range_size(c);
+    if (o->chunk_bits > 0 && effective_chunk_bits(&rsz, o->chunk_bits) != c->chunk_bits)
+        pz_die("--chunk-bits cannot be changed on an existing campaign (it is %u)", c->chunk_bits);
     if (strcmp(o->mode, "auto") != 0) {
         const char *want = !strcmp(o->mode, "linear") ? "linear" : !strcmp(o->mode, "kangaroo") ? "kangaroo" : !strcmp(o->mode, "bsgs") ? "bsgs" : NULL;
         if (!want) pz_die("--mode must be auto, linear, kangaroo or bsgs");
         if (strcmp(want, mode_name(c->mode)) != 0)
             pz_die("the existing campaign uses mode %s, not %s (the mode cannot be changed: use another name with -c)", mode_name(c->mode), want);
     }
-    if (o->bsgs_entries && c->mode == MODE_BSGS && o->bsgs_entries != c->bsgs_t)
-        pz_die("--bsgs-entries cannot be changed on an existing campaign (the table has %llu entries)", (unsigned long long)c->bsgs_t);
+    if (c->mode == MODE_BSGS) {
+        bool from_table;
+        const u64 T = requested_bsgs_entries(o, &from_table);
+        if (T && T != c->bsgs_t) {
+            if (from_table) pz_die("table %s has %llu baby steps but the campaign uses %llu (this cannot be changed after creation)", o->table, (unsigned long long)T, (unsigned long long)c->bsgs_t);
+            pz_die("--bsgs-entries cannot be changed on an existing campaign (the table has %llu entries)", (unsigned long long)c->bsgs_t);
+        }
+    }
 }
 
 static void parse_gpu_filter(run_ctx *r, const char *list) { pz_strlcpy(r->gpu_filter, list, sizeof r->gpu_filter); }

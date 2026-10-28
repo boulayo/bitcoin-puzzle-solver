@@ -240,6 +240,22 @@ for conflict in "-s somethingelse" "--chunk-bits 20" "-m kangaroo" "-m bsgs" "-r
 done
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/rc/p71/session.txt"); [ "$SES" = 1 ] && ok "the rejections left the campaign untouched (1 session)" || bad "sessions after the rejections: '$SES'"
 
+echo "== resume with the command that created the campaign, also when an option was cut down"
+rm -rf "$DIR/cb"; A1=1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
+# a range of 2^18 keys is smaller than a block of 2^30: the campaign gets blocks of its own size, and the same command must resume it
+for i in 1 2; do
+  OUT=$($BIN hunt -r 100000000000:10000003ffff -a $A1 --chunk-bits 30 -c cb -d "$DIR/cb" --ui log --no-gpu -t 1 2>&1); RC=$?
+  [ $RC -eq 0 ] && ok "--chunk-bits 30 on a range of 2^18 keys: run $i" || bad "--chunk-bits 30 on a small range, run $i: rc=$RC $(echo "$OUT" | grep ERROR)"
+done
+grep -q '^chunk_bits=18$' "$DIR/cb/cb/campaign.conf" && ok "the campaign has blocks of 2^18 keys" || bad "chunk_bits: $(grep chunk_bits "$DIR/cb/cb/campaign.conf")"
+# a table file that exists decides the size of the table, whatever --bsgs-entries says: the same command resumes the campaign
+for i in 1 2; do
+  OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" --bsgs-entries 777 -c bst4 -d "$DIR" --ui log --no-gpu 2>&1); RC=$?
+  [ $RC -eq 0 ] && ok "--table and --bsgs-entries together: run $i" || bad "--table with --bsgs-entries, run $i: rc=$RC $(echo "$OUT" | grep ERROR)"
+done
+OUT=$($BIN hunt -c bst4 -d "$DIR" --bsgs-entries 777 --ui log --no-gpu 2>&1); RC=$?
+[ $RC -ne 0 ] && echo "$OUT" | grep -q "bsgs-entries cannot be changed" && ok "--bsgs-entries alone cannot change the table of the campaign" || bad "--bsgs-entries 777 without the table on resume: rc=$RC"
+
 echo "== sub-interval of a puzzle: same command = same campaign"
 rm -rf "$DIR/sub"
 for i in 1 2; do timeout -s INT 2 $BIN hunt -p 71 -r 0x400000000000000000:0x4fffffffffffffffff -d "$DIR/sub" --ui log -q --no-gpu >/dev/null 2>&1; done
