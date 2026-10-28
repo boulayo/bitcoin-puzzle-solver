@@ -62,6 +62,7 @@ static void check_system(const sysinfo_t *s)
     char ps[128];
     pz_power_scheme(ps, sizeof ps);
     if (ps[0]) doctor_line('i', "active power plan: %s (a power-saving plan slows the CPU and GPU down; use 'High performance' for long campaigns)", ps);
+    if (gpu_count_usable() <= 0) return;                       /* the priority of the threads that serve the GPUs */
     if (pz_boost_possible()) doctor_line('i', "high priority for the GPU threads: possible (the first-run tuning tries it by itself; --prio-gpu yes|no forces it)");
     else doctor_line('i', "high priority for the GPU threads: not possible for this user (on Linux it needs root or CAP_SYS_NICE): stays normal");
 }
@@ -131,29 +132,39 @@ static long long mtime_of(const char *path)
     return stat(path, &st) == 0 ? (long long)st.st_mtime : 0;
 }
 
+static int cmp_names(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
 static void check_campaigns(const char *base)
 {
     section("Campaigns");
     doctor_line('i', "folder: %s", base);
     DIR *d = opendir(base);
     if (!d) { doctor_line('i', "does not exist yet ('hunt' creates it): no campaigns"); return; }
-    struct dirent *e;
-    int n = 0;
-    while ((e = readdir(d)) != NULL) {
+    char **names = NULL;
+    size_t nn = 0;
+    for (struct dirent *e; (e = readdir(d)) != NULL;) {
         if (e->d_name[0] == '.') continue;
+        names = pz_xrealloc(names, (nn + 1) * sizeof *names);
+        names[nn++] = pz_xstrdup(e->d_name);
+    }
+    closedir(d);
+    qsort(names, nn, sizeof *names, cmp_names);                 /* in the order of 'list' */
+    int n = 0;
+    for (size_t k = 0; k < nn; k++) {
+        const char *name = names[k];
         char conf[1200], dir[1100];
-        snprintf(dir, sizeof dir, "%s/%s", base, e->d_name);
+        snprintf(dir, sizeof dir, "%s/%s", base, name);
         snprintf(conf, sizeof conf, "%s/campaign.conf", dir);
         if (mtime_of(conf) == 0) continue;
         campaign_cfg c;
         char err[256];
-        if (cfg_load(&c, conf, err, sizeof err) != 0) { doctor_line('x', "%s: campaign.conf unreadable (%s)", e->d_name, err); continue; }
+        if (cfg_load(&c, conf, err, sizeof err) != 0) { doctor_line('x', "%s: campaign.conf unreadable (%s)", name, err); continue; }
         n++;
         char file[1300], age[56] = "never";
         long long mt = 0;
-        const char *names[] = {"state.dat", "dp.bin", "session.txt"};
+        const char *saved[] = {"state.dat", "dp.bin", "session.txt"};
         for (size_t i = 0; i < 3; i++) {
-            snprintf(file, sizeof file, "%s/%s", dir, names[i]);
+            snprintf(file, sizeof file, "%s/%s", dir, saved[i]);
             long long t = mtime_of(file);
             if (t > mt) mt = t;
         }
@@ -165,10 +176,11 @@ static void check_campaigns(const char *base)
         /* suspensions the campaign has gone through (logged by the reporter) */
         snprintf(file, sizeof file, "%s/log.txt", dir);
         const long long sleeps = pz_file_count(file, "system suspension detected");   /* streamed: after months the log is tens of MB */
-        doctor_line(found ? 'o' : 'i', "%-10s %-9s %s: %s, last save %s", e->d_name, mode_name(c.mode), pz, state, age);
-        if (sleeps > 0) doctor_line('i', "%-10s system suspensions detected during the campaign: %lld (handled: suspended time is not counted and the state is saved)", e->d_name, sleeps);
+        doctor_line(found ? 'o' : 'i', "%-10s %-9s %s: %s, last save %s", name, mode_name(c.mode), pz, state, age);
+        if (sleeps > 0) doctor_line('i', "%-10s system suspensions detected during the campaign: %lld (handled: suspended time is not counted and the state is saved)", name, sleeps);
     }
-    closedir(d);
+    for (size_t k = 0; k < nn; k++) free(names[k]);
+    free(names);
     if (!n) doctor_line('i', "no campaigns");
 }
 
@@ -206,12 +218,6 @@ static void check_time(void)
     if (dm < 0.25 || dm > 0.6) doctor_line('w', "the 0.3 s timer took %.2f s: unusual clock or scheduler", dm);
     else if (dw - dm > 0.2 || dm - dw > 0.2) doctor_line('w', "monotonic clock (%.2f s) and system clock (%.2f s) disagree", dm, dw);
     else doctor_line('o', "monotonic clock and system clock agree");
-    doctor_line('i', "if the computer sleeps or hibernates during a campaign: the program notices the time jump, does not count the suspended time, saves its state and, if the GPU stops responding after waking up, reopens it by itself");
-#if defined(_WIN32) || defined(__APPLE__)
-    doctor_line('i', "to keep the computer from sleeping while the campaign runs: hunt --keep-awake");
-#else
-    doctor_line('i', "to keep the computer from sleeping: systemd-inhibit pzsolve hunt ...");
-#endif
 }
 
 static void env_entry_line(const char *entry, void *ctx)
@@ -245,7 +251,7 @@ int doctor_run(int argc, char **argv)
     printf("pzsolve doctor - checks the program, the machine and the saved state (paste this page if you ask for help)\n");
     check_program();
     check_system(&s);
-    check_primitives();
+    if (!deep) check_primitives();           /* --full: the selftest at the end checks them, and more */
     check_cpu_engines();
     check_gpus();
     check_cache();
@@ -255,7 +261,8 @@ int doctor_run(int argc, char **argv)
     check_env();
     if (deep) {
         section("Full selftest");
-        int rc = selftest_run(0, NULL);
+        const int rc = selftest_checks(false);
+        printf("\n");
         doctor_line(rc ? 'x' : 'o', "full selftest: %s", rc ? "ERRORS" : "passed");
     }
     printf("\n");

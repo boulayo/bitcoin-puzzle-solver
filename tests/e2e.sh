@@ -39,7 +39,8 @@ A=$(field 0xb3c51 addr)
 $BIN hunt -p 20 -a "$A" -c s1 -d "$DIR" -s abc --ui log -q --no-gpu >/dev/null 2>&1
 $BIN hunt -p 20 -a "$A" -c s2 -d "$DIR" -s abc --ui log -q --no-gpu >/dev/null 2>&1
 $BIN hunt -p 20 -a "$A" -c s3 -d "$DIR" -s xyz --ui log -q --no-gpu >/dev/null 2>&1
-W1=$($BIN where -c s1 -d "$DIR" --key b3c51); W2=$($BIN where -c s2 -d "$DIR" --key b3c51); W3=$($BIN where -c s3 -d "$DIR" --key b3c51)
+# the position only: the state line depends on how far each campaign got
+W1=$($BIN where -c s1 -d "$DIR" --key b3c51 | grep "visit order"); W2=$($BIN where -c s2 -d "$DIR" --key b3c51 | grep "visit order"); W3=$($BIN where -c s3 -d "$DIR" --key b3c51 | grep "visit order")
 [ "$W1" = "$W2" ] && ok "same seed, same position" || bad "same seed but different positions"
 [ "$W1" != "$W3" ] && ok "different seed, different position" || bad "different seed but same position"
 

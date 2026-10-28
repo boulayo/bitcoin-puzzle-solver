@@ -343,13 +343,18 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     char pzt[32] = "";
     if (r->cfg.puzzle) snprintf(pzt, sizeof pzt, "puzzle #%d  ", r->cfg.puzzle);
 
-    char detail[900], tleft[400];
+    char detail[900], tleft[400] = "", rej[96] = "";
     wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
-    if (pi->beyond)
+    const u64 bad = atomic_load(&r->hits_bad);
+    if (bad) snprintf(rej, sizeof rej, "Rejected:       %llu candidate%s that failed the verification\n", (unsigned long long)bad, bad == 1 ? "" : "s");
+    const bool over = !strcmp(state, "FOUND") || !strcmp(state, "COMPLETED");   /* nothing left to estimate */
+    if (over) tleft[0] = 0;
+    else if (pi->beyond)
         snprintf(tleft, sizeof tleft, "Time left:      unknown (beyond the model: 5x the expected effort without a collision)\n");
     else
-        snprintf(tleft, sizeof tleft, "Time left:      50%%: %s   90%%: %s   %s: %s   (at the recent average speed)\n"
+        snprintf(tleft, sizeof tleft, "Time left:      50%%: %s   90%%: %s   %s: %s   (at the %s)\n"
                  "Chance within:  %s: %s   %s: %s   %s: %s   %s: %s   %s: %s\n", t50, t90, kang ? "99%" : "100%", tfull,
+                 final ? "last speed" : "recent average speed",
                  ETA_WINDOW_NAMES[0], pw[0], ETA_WINDOW_NAMES[1], pw[1], ETA_WINDOW_NAMES[2], pw[2], ETA_WINDOW_NAMES[3], pw[3], ETA_WINDOW_NAMES[4], pw[4]);
     int n = snprintf(buf, bcap,
         "=== pzsolve %s - campaign report ===\n"
@@ -368,13 +373,13 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "Speed:          %s %s/s   (CPU %s, GPU %s)\n"
         "%s"
         "Detail:         %s\n"
-        "Rejected:       %llu candidate%s that failed the verification\n"
+        "%s"
         "\nWorkers:\n",
         PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
         pct, done, total, pi->unit, rate, pi->unit, cr, gr, tleft,
-        detail, (unsigned long long)atomic_load(&r->hits_bad), atomic_load(&r->hits_bad) == 1 ? "" : "s");
+        detail, rej);
     for (int i = 0; i < r->nws && (size_t)n + 200 < bcap; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
         n += snprintf(buf + n, bcap - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);

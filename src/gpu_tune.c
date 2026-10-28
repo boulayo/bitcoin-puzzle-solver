@@ -336,7 +336,8 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
         if (op->no_data_fmt) rt_log(PZ_LOG_WARN, op->no_data_fmt, line, op->name(op->code(s), nb, sizeof nb));
         return;
     }
-    rt_log(PZ_LOG_INFO, "%s; picking %s%s", line, op->entry, op->name(op->vs[best], nb, sizeof nb));
+    rt_log(PZ_LOG_INFO, "%s; picking %s%s%s", line, op->entry, op->name(op->vs[best], nb, sizeof nb),
+           op->vs[best] == op->def ? " (default; none >3% faster)" : "");
     op->set(s, op->vs[best]);
     const bool ok = op->check(s);
     if (op->finish) op->finish(s);
@@ -644,9 +645,9 @@ int gpu_tune_selftest(void)
     pz_strlcpy(g_env.xdg_cache_home, tmp, sizeof g_env.xdg_cache_home);       /* the saved choices of the test go to a folder of its own */
     /* rates of the windows 128, 256 (the default) and 512; the window that is picked; the lines logged (the table, when one is made) */
     static const struct { double rate[3]; int picked; const char *table; } cases[] = {
-        {{100e6, 102e6, 90e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 90.00 M; picking window 256"},   /* the default is the fastest */
+        {{100e6, 102e6, 90e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 90.00 M; picking window 256 (default; none >3% faster)"},   /* the default is the fastest */
         {{100e6, 102e6, 107e6}, 512, "window 128 100.00 M; window 256 102.00 M; window 512 107.00 M; picking window 512"},   /* 4.9% faster: it wins */
-        {{100e6, 102e6, 103e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 103.00 M; picking window 256"},   /* 1% faster: the default stays */
+        {{100e6, 102e6, 103e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 103.00 M; picking window 256 (default; none >3% faster)"},   /* 1% faster: the default stays */
         {{0, 0, 0}, 256, NULL},                                                                                     /* nothing runs: the default, no table */
         {{100e6, 0, 0}, 128, "window 128 100.00 M; window 256 0.00; window 512 0.00; picking window 128"},                    /* the default cannot run */
     };
@@ -760,7 +761,23 @@ void gpu_doctor_cache(void)
         char *nl = strchr(line, '\n');
         if (nl) *nl = 0;
         char *eq = strrchr(line, '=');
-        if (eq && (size_t)(eq - line) > pz_vl && !strncmp(eq - pz_vl - 1, "|" PZ_VERSION, pz_vl + 1)) { doctor_line('i', "saved GPU tuning: %.150s", line); cnt++; }
+        if (eq && (size_t)(eq - line) > pz_vl && !strncmp(eq - pz_vl - 1, "|" PZ_VERSION, pz_vl + 1)) {
+            /* "[kang|]API|NAME|VERSION|CU|PZVERSION=VARIANT" (tune_key) -> "NAME (API, VERSION): kangaroo NK 128" */
+            const bool kang = !strncmp(line, "kang|", 5);
+            char key[400], nb[64];
+            pz_strlcpy(key, kang ? line + 5 : line, sizeof key);
+            char *f[4] = {key, NULL, NULL, NULL};
+            for (int k = 1; k < 4 && f[k - 1]; k++) {
+                char *bar = strchr(f[k - 1], '|');
+                if (bar) { *bar = 0; f[k] = bar + 1; }
+            }
+            const int v = pz_atoi(eq + 1);
+            if (f[3]) {
+                doctor_line('i', "saved GPU tuning: %.80s (%s, %.40s): %s %s", f[1], f[0], f[2], kang ? "kangaroo" : "linear window",
+                            kang ? kvariant_name(v, nb, sizeof nb) : variant_name(v, nb, sizeof nb));
+            } else doctor_line('i', "saved GPU tuning: %.150s", line);
+            cnt++;
+        }
         line = nl ? nl + 1 : NULL;
     }
     free(t);

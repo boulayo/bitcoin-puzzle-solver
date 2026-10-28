@@ -474,10 +474,15 @@ static void t_limit(void)
 int selftest_run(int argc, char **argv)
 {
     (void)argc; (void)argv;
+    return selftest_checks(true);
+}
+
+int selftest_checks(bool banner)
+{
     pz_ec_init();
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);          /* the small campaigns run by the checks must not print their own log lines (paths, "KEY FOUND") */
-    printf("pzsolve %s - selftest\n", PZ_VERSION);
+    if (banner) printf("pzsolve %s - selftest\n", PZ_VERSION);
     int f0;
 #define SECTION(title) printf("\n[%d/7] %s\n", ++sec, title); f0 = g_fail
     int sec = 0;
@@ -526,7 +531,7 @@ int selftest_run(int argc, char **argv)
     t_rate_memory();
     t_twin_runs();
 #undef SECTION
-    printf(g_fail ? "\nSELFTEST FAILED: %d of %d checks\n" : "\nSELFTEST PASSED: %d checks, no errors\n", g_fail ? g_fail : g_checks, g_checks);
+    if (banner) printf(g_fail ? "\nSELFTEST FAILED: %d of %d checks\n" : "\nSELFTEST PASSED: %d checks, no errors\n", g_fail ? g_fail : g_checks, g_checks);
     pz_log_set_quiet(was_quiet);
     return g_fail != 0;
 }
