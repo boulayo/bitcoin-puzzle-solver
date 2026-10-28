@@ -86,7 +86,7 @@ run_bsgs ─ bsgs_params_init (c, T, S, A, Ng) ─ run_load_sched (giants 1..Ng,
          ├─ "driver" thread: table (bsgs_table_load from --table, or bsgs_table_build with N threads and save)
          │                   → N search threads: loop { sched_claim → bsgs_scan → sched_complete }
          └─ main thread: reporter (phase 1/2 during the table, then giants)
-bsgs_scan: 1, 4 or 8 groups of 1024 giants (batch inversion, on SIMD lanes if available) → x coordinates → prefetch → table probe → candidate → check k·G = P → run_submit_key
+bsgs_scan: 1, 4 or 8 groups of 1024 giants (batch inversion, on SIMD lanes if available) → x coordinates → prefetch of the bucket → table probe (a bucket is one cache line, 1.4 per lookup on average; its 8 tags are compared at once with SSE2) → candidate → check k·G = P → run_submit_key
 ```
 
 ## 3. Flow of the kangaroo
@@ -111,7 +111,12 @@ kang_insert_dps (under mutex): inserts or compares with the existing entry → s
 * `dp.bin`: `"PZDP4\n"` + SHA-256 fingerprint (start, W, `"PZDPLOG4"`, pubkey) + 32-byte records `{tagk, d[3]}` little-endian
   (`tagk` = 61-bit abscissa ∥ 3-bit type: 0 tame, 1/2 wild on `Q` with sign, 3/4 wild on `3Q` with sign; `d` = 192-bit signed exponent).
   A file with another `"PZDP"` magic comes from an older layout (versions up to 1.9.0, campaigns with fewer than 256 kangaroos): `hunt` keeps it as `dp.bin.vN` and starts a new log.
-* BSGS table (`--table`): 4 KiB header (`PZBSGS01`, SHA-256, `T`, abscissa of `T·G`, checksum) + little-endian 8-byte cells.
+* BSGS table (`--table`): 4 KiB header (magic, SHA-256, `T`, number of cells, abscissa of `T·G`, checksum) + little-endian 8-byte cells
+  (24-bit tag from the second word of the abscissa ∥ 40-bit baby index, 0 = empty). `PZBSGS02` (written now): buckets of 8 cells, one cache
+  line, 70 % of the cells in use, the bucket of an abscissa is `⌊x.n[0]·buckets/2^64⌋`, a full bucket spills into the next one, and the
+  cells of a bucket are taken in order (a lookup stops at the first bucket whose last cell is free; `load` checks that property).
+  `PZBSGS01` (up to 1.10.0): one array, linear probing, load 0.65; it is still loaded and used as it is (`bsgs_table.linear`, 12.3 bytes
+  per baby step) and written back in that format, because it cannot be turned into the new one without computing the baby steps again.
 * `session.txt`, `stats.csv`, `status.json`, `report.txt`: see [`USAGE.md`](USAGE.md).
 
 ## 5. Concurrency and memory

@@ -123,6 +123,10 @@ BSGS uses only CPU and RAM; with a powerful GPU the kangaroo can be faster despi
 case, force `--mode kangaroo`. The mode stays fixed in the campaign (`campaign.conf`). The kangaroo takes intervals of 2^16 to 2^188 keys
 (puzzles 190 and above are refused with a message; the exponents of its walkers are 192-bit numbers).
 
+The BSGS table takes about 11.4 bytes per baby step (cells of 8 bytes, 70 % of them in use); `--bsgs-entries` counts baby steps, not
+bytes. A table saved by an earlier version (file `PZBSGS01`, 12.3 bytes per baby step) is read and used as it is, with the RAM it
+needs; tables saved now have a new format (`PZBSGS02`) that those versions cannot read.
+
 ## 5. The folder of a campaign
 
 ```
