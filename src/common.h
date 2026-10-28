@@ -98,6 +98,17 @@ long long pz_arg_int(const char *name, const char *s, long long lo, long long hi
 /* Whether `s` is a list of non-negative integers in decimal, separated by single commas ("0", "0,2"), as --gpu takes. */
 bool pz_index_list_valid(const char *s);
 
+/* Finds "key<sep>value" in a text and returns a pointer to the first character after the separator (the value runs to the end of the line,
+ * or of the text), NULL when there is none. By default the key must stand at the start of a line, and the separator right after it; of
+ * several matches the first is taken. Flags:
+ *   PZ_KV_ANYWHERE  the key may start anywhere in the text, not only at the start of a line
+ *   PZ_KV_LAST      take the last match instead of the first
+ *   PZ_KV_PAD       spaces and tabs may stand between the key and the separator ("model name   : value")
+ * The text is a C string: an embedded NUL ends it. Nothing is skipped after the separator and nothing is copied: the caller decides how
+ * the value ends and what blanks mean. A key that is only the beginning of a longer name does not match ("cbits" in "cbitsx=1"). */
+enum { PZ_KV_ANYWHERE = 1, PZ_KV_LAST = 2, PZ_KV_PAD = 4 };
+const char *pz_kv_find(const char *text, const char *key, char sep, unsigned flags);
+
 /* Hex helpers. */
 int pz_hex_decode(const char *hex, u8 *out, size_t maxlen);   /* returns bytes or -1 */
 void pz_hex_encode(const u8 *in, size_t n, char *out);        /* out needs 2n+1 */

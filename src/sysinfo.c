@@ -155,27 +155,20 @@ void sysinfo_pin_thread(const sysinfo_t *s, int n)
 /* The value of the first line of a /proc/cpuinfo-style text that starts with `key` (followed by blanks and ':'), or false. */
 static bool cpuinfo_field(const char *text, const char *key, char *out, size_t n)
 {
-    const size_t kl = strlen(key);
-    for (const char *p = text; p && *p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : NULL) {
-        if (strncmp(p, key, kl) != 0) continue;
-        const char *q = p + kl;
-        while (*q == ' ' || *q == '\t') q++;
-        if (*q != ':') continue;
-        q++;
-        while (*q == ' ' || *q == '\t') q++;
-        size_t i = 0;
-        while (*q && *q != '\n' && i + 1 < n) out[i++] = *q++;
-        out[i] = 0;
-        return i > 0;
-    }
-    return false;
+    const char *q = pz_kv_find(text, key, ':', PZ_KV_PAD);
+    if (!q) return false;
+    while (*q == ' ' || *q == '\t') q++;
+    size_t i = 0;
+    while (*q && *q != '\n' && i + 1 < n) out[i++] = *q++;
+    out[i] = 0;
+    return i > 0;
 }
 
+/* The number after "MemTotal:" and the like, in kiB (0 when the line is missing). */
 static u64 meminfo_kib(const char *text, const char *key)
 {
-    const char *p = strstr(text, key);
-    if (!p) return 0;
-    return pz_strtou64(p + strlen(key));
+    const char *p = pz_kv_find(text, key, ':', PZ_KV_ANYWHERE);
+    return p ? pz_strtou64(p) : 0;
 }
 
 static int cache_kib(int cpu, int idx)
@@ -237,8 +230,8 @@ void sysinfo_detect(sysinfo_t *s)
     }
     char *mi = pz_read_file("/proc/meminfo", NULL);
     if (mi) {
-        s->mem_total = meminfo_kib(mi, "MemTotal:") * 1024;
-        s->mem_avail = meminfo_kib(mi, "MemAvailable:") * 1024;
+        s->mem_total = meminfo_kib(mi, "MemTotal") * 1024;
+        s->mem_avail = meminfo_kib(mi, "MemAvailable") * 1024;
         free(mi);
     }
     u64 cg = cgroup_headroom();

@@ -58,10 +58,9 @@ bool campaign_is_running(const char *dir)
 static bool json_get(const char *text, const char *key, char *out, size_t n)
 {
     char pat[80];
-    snprintf(pat, sizeof pat, "\"%s\":", key);
-    const char *p = strstr(text, pat);
+    snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *p = pz_kv_find(text, pat, ':', PZ_KV_ANYWHERE);
     if (!p) return false;
-    p += strlen(pat);
     while (*p == ' ') p++;
     if (*p == '"') p++;
     size_t i = 0;

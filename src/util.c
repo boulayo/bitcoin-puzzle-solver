@@ -345,6 +345,31 @@ bool pz_parse_i64(const char *s, i64 *out)
     return true;
 }
 
+static const char *kv_at(const char *p, const char *key, size_t kl, char sep, unsigned flags)
+{
+    if (strncmp(p, key, kl) != 0) return NULL;
+    p += kl;
+    if (flags & PZ_KV_PAD)
+        while (*p == ' ' || *p == '\t') p++;
+    return *p == sep ? p + 1 : NULL;
+}
+
+const char *pz_kv_find(const char *text, const char *key, char sep, unsigned flags)
+{
+    const size_t kl = strlen(key);
+    const char *hit = NULL;
+    for (const char *p = text; p && *p;) {
+        const char *v = kv_at(p, key, kl, sep, flags);
+        if (v) {
+            if (!(flags & PZ_KV_LAST)) return v;
+            hit = v;
+        }
+        if (flags & PZ_KV_ANYWHERE) p++;
+        else if ((p = strchr(p, '\n')) != NULL) p++;
+    }
+    return hit;
+}
+
 long long pz_arg_int(const char *name, const char *s, long long lo, long long hi)
 {
     i64 v;

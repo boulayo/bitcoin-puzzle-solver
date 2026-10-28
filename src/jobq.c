@@ -387,19 +387,13 @@ int sched_save(sched_t *s, const char *path)
 /* copies the value of the line "key=value" into out */
 static bool state_field(const char *text, const char *key, char *out, size_t n)
 {
-    size_t kl = strlen(key);
-    for (const char *p = text; p && *p;) {
-        if (!strncmp(p, key, kl) && p[kl] == '=') {
-            size_t len = strcspn(p + kl + 1, "\n");
-            if (len == 0 || len >= n) return false;
-            memcpy(out, p + kl + 1, len);
-            out[len] = 0;
-            return true;
-        }
-        p = strchr(p, '\n');
-        if (p) p++;
-    }
-    return false;
+    const char *v = pz_kv_find(text, key, '=', 0);
+    if (!v) return false;
+    size_t len = strcspn(v, "\n");
+    if (len == 0 || len >= n) return false;
+    memcpy(out, v, len);
+    out[len] = 0;
+    return true;
 }
 
 int sched_load(sched_t *s, const char *path, char *err, size_t errlen)

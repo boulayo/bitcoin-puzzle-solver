@@ -204,19 +204,13 @@ int cfg_save(const campaign_cfg *c, const char *path)
 
 static const char *cfg_val(char *text, const char *key, char *out, size_t outlen)
 {
-    size_t kl = strlen(key);
-    for (char *p = text; p && *p;) {
-        char *nl = strchr(p, '\n');
-        if (!strncmp(p, key, kl) && p[kl] == '=') {
-            size_t len = nl ? (size_t)(nl - (p + kl + 1)) : strlen(p + kl + 1);
-            if (len >= outlen) len = outlen - 1;
-            memcpy(out, p + kl + 1, len);
-            out[len] = 0;
-            return out;
-        }
-        p = nl ? nl + 1 : NULL;
-    }
-    return NULL;
+    const char *v = pz_kv_find(text, key, '=', 0);
+    if (!v) return NULL;
+    size_t len = strcspn(v, "\n");
+    if (len >= outlen) len = outlen - 1;
+    memcpy(out, v, len);
+    out[len] = 0;
+    return out;
 }
 
 int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)

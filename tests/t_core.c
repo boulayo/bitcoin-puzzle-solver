@@ -225,6 +225,56 @@ static void t_file_count(void)
     pz_remove_tree(dir);
 }
 
+/* pz_kv_find: the value of "key<sep>value" in a text (the readers of campaign.conf, the checkpoint, status.json, /proc/cpuinfo, /proc/meminfo,
+ * session.txt and the machine profile all use it). */
+static void t_kv(void)
+{
+    const char *v;
+    CHECK(pz_kv_find("a=1\nb=2\n", "a", '=', 0) && !strcmp(pz_kv_find("a=1\nb=2\n", "a", '=', 0), "1\nb=2\n"));
+    CHECK(pz_kv_find("a=1\nb=2\n", "b", '=', 0) && !strcmp(pz_kv_find("a=1\nb=2\n", "b", '=', 0), "2\n"));
+    CHECK(pz_kv_find("a=1\nb=2\n", "c", '=', 0) == NULL);
+    CHECK(pz_kv_find("", "a", '=', 0) == NULL);
+    /* the first match by default, the last with PZ_KV_LAST */
+    const char *dup = "k=1\nx=0\nk=2\nk=3";
+    CHECK((v = pz_kv_find(dup, "k", '=', 0)) && !strncmp(v, "1\n", 2));
+    CHECK((v = pz_kv_find(dup, "k", '=', PZ_KV_LAST)) && !strcmp(v, "3"));
+    /* the key stands at the start of a line, unless PZ_KV_ANYWHERE */
+    const char *mid = "  k=1\nxk=2\nk=3\n";
+    CHECK((v = pz_kv_find(mid, "k", '=', 0)) && !strncmp(v, "3\n", 2));
+    CHECK((v = pz_kv_find(mid, "k", '=', PZ_KV_ANYWHERE)) && !strncmp(v, "1\n", 2));
+    CHECK((v = pz_kv_find(mid, "k", '=', PZ_KV_ANYWHERE | PZ_KV_LAST)) && !strncmp(v, "3\n", 2));
+    CHECK(pz_kv_find("  k=1\n", "k", '=', 0) == NULL);
+    /* a key that is the beginning of a longer name, or a longer key, does not match; the separator comes right after the key */
+    CHECK((v = pz_kv_find("cbitsx=1\ncbits=2\n", "cbits", '=', 0)) && !strncmp(v, "2\n", 2));
+    CHECK(pz_kv_find("cbitsx=1\n", "cbits", '=', 0) == NULL);
+    CHECK(pz_kv_find("cbits\n=5\n", "cbits", '=', 0) == NULL);
+    CHECK(pz_kv_find("cbits 5\n", "cbits", '=', 0) == NULL);
+    CHECK(pz_kv_find("cbits = 5\n", "cbits", '=', 0) == NULL);
+    CHECK(pz_kv_find("cb=1\n", "cbits", '=', 0) == NULL);
+    /* nothing after the separator is skipped or cut: blanks, '=' and '\r' are part of the value, the end of the value is the caller's business */
+    CHECK((v = pz_kv_find("k= v=w\r\nz=1\n", "k", '=', 0)) && !strncmp(v, " v=w\r\n", 6));
+    CHECK((v = pz_kv_find("k=", "k", '=', 0)) && !*v);                              /* an empty value is a match */
+    CHECK((v = pz_kv_find("k=\nk=2\n", "k", '=', 0)) && *v == '\n');
+    CHECK(pz_kv_find("k", "k", '=', 0) == NULL);
+    /* PZ_KV_PAD: blanks and tabs between the key and the separator */
+    const char *ci = "processor\t: 0\nmodel name\t: Intel(R) Xeon\nModel name  :  x\nMemTotal:       16384 kB\n";
+    CHECK((v = pz_kv_find(ci, "model name", ':', PZ_KV_PAD)) && !strncmp(v, " Intel", 6));
+    CHECK(pz_kv_find(ci, "model name", ':', 0) == NULL);
+    CHECK((v = pz_kv_find(ci, "Model name", ':', PZ_KV_PAD)) && !strncmp(v, "  x", 3));
+    CHECK((v = pz_kv_find(ci, "MemTotal", ':', 0)) && pz_strtou64(v) == 16384);
+    CHECK((v = pz_kv_find(ci, "MemTotal", ':', PZ_KV_ANYWHERE)) && pz_strtou64(v) == 16384);
+    CHECK(pz_kv_find(ci, "Total", ':', 0) == NULL && pz_kv_find(ci, "Total", ':', PZ_KV_ANYWHERE) != NULL);
+    CHECK(pz_kv_find(ci, "model", ':', PZ_KV_PAD) == NULL);                              /* "model name" is not "model" */
+    /* a quoted key, as in status.json */
+    const char *js = "{\n  \"state\": \"RUNNING\",\n  \"fraction\": 0.5\n}\n";
+    CHECK(pz_kv_find(js, "\"state\"", ':', 0) == NULL);                                  /* indented: not at the start of a line */
+    CHECK((v = pz_kv_find(js, "\"state\"", ':', PZ_KV_ANYWHERE)) && !strncmp(v, " \"RUNNING\"", 10));
+    CHECK((v = pz_kv_find(js, "\"fraction\"", ':', PZ_KV_ANYWHERE)) && !strncmp(v, " 0.5\n", 5));
+    /* the text is a C string: a NUL ends it */
+    const char nul[] = "a=1\n\0b=2\n";
+    CHECK(pz_kv_find(nul, "b", '=', 0) == NULL && pz_kv_find(nul, "a", '=', 0) != NULL);
+}
+
 int main(void)
 {
     {   /* the library is linked and gives the well-known answer for key 1 */
@@ -254,6 +304,7 @@ int main(void)
     }
 #endif
     t_writers();
+    t_kv();
     t_file_count();
 #ifndef _WIN32
     t_die_log();

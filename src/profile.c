@@ -49,16 +49,15 @@ static bool profile_load(const char *key, char *val, size_t vn)
     if (!profile_path(path, sizeof path)) return false;
     char *t = pz_read_file(path, NULL);
     if (!t) return false;
-    bool found = false;
-    for (char *line = t; line && *line;) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = 0;
-        char *eq = strchr(line, '=');            /* the key has no '=': the first one ends it (the value has some) */
-        if (eq && (size_t)(eq - line) == strlen(key) && !strncmp(line, key, strlen(key))) { pz_strlcpy(val, eq + 1, vn); found = true; }
-        line = nl ? nl + 1 : NULL;
+    const char *v = pz_kv_find(t, key, '=', PZ_KV_LAST);      /* the key has no '=' (profile_key replaces them); the value has some */
+    if (v) {
+        size_t len = strcspn(v, "\n");
+        if (len >= vn) len = vn - 1;
+        memcpy(val, v, len);
+        val[len] = 0;
     }
     free(t);
-    return found;
+    return v != NULL;
 }
 
 static void profile_save(const char *key, const char *val)

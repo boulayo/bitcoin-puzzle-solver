@@ -106,10 +106,10 @@ int run_session_load(run_ctx *r)
     double el = 0;
     unsigned long long un = 0;
     int ses = 0;
-    char *p;
-    if ((p = strstr(t, "elapsed="))) el = atof(p + 8);
-    if ((p = strstr(t, "units="))) un = pz_strtou64(p + 6);
-    if ((p = strstr(t, "sessions="))) ses = pz_atoi(p + 9);
+    const char *v;
+    if ((v = pz_kv_find(t, "elapsed", '=', PZ_KV_ANYWHERE))) el = atof(v);
+    if ((v = pz_kv_find(t, "units", '=', PZ_KV_ANYWHERE))) un = pz_strtou64(v);
+    if ((v = pz_kv_find(t, "sessions", '=', PZ_KV_ANYWHERE))) ses = pz_atoi(v);
     free(t);
     r->elapsed_prev = el;
     r->prev_units_total = un;
