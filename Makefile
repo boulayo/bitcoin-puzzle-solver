@@ -32,7 +32,9 @@ LDLIBS  := -lpthread -lm -ldl
 # clang (including Apple clang): without the SLP vectorizer. Apple clang 17 (x86-64, -O3) miscompiled the AVX2 lane step of the
 # kangaroo (the built-in self-test caught it: the result differed from the reference; -O0..-O2 and -O3 -fno-slp-vectorize are right).
 # The SIMD code uses explicit vector arithmetic, so the SLP pass has nothing to gain there.
-ISCLANG := $(shell $(CC) --version 2>/dev/null | grep -ci clang)
+# Only the first line of the version output is looked at: a later one can mention clang too (an InstalledDir line for a path with
+# clang in it) and would make the count 2.
+ISCLANG := $(shell $(CC) --version 2>/dev/null | head -n1 | grep -ci clang)
 ifeq ($(ISCLANG),1)
 COMMON  += -fno-slp-vectorize
 endif
