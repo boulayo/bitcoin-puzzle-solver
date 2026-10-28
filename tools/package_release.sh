@@ -135,12 +135,9 @@ build_linux() {
   make -s BUILD="$dir" -j"$JOBS"
   if [ -z "${SKIP_TESTS:-}" ]; then say "Linux x86-64: self-test"; "$dir/pzsolve" selftest | tail -2; fi
   if command -v objdump >/dev/null 2>&1; then
-    local newest
-    newest=$(objdump -T "$dir/pzsolve" | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
-    if objdump -T "$dir/pzsolve" | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -1)" != GLIBC_2.34 ]; then
-      die "the Linux binary needs $newest (or __isoc23_* symbols): it would not start on older distributions"
-    fi
-    echo "  glibc: needs at most $newest"
+    local r
+    r=$(tools/check_binary.sh linux "$dir/pzsolve" 2>&1) || die "$r"
+    echo "  glibc: $r"
   fi
   say "Linux x86-64: package"
   pack "$dir/pzsolve" linux x86_64
@@ -154,10 +151,9 @@ build_windows() {
   make -s CC="$WINCC" BUILD="$dir" -j"$JOBS"
   local objdump=${WINCC%gcc*}objdump
   if command -v "$objdump" >/dev/null 2>&1; then
-    if "$objdump" -p "$dir/pzsolve.exe" | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
-      die "pzsolve.exe depends on DLLs that are not part of Windows"
-    fi
-    echo "  pzsolve.exe imports only system DLLs"
+    local r
+    r=$(OBJDUMP="$objdump" tools/check_binary.sh windows "$dir/pzsolve.exe" 2>&1) || die "$r"
+    echo "  pzsolve.exe $r"
   fi
   if [ -z "${SKIP_TESTS:-}" ] && command -v wine >/dev/null 2>&1; then
     say "Windows x86-64: self-test under Wine"

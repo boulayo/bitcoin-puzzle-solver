@@ -72,12 +72,7 @@ jobs:
           build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --ui log -q --no-gpu
           grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
       - name: Binary needs no glibc newer than 2.34
-        run: |
-          newest=$(objdump -T build/pzsolve | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
-          echo "needs at most $newest"
-          if objdump -T build/pzsolve | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -1)" != GLIBC_2.34 ]; then
-            echo "::error::the binary needs $newest or __isoc23_* symbols: it would not start on older distributions"; exit 1
-          fi
+        run: tools/check_binary.sh linux build/pzsolve
       # The unit tests gate the gcc build on x86-64. Elsewhere they are informational until the test sources build with clang and
       # without the x86 engines (tests/t_engine.c uses a nested function, tests/t_bsgs.c calls bs_group_x86 unconditionally).
       - name: Unit tests
@@ -102,24 +97,15 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install MinGW-w64
         run: |
-          # a stalled mirror must not block the job for 45 minutes: limit each try and retry
-          export DEBIAN_FRONTEND=noninteractive
-          for try in 1 2 3; do
-            sudo timeout 120 apt-get update -o Acquire::Retries=3 && \
-              sudo timeout 300 apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix && break
-            echo "apt failed (try $try), retrying"; sleep 5
-          done
+          # a stalled mirror must not block the job for 45 minutes: the script limits each try and retries
+          tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix
           x86_64-w64-mingw32-gcc-posix --version | sed -n 1p
       - name: Build
         run: |
           echo "::add-matcher::.github/problem-matchers/cc.json"
           make windows -k -j"$(nproc)" 2>&1 | tee build.log
       - name: The exe imports only system DLLs
-        run: |
-          x86_64-w64-mingw32-objdump -p build/win/pzsolve.exe | grep 'DLL Name'
-          if x86_64-w64-mingw32-objdump -p build/win/pzsolve.exe | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
-            echo "::error::pzsolve.exe depends on a DLL that is not part of Windows"; exit 1
-          fi
+        run: tools/check_binary.sh windows build/win/pzsolve.exe
       - uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64-exe

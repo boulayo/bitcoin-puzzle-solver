@@ -85,13 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install MinGW-w64
         if: matrix.os == 'windows'
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          for try in 1 2 3; do
-            sudo timeout 120 apt-get update -o Acquire::Retries=3 && \
-              sudo timeout 300 apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix zip && break
-            echo "apt failed (try $try), retrying"; sleep 5
-          done
+        run: tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix zip
       - name: Build (release, portable)
         run: |
           echo "::add-matcher::.github/problem-matchers/cc.json"
@@ -118,18 +112,10 @@ jobs:
           "$BIN" selftest
       - name: Linux binary needs no glibc newer than 2.34
         if: matrix.os == 'linux'
-        run: |
-          newest=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
-          echo "needs at most $newest"
-          if objdump -T "$BIN" | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -1)" != GLIBC_2.34 ]; then
-            echo "::error::the binary needs $newest or __isoc23_* symbols"; exit 1
-          fi
+        run: tools/check_binary.sh linux "$BIN"
       - name: Windows exe imports only system DLLs
         if: matrix.os == 'windows'
-        run: |
-          if x86_64-w64-mingw32-objdump -p "$BIN" | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
-            echo "::error::pzsolve.exe depends on a DLL that is not part of Windows"; exit 1
-          fi
+        run: tools/check_binary.sh windows "$BIN"
       - name: Package
         run: |
           export OUT=dist-release

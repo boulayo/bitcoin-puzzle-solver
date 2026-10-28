@@ -32,10 +32,7 @@ run make OPT=-O0 BUILD=build/o0 lib-test >/dev/null   # an unoptimized build of 
 run make lib-cxx >/dev/null
 
 step "Linux binary compatibility (no glibc symbol newer than 2.34)"
-NEWEST=$(objdump -T build/pzsolve | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)
-if objdump -T build/pzsolve | grep -q isoc23 || [ "$(printf '%s\nGLIBC_2.34\n' "$NEWEST" | sort -V | tail -1)" != GLIBC_2.34 ]; then
-  echo "  FAIL the binary needs $NEWEST (or __isoc23_* symbols): it would not start on older distributions"; fail=$((fail+1))
-else echo "  OK needs at most $NEWEST"; fi
+if r=$(tools/check_binary.sh linux build/pzsolve 2>&1); then echo "  OK $r"; else echo "  FAIL $r"; fail=$((fail+1)); fi
 
 if [ -n "${PZ_NVRTC:-}" ]; then
   step "PTX modules consistent with the kernels (NVRTC: $PZ_NVRTC)"
@@ -261,8 +258,7 @@ if command -v x86_64-w64-mingw32-gcc-posix >/dev/null && command -v wine >/dev/n
   export WINEDEBUG=-all
   run make windows -j"$(nproc)" >/dev/null
   run make wintest >"$T/wintest.log" 2>&1 && echo "  OK unit tests and self-test of the exe" || tail -20 "$T/wintest.log"
-  if x86_64-w64-mingw32-objdump -p build/win/pzsolve.exe | grep 'DLL Name' | grep -viqE 'kernel32|msvcrt|advapi32|bcrypt'; then
-    echo "  FAIL the exe depends on non-system DLLs"; fail=$((fail+1)); else echo "  OK the exe uses only system DLLs"; fi
+  if r=$(tools/check_binary.sh windows build/win/pzsolve.exe 2>&1); then echo "  OK the exe $r"; else echo "  FAIL $r"; fail=$((fail+1)); fi
   run make winmockcuda >/dev/null
   W="$T/win"; rm -rf "$W"; mkdir -p "$W"; cp build/win/pzsolve.exe build/win/mockcuda/nvcuda.dll "$W/"
   (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
