@@ -107,14 +107,16 @@ else echo "  (not root: the priority of the GPU threads cannot be raised, measur
 # the panel's estimate in the first seconds: no completion time until every engine (here the simulated GPU too) has produced something,
 # then a provisional one that says so (the multi-line panel only appears on a terminal: a pseudo-terminal stands in)
 PANEL=$(env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/panelcache" python3 -I tools/pty_run.py 30 "$PWD/build/pzsolve" hunt -p 71 -m linear -c e -d "$T/panel" -t 2 --report-interval 1 --ui full 2>&1 || true)
-grep -qE "Time left +measuring" <<<"$PANEL" && grep -q "provisional estimate" <<<"$PANEL" && echo "  OK panel: measuring, then a provisional estimate (CPU + simulated GPU)" || { echo "  FAIL panel: initial estimate"; fail=$((fail+1)); }
+grep -qE "Time left +measuring" <<<"$PANEL" && grep -qE "^ +provisional" <<<"$PANEL" && echo "  OK panel: measuring, then a provisional estimate (CPU + simulated GPU)" || { echo "  FAIL panel: initial estimate"; fail=$((fail+1)); }
 # profile of the machine: measured by the first hunt (CPU + GPU, nothing forced), remembered by the next, applied to -t/--gpu
 PC="$T/profcache"; mkdir -p "$PC"; PROF="env XDG_CACHE_HOME=$PC LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15"
 rm -rf "$T/pr1"; outhas "profile of this machine (just measured)" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr1" --ui log && echo "  OK profile measured on the first run (linear)" || { echo "  FAIL profile measured (linear)"; fail=$((fail+1)); }
-rm -rf "$T/pr2"; outhas "profile of this machine from " $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr2" --ui log && echo "  OK profile reused on the second run (linear)" || { echo "  FAIL profile reused (linear)"; fail=$((fail+1)); }
+# a saved verdict that changes nothing goes to the log file only
+rm -rf "$T/pr2"; $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr2" --ui log >/dev/null 2>&1; grep -q "profile of this machine from " "$T/pr2/p/log.txt" && echo "  OK profile reused on the second run (linear)" || { echo "  FAIL profile reused (linear)"; fail=$((fail+1)); }
 rm -rf "$T/pr3"; outhas "profile of this machine (just measured)" $PROF build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr3" --ui log && echo "  OK profile measured on the first run (kangaroo)" || { echo "  FAIL profile measured (kangaroo)"; fail=$((fail+1)); }
 check_found "$T/pr3/p" "$KK" && echo "  OK kangaroo with CPU+GPU after tuning" || { echo "  FAIL kangaroo with CPU+GPU after tuning"; fail=$((fail+1)); }
-rm -rf "$T/pr4"; outhas "profile of this machine from " $PROF build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr4" --ui log && echo "  OK profile reused on the second run (kangaroo)" || { echo "  FAIL profile reused (kangaroo)"; fail=$((fail+1)); }
+# a saved verdict that changes nothing goes to the log file only
+rm -rf "$T/pr4"; $PROF build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr4" --ui log >/dev/null 2>&1; grep -q "profile of this machine from " "$T/pr4/p/log.txt" && echo "  OK profile reused on the second run (kangaroo)" || { echo "  FAIL profile reused (kangaroo)"; fail=$((fail+1)); }
 rm -rf "$T/pr6"; outhas "high priority" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr6" --ui log -t 2 --prio-gpu yes && echo "  OK hunt --prio-gpu yes (with an explicit -t)" || { echo "  FAIL hunt --prio-gpu yes"; fail=$((fail+1)); }
 check_found "$T/pr6/p" "$K" && echo "  OK linear found with high priority for the GPU threads" || { echo "  FAIL linear with --prio-gpu yes"; fail=$((fail+1)); }
 rm -rf "$T/pr5"; outhas "profile\|first run" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr5" --ui log -t 2 && { echo "  FAIL explicit -t ignored by the profile"; fail=$((fail+1)); } || echo "  OK explicit -t: no tuning"
@@ -165,17 +167,17 @@ outhas "attempt 1 of 3" $MOCK PZ_MOCK_FAIL_FILE="$T/st2.fault" build/pzsolve hun
 # the devices and both devices are used; an error of the driver during the tests is repeated for the device it hit; two devices of one model measure
 # the kernel variants once (whichever gets there first measures, the other takes the result from the file, as when they started one after the other)
 MD2="env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_MOCK_DEVICES=2"
-dev_order() { grep -E 'GPU\[[01]\]: (Mock|self-test)' <<<"$1" | sed -E 's/.*GPU\[([01])\].*/\1/' | tr -d '\n'; }
+dev_order() { grep -E 'GPU\[[01]\]: Mock' <<<"$1" | sed -E 's/.*GPU\[([01])\].*/\1/' | tr -d '\n'; }
 rm -rf "$T/md1"; MO=$($MD2 PZ_GPU_TUNE=0 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md1" --no-cpu --ui log 2>&1)
-[ "$(dev_order "$MO")" = 0011 ] && grep -q "GPU\[1\]: .* kangaroos" <<<"$MO" && check_found "$T/md1/c" "$KK" \
+[ "$(dev_order "$MO")" = 01 ] && grep -q "GPU\[1\]: .* kangaroos" <<<"$MO" && check_found "$T/md1/c" "$KK" \
   && echo "  OK two simulated GPUs, kangaroo: tested together, log lines in the order of the devices, both used" || { echo "  FAIL two simulated GPUs (kangaroo)"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
 rm -rf "$T/md2"; MO=$($MD2 PZ_GPU_TUNE=0 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/md2" --no-cpu --ui log 2>&1)
-[ "$(dev_order "$MO")" = 0011 ] && check_found "$T/md2/c" "$K" \
+[ "$(dev_order "$MO")" = 01 ] && check_found "$T/md2/c" "$K" \
   && echo "  OK two simulated GPUs, linear: log lines in the order of the devices" || { echo "  FAIL two simulated GPUs (linear)"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
 rm -rf "$T/md3"; touch "$T/md3.fault"; MO=$($MD2 PZ_MOCK_FAIL_FILE="$T/md3.fault" PZ_GPU_TUNE=0 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md3" --no-cpu --ui log 2>&1)
-grep -q "attempt 1 of 3" <<<"$MO" && [ "$(dev_order "$MO" | tr -d '\n' | wc -c)" = 4 ] && grep -q "GPU\[1\]: .* kangaroos" <<<"$MO" && check_found "$T/md3/c" "$KK" \
+grep -q "attempt 1 of 3" <<<"$MO" && [ "$(dev_order "$MO" | tr -d '\n' | wc -c)" = 2 ] && grep -q "GPU\[1\]: .* kangaroos" <<<"$MO" && check_found "$T/md3/c" "$KK" \
   && echo "  OK two simulated GPUs: an error during the tests is repeated for the device it hit, both are used" || { echo "  FAIL start-up retry with two simulated GPUs"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
-rm -rf "$T/md4" "$T/md4c"; MO=$($MD2 PZ_MOCK_SAME_NAME=1 PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/md4c" build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md4" --no-cpu --ui log 2>&1)
+rm -rf "$T/md4" "$T/md4c"; MO=$($MD2 PZ_MOCK_SAME_NAME=1 PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/md4c" build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md4" --no-cpu --ui log -v 2>&1)
 [ "$(grep -c 'tuning the kangaroo kernel' <<<"$MO")" = 1 ] && [ "$(grep -c 'GPU\[[01]\]: kangaroo with .* (from earlier tuning)' <<<"$MO")" = 1 ] && check_found "$T/md4/c" "$KK" \
   && echo "  OK two simulated GPUs of one model: the kernel variants are measured once" || { echo "  FAIL tuning of two simulated GPUs of one model"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
 rm -rf "$T/sus"; ( build/pzsolve hunt -p 45 -m linear -c s -d "$T/sus" --no-gpu --ui log -t 2 > "$T/sus.log" 2>&1 & p=$!; sleep 6; kill -STOP $p; sleep 18; kill -CONT $p; sleep 6; kill -INT $p; wait $p ) 2>/dev/null

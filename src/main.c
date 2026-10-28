@@ -901,15 +901,17 @@ static int cmd_hunt(int argc, char **argv)
     char memb[32];
     pz_fmt_bytes((double)r->sys.mem_total, memb, sizeof memb);
     pz_log(PZ_LOG_INFO, "pzsolve %s - campaign '%s' %s", PZ_VERSION, r->cfg.name, resuming ? "(resumed)" : "(new)");
-    if (r->cfg.puzzle) pz_log(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
-    else pz_log(PZ_LOG_INFO, "target: address %s", addr);
+    /* the header of the panel shows target, mode and seed: on a terminal with the panel these lines go to the log file only */
+    void (*const say)(pz_loglevel, const char *, ...) = run_ui_is_panel(r) ? pz_log_file : pz_log;
+    if (r->cfg.puzzle) say(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
+    else say(PZ_LOG_INFO, "target: address %s", addr);
     pz_log(PZ_LOG_INFO, "range: 0x%s - 0x%s (%s)", rs, re, rsz_short);
     if (r->cfg.mode == MODE_LINEAR)
-        pz_log(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);
+        say(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);
     else if (r->cfg.mode == MODE_BSGS)
-        pz_log(PZ_LOG_INFO, "mode: bsgs (known public key) | seed id %s | random order of the giant steps determined by the seed", idb);
+        say(PZ_LOG_INFO, "mode: bsgs (known public key) | seed id %s | random order of the giant steps determined by the seed", idb);
     else
-        pz_log(PZ_LOG_INFO, "mode: kangaroo (known public key) | seed id %s | the seed determines jumps and starting positions", idb);
+        say(PZ_LOG_INFO, "mode: kangaroo (known public key) | seed id %s | the seed determines jumps and starting positions", idb);
     if (r->cfg.part[0]) {
         char sd[65];
         pz_hex_encode(r->cfg.seed, 32, sd);
@@ -921,9 +923,9 @@ static int cmd_hunt(int argc, char **argv)
     else if (r->use_cpu) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, giant steps with %s", r->nthreads, PLURAL(r->nthreads), bsgs_engine_name());
     if (r->limit_pct) {
         char cpu[120] = "", gpu[80] = "";
-        if (r->use_cpu) snprintf(cpu, sizeof cpu, "CPU %d thread%s out of %d (one per physical core first)", r->nthreads, PLURAL(r->nthreads), thr_full);
+        if (r->use_cpu) snprintf(cpu, sizeof cpu, "CPU %d of %d thread%s", r->nthreads, thr_full, PLURAL(thr_full));
         if (r->use_gpu) snprintf(gpu, sizeof gpu, "%sGPUs at %d%% of the work-items", r->use_cpu ? ", " : "", r->limit_pct);
-        pz_log(PZ_LOG_INFO, "limit %d%%: %s%s; everything always at full speed, without pauses (less heat and power, speed reduced accordingly)", r->limit_pct, cpu, gpu);
+        pz_log(PZ_LOG_INFO, "limit %d%%: %s%s", r->limit_pct, cpu, gpu);
     }
     if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", o.prio_gpu == PRIO_YES ? " (--prio-gpu yes)" : " (from the machine profile)");
     if (r->node) pz_log(PZ_LOG_INFO, "node %u: kangaroo starting points differ from those of the other computers on the same campaign", r->node);

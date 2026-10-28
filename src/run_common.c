@@ -427,6 +427,8 @@ static ui_mode effective_ui(const run_ctx *r)
     return m;
 }
 
+bool run_ui_is_panel(const run_ctx *r) { return effective_ui(r) == UI_FULL; }
+
 static void ui_draw(run_ctx *r, const progress_info *pi, bool final)
 {
     eta_summary es;

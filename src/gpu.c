@@ -260,9 +260,10 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
 {
     memset(s, 0, sizeof *s);
     s->r = r;
-    char mem[160];
-    rt_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
-           d->api == RT_CUDA ? "SM" : "CU", fmt_devmem(d, mem, sizeof mem));
+    char mem[160], var[80];
+    fmt_devmem(d, mem, sizeof mem);
+    rt_log(PZ_LOG_DEBUG, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
+           d->api == RT_CUDA ? "SM" : "CU", mem);
     bool ok = false;
     for (int attempt = 1; !ok; attempt++) {
         s->mismatch = false;
@@ -283,7 +284,8 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
         gpu_session_release(s);
         return false;
     }
-    rt_log(PZ_LOG_INFO, "GPU[%d]: self-test passed", d->index);
+    rt_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s, %s, self-test passed", d->index, d->name, rt_api_name(d->api), d->cu,
+           d->api == RT_CUDA ? "SM" : "CU", mem, gpu_variant_text(s, for_kangaroo, var, sizeof var));
     return true;
 }
 

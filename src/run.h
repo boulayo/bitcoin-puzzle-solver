@@ -162,6 +162,7 @@ int run_clock_gap(double dm, double dw, double *gap);
 void run_write_report_files(run_ctx *r, const progress_info *pi, bool final);
 void run_final_progress(run_ctx *r, progress_info *pi);   /* fills pi with the current totals */
 void run_ui_final(run_ctx *r, const progress_info *pi);   /* last frame of the live display, left on screen */
+bool run_ui_is_panel(const run_ctx *r);                   /* the multi-line panel is on the terminal (its header names campaign, target, mode, seed) */
 
 /* modes */
 int run_linear(run_ctx *r);       /* defined in run_linear.c */

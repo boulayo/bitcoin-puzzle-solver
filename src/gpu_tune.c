@@ -355,11 +355,19 @@ static void tune_pick(gpu_session *s, int idx, const tune_ops *op)
     const int cached = g_retune ? 0 : tune_begin(&s->info, op->kang, idx);
     if (cached) {
         op->set(s, cached);
-        rt_log(PZ_LOG_INFO, op->cached_fmt, idx, op->name(cached, nb, sizeof nb));
+        rt_log(PZ_LOG_DEBUG, op->cached_fmt, idx, op->name(cached, nb, sizeof nb));   /* the start-up line of the device names the variant */
         return;
     }
     tune_measure(s, idx, op);
     tune_end(&s->info, op->kang);
+}
+
+char *gpu_variant_text(const gpu_session *s, bool kang, char *buf, size_t n)
+{
+    char nb[64];
+    if (kang) snprintf(buf, n, "kangaroo %s", kvariant_name(kang_code(s), nb, sizeof nb));
+    else snprintf(buf, n, "window %s", variant_name(s->variant, nb, sizeof nb));
+    return buf;
 }
 
 /* PZ_GPU_TUNE=0: no tuning; =1: also the devices that are not GPUs are tuned (for tests). */

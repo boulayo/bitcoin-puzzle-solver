@@ -57,6 +57,8 @@ double pz_mono(void);                /* monotonic seconds */
  * to its log file. */
 typedef enum { PZ_LOG_INFO, PZ_LOG_WARN, PZ_LOG_ERR, PZ_LOG_DEBUG } pz_loglevel;
 void pz_log(pz_loglevel lvl, const char *fmt, ...) __attribute__((format(PZ_PRINTF, 2, 3)));
+/* The same line in the log file only: for what the terminal already shows in another form (the header of the panel). */
+void pz_log_file(pz_loglevel lvl, const char *fmt, ...) __attribute__((format(PZ_PRINTF, 2, 3)));
 void pz_log_set_file(const char *path);
 void pz_log_set_verbose(int v);
 void pz_log_set_quiet(int q);   /* 0: everything is printed, 1: warnings and errors only, 2: nothing (the self-tests that provoke errors on purpose) */

@@ -259,22 +259,19 @@ void pz_fputs_wrap(FILE *fp, const char *text, int width, int hang)
     free(line);
 }
 
-void pz_log(pz_loglevel lvl, const char *fmt, ...)
+static void vlog(pz_loglevel lvl, bool terminal, const char *fmt, va_list ap)
 {
     static const char *tag[] = {"INFO", "WARN", "ERROR", "DEBUG"};
     char msg[1024];
-    va_list ap;
-    va_start(ap, fmt);
     vsnprintf(msg, sizeof msg, fmt, ap);
-    va_end(ap);
 
     char ts[32];
     log_stamp(ts, sizeof ts);
 
     log_lock();
     if (g_log_fp) fprintf(g_log_fp, "%s [%s] %s\n", ts, tag[lvl], msg);
-    if (lvl == PZ_LOG_DEBUG && !g_verbose) { log_unlock(); return; }
-    if (g_quiet < 2 && (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN)) {
+    if (lvl == PZ_LOG_DEBUG && !g_verbose) terminal = false;
+    if (terminal && g_quiet < 2 && (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN)) {
         block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
         char ln[1100 + 32];
         snprintf(ln, sizeof ln, "[%s] %-6s %s", ts + 11, tag[lvl], msg);
@@ -282,6 +279,22 @@ void pz_log(pz_loglevel lvl, const char *fmt, ...)
         fputc('\n', stderr);
     }
     log_unlock();
+}
+
+void pz_log(pz_loglevel lvl, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vlog(lvl, true, fmt, ap);
+    va_end(ap);
+}
+
+void pz_log_file(pz_loglevel lvl, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vlog(lvl, false, fmt, ap);
+    va_end(ap);
 }
 
 void pz_strlcpy(char *dst, const char *src, size_t n)

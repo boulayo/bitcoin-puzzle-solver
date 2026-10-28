@@ -101,8 +101,9 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
     if (prio) r->gpu_boost = true;
     const char *pn = prio ? ", high priority for the GPU threads" : "";
     if (!strncmp(val, "default", 7)) {
-        pz_log(PZ_LOG_INFO, "profile of this machine%s%s%s: the default values (all threads, all GPUs) are already the best%s",
-               fresh ? " (just measured)" : "", when[0] ? " from " : "", when, pn);
+        /* a saved verdict that changes nothing is not worth a line on the terminal (the measurement that has just ended is) */
+        (fresh || prio ? pz_log : pz_log_file)(PZ_LOG_INFO, "profile of this machine%s%s%s: the default values (all threads, all GPUs) are already the best%s",
+                                               fresh ? " (just measured)" : "", when[0] ? " from " : "", when, pn);
         return;
     }
     int t = -1;

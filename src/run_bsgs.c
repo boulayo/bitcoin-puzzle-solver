@@ -144,7 +144,7 @@ static void *driver_main(void *p)
         atomic_store(&b->phase, PH_BUILD);
         _Atomic u64 *units[MAX_WORKERS];
         for (int i = 0; i < b->nthreads; i++) units[i] = &r->ws[b->widx[i]].units;
-        pz_log(PZ_LOG_INFO, "BSGS: building the table of %llu baby steps with %d threads", (unsigned long long)b->P.T, b->nthreads);
+        pz_log(PZ_LOG_INFO, "BSGS: building the table with %d thread%s", b->nthreads, b->nthreads == 1 ? "" : "s");
         if (!bsgs_table_build(&b->tab, b->nthreads, units, &r->stop)) { atomic_store(&b->phase, PH_DONE); return NULL; }
         if (r->table_path[0]) {      /* saved even if a stop was requested meanwhile: the build can take hours */
             atomic_store(&b->phase, PH_SAVE);
