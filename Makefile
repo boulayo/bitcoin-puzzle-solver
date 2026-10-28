@@ -76,21 +76,23 @@ ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c
 KERNELS  := src/kernels/pz_common.cl src/kernels/pz_linear.cl src/kernels/pz_kang.cl src/kernels/pz_test.cl
-# CUDA modules: PTX generated from the same kernels by tools/gen_ptx.py (committed, so building needs no CUDA toolkit)
-PTXMODS  := linear128 linear256 linear512 linear128m4 linear256m4 linear512m4 kang64 kang128 kang256 kang64b kang128b kang256b kang16 kang32 kang16b kang32b kang64c kang128c test
+# CUDA modules: PTX generated from the same kernels by tools/gen_ptx.py (committed, so building needs no CUDA toolkit). Their list is
+# src/kernels/ptx/modules.txt, the only one: the lines are read here (through tools/ptx_table.awk), by gen_ptx.py, by the CUDA runtime
+# (build/ptx_mods.c is made from it) and by the simulated driver of tests/mock_cuda.
+PTXTAB   := src/kernels/ptx/modules.txt
+PTXAWK   := awk -f tools/ptx_table.awk
+PTXMODS  := $(shell $(PTXAWK) -v mode=names $(PTXTAB))
 PTX      := $(addprefix src/kernels/ptx/,$(addsuffix .ptx,$(PTXMODS)))
 # The PTX modules are embedded compressed (src/lz.c, tools/embed.c -z) and unpacked when one is loaded. The modules of a family differ
 # in few lines (linear128 and linear256 in 148 of 38,000), so each one is compressed against another, its base, whose text serves as
-# the dictionary: all together they take about 1 MB instead of 12 MB. Name:base pairs; a base must come before its dependents in
-# PTXMODS, and a module without a base is compressed on its own. A new module needs no entry, only a place in PTXMODS.
-PTXBASE  := linear256:linear128 linear512:linear128 linear128m4:linear128 linear256m4:linear128m4 linear512m4:linear128m4 \
-            kang128:kang64 kang256:kang64 kang64b:kang64 kang128b:kang64b kang256b:kang64b kang16:kang64 kang32:kang64 \
-            kang16b:kang64b kang32b:kang64b kang64c:kang64b kang128c:kang64c test:linear128
+# the dictionary: all together they take about 1 MB instead of 12 MB. Name:base pairs from the table; a base must come before its
+# dependents there, and a module without a base is compressed on its own.
+PTXBASE  := $(shell $(PTXAWK) -v mode=bases $(PTXTAB))
 PTXITEMS := $(foreach p,$(PTXMODS),pz_ptx_$(p)$(addprefix :pz_ptx_,$(patsubst $(p):%,%,$(filter $(p):%,$(PTXBASE)))) src/kernels/ptx/$(p).ptx)
 KANG_SRC := src/kangaroo.c src/kang_log.c src/kang_cpu.c src/kang_selftest.c src/kang_base.c src/bsgs_base.c
 
 GPU_SRC  := cl_api rt rt_cl rt_cuda gpu gpu_tune gpu_selftest
-SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c $(BUILD)/ptx_gen.c
+SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c $(BUILD)/ptx_gen.c $(BUILD)/ptx_mods.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
 ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_shani.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
 KVOBJ  := $(BUILD)/kang_x86.o $(BUILD)/kang_avx2v.o $(BUILD)/kang_avx512v.o $(BUILD)/kang_avx512i.o $(BUILD)/kang_avx512i2.o
@@ -226,14 +228,21 @@ $(BUILD)/kernels_gen.c: $(KERNELS) $(BUILD)/embed
 $(BUILD)/kernels_gen.o: $(BUILD)/kernels_gen.c
 	$(CC) $(DEPLOY) -O1 -c $< -o $@
 
-$(BUILD)/ptx_gen.c: $(PTX) $(BUILD)/embed
+$(BUILD)/ptx_gen.c: $(PTXTAB) $(PTX) $(BUILD)/embed
 	$(BUILD)/embed -z $@ $(PTXITEMS)
 
 $(BUILD)/ptx_gen.o: $(BUILD)/ptx_gen.c src/lz.h
 	$(CC) $(DEPLOY) -O1 -Isrc -c $< -o $@
 
+# which module the CUDA runtime loads for each program and parameter of rt_build
+$(BUILD)/ptx_mods.c: $(PTXTAB) tools/ptx_table.awk | $(BUILD)
+	$(PTXAWK) -v mode=rtcu $(PTXTAB) > $@
+
+$(BUILD)/ptx_mods.o: $(BUILD)/ptx_mods.c src/rt_priv.h
+	$(CC) $(COMMON) -MMD -MP -c $< -o $@
+
 # the list of the embedded modules and of their files, for tests/t_kernels.c
-$(BUILD)/ptx_tab.c: $(PTX) $(BUILD)/embed
+$(BUILD)/ptx_tab.c: $(PTXTAB) $(PTX) $(BUILD)/embed
 	$(BUILD)/embed -T $@ $(PTXITEMS)
 
 $(BUILD)/ptx_tab.o: $(BUILD)/ptx_tab.c src/lz.h
@@ -295,7 +304,7 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 
 # Unit tests (built against the same sources)
 TESTS := t_core t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
-TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
+TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_mods.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
 # t_gpufe: the kernel field arithmetic compiled for the host, PTX carry-chain variant (emulated) and portable variant
 $(BUILD)/kfe_fast.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kernels/pz_common.cl | $(BUILD)
@@ -371,18 +380,22 @@ endif
 MOCKCC  := $(CC) -std=gnu11 -O2 -fPIC -w -Itests/mock_cuda -DPZ_FAST_FE
 MOCKSRC := tests/mock_cuda/mock_cuda.c tests/mock_cuda/kern.c tests/mock_cuda/pz_host.h $(KERNELS)
 
-$(MOCK)/ptx_gen.c: $(PTX) $(BUILD)/embed
+$(MOCK)/ptx_gen.c: $(PTXTAB) $(PTX) $(BUILD)/embed
 	@mkdir -p $(MOCK)
 	$(BUILD)/embed $@ $(foreach p,$(PTXMODS),mock_ptx_$(p) src/kernels/ptx/$(p).ptx)
 
-$(MOCKLIB): $(MOCKSRC) $(MOCK)/ptx_gen.c
-	$(foreach h,128 256 512,$(MOCKCC) -c tests/mock_cuda/kern.c -DMOCK_LINEAR -DHALF=$(h) -Dpz_search=mock_search$(h) -o $(MOCK)/k$(h).o;)
-	$(foreach n,16 32 64 128 256,$(MOCKCC) -c tests/mock_cuda/kern.c -DMOCK_KANG -DNK=$(n) -Dpz_kang_step=mock_kang$(n) -o $(MOCK)/kk$(n).o;)
-	$(foreach n,16 32 64 128 256,$(MOCKCC) -c tests/mock_cuda/kern.c -DMOCK_KANG -DNK=$(n) -DMC=2 -Dpz_kang_step=mock_kang$(n)b -o $(MOCK)/kk$(n)b.o;)
-	$(foreach n,64 128,$(MOCKCC) -c tests/mock_cuda/kern.c -DMOCK_KANG -DNK=$(n) -DMC=4 -Dpz_kang_step=mock_kang$(n)c -o $(MOCK)/kk$(n)c.o;)
+# the modules the simulated driver knows and the kernel it runs for each (included by mock_cuda.c), and the objects of those kernels
+$(MOCK)/mock_mods.h: $(PTXTAB) tools/ptx_table.awk
+	@mkdir -p $(MOCK)
+	$(PTXAWK) -v mode=mockhdr $(PTXTAB) > $@
+
+MOCKOBJS := $(shell $(PTXAWK) -v mode=mockobjs -v dir=$(MOCK) $(PTXTAB))
+
+$(MOCKLIB): $(MOCKSRC) $(MOCK)/ptx_gen.c $(MOCK)/mock_mods.h
+	$(shell $(PTXAWK) -v mode=mockcc -v "cc=$(MOCKCC)" -v dir=$(MOCK) $(PTXTAB))
 	$(MOCKCC) -c tests/mock_cuda/kern.c -DMOCK_TEST -o $(MOCK)/kt.o
 	$(MOCKCC) -c $(MOCK)/ptx_gen.c -o $(MOCK)/ptx_gen.o
-	$(MOCKCC) $(MOCKLD) -o $@ tests/mock_cuda/mock_cuda.c $(MOCK)/k128.o $(MOCK)/k256.o $(MOCK)/k512.o $(MOCK)/kk16.o $(MOCK)/kk32.o $(MOCK)/kk64.o $(MOCK)/kk128.o $(MOCK)/kk256.o $(MOCK)/kk16b.o $(MOCK)/kk32b.o $(MOCK)/kk64b.o $(MOCK)/kk128b.o $(MOCK)/kk256b.o $(MOCK)/kk64c.o $(MOCK)/kk128c.o $(MOCK)/kt.o $(MOCK)/ptx_gen.o
+	$(MOCKCC) $(MOCKLD) -I$(MOCK) -o $@ tests/mock_cuda/mock_cuda.c $(MOCKOBJS) $(MOCK)/kt.o $(MOCK)/ptx_gen.o
 
 mockcuda: $(MOCKLIB)
 

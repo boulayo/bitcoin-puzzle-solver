@@ -4,6 +4,7 @@
 #define PZ_RT_PRIV_H
 
 #include "gpu_rt.h"
+#include "lz.h"
 
 struct rt_ctx {
     rt_api api;
@@ -45,6 +46,10 @@ bool rtcl_read(rt_ctx *c, rt_buf *b, size_t off, void *dst, size_t n);
 bool rtcl_run(rt_ctx *c, rt_kern *k, size_t n);
 
 /* CUDA */
+/* The modules (build/ptx_mods.c, made from src/kernels/ptx/modules.txt): the program and the parameter of rt_build that each one is for. */
+typedef struct { rt_prog_id prog; int param; const pz_blob *blob; } rtcu_module;
+extern const rtcu_module rtcu_modules[];
+extern const int rtcu_module_count;
 int rtcu_enumerate(rt_dev *out, int max, char *note, size_t nl);
 bool rtcu_open(rt_ctx *c);
 void rtcu_close(rt_ctx *c);

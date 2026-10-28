@@ -1,0 +1,46 @@
+# The CUDA modules of pzsolve: one line for each, and the only list of them. Adding a module is a line here and the file <name>.ptx that
+# tools/gen_ptx.py writes. The line is read by
+#   - tools/gen_ptx.py (what to compile and with which -D options),
+#   - the Makefile (which files to embed, and the base of each for the compression), through tools/ptx_table.awk,
+#   - the CUDA runtime (src/rt_cuda.c): the table of build/ptx_mods.c says which module an rt_build(program, parameter) call loads,
+#   - the simulated driver of tests/mock_cuda: which kernel it runs for a module, and the kernels it has to compile.
+#
+# name      the module, and the name of its file in this folder
+# kind      linear (src/kernels/pz_linear.cl), kang (pz_kang.cl) or test (pz_test.cl); all three come after pz_common.cl
+# cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel, the
+#           configuration of the batch products of a kangaroo kernel (0 at every walker, 1 at every other, 2 at every fourth)
+# base      an earlier module whose text is the dictionary of this one in the compressed embedding (src/lz.c), or - for none; the modules of
+#           a family differ in few lines, so all the PTX takes about 1 MB instead of 12. A base comes before the modules that use it
+# defines   the -D options of the NVRTC build, or - for none. The size of the parameter of rt_build (HALF, or NK) is the value of -DHALF / -DNK
+#
+# The order matters: a base comes before the modules that use it, and tools/gen_ptx.py reproduces the committed files only in this order (NVRTC
+# numbers the "callseq" comments of its PTX over all the programs one run compiles, so a module that moves changes the text of the ones after it).
+# A new module goes at the end.
+#
+# name         kind    cfg  base       defines
+linear128      linear  0    -          -DHALF=128
+linear256      linear  0    linear128  -DHALF=256
+linear512      linear  0    linear128  -DHALF=512
+# at least 4 resident blocks per SM: the compiler caps the kernel at 128 registers (a few spills, more warps)
+linear128m4    linear  4    linear128  -DHALF=128 -DPZ_MINB=4
+linear256m4    linear  4    linear128m4 -DHALF=256 -DPZ_MINB=4
+linear512m4    linear  4    linear128m4 -DHALF=512 -DPZ_MINB=4
+# kangaroos per work-item (one field inversion per NK steps); capped at 128 registers (four blocks per SM: 512 threads;
+# without the cap ptxas uses 150-220 registers and only two blocks fit)
+kang64         kang    0    -          -DNK=64 -DPZ_MINB=4
+kang128        kang    0    kang64     -DNK=128 -DPZ_MINB=4
+kang256        kang    0    kang64     -DNK=256 -DPZ_MINB=4
+# the same with the batch products kept only every 2 walkers (less memory traffic, half a product more per step)
+kang64b        kang    1    kang64     -DNK=64 -DMC=2 -DPZ_MINB=4
+kang128b       kang    1    kang64b    -DNK=128 -DMC=2 -DPZ_MINB=4
+kang256b       kang    1    kang64b    -DNK=256 -DMC=2 -DPZ_MINB=4
+# batch products kept only for every 4th walker (about 16 bytes less traffic per step): needs more registers than fit in 128
+# (about 212 without spills), so only two blocks of 128 threads stay resident per SM; the tuner keeps it only where it is faster
+kang64c        kang    2    kang64b    -DNK=64 -DMC=4 -DPZ_MINB=2
+kang128c       kang    2    kang64c    -DNK=128 -DMC=4 -DPZ_MINB=2
+# smaller herds per work-item (16, 32), for GPUs whose L2 cache can hold the whole herd (the tuner offers them only there)
+kang16         kang    0    kang64     -DNK=16 -DPZ_MINB=4
+kang32         kang    0    kang64     -DNK=32 -DPZ_MINB=4
+kang16b        kang    1    kang64b    -DNK=16 -DMC=2 -DPZ_MINB=4
+kang32b        kang    1    kang64b    -DNK=32 -DMC=2 -DPZ_MINB=4
+test           test    0    linear128  -

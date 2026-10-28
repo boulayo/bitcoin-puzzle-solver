@@ -23,35 +23,22 @@ OUT = os.path.join(KDIR, 'ptx')
 ARCH = 'compute_52'   # Maxwell and newer
 BLOCK = 128           # threads per block the host launches with (must match RT_CUDA_BLOCK in rt_cuda.c)
 
-MODULES = [
-    # name, sources, defines
-    ('linear128', ['pz_common.cl', 'pz_linear.cl'], ['-DHALF=128']),
-    ('linear256', ['pz_common.cl', 'pz_linear.cl'], ['-DHALF=256']),
-    ('linear512', ['pz_common.cl', 'pz_linear.cl'], ['-DHALF=512']),
-    # at least 4 resident blocks per SM: the compiler caps the kernel at 128 registers (a few spills, more warps)
-    ('linear128m4', ['pz_common.cl', 'pz_linear.cl'], ['-DHALF=128', '-DPZ_MINB=4']),
-    ('linear256m4', ['pz_common.cl', 'pz_linear.cl'], ['-DHALF=256', '-DPZ_MINB=4']),
-    ('linear512m4', ['pz_common.cl', 'pz_linear.cl'], ['-DHALF=512', '-DPZ_MINB=4']),
-    # kangaroos per work-item (one field inversion per NK steps); capped at 128 registers (four blocks per SM: 512 threads;
-    # without the cap ptxas uses 150-220 registers and only two blocks fit)
-    ('kang64', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=64', '-DPZ_MINB=4']),
-    ('kang128', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=128', '-DPZ_MINB=4']),
-    ('kang256', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=256', '-DPZ_MINB=4']),
-    # the same with the batch products kept only every 2 walkers (less memory traffic, half a product more per step)
-    ('kang64b', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=64', '-DMC=2', '-DPZ_MINB=4']),
-    ('kang128b', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=128', '-DMC=2', '-DPZ_MINB=4']),
-    ('kang256b', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=256', '-DMC=2', '-DPZ_MINB=4']),
-    # batch products kept only for every 4th walker (about 16 bytes less traffic per step): needs more registers than fit in 128
-    # (about 212 without spills), so only two blocks of 128 threads stay resident per SM; the tuner keeps it only where it is faster
-    ('kang64c', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=64', '-DMC=4', '-DPZ_MINB=2']),
-    ('kang128c', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=128', '-DMC=4', '-DPZ_MINB=2']),
-    # smaller herds per work-item (16, 32), for GPUs whose L2 cache can hold the whole herd (the tuner offers them only there)
-    ('kang16', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=16', '-DPZ_MINB=4']),
-    ('kang32', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=32', '-DPZ_MINB=4']),
-    ('kang16b', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=16', '-DMC=2', '-DPZ_MINB=4']),
-    ('kang32b', ['pz_common.cl', 'pz_kang.cl'], ['-DNK=32', '-DMC=2', '-DPZ_MINB=4']),
-    ('test', ['pz_common.cl', 'pz_test.cl'], []),
-]
+# The modules are listed in src/kernels/ptx/modules.txt, the one list that the Makefile, the CUDA runtime and the simulated driver read too:
+# name, kind, cfg, base, defines (see the comments of the file).
+SOURCES = {'linear': ['pz_common.cl', 'pz_linear.cl'], 'kang': ['pz_common.cl', 'pz_kang.cl'], 'test': ['pz_common.cl', 'pz_test.cl']}
+
+
+def read_modules():
+    """[(name, sources, defines)] from modules.txt"""
+    mods = []
+    for line in open(os.path.join(OUT, 'modules.txt')):
+        f = line.split()
+        if not f or f[0].startswith('#'):
+            continue
+        if len(f) < 5 or f[1] not in SOURCES:
+            raise SystemExit('modules.txt: cannot read the line: %s' % line.strip())
+        mods.append((f[0], SOURCES[f[1]], [] if f[4:] == ['-'] else f[4:]))
+    return mods
 
 
 def compile_one(lib, name, files, defines):
@@ -103,7 +90,8 @@ def main():
     print('NVRTC %d.%d, target %s, %d threads per block' % (major.value, minor.value, ARCH, BLOCK))
     os.makedirs(OUT, exist_ok=True)
     stale = []
-    for name, files, defines in MODULES:
+    modules = read_modules()
+    for name, files, defines in modules:
         ptx = compile_one(lib, name, files, defines)
         if ptxas:
             ptxas_report(ptxas, name, ptx)
@@ -119,7 +107,7 @@ def main():
             return 1
         print('PTX in sync')
     else:
-        print('wrote %d modules to %s' % (len(MODULES), OUT))
+        print('wrote %d modules to %s' % (len(modules), OUT))
     return 0
 
 

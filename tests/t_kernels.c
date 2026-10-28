@@ -70,7 +70,7 @@ int main(void)
         snprintf(path, sizeof path, "%s/%s", PTX_DIR, e->d_name);
         int found = 0;
         for (int i = 0; i < pz_embedded_count; i++) found |= strcmp(path, pz_embedded_files[i]) == 0;
-        if (!found) printf("FAIL %s is not embedded (add it to PTXMODS in the Makefile)\n", path);
+        if (!found) printf("FAIL %s is not embedded (add it to src/kernels/ptx/modules.txt)\n", path);
         CHECK(found);
         files++;
     }

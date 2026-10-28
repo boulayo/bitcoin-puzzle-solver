@@ -48,20 +48,14 @@ static void spin_wait(void)
 static void lock(int *l) { while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) spin_wait(); }
 static void unlock(int *l) { __atomic_store_n(l, 0, __ATOMIC_RELEASE); }
 
-extern const unsigned char mock_ptx_linear128[], mock_ptx_linear256[], mock_ptx_linear512[], mock_ptx_linear128m4[], mock_ptx_linear256m4[],
-    mock_ptx_linear512m4[], mock_ptx_kang64[], mock_ptx_kang128[], mock_ptx_kang256[], mock_ptx_kang64b[], mock_ptx_kang128b[],
-    mock_ptx_kang256b[], mock_ptx_kang16[], mock_ptx_kang32[], mock_ptx_kang16b[], mock_ptx_kang32b[], mock_ptx_kang64c[], mock_ptx_kang128c[], mock_ptx_test[];
-
 typedef void (*search_fn)(const uint *prm, const uint *gtab, uint *hits, const uint max_hits, const uint pz_n);
 typedef void (*kang_fn)(uint *state, const uint *jump, uint *dps, uint *dpcount, uint *rlist, uint *rcount, unsigned short *hist, const uint rounds,
                         const uint dp_mask_lo, const uint dp_mask_hi, const uint cap_lo, const uint cap_hi, const uint dps_cap, const uint rlist_cap,
                         const uint R, const uint step_lo, const uint step_hi, const uint pz_n);
 #define DECL_SEARCH(h) void mock_search##h(const uint *prm, const uint *gtab, uint *hits, const uint max_hits, const uint pz_n);
-#define DECL_KANG(n) void mock_kang##n(uint *state, const uint *jump, uint *dps, uint *dpcount, uint *rlist, uint *rcount, unsigned short *hist, \
+#define DECL_KANG(name) void mock_##name(uint *state, const uint *jump, uint *dps, uint *dpcount, uint *rlist, uint *rcount, unsigned short *hist, \
                                        const uint rounds, const uint dp_mask_lo, const uint dp_mask_hi, const uint cap_lo, const uint cap_hi, \
                                        const uint dps_cap, const uint rlist_cap, const uint R, const uint step_lo, const uint step_hi, const uint pz_n);
-DECL_SEARCH(128) DECL_SEARCH(256) DECL_SEARCH(512)
-DECL_KANG(16) DECL_KANG(32) DECL_KANG(64) DECL_KANG(128) DECL_KANG(256) DECL_KANG(16b) DECL_KANG(32b) DECL_KANG(64c) DECL_KANG(128c) DECL_KANG(64b) DECL_KANG(128b) DECL_KANG(256b)
 void pz_test_fe(const uint *in, uint *out, const uint pz_n);
 void pz_test_hash(const uint *in, uint *out, const uint pz_n);
 void pz_test_ec(const uint *in, uint *out, const uint pz_n);
@@ -103,16 +97,7 @@ static alloc_t *find_alloc(CUdeviceptr d, size_t n)
 /* ---- modules and functions ---- */
 /* the modules the driver knows (by their exact PTX text) and the C build of each kernel */
 enum { M_LINEAR, M_KANG, M_TEST };
-static const struct { const unsigned char *ptx; int kind; search_fn search; kang_fn kang; } MODS[] = {
-    {mock_ptx_linear128, M_LINEAR, mock_search128, NULL}, {mock_ptx_linear256, M_LINEAR, mock_search256, NULL},
-    {mock_ptx_linear512, M_LINEAR, mock_search512, NULL}, {mock_ptx_linear128m4, M_LINEAR, mock_search128, NULL},
-    {mock_ptx_linear256m4, M_LINEAR, mock_search256, NULL}, {mock_ptx_linear512m4, M_LINEAR, mock_search512, NULL},
-    {mock_ptx_kang64, M_KANG, NULL, mock_kang64}, {mock_ptx_kang128, M_KANG, NULL, mock_kang128}, {mock_ptx_kang256, M_KANG, NULL, mock_kang256},
-    {mock_ptx_kang64b, M_KANG, NULL, mock_kang64b}, {mock_ptx_kang128b, M_KANG, NULL, mock_kang128b}, {mock_ptx_kang256b, M_KANG, NULL, mock_kang256b},
-    {mock_ptx_kang16, M_KANG, NULL, mock_kang16}, {mock_ptx_kang32, M_KANG, NULL, mock_kang32}, {mock_ptx_kang16b, M_KANG, NULL, mock_kang16b},
-    {mock_ptx_kang32b, M_KANG, NULL, mock_kang32b}, {mock_ptx_kang64c, M_KANG, NULL, mock_kang64c}, {mock_ptx_kang128c, M_KANG, NULL, mock_kang128c},
-    {mock_ptx_test, M_TEST, NULL, NULL},
-};
+#include "mock_mods.h"   /* generated from src/kernels/ptx/modules.txt (Makefile): the modules, the kernel run for each, and MODS */
 #define M_COUNT ((int)(sizeof MODS / sizeof *MODS))
 typedef struct { int kind; } module_t;          /* kind = index in MODS + 1 (0 = free slot) */
 typedef struct { int kind; int which; } func_t;   /* kind = index in MODS */
