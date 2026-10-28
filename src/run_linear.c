@@ -107,8 +107,9 @@ int run_linear(run_ctx *r)
     bool resumed;
     r->sched = run_load_sched(r, &r->cfg, &resumed);
     if (resumed) {
-        char kd[48];
-        pz_log(PZ_LOG_INFO, "campaign resumed: %s keys already covered (%.6f%%)", u128_to_dec(sched_keys_done(r->sched), kd), sched_fraction(r->sched) * 100.0);
+        char kd[48], kg[64], pc[32];
+        pz_log(PZ_LOG_INFO, "campaign resumed: %s keys already covered (%s)", pz_group_digits(u128_to_dec(sched_keys_done(r->sched), kd), kg, sizeof kg),
+               pz_fmt_percent(sched_fraction(r->sched), pc, sizeof pc));
     }
     const u128 at_start = sched_keys_done(r->sched);
     r->keys_at_start[0] = (u64)at_start;

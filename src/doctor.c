@@ -156,11 +156,7 @@ static void check_campaigns(const char *base)
             long long t = mtime_of(file);
             if (t > mt) mt = t;
         }
-        if (mt) {
-            char ago[48];
-            pz_fmt_duration((double)(time(NULL) - mt), ago, sizeof ago);
-            snprintf(age, sizeof age, "%s ago", ago);
-        }
+        if (mt) pz_fmt_age((double)(time(NULL) - mt), age, sizeof age);
         const bool running = campaign_is_running(dir);
         snprintf(file, sizeof file, "%s/FOUND.txt", dir);
         const bool found = mtime_of(file) != 0;

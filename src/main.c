@@ -1140,13 +1140,19 @@ static int cmd_where(int argc, char **argv)
     {
         char g1[64], g2[64], g3[64];
         snprintf(g3, sizeof g3, "%.0Lf", blocks);
-        pz_prop_line("visit order", "block %s of %s, offset %llu within the block, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, sb), g1, sizeof g1),
-                     pz_group_digits(g3, g2, sizeof g2), (unsigned long long)off, frac * 100.0L);
+        char g4[32];
+        pz_prop_line("visit order", "block %s of %s, offset %s within the block, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, sb), g1, sizeof g1),
+                     pz_group_digits(g3, g2, sizeof g2), pz_fmt_u64(off, g4, sizeof g4), frac * 100.0L);
     }
     if (s->part.total) {
         pz_u256 local;
         if (sched_part_position(s, &seq, &local))
-            pz_prop_line("part", "in part %s of this computer: its block %s of %.0Lf", s->part_text, pz_u256_to_dec(&local, sb), pz_u256_to_ld(&s->blocks_part));
+        {
+            char g1[64], g2[64], g3[64];
+            snprintf(g3, sizeof g3, "%.0Lf", pz_u256_to_ld(&s->blocks_part));
+            pz_prop_line("part", "in part %s of this computer: its block %s of %s", s->part_text, pz_group_digits(pz_u256_to_dec(&local, sb), g1, sizeof g1),
+                         pz_group_digits(g3, g2, sizeof g2));
+        }
         else
             pz_prop_line("part", "not in part %s of this computer: another computer will scan it", s->part_text);
     }
@@ -1190,7 +1196,8 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
             char mb[48], cs[48];
             pz_fmt_bytes((double)bsgs_bytes_for(T), mb, sizeof mb);
             long double cost = bsgs_mean_cost(&w256, T);
-            pz_prop_line("BSGS in RAM", "table of %llu entries (%s), %.3Le operations on average (2^%.1f), deterministic", (unsigned long long)T, mb, cost, (double)log2l(cost));
+            char tg[32];
+            pz_prop_line("BSGS in RAM", "table of %s entries (%s), %.3Le operations on average (2^%.1f), deterministic", pz_fmt_u64(T, tg, sizeof tg), mb, cost, (double)log2l(cost));
             if (rate_kang > 0) pz_prop_line("", "time, at the kangaroo speed: %s on average", pz_fmt_duration((double)cost / rate_kang, cs, sizeof cs));
         } else {
             pz_prop_line("BSGS in RAM", "not worthwhile: the best table does not fit in 70%% of the free RAM of this machine");

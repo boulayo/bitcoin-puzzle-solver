@@ -5,6 +5,7 @@
 #include "envopts.h"
 #include <pzcore/u256.h>
 #include <stdarg.h>
+#include <math.h>
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
@@ -549,10 +550,34 @@ char *pz_fmt_duration(double s, char *buf, size_t n)
     unsigned long long t = (unsigned long long)s;
     unsigned long long d = t / 86400, h = t % 86400 / 3600, m = t % 3600 / 60, sec = t % 60;
     if (d) snprintf(buf, n, "%llud %lluh %llum", d, h, m);
-    else if (h) snprintf(buf, n, "%lluh %llum %llus", h, m, sec);
+    else if (h) snprintf(buf, n, "%lluh %llum", h, m);
     else if (m) snprintf(buf, n, "%llum %llus", m, sec);
     else if (s < 0.05) snprintf(buf, n, "<0.1s");
     else snprintf(buf, n, "%.1fs", s);
+    return buf;
+}
+
+char *pz_fmt_u64(u64 v, char *buf, size_t n)
+{
+    char d[32];
+    snprintf(d, sizeof d, "%llu", (unsigned long long)v);
+    return pz_group_digits(d, buf, n);
+}
+
+char *pz_fmt_percent(double frac, char *buf, size_t n)
+{
+    const double pct = frac * 100.0;
+    if (pct >= 0.001 || pct == 0) snprintf(buf, n, "%.4f%%", pct);
+    else snprintf(buf, n, "%.3e%%", pct);                     /* the first steps of a huge range */
+    return buf;
+}
+
+char *pz_fmt_age(double secs, char *buf, size_t n)
+{
+    char d[48];
+    if (!(secs >= 2)) snprintf(buf, n, "just now");             /* the times compared have a resolution of one second */
+    else if (secs < 60) snprintf(buf, n, "%.0fs ago", floor(secs));
+    else snprintf(buf, n, "%s ago", pz_fmt_duration(secs, d, sizeof d));
     return buf;
 }
 

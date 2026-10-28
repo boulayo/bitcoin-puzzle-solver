@@ -44,10 +44,12 @@ static void kang_progress(run_ctx *r, progress_info *pi)
     /* the size of the table, from the copies that need no lock: a rebuild of the table holds mu for seconds (see kang_state) */
     const u64 cnt = atomic_load_explicit(&ks->count_mirror, memory_order_relaxed), cap = atomic_load_explicit(&ks->cap_mirror, memory_order_relaxed);
     const unsigned thin = atomic_load_explicit(&ks->thin_mirror, memory_order_relaxed);
+    char nd[32], nk[32], nr[32], nx[32];
     snprintf(pi->detail, sizeof pi->detail,
-             "P(found) ~ %.1f%% | distinguished points %llu (table %.1f%%%s) | kangaroos %d | dp-bits %u | restarts %llu | discarded %llu",
-             pi->fraction * 100.0, (unsigned long long)cnt, 100.0 * (double)cnt / (double)cap, thin ? ", RAM exhausted: density reduced" : "", ks->K_total, ks->P.dp_bits,
-             (unsigned long long)(atomic_load(&ks->restarts) + atomic_load(&ks->dups)), (unsigned long long)atomic_load(&ks->dropped));
+             "P(found) ~ %.1f%% | distinguished points %s (table %.1f%%%s) | kangaroos %s | dp-bits %u | restarts %s | discarded %s",
+             pi->fraction * 100.0, pz_fmt_u64(cnt, nd, sizeof nd), 100.0 * (double)cnt / (double)cap, thin ? ", RAM exhausted: density reduced" : "",
+             pz_fmt_u64((u64)ks->K_total, nk, sizeof nk), ks->P.dp_bits, pz_fmt_u64(atomic_load(&ks->restarts) + atomic_load(&ks->dups), nr, sizeof nr),
+             pz_fmt_u64(atomic_load(&ks->dropped), nx, sizeof nx));
 }
 
 static int kang_checkpoint(run_ctx *r)
@@ -98,7 +100,8 @@ int run_kangaroo(run_ctx *r)
     if (kang_configure(ks, k_gpu) != 0) pz_die("no compute device available");
     int lr = kang_load_log(ks);
     if (lr < 0) pz_die("cannot use the distinguished-point file %s", ks->log_path);
-    if (lr == 0) pz_log(PZ_LOG_INFO, "campaign resumed: %llu distinguished points loaded from %s", (unsigned long long)ks->loaded, ks->log_path);
+    char nd[32];
+    if (lr == 0) pz_log(PZ_LOG_INFO, "campaign resumed: %s distinguished points loaded from %s", pz_fmt_u64(ks->loaded, nd, sizeof nd), ks->log_path);
     r->progress = kang_progress;
     r->checkpoint = kang_checkpoint;
 
@@ -539,12 +542,7 @@ static void say_wrapped(const char *fmt, ...)
     pz_fputs_wrap(stdout, buf, PZ_LINE_MAX, 4);
 }
 
-static char *count_text(u64 v, char *out, size_t n)
-{
-    char d[32];
-    snprintf(d, sizeof d, "%llu", (unsigned long long)v);
-    return pz_group_digits(d, out, n);
-}
+static char *count_text(u64 v, char *out, size_t n) { return pz_fmt_u64(v, out, n); }
 
 int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
 {

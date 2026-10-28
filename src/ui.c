@@ -84,12 +84,7 @@ static void bar(char *b, int width, double frac)
     b[width] = 0;
 }
 
-static void percent(double frac, char *buf, size_t n)
-{
-    double pct = frac * 100.0;
-    if (pct >= 0.001 || pct == 0) snprintf(buf, n, "%.4f%%", pct);
-    else snprintf(buf, n, "%.3e%%", pct);
-}
+static void percent(double frac, char *buf, size_t n) { pz_fmt_percent(frac, buf, n); }
 
 /* Shortens a line of the panel to at most maxw columns without cutting a word: first a remark in brackets at its end ("(peak ...)",
  * "[starting: ...]"), then its last fields ("a | b | c", "a  |  b"), and as a last resort its last words. */
@@ -315,11 +310,11 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
     } else if (pi->rate > 0 && pi->est_state != RATE_MEASURING) {
         /* richest layout that fits, then drop fields from the least important: bar, P(24h), the last quantile */
         for (int v = 0; v < 5; v++) {
-            if (v == 0) snprintf(buf, n, "%s [%s] %s %s %s/s | 50%%:%s 90%%:%s %s:%s | P(24h)=%s", tag, bb, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
-            else if (v == 1) snprintf(buf, n, "%s %s %s %s/s | 50%%:%s 90%%:%s %s:%s | P(24h)=%s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
-            else if (v == 2) snprintf(buf, n, "%s %s %s %s/s | 50%%:%s 90%%:%s %s:%s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3);
-            else if (v == 3) snprintf(buf, n, "%s %s %s %s/s | 50%%:%s 90%%:%s", tag, pc, rate, pi->unit, t1, t2);
-            else snprintf(buf, n, "%s %s %s/s | 50%%:%s", tag, pc, rate, t1);
+            if (v == 0) snprintf(buf, n, "%s [%s] %s %s %s/s | 50%%: %s 90%%: %s %s: %s | P(24h)=%s", tag, bb, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
+            else if (v == 1) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s %s: %s | P(24h)=%s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
+            else if (v == 2) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s %s: %s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3);
+            else if (v == 3) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s", tag, pc, rate, pi->unit, t1, t2);
+            else snprintf(buf, n, "%s %s %s/s | 50%%: %s", tag, pc, rate, t1);
             if (!limit || (int)strlen(buf) <= limit) break;
         }
         if (pi->est_state == RATE_PROVISIONAL) {                       /* the estimate is still settling: say so if it fits */

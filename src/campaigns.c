@@ -119,23 +119,13 @@ static void fill_row(row_t *w, const char *base, time_t now)
     bool running = campaign_is_running(dir);
     if (js) {
         if (json_get(js, "state", v, sizeof v)) pz_strlcpy(w->state, state_name(v), sizeof w->state);
-        if (json_get(js, "fraction", v, sizeof v)) {
-            double f = atof(v) * 100.0;
-            if (f >= 0.001 || f == 0) snprintf(w->frac, sizeof w->frac, "%.4f%%", f);
-            else snprintf(w->frac, sizeof w->frac, "%.2e%%", f);
-        }
+        if (json_get(js, "fraction", v, sizeof v)) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);
         if (json_get(js, "rate_per_second", v, sizeof v)) {
             double rt = atof(v);
             if (rt > 0) { char b[32]; pz_fmt_si(rt, b, sizeof b); snprintf(w->rate, sizeof w->rate, "%s/s", b); }
         }
         if (json_get(js, "eta_seconds_50", v, sizeof v) && strcmp(v, "null") != 0) pz_fmt_duration(atof(v), w->eta, sizeof w->eta);
-        if (json_get(js, "updated_unix", v, sizeof v)) {
-            double age = (double)now - atof(v);
-            if (age < 0) age = 0;
-            char b[48];
-            if (age < 2) pz_strlcpy(w->upd, "just now", sizeof w->upd);   /* updated_unix has a resolution of one second */
-            else snprintf(w->upd, sizeof w->upd, "%s ago", pz_fmt_duration(age, b, sizeof b));
-        }
+        if (json_get(js, "updated_unix", v, sizeof v)) pz_fmt_age((double)now - atof(v), w->upd, sizeof w->upd);
         free(js);
     }
     pz_strlcpy(w->state, campaign_shown_state(w->state, found, running), sizeof w->state);

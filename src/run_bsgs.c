@@ -48,8 +48,9 @@ static void bs_progress(run_ctx *r, progress_info *pi)
         pi->unit = "giant steps";
         pi->eta = (eta_in){ETA_UNIFORM, done, total - done, 0, false, 0};
         pz_fmt_bytes((double)b->table_bytes, a, sizeof a);
-        snprintf(det, sizeof det, "table: %llu baby steps (%s, %s%s) | table false positives: %llu", (unsigned long long)b->P.T, a,
-                 b->tab.thp ? "huge pages" : "normal pages", b->table_from_file ? ", from file" : "", (unsigned long long)atomic_load(&b->falsepos));
+        char tb[32], fp[32];
+        snprintf(det, sizeof det, "table: %s baby steps (%s, %s%s) | table false positives: %s", pz_fmt_u64(b->P.T, tb, sizeof tb), a,
+                 b->tab.thp ? "huge pages" : "normal pages", b->table_from_file ? ", from file" : "", pz_fmt_u64(atomic_load(&b->falsepos), fp, sizeof fp));
         snprintf(pi->detail, sizeof pi->detail, "%s\nrandom order: blocks of 2^%u giant steps, %zu open intervals", det, r->sched->cbits, sched_open_intervals(r->sched));
         return;
     }
@@ -247,17 +248,17 @@ int run_bsgs(run_ctx *r)
 
     const u64 T = r->cfg.bsgs_t;
     const u64 bytes = table_ram(r->table_path, T);
-    char mb[48], ma[48], c1[48], c2[48];
+    char mb[48], ma[48], c1[48], c2[48], tg[32], ng[32];
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
     pz_fmt_bytes((double)r->sys.mem_avail, ma, sizeof ma);
     pz_fmt_si((double)bsgs_mean_cost(&b->P.W, T), c1, sizeof c1);
     pz_fmt_si(KANG_C_MEAN * (double)sqrtl(pz_u256_to_ld(&b->P.W)), c2, sizeof c2);
-    pz_log(PZ_LOG_INFO, "BSGS: %llu baby steps (table %s, available RAM %s), %llu giant steps; expected mean cost %s operations (kangaroo: %s)",
-           (unsigned long long)T, mb, ma, (unsigned long long)b->P.Ng, c1, c2);
+    pz_log(PZ_LOG_INFO, "BSGS: %s baby steps (table %s, available RAM %s), %s giant steps; expected mean cost %s operations (kangaroo: %s)",
+           pz_fmt_u64(T, tg, sizeof tg), mb, ma, pz_fmt_u64(b->P.Ng, ng, sizeof ng), c1, c2);
     if (r->use_gpu && gpu_count_usable() > 0)
         pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode%s", r->mode_auto ? "" : " (use --mode kangaroo to put them to work)");
     if (bsgs_mean_cost(&b->P.W, T) > KANG_C_MEAN * sqrtl(pz_u256_to_ld(&b->P.W)))
-        pz_log(PZ_LOG_WARN, "BSGS: with %llu baby steps it costs more than the kangaroo (table too small for this range)", (unsigned long long)T);
+        pz_log(PZ_LOG_WARN, "BSGS: with %s baby steps it costs more than the kangaroo (table too small for this range)", tg);
 
     b->table_bytes = bytes;
     r->progress = bs_progress;
@@ -267,8 +268,9 @@ int run_bsgs(run_ctx *r)
     bool resumed;
     r->sched = run_load_sched(r, &b->scfg, &resumed);   /* before any thread starts: the reporter reads it */
     if (resumed) {
-        char kd[48];
-        pz_log(PZ_LOG_INFO, "campaign resumed: %s giant steps already checked (%.6f%%)", u128_to_dec(sched_keys_done(r->sched), kd), sched_fraction(r->sched) * 100.0);
+        char kd[48], kg[64], pc[32];
+        pz_log(PZ_LOG_INFO, "campaign resumed: %s giant steps already checked (%s)", pz_group_digits(u128_to_dec(sched_keys_done(r->sched), kd), kg, sizeof kg),
+               pz_fmt_percent(sched_fraction(r->sched), pc, sizeof pc));
     }
 
     if (b->P.Pp_inf) {   /* the public key is c*G: the key is the centre of the range */

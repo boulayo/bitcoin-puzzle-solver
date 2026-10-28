@@ -259,15 +259,23 @@ void run_final_progress(run_ctx *r, progress_info *pi)
     if (r->progress) r->progress(r, pi);
 }
 
-/* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines are
- * indented by `hang` columns. */
+/* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines, and the
+ * lines after a '\n' of the text, are indented by `hang` columns. */
 static void wrap_fields(const char *in, int width, int hang, char *out, size_t n)
 {
     size_t o = 0;
     int col = 0;
     for (const char *p = in; *p && o + 2 < n;) {
+        if (*p == '\n') {
+            o += (size_t)snprintf(out + o, n - o, "\n%*s", hang, "");
+            col = 0;
+            p++;
+            continue;
+        }
         const char *sep = strstr(p, " | ");
-        const size_t len = sep ? (size_t)(sep - p) : strlen(p);
+        const char *nl = strchr(p, '\n');
+        if (nl && (!sep || nl < sep)) sep = NULL;
+        const size_t len = sep ? (size_t)(sep - p) : nl ? (size_t)(nl - p) : strlen(p);
         if (col > 0 && col + 3 + (int)len > width) {
             o += (size_t)snprintf(out + o, n - o, " |\n%*s", hang, "");
             col = 0;
@@ -278,6 +286,7 @@ static void wrap_fields(const char *in, int width, int hang, char *out, size_t n
         o += (size_t)snprintf(out + o, n - o, "%.*s", (int)len, p);
         col += (int)len;
         p = sep ? sep + 3 : p + len;
+        if (o >= n) break;
     }
     out[o < n ? o : n - 1] = 0;
 }
@@ -309,8 +318,14 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     const bool kang = r->cfg.mode == MODE_KANGAROO;
     char rate[32], done[48], total[48], cr[32], gr[32], t50[48], t90[48], tfull[48], pw[ETA_NWIN][24];
     pz_fmt_si(pi->rate, rate, sizeof rate);
-    pz_fmt_si(cpur, cr, sizeof cr);
-    pz_fmt_si(gpur, gr, sizeof gr);
+    char pct[32];
+    pz_fmt_percent(pi->fraction, pct, sizeof pct);
+    bool any_gpu = false;
+    for (int i = 0; i < r->nws; i++) any_gpu |= r->ws[i].kind == 'G';
+    if (ncpu > 0) pz_fmt_si(cpur, cr, sizeof cr);
+    else pz_strlcpy(cr, "-", sizeof cr);                 /* none at work, rather than a speed of 0.00 */
+    if (any_gpu) pz_fmt_si(gpur, gr, sizeof gr);
+    else pz_strlcpy(gr, "-", sizeof gr);
     ui_fmt_count(pi->done, done, sizeof done);
     ui_fmt_count(pi->total, total, sizeof total);
     ui_fmt_eta(es.t50, t50, sizeof t50);
@@ -349,7 +364,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "%s"
         "Sessions:       %d, total compute time %s\n"
         "\n"
-        "%s%.6f %%   (%s of %s %s)\n"
+        "%s%s   (%s of %s %s)\n"
         "Speed:          %s %s/s   (CPU %s, GPU %s)\n"
         "%s"
         "Detail:         %s\n"
@@ -358,7 +373,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
-        pi->fraction * 100.0, done, total, pi->unit, rate, pi->unit, cr, gr, tleft,
+        pct, done, total, pi->unit, rate, pi->unit, cr, gr, tleft,
         detail, (unsigned long long)atomic_load(&r->hits_bad), atomic_load(&r->hits_bad) == 1 ? "" : "s");
     for (int i = 0; i < r->nws && (size_t)n + 200 < bcap; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);

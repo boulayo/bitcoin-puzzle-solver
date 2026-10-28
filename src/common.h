@@ -121,6 +121,9 @@ char *u128_to_dec(u128 v, char *buf);
 char *pz_fmt_si(double v, char *buf, size_t n);
 char *pz_group_digits(const char *in, char *out, size_t n);   /* "1234567" -> "1,234,567" */
 char *pz_fmt_duration(double secs, char *buf, size_t n);
+char *pz_fmt_u64(u64 v, char *buf, size_t n);                  /* 1234567 -> "1,234,567" */
+char *pz_fmt_percent(double frac, char *buf, size_t n);        /* 0.123456 -> "12.3456%", 1.2e-9 -> "1.200e-07%" */
+char *pz_fmt_age(double secs, char *buf, size_t n);            /* "just now", "7s ago", "3m 12s ago", "2h 5m ago" */
 char *pz_fmt_bytes(double v, char *buf, size_t n);
 
 /* Atomic write: writes data to a temporary file of its own next to path (so concurrent writers never share one), fsyncs, renames over path. */
