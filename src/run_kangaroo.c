@@ -42,7 +42,7 @@ static void kang_progress(run_ctx *r, progress_info *pi)
     snprintf(pi->detail, sizeof pi->detail,
              "P(found) ~ %.1f%% | distinguished points %llu (table %.1f%%%s) | kangaroos %d | dp-bits %u | restarts %llu | discarded %llu",
              pi->fraction * 100.0, (unsigned long long)cnt, 100.0 * (double)cnt / (double)cap, ks->thin_level ? ", RAM exhausted: density reduced" : "", ks->K_total, ks->P.dp_bits,
-             (unsigned long long)(atomic_load(&ks->restarts) + atomic_load(&ks->dups)), (unsigned long long)atomic_load(&ks->rejected));
+             (unsigned long long)(atomic_load(&ks->restarts) + atomic_load(&ks->dups)), (unsigned long long)atomic_load(&ks->dropped));
 }
 
 static int kang_checkpoint(run_ctx *r)
@@ -273,6 +273,23 @@ void kang_free_test_state(struct kang_state *ks)
     synth_free(r);
 }
 
+/* The "discarded" of the progress line counts the distinguished points that were lost (thinned out, no room in the table or in the log
+ * buffer, GPU buffer overflow), not the collisions that gave no whole solution. */
+static int progress_selftest(void)
+{
+    kang_state *ks = kang_make_test_state(40, 1);
+    if (!ks) return 1;
+    atomic_store(&ks->dropped, 7);
+    atomic_store(&ks->rejected, 3);
+    progress_info pi;
+    memset(&pi, 0, sizeof pi);
+    kang_progress(ks->r, &pi);
+    const bool ok = strstr(pi.detail, "| discarded 7") != NULL;
+    kang_free_test_state(ks);
+    pz_result_line("kangaroo, progress line: points discarded", "%s", ok ? "OK" : "FAILED");
+    return !ok;
+}
+
 int kangaroo_selftest(void)
 {
     const int was_quiet = pz_log_quiet();
@@ -316,6 +333,7 @@ int kangaroo_selftest(void)
     }
     if (cyc_lost) pz_result_line("kangaroo, 8 jumps (frequent cycles), W=2^30", "%d of 2 keys NOT found", cyc_lost);
     else pz_result_line("kangaroo, 8 jumps (frequent cycles), W=2^30", "2 keys found, steps / sqrt(W): %s", cyc);
+    fails += progress_selftest();
     pz_log_set_quiet(was_quiet);
     return fails;
 }
