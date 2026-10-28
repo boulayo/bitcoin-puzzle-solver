@@ -85,7 +85,6 @@ it all the same (with a warning): useful only as an exercise, since `2^160` keys
     --ui U              auto | full | line | log   (see section 6)
     --report-interval S seconds between panel updates [1]
     --checkpoint-interval S  seconds between saves [60]
-    --no-progress       same as --ui log
 -q / -v                 fewer / more messages
     --new / --resume    fails if the campaign exists / does not exist
 ```
@@ -332,7 +331,6 @@ Two-state variables (such as `PZ_NO_CUDA`) take effect with any value except emp
 | `PZ_NO_PROFILE=1` | same as `--no-tune` |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
 | `PZ_BENCH_SCALE=0.2` | shortens the measurements to a fifth, for tests |
-| `PZ_KANG_SCHEMA=1\|2\|3` | kangaroo scheme of a **new** campaign: 3 is the default since 1.7.9, 2 the one of 1.7.8, 1 the one of the earlier versions; an existing campaign keeps its own |
 | `XDG_CACHE_HOME` | cache folder (also on Windows) |
 
 For tests and diagnostics: `PZ_KANG_VERBOSE=1` (speed of every step of the chosen kangaroo), `PZ_TEST_DP_CAP=N` (tiny table of distinguished points),
@@ -384,12 +382,9 @@ The seed of A's campaign is in the "Seed" line of `campaigns/p140/report.txt` (a
 stopped**, merged: `pzsolve merge -p 140 -f /path/to/B/p140` (a `dp.bin` file, or the campaign folder, or several `-f`). The command
 says how many points are new and whether there is a collision between a "tame" and a "wild" point: in that case it finds the key, writes it to
 `FOUND.txt` and shows it. You can also merge the other way round (A into B) or both ways: points already known are recognized. After the merge `hunt`
-resumes where it was, with the enriched table. A log from another campaign (different interval or key) is refused; logs
-of very old versions must first be opened with `hunt`. All the computers of a campaign must use the same **kangaroo scheme**: since 1.7.9 a new campaign uses scheme 3, while campaigns
-started earlier keep theirs (scheme 1 up to 1.7.7, scheme 2 with 1.7.8) even after the upgrade. To add a new computer to
-an older campaign, start it the first time with `PZ_KANG_SCHEMA=1` or `=2` (Windows: `set PZ_KANG_SCHEMA=1` before the command); `merge`
-recognizes and refuses a log of another scheme. On open puzzles with a single machine, schemes 1 and 2 cost much more than scheme 3
-(about 1.35·√W against 1.02, `docs/en/ALGORITHMS.md` 8.10): the program points this out at startup, and it is better to start again with a new campaign. For the linear search see section 8.2.
+resumes where it was, with the enriched table. A log from another campaign (different interval or key) is refused, and so is one written by an older
+layout of the kangaroo (versions up to 1.9.0 on campaigns with fewer than 256 kangaroos, that is small intervals): `hunt` keeps such a `dp.bin` as
+`dp.bin.vN` and goes on with a new log, `merge` says why it cannot use it. For the linear search see section 8.2.
 
 ### 8.2 Several computers on a linear search (since 1.7.5)
 

@@ -149,7 +149,6 @@ double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthre
     r->use_gpu = false;
     r->sessions = 1;
     r->silent_setup = true;
-    if (o) r->kang_schema = o->schema;
     kang_state *ks = kang_create(r);
     r->kang = ks;
     kang_configure(ks, 0);
@@ -179,9 +178,7 @@ double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthre
     return steps;
 }
 
-struct kang_state *kang_make_test_state(unsigned wbits, int nthreads) { return kang_make_test_state_s(wbits, nthreads, 0); }
-
-struct kang_state *kang_make_test_state_s(unsigned wbits, int nthreads, int schema)
+struct kang_state *kang_make_test_state(unsigned wbits, int nthreads)
 {
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
@@ -208,7 +205,6 @@ struct kang_state *kang_make_test_state_s(unsigned wbits, int nthreads, int sche
     r->use_cpu = true;
     r->sessions = 1;
     r->silent_setup = true;
-    r->kang_schema = schema;
     kang_state *ks = kang_create(r);
     r->kang = ks;
     kang_configure(ks, 0);
@@ -229,9 +225,9 @@ int kangaroo_selftest(void)
     pz_log_set_quiet(1);
     int fails = 0;
     u64 s = 0xC0FFEE1234ULL;
-    struct { unsigned wbits; int n, schema; } cases[] = {{24, 4, 3}, {34, 3, 3}, {24, 2, 2}, {34, 1, 2}, {24, 3, 1}, {34, 1, 1}};   /* schemas 1 and 2: campaigns of 1.7.7 and 1.7.8 */
+    struct { unsigned wbits; int n; } cases[] = {{24, 4}, {34, 3}};
     for (size_t c = 0; c < sizeof cases / sizeof *cases; c++) {
-        const kang_try_opts so = {0, 0, false, cases[c].schema};
+        const kang_try_opts so = {0, 0, false};
         char vals[160] = "";
         int lost = 0;
         for (int t = 0; t < cases[c].n; t++) {
@@ -246,7 +242,7 @@ int kangaroo_selftest(void)
             else snprintf(vals + strlen(vals), sizeof vals - strlen(vals), "%s%.2f", vals[0] ? " " : "", steps / sqrt(ldexp(1.0, (int)cases[c].wbits)));
         }
         char lb[64];
-        snprintf(lb, sizeof lb, "kangaroo, schema %d, W=2^%u", cases[c].schema, cases[c].wbits);
+        snprintf(lb, sizeof lb, "kangaroo, W=2^%u", cases[c].wbits);
         if (lost) pz_result_line(lb, "%d of %d keys NOT found", lost, cases[c].n);
         else pz_result_line(lb, "%d key%s found, steps / sqrt(W): %s", cases[c].n, cases[c].n == 1 ? "" : "s", vals);
     }
@@ -259,7 +255,7 @@ int kangaroo_selftest(void)
         pz_u256 lo = pz_u256_pow2(80 + (unsigned)t), key;
         pz_u256 off = pz_u256_from_u64(st_rnd(&s) & ((1ULL << 30) - 1));
         pz_u256_add(&key, &lo, &off);
-        const kang_try_opts o = {8, 7, true, 0};
+        const kang_try_opts o = {8, 7, true};
         double steps = kang_try(&lo, 30, &key, 2, 60.0, st_rnd(&s), &o);
         if (steps < 0) { fails++; cyc_lost++; }
         else snprintf(cyc + strlen(cyc), sizeof cyc - strlen(cyc), "%s%.2f", cyc[0] ? " " : "", steps / sqrt(ldexp(1.0, 30)));
@@ -338,7 +334,7 @@ int kangaroo_stats(int argc, char **argv)
     unsigned bits = (unsigned)pz_atoi(argv[2]);
     int runs = pz_atoi(argv[3]);
     int thr = argc > 4 ? pz_atoi(argv[4]) : 1;
-    kang_try_opts o = {argc > 5 ? (unsigned)pz_atoi(argv[5]) : 0, argc > 6 ? (unsigned)pz_atoi(argv[6]) : 0, argc > 5, 0};
+    kang_try_opts o = {argc > 5 ? (unsigned)pz_atoi(argv[5]) : 0, argc > 6 ? (unsigned)pz_atoi(argv[6]) : 0, argc > 5};
     if (o.R && (o.R < 2 || o.R > KANG_R || (o.R & (o.R - 1)))) pz_die("kstat: R must be a power of 2 between 2 and %d", KANG_R);
     if (o.dp > 40) pz_die("kstat: DP must be at most 40");
     if (bits < 4 || bits > 64 || runs < 1 || runs > 1000000 || thr < 1 || thr > MAX_WORKERS - 16)
@@ -363,9 +359,7 @@ int kangaroo_stats(int argc, char **argv)
     }
     if (n == 0) { free(v); printf("W = 2^%u: none of the %d runs succeeded\n", bits, runs); return 1; }
     qsort(v, (size_t)n, sizeof(double), cmp_double);
-    const char *se = getenv("PZ_KANG_SCHEMA");
-    printf("kangaroo cost over %d run%s on W = 2^%u (schema %s, %d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits,
-           se && se[0] >= '1' && se[0] <= '3' && !se[1] ? se : "automatic", thr, thr == 1 ? "" : "s");
+    printf("kangaroo cost over %d run%s on W = 2^%u (%d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits, thr, thr == 1 ? "" : "s");
     pz_prop_line("mean", "%.3f", sum / n);
     pz_prop_line("median", "%.3f", v[n / 2]);
     pz_prop_line("90th percentile", "%.3f", v[n * 9 / 10]);
@@ -513,10 +507,8 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
             FILE *f = fopen(path, "rb");
             const bool got = f && fread(hdr, 1, 6, f) == 6;
             if (f) fclose(f);
-            const int fs = !got ? 0 : !memcmp(hdr, "PZDP2\n", 6) ? 1 : !memcmp(hdr, "PZDP3\n", 6) ? 2 : !memcmp(hdr, "PZDP4\n", 6) ? 3 : 0;
-            if (fs && fs != ks->schema)
-                say_wrapped("  %s: log of kangaroo schema %d, but this campaign uses schema %d, and the points of two schemas never meet. "
-                            "All computers must use the same schema: set PZ_KANG_SCHEMA=%d before starting the campaign on the new computer\n", path, fs, ks->schema, ks->schema);
+            if (got && !memcmp(hdr, "PZDP", 4) && memcmp(hdr, "PZDP4\n", 6) != 0)
+                say_wrapped("  %s: log of an older layout of the kangaroo (versions up to 1.9.0, small intervals): its points cannot be combined with those of this version\n", path);
             else
                 say_wrapped("  %s: not the log of this campaign: the range or the public key differ, or it comes from an earlier version (open it with 'hunt' first)\n", path);
             bad++;

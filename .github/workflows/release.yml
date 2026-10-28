@@ -168,7 +168,7 @@ jobs:
           ls
           ./pzsolve.exe version
           ./pzsolve.exe selftest
-          ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --no-progress -q --no-gpu
+          ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --ui log -q --no-gpu
           grep -qi d2c55 campaigns/ci20/FOUND.txt
 
   release:

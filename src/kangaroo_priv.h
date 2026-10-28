@@ -2,30 +2,18 @@
 /* kangaroo_priv.h - internals of the symmetric Gaudry-Schost kangaroo shared
  * by the CPU workers, the GPU workers and the self-test.
  *
- * Algorithm (see docs/en/ALGORITHMS.md, section 4.1):
- *   Exponents are relative to base = start - S (S = W/32, or less if the interval starts lower), so the unknown x = key -
- *   base lies in [S, S + W). Walkers move on equivalence classes {P, -P} (canonical representative = even y). A third of
- *   them are tame, starting at t*G with t in [0, W/32); the others are wild, starting at (-x + w)*G with w even in
- *   [0, W + W/16): their classes fold around 0 and the wild points on either side of it meet each other, which is where
- *   most solutions come from (the layout of the "SOTA" method of RCKangaroo, measured 1.15-1.18 sqrt(W) against 1.26-1.28
- *   of our earlier interval-centred Gaudry-Schost). Jumps are even, so wild walkers keep the parity of x and every
- *   wild-wild collision gives an even difference. Every walker carries its exact exponent d and a sign sigma, so ANY two
- *   distinct-kind distinguished points on the same class reveal x:
- *       tame d_t   , wild(sigma=+1) d_w :  x = d_t - d_w
- *       tame d_t   , wild(sigma=-1) d_w :  x = d_w - d_t
- *       wild(+1) d1, wild(-1) d2        :  x = (d2 - d1) / 2
+ * Algorithm (see docs/en/ALGORITHMS.md, sections 4.1, 8.8 and 8.10):
+ *   Exponents are relative to base = start: the unknown x = key - base lies in [0, W). Walkers move on equivalence classes
+ *   {P, -P} (canonical representative = even y). Every walker is E = c*x + u with c = 0 (tame), 1 (wild on Q) or 3 (wild on 3Q),
+ *   its start u in a fixed residue class mod 12 and every jump a multiple of 12, so the residue of a walker never changes. The
+ *   species (c, residue, zone, share: kang_species) are chosen so that the pairs that can meet are the ones whose equation
+ *   (c1 - c2) x = u2 - u1 has a whole solution for many x. Every walker carries its exact exponent d and a sign sigma, so a
+ *   collision of E1 = s1 c1 x + d1 and E2 = s2 c2 x + d2 (s = sign of the walker) gives (s1 c1 - s2 c2) x = d2 - d1: ANY two
+ *   distinct-kind distinguished points on the same class reveal x.
  *
- * That is the layout of schema 1, kept by the campaigns started with it (1.6.0-1.7.7). New campaigns use schema 2
- * (docs/en/ALGORITHMS.md, section 8.8): base = start, x in [0, W); every walker is E = c*x + u with c = 0 (tame), 1 (wild on Q) or 3
- * (wild on 3Q), its start u in a fixed residue class mod 12 and every jump a multiple of 12, so the residue of a walker
- * never changes. The species (c, residue, zone, share: kang_species) are chosen so that the pairs that can meet are the
- * ones whose equation (c1 - c2) x = u2 - u1 has a whole solution for many x: measured 1.04-1.09 sqrt(W) against
- * 1.15-1.19 of schema 1 in the same model. A collision of E1 = s1 c1 x + d1 and E2 = s2 c2 x + d2 (s = sign of the
- * walker) gives (s1 c1 - s2 c2) x = d2 - d1, which covers every case of both schemas.
- *
- * Schema 3 (8.10, new campaigns from 1.7.9) is schema 2 with every start zone split into bands with their own shares and a
- * mean jump of W^(3/4)/16 instead of 12 sqrt(W): without drift a walker stays within about sqrt(n) jumps of its start, and
- * with long walks short jumps leave too few pairs of walks that can cross (puzzle 135 on one machine: 1.35 instead of 1.02). */
+ *   Every start zone is split into bands with their own shares, and the mean jump is W^(3/4)/16: without drift a walker stays
+ *   within about sqrt(n) jumps of its start, and with long walks short jumps leave too few pairs of walks that can cross
+ *   (puzzle 135 on one machine: 1.35 instead of 1.02). */
 #ifndef PZ_KANGAROO_PRIV_H
 #define PZ_KANGAROO_PRIV_H
 
@@ -37,8 +25,8 @@
 #define KANG_NESC 16             /* escape jumps, after the R regular ones: used only to leave a fruitless cycle */
 #define KANG_CK_PERIOD 64        /* steps between the cycle checkpoints (detects cycles up to ~31 steps) */
 #define KANG_NOTAG 0xFFFFFFFFu   /* "no tag yet" */
-#define KANG_JUMP_MEAN 12.0L     /* mean jump, in units of sqrt(W) (schemas 1 and 2) */
-#define KANG_JUMP_DIV 16.0L      /* schema 3: mean jump W^(3/4) / KANG_JUMP_DIV */
+#define KANG_JUMP_DIV 16.0L      /* mean jump W^(3/4) / KANG_JUMP_DIV */
+#define KANG_KSHIFT 3            /* bits of the kind code at the bottom of tagk */
 #define KANG_K_THREAD_MAX 4096   /* kangaroos per CPU thread: one field inversion per round of the herd (measured optimum) */
 
 /* signed 192-bit integer (two's complement) */
@@ -90,18 +78,18 @@ static inline i192 i192_from_signed(bool neg, const pz_u256 *mag)
     return r;
 }
 
-/* distinguished-point record: 32 bytes. tagk = (x.n[2] & ~3) | kind (schema 1), (x.n[2] & ~7) | kind (schema 2). The
- * steps always write the codes of schema 1; kang_dp_recode turns them into those of schema 2. */
+/* distinguished-point record: 32 bytes. tagk = (x.n[2] & ~7) | kind. The steps write the codes tame / wild with its sign (0 to 2);
+ * kang_dp_recode turns them into the codes of the species (0 to 4). */
 typedef struct { u64 tagk; i192 d; } dp_rec;
 #define KIND_TAME 0
 #define KIND_WILD_P 1            /* wild, sigma = +1 */
 #define KIND_WILD_M 2            /* wild, sigma = -1 */
-#define KIND_WILD3_P 3           /* wild on 3Q, sigma = +1 (schema 2) */
-#define KIND_WILD3_M 4           /* wild on 3Q, sigma = -1 (schema 2) */
-#define KANG_MOD 12              /* schema 2: jumps are multiples of it, every walker keeps its start residue */
+#define KIND_WILD3_P 3           /* wild on 3Q, sigma = +1 */
+#define KIND_WILD3_M 4           /* wild on 3Q, sigma = -1 */
+#define KANG_MOD 12              /* jumps are multiples of it, every walker keeps its start residue */
 
-/* A species of walkers of schemas 2 and 3: E = coef*x + u, u = res (mod KANG_MOD) uniform in [lo, hi] thousandths of W,
- * share w millionths of the herd (schema 3 splits each zone into bands with their own shares). */
+/* A species of walkers: E = coef*x + u, u = res (mod KANG_MOD) uniform in [lo, hi] thousandths of W,
+ * share w millionths of the herd (each zone is split into bands with their own shares). */
 typedef struct { u8 coef, res; int16_t lo, hi; uint32_t w; } kang_species;
 
 typedef struct {
@@ -117,15 +105,11 @@ typedef struct {
 typedef struct kang_state {
     run_ctx *r;
     pz_u256 W;                      /* interval width */
-    int schema;                  /* layout of the walkers (see the top of this file): 1 or 2 */
-    unsigned kshift;             /* bits of the kind code at the bottom of tagk: 2 (schema 1) or 3 */
     long double c_mean;          /* expected cost in units of sqrt(W) */
     char jump_id[9];             /* first 4 bytes of the SHA-256 of the jump table, in hex: equal on all computers of a campaign */
     pz_u256 base;                   /* key = base + x */
     pz_ge Qp;                       /* pubkey - base*G */
-    pz_ge Q3;                       /* 3*Qp (schema 2) */
-    pz_u256 tame_w, wild_w;         /* schema 1, start distances: tame in [0, tame_w), wild even in [0, wild_w) */
-    double tame_frac;
+    pz_ge Q3;                       /* 3*Qp */
     long double sqrtW;
     kang_params_t P;
     int K_thread;                /* kangaroos per CPU thread */
@@ -134,7 +118,7 @@ typedef struct kang_state {
     dp_rec *tab;
     u64 cap, mask;
     u64 count;
-    u64 thin_mask;               /* only DPs whose (tag>>kshift)&thin_mask == 0 are stored once the table is full */
+    u64 thin_mask;               /* only DPs whose (tag>>KANG_KSHIFT)&thin_mask == 0 are stored once the table is full */
     unsigned thin_level;
     pthread_mutex_t mu;
     /* append-only log for resume */
@@ -159,8 +143,8 @@ typedef struct kang_worker {
     int K;
     pz_fe *x, *y;
     i192 *d;
-    u8 *kind;                    /* 0 tame, 1 wild (on 3Q in schema 2: 3; the steps only test kind != 0) */
-    u8 *spec;                    /* schemas 2 and 3: species of each walker (index in the table of kangaroo.c) */
+    u8 *kind;                    /* 0 tame, 1 wild (wild on 3Q: 3; the steps only test kind != 0) */
+    u8 *spec;                    /* species of each walker (index in the table of kangaroo.c) */
     int8_t *sigma;
     u32 *prev, *prev2;           /* tags of the points one and two steps back */
     u64 *lastdp;                 /* value of `round` at the last distinguished point (or restart) of each walker */
@@ -230,11 +214,10 @@ static inline void kang_dp_reserve(kang_worker *w)
     w->dpidx = pz_xrealloc(w->dpidx, sizeof(int) * (size_t)w->dpcap);
 }
 
-/* Schema 2: the kind code of a distinguished point of walker i, written by a step (tame / wild with its sign, the codes of
- * schema 1), becomes the code of its species (three bits). */
+/* The kind code of a distinguished point of walker i, written by a step (tame / wild with its sign), becomes the code of its
+ * species (three bits). */
 static inline void kang_dp_recode(const kang_state *ks, const kang_worker *w, dp_rec *r, int i)
 {
-    if (ks->schema < 2) return;
     unsigned k = (unsigned)(r->tagk & 3);
     if (k && w->kind[i] == 3) k += 2;
     r->tagk = (r->tagk & ~7ULL) | k;

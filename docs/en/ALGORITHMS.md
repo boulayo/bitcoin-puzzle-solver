@@ -7,7 +7,7 @@ Sections 1 to 7 cover the problem, the linear search, the seed-based visiting or
 successive schemas), the GPU kernels, rough running times and references. Section 8 is the theory: what is proven in the literature,
 what was measured, what is only modelled, and how much improvement is still possible. Sections 9 to 11 cover the BSGS mode, the SIMD
 lane arithmetic and the time-estimation model. Numbers are labeled as measured on the real curve, measured in a model
-(`tools/ksim.c`), or estimated.
+(`tools/research/ksim.c`), or estimated.
 
 ## Contents
 
@@ -123,19 +123,18 @@ end) of the interval, and makes each campaign independent of the others.
 
 ## 4. The interval kangaroo (public key known)
 
-**Which schema the program uses.** The kangaroo exists in three schemas. They share the step and the equivalence classes and differ in the
-species of walkers, where they start, the length of the jumps and how a pair of distinguished points is resolved. **New campaigns use schema 3**
-(from 1.7.9: the species and residues of schema 2, long jumps of mean `W^¾/16` and start zones split into bands; sections 8.8 and 8.10).
-Older campaigns keep the schema they started with, because changing the jumps would make the distinguished points already found useless: schema 2
-for campaigns started with 1.7.8, schema 1 for those started with 1.6.0 to 1.7.7. This section describes schema 1, which is the simplest and the base of
-the later ones: 4.1 to 4.6 (setup, parameters, measurements) refer to it, while 8.8 and 8.10 give the changes of schemas 2 and 3 and their
-measured cost (≈ 1.10 and ≈ 1.06 against 1.15·√W).
+**Which schema the program uses.** The kangaroo went through three schemas during development. They share the step and the equivalence classes
+and differ in the species of walkers, where they start, the length of the jumps and how a pair of distinguished points is resolved. **The program
+implements schema 3** (the species and residues of schema 2, long jumps of mean `W^¾/16` and start zones split into bands; sections 8.8 and 8.10).
+Schemas 1 and 2 were used by development builds (1.6.0 to 1.7.8) and, from 1.8.0 to 1.9.0, schema 1 for campaigns with fewer than 256 kangaroos;
+version 1.9.1 removed them together with their log formats (a `dp.bin` written by them is kept aside and not used). This section describes schema 1, which is the simplest and the base of the later
+ones: 4.1 to 4.6 (setup, parameters, measurements) refer to it, while 8.8 and 8.10 give the changes of schemas 2 and 3 and their measured cost
+(≈ 1.10 and ≈ 1.06 against 1.15·√W).
 
 ### 4.1 Setup (from 1.6.0)
 
-This subsection describes **schema 1**, used by the campaigns started from 1.6.0 to 1.7.7 (which keep it). New campaigns
-from 1.7.8 use schema 2: same classes, same step, but three species of walkers with fixed residues mod 12 (section 8.8), about 4% fewer
-steps; from 1.7.9 they use schema 3 (section 8.10).
+This subsection describes **schema 1**, the layout of the development builds 1.6.0 to 1.7.7. Schema 2 has the same classes and the same step but
+three species of walkers with fixed residues mod 12 (section 8.8), about 4% fewer steps; schema 3, the one the program uses, is in section 8.10.
 
 Let `S = W/32` (or less, if the interval starts below `W/32`), `base = lo − S` and `Q' = Q − base·G`. The key is
 `k = base + x` with `x ∈ [S, S + W)`: the whole interval lies on one side of the point `0` around which the classes fold.
@@ -192,7 +191,7 @@ of the negation map in the Pollard rho method*, 2010):
   two steps earlier, the next jump `(j+1) mod R` is used: the rule depends only on the history `(P_{n−1}, P_n)`, so two
   walkers that merge keep merging.
 * **Cycles of length 4, 6, …**: even after removing those of length 2 they remain, with probability `≈ (R−1)/(4R³) ≈ 1/(4R²)` per step,
-  that is **one every ≈ 2.6·10⁵ steps** with `R = 256` (measured: 3·10⁵ in the model of `tools/ksim.c`, almost all of length 4).
+  that is **one every ≈ 2.6·10⁵ steps** with `R = 256` (measured: 3·10⁵ in the model of `tools/research/ksim.c`, almost all of length 4).
   **Up to 1.5.0 the only defence was a restart after `24·2^dp_bits` steps without a DP**: fine for small intervals, but
   with `dp_bits = 45` (puzzle 140) that threshold is never reached, and every walker stayed trapped after a few
   minutes (GPU: ~1700 steps/s per walker). The displayed speed stayed high, but from then on the search could no longer
@@ -259,7 +258,7 @@ The distribution has a long tail (it is of the "birthday" type: about `1 − exp
   it therefore beats the kangaroo (1.15·√W)**. It has been implemented since 1.1.0 (`--mode bsgs`, section 9); the table
   takes `≈ 6.2·√W` bytes (25 GiB at `W = 2^64`, 98 GiB at `2^68`), so it is usable only for medium-small intervals.
 * **4-animal kangaroo** (≈ 1.715·√W) and Gaudry–Schost without symmetry (≈ 1.66·√W): superseded by the symmetric variant.
-* **Parameters of the centered variant (up to 1.5.0, `tools/ksim.c`, 8000 runs per point, W = 2^28, error ≈ ±0.007)**: a grid of 45
+* **Parameters of the centered variant (up to 1.5.0, `tools/research/ksim.c`, 8000 runs per point, W = 2^28, error ≈ ±0.007)**: a grid of 45
   combinations of wild zone `B ∈ {1/16…1/4}·W`, tame fraction `{0.4, 0.5, 0.6}` and mean jump `{0.3, 0.5, 0.8}`, plus 4 widths of the
   tame zone. The point in use (`A = W/2`, `B = W/8`, half tame, jump 0.5) is the best (1.292·√W in the model); the optimum is flat and
   far-off choices cost up to 7% (tame on `0.75·W`: +17%). No room *in that family*: the gain came from changing the layout (section 4.2). In the model, 3000–4000 runs per point (error ≈ ±0.01), same number of
@@ -276,10 +275,8 @@ The distribution has a long tail (it is of the "birthday" type: about `1 − exp
 Every new DP is appended to `dp.bin` (32 bytes + a header with a fingerprint of the interval and the key). On resume the table is
 rebuilt and the walkers restart from new points (a different random stream for each session); the old trails
 remain useful because each of their later DPs is already in the table. A file from a different campaign is recognized and refused.
-From 1.7.8 new campaigns used schema 2 and the log format 3 (`"PZDP3"`, section 8.8); from 1.7.9 they use schema 3 and the format `"PZDP4"`
-(section 8.10); campaigns with a log in format 1 or 2 stay on schema 1. Since 1.6.0 the base has changed (section 4.1): a `dp.bin` from 1.5.0 or earlier is converted at the first
-resume (the points stay the same; the distances of the wild kangaroos are rewritten relative to the new base, `d' = d − σ·(c − b)`), with a
-self-test that checks it on the curve.
+The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` of the older layouts are no longer read: `hunt` keeps such a `dp.bin` as
+`dp.bin.vN` and goes on with a new log, `merge` refuses it (the old versions converted them on the fly; 1.9.1 dropped this together with schemas 1 and 2).
 
 ## 5. GPU (CUDA and OpenCL)
 
@@ -387,7 +384,7 @@ but the time grows as `2^(n/2)` and `2^n`.
   <https://eprint.iacr.org/2010/616>.
 * P. van Oorschot, M. Wiener, *Parallel collision search with cryptanalytic applications* (J. Cryptology 1999): distinguished points.
 * P. Gaudry, E. Schost, *A low-memory parallel version of Matsuo, Chao, and Tsujii's algorithm* (ANTS 2004).
-* The abstract simulator used to tune the parameters is in `tools/ksim.c`.
+* The abstract simulator used to tune the parameters is in `tools/research/ksim.c`.
 ## 8. Theoretical limits: how much can still be improved?
 
 This section separates what is **known in the literature** from what is **the author's own reasoning** (marked as such).
@@ -598,8 +595,8 @@ function:
   with a carry chain already costs ≈ 3.9 instructions per limb product. Discarded.
 * **One-level Karatsuba: tried (1.7.7).** 3 products 4×4 instead of 1 of 8×8 (48 limb products instead of 64), in both forms
   (additive, with 129-bit sums fixed up with masks; subtractive, with `|a1 − a0|·|b1 − b0|` and a sign), checked by program
-  with 2 million products (`tools/sass/kara_check.c`) and counted with NVRTC 12.0, `ptxas` and `nvdisasm` for sm_86
-  (`tools/sass_count.py`, kernels in `tools/sass/`). The test bench costs 96 load and store instructions, subtracted from the figures:
+  with 2 million products (`tools/research/sass/kara_check.c`) and counted with NVRTC 12.0, `ptxas` and `nvdisasm` for sm_86
+  (`tools/research/sass_count.py`, kernels in `tools/research/sass/`). The test bench costs 96 load and store instructions, subtracted from the figures:
 
   | 8×8-limb product, without reduction | instructions |
   |---|---|
@@ -631,7 +628,7 @@ The only lever left on the compute side is therefore the share of multiplication
 ### 8.7 How low can it go: counting pairs with integer values (1.7.7)
 
 Section 8.1 gave a counting bound of `0.67·√W`, obtained by assuming that **every** pair of elements certifies two values of `x`.
-Redone with more care (`tools/bounds.py` repeats the calculations):
+Redone with more care (`tools/research/bounds.py` repeats the calculations):
 
 * The elements are classes `{E, −E}` with `E = b·x + a` (`b = 0` tame, `b = 1` wild, `b = 2, 3, …` walkers on `2x`, `3x`, …). Two elements
   collide in two ways, `E₁ = E₂` and `E₁ = −E₂`, and give `x = (a₂ − a₁)/(b₁ − b₂)` and `x = −(a₁ + a₂)/(b₁ + b₂)`: each is an integer only with
@@ -650,7 +647,7 @@ Redone with more care (`tools/bounds.py` repeats the calculations):
   situation does not exist, and the optimum of the model is `0.8165`. It is not a proven lower bound for every algorithm (it remains `Ω(√W)` with unknown
   constant), but it is the best that this family of constructions (tame and wild `±1`, also with more species) can give.
 
-**Where we are.** `tools/ksim.c` (abstract model, `rck=1 tf=0.3333 jabs=12`, `W = 2^34`, 1500 trials per point, error ≈ ±0.02; the cost of
+**Where we are.** `tools/research/ksim.c` (abstract model, `rck=1 tf=0.3333 jabs=12`, `W = 2^34`, 1500 trials per point, error ≈ ±0.02; the cost of
 placing the walkers is not counted, being negligible for `K ≪ √W`) measures the mean cost in units of `√W` as the walkers `K` and the bits of the distinguished points vary:
 
 | walkers `K` | `dp = 0` (every point is distinguished) | `dp = 2` | `dp = 4` |
@@ -695,7 +692,7 @@ for every `x`, there are enough of them. This is the scheme of the new campaigns
   for `E = −E'`). When the condition holds, the exponents of the two groups lie on the same lattice of step 12 and meet 12 times
   more often; when it does not hold they never meet. The factor of the pair goes from `1/|b − b'|` to `12/|b − b'|` on the good residues of `x`
   and to 0 on the others: with the right species every residue of `x` receives more useful pairs than before.
-* `tools/kspecies.py` computes the exact coverage (geometry of the zones, the two ways of colliding, the Jensen penalty) and searches for the species:
+* `tools/research/kspecies.py` computes the exact coverage (geometry of the zones, the two ways of colliding, the Jensen penalty) and searches for the species:
   first it enumerates the assignments of residue classes to species, then it optimizes the shares. The best one for `b ∈ {0, 1, 3}` (tame walkers,
   wild on `Q`, wild on `3Q`):
 
@@ -708,7 +705,7 @@ for every `x`, there are enough of them. This is the scheme of the new campaigns
   Cost in the random-coverage model: **1.045·√W**, against 1.085 for the optimum without residues (the 1.6.0 layout). Other families
   (`b ∈ {0, 1, 3, 5}` mod 60, `{0, 1, 3, 9}` mod 36) give the same value in the ideal model without geometry (0.991); coefficients 2, 5, 9
   do not help. The value 0.991 is the floor of this idea; the zones overlapping non-uniformly bring it to 1.045.
-* **Walk model** (`tools/ksim.c design=tools/kang_schema2.txt jabs=12`, jumps in `[2/3, 4/3]` of `12·√W` rounded to multiples of
+* **Walk model** (`tools/research/ksim.c design=tools/research/kang_schema2.txt jabs=12`, jumps in `[2/3, 4/3]` of `12·√W` rounded to multiples of
   12; `W = 2^36`, `dp = 0`, 5000 trials per point, error ≈ ±0.008):
 
 | walkers `K` | schema 1 (1.6.0–1.7.7) | schema 2 | difference |
@@ -720,9 +717,11 @@ for every `x`, there are enough of them. This is the scheme of the new campaigns
   With many walkers and a negligible delay of the distinguished points (the regime of the open puzzles, 8.7, *but see the correction in 8.10*) schema 2 reaches its
   theoretical value 1.045 just as schema 1 reached its 1.085–1.09: **about 4 % fewer steps**. With few walkers and dense distinguished points
   the advantage shrinks (`K = 256`, `dp = 2`, `W = 2^32`: 1.127 for schema 2 against 1.161 for schema 1) and with 64 walkers it reverses (`W = 2^28`, `dp = 2`: 1.276
-  against 1.214): with few walkers per species the coverage of each residue of `x` is too irregular. For this reason a new campaign uses
-  schema 2 only with at least 256 walkers (always, on the open puzzles).
-* **On the real curve** (`pzsolve kstat`, 1 thread, hence `K ≈ √W/256` and automatic `dp`; `PZ_KANG_SCHEMA=1|2` chooses the schema):
+  against 1.214): with few walkers per species the coverage of each residue of `x` is too irregular. The development builds used schema 2
+  only with at least 256 walkers (always, on the open puzzles); 1.9.1 uses schema 3 for every campaign, which with few walkers costs more than
+  schema 1 did (kstat, 1 thread: W = 2^24 1.54 against 1.40; W = 2^28 about 1.2 for both, with a longer tail) and the same from 2^32.
+* **On the real curve** (`pzsolve kstat`, 1 thread, hence `K ≈ √W/256` and automatic `dp`; measured with the development builds, where an
+  environment variable chose the schema):
 
 | W | walkers | trials | schema 1 | schema 2 |
 |---|---|---|---|---|
@@ -741,10 +740,8 @@ for every `x`, there are enough of them. This is the scheme of the new campaigns
   `c ∈ {0, +1, −1, +3, −3}`, exact division by `|c₁ − c₂| ∈ {1, 2, 3, 4, 6}`. The step still writes the usual 2-bit code (tame or
   wild with its sign) and the host turns it into the 3-bit code of the species, so the GPU kernel did not change. The abscissa label in the table
   goes from 62 to 61 bits (false positives are verified anyway).
-* **Compatibility.** The schema is decided when the campaign is created: a `dp.bin` in format 1 or 2 (campaigns of 1.7.7 and earlier) keeps it
-  on schema 1, which stays identical; a new campaign uses schema 2 and log format 3 (`"PZDP3"`, base = start,
-  fingerprint with `"PZDPLOG3"`). The points of the two schemas do not meet: `merge` refuses a log of the other schema and explains why, and to
-  add a computer to a schema 1 campaign it is started with `PZ_KANG_SCHEMA=1`.
+* **Compatibility.** The points of two schemas never meet, so each schema had its own log format (schema 2: `"PZDP3"`, base = start, fingerprint
+  with `"PZDPLOG3"`). Since 1.9.1 only the format of schema 3 is read.
 
 **What remains.** Between 1.045 and the structured coverage 0.8165 there is still 22 %, which without memory `∝ √W` does not seem recoverable with
 random walks; the floor of the residue idea (0.991, without geometry losses) indicates that at most 5 % would be left to gain from better zones.
@@ -774,7 +771,7 @@ adds `n·M` useful pairs to the `n²` of the walks). With 64 GiB, `M ≈ 2^31` a
 **2. Precomputation (Bernstein–Lange).** Many "tame" walks that do not depend on the key are started, each up to a distinguished point, and a table
 keeps the `T` distinguished points reached by the largest number of walks. Then, for a key, it suffices to walk from
 `Q + r·G` to a distinguished point and hope that it is in the table. The table is valid for **every** interval of the same width (just translate the
-public key). Measurements in the abstract model (`tools/blsim.c`, kangaroo without `±` classes, 200–400 keys per row):
+public key). Measurements in the abstract model (`tools/research/blsim.c`, kangaroo without `±` classes, 200–400 keys per row):
 
 | W | T | precomputation walks | precomputation | online search | product |
 |---|---|---|---|---|---|
@@ -833,7 +830,7 @@ With small `P` the coverage depends on a few pairs, which meet many times, wasti
 (`W = 2^134`) with one laptop GPU and the CPU (`K ≈ 2^19.4`) and the jump of `12·√W` of schemas 1 and 2: **`P ≈ 0.6`**. RCKangaroo does not have the problem
 because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1.5`).
 
-**Measurements.** Simulator (`tools/ksim.c`, which now counts merges and restarts; `rsmin=N` restarts a walker at the first distinguished point
+**Measurements.** Simulator (`tools/research/ksim.c`, which now counts merges and restarts; `rsmin=N` restarts a walker at the first distinguished point
 after `N` steps) and real curve (`PZ_TEST_KTHREAD` and `PZ_TEST_JUMP` impose walkers per thread and mean jump, for tests only):
 
 | case | `P` | cost |
@@ -859,8 +856,8 @@ after `N` steps) and real curve (`PZ_TEST_KTHREAD` and `PZ_TEST_JUMP` impose wal
   explored region is `W/(16·√K)`, a fraction `1/(16·√K)` of `W`, much smaller than the start zones. On the test intervals (`W ≤ 2^44`) the jump
   goes from 16·√W (at `2^32`) to 128·√W (at `2^44`), longer than the 12·√W of before.
 * **Banded zones**: the same species and the same residues as schema 2, with every zone split into bands (tame: 2 bands of `0.02·W`; wild on `Q`: bands of
-  `0.1·W`; on `3Q`: bands of `0.2·W`) and a share per band, optimized in the exact coverage model (`tools/kbands.py`; in the
-  program `src/kang_spec3.inc`, generated from `tools/kang_schema3.txt` with `tools/kspec_table.py`). The density of the wild walkers on `Q` concentrates
+  `0.1·W`; on `3Q`: bands of `0.2·W`) and a share per band, optimized in the exact coverage model (`tools/research/kbands.py`; in the
+  program `src/kang_spec3.inc`, generated from `tools/research/kang_schema3.txt` with `tools/research/kspec_table.py`). The density of the wild walkers on `Q` concentrates
   near the two ends of the zone, that of those on `3Q` in the middle. Coverage model: 1.0455 to 1.0344 (1.0304 with finer bands, not adopted: in the
   walks no difference). Walk model, `W = 2^36`, 4096 walkers, `dp = 0`, 5000 trials, two seeds: **1.015 and 1.021 against 1.044 and
   1.053** for schema 2. With 64 walkers the bands do not help (1.063 against 1.054).

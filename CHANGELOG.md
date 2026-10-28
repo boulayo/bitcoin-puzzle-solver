@@ -3,6 +3,25 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
 
+## [1.9.1] — 2026-10-28
+
+### Removed
+- The older kangaroo layouts (schemas 1 and 2) of the development builds, their log formats (`PZDP1` to `PZDP3`), the conversion of old logs and the
+  variable `PZ_KANG_SCHEMA`. Every campaign now uses schema 3, which versions 1.8.0 to 1.9.0 already used for every campaign with at least 256
+  kangaroos (all the open puzzles); campaigns started with them in that case resume unchanged (same jump table, same `dp.bin`).
+- **Upgrade note.** Versions 1.8.0 to 1.9.0 used schema 1 for a new kangaroo campaign with fewer than 256 kangaroos, that is on small intervals
+  (below about 2^28 to 2^32 keys, depending on the number of threads) or with `-m kangaroo` on a small range. Such a campaign has a `dp.bin` starting
+  with `PZDP2`, whose points 1.9.1 cannot use: `hunt` keeps the file as `dp.bin.v2`, says so and goes on with a new log (the keys already scanned
+  by that campaign are scanned again), and `merge` refuses the file with an explanation.
+- Cost on small intervals: schema 3 takes more steps than schema 1 did when there are few kangaroos (`kstat`, 1 thread: W = 2^24, 1.54 instead of 1.40
+  times √W; at 2^28 the means are about equal, 1.2, with a longer tail), and the same from 2^32 on.
+- The option `--no-progress`: use `--ui log`.
+
+### Changed
+- The Italian documentation is reduced to the README and the usage guide (the translations of the algorithms, architecture, data, release and tools
+  documents were behind the English ones); they point to the English documents.
+- The simulators and measurement scripts behind `docs/en/ALGORITHMS.md` moved to `tools/research/`; `tools/export_public.sh` is no longer in the repository.
+
 ## [1.9.0] — 2026-10-24
 
 ### Added
@@ -65,5 +84,4 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.
   use `long double` and only work consistently on x86-64 (the program warns on other architectures).
 - License: `AGPL-3.0-or-later`, with a commercial license available (see the README).
 
-Earlier version numbers (1.0.0 to 1.7.9) were development builds that were never released. Their history, in Italian, is in
-[`docs/it/CHANGELOG.md`](docs/it/CHANGELOG.md).
+Earlier version numbers (1.0.0 to 1.7.9) were development builds that were never released.

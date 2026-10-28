@@ -76,7 +76,6 @@ typedef struct run_ctx {
                                       * running flat out all the time (0 = off). Set by run_limit_setup */
     prio_mode prio_gpu;              /* --prio-gpu */
     bool gpu_boost;                  /* the threads serving the GPUs run above the CPU workers (from --prio-gpu or the profile) */
-    int kang_schema;                 /* kangaroo: layout of the walkers to use (0 = the campaign's own, see kang_create) */
     u32 node;                        /* kangaroo: this computer's number in a campaign shared by several (--node): different starting points */
     char gpu_filter[128];
     u64 mem_limit;                   /* bytes for DP tables / the BSGS table (0 = automatic) */

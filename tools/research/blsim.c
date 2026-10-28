@@ -8,7 +8,7 @@
  * that misses starts again from a new r.
  * Walk: classic kangaroo (positive jumps, mean W/(4L)), or with negation map (sym=1: classes {E, -E}, random sign).
  *
- *   gcc -O2 -o blsim tools/blsim.c -lm && ./blsim bits=36 T=4096 beta=8 targets=400
+ *   gcc -O2 -o blsim tools/research/blsim.c -lm && ./blsim bits=36 T=4096 beta=8 targets=400
  * prints precomputation and online steps, also in units of sqrt(W*T) and sqrt(W/T). */
 #include <stdio.h>
 #include <stdlib.h>

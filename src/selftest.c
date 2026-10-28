@@ -326,8 +326,6 @@ int selftest_run(int argc, char **argv)
         CHECK(rc == 0);
         rc = kangaroo_selftest();
         CHECK(rc == 0);
-        rc = kang_log_selftest();
-        CHECK(rc == 0);
         rc = kang_merge_selftest();
         CHECK(rc == 0);
         rc = kang_log_fault_selftest();

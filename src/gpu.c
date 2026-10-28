@@ -1168,7 +1168,7 @@ static void pack_state(uint32_t *o, const kang_worker *w, int i)
     pack_fe(o, &w->x[i]);
     pack_fe(o + 8, &w->y[i]);
     for (int j = 0; j < 3; j++) { o[16 + 2 * j] = (uint32_t)w->d[i].w[j]; o[17 + 2 * j] = (uint32_t)(w->d[i].w[j] >> 32); }
-    o[22] = w->kind[i] != 0;           /* the kernel only tells tame from wild (the species of schema 2 stay on the host: kang_dp_recode) */
+    o[22] = w->kind[i] != 0;           /* the kernel only tells tame from wild (the species stay on the host: kang_dp_recode) */
     o[23] = w->sigma[i] < 0 ? 1u : 0u;
     o[24] = w->prev[i];
     o[25] = w->prev2[i];

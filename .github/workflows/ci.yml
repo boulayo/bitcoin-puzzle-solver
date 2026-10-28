@@ -66,7 +66,7 @@ jobs:
         run: build/pzsolve devices
       - name: Smoke test (find the key of puzzle 20)
         run: |
-          build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --no-progress -q --no-gpu
+          build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --ui log -q --no-gpu
           grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
       - name: Binary needs no glibc newer than 2.34
         run: |
@@ -150,7 +150,7 @@ jobs:
           ./pzsolve.exe selftest
       - name: Smoke test (find the key of puzzle 20)
         run: |
-          ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --no-progress -q --no-gpu
+          ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --ui log -q --no-gpu
           grep -qi d2c55 campaigns/ci20/FOUND.txt
 
   macos:
@@ -195,7 +195,7 @@ jobs:
         run: build/pzsolve selftest
       - name: Smoke test (find the key of puzzle 20)
         run: |
-          PZ_NO_OPENCL=1 build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --no-progress -q --no-gpu
+          PZ_NO_OPENCL=1 build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --ui log -q --no-gpu
           grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
       # Informational until the test sources build with Apple clang (tests/t_engine.c uses a GCC nested function) and without the
       # x86 engines on Apple Silicon (tests/t_bsgs.c calls bs_group_x86 unconditionally).

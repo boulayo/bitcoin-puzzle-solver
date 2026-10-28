@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* kara_check.c - host check of kara.h: the Karatsuba products equal the schoolbook one on random limbs and on the carry edge cases.
- *   gcc -O2 -o /tmp/kara_check tools/sass/kara_check.c && /tmp/kara_check */
+ *   gcc -O2 -o /tmp/kara_check tools/research/sass/kara_check.c && /tmp/kara_check */
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>

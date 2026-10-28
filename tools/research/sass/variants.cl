@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* variants.cl - kernels for tools/sass_count.py: the bare limb product and the whole field multiplication/square with the
+/* variants.cl - kernels for tools/research/sass_count.py: the bare limb product and the whole field multiplication/square with the
  * production reduction, in the forms of kara.h and chain.h, plus a kernel with the loads and stores alone (k_none) whose
- * instruction count is the overhead to subtract. Compile as: tools/sass_count.py ... tools/sass/kara.h tools/sass/chain.h tools/sass/variants.cl */
+ * instruction count is the overhead to subtract. Compile as: tools/research/sass_count.py ... tools/research/sass/kara.h tools/research/sass/chain.h tools/research/sass/variants.cl */
 #define LOAD2(a, b) for (int j = 0; j < 8; j++) { (a).v[j] = in[j * pz_n + i]; (b).v[j] = in[(8 + j) * pz_n + i]; }
 #define STORE(r) for (int j = 0; j < 8; j++) out[j * pz_n + i] = (r).v[j]
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Counts the SASS instructions (sm_86) that NVIDIA's compilers produce for kernels of the CUDA dialect of src/kernels.
 
-    tools/sass_count.py --nvrtc LIBNVRTC --ptxas PTXAS [--nvdisasm NVDISASM] [--hist KERNEL] [-DNAME ...] FILE...
+    tools/research/sass_count.py --nvrtc LIBNVRTC --ptxas PTXAS [--nvdisasm NVDISASM] [--hist KERNEL] [-DNAME ...] FILE...
 
 The sources are concatenated after pz_cuda.h and pz_common.cl (as tools/gen_ptx.py does), compiled to PTX with NVRTC
 (compute_52, -DPZ_FAST_FE), assembled with ptxas for sm_86, and the number of instructions of every kernel is the size of its
@@ -10,10 +10,10 @@ The sources are concatenated after pz_cuda.h and pz_common.cl (as tools/gen_ptx.
 nvdisasm lists every kernel of the file). The tools come from NVIDIA's pip wheels (nvidia-cuda-nvrtc-cu12, nvidia-cuda-nvcc-cu12:
 see tools/README.md) and the CUDA 12 repository package cuda-nvdisasm-12-0.
 
-Used for docs/en/ALGORITHMS.md section 8.6: tools/sass_count.py ... tools/sass/kara.h tools/sass/chain.h tools/sass/variants.cl"""
+Used for docs/en/ALGORITHMS.md section 8.6: tools/research/sass_count.py ... tools/research/sass/kara.h tools/research/sass/chain.h tools/research/sass/variants.cl"""
 import collections, ctypes, os, re, subprocess, sys, tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 KDIR = os.path.join(ROOT, 'src', 'kernels')
 
 

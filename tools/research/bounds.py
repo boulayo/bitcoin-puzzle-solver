@@ -11,7 +11,7 @@ Types: b = 0 tame, b = 1 wild, b = 2, 3, ... walkers on 2x, 3x, ...
   structured coverage (no overlaps, as in baby-step giant-step):  E = (2/3) / sqrt(c)       sqrt(W)
   random coverage (independent pairs, Poisson):                   E = (sqrt(pi)/2) / sqrt(c)  sqrt(W)
 
-Run: python3 tools/bounds.py     (needs numpy)"""
+Run: python3 tools/research/bounds.py     (needs numpy)"""
 import numpy as np
 
 

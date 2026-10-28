@@ -130,7 +130,6 @@ static void usage_hunt(FILE *f)
 "DISPLAY AND FILES\n"
 "      --ui U              auto | full (multi-line panel updated in place) | line (one line) | log (one line per minute, suited\n"
 "                          to files)   [auto: full on a terminal]\n"
-"      --no-progress       same as --ui log\n"
 "      --report-interval S seconds between panel updates [1]\n"
 "      --checkpoint-interval S   seconds between state saves [60]\n"
 "  -q, --quiet             fewer messages\n"
@@ -175,7 +174,7 @@ typedef struct {
     int threads, chunk_bits, dp_bits;
     double mem_gb;
     int report_interval, checkpoint_interval;
-    bool no_cpu, no_gpu, no_progress, quiet, verbose, want_new, want_resume, retune, no_tune, keep_awake;
+    bool no_cpu, no_gpu, quiet, verbose, want_new, want_resume, retune, no_tune, keep_awake;
     prio_mode prio_gpu;
     char part[PART_TEXT];
     int node, nfiles;
@@ -187,14 +186,14 @@ typedef struct {
     ui_mode ui;
 } opts_t;
 
-enum { O_GPUAPI = 996, O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_ISA, O_CHUNK, O_DP, O_MEM, O_REPORT, O_CKPT, O_NOPROG, O_NEW, O_RESUME, O_KEY, O_RETUNE, O_NOTUNE, O_AWAKE, O_NODE, O_PRIO, O_PART, O_LIMIT };
+enum { O_GPUAPI = 996, O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_ISA, O_CHUNK, O_DP, O_MEM, O_REPORT, O_CKPT, O_NEW, O_RESUME, O_KEY, O_RETUNE, O_NOTUNE, O_AWAKE, O_NODE, O_PRIO, O_PART, O_LIMIT };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"hash160", 1, 0, 'H'}, {"pubkey", 1, 0, 'k'},
     {"campaign", 1, 0, 'c'}, {"dir", 1, 0, 'd'}, {"seed", 1, 0, 's'}, {"mode", 1, 0, 'm'}, {"threads", 1, 0, 't'},
     {"no-cpu", 0, 0, O_NOCPU}, {"no-gpu", 0, 0, O_NOGPU}, {"gpu", 1, 0, O_GPU}, {"isa", 1, 0, O_ISA},
     {"chunk-bits", 1, 0, O_CHUNK}, {"dp-bits", 1, 0, O_DP}, {"mem", 1, 0, O_MEM}, {"report-interval", 1, 0, O_REPORT},
-    {"checkpoint-interval", 1, 0, O_CKPT}, {"no-progress", 0, 0, O_NOPROG}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
+    {"checkpoint-interval", 1, 0, O_CKPT}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
     {"new", 0, 0, O_NEW}, {"resume", 0, 0, O_RESUME}, {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN}, {"gpu-api", 1, 0, O_GPUAPI},
     {"retune", 0, 0, O_RETUNE}, {"no-tune", 0, 0, O_NOTUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE}, {"prio-gpu", 1, 0, O_PRIO},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
@@ -335,7 +334,6 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         case O_MEM: o->mem_gb = opt_positive_double("--mem", optarg); break;
         case O_REPORT: o->report_interval = (int)opt_int("--report-interval", optarg, 1, 86400); break;
         case O_CKPT: o->checkpoint_interval = (int)opt_int("--checkpoint-interval", optarg, 1, 86400); break;
-        case O_NOPROG: o->no_progress = true; break;
         case 'q': o->quiet = true; break;
         case 'v': o->verbose = true; break;
         case O_NEW: o->want_new = true; break;
@@ -731,7 +729,7 @@ static int cmd_hunt(int argc, char **argv)
     if (o.gpu[0]) parse_gpu_filter(r, o.gpu);
     if (o.report_interval > 0) r->report_interval = o.report_interval;
     if (o.checkpoint_interval > 0) r->checkpoint_interval = o.checkpoint_interval;
-    r->ui = (o.no_progress || o.quiet) ? UI_LOG : o.ui;
+    r->ui = o.quiet ? UI_LOG : o.ui;
     if (o.mem_gb > 0) r->mem_limit = (u64)(o.mem_gb * 1073741824.0);
     pz_strlcpy(r->table_path, o.table, sizeof r->table_path);
     if (o.dp_bits >= 0) r->cfg.dp_bits = (unsigned)o.dp_bits;

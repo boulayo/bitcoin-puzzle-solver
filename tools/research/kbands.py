@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Bands for the kangaroo species (docs/en/ALGORITHMS.md section 8.10): each starting zone is split into bands with a share of its own,
-optimized in the exact coverage model of tools/kspecies.py. The bands of scheme 3 (tools/kang_schema3.txt) come from:
+optimized in the exact coverage model of tools/research/kspecies.py. The bands of scheme 3 (tools/research/kang_schema3.txt) come from:
 
-    python3 tools/kbands.py '{"M":12,"W":384,"spec":[[0,[0,3,6,9],-0.08,0.08,8],[1,[3,7,11],-1.2,0.2,14],[3,[9],-3.4,0.4,19]],
+    python3 tools/research/kbands.py '{"M":12,"W":384,"spec":[[0,[0,3,6,9],-0.08,0.08,8],[1,[3,7,11],-1.2,0.2,14],[3,[9],-3.4,0.4,19]],
                               "init":[0.294,0.349,0.358],"design":"kang_schema3.txt"}'
 
 spec: [coefficient, allowed residues, start, end (in units of W), number of bands]; init: initial share per species; design: file for
-tools/ksim.c (design=) and for tools/kspec_table.py. Needs numpy; takes a few minutes.
+tools/research/ksim.c (design=) and for tools/research/kspec_table.py. Needs numpy; takes a few minutes.
 """
 import numpy as np, sys, json, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

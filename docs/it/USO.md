@@ -85,7 +85,6 @@ cerca lo stesso (con un avviso): utile solo come esercizio, dato che `2^160` chi
     --ui U              auto | full | line | log   (vedi sezione 6)
     --report-interval S secondi tra gli aggiornamenti del pannello [1]
     --checkpoint-interval S  secondi tra i salvataggi [60]
-    --no-progress       come --ui log
 -q / -v                 meno / più messaggi
     --new / --resume    fallisce se la campagna esiste / non esiste
 ```
@@ -190,7 +189,7 @@ Ctrl-C: ferma e salva i progressi; rilancia lo stesso comando per riprendere.
   taratura; la misura prende il posto del ricordo in circa 2 minuti. Finché la stima si assesta compare la riga «stima provvisoria».
   Con `--no-tune` la memoria non si usa né si aggiorna. `pzsolve doctor` elenca le velocità ricordate.
 * **Prob. di trovarla da ora**: probabilità di successo nelle prossime ore/giorni a questo ritmo, *supponendo che la chiave sia
-  nell'intervallo* (formule in [`ALGORITMI.md`](ALGORITMI.md) sezione 11).
+  nell'intervallo* (formule in [`ALGORITHMS.md`](../en/ALGORITHMS.md) sezione 11, in inglese).
 * Nel BSGS, durante la costruzione della tabella il pannello mostra la fase 1 di 2 e quanti giganti seguiranno.
 
 Modalità: `--ui full` (pannello), `--ui line` (una sola riga dinamica), `--ui log` (una riga di riepilogo al minuto nel log,
@@ -303,7 +302,7 @@ spesso la GPU integrata dà meno di quanto toglie. `-t N` prova solo N thread CP
 
 Variabili d'ambiente utili (quelle a due stati, come `PZ_NO_CUDA`, valgono con qualunque valore tranne vuoto e `0`): `PZ_GPU_API=cuda|opencl`, `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1`, `PZ_GPU_HALF=128|256|512` (CUDA) o
 `64|128|256|512` (OpenCL) e `PZ_GPU_NK=64|128|256` (CUDA) o `32|64|128` (OpenCL), con suffisso facoltativo `b` per i prodotti a coppie (es. `128b`) (saltano la taratura), `PZ_GPU_TUNE=0` (nessuna
-taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test). Per i test e la diagnostica: `PZ_KANG_VERBOSE=1` (velocità di ogni passo del canguro scelto), `PZ_TEST_DP_CAP=N` (tabella dei punti distinti minuscola), `PZ_MOCK_FAIL_FILE=percorso` (il driver CUDA simulato fallisce un lancio quando il file compare), `PZ_KANG_SCHEMA=1|2|3` (schema del canguro di una campagna **nuova**: 3 è quello predefinito dalla 1.7.9, 2 quello della 1.7.8, 1 quello delle versioni precedenti; una campagna esistente tiene il suo), `PZ_TEST_KTHREAD=N` e `PZ_TEST_JUMP=N` (solo per le prove: camminatori per thread CPU e salto medio in unità di √W), `XDG_CACHE_HOME` (cartella della cache, anche su Windows). Per la CPU, a scopo diagnostico: `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` impone il passo del canguro (`avx512i2`: IFMA a coppie di vettori, dalla 1.7.7),
+taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test). Per i test e la diagnostica: `PZ_KANG_VERBOSE=1` (velocità di ogni passo del canguro scelto), `PZ_TEST_DP_CAP=N` (tabella dei punti distinti minuscola), `PZ_MOCK_FAIL_FILE=percorso` (il driver CUDA simulato fallisce un lancio quando il file compare), `PZ_TEST_KTHREAD=N` e `PZ_TEST_JUMP=N` (solo per le prove: camminatori per thread CPU e salto medio in unità di √W), `XDG_CACHE_HOME` (cartella della cache, anche su Windows). Per la CPU, a scopo diagnostico: `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` impone il passo del canguro (`avx512i2`: IFMA a coppie di vettori, dalla 1.7.7),
 `PZ_BSGS_SCALAR=1` disattiva le finestre BSGS a corsie. `PZ_KANG_MIX=1` (sperimentale): sui core con hyper-threading il primo
 thread usa il passo vettoriale e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale;
 `bench` misura se conviene (riga "misto") e lo suggerisce.
@@ -348,12 +347,8 @@ Il seed della campagna di A è nella riga «Seed» di `campaigns/p140/report.txt
 ferma**, si unisce: `pzsolve merge -p 140 -f percorso\di\B\p140` (un file `dp.bin`, oppure la cartella della campagna, o più `-f`). Il comando
 dice quanti punti sono nuovi e se c'è una collisione fra un punto "domato" e uno "selvatico": in quel caso trova la chiave, la scrive in
 `FOUND.txt` e la mostra. Si può anche unire in senso inverso (A su B) o in entrambi: i punti già noti vengono riconosciuti. Dopo l'unione `hunt`
-riprende da dove era, con la tabella arricchita. Un registro di un'altra campagna (intervallo o chiave diversi) viene rifiutato; i registri
-di versioni molto vecchie vanno prima aperti con `hunt`. Tutti i computer di una campagna devono usare lo stesso **schema del canguro**: dalla 1.7.9 una campagna nuova usa lo schema 3, le campagne
-iniziate prima tengono il loro (schema 1 fino alla 1.7.7, schema 2 con la 1.7.8) anche dopo l'aggiornamento. Per aggiungere un computer nuovo a
-una campagna più vecchia, avvialo la prima volta con `PZ_KANG_SCHEMA=1` o `=2` (Windows: `set PZ_KANG_SCHEMA=1` prima del comando); `merge`
-riconosce e rifiuta un registro di un altro schema. Sui puzzle aperti con una sola macchina gli schemi 1 e 2 costano molto di più dello schema 3
-(circa 1,35·√W contro 1,02, `docs/it/ALGORITMI.md` 8.10): all'avvio il programma lo segnala, e conviene ricominciare con una campagna nuova. Per la ricerca lineare vedi la sezione che segue.
+riprende da dove era, con la tabella arricchita. Un registro di un'altra campagna (intervallo o chiave diversi) viene rifiutato, e lo stesso vale per uno scritto da una
+vecchia disposizione del canguro (versioni fino alla 1.9.0 nelle campagne con meno di 256 canguri, cioè intervalli piccoli): `hunt` lo conserva come `dp.bin.vN` e prosegue con un registro nuovo, `merge` spiega perché non può usarlo. Per la ricerca lineare vedi la sezione che segue.
 
 ### Più computer sulla ricerca lineare (dalla 1.7.5)
 

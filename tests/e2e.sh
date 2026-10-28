@@ -19,7 +19,7 @@ MAXN=24; [ "${E2E_QUICK:-0}" = 1 ] && MAXN=18
 for n in $(seq 1 $MAXN); do
   K=$(rndkey $n $((n*7+1)))
   A=$(field $K addr)
-  $BIN hunt -p $n -a "$A" -c lin$n -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -p $n -a "$A" -c lin$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/lin$n/FOUND.txt" 2>/dev/null)
   WANT=${K#0x}
   [ "$GOT" = "$WANT" ] && ok "puzzle $n key $K" || bad "puzzle $n: expected $WANT found '$GOT'"
@@ -29,36 +29,36 @@ echo "== keys at the ends of the interval (puzzle 20)"
 for K in 0x80000 0xfffff; do
   A=$(field $K addr)
   rm -rf "$DIR/edge"
-  $BIN hunt -p 20 -a "$A" -c edge -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -p 20 -a "$A" -c edge -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/edge/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${K#0x}" ] && ok "end $K" || bad "end $K (found '$GOT')"
 done
 
 echo "== reproducible seed: same seed => same order, different seeds => different orders"
 A=$(field 0xb3c51 addr)
-$BIN hunt -p 20 -a "$A" -c s1 -d "$DIR" -s abc --no-progress -q --no-gpu >/dev/null 2>&1
-$BIN hunt -p 20 -a "$A" -c s2 -d "$DIR" -s abc --no-progress -q --no-gpu >/dev/null 2>&1
-$BIN hunt -p 20 -a "$A" -c s3 -d "$DIR" -s xyz --no-progress -q --no-gpu >/dev/null 2>&1
+$BIN hunt -p 20 -a "$A" -c s1 -d "$DIR" -s abc --ui log -q --no-gpu >/dev/null 2>&1
+$BIN hunt -p 20 -a "$A" -c s2 -d "$DIR" -s abc --ui log -q --no-gpu >/dev/null 2>&1
+$BIN hunt -p 20 -a "$A" -c s3 -d "$DIR" -s xyz --ui log -q --no-gpu >/dev/null 2>&1
 W1=$($BIN where -c s1 -d "$DIR" --key b3c51); W2=$($BIN where -c s2 -d "$DIR" --key b3c51); W3=$($BIN where -c s3 -d "$DIR" --key b3c51)
 [ "$W1" = "$W2" ] && ok "same seed, same position" || bad "same seed but different positions"
 [ "$W1" != "$W3" ] && ok "different seed, different position" || bad "different seed but same position"
 
 echo "== interrupt and resume (linear, puzzle 31)"
 K=$(rndkey 31 99); A=$(field $K addr)
-timeout -s INT 3 $BIN hunt -p 31 -a "$A" -c res -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+timeout -s INT 3 $BIN hunt -p 31 -a "$A" -c res -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -f "$DIR/res/state.dat" ] && ok "checkpoint written" || bad "checkpoint missing"
 K1=$(grep -c "^iv" "$DIR/res/state.dat")
-$BIN hunt -c res -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+$BIN hunt -c res -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{print $4}' "$DIR/res/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "key found after resuming" || bad "after resuming: expected ${K#0x} found '$GOT'"
-OUT=$($BIN hunt -c res -d "$DIR" --no-progress -q --no-gpu 2>&1)
+OUT=$($BIN hunt -c res -d "$DIR" --ui log -q --no-gpu 2>&1)
 echo "$OUT" | grep -q "already found" && ok "a finished campaign is not run again" || bad "finished campaign run again"
 
 echo "== stop with repeated signals in quick succession (timeout sends the signal to the process and to its group)"
 A31=$(field 0x5e36d2eb addr)
 for i in 1 2 3 4 5; do
   rm -rf "$DIR/sig"
-  timeout -s INT 2.5 $BIN hunt -p 31 -a "$A31" -c sig -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  timeout -s INT 2.5 $BIN hunt -p 31 -a "$A31" -c sig -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   [ -s "$DIR/sig/state.dat" ] || { bad "attempt $i: no checkpoint after the stop"; break; }
   [ $i -eq 5 ] && ok "checkpoint always written on stop (5 attempts)"
 done
@@ -66,17 +66,17 @@ done
 echo "== kangaroo (public key known)"
 for n in 32 38 44 50; do
   K=$(rndkey $n $((n*13+5))); PUB=$(field $K pub); A=$(field $K addr)
-  $BIN hunt -p $n -a "$A" -k "$PUB" -m kangaroo -c kang$n -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -p $n -a "$A" -k "$PUB" -m kangaroo -c kang$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/kang$n/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${K#0x}" ] && ok "kangaroo puzzle $n key $K" || bad "kangaroo puzzle $n: expected ${K#0x} found '$GOT'"
 done
 
 echo "== kangaroo: resume from the distinguished-point log"
 K=$(rndkey 56 4242); PUB=$(field $K pub); A=$(field $K addr)
-timeout -s INT 4 $BIN hunt -p 56 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+timeout -s INT 4 $BIN hunt -p 56 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 SZ=$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)
 [ "$SZ" -gt 38 ] && ok "distinguished-point log written ($SZ bytes)" || bad "dp.bin empty"
-$BIN hunt -c kres -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+$BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"
 
@@ -84,14 +84,14 @@ echo "== custom intervals (size not a power of two)"
 LO=$((0x1000000+5)); HI=$((LO+99999))
 for K in $LO $HI $((LO+54321)); do
   KH=$(printf '0x%x' $K); A=$(field $KH addr); rm -rf "$DIR/cus"
-  $BIN hunt -r $(printf '%x:%x' $LO $HI) -a "$A" -c cus -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -r $(printf '%x:%x' $LO $HI) -a "$A" -c cus -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/cus/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "linear on an interval of 100000 keys: $KH" || bad "custom interval $KH (found '$GOT')"
 done
 LO=$((0x7000000000+12345)); W=1000003; HI=$((LO+W-1))
 for K in $LO $HI $((LO+W/2)) $((LO+777777)); do
   KH=$(printf '0x%x' $K); P=$(field $KH pub); A=$(field $KH addr); rm -rf "$DIR/cusk"
-  $BIN hunt -r $(printf '%x:%x' $LO $HI) -a "$A" -k "$P" -m kangaroo -c cusk -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -r $(printf '%x:%x' $LO $HI) -a "$A" -k "$P" -m kangaroo -c cusk -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/cusk/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "kangaroo on an interval of $W keys: $KH" || bad "kangaroo custom interval $KH (found '$GOT')"
 done
@@ -99,30 +99,30 @@ done
 echo "== BSGS in RAM (public key known)"
 for n in 30 44 52; do
   rm -rf "$DIR/bs$n"
-  $BIN hunt -p $n --mode bsgs -c bs$n -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -p $n --mode bsgs -c bs$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/bs$n/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "$(dbfield $n 4)" ] && ok "bsgs puzzle $n" || bad "bsgs puzzle $n: expected $(dbfield $n 4) found '$GOT'"
 done
 LO=$((0x123456789a)); W=3000017
 for K in $LO $((LO+W-1)) $((LO+(W-1)/2)) $((LO+1234567)); do
   KH=$(printf '0x%x' $K); P=$(field $KH pub); A=$(field $KH addr); rm -rf "$DIR/bsc"
-  $BIN hunt -r $(printf '%x:%x' $LO $((LO+W-1))) -a "$A" -k "$P" -m bsgs -c bsc -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -r $(printf '%x:%x' $LO $((LO+W-1))) -a "$A" -k "$P" -m bsgs -c bsc -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/bsc/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "bsgs on an interval of $W keys: $KH" || bad "bsgs custom interval $KH (found '$GOT')"
 done
 rm -rf "$DIR/bst"
-$BIN hunt -p 46 -m bsgs --table "$DIR/t.tbl" -c bst1 -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+$BIN hunt -p 46 -m bsgs --table "$DIR/t.tbl" -c bst1 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -s "$DIR/t.tbl" ] && ok "baby-step table saved to file" || bad "table not saved"
-OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" -c bst2 -d "$DIR" --no-progress --no-gpu 2>&1)
+OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" -c bst2 -d "$DIR" --ui log --no-gpu 2>&1)
 echo "$OUT" | grep -q "reading the table" && ok "table read back from file for another puzzle" || bad "table not read back"
 GOT=$(awk '/private key hex/{print $4}' "$DIR/bst2/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "$(dbfield 47 4)" ] && ok "bsgs with table from file: key found" || bad "bsgs with table from file: '$GOT'"
 head -c 100000 "$DIR/t.tbl" > "$DIR/trunc.tbl"
-$BIN hunt -p 48 -m bsgs --table "$DIR/trunc.tbl" -c bst3 -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1 && bad "truncated table accepted" || ok "truncated table rejected"
+$BIN hunt -p 48 -m bsgs --table "$DIR/trunc.tbl" -c bst3 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1 && bad "truncated table accepted" || ok "truncated table rejected"
 rm -rf "$DIR/bsr"
-timeout -s INT 3 $BIN hunt -p 60 -m bsgs --bsgs-entries 3000000 -c bsr -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+timeout -s INT 3 $BIN hunt -p 60 -m bsgs --bsgs-entries 3000000 -c bsr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -s "$DIR/bsr/state.dat" ] && ok "BSGS checkpoint written" || bad "BSGS checkpoint missing"
-timeout -s INT 3 $BIN hunt -c bsr -d "$DIR" --no-progress --no-gpu >"$DIR/bsr.out" 2>&1
+timeout -s INT 3 $BIN hunt -c bsr -d "$DIR" --ui log --no-gpu >"$DIR/bsr.out" 2>&1
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/bsr/session.txt")
 grep -q "campaign resumed" "$DIR/bsr.out" && [ "$SES" = 2 ] && ok "BSGS resumed from the checkpoint (2 sessions)" || bad "BSGS resume: sessions '$SES'"
 $BIN where -c bsr -d "$DIR" --key $(dbfield 60 4) | grep -q "giant step" && ok "where for a BSGS campaign" || bad "where BSGS"
@@ -130,22 +130,22 @@ $BIN where -c bsr -d "$DIR" --key $(dbfield 60 4) | grep -q "giant step" && ok "
 echo "== built-in database: automatic target with -p N (already solved puzzles)"
 for n in 18 23; do
   rm -rf "$DIR/db$n"
-  $BIN hunt -p $n --mode linear -c db$n -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -p $n --mode linear -c db$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/db$n/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "$(dbfield $n 4)" ] && ok "db linear puzzle $n" || bad "db linear puzzle $n: expected $(dbfield $n 4) found '$GOT'"
 done
 for n in 36 42; do
   rm -rf "$DIR/dbk$n"
-  $BIN hunt -p $n -c dbk$n -d "$DIR" --no-progress -q --no-gpu >/dev/null 2>&1
+  $BIN hunt -p $n -c dbk$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   GOT=$(awk '/private key hex/{print $4}' "$DIR/dbk$n/FOUND.txt" 2>/dev/null)
   MODE=$(awk -F= '$1=="mode"{print $2}' "$DIR/dbk$n/campaign.conf")
   [ "$GOT" = "$(dbfield $n 4)" ] && { [ "$MODE" = kangaroo ] || [ "$MODE" = bsgs ]; } && ok "db automatic mode ($MODE) puzzle $n" || bad "db puzzle $n: expected $(dbfield $n 4) found '$GOT' mode '$MODE'"
 done
 rm -rf "$DIR/stab"
-timeout -s INT 2 $BIN hunt -p 33 --mode linear -d "$DIR/stab" --no-progress -q --no-gpu >/dev/null 2>&1
+timeout -s INT 2 $BIN hunt -p 33 --mode linear -d "$DIR/stab" --ui log -q --no-gpu >/dev/null 2>&1
 [ -s "$DIR/stab/p33/state.dat" ] && ok "stable campaign name p33 created without -c" || bad "campaign p33 not created"
 SEED1=$(awk -F= '$1=="seed"{print $2}' "$DIR/stab/p33/campaign.conf")
-timeout -s INT 2 $BIN hunt -p 33 --mode linear -d "$DIR/stab" --no-progress -q --no-gpu >/dev/null 2>&1
+timeout -s INT 2 $BIN hunt -p 33 --mode linear -d "$DIR/stab" --ui log -q --no-gpu >/dev/null 2>&1
 SEED2=$(awk -F= '$1=="seed"{print $2}' "$DIR/stab/p33/campaign.conf")
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/stab/p33/session.txt")
 [ "$SEED1" = "$SEED2" ] && [ "$SES" = 2 ] && ok "running the same command again resumes the campaign (2 sessions, same seed)" || bad "automatic resume: sessions '$SES'"
@@ -168,7 +168,7 @@ echo "== input error checks"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX -c bad -d "$DIR" -q >/dev/null 2>&1 && bad "address with a wrong checksum accepted" || ok "address with a wrong checksum rejected"
 $BIN hunt -r 1:ffff -c bad2 -d "$DIR" -q >/dev/null 2>&1 && bad "missing target accepted" || ok "missing target rejected"
 $BIN hunt -p 257 -c bad4 -d "$DIR" -q >/dev/null 2>&1 && bad "puzzle 257 accepted" || ok "puzzle 257 rejected"
-timeout -s INT 2 $BIN hunt -p 161 -c p161 -d "$DIR" --no-progress --no-gpu -t 1 >"$DIR/p161.out" 2>&1
+timeout -s INT 2 $BIN hunt -p 161 -c p161 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/p161.out" 2>&1
 grep -q "emptied by the creator" "$DIR/p161.out" && grep -q "^address=1JkqBQcC4tHcb1JfdCH6nrWYwTPGznHANh" "$DIR/p161/campaign.conf" 2>/dev/null \
   && ok "puzzle 161 (emptied): warning and address from the database" || bad "puzzle 161: warning or address missing"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH -k 02e0cd1ed3ab4d2d3d6f3c2b1a5c4f3e2d1c0b9a8f7e6d5c4b3a291807f6e5d4c3 -c bad3 -d "$DIR" -q >/dev/null 2>&1 && bad "invalid pubkey accepted" || ok "invalid pubkey rejected"

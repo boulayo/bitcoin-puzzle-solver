@@ -1,0 +1,17 @@
+# Research tools
+
+Simulators, models and measurement scripts behind `docs/en/ALGORITHMS.md`. Nothing here is needed to build, test or use pzsolve; the generated
+result that the program uses is `src/kang_spec3.inc` (table of the species and bands of kangaroo schema 3). Run the commands from the root of the repository.
+
+| File | What it does |
+|------|--------------|
+| `ksim.c` | Abstract kangaroo simulator (points = integer exponents, no curve): used to tune zones, jumps and `dp_bits`. `gcc -O2 -o ksim tools/research/ksim.c -lm && ./ksim bits=32 runs=1000 K=64 dp=3 A=0.5 B=0.12 tf=0.5 jm=0.5` |
+| `kang_schema2.txt` | The species of kangaroo schema 2 (`docs/en/ALGORITHMS.md` section 8.8) for `ksim`: `./ksim bits=36 runs=5000 K=4096 dp=0 design=tools/research/kang_schema2.txt jabs=12` (schema 1: `rck=1 tf=0.3333 jabs=12`). `rsmin=N` restarts a walker at the first distinguished point after N steps; the final line counts merges, restarts and cycle escapes per trial. Rows are `coefficient residue start end share`, with the zone in units of `W` and the modulus in the first row |
+| `blsim.c` | Abstract kangaroo model with Bernstein-Lange **precomputation** (`docs/en/ALGORITHMS.md` section 8.9): a table of the `T` most frequent distinguished points, then the online search. `gcc -O2 -o blsim tools/research/blsim.c -lm && ./blsim bits=36 T=4096 beta=1 alpha=0.5` prints the precomputation and search steps in units of `√(W·T)` and `√(W/T)` |
+| `kbands.py` | Splits the start zones of the species into bands with their own shares and optimizes them in the exact coverage model (`docs/en/ALGORITHMS.md` section 8.10); writes the layout file of schema 3. Needs numpy |
+| `kang_schema3.txt` | The bands of schema 3 (format of `ksim design=`) |
+| `kspec_table.py` | Turns a layout file into the species table of `src/kangaroo.c`: `python3 -I tools/research/kspec_table.py tools/research/kang_schema3.txt > src/kang_spec3.inc` |
+| `kspecies.py` | Searches for species with fixed residues in the exact coverage model (section 8.8): `python3 -I tools/research/kspecies.py 0,1,3 12 768 0.023 40` prints the cost and the shares. Needs numpy |
+| `sass_count.py` | Counts the SASS instructions (sm_86) that NVRTC + `ptxas` produce for the CUDA-dialect kernels in `src/kernels`, and with `nvdisasm` the opcode histogram. Used for the measurements in section 8.6 (Karatsuba, row-wise product). Tools: `pip download nvidia-cuda-nvrtc-cu12==12.0.140 nvidia-cuda-nvcc-cu12==12.0.140` (NVRTC and `ptxas`), `nvdisasm` from the `cuda-nvdisasm-12-0` package of the CUDA repository. `python3 -I tools/research/sass_count.py --nvrtc .../libnvrtc.so.12 --ptxas .../ptxas tools/research/sass/kara.h tools/research/sass/chain.h tools/research/sass/variants.cl` |
+| `sass/` | The forms of the 8x8-limb product measured by `sass_count.py`: `kara.h` (additive and subtractive Karatsuba), `chain.h` (row-wise, carry chain), `variants.cl` (benchmark kernels); `kara_check.c` checks on the computer that Karatsuba gives the same product as the schoolbook method |
+| `bounds.py` | The calculations of section 8.7: pair coverage with integer values, the optimum of mixtures of walker species (structured 0.8165, random 1.0854), interleaved BSGS. Needs numpy |

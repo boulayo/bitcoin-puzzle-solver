@@ -6,7 +6,6 @@
 #include "platform.h"
 #include "outfmt.h"
 #include <math.h>
-#include <float.h>
 #include <unistd.h>
 #include <time.h>
 #ifndef _WIN32
@@ -61,10 +60,10 @@ pz_u256 krng_below(u64 s[4], const pz_u256 *bound)
 static inline unsigned log2u(u64 v) { return 63 - (unsigned)__builtin_clzll(v); }
 
 static bool dp_empty(const dp_rec *e) { return e->tagk == 0 && !(e->d.w[0] | e->d.w[1] | e->d.w[2]); }
-static inline u64 slot_of(const kang_state *ks, u64 tagk) { return ((tagk >> ks->kshift) * 0x9E3779B97F4A7C15ULL) >> (64 - log2u(ks->cap)); }
-static inline u64 kind_of(const kang_state *ks, u64 tagk) { return tagk & (((u64)1 << ks->kshift) - 1); }
+static inline u64 slot_of(const kang_state *ks, u64 tagk) { return ((tagk >> KANG_KSHIFT) * 0x9E3779B97F4A7C15ULL) >> (64 - log2u(ks->cap)); }
+static inline u64 kind_of(const kang_state *ks, u64 tagk) { return tagk & (((u64)1 << KANG_KSHIFT) - 1); }
 
-/* coefficient of x in the exponent E = coef*x + d of a point of kind k (both schemas) */
+/* coefficient of x in the exponent E = coef*x + d of a point of kind k */
 static int kind_coef(unsigned k)
 {
     static const int c[5] = {0, 1, -1, 3, -3};
@@ -136,7 +135,7 @@ static void table_thin(kang_state *ks)
     u64 kept = 0;
     ks->tab = nt;
     for (u64 i = 0; i < ks->cap; i++) {
-        if (dp_empty(&old[i]) || ((old[i].tagk >> ks->kshift) & ks->thin_mask)) continue;
+        if (dp_empty(&old[i]) || ((old[i].tagk >> KANG_KSHIFT) & ks->thin_mask)) continue;
         u64 s = slot_of(ks, old[i].tagk);
         while (!dp_empty(&nt[s])) s = (s + 1) & ks->mask;
         nt[s] = old[i];
@@ -150,13 +149,13 @@ static void table_thin(kang_state *ks)
 /* mu held. Returns 1 inserted, 0 duplicate of same kind, 2 solved, -1 skipped (thinned out) */
 static int table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
 {
-    if (ks->thin_mask && ((rec->tagk >> ks->kshift) & ks->thin_mask)) { atomic_fetch_add(&ks->dropped, 1); return -1; }
+    if (ks->thin_mask && ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask)) { atomic_fetch_add(&ks->dropped, 1); return -1; }
     if (ks->count * 10 >= ks->cap * 8) {
         u64 max_entries = ks->r->mem_limit / sizeof(dp_rec);
         const bool grown = ks->cap * 2 <= max_entries && table_grow(ks);
         if (!grown && ks->count * 100 >= ks->cap * 93) {
             table_thin(ks);
-            if ((rec->tagk >> ks->kshift) & ks->thin_mask) { atomic_fetch_add(&ks->dropped, 1); return -1; }
+            if ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask) { atomic_fetch_add(&ks->dropped, 1); return -1; }
         }
     }
     if (ks->count + 1 >= ks->cap) { atomic_fetch_add(&ks->dropped, 1); return -1; }      /* never fill the last slot: the probe below must end */
@@ -169,7 +168,7 @@ static int table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
             if (!from_log) log_push(ks, rec);
             return 1;
         }
-        if ((e->tagk >> ks->kshift) == (rec->tagk >> ks->kshift)) {
+        if ((e->tagk >> KANG_KSHIFT) == (rec->tagk >> KANG_KSHIFT)) {
             if (kind_of(ks, e->tagk) == kind_of(ks, rec->tagk)) return 0;
             if (solve_pair(ks, e, rec)) return 2;
             atomic_fetch_add(&ks->rejected, 1);
@@ -194,8 +193,7 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
 
 /* ---------------- log persistence ---------------- */
 
-/* Fingerprint of the campaign in a DP log: base, W and public key. Format 2 (1.6.0) has base = start - W/32; format 1
- * had the interval centre start + (W - 1)/2 as base. */
+/* Fingerprint of the campaign in a DP log: base, W and public key. */
 static void log_fingerprint(const kang_state *ks, const pz_u256 *base, const char *tag, u8 fp[32])
 {
     u8 buf[32 * 3 + 33];
@@ -270,56 +268,19 @@ static void log_push(kang_state *ks, const dp_rec *rec)
     ks->logbuf[ks->nlog++] = *rec;
 }
 
-/* Magic and fingerprint of the logs of this campaign: format 2 for schema 1, format 3 for schema 2 (another base and
- * other kind codes: the points of the two cannot be mixed). */
-static const char *log_magic(const kang_state *ks) { return ks->schema >= 3 ? "PZDP4\n" : ks->schema == 2 ? "PZDP3\n" : "PZDP2\n"; }
-static void log_fp(const kang_state *ks, u8 fp[32])
-{
-    log_fingerprint(ks, &ks->base, ks->schema >= 3 ? "PZDPLOG4" : ks->schema == 2 ? "PZDPLOG3" : "PZDPLOG2", fp);
-}
+/* Magic and fingerprint of the logs of this campaign. Logs of earlier layouts of the walkers ("PZDP1" to "PZDP3", written by
+ * versions before 1.9.1) have other kind codes and another base: their points cannot be mixed with these. */
+#define LOG_MAGIC "PZDP4\n"
+static void log_fp(const kang_state *ks, u8 fp[32]) { log_fingerprint(ks, &ks->base, "PZDPLOG4", fp); }
 
 static FILE *log_create(const kang_state *ks, const char *path, const u8 fp[32])
 {
     FILE *f = fopen(path, "wb");
     if (!f) return NULL;
-    fwrite(log_magic(ks), 1, 6, f);
+    fwrite(LOG_MAGIC, 1, 6, f);
     fwrite(fp, 1, 32, f);
     fflush(f);
     return f;
-}
-
-/* A format-1 log of this campaign: its distinguished points stay valid (they are points of the curve with their exact
- * exponents), only the base changed. Wild distances are re-expressed from the old base c to the new one b:
- * sigma*(k - c) + d = sigma*(k - b) + d - sigma*(c - b). Writes them to a new log and keeps the old file as dp.bin.v1. */
-static int log_convert_v1(kang_state *ks, FILE *f)
-{
-    pz_u256 one = pz_u256_from_u64(1), wm1, c, delta;
-    pz_u256_sub(&wm1, &ks->W, &one);
-    wm1 = pz_u256_shr(&wm1, 1);
-    pz_u256_add(&c, &ks->r->cfg.range_start, &wm1);
-    pz_u256_sub(&delta, &c, &ks->base);
-    const i192 dl = i192_from_signed(false, &delta);
-    char tmp[640], old[640];
-    snprintf(tmp, sizeof tmp, "%s.tmp", ks->log_path);
-    snprintf(old, sizeof old, "%s.v1", ks->log_path);
-    u8 fp[32];
-    log_fp(ks, fp);
-    FILE *o = log_create(ks, tmp, fp);
-    if (!o) { fclose(f); return -1; }
-    dp_rec rec;
-    u64 n = 0;
-    while (fread(&rec, sizeof rec, 1, f) == 1) {
-        const unsigned kind = rec.tagk & 3;
-        if (kind == KIND_WILD_P) i192_sub(&rec.d, &rec.d, &dl);
-        else if (kind == KIND_WILD_M) i192_add(&rec.d, &rec.d, &dl);
-        if (fwrite(&rec, sizeof rec, 1, o) != 1) { fclose(o); fclose(f); return -1; }
-        n++;
-    }
-    fclose(f);
-    if (fclose(o) != 0 || rename(ks->log_path, old) != 0 || rename(tmp, ks->log_path) != 0) return -1;
-    pz_log(PZ_LOG_INFO, "distinguished points: converted %llu points of the previous format to the new kangaroo schema (original in %s)",
-           (unsigned long long)n, old);
-    return 0;
 }
 
 int kang_load_log(kang_state *ks)
@@ -333,20 +294,22 @@ int kang_load_log(kang_state *ks)
     }
     u8 hdr[38];
     bool hdr_ok = fread(hdr, 1, 38, f) == 38;
-    if (hdr_ok && ks->schema == 1 && memcmp(hdr, "PZDP1\n", 6) == 0) {
-        u8 fp1[32];
-        pz_u256 one = pz_u256_from_u64(1), wm1, c;
-        pz_u256_sub(&wm1, &ks->W, &one);
-        wm1 = pz_u256_shr(&wm1, 1);
-        pz_u256_add(&c, &ks->r->cfg.range_start, &wm1);
-        log_fingerprint(ks, &c, "PZDPLOG1", fp1);
-        if (memcmp(hdr + 6, fp1, 32) == 0) {
-            if (log_convert_v1(ks, f) != 0) { pz_log(PZ_LOG_ERR, "converting %s failed", ks->log_path); return -1; }
-            f = fopen(ks->log_path, "rb");
-            if (!f || fread(hdr, 1, 38, f) != 38) { if (f) fclose(f); return -1; }
+    if (hdr_ok && !memcmp(hdr, "PZDP", 4) && memcmp(hdr, LOG_MAGIC, 6) != 0) {
+        /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
+         * small intervals): its points cannot be used. It is kept under another name and the campaign goes on with a new log. */
+        char old[640];
+        snprintf(old, sizeof old, "%s.v%c", ks->log_path, hdr[4]);
+        fclose(f);
+        if (rename(ks->log_path, old) != 0) {
+            pz_log(PZ_LOG_ERR, "file %s was written by an older layout of the kangaroo and cannot be used, and it could not be moved away", ks->log_path);
+            return -1;
         }
+        pz_log(PZ_LOG_WARN, "distinguished points: %s was written by an older layout of the kangaroo (versions up to 1.9.0, small intervals) and cannot be "
+               "used; it is kept as %s and the campaign goes on with a new file", ks->log_path, old);
+        ks->log = log_create(ks, ks->log_path, fp);
+        return ks->log ? 1 : -1;
     }
-    if (!hdr_ok || memcmp(hdr, log_magic(ks), 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) {
+    if (!hdr_ok || memcmp(hdr, LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) {
         fclose(f);
         pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header): ignored", ks->log_path);
         return -1;
@@ -379,7 +342,7 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
     if (!f) return -1;
     u8 hdr[38], fp[32];
     log_fp(ks, fp);
-    if (fread(hdr, 1, 38, f) != 38 || memcmp(hdr, log_magic(ks), 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) { fclose(f); return -2; }
+    if (fread(hdr, 1, 38, f) != 38 || memcmp(hdr, LOG_MAGIC, 6) != 0 || memcmp(hdr + 6, fp, 32) != 0) { fclose(f); return -2; }
     dp_rec rec;
     pthread_mutex_lock(&ks->mu);
     while (fread(&rec, sizeof rec, 1, f) == 1) {      /* a partly written last record is ignored */
@@ -395,7 +358,7 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
     return 0;
 }
 
-/* x.n[2] of (sign*X + d)*G for the self-test of the log conversion */
+/* x.n[2] of (sign*X + d)*G for the self-tests of the merge and of the collisions */
 static u64 tag_of(const i192 *X, int sign, const i192 *d)
 {
     i192 e = *d, t = *X;
@@ -410,95 +373,26 @@ static u64 tag_of(const i192 *X, int sign, const i192 *d)
     return p.x.n[2];
 }
 
-/* A format-1 log (interval-centred base) written by hand, loaded: every converted record must still describe its
- * point with the new base. Returns the number of failures. */
-int kang_log_selftest(void)
-{
-    kang_state *ks = kang_make_test_state_s(40, 1, 1);
-    if (!ks) return 1;
-    int fails = 0;
-    pz_u256 key = pz_u256_pow2(90), one = pz_u256_from_u64(1), wm1, c;
-    pz_u256_add_u64(&key, &key, 123456789);          /* the key of kang_make_test_state */
-    pz_u256_sub(&wm1, &ks->W, &one);
-    wm1 = pz_u256_shr(&wm1, 1);
-    pz_u256_add(&c, &ks->r->cfg.range_start, &wm1);
-    const bool lowc = pz_u256_cmp(&key, &c) < 0;     /* x relative to the old base, signed */
-    pz_u256 m;
-    if (lowc) pz_u256_sub(&m, &c, &key); else pz_u256_sub(&m, &key, &c);
-    const i192 Xo = i192_from_signed(lowc, &m);
-    pz_u256_sub(&m, &key, &ks->base);
-    const i192 Xn = i192_from_signed(false, &m);
-    u8 fp1[32];
-    log_fingerprint(ks, &c, "PZDPLOG1", fp1);
-    FILE *f = fopen(ks->log_path, "wb");
-    if (!f) { kang_free_test_state(ks); return 1; }
-    fwrite("PZDP1\n", 1, 6, f);
-    fwrite(fp1, 1, 32, f);
-    u64 s = 0x5EED5EEDULL;
-    const int N = 30;
-    for (int i = 0; i < N; i++) {
-        s ^= s << 13; s ^= s >> 7; s ^= s << 17;
-        const unsigned kind = (unsigned)i % 3;
-        pz_u256 dm = pz_u256_from_u64(s & ((1ULL << 41) - 1));
-        dp_rec r;
-        r.d = i192_from_signed(s >> 63, &dm);
-        const int sign = kind == KIND_TAME ? 0 : (kind == KIND_WILD_P ? 1 : -1);
-        r.tagk = (tag_of(&Xo, sign, &r.d) & ~3ULL) | kind;
-        fwrite(&r, sizeof r, 1, f);
-    }
-    fclose(f);
-    if (kang_load_log(ks) != 0 || ks->loaded != (u64)N) fails++;
-    char old[640];
-    snprintf(old, sizeof old, "%s.v1", ks->log_path);
-    FILE *o = fopen(old, "rb");
-    if (!o) fails++; else fclose(o);
-    kang_flush_log(ks);
-    f = fopen(ks->log_path, "rb");
-    u8 hdr[38];
-    if (!f || fread(hdr, 1, 38, f) != 38 || memcmp(hdr, log_magic(ks), 6) != 0) fails++;
-    for (int i = 0; f && i < N; i++) {
-        dp_rec r;
-        if (fread(&r, sizeof r, 1, f) != 1) { fails++; break; }
-        const unsigned kind = r.tagk & 3;
-        const int sign = kind == KIND_TAME ? 0 : (kind == KIND_WILD_P ? 1 : -1);
-        if ((tag_of(&Xn, sign, &r.d) & ~3ULL) != (r.tagk & ~3ULL)) fails++;
-    }
-    if (f) fclose(f);
-    kang_free_test_state(ks);
-    pz_result_line("distinguished-point log: conversion from format 1", "%s", fails ? "FAILED" : "OK");
-    return fails;
-}
-
 /* ---------------- setup ---------------- */
 
 static long double u256_ld(const pz_u256 *v) { return pz_u256_to_ld(v); }
 
-/* Schema 2: the species of walkers (docs/en/ALGORITHMS.md, section 8.8). Tame walkers near 0 in the four residues that are multiples
- * of 3, wild ones on Q in three residues 4 apart, wild ones on 3Q in one residue; zones a little wider than where the
- * classes fold. Found by enumerating the residue patterns mod 12 in the exact coverage model and measured in the walk
- * model (tools/ksim.c, design file). */
-static const kang_species KSPEC2[] = {
-    {0, 0, -23, 23, 42000}, {0, 3, -23, 23, 94000}, {0, 6, -23, 23, 42000}, {0, 9, -23, 23, 116000},
-    {1, 3, -1005, 5, 117000}, {1, 7, -1005, 5, 116000}, {1, 11, -1005, 5, 116000},
-    {3, 9, -3005, 5, 358000},
-};
-
-/* Schema 3 (docs/en/ALGORITHMS.md, section 8.10): the same residues, every zone split into bands with their own shares, optimized in
- * the exact coverage model (tools/kbands.py), from tools/kang_schema3.txt by tools/kspec_table.py. */
+/* The species of walkers (docs/en/ALGORITHMS.md, sections 8.8 and 8.10): tame walkers near 0 in the four residues mod 12 that are
+ * multiples of 3, wild ones on Q in three residues 4 apart, wild ones on 3Q in one residue, every zone split into bands with their own
+ * shares, optimized in the exact coverage model (tools/research/kbands.py), from tools/research/kang_schema3.txt by tools/research/kspec_table.py. */
 static const kang_species KSPEC3[] = {
 #include "kang_spec3.inc"
 };
 
 _Static_assert(sizeof KSPEC3 / sizeof *KSPEC3 <= 255, "the species index of a walker is a byte");
 
-static const kang_species *spec_table(const kang_state *ks, int *n)
+static const kang_species *spec_table(int *n)
 {
-    if (ks->schema >= 3) { *n = (int)(sizeof KSPEC3 / sizeof *KSPEC3); return KSPEC3; }
-    *n = (int)(sizeof KSPEC2 / sizeof *KSPEC2);
-    return KSPEC2;
+    *n = (int)(sizeof KSPEC3 / sizeof *KSPEC3);
+    return KSPEC3;
 }
 
-/* floor(sqrt(n)) with integers only: the jump table of schema 3 must come out the same on every architecture (long double is
+/* floor(sqrt(n)) with integers only: the jump table must come out the same on every architecture (long double is
  * 80 bits on x86, 64 on Apple arm64 and 128 on Linux arm64, so a table computed with it could differ between computers). */
 static pz_u256 u256_isqrt(const pz_u256 *n)
 {
@@ -527,27 +421,6 @@ static pz_u256 u256_mul_u64(const pz_u256 *a, u64 q)
     return lo;
 }
 
-/* The layout of a campaign: the one its log was written with; for a new one PZ_KANG_SCHEMA if set, else schema 3 with
- * at least KANG_SCHEMA2_MIN_K walkers (always on the open puzzles). With fewer, the pairs of the right residues are too
- * few walkers each: schema 2 costs more (64 walkers on W = 2^28: 1.31 against 1.22 sqrt(W) on the curve, the same in the model). */
-#define KANG_SCHEMA2_MIN_K 256
-static int campaign_schema(const run_ctx *r, int k_total)
-{
-    if (r->kang_schema >= 1 && r->kang_schema <= 3) return r->kang_schema;
-    char path[640], hdr[6];
-    snprintf(path, sizeof path, "%s/dp.bin", r->cfg.dir);
-    FILE *f = fopen(path, "rb");
-    const bool got = f && fread(hdr, 1, 6, f) == 6;
-    if (f) fclose(f);
-    if (got && (!memcmp(hdr, "PZDP1\n", 6) || !memcmp(hdr, "PZDP2\n", 6))) return 1;
-    if (got && !memcmp(hdr, "PZDP3\n", 6)) return 2;
-    if (got && !memcmp(hdr, "PZDP4\n", 6)) return 3;
-    const char *e = getenv("PZ_KANG_SCHEMA");
-    if (e && e[0] >= '1' && e[0] <= '3' && !e[1]) return e[0] - '0';
-    if (LDBL_MANT_DIG != 64) return 3;                  /* schemas 1 and 2 need the x86 long double (see kang_setup_schema) */
-    return k_total >= KANG_SCHEMA2_MIN_K ? 3 : 1;
-}
-
 kang_state *kang_create(run_ctx *r)
 {
     pz_ec_init();
@@ -557,10 +430,6 @@ kang_state *kang_create(run_ctx *r)
     ks->W = cfg_range_size(&r->cfg);
     if (pz_u256_bits(&ks->W) < 17) pz_die("range too small for the kangaroo (at least 2^16 keys needed): use --mode linear");
     if (pz_u256_bits(&ks->W) > 190) pz_die("range too large for the kangaroo (maximum 2^190)");
-    ks->tame_w = pz_u256_shr(&ks->W, 5);                     /* W/32 */
-    ks->wild_w = pz_u256_shr(&ks->W, 4);                     /* W + W/16 */
-    pz_u256_add(&ks->wild_w, &ks->wild_w, &ks->W);
-    ks->tame_frac = 1.0 / 3.0;
     ks->sqrtW = sqrtl(u256_ld(&ks->W));
     ks->epoch = (u64)r->sessions | (u64)r->node << 32;   /* node 0 keeps the streams of the single-computer campaigns */
 
@@ -578,21 +447,12 @@ kang_state *kang_create(run_ctx *r)
     return ks;
 }
 
-/* The layout of the walkers, now that their number is known, and what depends on it (base, Q', 3Q'). */
-static void kang_setup_schema(kang_state *ks)
+/* What depends on the interval and on the walkers: base (the walkers are E = c*x + u with x = key - base in [0, W)), Q' = pubkey - base*G and 3Q'. */
+static void kang_setup(kang_state *ks)
 {
     run_ctx *r = ks->r;
-    ks->schema = campaign_schema(r, ks->K_total);
-    if (ks->schema < 3 && LDBL_MANT_DIG != 64 && !r->silent_setup)
-        pz_log(PZ_LOG_WARN, "kangaroo: schema %d computes its jump table with long double, which differs between architectures: do not "
-               "combine this campaign (--node, merge) with computers of another architecture. Schema 3 has no such limit", ks->schema);
-    ks->kshift = ks->schema >= 2 ? 3 : 2;
-    ks->c_mean = ks->schema >= 3 ? KANG_C_MEAN : ks->schema == 2 ? KANG_C_MEAN_V2 : KANG_C_MEAN_V1;
-    /* schema 1: base = start - S, the interval sits at [S, S + W) above the point where the classes fold (S = W/32 keeps
-     * the first keys away from it); schema 2: base = start, the zones of the species are placed around the fold */
-    pz_u256 S = ks->schema >= 2 ? pz_u256_zero() : pz_u256_shr(&ks->W, 5);
-    if (pz_u256_cmp(&S, &r->cfg.range_start) > 0) S = r->cfg.range_start;
-    pz_u256_sub(&ks->base, &r->cfg.range_start, &S);
+    ks->c_mean = KANG_C_MEAN;
+    ks->base = r->cfg.range_start;
     if (pz_u256_is_zero(&ks->base)) {
         ks->Qp = r->cfg.pubkey;
     } else {
@@ -604,10 +464,8 @@ static void kang_setup_schema(kang_state *ks)
             ks->Qp = bg;   /* unused */
         }
     }
-    if (ks->schema >= 2) {
-        pz_ge q2;
-        if (!pz_ge_add(&q2, &ks->Qp, &ks->Qp) || !pz_ge_add(&ks->Q3, &q2, &ks->Qp)) ks->Q3 = ks->Qp;   /* only if Qp is not a point: the key was found above */
-    }
+    pz_ge q2;
+    if (!pz_ge_add(&q2, &ks->Qp, &ks->Qp) || !pz_ge_add(&ks->Q3, &q2, &ks->Qp)) ks->Q3 = ks->Qp;   /* only if Qp is not a point: the key was found above */
     ks->expected_steps = ks->c_mean * ks->sqrtW;
 }
 
@@ -618,7 +476,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     int nthr = r->use_cpu ? r->nthreads : 0;
     ks->K_total = ks->K_thread * nthr + k_gpu_total;
     if (ks->K_total <= 0) return -1;
-    kang_setup_schema(ks);
+    kang_setup(ks);
     if (r->mem_limit == 0) {
         u64 lim = (u64)((double)r->sys.mem_avail * 0.4);
         if (lim > (64ULL << 30)) lim = 64ULL << 30;
@@ -655,15 +513,13 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     ks->P.cap_since = dp >= 58 ? ~0ULL : 24ULL * ((u64)1 << dp) + 16;
     ks->P.R = KANG_R;
 
-    /* jump table (the walk on classes is a symmetric random walk: no drift to tune). Schema 1: even, uniform in
-     * [2, 2*mean]; schemas 2 and 3: uniform in [2/3, 4/3] of the mean, rounded up to a multiple of KANG_MOD.
-     * Mean: 12 sqrt(W) in schemas 1 and 2. Without drift a walker stays within about sqrt(n) jumps of its start (n ~ sqrt(W)/K
-     * steps each), so two walks can cross only if their starts are that close: the number of such pairs is about
-     * (mean / W^(3/4)) * K^1.5, only 0.6 for puzzle 135 with a jump of 12 sqrt(W). Schema 3 takes W^(3/4)/16: K^1.5/16 pairs,
-     * and each walk covers a fraction 1/(16 sqrt(K)) of W (8.10) */
-    long double mean = KANG_JUMP_MEAN * ks->sqrtW;      /* schemas 1 and 2 */
-    u128 mean3 = 0;                                     /* schema 3: integer arithmetic, identical on every architecture */
-    if (ks->schema >= 3) {
+    /* jump table (the walk on classes is a symmetric random walk: no drift to tune): uniform in [2/3, 4/3] of the mean, rounded up
+     * to a multiple of KANG_MOD, in integer arithmetic (identical on every architecture). Without drift a walker stays within about
+     * sqrt(n) jumps of its start (n ~ sqrt(W)/K steps each), so two walks can cross only if their starts are that close: the number
+     * of such pairs is about (mean / W^(3/4)) * K^1.5, hence the mean of W^(3/4)/16: K^1.5/16 pairs, and each walk covers a
+     * fraction 1/(16 sqrt(K)) of W (8.10) */
+    u128 mean3;
+    {
         const pz_u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */
         const char *tj = getenv("PZ_TEST_JUMP");                            /* tests: mean jump in units of sqrt(W) */
         pz_u256 m;
@@ -676,25 +532,20 @@ int kang_configure(kang_state *ks, int k_gpu_total)
         if (pz_u256_bits(&m) > 120) m = pz_u256_pow2(120);                        /* jump distances are 128-bit (W above 2^165) */
         mean3 = (u128)m.w[1] << 64 | m.w[0];
         if (mean3 < 2 * KANG_MOD) mean3 = 2 * KANG_MOD;
-        mean = (long double)mean3;                                          /* only for the log line */
-    } else if (mean < 2 * KANG_MOD) mean = 2 * KANG_MOD;
+    }
+    const long double mean = (long double)mean3;                               /* only for the log line */
     u64 rg[4];
-    krng_seed(rg, r->cfg.seed, ks->schema >= 3 ? "jumps4" : ks->schema == 2 ? "jumps3" : "jumps2", 0, 0);
-    pz_u256 bound = pz_u256_from_u128(ks->schema >= 3 ? mean3 / 3 * 2 + 1 : (u128)(ks->schema >= 2 ? mean * 2 / 3 + 1 : mean));
-    const pz_u256 low = pz_u256_from_u128(ks->schema >= 3 ? mean3 / 3 * 2 : (u128)(mean * 2 / 3));
+    krng_seed(rg, r->cfg.seed, "jumps4", 0, 0);
+    pz_u256 bound = pz_u256_from_u128(mean3 / 3 * 2 + 1);
+    const pz_u256 low = pz_u256_from_u128(mean3 / 3 * 2);
     pz_ge pts[KANG_R + KANG_NESC];
     for (unsigned j = 0; j < KANG_R + KANG_NESC; j++) {   /* the escape jumps after the regular ones, same distribution */
         pz_u256 v = krng_below(rg, &bound);
-        if (ks->schema >= 2) {
-            u32 rem;
-            pz_u256_add(&v, &v, &low);
-            v = pz_u256_divmod_u32(&v, KANG_MOD, &rem);
-            pz_u256_add_u64(&v, &v, 1);
-            v = pz_u256_mul_u32(&v, KANG_MOD);
-        } else {
-            v = pz_u256_shl(&v, 1);
-            pz_u256_add_u64(&v, &v, 2);
-        }
+        u32 rem;
+        pz_u256_add(&v, &v, &low);
+        v = pz_u256_divmod_u32(&v, KANG_MOD, &rem);
+        pz_u256_add_u64(&v, &v, 1);
+        v = pz_u256_mul_u32(&v, KANG_MOD);
         ks->P.jv[j] = (u128)v.w[1] << 64 | v.w[0];
         if (!pz_ec_mul_g(&pts[j], &v)) pz_die("invalid jump");
         ks->P.jx[j] = pts[j].x;
@@ -727,19 +578,12 @@ int kang_configure(kang_state *ks, int k_gpu_total)
 
     if (r->silent_setup) return 0;
     char b1[32], b2[32], b3[32];
-    pz_log(PZ_LOG_INFO, "kangaroo: schema %d, W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
-           ks->schema, log2l(u256_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
+    pz_log(PZ_LOG_INFO, "kangaroo: W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
+           log2l(u256_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
     pz_log(PZ_LOG_INFO, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", ks->jump_id);
     pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
            pz_fmt_si((double)ks->expected_steps, b3, sizeof b3), ks->c_mean, pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b1, sizeof b1));
-    /* pairs of walkers whose walks can cross, about (mean jump / W^(3/4)) * K^1.5 (8.10): below a few dozen the coverage hangs on a
-     * few pairs and the search costs much more than its constant (1.5 sqrt(W) instead of 1.1 in the model and on the curve) */
-    const long double pairs = mean / (ks->sqrtW * sqrtl(ks->sqrtW)) * powl((long double)ks->K_total, 1.5L);
-    if (ks->schema < 3 && pairs < 64)
-        pz_log(PZ_LOG_WARN, "kangaroo: with %d kangaroos on this range the jumps of schema %d are too short (only ~%.2Lg pairs of walks that can "
-               "cross): the expected cost is much higher than %.2Lf x sqrt(W). A new campaign (schema 3) avoids this; the work done so far "
-               "with this schema does not carry over", ks->K_total, ks->schema, pairs, ks->c_mean);
     return 0;
 }
 
@@ -781,37 +625,30 @@ kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream)
     w->vstale = pz_xcalloc((size_t)K, 1);
     w->spec = pz_xcalloc((size_t)K, 1);
     krng_seed(w->rng, ks->r->cfg.seed, "herd", ks->epoch, stream);
-    if (ks->schema >= 2) {
-        /* the shares of the species, as exact as K allows: walker i takes the species at (i + 1/2) / K of the cumulated
-         * shares. Schema 3: the species here is the group of bands with the same coefficient and residue (the first band
-         * of the group stands for it), and every start draws the band at random by the shares: with a few dozen walkers
-         * and 51 bands, a fixed band per walker would leave some residues without walkers, and the keys that only those
-         * could reach without a solution */
-        int ns;
-        const kang_species *sp = spec_table(ks, &ns);
-        u64 gw[256] = {0}, tot = 0;
-        int first[256];
-        for (int s = 0; s < ns; s++) {
-            int g = s;
-            if (ks->schema >= 3)
-                for (int t = 0; t < s; t++)
-                    if (sp[t].coef == sp[s].coef && sp[t].res == sp[s].res) { g = t; break; }
-            first[s] = g;
-            gw[g] += sp[s].w;
-            tot += sp[s].w;
-        }
-        for (int i = 0; i < K; i++) {
-            const u64 pos = ((u64)(2 * i + 1) * tot) / (2 * (u64)K);
-            u64 acc = 0;
-            int s = 0;
-            while (s < ns - 1 && (first[s] != s || pos >= acc + gw[s])) acc += first[s] == s ? gw[s] : 0, s++;
-            w->spec[i] = (u8)s;
-            w->kind[i] = sp[s].coef;
-        }
-        return w;
+    /* the shares of the species, as exact as K allows: walker i takes the species at (i + 1/2) / K of the cumulated shares. The
+     * species here is the group of bands with the same coefficient and residue (the first band of the group stands for it), and
+     * every start draws the band at random by the shares: with a few dozen walkers and 51 bands, a fixed band per walker would
+     * leave some residues without walkers, and the keys that only those could reach without a solution */
+    int ns;
+    const kang_species *sp = spec_table(&ns);
+    u64 gw[256] = {0}, tot = 0;
+    int first[256];
+    for (int s = 0; s < ns; s++) {
+        int g = s;
+        for (int t = 0; t < s; t++)
+            if (sp[t].coef == sp[s].coef && sp[t].res == sp[s].res) { g = t; break; }
+        first[s] = g;
+        gw[g] += sp[s].w;
+        tot += sp[s].w;
     }
-    int ntame = (int)(ks->tame_frac * K);
-    for (int i = 0; i < K; i++) w->kind[i] = i < ntame ? 0 : 1;
+    for (int i = 0; i < K; i++) {
+        const u64 pos = ((u64)(2 * i + 1) * tot) / (2 * (u64)K);
+        u64 acc = 0;
+        int s = 0;
+        while (s < ns - 1 && (first[s] != s || pos >= acc + gw[s])) acc += first[s] == s ? gw[s] : 0, s++;
+        w->spec[i] = (u8)s;
+        w->kind[i] = sp[s].coef;
+    }
     return w;
 }
 
@@ -841,7 +678,7 @@ static u32 i192_mod_u32(const i192 *a, u32 m)
     return neg && rem ? m - rem : rem;
 }
 
-/* Schema 2: a start of species sp, E = c*x + u: the point c*Qp + u*G and u. False when it cannot be used (u = 0 on a tame
+/* A start of species sp, E = c*x + u: the point c*Qp + u*G and u. False when it cannot be used (u = 0 on a tame
  * walker, or the point at infinity, which reveals the key). */
 static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz_ge *p, i192 *d)
 {
@@ -892,46 +729,19 @@ void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
         pz_ge p;
         i192 d;
         int8_t sg = 1;
-        if (ks->schema >= 2) {
+        {
             int ns;
-            const kang_species *sp = spec_table(ks, &ns), *band = &sp[w->spec[i]];
-            if (ks->schema >= 3) {                       /* a band of the walker's group, by the shares */
-                u64 tot = 0;
-                for (int s = 0; s < ns; s++)
-                    if (sp[s].coef == band->coef && sp[s].res == band->res) tot += sp[s].w;
-                u64 pick = krng_next(rng) % tot;
-                for (int s = 0; s < ns; s++)
-                    if (sp[s].coef == band->coef && sp[s].res == band->res) {
-                        if (pick < sp[s].w) { band = &sp[s]; break; }
-                        pick -= sp[s].w;
-                    }
-            }
-            if (!start_species(ks, band, rng, &p, &d)) continue;
-        } else if (w->kind[i] == 0) {
-            /* tame: t*G, t in [1, W/32) */
-            pz_u256 t = krng_below(rng, &ks->tame_w);
-            if (pz_u256_is_zero(&t) || !pz_ec_mul_g(&p, &t)) continue;
-            d = i192_from_signed(false, &t);
-        } else {
-            /* wild: (-x + v)*G = v*G - Qp, v even in [0, W + W/16) */
-            pz_u256 half = pz_u256_shr(&ks->wild_w, 1), v = krng_below(rng, &half);
-            v = pz_u256_shl(&v, 1);
-            pz_ge nq;
-            pz_ge_neg(&nq, &ks->Qp);
-            if (pz_u256_is_zero(&v)) p = nq;
-            else {
-                pz_ge vg;
-                if (!pz_ec_mul_g(&vg, &v)) continue;
-                if (!pz_ge_add(&p, &vg, &nq)) {
-                    /* v*G == Qp: x = v, the key is known */
-                    pz_u256 key;
-                    pz_u256_add(&key, &ks->base, &v);
-                    run_submit_key(ks->r, &key, "kangaroo (start)");
-                    continue;
+            const kang_species *sp = spec_table(&ns), *band = &sp[w->spec[i]];
+            u64 tot = 0;                                 /* a band of the walker's group, by the shares */
+            for (int s = 0; s < ns; s++)
+                if (sp[s].coef == band->coef && sp[s].res == band->res) tot += sp[s].w;
+            u64 pick = krng_next(rng) % tot;
+            for (int s = 0; s < ns; s++)
+                if (sp[s].coef == band->coef && sp[s].res == band->res) {
+                    if (pick < sp[s].w) { band = &sp[s]; break; }
+                    pick -= sp[s].w;
                 }
-            }
-            d = i192_from_signed(false, &v);
-            sg = -1;
+            if (!start_species(ks, band, rng, &p, &d)) continue;
         }
         pz_fe_normalize(&p.y);
         if (pz_fe_is_odd(&p.y)) {   /* canonical representative: even y */
@@ -1363,9 +1173,9 @@ void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)
 }
 
 /* Two computers' logs, each with half of a collision: neither can solve the key, the merge of both does. */
-static int merge_selftest_schema(int schema)
+static int merge_selftest(void)
 {
-    kang_state *ks = kang_make_test_state_s(40, 1, schema);
+    kang_state *ks = kang_make_test_state(40, 1);
     if (!ks) return 1;
     int fails = 0;
     pz_u256 key = pz_u256_pow2(90), m;
@@ -1374,7 +1184,7 @@ static int merge_selftest_schema(int schema)
     const i192 X = i192_from_signed(false, &m);   /* the unknown offset from the base */
     u8 fp[32];
     log_fp(ks, fp);
-    const u64 km = ((u64)1 << ks->kshift) - 1;
+    const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
     char dir[700], pa[760], pb[760], pc[760];
     pz_strlcpy(dir, ks->r->cfg.dir, sizeof dir);
     snprintf(pa, sizeof pa, "%s/node_a.bin", dir);
@@ -1390,11 +1200,11 @@ static int merge_selftest_schema(int schema)
         kang_free_test_state(ks);
         return 1;
     }
-    fwrite(log_magic(ks), 1, 6, fa); fwrite(fp, 1, 32, fa);
-    fwrite(log_magic(ks), 1, 6, fb); fwrite(fp, 1, 32, fb);
+    fwrite(LOG_MAGIC, 1, 6, fa); fwrite(fp, 1, 32, fa);
+    fwrite(LOG_MAGIC, 1, 6, fb); fwrite(fp, 1, 32, fb);
     u8 other[32];
     memset(other, 0x5A, sizeof other);
-    fwrite(log_magic(ks), 1, 6, fc); fwrite(other, 1, 32, fc);
+    fwrite(LOG_MAGIC, 1, 6, fc); fwrite(other, 1, 32, fc);
     for (int i = 0; i < 3; i++) {
         const pz_u256 dw256 = pz_u256_from_u64(dws[i]);
         const i192 dw = i192_from_signed(false, &dw256);
@@ -1423,9 +1233,7 @@ static int merge_selftest_schema(int schema)
     MCHK(kang_merge_file(ks, pb, &b) != 0 || !b.solved);                                      /* A and B together do */
     MCHK(!atomic_load(&ks->r->found) || pz_u256_cmp(&ks->r->found_key, &key) != 0);
     kang_free_test_state(ks);
-    char lb[64];
-    snprintf(lb, sizeof lb, "merge of two computers' points, schema %d", schema);
-    pz_result_line(lb, "%s", fails ? "FAILED" : "OK");
+    pz_result_line("merge of two computers' points", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -1438,7 +1246,7 @@ static i192 i192_mul_small(const i192 *X, int c)
     return r;
 }
 
-/* Schema 2: two distinguished points on the same class reveal the key for every two kinds of different coefficient
+/* Two distinguished points on the same class reveal the key for every two kinds of different coefficient
  * (tame, wild on Q and on 3Q, either sign), the division by c_a - c_b included. */
 static int solve_selftest(void)
 {
@@ -1449,7 +1257,7 @@ static int solve_selftest(void)
     for (unsigned ka = 0; ka < 5; ka++)
         for (unsigned kb = 0; kb < 5; kb++) {
             if (kind_coef(ka) == kind_coef(kb)) continue;
-            kang_state *ks = kang_make_test_state_s(40, 1, 3);
+            kang_state *ks = kang_make_test_state(40, 1);
             if (!ks) return fails + 1;
             pz_u256 key = pz_u256_pow2(90), m;
             pz_u256_add_u64(&key, &key, 123456789);       /* the key of kang_make_test_state */
@@ -1478,7 +1286,7 @@ static int solve_selftest(void)
     return fails;
 }
 
-int kang_merge_selftest(void) { return merge_selftest_schema(1) + merge_selftest_schema(2) + merge_selftest_schema(3) + solve_selftest(); }
+int kang_merge_selftest(void) { return merge_selftest() + solve_selftest(); }
 
 #ifndef _WIN32
 /* The log of distinguished points when the disk refuses writes: no overflow of the buffer, nothing lost, and after a write that stopped in the
@@ -1544,7 +1352,7 @@ int kang_log_fault_selftest(void)
         ks->log = NULL;
         FILE *f = fopen(path, "rb");
         u8 hdr[38];
-        LCHK(f && fread(hdr, 1, 38, f) == 38 && !memcmp(hdr, log_magic(ks), 6));
+        LCHK(f && fread(hdr, 1, 38, f) == 38 && !memcmp(hdr, LOG_MAGIC, 6));
         int seen = 0;
         for (; f && seen < N + 1; seen++) {
             dp_rec r;

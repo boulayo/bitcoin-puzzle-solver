@@ -1,6 +1,5 @@
-> **Documentazione italiana.** Questa cartella (`docs/it/`) contiene README, guida, algoritmi, architettura e CHANGELOG in italiano. Il testo
-> è stato scritto per la versione 1.7.9 e poi aggiornato fino alla 1.8.1 (opzioni, arm64, indirizzi `bc1q`, aiuto per comando). I messaggi del programma sono in inglese,
-> quindi gli esempi di output riportati qui possono differire. Per tutto il resto fa fede la documentazione inglese nella cartella principale.
+> **Documentazione italiana.** Questa cartella (`docs/it/`) contiene il README e la guida all'uso in italiano. I messaggi del programma sono in inglese, quindi gli esempi di output
+> riportati qui possono differire. Per tutto il resto (algoritmi, architettura, rilascio, storia delle versioni) c'è solo la documentazione inglese e fa fede quella.
 
 # pzsolve
 
@@ -33,7 +32,7 @@ Software libero: se ti è utile puoi [sostenere il progetto](#sostieni-il-proget
 | anche la **chiave pubblica**, tabella troppo grande o con GPU | canguro di Pollard simmetrico ("schema 3") | ≈ 1,06 · √W passi misurati, ≈ 1,02 attesi a scala di puzzle (modello) |
 
 `--mode auto` (il predefinito) sceglie da solo. Un "passo" è un salto del canguro o un passo gigante del BSGS; una "chiave" è una chiave
-candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/it/ALGORITMI.md`](ALGORITMI.md).
+candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (in inglese).
 
 * **Tutti i puzzle sono già dentro.** `pzsolve puzzles` li elenca e `pzsolve hunt -p N` avvia una campagna: intervallo, indirizzo
   e chiave pubblica vengono da un database verificato con un riferimento Python indipendente (compresi i puzzle 161-256). Lo stesso
@@ -119,7 +118,7 @@ con altri strumenti.
 | pzsolve, schema 3, a scala di puzzle | ≈ 1,02·√W | modellato, non misurato |
 | BSGS con ± e tabella di √W/2 voci | 1,0·√W | serve una tabella che stia in RAM: non fattibile per i puzzle aperti |
 
-Le tabelle complete e il modello sono in [`docs/it/ALGORITMI.md`](ALGORITMI.md) (sezioni 8.8 e 8.10).
+Le tabelle complete e il modello sono in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (sezioni 8.8 e 8.10, in inglese).
 
 ## Limiti e cosa aspettarsi
 
@@ -156,10 +155,7 @@ e, per CUDA, con un driver simulato. Le build per macOS e arm64 sono compilate e
 ## Documentazione
 
 * [`docs/it/USO.md`](USO.md): comandi, tutte le opzioni, cartella della campagna, GPU, più computer, problemi comuni, Windows.
-* [`docs/it/ALGORITMI.md`](ALGORITMI.md): gli algoritmi, le misure e i limiti teorici.
-* [`docs/it/ARCHITETTURA.md`](ARCHITETTURA.md): come è organizzato il sorgente.
-* [`docs/it/VERSIONAMENTO.md`](VERSIONAMENTO.md): versionamento e procedura di rilascio.
-* [`CHANGELOG.md`](CHANGELOG.md) e [`STRUMENTI.md`](STRUMENTI.md): storia delle versioni e strumenti di supporto.
+* In inglese: [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (algoritmi, misure, limiti teorici), [`docs/en/ARCHITECTURE.md`](../en/ARCHITECTURE.md) (sorgente), [`docs/en/RELEASING.md`](../en/RELEASING.md) (rilascio), [`CHANGELOG.md`](../../CHANGELOG.md) e [`tools/README.md`](../../tools/README.md).
 
 ## Uso responsabile
 
