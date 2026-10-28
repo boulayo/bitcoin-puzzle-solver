@@ -536,6 +536,25 @@ static unsigned effective_chunk_bits(const pz_u256 *rsz, int requested)
     return cb;
 }
 
+/* -m kangaroo or -m bsgs without a public key: what can be done instead. */
+static void no_pubkey(const campaign_cfg *c, const char *mode)
+{
+    if (c->puzzle && puzzle_find(c->puzzle) && !puzzle_find(c->puzzle)->pubkey[0])
+        pz_die("puzzle %d has no known public key: only -m linear applies", c->puzzle);
+    pz_die("%s mode needs the public key: give it with -k, or use -m linear", mode);
+}
+
+/* The warnings about a solved puzzle, once the command has been checked whole: a command that is refused gets only its error. */
+static void warn_solved(const opts_t *o, const campaign_cfg *c)
+{
+    const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
+    if (!db || !db->privkey[0] || o->address[0] || o->hash160[0] || o->pubkey[0]) return;   /* only for the target of the database */
+    pz_log(PZ_LOG_WARN, "puzzle %d is already SOLVED (the key is public): the campaign is only a test run", db->n);
+    pz_u256 pk;
+    if (o->range[0] && pz_u256_from_hex(&pk, db->privkey) && (pz_u256_cmp(&pk, &c->range_start) < 0 || pz_u256_cmp(&pk, &c->range_end) > 0))
+        pz_log(PZ_LOG_WARN, "the known key of puzzle %d is not in the given range: the campaign will not find it", db->n);
+}
+
 /* Builds a new campaign configuration from the command line. */
 static void build_new_cfg(const opts_t *o, campaign_cfg *c)
 {
@@ -582,9 +601,6 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
             pz_ge_to_pub33(pub, &pt);
             pz_hash160(pub, 33, hk);
             if (memcmp(hk, h, 20) != 0) pz_die("puzzle database inconsistent (the key of puzzle %d does not match the address)", db->n);
-            pz_log(PZ_LOG_WARN, "puzzle %d is already SOLVED (the key is public): the campaign is only a test run", db->n);
-            if (o->range[0] && (pz_u256_cmp(&pk, &c->range_start) < 0 || pz_u256_cmp(&pk, &c->range_end) > 0))
-                pz_log(PZ_LOG_WARN, "the known key of puzzle %d is not in the given range: the campaign will not find it", db->n);
         }
         if (o->range[0]) {
             /* a custom range must overlap the range the puzzle guarantees */
@@ -646,10 +662,10 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
 
     if (!strcmp(o->mode, "linear")) c->mode = MODE_LINEAR;
     else if (!strcmp(o->mode, "kangaroo")) {
-        if (!c->has_pubkey) pz_die("kangaroo mode requires --pubkey");
+        if (!c->has_pubkey) no_pubkey(c, "kangaroo");
         c->mode = MODE_KANGAROO;
     } else if (!strcmp(o->mode, "bsgs")) {
-        if (!c->has_pubkey) pz_die("bsgs mode requires the public key");
+        if (!c->has_pubkey) no_pubkey(c, "bsgs");
         c->mode = MODE_BSGS;
         c->bsgs_t = pick_bsgs_entries(o, &rsz, NULL);
     } else if (!strcmp(o->mode, "auto")) {
@@ -810,6 +826,7 @@ static int cmd_hunt(int argc, char **argv)
     if (!resuming) {
         build_new_cfg(&o, &r->cfg);
         check_options_for_campaign(&o, &r->cfg, r, true);
+        warn_solved(&o, &r->cfg);
         snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o.dir, r->cfg.name);
         if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
         /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the

@@ -214,7 +214,10 @@ void run_bsgs_check(const campaign_cfg *cfg, const sysinfo_t *sys, bool use_cpu,
     if (!use_cpu) pz_die("bsgs mode uses the CPU and RAM (GPUs do not take part): drop --no-cpu");
     const u64 T = cfg->bsgs_t;
     if (!T) pz_die("bsgs campaign without a table size (bsgs_entries)");
-    if (!bsgs_params_init(P, &cfg->range_start, &cfg->range_end, &cfg->pubkey, T, err, sizeof err)) pz_die("%s", err);
+    if (!bsgs_params_init(P, &cfg->range_start, &cfg->range_end, &cfg->pubkey, T, err, sizeof err)) {
+        const bool range = strstr(err, "range too large") || strstr(err, "too many giant steps");   /* the kangaroo has no such limit */
+        pz_die("%s%s", err, range ? ": use -m kangaroo" : "");
+    }
 
     const u64 bytes = table_ram(table_path, T);
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
