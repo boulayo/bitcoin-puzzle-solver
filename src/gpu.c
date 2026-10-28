@@ -337,6 +337,12 @@ static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
 
 /* ---------------- recovery after a device error ---------------- */
 
+/* The size (groups per work-item of the linear kernel, rounds of the kangaroo) of the launches that follow a failed one: a quarter, at
+ * least 1. A GPU shared with a game or a desktop can slow down so much that a launch tuned to 0.35 s runs past the 2 s of the watchdog
+ * of the system; the same size after the recovery would fail again, four times, and the GPU would be given up. The size grows back
+ * after the successful launches by the timing rule of the loops. */
+uint32_t gpu_launch_after_failure(uint32_t n) { return n >= 4 ? n / 4 : 1; }
+
 /* A failed launch after the machine slept or hibernated usually means that the driver reset the device or its context.
  * Drops the session, waits, reopens and rebuilds it (about two and a half minutes of attempts) and repeats the start-up
  * self-test; false if the device never comes back or fails the test. The caller then restores its own buffers. */
@@ -401,11 +407,12 @@ static void *gpu_linear_thread(void *p)
             sched_complete(r->sched, &c, 0);                  /* the block goes back to the pool */
             if (atomic_load(&r->stop)) break;
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
+            ngroups = gpu_launch_after_failure(ngroups);
             if (++consecutive > 3 || ++total_fails > 40 || !gpu_recover(s, false)) {
                 pz_log(PZ_LOG_ERR, "GPU %s: the device does not respond, excluding it", s->info.name);
                 break;
             }
-            pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed", s->info.index);
+            pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed (launches reduced to %u groups per work-item, growing back while they succeed)", s->info.index, ngroups);
             continue;
         }
         consecutive = 0;
@@ -656,11 +663,12 @@ static void *gpu_kang_thread(void *p)
          * since their last distinguished point is lost; the points already found are on the host) */
         if (atomic_load(&r->stop)) break;
         pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
+        rounds = gpu_launch_after_failure(rounds);
         if (++consecutive > 3 || ++total_fails > 40 || !gpu_recover(s, true) || !kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index + 7919ULL * (u64)total_fails)) {
             pz_log(PZ_LOG_ERR, "GPU %s: the device does not respond, excluding it", s->info.name);
             break;
         }
-        pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed with a new herd", s->info.index);
+        pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed with a new herd (launches reduced to %u rounds, growing back while they succeed)", s->info.index, rounds);
     }
     free(dpraw); free(rlraw); free(recs); free(dups);
 done:

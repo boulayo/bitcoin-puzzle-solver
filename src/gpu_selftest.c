@@ -287,12 +287,28 @@ bool gpu_test_kang(gpu_session *s)
     return esc > 0;
 }
 
+/* The rules by which the worker threads recover from a failed launch. */
+int gpu_policy_selftest(void)
+{
+    int fails = 0;
+#define PCHK(cond) do { if (!(cond)) { fails++; printf("  GPU recovery: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
+    /* a quarter of the launch, never less than one */
+    PCHK(gpu_launch_after_failure(4096) == 1024 && gpu_launch_after_failure(8) == 2 && gpu_launch_after_failure(4) == 1);
+    PCHK(gpu_launch_after_failure(3) == 1 && gpu_launch_after_failure(2) == 1 && gpu_launch_after_failure(1) == 1 && gpu_launch_after_failure(0) == 1);
+    uint32_t n = 4096;
+    int steps = 0;
+    while (n > 1 && steps < 20) { n = gpu_launch_after_failure(n); steps++; }
+    PCHK(n == 1 && steps == 6);                               /* 4096 to 1 in six failures */
+    pz_result_line("GPU recovery: size of the launches", "%s", fails ? "FAILED" : "OK");
+    return fails;
+}
+
 int gpu_selftest(void)
 {
     rt_dev devs[RT_MAX_DEVS];
     char note[200];
     int n = enumerate(devs, note, sizeof note);
-    int fails = 0, tested = 0;
+    int fails = gpu_policy_selftest(), tested = 0;
     for (int i = 0; i < n; i++) {
         if (!gpu_selftest_allowed(&devs[i])) continue;
         gpu_session *s = pz_xcalloc(1, sizeof *s);

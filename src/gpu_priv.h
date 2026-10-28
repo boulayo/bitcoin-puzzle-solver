@@ -119,6 +119,7 @@ bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L);
 void gpu_kang_release(gpu_session *s);
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds);
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
+uint32_t gpu_launch_after_failure(uint32_t n);          /* the size of the launches after a failed one */
 
 /* gpu_tune.c: the variants of the kernels, their choice for a device (remembered on disk) and the herd size */
 int gpu_variants_of(const rt_dev *d, const int **v);
@@ -128,7 +129,8 @@ size_t gpu_kang_threads(const gpu_session *s);
 void gpu_linear_autotune(gpu_session *s, int idx);
 void gpu_kang_autotune(gpu_session *s, int idx);
 
-/* gpu_selftest.c: the kernels against the CPU */
+/* gpu_selftest.c: the kernels against the CPU, and the rules of the recovery (no device needed) */
+int gpu_policy_selftest(void);
 bool gpu_test_fe(gpu_session *s);
 bool gpu_test_linear(gpu_session *s);
 bool gpu_test_kang(gpu_session *s);
