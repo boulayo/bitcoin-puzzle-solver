@@ -108,6 +108,36 @@ static void t_seed(void)
     sched_free(a); sched_free(same); sched_free(other); sched_free(old); sched_free(bad);
 }
 
+/* ---- the configuration of a campaign ---- */
+
+static void t_cfg(void)
+{
+    char err[300];
+    campaign_cfg c = mkcfg(1000, 2000, 12), l;
+    c.format_version = PZ_FORMAT_VERSION;
+    snprintf(c.name, sizeof c.name, "t");
+    CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
+    CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) == 0 && l.mode == MODE_LINEAR);
+    const struct { search_mode m; const char *name; } modes[] = {{MODE_LINEAR, "linear"}, {MODE_KANGAROO, "kangaroo"}, {MODE_BSGS, "bsgs"}};
+    for (size_t i = 0; i < sizeof modes / sizeof *modes; i++) {
+        c.mode = modes[i].m;
+        CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
+        CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) == 0 && l.mode == modes[i].m);
+    }
+    /* a mode this version does not know is refused, not taken for a linear search */
+    char *t = pz_read_file("build/t_jobq.conf", NULL);
+    char *m = t ? strstr(t, "mode=bsgs") : NULL;
+    CHECK(m != NULL);
+    if (m) {
+        memcpy(m, "mode=zzzz", 9);
+        FILE *f = fopen("build/t_jobq.conf", "wb");
+        CHECK(f != NULL);
+        if (f) { fputs(t, f); fclose(f); }
+        CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "unknown mode 'zzzz'"));
+    }
+    free(t);
+}
+
 static void t_parts(void)
 {
     char err[300];
@@ -378,6 +408,7 @@ int main(void)
     }
     t_parts();
     t_seed();
+    t_cfg();
     printf(fails ? "t_jobq: %d FAILED\n" : "t_jobq: OK\n", fails);
     return fails != 0;
 }

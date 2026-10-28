@@ -249,7 +249,15 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
         }
         c->has_pubkey = true;
     }
-    GET("mode") c->mode = strcmp(v, "kangaroo") == 0 ? MODE_KANGAROO : strcmp(v, "bsgs") == 0 ? MODE_BSGS : MODE_LINEAR;
+    GET("mode")
+    if (!strcmp(v, "linear")) c->mode = MODE_LINEAR;
+    else if (!strcmp(v, "kangaroo")) c->mode = MODE_KANGAROO;
+    else if (!strcmp(v, "bsgs")) c->mode = MODE_BSGS;
+    else {            /* not guessed: a search of another kind than the campaign's would run on its state */
+        snprintf(err, errlen, "unknown mode '%.20s' in %s (a campaign of another version?)", v, path);
+        free(text);
+        return -1;
+    }
     GET("seed") if (pz_hex_decode(v, c->seed, 32) != 32) { snprintf(err, errlen, "invalid seed"); free(text); return -1; }
     GET("chunk_bits") c->chunk_bits = (unsigned)pz_strtou64(v);
     GET("dp_bits") c->dp_bits = (unsigned)pz_strtou64(v);

@@ -288,6 +288,16 @@ NC=$(ls -d "$DIR"/sub/p71-* 2>/dev/null | wc -l); SES=$(awk -F= '$1=="sessions"{
 [ "$NC" = 1 ] && [ "$SES" = 2 ] && ok "a single campaign with 2 sessions" || bad "sub-interval: $NC campaigns, sessions '$SES'"
 $BIN hunt -p 71 -r 0x1:0x3f -d "$DIR/sub" --ui log -q --no-gpu >/dev/null 2>&1 && bad "interval outside the puzzle accepted" || ok "interval that does not intersect the puzzle rejected"
 
+echo "== status.json lists every worker; a campaign.conf with a mode this version does not know is refused"
+rm -rf "$DIR/sj"
+timeout -s INT 4 $BIN hunt -p 71 -m linear -t 200 -d "$DIR/sj" --ui log -q --no-gpu >/dev/null 2>&1
+python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if len(d['workers']) == 200 and d['workers'][199]['name'] == 'CPU199' else 1)" "$DIR/sj/p71/status.json" 2>/dev/null \
+  && ok "status.json: 200 workers listed, valid JSON" || bad "status.json with 200 workers"
+rm -rf "$DIR/um"; mkdir -p "$DIR/um"; cp -r "$DIR/rc/p71" "$DIR/um/p71"; sed -i 's/^mode=.*/mode=quantum/' "$DIR/um/p71/campaign.conf"
+OUT=$($BIN list -d "$DIR/um" 2>&1); echo "$OUT" | grep -q "unknown mode 'quantum'" && ok "list: unknown mode reported" || bad "list with an unknown mode: $OUT"
+OUT=$(timeout 10 $BIN hunt -c p71 -d "$DIR/um" --ui log -q --no-gpu 2>&1); RC=$?
+[ $RC -ne 0 ] && echo "$OUT" | grep -q "unknown mode 'quantum'" && ok "hunt: a campaign of an unknown mode is not run as a linear one" || bad "hunt with an unknown mode: rc=$RC"
+
 echo "== terminal closed (SIGHUP): orderly stop with save"
 # Under nohup SIGHUP arrives already ignored, the shell cannot restore it and the program rightly keeps ignoring it
 if [ $(( 0x$(awk '/^SigIgn:/{print $2}' /proc/$$/status 2>/dev/null || echo 0) & 1 )) -eq 1 ]; then

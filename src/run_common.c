@@ -266,7 +266,9 @@ static void wrap_fields(const char *in, int width, int hang, char *out, size_t n
 
 void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 {
-    char buf[8192], tb[40], seedhex[65], idb[17], rs[80], re[80], addr[80], hx[48], elapsed[48], state[24];
+    const size_t bcap = 8192 + (size_t)r->nws * 128;      /* the list of the workers grows with their number */
+    char *buf = pz_xmalloc(bcap);
+    char tb[40], seedhex[65], idb[17], rs[80], re[80], addr[80], hx[48], elapsed[48], state[24];
     double el = r->elapsed_prev + run_session_elapsed(r);
     time_t now = time(NULL);
     struct tm tmv;
@@ -308,7 +310,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 
     char detail[900];
     wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
-    int n = snprintf(buf, sizeof buf,
+    int n = snprintf(buf, bcap,
         "=== pzsolve %s - campaign report ===\n"
         "Updated:        %s\n"
         "State:          %s\n"
@@ -334,20 +336,22 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         pi->fraction * 100.0, done, total, pi->unit, rate, pi->unit, cr, gr, t50, t90, kang ? "99%" : "100%", tfull,
         ETA_WINDOW_NAMES[0], pw[0], ETA_WINDOW_NAMES[1], pw[1], ETA_WINDOW_NAMES[2], pw[2], ETA_WINDOW_NAMES[3], pw[3], ETA_WINDOW_NAMES[4], pw[4],
         detail, (unsigned long long)atomic_load(&r->hits_bad), atomic_load(&r->hits_bad) == 1 ? "" : "s");
-    for (int i = 0; i < r->nws && n < (int)sizeof buf - 200; i++) {
+    for (int i = 0; i < r->nws && (size_t)n + 200 < bcap; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
-        n += snprintf(buf + n, sizeof buf - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);
+        n += snprintf(buf + n, bcap - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);
     }
-    if (atomic_load(&r->found)) n += snprintf(buf + n, sizeof buf - (size_t)n, "\nKEY FOUND: see %s\n", r->path_found);
+    if (atomic_load(&r->found)) n += snprintf(buf + n, bcap - (size_t)n, "\nKEY FOUND: see %s\n", r->path_found);
     pz_write_file_atomic(r->path_report, buf, (size_t)n, 0644);
+    free(buf);
 
     /* status.json (machine readable; used by the 'list' command) */
-    char j[8192], e50[32], e90[32], efull[32], pj[ETA_NWIN][32];
+    const size_t jcap = 6144 + (size_t)r->nws * 256;     /* one entry per worker: the file must stay whole, and valid JSON, with any number of them */
+    char *j = pz_xmalloc(jcap), e50[32], e90[32], efull[32], pj[ETA_NWIN][32];
     json_num(e50, sizeof e50, es.t50);
     json_num(e90, sizeof e90, es.t90);
     json_num(efull, sizeof efull, kang ? es.t99 : es.t_full);
     for (int i = 0; i < ETA_NWIN; i++) json_num(pj[i], sizeof pj[i], es.p_win[i]);
-    int m = snprintf(j, sizeof j,
+    int m = snprintf(j, jcap,
         "{\n  \"program\": \"pzsolve\",\n  \"version\": \"%s\",\n  \"campaign\": \"%s\",\n  \"seed_id\": \"%s\",\n  \"part\": \"%s\",\n  \"limit_percent\": %d,\n"
         "  \"puzzle\": %d,\n  \"mode\": \"%s\",\n  \"state\": \"%s\",\n  \"updated_unix\": %lld,\n"
         "  \"elapsed_seconds\": %.1f,\n  \"sessions\": %d,\n  \"unit\": \"%s\",\n  \"done\": \"%.0Lf\",\n  \"total\": \"%.0Lf\",\n"
@@ -359,11 +363,14 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         r->sessions, pi->unit, pi->done, pi->total, pi->fraction, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
         pj[0], pj[1], pj[2], pj[3], pj[4],
         atomic_load(&r->found) ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad));
-    for (int i = 0; i < r->nws && m < (int)sizeof j - 200; i++)
-        m += snprintf(j + m, sizeof j - (size_t)m, "%s\n    {\"name\": \"%s\", \"kind\": \"%c\", \"rate\": %.1f, \"units\": %llu}", i ? "," : "",
-                      r->ws[i].name, r->ws[i].kind, r->ws[i].rate, (unsigned long long)atomic_load(&r->ws[i].units));
-    m += snprintf(j + m, sizeof j - (size_t)m, "\n  ]\n}\n");
+    for (int i = 0; i < r->nws && (size_t)m + 300 < jcap; i++) {
+        const double wr = r->ws[i].rate;
+        m += snprintf(j + m, jcap - (size_t)m, "%s\n    {\"name\": \"%s\", \"kind\": \"%c\", \"rate\": %.1f, \"units\": %llu}", i ? "," : "",
+                      r->ws[i].name, r->ws[i].kind, isfinite(wr) && wr >= 0 && wr < 1e18 ? wr : 0.0, (unsigned long long)atomic_load(&r->ws[i].units));
+    }
+    m += snprintf(j + m, jcap - (size_t)m, "\n  ]\n}\n");
     pz_write_file_atomic(r->path_status, j, (size_t)m, 0644);
+    free(j);
 }
 
 static void append_stats_csv(run_ctx *r, const progress_info *pi)

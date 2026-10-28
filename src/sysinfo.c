@@ -46,6 +46,7 @@ void sysinfo_detect(sysinfo_t *s)
             if (c->Level == 3 && !s->l3_kib) s->l3_kib = (int)(c->Size / 1024);
         }
     }
+    free(info);
     /* physical cores (processor group 0: masks are 64-bit; further logical CPUs count as cores of their own) */
     for (int i = 0; i < s->ncpu; i++) s->core_of[i] = -1;
     len = 0;
@@ -246,7 +247,7 @@ void sysinfo_detect(sysinfo_t *s)
     s->l2_kib = cache_kib(s->cpu_ids[0], 2);
     s->l3_kib = cache_kib(s->cpu_ids[0], 3);
     /* physical cores: (package, core id) pairs; without topology every CPU is a core */
-    static int key[1024];
+    int key[1024];
     for (int i = 0; i < s->ncpu; i++) {
         char path[160];
         snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/topology/core_id", s->cpu_ids[i]);
