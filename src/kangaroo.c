@@ -107,6 +107,7 @@ static bool table_grow(kang_state *ks)
         nt[s] = old[i];
     }
     free(old);
+    atomic_store_explicit(&ks->cap_mirror, ncap, memory_order_relaxed);
     return true;
 }
 
@@ -134,6 +135,8 @@ static void table_thin(kang_state *ks)
     }
     free(old);
     ks->count = kept;
+    atomic_store_explicit(&ks->count_mirror, kept, memory_order_relaxed);
+    atomic_store_explicit(&ks->thin_mirror, ks->thin_level, memory_order_relaxed);
     pz_log(PZ_LOG_WARN, "distinguished-point table full (RAM limit): halving the density of stored points (level %u). Raise --mem to avoid this", ks->thin_level);
 }
 
@@ -156,6 +159,7 @@ int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
         if (dp_empty(e)) {
             *e = *rec;
             ks->count++;
+            atomic_store_explicit(&ks->count_mirror, ks->count, memory_order_relaxed);
             if (!from_log) kang_log_push(ks, rec);
             return 1;
         }
@@ -385,6 +389,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     if (cap < 64) cap = 64;
     ks->cap = cap;
     ks->mask = cap - 1;
+    atomic_store_explicit(&ks->cap_mirror, cap, memory_order_relaxed);
     ks->tab = calloc(cap, sizeof(dp_rec));
     if (!ks->tab) pz_die("not enough memory for the distinguished-point table (%llu entries)", (unsigned long long)cap);
     ks->caplog = 32768;

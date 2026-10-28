@@ -125,6 +125,11 @@ typedef struct kang_state {
     u64 loaded;
     u64 epoch;
     long double expected_steps;
+    /* The size of the table as the progress line shows it. The plain fields above are written under mu, and a rebuild of the table (growth,
+     * thinning) holds mu for as long as it takes (seconds, for a table of GiB): the reporter reads these copies instead, so that it does not
+     * wait for the lock (a pause of 15 s in its loop reads as a suspension of the system). Written under mu, read without. */
+    _Atomic u64 count_mirror, cap_mirror;
+    _Atomic unsigned thin_mirror;
 } kang_state;
 
 /* per-worker (CPU or host-side GPU) kangaroo herd */

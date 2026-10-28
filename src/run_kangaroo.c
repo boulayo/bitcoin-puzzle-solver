@@ -36,12 +36,12 @@ static void kang_progress(run_ctx *r, progress_info *pi)
     pi->fraction = (double)(1.0L - expl(-z * z));
     pi->unit = "steps";
     pi->eta = (eta_in){ETA_RAYLEIGH, done, 0, c, false, 0};
-    pthread_mutex_lock(&ks->mu);
-    u64 cnt = ks->count, cap = ks->cap;
-    pthread_mutex_unlock(&ks->mu);
+    /* the size of the table, from the copies that need no lock: a rebuild of the table holds mu for seconds (see kang_state) */
+    const u64 cnt = atomic_load_explicit(&ks->count_mirror, memory_order_relaxed), cap = atomic_load_explicit(&ks->cap_mirror, memory_order_relaxed);
+    const unsigned thin = atomic_load_explicit(&ks->thin_mirror, memory_order_relaxed);
     snprintf(pi->detail, sizeof pi->detail,
              "P(found) ~ %.1f%% | distinguished points %llu (table %.1f%%%s) | kangaroos %d | dp-bits %u | restarts %llu | discarded %llu",
-             pi->fraction * 100.0, (unsigned long long)cnt, 100.0 * (double)cnt / (double)cap, ks->thin_level ? ", RAM exhausted: density reduced" : "", ks->K_total, ks->P.dp_bits,
+             pi->fraction * 100.0, (unsigned long long)cnt, 100.0 * (double)cnt / (double)cap, thin ? ", RAM exhausted: density reduced" : "", ks->K_total, ks->P.dp_bits,
              (unsigned long long)(atomic_load(&ks->restarts) + atomic_load(&ks->dups)), (unsigned long long)atomic_load(&ks->dropped));
 }
 
@@ -273,20 +273,45 @@ void kang_free_test_state(struct kang_state *ks)
     synth_free(r);
 }
 
+typedef struct { run_ctx *r; progress_info pi; _Atomic int done; } progress_call;
+
+static void *progress_call_main(void *p)
+{
+    progress_call *c = p;
+    kang_progress(c->r, &c->pi);
+    atomic_store(&c->done, 1);
+    return NULL;
+}
+
 /* The "discarded" of the progress line counts the distinguished points that were lost (thinned out, no room in the table or in the log
- * buffer, GPU buffer overflow), not the collisions that gave no whole solution. */
+ * buffer, GPU buffer overflow), not the collisions that gave no whole solution. The line must also come out while the table is locked: a
+ * rebuild of the table (growth, thinning) holds the lock for seconds when the table is large, and the reporter that waits for it makes the
+ * clock-gap detector of run_reporter_loop (15 s) see a suspension of the system. */
 static int progress_selftest(void)
 {
     kang_state *ks = kang_make_test_state(40, 1);
     if (!ks) return 1;
     atomic_store(&ks->dropped, 7);
     atomic_store(&ks->rejected, 3);
-    progress_info pi;
-    memset(&pi, 0, sizeof pi);
-    kang_progress(ks->r, &pi);
-    const bool ok = strstr(pi.detail, "| discarded 7") != NULL;
+    dp_rec recs[100];
+    memset(recs, 0, sizeof recs);
+    for (int i = 0; i < 100; i++) recs[i].tagk = ((u64)(i + 1) << 20) | KIND_TAME;
+    bool ok = !kang_insert_dps(ks, recs, 100, NULL);
+    progress_call c;
+    memset(&c, 0, sizeof c);
+    c.r = ks->r;
+    kang_progress(ks->r, &c.pi);
+    ok = ok && strstr(c.pi.detail, "| discarded 7") != NULL && strstr(c.pi.detail, "distinguished points 100 (table ") != NULL;
+    pthread_mutex_lock(&ks->mu);                          /* as in the middle of table_grow or table_thin */
+    pthread_t th;
+    const bool started = pthread_create(&th, NULL, progress_call_main, &c) == 0;
+    for (int i = 0; started && i < 400 && !atomic_load(&c.done); i++) pz_sleep(0.005);
+    const bool unblocked = atomic_load(&c.done);
+    pthread_mutex_unlock(&ks->mu);
+    if (started) pthread_join(th, NULL);
+    ok = ok && started && unblocked;
     kang_free_test_state(ks);
-    pz_result_line("kangaroo, progress line: points discarded", "%s", ok ? "OK" : "FAILED");
+    pz_result_line("kangaroo, progress line, table locked", "%s", ok ? "OK" : "FAILED");
     return !ok;
 }
 
