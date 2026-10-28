@@ -1106,7 +1106,7 @@ static int cmd_split(int argc, char **argv)
                (u128)speed[i] * 200 < (u128)wsum ? "   (too slow for this split: its minimum share is more than its fair share)" : "");
         first += counts[i];
     }
-    printf("On every computer use the same puzzle or range (-p or -r), the same -s and --chunk-bits, and -m linear.\n");
+    pz_fputs_wrap(stdout, "On every computer use the same puzzle or range (-p or -r), the same -s and --chunk-bits, and -m linear.\n", PZ_LINE_MAX, 2);
     return 0;
 }
 

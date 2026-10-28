@@ -241,6 +241,6 @@ int campaigns_list(const char *base)
         free(w->name);
     }
     free(rows);
-    if (stopped) printf("\nResume a campaign with: pzsolve hunt -c NAME, or pzsolve hunt -p N for a puzzle of the database.\n");
+    if (stopped) pz_fputs_wrap(stdout, "\nResume a campaign with: pzsolve hunt -c NAME, or pzsolve hunt -p N for a puzzle of the database.\n", PZ_LINE_MAX, 2);
     return nc;
 }

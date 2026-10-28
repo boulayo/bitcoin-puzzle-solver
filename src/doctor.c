@@ -248,7 +248,7 @@ int doctor_run(int argc, char **argv)
     }
     sysinfo_t s;
     sysinfo_detect(&s);
-    printf("pzsolve doctor - checks the program, the machine and the saved state (paste this page if you ask for help)\n");
+    pz_fputs_wrap(stdout, "pzsolve doctor - checks the program, the machine and the saved state (paste this page if you ask for help)\n", PZ_LINE_MAX, 2);
     check_program();
     check_system(&s);
     if (!deep) check_primitives();           /* --full: the selftest at the end checks them, and more */
