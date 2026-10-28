@@ -9,7 +9,8 @@
  *   [22] kind (0 tame / 1 wild)  [23] sigma flag (1 => sigma = -1)
  *   [24] tag one step back  [25] tag two steps back  [26] cycle checkpoint tag  [27] least tag since
  *   [28] leaving a cycle (0/1)  [29,30] step number of the last distinguished point or restart (64-bit)  [31] unused
- * jump table (constant): per jump 20 uints = x[8] y[8] v[4]; R regular jumps, then KANG_NESC escape jumps
+ * jump table: per jump 20 uints = x[8] y[8] v[4]; R regular jumps, then KANG_NESC escape jumps. In global memory, not __constant:
+ * every walker reads its own entry, and the constant cache serializes the reads of a warp at different addresses (NVIDIA)
  * DP record = 10 uints: tagk_lo tagk_hi d[6] index pad
  *
  * Why it is built like this. The private arrays of a work-item (tens of KB) live in device memory, and the kernel is
@@ -41,7 +42,7 @@
 #define FL_ESC 4u
 #define FL_JSHIFT 8
 
-inline void d_add_jump(uint d[6], __constant const uint *v)
+inline void d_add_jump(uint d[6], __global const uint *v)
 {
     ulong acc = (ulong)d[0] + v[0];
     d[0] = (uint)acc;
@@ -85,7 +86,7 @@ inline void kang_cycle(int bnd, uint t, uint *ck, uint *mn, uint *esc)
 }
 
 /* d += the jumps of `nr` rounds of the history of one kangaroo (entries off0, off0 + stride, ...) */
-inline void kang_replay(__global const ushort *hist, const size_t off0, const size_t stride, const uint nr, __constant const uint *jump, uint d[6])
+inline void kang_replay(__global const ushort *hist, const size_t off0, const size_t stride, const uint nr, __global const uint *jump, uint d[6])
 {
     for (uint i = 0; i < nr; i++) {
         const uint h = hist[off0 + (size_t)i * stride];
@@ -97,7 +98,7 @@ inline void kang_replay(__global const ushort *hist, const size_t off0, const si
 
 /* A distinguished point after round `rd` of the launch: d is rebuilt from its value at the start of the launch */
 PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hist, const size_t off0, const size_t stride, const uint nr,
-                              __constant const uint *jump, __global uint *dps, __global uint *dpcount, const uint dps_cap, const uint widx,
+                              __global const uint *jump, __global uint *dps, __global uint *dpcount, const uint dps_cap, const uint widx,
                               const uint kindcode, const uint t4, const uint t5)
 {
     uint d[6];
@@ -157,7 +158,7 @@ PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hi
 
 /* One launch = `rounds` steps of the NK kangaroos of this work-item; the number of rounds is at most the depth of the
  * history buffer. Step number of the first round: step_hi:step_lo (the same for every kangaroo of the herd). */
-__kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __global uint *dps, __global uint *dpcount,
+__kernel void pz_kang_step(__global uint *state, __global const uint *jump, __global uint *dps, __global uint *dpcount,
                            __global uint *rlist, __global uint *rcount, __global ushort *hist, const uint rounds, const uint dp_mask_lo,
                            const uint dp_mask_hi, const uint cap_lo, const uint cap_hi, const uint dps_cap, const uint rlist_cap, const uint R,
                            const uint step_lo, const uint step_hi, const uint pz_n)
@@ -189,7 +190,7 @@ __kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __
     fe acc;
     for (int k = 0; k < NK; k++) {
         fe jx, d;
-        fe_load_c(&jx, jump + (FL[k] >> FL_JSHIFT) * JS);
+        fe_load_g(&jx, jump + (FL[k] >> FL_JSHIFT) * JS);
         fe_sub(&d, &X[k], &jx);
 #if MC > 1
         if (k % MC == 0) { if (k == 0) fe_set_u32(&TP[0][0], 1); else TP[0][k / MC] = acc; }
@@ -232,7 +233,7 @@ __kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __
                 const int i = b * MC + c, k = dir ? i : NK - 1 - i;
                 fe jx0;
                 BX[c] = X[k];
-                fe_load_c(&jx0, jump + (FL[k] >> FL_JSHIFT) * JS);
+                fe_load_g(&jx0, jump + (FL[k] >> FL_JSHIFT) * JS);
                 fe_sub(&BD[c], &BX[c], &jx0);
             }
             BQ[MC - 1] = TP[rd & 1][NK / MC - 1 - b];
@@ -247,8 +248,8 @@ __kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __
                 const fe xk = BX[c], yk = Y[k];
                 fe jx, jy, ik, lam, t, x3, y3;
                 uint J2;
-                fe_load_c(&jx, jump + J * JS);
-                fe_load_c(&jy, jump + J * JS + 8);
+                fe_load_g(&jx, jump + J * JS);
+                fe_load_g(&jy, jump + J * JS + 8);
                 if (i < NK - 1) {
                     fe_mul(&ik, &inv, &BQ[c]);
                     fe_mul(&inv, &inv, &BD[c]);
@@ -258,7 +259,7 @@ __kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __
                 KANG_STEP
                 if (more) {                                /* denominator of the next round, running product */
                     fe jx2, d2;
-                    fe_load_c(&jx2, jump + J2 * JS);
+                    fe_load_g(&jx2, jump + J2 * JS);
                     fe_sub(&d2, &x3, &jx2);
                     if (i == 0) accn = d2;
                     else fe_mul(&accn, &accn, &d2);
@@ -273,8 +274,8 @@ __kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __
             const fe xk = X[k], yk = Y[k];
             fe jx, jy, ik, lam, t, x3, y3;
             uint J2;
-            fe_load_c(&jx, jump + J * JS);
-            fe_load_c(&jy, jump + J * JS + 8);
+            fe_load_g(&jx, jump + J * JS);
+            fe_load_g(&jy, jump + J * JS + 8);
             if (i < NK - 1) {
                 const fe pk = TP[dir ? k + 1 : k - 1];
                 fe d;
@@ -287,7 +288,7 @@ __kernel void pz_kang_step(__global uint *state, __constant const uint *jump, __
             KANG_STEP
             if (more) {                                    /* denominator of the next round, running product */
                 fe jx2, d2;
-                fe_load_c(&jx2, jump + J2 * JS);
+                fe_load_g(&jx2, jump + J2 * JS);
                 fe_sub(&d2, &x3, &jx2);
                 if (i == 0) accn = d2;
                 else fe_mul(&accn, &accn, &d2);
