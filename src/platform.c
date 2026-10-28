@@ -91,6 +91,7 @@ int pz_fd_sync(int fd)
 }
 
 int pz_fd_truncate(int fd, u64 size) { return ftruncate(fd, (off_t)size); }
+int pz_truncate_path(const char *path, u64 size) { return truncate(path, (off_t)size); }
 
 void pz_fd_drop_cache(int fd, u64 off, u64 len)
 {
@@ -484,6 +485,19 @@ int pz_fd_truncate(int fd, u64 size)
     info.EndOfFile.QuadPart = (LONGLONG)size;
     if (h == INVALID_HANDLE_VALUE || !SetFileInformationByHandle(h, FileEndOfFileInfo, &info, sizeof info)) { errno = EIO; return -1; }
     return 0;
+}
+
+/* MinGW's truncate() takes a 32-bit length (only ftruncate is renamed by _FILE_OFFSET_BITS): a file of 2 GiB or more would not be cut,
+ * or cut to its size modulo 4 GiB. */
+int pz_truncate_path(const char *path, u64 size)
+{
+    const int fd = pz_open_rw(path, false);
+    if (fd < 0) return -1;
+    const int rc = pz_fd_truncate(fd, size);
+    const int e = errno;
+    close(fd);
+    errno = e;
+    return rc;
 }
 
 void pz_fd_drop_cache(int fd, u64 off, u64 len) { (void)fd; (void)off; (void)len; }

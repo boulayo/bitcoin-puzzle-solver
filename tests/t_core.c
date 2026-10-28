@@ -9,10 +9,10 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <dirent.h>
+#include <unistd.h>
 #ifndef _WIN32
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <unistd.h>
 #endif
 
 static int fails;
@@ -276,6 +276,33 @@ static void t_kv(void)
     CHECK(pz_kv_find(nul, "b", '=', 0) == NULL && pz_kv_find(nul, "a", '=', 0) != NULL);
 }
 
+/* pz_truncate_path cuts a file above 4 GiB to the byte (MinGW's truncate() takes a 32-bit length): the size of a dp.bin of 4 GiB, a
+ * header and one block of records, with a torn record at the end. The file is sparse: it takes no room on the disk. */
+static void t_truncate_path(void)
+{
+    char dir[600], path[700];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pztrunc")) { CHECK(0); return; }
+    snprintf(path, sizeof path, "%s/big.bin", dir);
+    const u64 keep = (4ULL << 30) + 38 + 32768 * 32;
+    int fd = pz_open_rw(path, true);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        CHECK(pz_fd_truncate(fd, keep + 16) == 0 && pz_fd_size(fd) == (i64)(keep + 16));
+        close(fd);
+        CHECK(pz_truncate_path(path, keep) == 0);
+        fd = pz_open_read(path);
+        CHECK(fd >= 0 && pz_fd_size(fd) == (i64)keep);
+        if (fd >= 0) close(fd);
+        CHECK(pz_truncate_path(path, 38) == 0);                          /* and down below 4 GiB */
+        fd = pz_open_read(path);
+        CHECK(fd >= 0 && pz_fd_size(fd) == 38);
+        if (fd >= 0) close(fd);
+    }
+    snprintf(path, sizeof path, "%s/none.bin", dir);
+    CHECK(pz_truncate_path(path, 0) != 0);                              /* no such file: not created */
+    pz_remove_tree(dir);
+}
+
 int main(void)
 {
     pz_env_init();
@@ -308,6 +335,7 @@ int main(void)
     t_writers();
     t_kv();
     t_file_count();
+    t_truncate_path();
 #ifndef _WIN32
     t_die_log();
 #endif

@@ -33,7 +33,7 @@ static int log_resync(kang_state *ks)
     fclose(f);
     if (size < 38) return -1;
     const u64 whole = (u64)(size - 38) / sizeof(dp_rec);
-    if (truncate(ks->log_path, 38 + (off_t)(whole * sizeof(dp_rec))) != 0) return -1;
+    if (pz_truncate_path(ks->log_path, 38 + whole * sizeof(dp_rec)) != 0) return -1;
     const u64 on_file = whole > ks->log_recs ? whole - ks->log_recs : 0;      /* of the records of the block, already written */
     const size_t drop = on_file > ks->nw ? ks->nw : (size_t)on_file;
     memmove(ks->wbuf, ks->wbuf + drop, (ks->nw - drop) * sizeof(dp_rec));
@@ -282,7 +282,7 @@ int kang_load_log(kang_state *ks)
     if (n < 0) return log_unreadable(ks, e);
     /* the whole records of the file: a record cut short at the end (the program stopped in the middle of a write) is cut off, and only that */
     const u64 rest = (u64)size - sizeof hdr, whole = rest / sizeof(dp_rec);
-    if (rest % sizeof(dp_rec) && truncate(ks->log_path, (off_t)(sizeof hdr + whole * sizeof(dp_rec))) != 0) {
+    if (rest % sizeof(dp_rec) && pz_truncate_path(ks->log_path, sizeof hdr + whole * sizeof(dp_rec)) != 0) {
         pz_log(PZ_LOG_ERR, "cannot cut the partly written record off the end of %s: %s", ks->log_path, strerror(errno));
         return -1;
     }

@@ -34,6 +34,7 @@ i64 pz_pwrite(int fd, const void *buf, size_t n, u64 off);
 i64 pz_fd_size(int fd);                                    /* -1 on error */
 int pz_fd_sync(int fd);
 int pz_fd_truncate(int fd, u64 size);
+int pz_truncate_path(const char *path, u64 size);          /* truncate(), with a 64-bit length on every system */
 void pz_fd_drop_cache(int fd, u64 off, u64 len);           /* hint: these bytes will not be read again */
 /* Replaces `to` with `from` atomically (POSIX rename semantics, also when `to` exists or is briefly held open by a
  * reader on Windows). 0 on success. */
