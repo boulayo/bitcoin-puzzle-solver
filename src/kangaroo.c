@@ -297,21 +297,11 @@ static void kang_setup(kang_state *ks)
     ks->expected_steps = KANG_C_MEAN * ks->sqrtW;
 }
 
-/* Called once the total number of walkers (CPU + GPU) is known. */
-int kang_configure(kang_state *ks, int k_gpu_total)
+/* dp_bits: the larger of what the overhead of the walkers allows and what memory requires (the table must hold the points of
+ * KANG_DP_MEM_MARGIN sqrt(W) steps), or --dp-bits as far as the number of walkers allows. */
+static int pick_dp_bits(kang_state *ks, u64 max_entries)
 {
     run_ctx *r = ks->r;
-    int nthr = r->use_cpu ? r->nthreads : 0;
-    ks->K_total = ks->K_thread * nthr + k_gpu_total;
-    if (ks->K_total <= 0) return -1;
-    kang_setup(ks);
-    if (r->mem_limit == 0) {
-        u64 lim = (u64)((double)r->sys.mem_avail * 0.4);
-        if (lim > (64ULL << 30)) lim = 64ULL << 30;
-        if (lim < (256ULL << 20)) lim = 256ULL << 20;
-        r->mem_limit = lim;
-    }
-    u64 max_entries = r->mem_limit / sizeof(dp_rec);
     int dp_ov = 0;
     long double ov = 0.01L * ks->sqrtW / ks->K_total;
     if (ov >= 1.0L) dp_ov = (int)floorl(log2l(ov));
@@ -334,18 +324,18 @@ int kang_configure(kang_state *ks, int k_gpu_total)
             dp = dmax;
         } else dp = (int)r->cfg.dp_bits;
     }
-    ks->P.dp_bits = (unsigned)dp;
-    ks->P.dp_mask = ((u64)1 << dp) - 1;
-    /* a walker without a DP for 24 times the mean distance between DPs is in a cycle (false alarm ~e^-24); the counter
-     * is 64-bit: with large dp_bits (45 on puzzle 140) a 32-bit cap would restart every walker long before its next DP */
-    ks->P.cap_since = dp >= 58 ? ~0ULL : 24ULL * ((u64)1 << dp) + 16;
-    ks->P.R = KANG_R;
+    return dp;
+}
 
-    /* jump table (the walk on classes is a symmetric random walk: no drift to tune): uniform in [2/3, 4/3] of the mean, rounded up
-     * to a multiple of KANG_MOD, in integer arithmetic (identical on every architecture). Without drift a walker stays within about
-     * sqrt(n) jumps of its start (n ~ sqrt(W)/K steps each), so two walks can cross only if their starts are that close: the number
-     * of such pairs is about (mean / W^(3/4)) * K^1.5, hence the mean of W^(3/4)/16: K^1.5/16 pairs, and each walk covers a
-     * fraction 1/(16 sqrt(K)) of W (docs/en/ALGORITHMS.md 8.10) */
+/* The jump table (the walk on classes is a symmetric random walk: no drift to tune): uniform in [2/3, 4/3] of the mean, rounded up
+ * to a multiple of KANG_MOD, in integer arithmetic (identical on every architecture). Without drift a walker stays within about
+ * sqrt(n) jumps of its start (n ~ sqrt(W)/K steps each), so two walks can cross only if their starts are that close: the number
+ * of such pairs is about (mean / W^(3/4)) * K^1.5, hence the mean of W^(3/4)/16: K^1.5/16 pairs, and each walk covers a
+ * fraction 1/(16 sqrt(K)) of W (docs/en/ALGORITHMS.md 8.10). Sets jump_tag; returns the mean jump, for the log. */
+static long double make_jump_table(kang_state *ks)
+{
+    run_ctx *r = ks->r;
+    ks->P.R = KANG_R;
     u128 mean3;
     {
         const pz_u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */
@@ -360,7 +350,6 @@ int kang_configure(kang_state *ks, int k_gpu_total)
         mean3 = (u128)m.w[1] << 64 | m.w[0];
         if (mean3 < 2 * KANG_MOD) mean3 = 2 * KANG_MOD;
     }
-    const long double mean = (long double)mean3;                               /* only for the log line */
     u64 rg[4];
     krng_seed(rg, r->cfg.seed, "jumps4", 0, 0);
     pz_u256 bound = pz_u256_from_u128(mean3 / 3 * 2 + 1);
@@ -388,10 +377,15 @@ int kang_configure(kang_state *ks, int k_gpu_total)
         pz_sha256(jb, sizeof jb, jh);
         memcpy(ks->jump_tag, jh, sizeof ks->jump_tag);
     }
+    return (long double)mean3;
+}
 
-    /* The table starts with room for the points expected at 60 % load, as far as the memory limit allows. With a small --dp-bits on a large interval
-     * that is more than a u64 holds (2^69 points on puzzle 140 with --dp-bits 2), and the conversion of such a number is undefined: the number is
-     * cut at 2^62, far above any table that memory can hold, and the limit decides. */
+/* The table of distinguished points and the buffers of its log. The table starts with room for the points expected at 60 % load, as far as
+ * the memory limit allows. With a small --dp-bits on a large interval that is more than a u64 holds (2^69 points on puzzle 140 with
+ * --dp-bits 2), and the conversion of such a number is undefined: the number is cut at 2^62, far above any table that memory can hold,
+ * and the limit decides. */
+static void alloc_table(kang_state *ks, int dp, u64 max_entries)
+{
     const long double n_target = KANG_DP_MEM_MARGIN * ks->sqrtW / ldexpl(1.0L, dp);
     const long double want_max = ldexpl(1.0L, 62);
     const long double want_f = n_target / 0.6L;
@@ -409,13 +403,38 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     ks->caplog = ks->capw = KANG_LOG_BUF_INIT;
     ks->logbuf = pz_xmalloc(ks->caplog * sizeof(dp_rec));
     ks->wbuf = pz_xmalloc(ks->capw * sizeof(dp_rec));
-    snprintf(ks->log_path, sizeof ks->log_path, "%s/dp.bin", r->cfg.dir);
+    snprintf(ks->log_path, sizeof ks->log_path, "%s/dp.bin", ks->r->cfg.dir);
+}
+
+/* Called once the total number of walkers (CPU + GPU) is known. */
+int kang_configure(kang_state *ks, int k_gpu_total)
+{
+    run_ctx *r = ks->r;
+    int nthr = r->use_cpu ? r->nthreads : 0;
+    ks->K_total = ks->K_thread * nthr + k_gpu_total;
+    if (ks->K_total <= 0) return -1;
+    kang_setup(ks);
+    if (r->mem_limit == 0) {
+        u64 lim = (u64)((double)r->sys.mem_avail * 0.4);
+        if (lim > (64ULL << 30)) lim = 64ULL << 30;
+        if (lim < (256ULL << 20)) lim = 256ULL << 20;
+        r->mem_limit = lim;
+    }
+    const u64 max_entries = r->mem_limit / sizeof(dp_rec);
+    const int dp = pick_dp_bits(ks, max_entries);
+    ks->P.dp_bits = (unsigned)dp;
+    ks->P.dp_mask = ((u64)1 << dp) - 1;
+    /* a walker without a DP for 24 times the mean distance between DPs is in a cycle (false alarm ~e^-24); the counter
+     * is 64-bit: with large dp_bits (45 on puzzle 140) a 32-bit cap would restart every walker long before its next DP */
+    ks->P.cap_since = dp >= 58 ? ~0ULL : 24ULL * ((u64)1 << dp) + 16;
+    const long double mean = make_jump_table(ks);
+    alloc_table(ks, dp, max_entries);
 
     if (r->silent_setup) return 0;
     char b1[32], b2[32], b3[32], jid[9];
     kang_jump_id(ks->jump_tag, jid);
     pz_log(PZ_LOG_INFO, "kangaroo: W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
-           log2l(pz_u256_to_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
+           log2l(pz_u256_to_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)ks->cap * sizeof(dp_rec), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
     pz_log(r->node ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);
     pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
