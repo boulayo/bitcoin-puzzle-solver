@@ -44,11 +44,39 @@ static inline pz_vu pz_v_set(uint32_t x)
     return r;
 }
 
-/* Byte swap of each word. With 64-byte vectors one byte shuffle (vpshufb); with AVX2 the shuffle mask costs a register that the
- * RIPEMD-160 lines need, and SSE2 has no byte shuffle: shifts there. */
+#if PZ_VBYTES == 32 && defined(__AVX2__) && !defined(PZ_HASH_SHA256_EXTERNAL)
+#include <immintrin.h>
+/* AVX2 byte shuffles with the mask read from memory through a pointer the compiler cannot see through: one vpshufb with a memory
+ * operand, so no register is held for the mask (the RIPEMD-160 lines need all sixteen). Not with the SHA-NI stage, where they
+ * made the compiler spill more than they saved. */
+static const uint8_t pz_v_mask_bswap[32] PZ_ALIGN(32) = {3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12,
+                                                       3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12};
+static const uint8_t pz_v_mask_rotl8[32] PZ_ALIGN(32) = {3, 0, 1, 2, 7, 4, 5, 6, 11, 8, 9, 10, 15, 12, 13, 14,
+                                                       3, 0, 1, 2, 7, 4, 5, 6, 11, 8, 9, 10, 15, 12, 13, 14};
+static inline pz_vu pz_v_shuffle_mem(pz_vu x, const uint8_t *mask)
+{
+    __asm__("" : "+r"(mask));
+    return (pz_vu)_mm256_shuffle_epi8((__m256i)x, _mm256_load_si256((const __m256i *)mask));
+}
+#endif
+
+/* Rotation left by a constant: with AVX2 a rotation by 8 bits is one byte shuffle instead of two shifts and an or (AVX-512 has
+ * vprold for every count). */
+static inline pz_vu pz_v_rotl(pz_vu x, int n)
+{
+#if PZ_VBYTES == 32 && defined(__AVX2__) && !defined(PZ_HASH_SHA256_EXTERNAL)
+    if (n == 8) return pz_v_shuffle_mem(x, pz_v_mask_rotl8);
+#endif
+    return PZ_V_ROTL(x, n);
+}
+
+/* Byte swap of each word. With 64-byte vectors one byte shuffle (vpshufb), with AVX2 one with the mask in memory, and SSE2 has no
+ * byte shuffle: shifts there. */
 static inline pz_vu pz_v_bswap(pz_vu x)
 {
-#if PZ_VBYTES == 64
+#if PZ_VBYTES == 32 && defined(__AVX2__) && !defined(PZ_HASH_SHA256_EXTERNAL)
+    return pz_v_shuffle_mem(x, pz_v_mask_bswap);
+#elif PZ_VBYTES == 64
     typedef uint8_t pz_vb __attribute__((vector_size(64)));
 #define PZ_BSWAP_IDX 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 19, 18, 17, 16, 23, 22, 21, 20, 27, 26, 25, 24, 31, 30, 29, 28, \
                      35, 34, 33, 32, 39, 38, 37, 36, 43, 42, 41, 40, 47, 46, 45, 44, 51, 50, 49, 48, 55, 54, 53, 52, 59, 58, 57, 56, 63, 62, 61, 60
@@ -73,7 +101,7 @@ static inline pz_vu pz_v_load(const uint32_t *p)
 static inline void pz_v_store(uint32_t *p, pz_vu v) { memcpy(p, &v, sizeof v); }
 
 #ifdef PZ_HASH_EXTERNAL
-#include PZ_HASH_EXTERNAL     /* a complete implementation of PZ_HASH_LANES_FN and PZ_HASH_W0_FN for this lane count (aarch64: hash_lanes_neon.inc) */
+#include PZ_HASH_EXTERNAL     /* a complete implementation of PZ_HASH_LANES_FN and PZ_HASH_FILTER_FN for this lane count (aarch64: hash_lanes_neon.inc) */
 #else
 #ifdef PZ_HASH_SHA256_EXTERNAL
 #include PZ_HASH_SHA256_EXTERNAL     /* pz_sha256_lanes_33 for the instruction set of the includer (x86-64: hash_lanes_shani.inc) */
@@ -157,9 +185,9 @@ static inline __attribute__((always_inline)) void pz_ripemd160_lanes_32(const pz
 #pragma GCC unroll 80
     for (int j = 0; j < 80; j++) {
         const int rd = j / 16;
-        pz_vu t = PZ_V_ROTL(a + pz_rmd_fv(rd, b, c, d) + m[pz_rmd_rl[j]] + pz_rmd_kl[rd], pz_rmd_sl[j]) + e;
+        pz_vu t = pz_v_rotl(a + pz_rmd_fv(rd, b, c, d) + m[pz_rmd_rl[j]] + pz_rmd_kl[rd], pz_rmd_sl[j]) + e;
         a = e; e = d; d = PZ_V_ROTL(c, 10); c = b; b = t;
-        t = PZ_V_ROTL(a2 + pz_rmd_fv(4 - rd, b2, c2, d2) + m[pz_rmd_rr[j]] + pz_rmd_kr[rd], pz_rmd_sr[j]) + e2;
+        t = pz_v_rotl(a2 + pz_rmd_fv(4 - rd, b2, c2, d2) + m[pz_rmd_rr[j]] + pz_rmd_kr[rd], pz_rmd_sr[j]) + e2;
         a2 = e2; e2 = d2; d2 = PZ_V_ROTL(c2, 10); c2 = b2; b2 = t;
     }
     out[0] = pz_v_set(h1) + c + d2;
