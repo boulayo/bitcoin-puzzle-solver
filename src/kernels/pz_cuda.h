@@ -23,6 +23,7 @@ typedef unsigned short ushort;
 #define get_global_id(d) (blockIdx.x * blockDim.x + threadIdx.x)
 #define rotate(x, n) __funnelshift_l((x), (x), (n))
 #define mul_hi(a, b) __umulhi((a), (b))
+#define PZ_BSWAP(x) __byte_perm((x), 0u, 0x0123u)
 #define atomic_inc(p) atomicAdd((p), 1u)
 #define atomic_or(p, v) atomicOr((p), (v))
 

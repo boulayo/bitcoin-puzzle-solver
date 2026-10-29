@@ -880,7 +880,11 @@ inline uint rmd_f(int rd, uint x, uint y, uint z)
     }
 }
 
+#ifdef PZ_BSWAP
+inline uint bswap32(uint x) { return PZ_BSWAP(x); }   /* CUDA: one PRMT, where the expression below compiles to five instructions */
+#else
 inline uint bswap32(uint x) { return (x >> 24) | ((x >> 8) & 0xff00u) | ((x << 8) & 0xff0000u) | (x << 24); }
+#endif
 
 /* RIPEMD-160 of the 32-byte SHA-256 digest; out = five little-endian words */
 inline void ripemd160_32(const uint dig[8], uint out[5])

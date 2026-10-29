@@ -32,6 +32,7 @@ extern PZ_MOCK_TLS unsigned pz_mock_gid;
 #define rotate(x, n) ((uint)(((uint)(x) << ((n) & 31)) | ((uint)(x) >> ((32 - ((n) & 31)) & 31))))
 #define mul_hi(a, b) ((uint)(((ulong)(uint)(a) * (uint)(b)) >> 32))
 #define PZ_CTZ(x) __builtin_ctz(x)
+#define PZ_BSWAP(x) __builtin_bswap32(x)
 #define atomic_inc(p) __atomic_fetch_add((p), 1u, __ATOMIC_RELAXED)
 #define atomic_or(p, v) __atomic_fetch_or((p), (v), __ATOMIC_RELAXED)
 
