@@ -226,7 +226,7 @@ static void linear_set_variant(gpu_session *s, int v) { s->variant = v; }
 static int linear_code(const gpu_session *s) { return s->variant; }
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
- * OpenCL the historical 64 per compute unit; bounded by the state buffer in an eighth of the device memory. */
+ * OpenCL the historical 64 per compute unit; bounded by the state and the history in a sixth of the device memory. */
 size_t gpu_kang_threads(const gpu_session *s)
 {
     size_t t = s->l2fit ? kang_l2_threads_for(&s->info, s->NK) : 0;

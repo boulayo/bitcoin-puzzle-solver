@@ -498,7 +498,7 @@ static void *gpu_linear_thread(void *p)
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
             ngroups = gpu_launch_after_failure(ngroups);
             if (gpu_health_failed(&health) || !gpu_recover(s, false)) {
-                pz_log(PZ_LOG_ERR, "GPU %s: the device does not respond, excluding it", s->info.name);
+                pz_log(PZ_LOG_ERR, "GPU[%d] %s: the device does not respond, excluding it", s->info.index, s->info.name);
                 break;
             }
             pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed (launches reduced to %u groups per work-item, growing back while they succeed)", s->info.index, ngroups);
@@ -509,7 +509,7 @@ static void *gpu_linear_thread(void *p)
         double dt = t1 - t0;
         u64 covered = c.nkeys;
         if (L.err) {
-            pz_log(PZ_LOG_WARN, "GPU %s: numeric anomaly in the block, rescanning on the CPU", s->info.name);
+            pz_log(PZ_LOG_WARN, "GPU[%d] %s: numeric anomaly in the block, rescanning on the CPU", s->info.index, s->info.name);
             cpu_scan_claim(r, &c, &covered);
         }
         for (uint32_t i = 0; i < L.nhits; i++) {
@@ -699,10 +699,11 @@ static void *gpu_kang_thread(void *p)
     kang_worker *mirror = NULL;
     gpu_health health = {0};
     int recoveries = 0;                                    /* the herds rebuilt so far: each one starts from other points */
-    if (!kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index)) { pz_log(PZ_LOG_ERR, "GPU %s: kangaroo setup failed", s->info.name); goto done; }
+    if (!kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index)) { pz_log(PZ_LOG_ERR, "GPU[%d] %s: kangaroo setup failed", s->info.index, s->info.name); goto done; }
     {
-        char mu[80];
-        pz_log(PZ_LOG_INFO, "GPU[%d]: %d kangaroos (%d work-items x %d), memory used %s", s->info.index, K, T, s->NK, gpu_fmt_devused(&s->info, s->mem_used, mu, sizeof mu));
+        char mu[80], kt[32], tt[32];
+        pz_log(PZ_LOG_INFO, "GPU[%d]: %s kangaroos (%s work-items x %d), memory used %s", s->info.index, pz_fmt_u64((u64)K, kt, sizeof kt),
+               pz_fmt_u64((u64)T, tt, sizeof tt), s->NK, gpu_fmt_devused(&s->info, s->mem_used, mu, sizeof mu));
     }
     uint32_t *dpraw = pz_xcalloc((size_t)s->dps_cap, 40), *rlraw = pz_xcalloc((size_t)s->rl_cap, 4);
     dp_rec *recs = pz_xcalloc((size_t)s->dps_cap, sizeof(dp_rec));
@@ -768,7 +769,7 @@ static void *gpu_kang_thread(void *p)
         pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
         rounds = gpu_launch_after_failure(rounds);
         if (gpu_health_failed(&health) || !gpu_recover(s, true) || !kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index + 7919ULL * (u64)++recoveries)) {
-            pz_log(PZ_LOG_ERR, "GPU %s: the device does not respond, excluding it", s->info.name);
+            pz_log(PZ_LOG_ERR, "GPU[%d] %s: the device does not respond, excluding it", s->info.index, s->info.name);
             break;
         }
         pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed with a new herd (launches reduced to %u rounds, growing back while they succeed)", s->info.index, rounds);
