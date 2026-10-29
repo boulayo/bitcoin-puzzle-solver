@@ -62,8 +62,8 @@ static inline PZ_VABI void vctx_flush(vctx_t *c)
     c->n = 0;
     return;
 #endif
-    PZ_HASH_W0_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
-    const u32 t0 = c->job->target_w[0];
+    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
+    const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     for (int l = 0; l < c->n; l++)
         if (UNLIKELY(c->out[0][l] == t0)) vctx_verify(c, l);
     c->n = 0;

@@ -4,7 +4,7 @@
  * Included once per translation unit and instruction-set variant, so that the hash is compiled for the instruction set of the
  * includer and, when the includer is a search loop, inlined into it. Before including, define
  *   PZ_VBYTES         the vector width in bytes (16, 32 or 64): the number of lanes is PZ_VBYTES / 4
- *   PZ_HASH_LANES_FN  the name of the function to define (the template also defines PZ_HASH_LANES_FN_w0, see PZ_HASH_W0_FN)
+ *   PZ_HASH_LANES_FN  the name of the function to define (the template also defines PZ_HASH_LANES_FN_wf, see PZ_HASH_FILTER_FN)
  *   PZ_HASH_EXTERNAL  (optional) a file that implements both functions instead: hash_lanes_neon.inc on aarch64
  *   PZ_HASH_SHA256_EXTERNAL  (optional) a file that replaces only the SHA-256 stage: hash_lanes_shani.inc on x86-64 (PZ_VBYTES 32). It defines
  *                     pz_sha256_lanes_33 with the SHA-256 instructions of the CPU and returns the digest words already byte-swapped,
@@ -16,12 +16,15 @@
  *     X[8][PZ_LANES]    the x coordinates as big-endian words, word i of lane l at X[i * PZ_LANES + l]
  *     pfx[PZ_LANES]     the prefix byte of each key: 2 or 3
  *     out[5][PZ_LANES]  the five words of each HASH160 (RIPEMD-160 of SHA-256 of the 33-byte key), little-endian words
- *   void PZ_HASH_W0_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *out0)
- *     the same, but only out[0][..]: the compiler drops the part of RIPEMD-160 that does not reach the first word. A search that
- *     filters on the first word and checks the rest of the few hits with the scalar code does this. */
+ *   void PZ_HASH_FILTER_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *outw)
+ *     the same, but only out[PZ_HASH_FILTER_WORD][..]: the compiler drops the part of RIPEMD-160 that does not reach that word. A
+ *     search that filters on one word and checks the rest of the few hits with the scalar code does this. */
 
 #include <pzcore/defs.h>
 #include <pzcore/impl/hash_tables.h>
+
+/* the digest word PZ_HASH_FILTER_FN returns (as little-endian words, the order of out[5][..]) */
+#define PZ_HASH_FILTER_WORD 2
 
 #ifndef PZ_CAT
 #define PZ_CAT_(a, b) a##b
@@ -175,15 +178,16 @@ static PZ_UNUSED void PZ_HASH_LANES_FN(const uint32_t *X, const uint32_t *pfx, u
     for (int i = 0; i < 5; i++) pz_v_store(out + i * PZ_LANES, r[i]);
 }
 
-/* Only the first word of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). It does not
- * depend on the last step of the left RIPEMD-160 line nor on the last two of the right one, which the compiler drops once
- * pz_ripemd160_lanes_32 is inlined here. */
-#define PZ_HASH_W0_FN PZ_CAT(PZ_HASH_LANES_FN, _w0)
-static PZ_UNUSED void PZ_HASH_W0_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *out0)
+/* Only word PZ_HASH_FILTER_WORD of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). Word 2,
+ * h3 + e + a2, is rol(t76, 10) + rol(t'75, 10) where t_j (t'_j) is the word made by step j of the left (right) line: it does not
+ * depend on the last three steps of the left line nor on the last four of the right one, which the compiler drops once
+ * pz_ripemd160_lanes_32 is inlined here. Word 0 needs four of these seven steps. */
+#define PZ_HASH_FILTER_FN PZ_CAT(PZ_HASH_LANES_FN, _wf)
+static PZ_UNUSED void PZ_HASH_FILTER_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *outw)
 {
     pz_vu dig[8], r[5];
     pz_sha256_lanes_33(X, pfx, dig);
     pz_ripemd160_lanes_32(dig, r);
-    pz_v_store(out0, r[0]);
+    pz_v_store(outw, r[PZ_HASH_FILTER_WORD]);
 }
 #endif /* PZ_HASH_EXTERNAL */

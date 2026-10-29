@@ -8,7 +8,7 @@
  *     C - i*G  at the same time, plus the next group center  C + 2*HALF*G;
  *   - every candidate's compressed public key is hashed PZ_LANES at a time
  *     with the vectorized SHA-256 + RIPEMD-160 pipeline;
- *   - only candidates whose first digest word equals the target's are
+ *   - only candidates whose digest word PZ_HASH_FILTER_WORD equals the target's are
  *     verified in full with the scalar reference hash. */
 
 #define CAT_(a, b) a##b
@@ -52,8 +52,8 @@ static inline void ctx_flush(ctx_t *c)
     c->n = 0;
     return;
 #endif
-    PZ_HASH_W0_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
-    const u32 t0 = c->job->target_w[0];
+    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
+    const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     for (int l = 0; l < c->n; l++)
         if (UNLIKELY(c->out[0][l] == t0)) ctx_verify(c, l);
     c->n = 0;

@@ -3,7 +3,7 @@
  * SHA-256 uses the ARMv8 SHA2 instructions (sha256h, sha256h2, sha256su0, sha256su1), four keys at a time in lock step. RIPEMD-160
  * runs on NEON vectors of four lanes; PZ_NEON_NV such vectors (PZ_LANES = 4 * PZ_NEON_NV) are advanced together inside every step, which gives
  * the out-of-order core PZ_NEON_NV * 2 independent dependency chains (two RIPEMD lines per vector). Rotations are a shift left plus a
- * shift-right-insert. Layout as in hash_lanes.inc: X[8][PZ_LANES] and pfx[PZ_LANES] in, out[5][PZ_LANES] (or out0[PZ_LANES]) out. */
+ * shift-right-insert. Layout as in hash_lanes.inc: X[8][PZ_LANES] and pfx[PZ_LANES] in, out[5][PZ_LANES] (or outw[PZ_LANES]) out. */
 
 #include <arm_neon.h>
 
@@ -149,13 +149,13 @@ static PZ_UNUSED void PZ_HASH_LANES_FN(const uint32_t *X, const uint32_t *pfx, u
         for (int v = 0; v < PZ_NV; v++) vst1q_u32(out + i * PZ_LANES + 4 * v, r[i][v]);
 }
 
-/* Only the first word of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). GCC keeps one
- * out-of-line copy of the hash for both functions, so this computes all five words; forcing the inlining (as hash_lanes.inc
+/* Only word PZ_HASH_FILTER_WORD of each pz_hash160 (the search filter; matches are re-checked with the scalar hash). GCC keeps
+ * one out-of-line copy of the hash for both functions, so this computes all five words; forcing the inlining (as hash_lanes.inc
  * does) counted more instructions here, not fewer: with two vectors the inlined RIPEMD-160 lines spill more. */
-#define PZ_HASH_W0_FN PZ_CAT(PZ_HASH_LANES_FN, _w0)
-static PZ_UNUSED void PZ_HASH_W0_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *out0)
+#define PZ_HASH_FILTER_FN PZ_CAT(PZ_HASH_LANES_FN, _wf)
+static PZ_UNUSED void PZ_HASH_FILTER_FN(const uint32_t *X, const uint32_t *pfx, uint32_t *outw)
 {
     uint32x4_t r[5][PZ_NV];
     pz_neon_hash160(X, pfx, r);
-    for (int v = 0; v < PZ_NV; v++) vst1q_u32(out0 + 4 * v, r[0][v]);
+    for (int v = 0; v < PZ_NV; v++) vst1q_u32(outw + 4 * v, r[PZ_HASH_FILTER_WORD][v]);
 }
