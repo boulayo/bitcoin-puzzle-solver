@@ -571,7 +571,7 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
         const int rc = kang_merge_file(ks, path, &st);
         if (rc == -1) { say_wrapped("  %s: %s\n", path, access(path, F_OK) != 0 ? "does not exist" : "cannot read the file"); bad++; continue; }
         if (rc == -3) {
-            say_wrapped("  %s: written with another jump table (id %s, this campaign: %s): another seed or another computer setup, the points cannot meet\n",
+            say_wrapped("  %s: written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet\n",
                         path, st.jump_id, ks->jump_id);
             bad++;
             continue;

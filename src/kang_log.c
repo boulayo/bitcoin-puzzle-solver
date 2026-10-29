@@ -218,7 +218,8 @@ static int log_unreadable(const kang_state *ks, int err)
 
 static int log_foreign(const kang_state *ks)
 {
-    pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header): ignored", ks->log_path);
+    pz_log(PZ_LOG_ERR, "file %s does not belong to this campaign (different header); it is left as it is: move it away to start the distinguished "
+           "points again", ks->log_path);
     return -1;
 }
 
@@ -304,8 +305,8 @@ int kang_load_log(kang_state *ks)
         char theirs[9];
         jump_id_text(hdr + 38, theirs);
         fclose(f);
-        pz_log(PZ_LOG_ERR, "file %s was written with another jump table (id %s, this campaign: %s): another seed or another computer setup, the points "
-               "cannot meet; it is left as it is: move it away to start the distinguished points again", ks->log_path, theirs, ks->jump_id);
+        pz_log(PZ_LOG_ERR, "file %s was written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet; it is "
+               "left as it is: move it away to start the distinguished points again", ks->log_path, theirs, ks->jump_id);
         return -1;
     }
     const long long n = kang_log_read(ks, f);
