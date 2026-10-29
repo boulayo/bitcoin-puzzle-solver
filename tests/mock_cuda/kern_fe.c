@@ -14,6 +14,8 @@ static void ld(fe *f, const uint *p) { for (int i = 0; i < 8; i++) f->v[i] = p[i
 static void st(uint *p, const fe *f) { for (int i = 0; i < 8; i++) p[i] = f->v[i]; }
 void CAT(GK, add)(uint *r, const uint *a, const uint *b) { fe x, y, z; ld(&x, a); ld(&y, b); fe_add(&z, &x, &y); st(r, &z); }
 void CAT(GK, sub)(uint *r, const uint *a, const uint *b) { fe x, y, z; ld(&x, a); ld(&y, b); fe_sub(&z, &x, &y); st(r, &z); }
+void CAT(GK, subn)(uint *r, const uint *a, const uint *b) { fe x, y, z; ld(&x, a); ld(&y, b); fe_sub_norm(&z, &x, &y); st(r, &z); }
+void CAT(GK, addn)(uint *r, const uint *a, const uint *b) { fe x, y, z; ld(&x, a); ld(&y, b); fe_add_norm(&z, &x, &y); st(r, &z); }
 void CAT(GK, sub2)(uint *r, const uint *a, const uint *b, const uint *c) { fe x, y, w, z; ld(&x, a); ld(&y, b); ld(&w, c); fe_sub2(&z, &x, &y, &w); st(r, &z); }
 void CAT(GK, mul)(uint *r, const uint *a, const uint *b) { fe x, y, z; ld(&x, a); ld(&y, b); fe_mul(&z, &x, &y); st(r, &z); }
 void CAT(GK, sqr)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_sqr(&z, &x); st(r, &z); }

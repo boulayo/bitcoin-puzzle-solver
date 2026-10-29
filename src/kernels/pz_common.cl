@@ -112,6 +112,37 @@ inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
     for (int i = 0; i < 8; i++) r->v[i] = o[i];
 }
 
+/* r = a - b for a normalized b (< p): after a borrow the value is a - b + 2^256 >= 2^256 - p + 1 = 2^32 + 978, so taking 2^32 + 977
+ * off it cannot borrow again and the second correction of fe_sub is not needed */
+inline void fe_sub_norm(fe *r, const fe *a, const fe *b)
+{
+    uint o[8], c = 0, w;
+#pragma unroll
+    for (int i = 0; i < 8; i++) o[i] = PZ_SUBC(a->v[i], b->v[i], c, &c);
+    w = c;
+    o[0] = PZ_SUBC(o[0], w * 977u, 0u, &c);
+    o[1] = PZ_SUBC(o[1], w, c, &c);
+#pragma unroll
+    for (int i = 2; i < 8; i++) o[i] = PZ_SUBC(o[i], 0u, c, &c);
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = o[i];
+}
+
+/* r = a + b for normalized a and b: a + b < 2p, so after a carry a + b - 2^256 + 2^32 + 977 = a + b - p < 2^256 and one fold is enough */
+inline void fe_add_norm(fe *r, const fe *a, const fe *b)
+{
+    uint o[8], c = 0, w;
+#pragma unroll
+    for (int i = 0; i < 8; i++) o[i] = PZ_ADDC(a->v[i], b->v[i], c, &c);
+    w = c;
+    o[0] = PZ_ADDC(o[0], w * 977u, 0u, &c);
+    o[1] = PZ_ADDC(o[1], w, c, &c);
+#pragma unroll
+    for (int i = 2; i < 8; i++) o[i] = PZ_ADDC(o[i], 0u, c, &c);
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = o[i];
+}
+
 #else
 /* ---- CUDA: addition, subtraction and (below) the products and their reduction on PTX carry chains (PZ_FAST_FE,
  * pz_cuda.h): on sm_86 add+sub take 88 instead of 176 instructions. Same results (congruent, < 2^256); the start-up
@@ -166,6 +197,32 @@ inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
     SUBC(w, 0u, 0u);
     w &= 1u;
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC(r2, r2, 0u);
+    r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
+}
+
+/* r = a - b for a normalized b (< p): after a borrow the value is a - b + 2^256 >= 2^256 - p + 1 = 2^32 + 978, so taking 2^32 + 977
+ * off it cannot borrow again (6 instructions less than fe_sub) */
+inline void fe_sub_norm(fe *r, const fe *a, const fe *b)
+{
+    uint r0, r1, r2, r3, r4, r5, r6, r7, w;
+    SUB_CC(r0, a->v[0], b->v[0]); SUBC_CC(r1, a->v[1], b->v[1]); SUBC_CC(r2, a->v[2], b->v[2]); SUBC_CC(r3, a->v[3], b->v[3]);
+    SUBC_CC(r4, a->v[4], b->v[4]); SUBC_CC(r5, a->v[5], b->v[5]); SUBC_CC(r6, a->v[6], b->v[6]); SUBC_CC(r7, a->v[7], b->v[7]);
+    SUBC(w, 0u, 0u);
+    w &= 1u;
+    SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC_CC(r2, r2, 0u); SUBC_CC(r3, r3, 0u);
+    SUBC_CC(r4, r4, 0u); SUBC_CC(r5, r5, 0u); SUBC_CC(r6, r6, 0u); SUBC(r7, r7, 0u);
+    r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
+}
+
+/* r = a + b for normalized a and b: a + b < 2p, so after a carry a + b - 2^256 + 2^32 + 977 = a + b - p < 2^256 and one fold is enough */
+inline void fe_add_norm(fe *r, const fe *a, const fe *b)
+{
+    uint r0, r1, r2, r3, r4, r5, r6, r7, c;
+    ADD_CC(r0, a->v[0], b->v[0]); ADDC_CC(r1, a->v[1], b->v[1]); ADDC_CC(r2, a->v[2], b->v[2]); ADDC_CC(r3, a->v[3], b->v[3]);
+    ADDC_CC(r4, a->v[4], b->v[4]); ADDC_CC(r5, a->v[5], b->v[5]); ADDC_CC(r6, a->v[6], b->v[6]); ADDC_CC(r7, a->v[7], b->v[7]);
+    ADDC(c, 0u, 0u);
+    ADD_CC(r0, r0, c * 977u); ADDC_CC(r1, r1, c); ADDC_CC(r2, r2, 0u); ADDC_CC(r3, r3, 0u);
+    ADDC_CC(r4, r4, 0u); ADDC_CC(r5, r5, 0u); ADDC_CC(r6, r6, 0u); ADDC(r7, r7, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
 }
 

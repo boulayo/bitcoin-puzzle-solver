@@ -12,6 +12,8 @@ typedef unsigned int uint;
 #define GPUFE_DECL(p)                                                                                              \
     void p##add(uint *r, const uint *a, const uint *b);                                                           \
     void p##sub(uint *r, const uint *a, const uint *b);                                                           \
+    void p##subn(uint *r, const uint *a, const uint *b);                                                          \
+    void p##addn(uint *r, const uint *a, const uint *b);                                                          \
     void p##sub2(uint *r, const uint *a, const uint *b, const uint *c);                                           \
     void p##mul(uint *r, const uint *a, const uint *b);                                                           \
     void p##sqr(uint *r, const uint *a);                                                                          \
@@ -26,11 +28,12 @@ GPUFE_DECL(gf_)   /* PZ_FAST_FE (PTX chains, emulated) */
 typedef struct {
     const char *name;
     void (*add)(uint *, const uint *, const uint *), (*sub)(uint *, const uint *, const uint *);
+    void (*subn)(uint *, const uint *, const uint *), (*addn)(uint *, const uint *, const uint *);
     void (*sub2)(uint *, const uint *, const uint *, const uint *), (*mul)(uint *, const uint *, const uint *);
     void (*sqr)(uint *, const uint *), (*norm)(uint *, const uint *), (*cneg)(uint *, const uint *, uint);
     void (*inv)(uint *, const uint *), (*invpow)(uint *, const uint *);
 } gpufe;
-#define GPUFE(p, n) {n, p##add, p##sub, p##sub2, p##mul, p##sqr, p##norm, p##cneg, p##inv, p##invpow}
+#define GPUFE(p, n) {n, p##add, p##sub, p##subn, p##addn, p##sub2, p##mul, p##sqr, p##norm, p##cneg, p##inv, p##invpow}
 static const gpufe V[] = {GPUFE(gp_, "portable"), GPUFE(gc_, "carry"), GPUFE(gf_, "PTX")};
 #define NV ((int)(sizeof V / sizeof *V))
 
@@ -78,8 +81,17 @@ static void check(const uint a[8], const uint b[8])
         V[v].sqr(r, a); pz_fe_sqr(&w, &A); expect("sqr", v, r, &w, a, NULL, false);
         V[v].norm(r, a); w = A; expect("normalize", v, r, &w, a, NULL, true);
         /* p - a of a canonical, non-zero a */
-        uint n[8];
+        uint n[8], nb[8];
         V[v].norm(n, a);
+        V[v].norm(nb, b);
+        /* a - b and b - a with the subtrahend normalized, a + b of two normalized values */
+        {
+            pz_fe Nb;
+            from32(&Nb, nb);
+            V[v].subn(r, a, nb); pz_fe_sub(&w, &A, &Nb); expect("sub_norm", v, r, &w, a, nb, false);
+            V[v].subn(r, b, n); pz_fe_sub(&w, &B, &A); expect("sub_norm", v, r, &w, b, n, false);
+            V[v].addn(r, n, nb); pz_fe_add(&w, &A, &B); expect("add_norm", v, r, &w, n, nb, false);
+        }
         if (n[0] | n[1] | n[2] | n[3] | n[4] | n[5] | n[6] | n[7]) {
             pz_fe N, z;
             from32(&N, n);

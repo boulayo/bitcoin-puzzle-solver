@@ -149,14 +149,14 @@ PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hi
 
 /* the step of one kangaroo once its inverse ik is known; needs k, i, rd, n, bnd, f, J, xk, yk, jx, jy, ik, t, lam, x3, y3, J2 declared */
 #define KANG_STEP { \
-            fe_sub(&t, &yk, &jy); \
+            fe_sub_norm(&t, &yk, &jy);                     /* x, y and the jump points are normalized */ \
             fe_mul(&lam, &t, &ik); \
             fe_sqr(&x3, &lam); \
             fe_sub2(&x3, &x3, &xk, &jx); \
-            fe_sub(&t, &xk, &x3); \
-            fe_mul(&y3, &lam, &t); \
-            fe_sub(&y3, &y3, &yk); \
             fe_normalize(&x3); \
+            fe_sub_norm(&t, &xk, &x3); \
+            fe_mul(&y3, &lam, &t); \
+            fe_sub_norm(&y3, &y3, &yk); \
             fe_normalize(&y3); \
             const uint flip = y3.v[0] & 1u; \
             fe_cneg_norm(&y3, flip);                       /* canonical representative: even y */ \
@@ -222,7 +222,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
     for (int k = 0; k < NK; k++) {
         fe jx, d;
         fe_load_g16(&jx, jump + (FL[k] >> FL_JSHIFT) * JS);
-        fe_sub(&d, &X[k], &jx);
+        fe_sub_norm(&d, &X[k], &jx);
 #if MC > 1
         if (k % MC == 0) { if (k == 0) fe_set_u32(&TP[0][0], 1); else TP[0][k / MC] = acc; }
 #endif
@@ -265,7 +265,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 fe jx0;
                 BX[c] = X[k];
                 fe_load_g16(&jx0, jump + (FL[k] >> FL_JSHIFT) * JS);
-                fe_sub(&BD[c], &BX[c], &jx0);
+                fe_sub_norm(&BD[c], &BX[c], &jx0);
             }
             BQ[MC - 1] = TP[rd & 1][NK / MC - 1 - b];
 #pragma unroll
@@ -291,7 +291,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 if (more) {                                /* denominator of the next round, running product */
                     fe jx2, d2;
                     fe_load_g16(&jx2, jump + J2 * JS);
-                    fe_sub(&d2, &x3, &jx2);
+                    fe_sub_norm(&d2, &x3, &jx2);
                     if (i == 0) accn = d2;
                     else fe_mul(&accn, &accn, &d2);
                 }
@@ -311,7 +311,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 const fe pk = TP[dir ? k + 1 : k - 1];
                 fe d;
                 fe_mul(&ik, &inv, &pk);
-                fe_sub(&d, &xk, &jx);
+                fe_sub_norm(&d, &xk, &jx);
                 fe_mul(&inv, &inv, &d);
             } else {
                 ik = inv;
@@ -320,7 +320,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
             if (more) {                                    /* denominator of the next round, running product */
                 fe jx2, d2;
                 fe_load_g16(&jx2, jump + J2 * JS);
-                fe_sub(&d2, &x3, &jx2);
+                fe_sub_norm(&d2, &x3, &jx2);
                 if (i == 0) accn = d2;
                 else fe_mul(&accn, &accn, &d2);
                 TP[k] = accn;

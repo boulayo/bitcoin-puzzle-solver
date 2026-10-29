@@ -21,15 +21,16 @@ inline void load_ge_c(ge *p, __constant const uint *q)
     for (int i = 0; i < 8; i++) { p->x.v[i] = q[i]; p->y.v[i] = q[8 + i]; }
 }
 
-/* the key at offset ko with public point (x, y): compared with the target on word 2 of its hash160, then in full */
-inline void check_key(const fe *x, const fe *y, ulong ko, const uint tw[5], __global uint *hits, const uint max_hits)
+/* the key at offset ko with public point (xn, y), xn normalized: compared with the target on word 2 of its hash160, then in full */
+inline void check_key(const fe *xn, const fe *y, ulong ko, const uint tw[5], __global uint *hits, const uint max_hits)
 {
-    fe xn = *x, yn = *y;
-    fe_normalize(&xn); fe_normalize(&yn);          /* only bit 0 of yn is used: the compiler keeps just the carry chain */
+    fe yn = *y;
+    fe_normalize(&yn);                             /* only bit 0 of yn is used: the compiler keeps just the carry chain */
     const uint par = yn.v[0] & 1u;
-    if (hash160_w2(&xn, par) != tw[2]) return;
+    const fe xv = *xn;
+    if (hash160_w2(&xv, par) != tw[2]) return;
     uint h[5];
-    hash160_words(&xn, par, h);
+    hash160_words(&xv, par, h);
     if (h[0] == tw[0] && h[1] == tw[1] && h[3] == tw[3] && h[4] == tw[4]) {
         uint k = atomic_inc(&hits[0]);
         if (k < max_hits) { hits[2 + 2 * k] = (uint)ko; hits[3 + 2 * k] = (uint)(ko >> 32); }
@@ -64,7 +65,7 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             fe sx, d;
             if (m < HALF) fe_load_c16(&sx, gtab + m * 16);
             else sx = GS.x;
-            fe_sub(&d, &sx, &xc);
+            fe_sub_norm(&d, &sx, &xc);                  /* the centre and the table are normalized */
             if (m == 0) acc = d;
             else fe_mul(&acc, &acc, &d);
             if (m < HALF) tmp[m] = acc;
@@ -79,16 +80,16 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
         {
             fe im, d, lam, t;
             fe_mul(&im, &inv, &tmp[HALF - 1]);
-            fe_sub(&d, &GS.x, &xc);
+            fe_sub_norm(&d, &GS.x, &xc);
             fe_mul(&inv, &inv, &d);
-            fe_sub(&t, &GS.y, &yc);
+            fe_sub_norm(&t, &GS.y, &yc);
             fe_mul(&lam, &t, &im);
             fe_sqr(&ncx, &lam);
             fe_sub(&ncx, &ncx, &xc);
             fe_sub(&ncx, &ncx, &GS.x);
             fe_sub(&t, &xc, &ncx);
             fe_mul(&ncy, &lam, &t);
-            fe_sub(&ncy, &ncy, &yc);
+            fe_sub_norm(&ncy, &ncy, &yc);
             fe_normalize(&ncx);
             fe_normalize(&ncy);
         }
@@ -105,31 +106,33 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             if (i > 1) {
                 fe d;
                 fe_mul(&im, &inv, &tmp[i - 2]);
-                fe_sub(&d, &sx, &xc);
+                fe_sub_norm(&d, &sx, &xc);
                 fe_mul(&inv, &inv, &d);
             } else {
                 im = inv;
             }
             fe xs;                                       /* x3 = lam^2 - (xc + sx) for both points */
-            fe_add(&xs, &xc, &sx);
+            fe_add_norm(&xs, &xc, &sx);
             if (i < HALF) {
-                fe_sub(&t, &sy, &yc);
+                fe_sub_norm(&t, &sy, &yc);
                 fe_mul(&lam, &t, &im);
                 fe_sqr(&x3, &lam);
                 fe_sub(&x3, &x3, &xs);
-                fe_sub(&t, &xc, &x3);
+                fe_normalize(&x3);
+                fe_sub_norm(&t, &xc, &x3);
                 fe_mul(&y3, &lam, &t);
-                fe_sub(&y3, &y3, &yc);
+                fe_sub_norm(&y3, &y3, &yc);
                 check_key(&x3, &y3, koff + (ulong)i, tw, hits, max_hits);
             }
             /* C - i*G */
-            fe_add(&t, &sy, &yc);
+            fe_add_norm(&t, &sy, &yc);
             fe_mul(&lam, &t, &im);
             fe_sqr(&x3, &lam);
             fe_sub(&x3, &x3, &xs);
-            fe_sub(&t, &x3, &xc);
+            fe_normalize(&x3);
+            fe_sub_norm(&t, &x3, &xc);
             fe_mul(&y3, &lam, &t);
-            fe_sub(&y3, &y3, &yc);
+            fe_sub_norm(&y3, &y3, &yc);
             ko = koff - (ulong)i;
         check:;
             check_key(&x3, &y3, ko, tw, hits, max_hits);
