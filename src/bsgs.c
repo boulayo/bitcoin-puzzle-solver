@@ -356,7 +356,19 @@ typedef struct {
     bool stopped;
 } build_arg;
 
-enum { BUILD_BLOCK = 1 << 22 };
+enum { BUILD_BLOCK = 1 << 22, BUILD_BLOCK_MIN = 1 << 16 };
+
+/* Baby steps per block of the build: 2^22, or less so that a small table still gives every thread about 8 blocks (`bench` builds
+ * 2^22 entries, which would be one block for one thread, and a table of a few blocks leaves threads idle at the end). Whole batches
+ * of lane windows, which 2^22 is too: the batches fall where they always did, and a table built by one thread is the same. */
+static u64 build_block(u64 T, int nthreads, int lanes)
+{
+    const u64 batch = (u64)BS_GRP * (u64)(lanes > 1 ? lanes : 1);
+    u64 b = T / (8 * (u64)nthreads);
+    if (b > BUILD_BLOCK) b = BUILD_BLOCK;
+    if (b < BUILD_BLOCK_MIN) b = BUILD_BLOCK_MIN;
+    return (b + batch - 1) / batch * batch;
+}
 
 static void *build_thread(void *p)
 {
@@ -420,9 +432,10 @@ bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic 
     _Atomic int never = 0;
     build_arg *args = pz_xcalloc((size_t)nthreads, sizeof *args);
     pthread_t *th = pz_xcalloc((size_t)nthreads, sizeof *th);
-    u64 nblocks = (t->T + BUILD_BLOCK - 1) / BUILD_BLOCK;
+    const bs_vengine *ve = pick_vengine();
+    const u64 blk = build_block(t->T, nthreads, ve ? ve->lanes : 1), nblocks = (t->T + blk - 1) / blk;
     for (int i = 0; i < nthreads; i++) {
-        args[i] = (build_arg){t, st, pick_group(), &next, nblocks, BUILD_BLOCK, units ? units[i] : NULL, stop ? stop : &never, 0, false};
+        args[i] = (build_arg){t, st, pick_group(), &next, nblocks, blk, units ? units[i] : NULL, stop ? stop : &never, 0, false};
         if (pthread_create(&th[i], NULL, build_thread, &args[i]) != 0) pz_die("pthread_create failed");
     }
     u64 inserted = 0;
