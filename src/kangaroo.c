@@ -56,7 +56,7 @@ static pz_u256 krng_below(u64 s[4], const pz_u256 *bound)
 
 static inline unsigned log2u(u64 v) { return 63 - (unsigned)__builtin_clzll(v); }
 
-static bool dp_empty(const dp_rec *e) { return e->tagk == 0 && !(e->d.w[0] | e->d.w[1] | e->d.w[2]); }
+static bool dp_empty(const dp_ent *e) { return e->ref == 0; }
 static inline u64 slot_of(const kang_state *ks, u64 tagk) { return ((tagk >> KANG_KSHIFT) * 0x9E3779B97F4A7C15ULL) >> (64 - log2u(ks->cap)); }
 static inline u64 kind_of(const kang_state *ks, u64 tagk) { return tagk & (((u64)1 << KANG_KSHIFT) - 1); }
 
@@ -92,13 +92,37 @@ static bool solve_pair(kang_state *ks, const dp_rec *a, const dp_rec *b)
     return run_submit_key(ks->r, &key, "kangaroo");
 }
 
+/* mu held. The whole record of an entry: its copy in spill, or its record in the log, which must have the tag of the entry. */
+static bool entry_record(kang_state *ks, const dp_ent *e, dp_rec *out)
+{
+    if (e->ref & KANG_REF_SPILL) {
+        *out = ks->spill[e->ref & ~KANG_REF_SPILL];
+        return true;
+    }
+    if (kang_log_get(ks, e->ref - 1, out) && out->tagk == e->tagk) return true;
+    pz_log(PZ_LOG_ERR, "cannot read distinguished point %llu back from %s: a collision with it could not be checked (was the file moved or cut?)",
+           (unsigned long long)(e->ref - 1), ks->log_path);
+    return false;
+}
+
+/* mu held. Keeps a copy of a record that is in no log; returns the ref of its entry. */
+static u64 spill_add(kang_state *ks, const dp_rec *rec)
+{
+    if (ks->nspill == ks->capspill) {
+        ks->capspill = ks->capspill ? ks->capspill * 2 : 4096;
+        ks->spill = pz_xrealloc(ks->spill, ks->capspill * sizeof(dp_rec));
+    }
+    ks->spill[ks->nspill] = *rec;
+    return KANG_REF_SPILL | ks->nspill++;
+}
+
 /* False (nothing changed) when the memory for the larger table is not there. */
 static bool table_grow(kang_state *ks)
 {
     u64 ncap = ks->cap * 2;
-    dp_rec *nt = calloc(ncap, sizeof(dp_rec));
+    dp_ent *nt = calloc(ncap, sizeof(dp_ent));
     if (!nt) return false;
-    dp_rec *old = ks->tab;
+    dp_ent *old = ks->tab;
     u64 ocap = ks->cap;
     ks->tab = nt;
     ks->cap = ncap;
@@ -126,13 +150,13 @@ static void table_thin(kang_state *ks)
 {
     ks->thin_mask = ks->thin_mask << 1 | 1;
     ks->thin_level++;
-    const dp_rec none = {0, {{0, 0, 0}}};
+    const dp_ent none = {0, 0};
     u64 start = 0;
     while (!dp_empty(&ks->tab[start])) start++;       /* there is one: the last slot is never filled */
     u64 kept = 0;
     for (u64 i = 1; i <= ks->cap; i++) {
         const u64 p = (start + i) & ks->mask;
-        const dp_rec e = ks->tab[p];
+        const dp_ent e = ks->tab[p];
         if (dp_empty(&e)) continue;
         if ((e.tagk >> KANG_KSHIFT) & ks->thin_mask) { ks->tab[p] = none; continue; }
         u64 s = slot_of(ks, e.tagk);
@@ -141,6 +165,21 @@ static void table_thin(kang_state *ks)
         kept++;
     }
     ks->count = kept;
+    if (ks->nspill) {                                   /* the copies of the entries that stay, in a smaller array */
+        u64 n = 0;
+        for (u64 p = 0; p < ks->cap; p++) n += !dp_empty(&ks->tab[p]) && (ks->tab[p].ref & KANG_REF_SPILL);
+        dp_rec *sp = n ? pz_xmalloc(n * sizeof(dp_rec)) : NULL;
+        n = 0;
+        for (u64 p = 0; p < ks->cap; p++) {
+            dp_ent *e = &ks->tab[p];
+            if (dp_empty(e) || !(e->ref & KANG_REF_SPILL)) continue;
+            sp[n] = ks->spill[e->ref & ~KANG_REF_SPILL];
+            e->ref = KANG_REF_SPILL | n++;
+        }
+        free(ks->spill);
+        ks->spill = sp;
+        ks->nspill = ks->capspill = n;
+    }
     atomic_store_explicit(&ks->count_mirror, kept, memory_order_relaxed);
     atomic_store_explicit(&ks->thin_mirror, ks->thin_level, memory_order_relaxed);
     /* by design about one run in five where memory sets dp_bits (KANG_DP_MEM_MARGIN): not a warning */
@@ -148,15 +187,18 @@ static void table_thin(kang_state *ks)
            "when memory sets dp-bits: the search goes on with a slightly later collision; a larger --mem helps only if the RAM is there", ks->thin_level);
 }
 
-/* mu held. Returns 1 inserted, 0 duplicate of same kind, 2 solved, -1 skipped (thinned out) */
-int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
+/* mu held. Returns 1 inserted, 0 duplicate of same kind, 2 solved, -1 skipped (thinned out). at: KANG_AT_NEW for a new point (it goes to the log),
+ * or the index of the record in the log it was read from. */
+int kang_table_insert(kang_state *ks, const dp_rec *rec, u64 at)
 {
     if (ks->thin_mask && ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask)) { atomic_fetch_add(&ks->dropped, 1); return -1; }
-    if (ks->count * 10 >= ks->cap * 8) {
-        u64 max_entries = ks->r->mem_limit / sizeof(dp_rec);
-        /* the old table and the larger one exist together while the entries move: both must fit in the limit */
-        const bool grown = ks->cap * 3 <= max_entries && table_grow(ks);
-        if (!grown && ks->count * 100 >= ks->cap * 93) {
+    const u64 spilled = ks->nspill * sizeof(dp_rec), lim = ks->r->mem_limit;
+    if (ks->count * 10 >= ks->cap * 8 || spilled > lim / 2) {
+        const u64 max_entries = (lim > spilled ? lim - spilled : 0) / sizeof(dp_ent);
+        /* the old table and the larger one exist together while the entries move: both must fit in the limit, with the copies of spill. Those
+         * are thinned with the table when they take half of the limit (points in no log: no file, or a disk that refuses) */
+        const bool grown = ks->count * 10 >= ks->cap * 8 && ks->cap * 3 <= max_entries && table_grow(ks);
+        if (!grown && (ks->count * 100 >= ks->cap * 93 || spilled > lim / 2)) {
             table_thin(ks);
             if ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask) { atomic_fetch_add(&ks->dropped, 1); return -1; }
         }
@@ -164,17 +206,20 @@ int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log)
     if (ks->count + 1 >= ks->cap) { atomic_fetch_add(&ks->dropped, 1); return -1; }      /* never fill the last slot: the probe below must end */
     u64 s = slot_of(ks, rec->tagk);
     for (;;) {
-        dp_rec *e = &ks->tab[s];
+        dp_ent *e = &ks->tab[s];
         if (dp_empty(e)) {
-            *e = *rec;
+            u64 ref = at + 1, idx;
+            if (at == KANG_AT_NEW) ref = kang_log_push(ks, rec, &idx) && ks->log_refs ? idx + 1 : spill_add(ks, rec);
+            e->tagk = rec->tagk;
+            e->ref = ref;
             ks->count++;
             atomic_store_explicit(&ks->count_mirror, ks->count, memory_order_relaxed);
-            if (!from_log) kang_log_push(ks, rec);
             return 1;
         }
         if ((e->tagk >> KANG_KSHIFT) == (rec->tagk >> KANG_KSHIFT)) {
             if (kind_of(ks, e->tagk) == kind_of(ks, rec->tagk)) return 0;
-            if (solve_pair(ks, e, rec)) return 2;
+            dp_rec old;
+            if (entry_record(ks, e, &old) && solve_pair(ks, &old, rec)) return 2;
             atomic_fetch_add(&ks->rejected, 1);
             return 0;
         }
@@ -187,7 +232,7 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
     bool solved = false;
     pthread_mutex_lock(&ks->mu);
     for (int i = 0; i < n; i++) {
-        int rc = kang_table_insert(ks, &recs[i], false);
+        int rc = kang_table_insert(ks, &recs[i], KANG_AT_NEW);
         if (dup_out) dup_out[i] = (rc == 0);
         if (rc == 2) { solved = true; break; }
         if (ks->log_ready && i + 1 < n) {                /* a full block of the log (a big batch of a GPU): written without the lock, */
@@ -399,7 +444,7 @@ static void alloc_table(kang_state *ks, int dp, u64 max_entries)
     ks->cap = cap;
     ks->mask = cap - 1;
     atomic_store_explicit(&ks->cap_mirror, cap, memory_order_relaxed);
-    ks->tab = calloc(cap, sizeof(dp_rec));
+    ks->tab = calloc(cap, sizeof(dp_ent));
     if (!ks->tab) pz_die("not enough memory for the distinguished-point table (%llu entries)", (unsigned long long)cap);
     ks->log_hdr = KANG_LOG_HDR;
     ks->caplog = ks->capw = KANG_LOG_BUF_INIT;
@@ -422,7 +467,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
         if (lim < (256ULL << 20)) lim = 256ULL << 20;
         r->mem_limit = lim;
     }
-    const u64 max_entries = r->mem_limit / sizeof(dp_rec);
+    const u64 max_entries = r->mem_limit / sizeof(dp_ent);
     const int dp = pick_dp_bits(ks, max_entries);
     ks->P.dp_bits = (unsigned)dp;
     ks->P.dp_mask = ((u64)1 << dp) - 1;
@@ -438,7 +483,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     if (nthr) snprintf(cpu, sizeof cpu, "CPU %d x %s", nthr, pz_fmt_u64((u64)ks->K_thread, kc, sizeof kc));
     if (k_gpu_total) snprintf(gpu, sizeof gpu, "%sGPU %s", nthr ? ", " : "", pz_fmt_u64((u64)k_gpu_total, kg, sizeof kg));
     pz_log(PZ_LOG_INFO, "kangaroo: %s kangaroos (%s%s), dp-bits %d, table %s (max %s); expected ~%s steps, ~%s distinguished points",
-           pz_fmt_u64((u64)ks->K_total, kt, sizeof kt), cpu, gpu, dp, pz_fmt_bytes((double)ks->cap * sizeof(dp_rec), b1, sizeof b1),
+           pz_fmt_u64((u64)ks->K_total, kt, sizeof kt), cpu, gpu, dp, pz_fmt_bytes((double)ks->cap * sizeof(dp_ent), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2), pz_fmt_si((double)ks->expected_steps, b3, sizeof b3),
            pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b4, sizeof b4));
     pz_log(PZ_LOG_DEBUG, "kangaroo: W = 2^%.1Lf, mean jump %.3Le, expected effort %.2Lf x sqrt(W)", log2l(pz_u256_to_ld(&ks->W)), mean, (long double)KANG_C_MEAN);
@@ -454,6 +499,7 @@ void kang_destroy(kang_state *ks)
     kang_flush_log(ks);
     if (ks->log) fclose(ks->log);
     free(ks->tab);
+    free(ks->spill);
     free(ks->logbuf);
     free(ks->wbuf);
     pthread_mutex_destroy(&ks->mu);

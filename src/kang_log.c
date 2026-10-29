@@ -127,16 +127,44 @@ static bool log_make_room(kang_state *ks)
 
 /* mu held. Appends to the log buffer. When it is full it is exchanged for the empty one, and the thread that unlocks mu next writes it
  * (kang_table_unlock). When the disk refuses, the buffer grows (up to KANG_LOG_BUF_MAX records) instead of overflowing, and the next
- * checkpoint tries again; beyond that new points stay in the table only. */
-void kang_log_push(kang_state *ks, const dp_rec *rec)
+ * checkpoint tries again; beyond that new points stay in RAM only (false: the table keeps a copy of the record, in spill). *idx is the index
+ * of the record in the log. */
+bool kang_log_push(kang_state *ks, const dp_rec *rec, u64 *idx)
 {
     if (ks->nlog == ks->caplog && !log_make_room(ks)) {
         atomic_fetch_add(&ks->dropped, 1);
         if (!atomic_exchange(&ks->log_warned, true))
             pz_log(PZ_LOG_ERR, "writing %s failed (disk full?): new distinguished points stay in RAM only and will be lost if the program stops", ks->log_path);
-        return;
+        return false;
     }
     ks->logbuf[ks->nlog++] = *rec;
+    *idx = ks->log_next++;
+    return true;
+}
+
+/* mu held. The record at index idx of the log: the last nlog records are in logbuf, the nw before them in wbuf (being written, or refused by
+ * the disk), the others in the file. wmu (taken after mu, as everywhere) keeps wbuf and the file still meanwhile: a write that is going on
+ * is waited for. The file is read with a stream of its own, which sees what the writes flushed. */
+bool kang_log_get(kang_state *ks, u64 idx, dp_rec *out)
+{
+    if (idx >= ks->log_next) return false;
+    const u64 in_logbuf = ks->log_next - ks->nlog;
+    if (idx >= in_logbuf) { *out = ks->logbuf[idx - in_logbuf]; return true; }
+    pthread_mutex_lock(&ks->wmu);
+    const u64 in_wbuf = in_logbuf - ks->nw;
+    bool ok = false;
+    if (idx >= in_wbuf) {
+        *out = ks->wbuf[idx - in_wbuf];
+        ok = true;
+    } else {
+        FILE *f = fopen(ks->log_path, "rb");
+        if (f) {
+            ok = fseeko(f, (off_t)(ks->log_hdr + idx * sizeof(dp_rec)), SEEK_SET) == 0 && fread(out, sizeof *out, 1, f) == 1;
+            fclose(f);
+        }
+    }
+    pthread_mutex_unlock(&ks->wmu);
+    return ok;
 }
 
 void kang_table_unlock(kang_state *ks)
@@ -199,7 +227,7 @@ long long kang_log_read(kang_state *ks, FILE *f)
     long long n = 0;
     pthread_mutex_lock(&ks->mu);
     while (fread(&rec, sizeof rec, 1, f) == 1) {
-        int rc = kang_table_insert(ks, &rec, true);
+        int rc = kang_table_insert(ks, &rec, (u64)n);
         n++;
         if (rc == 2) break;
     }
@@ -254,6 +282,15 @@ static int log_read_header(const kang_state *ks, FILE *f, const u8 fp[32], off_t
     return memcmp(hdr, want, *hlen) != 0 ? KANG_HDR_OTHER_JUMPS : KANG_HDR_OK;
 }
 
+/* A new log for the campaign: its records start at index 0, and the entries of the table refer to them. 1, or -1 when it cannot be created. */
+static int log_start(kang_state *ks, const u8 fp[32])
+{
+    ks->log = kang_log_create(ks, ks->log_path, fp);
+    ks->log_recs = ks->log_next = 0;
+    ks->log_refs = ks->log != NULL;
+    return ks->log ? 1 : -1;
+}
+
 int kang_load_log(kang_state *ks)
 {
     FILE *f = fopen(ks->log_path, "rb");
@@ -264,8 +301,7 @@ int kang_load_log(kang_state *ks)
         /* only a file that is not there is made anew: any other failure (permissions, I/O error, too many open files) may be passing,
          * and creating the file would empty it */
         if (open_err != ENOENT) return log_unreadable(ks, open_err);
-        ks->log = kang_log_create(ks, ks->log_path, fp);
-        return ks->log ? 1 : -1;
+        return log_start(ks, fp);
     }
     off_t size;
     size_t hlen;
@@ -278,8 +314,7 @@ int kang_load_log(kang_state *ks)
     if (hc == KANG_HDR_SHORT) {
         pz_log(PZ_LOG_WARN, "distinguished points: %s is shorter than its header (%lld of %zu bytes: an interrupted creation, disk full?); starting a new file",
                ks->log_path, (long long)size, hlen);
-        ks->log = kang_log_create(ks, ks->log_path, fp);
-        return ks->log ? 1 : -1;
+        return log_start(ks, fp);
     }
     if (hc == KANG_HDR_OLDER) {
         /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
@@ -292,8 +327,7 @@ int kang_load_log(kang_state *ks)
         }
         pz_log(PZ_LOG_WARN, "distinguished points: %s was written by an older layout of the kangaroo (versions up to 1.9.0, small intervals) and cannot be "
                "used; it is kept as %s and the campaign goes on with a new file", ks->log_path, old);
-        ks->log = kang_log_create(ks, ks->log_path, fp);
-        return ks->log ? 1 : -1;
+        return log_start(ks, fp);
     }
     if (hc == KANG_HDR_NEWER) {
         pz_log(PZ_LOG_ERR, "file %s was written by a newer version of pzsolve (%.4s%c) and cannot be used by this one: it is left as it is; use that version, "
@@ -308,20 +342,22 @@ int kang_load_log(kang_state *ks)
                "left as it is: move it away to start the distinguished points again", ks->log_path, theirs, ours);
         return -1;
     }
+    /* the whole records of the file: a record cut short at the end (the program stopped in the middle of a write) is cut off, and only that */
+    const u64 rest = (u64)size - hlen, whole = rest / sizeof(dp_rec);
+    ks->log_hdr = (unsigned)hlen;                     /* a log of version 4 stays one: it is appended to as it is */
+    ks->log_next = whole;                             /* the entries refer to the records of the file by their index (kang_log_get) */
     const long long n = kang_log_read(ks, f);
     const int re = errno;
     fclose(f);
     if (n < 0) return log_unreadable(ks, re);
-    /* the whole records of the file: a record cut short at the end (the program stopped in the middle of a write) is cut off, and only that */
-    const u64 rest = (u64)size - hlen, whole = rest / sizeof(dp_rec);
     if (rest % sizeof(dp_rec) && pz_truncate_path(ks->log_path, hlen + whole * sizeof(dp_rec)) != 0) {
         pz_log(PZ_LOG_ERR, "cannot cut the partly written record off the end of %s: %s", ks->log_path, strerror(errno));
         return -1;
     }
     ks->loaded = (u64)n;
     ks->log_recs = whole;
-    ks->log_hdr = (unsigned)hlen;                     /* a log of version 4 stays one: it is appended to as it is */
     ks->log = fopen(ks->log_path, "ab");
+    ks->log_refs = ks->log != NULL;
     return ks->log ? 0 : -1;
 }
 
@@ -347,7 +383,7 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
     pthread_mutex_lock(&ks->mu);
     while (fread(&rec, sizeof rec, 1, f) == 1) {      /* a partly written last record is ignored */
         st->read++;
-        const int rc = kang_table_insert(ks, &rec, false);
+        const int rc = kang_table_insert(ks, &rec, KANG_AT_NEW);
         if (rc == 1) st->added++;
         else if (rc == 0) st->dups++;
         else if (rc < 0) st->skipped++;

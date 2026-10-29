@@ -237,18 +237,20 @@ static u64 table_rnd(u64 *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; re
 static u64 table_occupied(const kang_state *ks)
 {
     u64 n = 0;
-    for (u64 i = 0; i < ks->cap; i++) n += ks->tab[i].tagk != 0 || (ks->tab[i].d.w[0] | ks->tab[i].d.w[1] | ks->tab[i].d.w[2]);
+    for (u64 i = 0; i < ks->cap; i++) n += ks->tab[i].ref != 0;
     return n;
 }
 
-/* A test state whose table starts with 64 slots (as with PZ_TEST_DP_CAP=64) and may use `limit` entries' worth of memory. */
-static kang_state *small_table_state(u64 limit)
+/* A test state whose table starts with 64 slots (as with PZ_TEST_DP_CAP=64) and may use `limit` entries' worth of memory. With `logged` it has
+ * its dp.bin, as a campaign does, and the entries refer to their records in it; without, the table keeps a copy of every record (spill). */
+static kang_state *small_table_state(u64 limit, bool logged)
 {
     const long long before = g_env.test_dp_cap;
     g_env.test_dp_cap = 64;
     kang_state *ks = kang_make_test_state(40, 1);
     g_env.test_dp_cap = before;
-    if (ks) ks->r->mem_limit = limit * sizeof(dp_rec);
+    if (ks) ks->r->mem_limit = limit * sizeof(dp_ent);
+    if (ks && logged && kang_load_log(ks) != 1) { kang_free_test_state(ks); return NULL; }
     return ks;
 }
 
@@ -278,7 +280,7 @@ static int table_check(kang_state *ks, const dp_rec *recs, const int *rc, int n)
     for (int i = 0; i < n; i++) {
         if (rc[i] != 1) continue;
         const bool stays = !((recs[i].tagk >> KANG_KSHIFT) & ks->thin_mask);
-        TCHK(kang_table_insert(ks, &recs[i], true) == (stays ? 0 : -1));
+        TCHK(kang_table_insert(ks, &recs[i], (u64)i) == (stays ? 0 : -1));
     }
     TCHK(ks->count == before);
     return fails;
@@ -288,14 +290,14 @@ static int table_check(kang_state *ks, const dp_rec *recs, const int *rc, int n)
 static int table_thin_checks(void)
 {
     int fails = 0;
-    kang_state *ks = small_table_state(64);
+    kang_state *ks = small_table_state(64, true);
     if (!ks) return 1;
     enum { N = 1500 };
     dp_rec *recs = pz_xmalloc(N * sizeof *recs);
     int *rc = pz_xmalloc(N * sizeof *rc);
     unsigned deepest = 99;
     for (int trial = 0; trial < 300; trial++) {
-        memset(ks->tab, 0, ks->cap * sizeof(dp_rec));
+        memset(ks->tab, 0, ks->cap * sizeof(dp_ent));
         ks->count = 0;
         ks->thin_mask = 0;
         ks->thin_level = 0;
@@ -306,7 +308,7 @@ static int table_thin_checks(void)
         unsigned level = 0;
         while (n < N && ks->thin_level < 4) {
             recs[n] = table_record(&s, (u64)n);
-            rc[n] = kang_table_insert(ks, &recs[n], false);
+            rc[n] = kang_table_insert(ks, &recs[n], KANG_AT_NEW);
             n++;
             if (ks->thin_level != level) {
                 level = ks->thin_level;
@@ -323,44 +325,65 @@ static int table_thin_checks(void)
     return fails;
 }
 
-/* A point that meets one in the table still solves the key after the table was thinned (and the entry moved in the process). */
-static int table_collision_checks(void)
+/* The two buffers of the log hold `n` records each, and are empty. */
+static void log_small_buffers(kang_state *ks, size_t n)
 {
-    int fails = 0;
+    ks->logbuf = pz_xrealloc(ks->logbuf, n * sizeof(dp_rec));
+    ks->caplog = n;
+    ks->nlog = 0;
+    ks->wbuf = pz_xrealloc(ks->wbuf, n * sizeof(dp_rec));
+    ks->capw = n;
+    ks->nw = 0;
+}
+
+/* A tame and a wild point that meet (the key of kang_make_test_state), whose tag has the bits clear that four levels of thinning look at; *want
+ * is the key. */
+static void meeting_pair(dp_rec *ta, dp_rec *wb, pz_u256 *want)
+{
     const pz_u256 m = pz_u256_from_u64(123456789);      /* the offset of the key of kang_make_test_state from the base */
-    pz_u256 want = pz_u256_pow2(90);
-    pz_u256_add(&want, &want, &m);
+    *want = pz_u256_pow2(90);
+    pz_u256_add(want, want, &m);
     const i192 X = i192_from_signed(false, &m);
     const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
-    dp_rec ta = {0, i192_zero()}, wb = ta;
-    for (u64 dw0 = 777;; dw0++) {      /* a pair of points that meet, whose tag has the bits clear that four levels of thinning look at */
+    for (u64 dw0 = 777;; dw0++) {
         const pz_u256 dw256 = pz_u256_from_u64(dw0);
         const i192 dw = i192_from_signed(false, &dw256);
         const u64 tag = tag_of(&X, 1, &dw) & ~km;
         if (!tag || ((tag >> KANG_KSHIFT) & 15)) continue;
         i192 dt;
         i192_add(&dt, &X, &dw);
-        ta.tagk = tag | KIND_TAME; ta.d = dt;
-        wb.tagk = tag | KIND_WILD_P; wb.d = dw;
-        break;
+        ta->tagk = tag | KIND_TAME; ta->d = dt;
+        wb->tagk = tag | KIND_WILD_P; wb->d = dw;
+        return;
     }
+}
+
+/* A point that meets one in the table still solves the key after the table was thinned (and the entry moved in the process), with the entries
+ * referring to dp.bin and with the copies of a state without a log (which the thinning compacts). */
+static int table_collision_checks(void)
+{
+    int fails = 0;
+    dp_rec ta, wb;
+    pz_u256 want;
+    meeting_pair(&ta, &wb, &want);
     int moved = 0;
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(2);                                    /* the thinning warns, and "key found" */
     for (int sc = 0; sc < 40; sc++) {
-        kang_state *ks = small_table_state(64);
+        kang_state *ks = small_table_state(64, sc & 1);
         if (!ks) return fails + 1;
         u64 s = 0xD1B54A32D192ED03ULL * (u64)(sc + 1), at = 0;
         unsigned level = 0;
         for (int i = 0; i < 3000 && ks->thin_level < 4; i++) {
             if (i == 20 + sc) {                              /* among the others, so that it can be pushed behind its first probe */
-                TCHK(kang_table_insert(ks, &ta, false) == 1);
+                TCHK(kang_table_insert(ks, &ta, KANG_AT_NEW) == 1);
                 while (at < ks->cap && ks->tab[at].tagk != ta.tagk) at++;
             }
             const dp_rec f = table_record(&s, (u64)i);
-            kang_table_insert(ks, &f, false);
+            kang_table_insert(ks, &f, KANG_AT_NEW);
             if (ks->thin_level == level) continue;
             level = ks->thin_level;
+            if (i < 20 + sc) continue;                       /* without a log the copies thin the table earlier (half the limit) */
             u64 now = 0;
             while (now < ks->cap && ks->tab[now].tagk != ta.tagk) now++;
             TCHK(now < ks->cap);                            /* the entry is still there */
@@ -368,11 +391,104 @@ static int table_collision_checks(void)
             at = now;
         }
         TCHK(ks->thin_level == 4);
-        TCHK(kang_table_insert(ks, &wb, false) == 2 && atomic_load(&ks->r->found) && !pz_u256_cmp(&ks->r->found_key, &want));
+        TCHK((sc & 1) ? ks->nspill == 0 : ks->nspill == ks->count);      /* the copies of the dropped entries went with them */
+        TCHK(kang_table_insert(ks, &wb, KANG_AT_NEW) == 2 && atomic_load(&ks->r->found) && !pz_u256_cmp(&ks->r->found_key, &want));
         kang_free_test_state(ks);
     }
     pz_log_set_quiet(was_quiet);
     TCHK(moved > 0);                                        /* the thinning did move the entry in some of the tables */
+    return fails;
+}
+
+/* The entry of a point refers to its record: wherever that record is when the other half of the collision comes, the distance is read back
+ * and the key found. In logbuf, in the block taken out for writing and not written, in the file, in the file after a resume (with the header of
+ * this version and of version 4), after a merge and in a state without a log (a copy). A match of the tags of two kinds whose distances do not
+ * solve (a false match of the 61 bits) is refused, and so is a record of the file that is not the one of the entry. */
+static int table_ref_checks(void)
+{
+    int fails = 0;
+    dp_rec ta, wb, other;
+    pz_u256 want;
+    meeting_pair(&ta, &wb, &want);
+    other = ta;
+    other.d.w[0] ^= 0x10;                                   /* the tag of ta, another distance */
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                                    /* "key found", the refused candidates */
+    for (int where = 0; where < 9; where++) {
+        /* 0 logbuf, 1 wbuf, 2 file, 3 resume, 4 resume of a version 4 log, 5 merge then flush, 6 no log, 7 false match, 8 record changed in the file */
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) return fails + 1;
+        u64 s = 0x2545F4914F6CDD1DULL * (u64)(where + 1);
+        if (where != 6) TCHK(kang_load_log(ks) == 1 && ks->log_refs);
+        if (where == 1) log_small_buffers(ks, 8);
+        if (where == 3 || where == 4) {                     /* a log that holds the tame point among others, loaded by a new state */
+            u8 fp[32];
+            kang_log_fp(ks, fp);
+            if (ks->log) { fclose(ks->log); ks->log = NULL; }
+            FILE *f = fopen(ks->log_path, "wb");
+            TCHK(f != NULL);
+            if (f) {
+                fwrite(where == 4 ? KANG_LOG_MAGIC4 : KANG_LOG_MAGIC, 1, 6, f);
+                fwrite(fp, 1, 32, f);
+                if (where == 3) fwrite(ks->jump_tag, 1, 4, f);
+                for (int i = 0; i < 300; i++) {
+                    const dp_rec r = i == 157 ? ta : table_record(&s, (u64)i);
+                    fwrite(&r, sizeof r, 1, f);
+                }
+                fclose(f);
+            }
+            TCHK(kang_load_log(ks) == 0 && ks->loaded == 300 && ks->log_next == 300 && ks->log_refs);
+        } else if (where == 5) {                            /* another computer's log with the tame point, merged, and written to ours */
+            char path[700];
+            snprintf(path, sizeof path, "%s/node_b.bin", ks->r->cfg.dir);
+            u8 fp[32];
+            kang_log_fp(ks, fp);
+            FILE *f = fopen(path, "wb");
+            TCHK(f != NULL);
+            if (f) {
+                fwrite(KANG_LOG_MAGIC, 1, 6, f);
+                fwrite(fp, 1, 32, f);
+                fwrite(ks->jump_tag, 1, 4, f);
+                for (int i = 0; i < 50; i++) {
+                    const dp_rec r = i == 20 ? ta : table_record(&s, (u64)i);
+                    fwrite(&r, sizeof r, 1, f);
+                }
+                fclose(f);
+            }
+            for (int i = 0; i < 10; i++) { const dp_rec r = table_record(&s, 1000 + (u64)i); kang_insert_dps(ks, &r, 1, NULL); }
+            kang_merge_stats st = {0};
+            TCHK(kang_merge_file(ks, path, &st) == KANG_HDR_OK && st.added == 50 && !st.solved);
+            TCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->log_recs == 60);
+        } else {
+            for (int i = 0; i < 3; i++) { const dp_rec r = table_record(&s, 500 + (u64)i); kang_table_insert(ks, &r, KANG_AT_NEW); }
+            TCHK(kang_table_insert(ks, where == 7 ? &other : &ta, KANG_AT_NEW) == 1);
+            for (int i = 0; i < (where == 1 ? 8 : 40); i++) { const dp_rec r = table_record(&s, (u64)i); kang_table_insert(ks, &r, KANG_AT_NEW); }
+            if (where == 1) TCHK(ks->nw == 8 && ks->nlog == 4 && ks->log_ready);     /* taken out, waiting for its writer */
+            if (where == 2 || where == 8) TCHK(kang_flush_log(ks) == 0 && ks->nlog == 0 && ks->nw == 0 && ks->log_recs == 44);
+            if (where == 6) TCHK(ks->nspill == 44 && !ks->log_refs);
+            if (where == 8) {                               /* the record of the point in the file is overwritten with another point */
+                const dp_rec r = table_record(&s, 99);
+                FILE *f = fopen(ks->log_path, "r+b");
+                TCHK(f && fseeko(f, KANG_LOG_HDR + 3 * sizeof r, SEEK_SET) == 0 && fwrite(&r, sizeof r, 1, f) == 1);
+                if (f) fclose(f);
+            }
+        }
+        const int rc = kang_table_insert(ks, &wb, KANG_AT_NEW);
+        if (where < 7) {
+            TCHK(rc == 2 && atomic_load(&ks->r->found) && !pz_u256_cmp(&ks->r->found_key, &want));
+        } else {
+            TCHK(rc == 0 && !atomic_load(&ks->r->found));
+            if (where == 7) TCHK(atomic_load(&ks->rejected) == 1 && atomic_load(&ks->r->hits_bad) == 1);   /* the key was checked, and refused */
+            else TCHK(atomic_load(&ks->rejected) == 1 && atomic_load(&ks->r->hits_bad) == 0);              /* not even tried */
+        }
+        if (where == 1) {                                   /* the block is written, as by the inserting thread */
+            pthread_mutex_lock(&ks->mu);
+            kang_table_unlock(ks);
+            TCHK(ks->nw == 0 && ks->log_recs == 8);
+        }
+        kang_free_test_state(ks);
+    }
+    pz_log_set_quiet(was_quiet);
     return fails;
 }
 
@@ -385,13 +501,13 @@ static int table_grow_checks(void)
     int *rc = pz_xmalloc(N * sizeof *rc);
     for (int tight = 0; tight < 2; tight++) {
         const u64 limit = tight ? 512 : (1 << 20);          /* entries */
-        kang_state *ks = small_table_state(limit);
+        kang_state *ks = small_table_state(limit, true);
         if (!ks) return fails + 1;
         u64 s = 0xA0761D6478BD642FULL, cap = ks->cap;
         TCHK(cap == 64);
         for (int n = 0; n < N;) {
             recs[n] = table_record(&s, (u64)n);
-            rc[n] = kang_table_insert(ks, &recs[n], false);
+            rc[n] = kang_table_insert(ks, &recs[n], KANG_AT_NEW);
             n++;
             if (ks->cap != cap) {
                 TCHK(ks->cap == 2 * cap && 3 * cap <= limit);
@@ -416,7 +532,7 @@ static int table_grow_checks(void)
 static int table_size_checks(void)
 {
     int fails = 0;
-    const u64 top = (256ULL << 20) / sizeof(dp_rec);           /* the limit of kang_make_test_state, a power of two */
+    const u64 top = (256ULL << 20) / sizeof(dp_ent);           /* the limit of kang_make_test_state, a power of two */
     static const struct { unsigned wbits, dp; } cases[] = {{40, 2}, {40, 4}, {40, 10}, {64, 2}, {100, 2}, {139, 2}, {KANG_MAX_W_LOG2, 2},
                                                            {KANG_MAX_W_LOG2, 3}, {KANG_MAX_W_LOG2, 20}, {KANG_MAX_W_LOG2, 60}};
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
@@ -441,7 +557,8 @@ static int table_selftest(void)
     fails += table_size_checks();
     pz_log_set_quiet(was_quiet);
     fails += table_collision_checks();
-    pz_result_line("DP table: growth, thinning", "%s", fails ? "FAILED" : "OK");
+    fails += table_ref_checks();
+    pz_result_line("DP table: growth, thinning, records", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -705,16 +822,6 @@ int kang_log_file_selftest(void)
 #ifndef _WIN32
 #define LCHK(cond) do { if (!(cond)) { fails++; printf("  full disk: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
 
-/* The two buffers of the log hold `n` records each, and are empty. */
-static void log_small_buffers(kang_state *ks, size_t n)
-{
-    ks->logbuf = pz_xrealloc(ks->logbuf, n * sizeof(dp_rec));
-    ks->caplog = n;
-    ks->nlog = 0;
-    ks->wbuf = pz_xrealloc(ks->wbuf, n * sizeof(dp_rec));
-    ks->capw = n;
-    ks->nw = 0;
-}
 
 /* A write that stops in the middle of a record (file size limit): `n` points go in, the first ones reach the file, the limit hides the
  * rest, lifting it and flushing completes the file. With `dps` the points enter as the workers insert them (the thread that fills a buffer
@@ -746,7 +853,7 @@ static int log_short_write_check(kang_state *ks, const char *name, u64 first_id,
         for (int i = 0; i < n; i++) {
             rec.tagk = ((first_id + (u64)i) << 20) | KIND_TAME;
             if (dps) kang_insert_dps(ks, &rec, 1, NULL);
-            else kang_table_insert(ks, &rec, false);
+            else kang_table_insert(ks, &rec, KANG_AT_NEW);
         }
         LCHK(ks->log_broken);
         LCHK(ks->nlog + ks->nw > 0);                                 /* what the file refused is kept */
@@ -962,7 +1069,7 @@ int kang_log_fault_selftest(void)
         const int N = 3000;
         for (int i = 0; i < N; i++) {
             rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
-            kang_table_insert(ks, &rec, false);
+            kang_table_insert(ks, &rec, KANG_AT_NEW);
         }
         LCHK(ks->nlog + ks->nw == (size_t)N && ks->caplog >= ks->nlog);       /* the buffer grew instead of overflowing; no point was lost */
         LCHK(atomic_load(&ks->dropped) == 0);

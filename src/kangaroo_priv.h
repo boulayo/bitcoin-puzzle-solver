@@ -79,6 +79,14 @@ static inline i192 i192_from_signed(bool neg, const pz_u256 *mag)
 /* distinguished-point record: 32 bytes. tagk = (x.n[2] & ~7) | kind. The steps write the codes tame / wild with its sign (0 to 2);
  * kang_dp_recode turns them into the codes of the species (0 to 4). */
 typedef struct { u64 tagk; i192 d; } dp_rec;
+/* An entry of the table: 16 bytes, the tag and where the whole record is. A match of two tags of the same kind needs nothing more (the walker is
+ * restarted); a match of two kinds, once a campaign plus a few false matches of the 61 bits of the tag, reads the distance back. ref is 1 + the
+ * index of the record in the log (kang_log_get: from the file, or from the buffers not written yet), or KANG_REF_SPILL | the index of its copy in
+ * ks->spill, for the points that are in no log (no file, or the disk refused them beyond KANG_LOG_BUF_MAX); 0 is an empty slot. Half the 32 bytes of
+ * a record: where memory sets dp_bits, one bit less, and half the delay of the distinguished points. */
+typedef struct { u64 tagk, ref; } dp_ent;
+#define KANG_REF_SPILL ((u64)1 << 63)
+#define KANG_AT_NEW (~(u64)0)    /* kang_table_insert: a new point, to be logged (otherwise the index of the record in the log) */
 #define KIND_TAME 0
 #define KIND_WILD_P 1            /* wild, sigma = +1 */
 #define KIND_WILD_M 2            /* wild, sigma = -1 */
@@ -113,9 +121,11 @@ typedef struct kang_state {
     int K_thread;                /* kangaroos per CPU thread */
     int K_total;
     /* DP table */
-    dp_rec *tab;
+    dp_ent *tab;
     u64 cap, mask;
     u64 count;
+    dp_rec *spill;               /* the records of the entries that are in no log (KANG_REF_SPILL), under mu; they count against the memory limit */
+    u64 nspill, capspill;
     u64 thin_mask;               /* only DPs whose (tag>>KANG_KSHIFT)&thin_mask == 0 are stored once the table is full */
     unsigned thin_level;
     pthread_mutex_t mu;
@@ -131,6 +141,9 @@ typedef struct kang_state {
     dp_rec *wbuf;                /* (w) */
     size_t nw, capw;             /* (w) */
     bool log_ready;              /* a block was taken out of logbuf and waits for its writer: the one that unlocks mu writes it */
+    bool log_refs;               /* the log is open (kang_load_log): new entries refer to their records in it instead of a copy in spill */
+    u64 log_next;                /* index in the log of the next record that enters logbuf: the records are the file's log_recs, then wbuf, then
+                                  * logbuf, so the last nlog are in logbuf and the nw before them in wbuf. Under mu */
     u64 log_recs;                /* (w) whole records known to be in the file (loaded + flushed) */
     bool log_broken;             /* (w) the last write failed: the file is cut back to whole records and reopened before the next one */
     unsigned log_hdr;            /* (w) length of the header of the open log: KANG_LOG_HDR, or KANG_LOG_HDR4 for a log of version 4 */
@@ -263,9 +276,11 @@ int kang_log_class(const u8 magic[6]);
 enum { KANG_HDR_OK, KANG_HDR_SHORT, KANG_HDR_FOREIGN, KANG_HDR_OLDER, KANG_HDR_NEWER, KANG_HDR_OTHER_JUMPS, KANG_HDR_READ_ERR };
 void kang_jump_id(const u8 tag[4], char out[9]);                                         /* the id of a jump table, in hex */
 FILE *kang_log_create(kang_state *ks, const char *path, const u8 fp[32]);               /* a log with the current header; sets log_hdr */
-void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
+bool kang_log_push(kang_state *ks, const dp_rec *rec, u64 *idx);                         /* mu held: false when there was no room; *idx: its index in the log */
+bool kang_log_get(kang_state *ks, u64 idx, dp_rec *out);                                 /* mu held: the record at index idx of the log, from the buffers or the file */
 long long kang_log_read(kang_state *ks, FILE *f);                                        /* the records of an open log into the table: their number, -1 on a read error */
-int kang_table_insert(kang_state *ks, const dp_rec *rec, bool from_log);                 /* mu held: 1 inserted, 0 duplicate, 2 solved, -1 skipped */
+int kang_table_insert(kang_state *ks, const dp_rec *rec, u64 at);                        /* mu held: 1 inserted, 0 duplicate, 2 solved, -1 skipped. at: KANG_AT_NEW
+                                                                                          * or the index of the record in the log it comes from */
 int kang_kind_coef(unsigned k);                                                          /* coefficient of x in the exponent of a point of kind k */
 
 kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream);
