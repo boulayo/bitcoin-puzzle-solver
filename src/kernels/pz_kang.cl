@@ -42,14 +42,17 @@
 #define FL_ESC 4u
 #define FL_JSHIFT 8
 
-inline void d_add_jump(uint d[6], __global const uint *v)
+/* the distance of jump j: one 16-byte load (an entry is 80 bytes and its distance starts 64 bytes into it, so it is 16-byte aligned) */
+inline uint4 jump_dist(__global const uint *jump, const uint j) { return *(__global const uint4 *)(jump + j * JS + 16); }
+
+inline void d_add_jump(uint d[6], const uint4 v)
 {
-    ulong acc = (ulong)d[0] + v[0];
+    ulong acc = (ulong)d[0] + v.x;
     d[0] = (uint)acc;
     ulong c = acc >> 32;
-    acc = (ulong)d[1] + v[1] + c; d[1] = (uint)acc; c = acc >> 32;
-    acc = (ulong)d[2] + v[2] + c; d[2] = (uint)acc; c = acc >> 32;
-    acc = (ulong)d[3] + v[3] + c; d[3] = (uint)acc; c = acc >> 32;
+    acc = (ulong)d[1] + v.y + c; d[1] = (uint)acc; c = acc >> 32;
+    acc = (ulong)d[2] + v.z + c; d[2] = (uint)acc; c = acc >> 32;
+    acc = (ulong)d[3] + v.w + c; d[3] = (uint)acc; c = acc >> 32;
     acc = (ulong)d[4] + c; d[4] = (uint)acc; c = acc >> 32;
     d[5] += (uint)c;
 }
@@ -85,15 +88,44 @@ inline void kang_cycle(int bnd, uint t, uint *ck, uint *mn, uint *esc)
     }
 }
 
-/* d += the jumps of `nr` rounds of the history of one kangaroo (entries off0, off0 + stride, ...) */
+/* one entry of the history: d += the jump it names (whose distance v was loaded before), negated if the point was */
+inline void kang_replay_one(uint d[6], const uint h, const uint4 v)
+{
+    if (h == H_NOP) return;
+    d_add_jump(d, v);
+    if (h & H_FLIP) d_neg(d);
+}
+inline uint hist_jump(const uint h) { return h == H_NOP ? 0u : (h & H_JMASK); }   /* a round without a step reads a valid entry */
+
+/* d += the jumps of `nr` rounds of the history of one kangaroo (entries off0, off0 + stride, ...). The history is far larger than the
+ * caches: its entries, then their jump distances, are loaded KANG_REPLAY_BATCH at a time before they are used, so that the loads of a
+ * batch wait for the memory together instead of one after the other. */
+#define KANG_REPLAY_BATCH 8
 inline void kang_replay(__global const ushort *hist, const size_t off0, const size_t stride, const uint nr, __global const uint *jump, uint d[6])
 {
-    for (uint i = 0; i < nr; i++) {
-        const uint h = hist[off0 + (size_t)i * stride];
-        if (h == H_NOP) continue;
-        d_add_jump(d, jump + (h & H_JMASK) * JS + 16);
-        if (h & H_FLIP) d_neg(d);
+    uint i = 0;
+    for (; i + KANG_REPLAY_BATCH <= nr; i += KANG_REPLAY_BATCH) {
+        uint h[KANG_REPLAY_BATCH];
+#pragma unroll
+        for (int k = 0; k < KANG_REPLAY_BATCH; k++) h[k] = hist[off0 + (size_t)(i + k) * stride];
+#pragma unroll
+        for (int k = 0; k < KANG_REPLAY_BATCH; k++) kang_replay_one(d, h[k], jump_dist(jump, hist_jump(h[k])));
     }
+    for (; i < nr; i++) {
+        const uint h = hist[off0 + (size_t)i * stride];
+        kang_replay_one(d, h, jump_dist(jump, hist_jump(h)));
+    }
+}
+
+/* The distance in the state `st` of a walker at the end of a launch: += the jumps of its `nr` rounds. On CUDA a call of its own, like
+ * kang_emit_dp: the registers of the batches of the replay then take no part in the allocation of the kernel's main loop. */
+PZ_NOINLINE void kang_replay_state(__global uint *st, __global const ushort *hist, const size_t off0, const size_t stride, const uint nr,
+                                   __global const uint *jump)
+{
+    uint d[6];
+    for (int i = 0; i < 6; i++) d[i] = st[16 + i];
+    kang_replay(hist, off0, stride, nr, jump, d);
+    for (int i = 0; i < 6; i++) st[16 + i] = d[i];
 }
 
 /* A distinguished point after round `rd` of the launch: d is rebuilt from its value at the start of the launch */
@@ -301,11 +333,8 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
     /* write the herd back; d advances by the jumps of the whole launch */
     for (int k = 0; k < NK; k++) {
         __global uint *s = state + (size_t)(base + k) * KS;
-        uint d[6];
-        for (int i = 0; i < 6; i++) d[i] = s[16 + i];
-        kang_replay(hist, (size_t)k * pz_n + gid, HS, rounds, jump, d);
+        kang_replay_state(s, hist, (size_t)k * pz_n + gid, HS, rounds, jump);
         for (int i = 0; i < 8; i++) { s[i] = X[k].v[i]; s[8 + i] = Y[k].v[i]; }
-        for (int i = 0; i < 6; i++) s[16 + i] = d[i];
         const uint f = FL[k];
         s[22] = f & 1u;
         s[23] = (f >> 1) & 1u;

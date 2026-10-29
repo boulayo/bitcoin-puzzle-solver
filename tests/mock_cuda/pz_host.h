@@ -10,6 +10,7 @@ typedef unsigned long long ulong;
 typedef unsigned char uchar;
 typedef unsigned short ushort;
 typedef long long s64;
+typedef struct { uint x, y, z, w; } uint4;   /* the vector type the kernels load jump distances as */
 
 /* Several simulated devices run kernels at the same time (one thread each): the work-item index and the carry flag belong to the thread.
  * Where the compiler has no usable thread-local storage in a DLL (Windows), the driver runs one launch at a time instead. */
