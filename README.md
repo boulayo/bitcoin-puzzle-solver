@@ -50,7 +50,7 @@ linear scan. The algorithms are explained in [`docs/en/ALGORITHMS.md`](docs/en/A
 
 ## Quick start
 
-Download the archive for your platform from the [Releases page](../../releases), unpack it and check it with `SHA256SUMS`. Nothing needs
+Download the archive for your platform from the [Releases page](https://github.com/boulayo/bitcoin-puzzle-solver/releases), unpack it and check it with `SHA256SUMS`. Nothing needs
 to be installed; for NVIDIA GPUs the normal graphics driver is enough (version 525 or later).
 
 ```sh
@@ -107,7 +107,7 @@ on hardware and kernel quality. Run `pzsolve bench` to measure yours, and please
 | BSGS with ± and a table of √W/2 entries | 1.0·√W | needs a table that fits in RAM: not feasible for the open puzzles |
 
 The full tables and the model are in [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md) (sections 8.8 and 8.10) and, for the measurements behind them,
-in [`docs/en/RESEARCH.md`](docs/en/RESEARCH.md) (same sections).
+in [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) (same sections).
 
 ## Limits and what to expect
 
@@ -138,16 +138,16 @@ make windows    # build/win/pzsolve.exe, cross-compiled with MinGW-w64
 ```
 
 The macOS and arm64 builds are built and tested by the CI on every push; the full verification is described in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/CONTRIBUTING.md).
 
 ## Documentation
 
 * [`docs/en/USAGE.md`](docs/en/USAGE.md): commands, all options, the campaign folder, GPUs, several computers, troubleshooting, Windows.
 * [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md): the algorithms, the running times and the theoretical limits.
-* [`docs/en/RESEARCH.md`](docs/en/RESEARCH.md): the research log, what was tried and what was measured (variants that were discarded, intermediate measurements).
-* [`docs/en/ARCHITECTURE.md`](docs/en/ARCHITECTURE.md): how the source is organized.
-* [`docs/en/RELEASING.md`](docs/en/RELEASING.md): versioning and the release procedure.
-* [`CHANGELOG.md`](CHANGELOG.md) and [`tools/README.md`](tools/README.md): what changed, and the helper tools.
+* [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md): the research log, what was tried and what was measured (variants that were discarded, intermediate measurements).
+* [`docs/en/ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md): how the source is organized.
+* [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md): versioning and the release procedure.
+* [`CHANGELOG.md`](CHANGELOG.md) and [`tools/README.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/tools/README.md): what changed, and the helper tools.
 
 ## Responsible use
 
@@ -173,6 +173,6 @@ pzsolve is free software, licensed under the **GNU Affero General Public License
 a network, you must offer them the complete corresponding source code under the same license.
 
 **Commercial license.** If you want to use pzsolve in a proprietary product or service without the obligations of the AGPL, a paid
-commercial license is available. Open an issue titled "Commercial license" (without confidential details) or write to leonardo@boulayo.it. Contributions are welcome under [CONTRIBUTING.md](CONTRIBUTING.md).
+commercial license is available. Open an issue titled "Commercial license" (without confidential details) or write to leonardo@boulayo.it. Contributions are welcome under [CONTRIBUTING.md](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/CONTRIBUTING.md).
 
 Copyright (C) 2026 Leonardo Boulay.

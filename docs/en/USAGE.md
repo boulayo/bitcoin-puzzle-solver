@@ -246,7 +246,7 @@ finds how many CPU threads and which GPUs pay off.
 ### 7.5 `bench` and the GPUs
 
 For every GPU `bench` prints, besides the linear search and the kangaroo (with the memory used), the copy bandwidth, the throughput of 32-bit
-integer instructions and the L2 cache, and for NVIDIA the two ceilings of the kangaroo they give: how to read them is in [`RESEARCH.md`](RESEARCH.md) section 8.4.
+integer instructions and the L2 cache, and for NVIDIA the two ceilings of the kangaroo they give: how to read them is in [`RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) section 8.4.
 
 `bench --gpu-only` skips the CPU tests. `bench --retune` ignores the saved choice of the kernel variants
 (`gpu_tune.txt`) and measures it again: useful after a driver update or to see the numbers of all the variants.
@@ -333,7 +333,7 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 | `TERM=dumb` | the terminal cannot move the cursor: no panel (`--ui log`) |
 
 The variables for tests and diagnostics (`PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_BSGS_SCALAR`, `PZ_TEST_*`, `PZ_ASSUME_IFMA`, `PZ_EXPECT_SHANI`
-and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](ARCHITECTURE.md) section 5b.
+and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md) section 5b.
 
 ## 8. Performance tips
 

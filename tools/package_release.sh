@@ -12,8 +12,12 @@
 #
 # Output (OUT, default dist-release/):
 #   pzsolve-<version>-linux-x86_64.tar.gz     one top folder per archive, with the binary, README.md, LICENSE (if the
-#   pzsolve-<version>-windows-x86_64.zip      repository has one), CHANGELOG.md, docs/ and BUILD-INFO.txt
+#   pzsolve-<version>-windows-x86_64.zip      repository has one), CHANGELOG.md, the user documents and BUILD-INFO.txt
 #   SHA256SUMS
+#
+# The user documents are docs/en/USAGE.md, docs/en/ALGORITHMS.md, docs/it and docs/img (the DOCS list of this script). The ones for developers
+# (RESEARCH, ARCHITECTURE, RELEASING, CONTRIBUTING, tools/) stay in the repository, and the shipped files link to them by their
+# github.com address.
 #
 # The builds are the ones of the Makefile, from scratch, in build/release/<target>: Linux dynamic against glibc (the code avoids
 # the __isoc23_* symbols and anything newer than glibc 2.34, so the binary starts on older distributions; checked below), Windows
@@ -30,6 +34,7 @@ VERSION=$(tr -d '[:space:]' < VERSION)
 WINCC=${WINCC:-x86_64-w64-mingw32-gcc-posix}
 JOBS=${JOBS:-$( (nproc || sysctl -n hw.ncpu || echo 2) 2>/dev/null | head -1)}
 export COPYFILE_DISABLE=1          # macOS tar: no ._* AppleDouble files in the archives
+DOCS=(docs/en/USAGE.md docs/en/ALGORITHMS.md docs/it docs/img)
 
 # owner of the archive members: root, whoever built the package (GNU tar and bsdtar spell the options differently)
 TAROPTS=()
@@ -95,7 +100,12 @@ pack() {
   strip_binary "$d/$exe" "$os"
   cp README.md "$d/"
   for f in LICENSE LICENSE.md LICENSE.txt COPYING CHANGELOG.md; do [ -f "$f" ] && cp "$f" "$d/"; done
-  [ -d docs ] && cp -R docs "$d/docs"
+  local doc
+  for doc in "${DOCS[@]}"; do
+    [ -e "$doc" ] || die "missing document: $doc"
+    mkdir -p "$d/$(dirname "$doc")"
+    cp -R "$doc" "$d/$doc"
+  done
   {
     echo "pzsolve $VERSION"
     echo "platform:  $os-$arch"

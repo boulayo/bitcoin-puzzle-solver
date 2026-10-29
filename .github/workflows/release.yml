@@ -11,7 +11,7 @@
 # another commit than the one this run built: the files would not come from the tagged commit, while the tag and the notes stay as
 # they are. Tick "replace" in a manual run to do it on purpose; the job log says what happened.
 #
-# Archives (one top folder each, with the binary, README.md, LICENSE if present, CHANGELOG.md, docs/ and BUILD-INFO.txt):
+# Archives (one top folder each, with the binary, README.md, LICENSE if present, CHANGELOG.md, the user documents and BUILD-INFO.txt):
 #   pzsolve-<version>-linux-x86_64.tar.gz    pzsolve-<version>-linux-arm64.tar.gz
 #   pzsolve-<version>-macos-arm64.tar.gz     pzsolve-<version>-macos-x86_64.tar.gz
 #   pzsolve-<version>-windows-x86_64.zip     SHA256SUMS

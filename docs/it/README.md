@@ -54,7 +54,7 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
 
 ## Avvio rapido
 
-Scarica l'archivio per la tua piattaforma dalla pagina [Releases](../../../../releases), decomprimilo e controllalo con `SHA256SUMS`. Non
+Scarica l'archivio per la tua piattaforma dalla pagina [Releases](https://github.com/boulayo/bitcoin-puzzle-solver/releases), decomprimilo e controllalo con `SHA256SUMS`. Non
 serve installare nulla; per le GPU NVIDIA basta il normale driver grafico (versione 525 o successiva).
 
 ```sh
@@ -114,7 +114,7 @@ con altri strumenti.
 | BSGS con ± e tabella di √W/2 voci | 1,0·√W | serve una tabella che stia in RAM: non fattibile per i puzzle aperti |
 
 Le tabelle complete e il modello sono in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (sezioni 8.8 e 8.10, in inglese) e, per le misure che li sostengono,
-in [`docs/en/RESEARCH.md`](../en/RESEARCH.md) (stesse sezioni, in inglese).
+in [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) (stesse sezioni, in inglese).
 
 ## Limiti e cosa aspettarsi
 
@@ -145,12 +145,12 @@ make windows    # build/win/pzsolve.exe, cross-compilato con MinGW-w64
 ```
 
 Le build per macOS e arm64 sono compilate e provate dalla CI a ogni push; la verifica completa è descritta in
-[CONTRIBUTING.md](../../CONTRIBUTING.md) (in inglese).
+[CONTRIBUTING.md](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/CONTRIBUTING.md) (in inglese).
 
 ## Documentazione
 
 * [`docs/it/USO.md`](USO.md): comandi, tutte le opzioni, cartella della campagna, GPU, più computer, problemi comuni, Windows.
-* In inglese: [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (algoritmi, tempi, limiti teorici), [`docs/en/RESEARCH.md`](../en/RESEARCH.md) (diario di ricerca: cosa è stato provato e misurato), [`docs/en/ARCHITECTURE.md`](../en/ARCHITECTURE.md) (sorgente), [`docs/en/RELEASING.md`](../en/RELEASING.md) (rilascio), [`CHANGELOG.md`](../../CHANGELOG.md) e [`tools/README.md`](../../tools/README.md).
+* In inglese: [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (algoritmi, tempi, limiti teorici), [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) (diario di ricerca: cosa è stato provato e misurato), [`docs/en/ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md) (sorgente), [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md) (rilascio), [`CHANGELOG.md`](../../CHANGELOG.md) e [`tools/README.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/tools/README.md).
 
 ## Uso responsabile
 
@@ -178,6 +178,6 @@ modificata, o la offri agli utenti attraverso una rete, devi dare loro il codice
 
 **Licenza commerciale.** Se vuoi usare pzsolve in un prodotto o servizio proprietario senza gli obblighi dell'AGPL, è disponibile
 una licenza commerciale a pagamento. Apri una issue intitolata «Commercial license» (senza dettagli riservati) oppure scrivi a leonardo@boulayo.it. I contributi sono benvenuti alle condizioni di
-[CONTRIBUTING.md](../../CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/CONTRIBUTING.md).
 
 Copyright (C) 2026 Leonardo Boulay.

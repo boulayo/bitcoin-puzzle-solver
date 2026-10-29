@@ -247,7 +247,7 @@ raffreddamento: `bench --together` (sezione 7.9) trova quanti thread CPU e quali
 ### 7.5 `bench` e le GPU
 
 Per ogni GPU il `bench` stampa, oltre alla ricerca lineare e al canguro (con la memoria usata), la banda di copia, il throughput delle istruzioni
-intere a 32 bit e la cache L2, e per le NVIDIA i due tetti del canguro che ne derivano: come leggerli è in [`RESEARCH.md`](../en/RESEARCH.md) sezione 8.4 (in inglese).
+intere a 32 bit e la cache L2, e per le NVIDIA i due tetti del canguro che ne derivano: come leggerli è in [`RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) sezione 8.4 (in inglese).
 
 `bench --gpu-only` salta le prove della CPU. `bench --retune` ignora la scelta salvata delle varianti dei kernel
 (`gpu_tune.txt`) e la misura di nuovo: serve dopo un aggiornamento del driver o per vedere i numeri di tutte le varianti.
@@ -334,7 +334,7 @@ come se la variabile non ci fosse.
 | `TERM=dumb` | il terminale non sa spostare il cursore: niente pannello (`--ui log`) |
 
 Le variabili per i test e la diagnostica (`PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_BSGS_SCALAR`, `PZ_TEST_*`, `PZ_ASSUME_IFMA`, `PZ_EXPECT_SHANI`
-e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](../en/ARCHITECTURE.md) sezione 5b (in inglese).
+e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md) sezione 5b (in inglese).
 
 ## 8. Consigli prestazionali
 
