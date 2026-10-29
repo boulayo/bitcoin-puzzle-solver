@@ -235,7 +235,7 @@ Kangaroo kernel (rewritten in 1.5.0, kernel v2 in 1.7.0), continuing the Kangaro
   launch for everyone and, for the rare distinguished points, on the spot; (b) one pass per round instead of two: the pass that moves the
   walkers also computes the denominators of the next round and their running products, which alternate between prefixes and suffixes (the pass
   goes down, then up, ...): Montgomery's trick works with both, and each pass reads and overwrites the products
-  left by the previous one; (c) the inversion is by divstep (sec. 8.4); (d) a launch does at most 64 rounds (depth of the history),
+  left by the previous one; (c) the inversion is by divstep (sec. 8.4); (d) a launch does at most 64 rounds (depth of the history; since 1.13.0 the depth is 64 to 256, chosen per herd from the device memory),
   starting from the step number common to the whole herd.
 
 ## 8. Theoretical limits: how much can still be improved?

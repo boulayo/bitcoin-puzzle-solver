@@ -1,7 +1,7 @@
 # Changelog
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
-Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.md)).
+Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
 ## [1.12.0] — 2026-10-29
 
@@ -55,7 +55,7 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.
   those of earlier versions (`PZBSGS01`) are still read and used as they are (they need 12.3 bytes per baby step), but earlier versions
   cannot read the new files.
 - The kangaroo thins its table of distinguished points in place: the peak memory drops from twice the limit to the limit (measured 521 to
-  265 MiB at `--mem 0.25`), and the table grows only if the old and the new one fit in the limit together.
+  256 MiB at `--mem 0.25`), and the table grows only if the old and the new one fit in the limit together.
 - The dashboard no longer waits for the table of the kangaroo while it is rebuilt (the pause was up to several seconds and could be taken for
   a system suspension), and the log of distinguished points is written outside the table lock, under a lock of its own: a slow or remote
   disk no longer stalls the search threads.

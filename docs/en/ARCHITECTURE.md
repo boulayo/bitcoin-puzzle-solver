@@ -89,7 +89,7 @@ bsgs_scan: 1, 4 or 8 groups of 1024 giants (batch inversion, on SIMD lanes if av
 run_kangaroo ─ (GPU: opens the devices, NK tuning, self-test) ─ kang_create (interval, base, Q', zones)
              ─ kang_configure (K, dp_bits, table, jumps from seed) ─ kang_load_log (dp.bin)
              ─ CPU thread: kang_cpu_worker_main { round (fastest variant among scalar and lanes, verified) → DP → table }
-             ─ GPU thread: gpu_kang_thread { kernel pz_kang_step (NK walkers per thread, up to 64 rounds per launch, jump history in
+             ─ GPU thread: gpu_kang_thread { kernel pz_kang_step (NK walkers per thread, 64 to 256 rounds per launch, jump history in
                                               a buffer of 16 bits per step; d and the DPs are rebuilt by replaying it) → DP/restarts → table }
              ─ reporter: probability of success, DPs in the table, restarts
 kang_insert_dps (under the table mutex): inserts or compares with the existing entry → solve_pair → run_submit_key; a full block of the log is written after the mutex is released
