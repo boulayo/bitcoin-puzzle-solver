@@ -659,3 +659,40 @@ additions of the 29-bit representation. The engine (`engine_vec_impl.inc`) is th
   With IFMA the curve costs ≈ 21 ns per key and the two hashes ≈ 39 ns: **the CPU bottleneck is now the hash** (≈ 65%).
 * **SHA-NI, tried and rejected**: one SHA-256 block with the SHA-NI instructions costs ≈ 63 ns on the same CPU, while SHA-256 +
   RIPEMD-160 on the 16 AVX-512 lanes cost ≈ 39 ns per key in total. It does not pay off.
+
+### 10.2 Linear search: what was measured after 1.13.0
+
+Same test machine as above (x86-64 server CPU with AVX-512; its CPUID hides IFMA but the processor executes it, `PZ_ASSUME_IFMA=1`), one
+thread pinned to one CPU, a harness that calls the engines directly; times are the best of 100 scans of 65,536 keys, base and new run
+in 9 alternating pairs (the machine was shared, load 1 to 6): median gain and range of the pairs. Instructions per key with `callgrind`
+(AVX2 engines; valgrind has no AVX-512).
+
+* **Where the time goes (avx512i).** The hash filter alone runs at ≈ 92 core cycles per key (16 lanes; about 2,700 vector ALU operations per
+  batch on ports 0 and 5, so ≈ 92 % of that limit); the curve part alone (hash removed) at ≈ 18 ns per key; the whole engine ≈ 53 ns.
+  The hash has no slack left: the constant message words fold, every rotation is one `vprold`, `ch` and `maj` one `vpternlogd` each.
+  A field product is latency-bound when it waits for the previous one: 85 cycles in a chain against 60 when independent (`vpmadd52luq`
+  runs on port 0 only); with 29-bit limbs the two are equal (throughput-bound).
+* **Kept** (gain on the engine, per change):
+  * canonical `x` and the parity of `y` without the full normalization (ALGORITHMS.md 2.1): avx512v +9.0 % (+6.7..+17.1), avx2v +3.7 %
+    (+2.5..+5.0, 1306 to 1263 instructions per key), avx512i +2.3 % (IQR +2.2..+2.9);
+  * no carry pass on the differences that only feed a product (29-bit limbs): avx512v +2.1 % (+0.6..+3.7), avx2v +1.7 % (+0.9..+2.1,
+    1263 to 1237 instructions);
+  * filter on digest word 2 instead of word 0: 4 RIPEMD-160 steps fewer, 5573 to 5529 instructions per AVX2 batch, 3036 to 3009 per
+    AVX-512 batch; +0.3 to +0.6 % (within the noise of a single pair, consistent over all pairs);
+  * one vector comparison of the filter word per batch: +0.2 to +0.35 %;
+  * eight batches hashed together: avx512i +2.1 % (IQR +1.9..+3.1; 2, 8 and 16 batches gave +1.9, +2.4, +2.6 %), avx2v +0.9 %, avx512v
+    unchanged;
+  * two chains of products in the batch inversion (IFMA only): +3.0 % (15 pairs, +1.5..+5.0);
+  * products, `vctx_emit` and `vround` inlined on AVX-512: avx512v +2.7 %, avx512i +1.3 % (IQR -0.7..+2.1: not distinguishable from 0);
+  * AVX2 byte swap and rotations by 8 as one `vpshufb` with the mask in memory: 5529 to 5432 filter instructions, avx2v +0.9 %, avx2 +0.7 %;
+  * scalar engines, `x(C) + x(i·G)` formed once per pair: avx2 +4.1 % (1514 to 1489 instructions), avx512 +2.8 %.
+  * Together: avx512i +7.3 % (52.2 against 56.0 ns per key), avx512v +15.6 %, avx2v +7.6 %, avx2 +5.0 %, avx512 +3.3 %.
+* **Tried and dropped:** a window of 512 keys on avx512i (the inversion over twice the keys): +0.15 % (-0.3..+1.2); two chains of products
+  on the 29-bit layouts: -0.4 to -0.8 %; the inlining on AVX2: -1.0 to -2.4 % (16 registers, more spills); the AVX2 shuffles in the SHA-NI
+  build: more spills than operations saved (1976 to 1982 instructions); several batches hashed together in the scalar engines: -0.4 % (avx2)
+  and -1.1 % (avx512) against the code with one batch, 24 more instructions per key.
+* **Not a bottleneck:** the claims of the scheduler last about 3 s and their set-up (the centres of the first round, two arrays of
+  150 to 300 KB) costs well under 0.01 %; 4 threads give 3.95 times one thread with avx512i (`bench`: 16.7, 35.3, 66.0 M keys/s).
+* **GPU linear kernel** (sm_86 SASS from NVRTC 12.0 and `ptxas`, executed path of `linear256`; not measured on a card): the filter on word 2
+  with a full hash of the few keys that pass (2103 to 2077 instructions) and the shared `x(C) + x(i·G)` (loop per pair 2315 to 2269) give
+  ≈ 3419 to 3370 instructions per key (-1.4 %); registers 172 to 174, same occupancy.

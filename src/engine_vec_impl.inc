@@ -16,8 +16,8 @@
 #define CAT(a, b) CAT_(a, b)
 #define PZ_HASH_LANES_FN CAT(hash_lanes_, ISA)
 #include <pzcore/impl/hash_lanes.inc>
-/* With 32 vector registers the search runs faster with the products, vctx_emit and vround inlined (measured: 2.4 % with IFMA,
- * 3 % without); with the 16 of AVX2 the spills make it slower. */
+/* With 32 vector registers the search runs faster with the products, vctx_emit and vround inlined (measured: 2.7 % on avx512v,
+ * 0 to 2 % on avx512i); with the 16 of AVX2 the spills make it slower (-1 to -2.4 %). */
 #if PZ_VBYTES == 64
 #define PZ_FEV_INLINE __attribute__((always_inline))
 #define VINLINE __attribute__((always_inline))
@@ -129,7 +129,7 @@ static inline PZ_VABI bool vl_any(pz_vl v)
 }
 
 /* Canonical x and the parity of the canonical y, then NL candidates appended to the hash batch. The fast forms cover all but
- * about 2^-24 of the lanes; for those the full normalization runs on the whole vector. */
+ * about 2^-24 of the lanes (2^-48 with IFMA); for those the full normalization runs on the whole vector. */
 static inline VINLINE PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev *y, pz_vl koff)
 {
     pz_vl unsure = pz_fev_normalize_fast(x);

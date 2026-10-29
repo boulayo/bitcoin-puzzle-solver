@@ -52,6 +52,12 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
   center `C + 2H·G`. With `H = 256` (CPU) the cost is ≈ `3.5 M + 1 S` per key (M = field multiplication, S = field squaring)
   plus 1/512 of an inversion.
 * The hash needs the parity of `y`: it is obtained by also computing `y` (one multiplication) instead of hashing twice.
+  Only `x` and that parity have to be canonical. In the lane engines a carry pass and one fold give both, and the full reduction runs
+  only when the top limb ends all ones (about one lane in 2^24, every value ≥ p among them; with IFMA every element is canonical already
+  below that). For `x3 = λ² − x(C) − x(i·G)` the scalar engines and the GPU subtract the sum `x(C) + x(i·G)`, formed once for both
+  points of a pair; the lane engines subtract both terms in one pass.
+* The lane engines hash the candidates eight batches at a time (8 × 8 or 8 × 16 keys), so that the curve arithmetic of consecutive
+  points runs back to back and out-of-order execution overlaps their dependency chains.
 
 ### 2.2 Vectorized hash160
 
@@ -612,6 +618,10 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 
 * **Representation** (`lib/pzcore/include/pzcore/fev.h`): 9 limbs of 29 bits per element, "structure of arrays" (limb `i` of all lanes is one
   register). `vpmuludq` (32×32→64) does 4 or 8 products per instruction and a column of 9 products of ≤ 2^60 fits in 64 bits.
+* With 29-bit limbs a difference `a − b + k·p` that only meets a tight factor in a product (or goes to the hash) skips its carry pass: its
+  limbs stay below 2^31 + 2^23, and nine products of such a limb and a tight one still fit in 64 bits. With IFMA a product that waits for
+  the previous one is latency-bound, so the forward pass of the batch inversion runs as two interleaved chains (even and odd
+  denominators). On AVX-512 (32 vector registers) the products are inlined in the loop of the engine.
 * The reduction, the limb bounds, the order of the windows, the lane kangaroo (RESEARCH.md 10.0), the AVX-512 IFMA variant (RESEARCH.md 10.1),
   their verification and the measurements on the test machine mentioned above: RESEARCH.md section 10.
 
