@@ -59,6 +59,18 @@ PZ_VABI void kv_canon(pz_fev *x3, pz_fev *y3)
     }
 }
 
+/* The coordinates of a jump point are kept in the table as K1 - c (the multiple of p that pz_fev_sub adds, less the limbs of c), so
+ * that a - c is a + (K1 - c) and its carries: pz_fev_sub less one operation per limb, the same limbs. */
+static inline PZ_VABI void kv_sub_jump(pz_fev *r, const pz_fev *a, const pz_fev *nc)
+{
+#ifdef PZ_FEV_IFMA
+    pz_fev_add(r, a, nc);
+#else
+    pz_fev_add(r, a, nc);
+    pz_fev_carry_small(r);
+#endif
+}
+
 #define KV_WORDS (2 * PZ_FEV_NLIMB + 2)          /* table entry: x limbs, y limbs, distance (two words) */
 #define KV_STRIDE ((KV_WORDS + 7) & ~7)        /* padded to whole 64-byte rows */
 /* Word offsets in an entry. The backward pass reads y and the distance (KV_BN words from KV_B), the forward pass x: with 5 limbs
@@ -256,9 +268,9 @@ static void CAT(kv_setup_, ISA)(kang_worker *w)
         u64 *e = t + (size_t)j * KV_STRIDE;
         pz_fev a;
         pz_fev_set_lane(&a, 0, &w->P->jx[j]);
-        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[KV_X + i] = a.l[i][0];
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[KV_X + i] = pz_fev_k1[i] - a.l[i][0];
         pz_fev_set_lane(&a, 0, &w->P->jy[j]);
-        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[KV_Y + i] = a.l[i][0];
+        for (int i = 0; i < PZ_FEV_NLIMB; i++) e[KV_Y + i] = pz_fev_k1[i] - a.l[i][0];
         e[KV_V] = (u64)w->P->jv[j];
         e[KV_V + 1] = (u64)(w->P->jv[j] >> 64);
     }
@@ -317,7 +329,7 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
         x[u].jv1 = e[KV_V - KV_B + 1];
     }
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vy[c - u], &x[u].jy);
+    for (int u = 0; u < nu; u++) kv_sub_jump(&x[u].t, &E->vy[c - u], &x[u].jy);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) kv_mul(&x[u].lam, &x[u].t, &x[u].ic);
 #pragma GCC unroll 2
@@ -440,7 +452,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         pz_fev jx;
         A[c].jb = kv_jbase(&vx[c], &A[c], P->R);
         kv_load_words(jx.l, KV_X, PZ_FEV_NLIMB, vjt, A[c].jb);
-        pz_fev_sub(&vdx[c], &vx[c], &jx);
+        kv_sub_jump(&vdx[c], &vx[c], &jx);
         if (c == 0) acc = vdx[0];
         else kv_mul(&acc, &acc, &vdx[c]);
         vtmp[c] = acc;
@@ -499,7 +511,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         kv_load_words(e, KV_B, KV_BN, vjt, a->jb);
         memcpy(jy.l, e + KV_Y - KV_B, sizeof jy.l);
         const pz_vl jv0 = e[KV_V - KV_B], jv1 = e[KV_V - KV_B + 1];
-        pz_fev_sub(&t, &vy[c], &jy);
+        kv_sub_jump(&t, &vy[c], &jy);
         kv_mul(&lam, &t, &ic);
         kv_sqr(&l2, &lam);
         kv_x3_t(&x3, &t, &l2, &vx[c], &vdx[c]);
