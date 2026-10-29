@@ -566,8 +566,8 @@ path, which is also triggered by every zero denominator in the batch inversion.
   0.01 ns per giant step, against ≈ 100 ns for the step itself). Tables written by versions up to 1.10.0 (`PZBSGS01`: one array, linear
   probing, load 0.65, 12.3 bytes per baby step) are read and used as they are; they cannot be converted without computing the baby
   steps again.
-* **Parallel construction**: blocks of 2^22 baby steps taken from an atomic counter; each thread uses the same batch-inversion
-  window. Measured on 4 cores: ≈ 16–24 M entries/s.
+* **Parallel construction**: blocks of up to 2^22 baby steps taken from an atomic counter; each thread uses the same batch-inversion
+  window. Measured on 4 cores (AVX-512): ≈ 40–50 M entries/s (smaller blocks on small tables, so every core works).
 * **SIMD lane windows**: 4 (AVX2) or 8 (AVX-512, IFMA) consecutive windows per instruction, with the arithmetic of
   `fev.h`/`fev52.h`, both for the giants and for building the table. At startup each variant must produce exactly the
   x-coordinates of the scalar routine (two calls, so the advance of the centers is covered too), otherwise it is not used;

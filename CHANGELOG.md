@@ -3,6 +3,54 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.13.0] — 2026-10-29
+
+### Changed
+- **Upgrade note.** Every command refuses the options it does not use (for example `list -t 7`) instead of ignoring them; `--mem` must be
+  at least 0.001 (GiB); `merge` exits with 2, not 1, when a file cannot be merged. Scripts that relied on the old behaviour must be adjusted.
+- The kangaroo table of distinguished points uses 16 bytes per entry instead of 32: it keeps the index of the point in `dp.bin` and reads the
+  distance back when two kinds of walkers meet. Where memory sets `dp_bits` it is one bit lower, which halves the delay before a collision is
+  seen. Modelled with 2^22 kangaroos on puzzle 140: 1.10 to 1.08 times the square root of the range with 32 GB, 1.15 to 1.10 with 16 GB,
+  1.23 to 1.15 with 8 GB; 1 % or less with 2^20 kangaroos or 64 GB and more. Measured on 2^40 and 2^44 keys with a small `--mem`: 8 to 9 %
+  fewer steps. `dp.bin` is unchanged; points that are in no log keep a full copy, so a solve is never lost.
+- CPU threads go to distinct physical cores first for every thread count (`-t N`, the machine profile, `bench`), not only with `--limit`.
+  This matters where the two threads of a core are numbered next to each other (Windows, Intel hybrid CPUs).
+- Kangaroo on CPUs with SMT: the mixed layout (vector step on the first thread of each core, BMI2/ADX step on the other) is measured at
+  start-up and used when it is at least 3 % faster (+14 % on the CI runner). `PZ_KANG_MIX=0` turns it off, `=1` forces it.
+- BSGS: the table is built in blocks sized to the table and the threads, so small tables use every thread (`bench`: about 3 times faster on 4
+  cores). The table is the same.
+- GPU kangaroo: the tuner also tries wider herds (4 and 8 times the work-items per compute unit with OpenCL, at most 128 per unit on Intel
+  GPUs; 512 threads per SM on CUDA cards with more than about 80 SMs); a launch runs up to 256 rounds when the device memory allows and reads
+  its two counters in one transfer; the replay at the end of a launch loads the jump history 8 entries at a time. Correctness checked on the
+  simulated CUDA driver and on pocl; the gain on real cards is not measured yet.
+- CUDA linear search: the register-capped variants get a grid of 4 blocks per SM, the occupancy they were built for.
+- Terminal output:
+  - the kangaroo start-up is one line with grouped digits (the internals with `-v`);
+  - GPU tuning prints one line per GPU and kernel, with the rates of every variant in `log.txt`;
+  - the jump table id is shown with any `--node`, 0 included;
+  - a completed campaign is shown as completed, and resuming it prints one line and exits with 1 instead of running a session;
+  - usage errors show the usage line of the command;
+  - the main help has one line per command, and `hunt --help` documents every option and the complete rule of `-m auto`;
+  - `info` and finished campaigns show no rows of zeros; chance windows stop at the first 100 %; a range size is written `2^k` only when
+    it is exact;
+  - tables of `bench --together` are never wrapped;
+  - a GPU runtime switched off by `PZ_NO_CUDA` or `PZ_NO_OPENCL` is reported as disabled.
+- The thinning of the table of distinguished points is an information, not a warning: it is expected in about one run in five where memory
+  sets `dp_bits`.
+- Documentation: shorter guide (the option list is `pzsolve hunt --help`), a glossary, the GPU memory of the kangaroo (40 MiB plus 256 bytes
+  per kangaroo), `--mem` in GiB; release archives ship only the user documents.
+
+### Fixed
+- A failed opening of `dp.bin` for a reason other than a missing file (permissions, disk error) recreated it empty.
+- A thread count in `machine_profile.txt` beyond the worker limit stopped the kangaroo with "too many workers".
+- `doctor` on an empty campaigns folder, and `--mem` below 32 bytes, did undefined operations.
+- `log.txt` got two "final state" lines in log mode and none with the panel; log records written to a file or a pipe were split; `--ui line`
+  and `info` ignored the terminal width; the panel stopped at 110 columns instead of 128.
+- The first-run measurement wrote its kangaroo set-up into the log of the new campaign.
+- `split` and `puzzle --rate` accepted speeds with blanks, a sign or hexadecimal digits.
+- Messages: a foreign `dp.bin` is "left as it is", a log with another jump table means "another seed", GPUs are always named `GPU[n]`;
+  `FOUND.txt` writes the key with `0x`.
+
 ## [1.12.0] — 2026-10-29
 
 ### Removed
