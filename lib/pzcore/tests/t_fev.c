@@ -270,7 +270,12 @@ int main(void)
             pz_fev_inv(&inv, &a);
             pz_fev_mul(&one, &inv, &a);
             for (int l = 0; l < PZ_FEV_LANES; l++) {
-                if (pz_fe_is_zero(&va[l])) continue;
+                if (pz_fe_is_zero(&va[l])) {                 /* the inverse of a zero lane is zero, the other lanes are still inverted */
+                    pz_fe got;
+                    lane_value(&got, &inv, l);
+                    CHECK(pz_fe_is_zero(&got));
+                    continue;
+                }
                 pz_fe got, want1;
                 lane_value(&got, &one, l);
                 pz_fe_set_u64(&want1, 1);
@@ -390,6 +395,26 @@ int main(void)
      * patterns with every limb at the bound */
     CHECK(flagged_crafted > 0);
     printf("t_fev (%s): fast normalization flagged %d random and %d crafted lanes\n", name, flagged, flagged_crafted);
+    /* inversion with zero lanes in every position (0 and p), next to 1, p - 1 and random values */
+    for (int z = 0; z < PZ_FEV_LANES; z++) {
+        pz_fev a, inv;
+        pz_fe v[PZ_FEV_LANES];
+        for (int l = 0; l < PZ_FEV_LANES; l++) {
+            for (int j = 0; j < 4; j++) v[l].n[j] = rnd();
+            if (l == 1) pz_fe_set_u64(&v[l], 1);
+            if (l == 2) { v[l] = pz_fe_p; v[l].n[0]--; }
+            if (l == z || l == (z + 3) % PZ_FEV_LANES) v[l] = l == z ? pz_fe_p : (pz_fe){{0, 0, 0, 0}};
+            pz_fev_set_lane(&a, l, &v[l]);
+        }
+        pz_fev_inv(&inv, &a);
+        for (int l = 0; l < PZ_FEV_LANES; l++) {
+            pz_fe got, want = v[l];
+            lane_value(&got, &inv, l);
+            pz_fe_inv(&want, &want);
+            pz_fe_normalize(&want);
+            CHECK(pz_fe_eq(&got, &want));
+        }
+    }
     printf(fails ? "t_fev (%s): %d FAILED\n" : "t_fev (%s): OK\n", name, fails);
     return fails != 0;
 }

@@ -7,30 +7,16 @@ static inline PZ_VABI void pz_fev_broadcast(pz_fev *r, const pz_fe *x)
     for (int lane = 0; lane < PZ_FEV_LANES; lane++) pz_fev_set_lane(r, lane, x);
 }
 
-/* r = a^(2^n) */
-static inline PZ_VABI void pz_fev_sqr_n(pz_fev *r, const pz_fev *a, int n)
+/* r = a^-1 in every lane (0 in a lane that is 0 mod p). The lanes are inverted together by Montgomery's trick: one scalar inversion
+ * (pz_fe_inv, divsteps) and 3 (PZ_FEV_LANES - 1) scalar products, a fraction of the time of an addition chain of 255 vector squarings,
+ * whose products wait for each other. Out of line: called once per batch. */
+static PZ_UNUSED __attribute__((noinline)) PZ_VABI void pz_fev_inv(pz_fev *r, const pz_fev *a)
 {
-    pz_fev_sqr(r, a);
-    for (int i = 1; i < n; i++) pz_fev_sqr(r, r);
-}
-
-/* r = a^-1 in every lane (a != 0 mod p): the libsecp256k1 addition chain, 255 squarings and 15 products. */
-static inline PZ_VABI void pz_fev_inv(pz_fev *r, const pz_fev *a)
-{
-    pz_fev x2, x3, x6, x9, x11, x22, x44, x88, x176, x220, x223, t;
-    pz_fev_sqr(&x2, a);            pz_fev_mul(&x2, &x2, a);
-    pz_fev_sqr(&x3, &x2);          pz_fev_mul(&x3, &x3, a);
-    pz_fev_sqr_n(&x6, &x3, 3);     pz_fev_mul(&x6, &x6, &x3);
-    pz_fev_sqr_n(&x9, &x6, 3);     pz_fev_mul(&x9, &x9, &x3);
-    pz_fev_sqr_n(&x11, &x9, 2);    pz_fev_mul(&x11, &x11, &x2);
-    pz_fev_sqr_n(&x22, &x11, 11);  pz_fev_mul(&x22, &x22, &x11);
-    pz_fev_sqr_n(&x44, &x22, 22);  pz_fev_mul(&x44, &x44, &x22);
-    pz_fev_sqr_n(&x88, &x44, 44);  pz_fev_mul(&x88, &x88, &x44);
-    pz_fev_sqr_n(&x176, &x88, 88); pz_fev_mul(&x176, &x176, &x88);
-    pz_fev_sqr_n(&x220, &x176, 44); pz_fev_mul(&x220, &x220, &x44);
-    pz_fev_sqr_n(&x223, &x220, 3); pz_fev_mul(&x223, &x223, &x3);
-    pz_fev_sqr_n(&t, &x223, 23);   pz_fev_mul(&t, &t, &x22);
-    pz_fev_sqr_n(&t, &t, 5);       pz_fev_mul(&t, &t, a);
-    pz_fev_sqr_n(&t, &t, 3);       pz_fev_mul(&t, &t, &x2);
-    pz_fev_sqr_n(&t, &t, 2);       pz_fev_mul(r, &t, a);
+    pz_fev c = *a;
+    pz_fe e[PZ_FEV_LANES], t[PZ_FEV_LANES];
+    pz_fev_normalize(&c);                                    /* pz_fev_get_lane wants canonical lanes */
+    for (int l = 0; l < PZ_FEV_LANES; l++) pz_fev_get_lane(&e[l], &c, l);
+    if (PZ_UNLIKELY(!pz_fe_inv_batch(e, t, PZ_FEV_LANES)))
+        for (int l = 0; l < PZ_FEV_LANES; l++) pz_fe_inv(&e[l], &e[l]);
+    for (int l = 0; l < PZ_FEV_LANES; l++) pz_fev_set_lane(r, l, &e[l]);
 }

@@ -22,6 +22,19 @@
 #endif
 
 #define NL PZ_FEV_LANES
+
+/* The products, the square and the normalization of the step. The compiler decides whether to inline them, and does once the file has no
+ * other caller; with the 16 vector registers of AVX2 the inlined copies spill more than the calls cost (avx2v, measured: 6.5 % more time
+ * per step), so there they stay out of line. */
+#if PZ_VBYTES == 32
+static __attribute__((noinline)) PZ_VABI void kv_mul(pz_fev *r, const pz_fev *a, const pz_fev *b) { pz_fev_mul(r, a, b); }
+static __attribute__((noinline)) PZ_VABI void kv_sqr(pz_fev *r, const pz_fev *a) { pz_fev_sqr(r, a); }
+static __attribute__((noinline)) PZ_VABI void kv_normalize(pz_fev *r) { pz_fev_normalize(r); }
+#else
+#define kv_mul pz_fev_mul
+#define kv_sqr pz_fev_sqr
+#define kv_normalize pz_fev_normalize
+#endif
 #define KV_WORDS (2 * PZ_FEV_NLIMB + 2)          /* table entry: x limbs, y limbs, distance (two words) */
 #define KV_STRIDE ((KV_WORDS + 7) & ~7)        /* padded to whole 64-byte rows */
 /* Word offsets in an entry. The backward pass reads y and the distance (KV_BN words from KV_B), the forward pass x: with 5 limbs
@@ -92,21 +105,6 @@ static inline PZ_VABI void kv_x3_t(pz_fev *x3, pz_fev *t, const pz_fev *l2, cons
     pz_fev_sub2_lazy(x3, &s, x, x);
     pz_fev_sub2(t, &x3x, l2, dx);
 }
-
-#if PZ_VBYTES == 64 && !defined(PZ_FEV_IFMA)
-/* r = a^-1 in every lane, a canonical and nonzero: the 8 lanes are inverted together by the scalar Montgomery trick, one scalar
- * inversion and 21 scalar products, instead of the 255 squarings and 15 products of a vector inversion (pz_fev_inv). Once a round:
- * per step of a herd of 4096, 391 to 377 instructions (avx512v). Not with IFMA, whose vector inversion is cheap enough, nor on AVX2:
- * there the step then gets the square and the reduction of the products inlined by the compiler, which costs more than the 4 lanes
- * save (767 to 811 instructions per step). */
-static PZ_VABI void kv_inv_lanes(pz_fev *r, const pz_fev *a)
-{
-    pz_fe e[NL], t[NL];
-    for (int l = 0; l < NL; l++) pz_fev_get_lane(&e[l], a, l);
-    pz_fe_inv_batch(e, t, NL);
-    for (int l = 0; l < NL; l++) pz_fev_set_lane(r, l, &e[l]);
-}
-#endif
 
 #if PZ_VBYTES == 64
 /* 8x8 transpose of 64-bit words: r[l] = row of lane l -> r[w] = word w of every lane */
@@ -270,8 +268,8 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
         const int cc = c - u;
         x[u].a = &E->A[cc];
         if (cc > 0) {
-            pz_fev_mul(&x[u].ic, inv, &E->vtmp[cc - 1]);
-            pz_fev_mul(inv, inv, &E->vdx[cc]);
+            kv_mul(&x[u].ic, inv, &E->vtmp[cc - 1]);
+            kv_mul(inv, inv, &E->vdx[cc]);
         } else {
             x[u].ic = *inv;
         }
@@ -287,19 +285,19 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vy[c - u], &x[u].jy);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_mul(&x[u].lam, &x[u].t, &x[u].ic);
+    for (int u = 0; u < nu; u++) kv_mul(&x[u].lam, &x[u].t, &x[u].ic);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sqr(&x[u].l2, &x[u].lam);
+    for (int u = 0; u < nu; u++) kv_sqr(&x[u].l2, &x[u].lam);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) kv_x3_t(&x[u].x3, &x[u].t, &x[u].l2, &E->vx[c - u], &E->vdx[c - u]);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_mul(&x[u].y3, &x[u].lam, &x[u].t);
+    for (int u = 0; u < nu; u++) kv_mul(&x[u].y3, &x[u].lam, &x[u].t);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) pz_fev_sub_lazy(&x[u].y3, &x[u].y3, &E->vy[c - u]);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
-        pz_fev_normalize(&x[u].x3);
-        pz_fev_normalize(&x[u].y3);
+        kv_normalize(&x[u].x3);
+        kv_normalize(&x[u].y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
         const pz_vl sel = pz_vl_set(0) - (x[u].y3.l[0] & one);
         pz_fev ny;
@@ -407,12 +405,12 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         kv_load_words(jx.l, KV_X, PZ_FEV_NLIMB, vjt, A[c].jb);
         pz_fev_sub(&vdx[c], &vx[c], &jx);
         if (c == 0) acc = vdx[0];
-        else pz_fev_mul(&acc, &acc, &vdx[c]);
+        else kv_mul(&acc, &acc, &vdx[c]);
         vtmp[c] = acc;
     }
     pz_fev chk = acc;                                           /* canonical: the zero test, then the inversion */
     {
-        pz_fev_normalize(&chk);
+        kv_normalize(&chk);
         pz_vl z = chk.l[0];
         for (int i = 1; i < PZ_FEV_NLIMB; i++) z |= chk.l[i];
         bool zero = false;
@@ -441,11 +439,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     /* Montgomery, backward pass fused with the step: each inverse is used as soon as it is peeled off, from the last
      * vector to the first; the rare events are sorted back into index order at the end */
     pz_fev inv;
-#if PZ_VBYTES == 64 && !defined(PZ_FEV_IFMA)
-    kv_inv_lanes(&inv, &chk);
-#else
-    pz_fev_inv(&inv, &acc);
-#endif
+    pz_fev_inv(&inv, &chk);
     const int ndp0 = w->ndp, nrs0 = w->nrestart;
     const pz_vl one = pz_vl_set(1), dpmask = pz_vl_set(P->dp_mask), cap = pz_vl_set(P->cap_since);
 #ifdef KV_PAIR
@@ -458,8 +452,8 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         kv_aux *a = &A[c];
         pz_fev ic;
         if (c > 0) {
-            pz_fev_mul(&ic, &inv, &vtmp[c - 1]);
-            pz_fev_mul(&inv, &inv, &vdx[c]);
+            kv_mul(&ic, &inv, &vtmp[c - 1]);
+            kv_mul(&inv, &inv, &vdx[c]);
         } else {
             ic = inv;
         }
@@ -469,13 +463,13 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         memcpy(jy.l, e + KV_Y - KV_B, sizeof jy.l);
         const pz_vl jv0 = e[KV_V - KV_B], jv1 = e[KV_V - KV_B + 1];
         pz_fev_sub(&t, &vy[c], &jy);
-        pz_fev_mul(&lam, &t, &ic);
-        pz_fev_sqr(&l2, &lam);
+        kv_mul(&lam, &t, &ic);
+        kv_sqr(&l2, &lam);
         kv_x3_t(&x3, &t, &l2, &vx[c], &vdx[c]);
-        pz_fev_mul(&y3, &lam, &t);
+        kv_mul(&y3, &lam, &t);
         pz_fev_sub_lazy(&y3, &y3, &vy[c]);
-        pz_fev_normalize(&x3);
-        pz_fev_normalize(&y3);
+        kv_normalize(&x3);
+        kv_normalize(&y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
         const pz_vl sel = pz_vl_set(0) - (y3.l[0] & one);
         {

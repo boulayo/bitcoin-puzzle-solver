@@ -26,6 +26,29 @@ static void pick(pz_fe *a, int mode)
     }
 }
 
+/* a^(p-2) by square-and-multiply over the bits of the exponent: the reference for the inversion by divsteps */
+static void inv_pow(pz_fe *r, const pz_fe *a)
+{
+    static const uint64_t e[4] = {0xFFFFFFFEFFFFFC2DULL, ~0ULL, ~0ULL, ~0ULL};
+    pz_fe acc = {{1, 0, 0, 0}};
+    for (int i = 255; i >= 0; i--) {
+        pz_fe_sqr_c(&acc, &acc);
+        if (e[i / 64] >> (i % 64) & 1) pz_fe_mul_c(&acc, &acc, a);
+    }
+    *r = acc;
+    pz_fe_normalize(r);
+}
+
+static void check_inv(const pz_fe *a)
+{
+    pz_fe got, want;
+    pz_fe_inv(&got, a);
+    inv_pow(&want, a);                    /* 0 for a = 0, as pz_fe_inv */
+    CHECK(pz_fe_equiv(&got, &want));
+    pz_fe_normalize(&got);
+    CHECK(pz_fe_eq(&got, &want));         /* canonical */
+}
+
 int main(void)
 {
 #ifdef PZ_FE_ASM
@@ -116,6 +139,38 @@ int main(void)
                 pz_fe_to_u256(&want, &w);
                 CHECK(!pz_u256_cmp(&got, &want));
             }
+    /* inversion: the special patterns, 2^k, 2^k - 1, p - 2^k, p + 2^k (lazy), p - x for small x, and random values of every length */
+    for (int i = 0; i < 12; i++) {
+        pz_fe a;
+        pick(&a, i);
+        check_inv(&a);
+    }
+    for (int k = 0; k < 256; k++) {
+        pz_fe a = {{0, 0, 0, 0}}, m, q, l;
+        a.n[k / 64] = 1ULL << (k % 64);
+        check_inv(&a);
+        pz_fe_sub_c(&q, &pz_fe_p, &a);
+        check_inv(&q);
+        pz_fe_add_c(&l, &pz_fe_p, &a);
+        check_inv(&l);
+        pz_fe one = {{1, 0, 0, 0}};
+        pz_fe_sub_c(&m, &a, &one);
+        check_inv(&m);
+    }
+    for (uint64_t x = 1; x < 2000; x++) {
+        pz_fe a = {{x, 0, 0, 0}}, q;
+        check_inv(&a);
+        pz_fe_sub_c(&q, &pz_fe_p, &a);
+        check_inv(&q);
+    }
+    for (int it = 0; it < 30000 && fails < 10; it++) {
+        pz_fe a;
+        for (int j = 0; j < 4; j++) a.n[j] = rnd();
+        const int len = it % 5;                                  /* 0: 256 bits; 1 to 4: a top limb cleared, or the bits above a few */
+        if (len) a.n[4 - len] &= (1ULL << (it % 61)) - 1;
+        for (int j = 5 - len; j < 4 && len; j++) a.n[j] = 0;
+        check_inv(&a);
+    }
     printf(fails ? "t_fe (%s): %d FAILED\n" : "t_fe (%s): OK\n", mode, fails);
     return fails != 0;
 }
