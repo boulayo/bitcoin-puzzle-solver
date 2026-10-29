@@ -3,6 +3,17 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.16.0] — 2026-10-30
+
+### Changed
+- The first-run measurement of CPU threads and GPUs also tries one CPU thread fewer per CUDA device, and leaves out a GPU whose loss is not
+  measurable (a configuration without it within 1 % of the best, confirmed in alternating pairs like a faster one): on a laptop such a
+  device costs more shared power than it returns. Measured on an i7-11850H with an RTX A2000 and an Intel UHD: the integrated GPU gave
+  16 M keys/s and cost the other GPU 90 M; without it the linear search went from 865 to 948 M keys/s. `--retune` redoes the choice.
+- Documentation: RESEARCH.md 10.5 models the linear search on that laptop against the owner's measurements: port floors of Tiger Lake
+  (112 cycles per key against 158 measured), why SHA-NI does not pay there, the issue ceiling of the A2000 (the kernel at 73 % of its
+  ALU pipe), power sharing between CPU and GPU; what the options do.
+
 ## [1.15.1] — 2026-10-29
 
 ### Fixed
