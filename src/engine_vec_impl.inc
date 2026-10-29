@@ -29,29 +29,40 @@
 #error "the hash width must be twice the number of curve lanes"
 #endif
 
+/* The candidates are hashed VBATCHES batches of PZ_LANES at a time: the curve arithmetic of several rounds of the loop in vround
+ * then runs back to back, and out-of-order execution overlaps the dependency chains of consecutive points instead of stopping
+ * at every call of the hash. */
+#ifndef VBATCHES
+#define VBATCHES 8
+#endif
+
 typedef struct {
     u32 X[8][PZ_LANES] PZ_ALIGN(64);
     u32 pfx[PZ_LANES] PZ_ALIGN(64);
-    u32 outw[PZ_LANES] PZ_ALIGN(64);      /* the filter word of the digests */
     u64 koff[PZ_LANES] PZ_ALIGN(64);
-    int n;
+} vbatch_t;
+
+typedef struct {
+    vbatch_t b[VBATCHES];
+    u32 outw[PZ_LANES] PZ_ALIGN(64);      /* the filter word of the digests */
+    int n;                    /* candidates in b[], filled in order */
     const scan_job *job;
     pz_u256 base;             /* first key of the claim */
 } vctx_t;
 
-static PZ_VABI void vctx_verify(vctx_t *c, int lane)
+static PZ_VABI void vctx_verify(vctx_t *c, const vbatch_t *b, int lane)
 {
     u8 pub[33], h[20];
-    pub[0] = (u8)c->pfx[lane];
+    pub[0] = (u8)b->pfx[lane];
     for (int i = 0; i < 8; i++) {
-        u32 w = c->X[i][lane];
+        u32 w = b->X[i][lane];
         pub[1 + 4 * i] = (u8)(w >> 24); pub[2 + 4 * i] = (u8)(w >> 16);
         pub[3 + 4 * i] = (u8)(w >> 8);  pub[4 + 4 * i] = (u8)w;
     }
     pz_hash160(pub, 33, h);
     if (memcmp(h, c->job->target_h160, 20) != 0) return;
     pz_u256 key;
-    pz_u256 d = pz_u256_from_u64(c->koff[lane]);
+    pz_u256 d = pz_u256_from_u64(b->koff[lane]);
     pz_u256_add(&key, &c->base, &d);
     if (c->job->on_hit) c->job->on_hit(c->job->user, &key);
 }
@@ -62,18 +73,22 @@ static inline PZ_VABI void vctx_flush(vctx_t *c)
     c->n = 0;
     return;
 #endif
-    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, c->outw);
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
-    /* one vector comparison for the batch; lanes past n hold older keys, which the loop skips */
-    const pz_vu w = pz_v_load(c->outw), t = pz_v_set(t0);
+    const pz_vu t = pz_v_set(t0);
+    for (int k = 0; k * PZ_LANES < c->n; k++) {
+        vbatch_t *b = &c->b[k];
+        PZ_HASH_FILTER_FN(&b->X[0][0], b->pfx, c->outw);
+        /* one vector comparison for the batch; lanes past n hold older keys, which the loop skips */
+        const pz_vu w = pz_v_load(c->outw);
 #if PZ_VBYTES == 64
-    const bool any = _mm512_cmpeq_epi32_mask((__m512i)w, (__m512i)t) != 0;
+        const bool any = _mm512_cmpeq_epi32_mask((__m512i)w, (__m512i)t) != 0;
 #else
-    const bool any = _mm256_movemask_epi8(_mm256_cmpeq_epi32((__m256i)w, (__m256i)t)) != 0;
+        const bool any = _mm256_movemask_epi8(_mm256_cmpeq_epi32((__m256i)w, (__m256i)t)) != 0;
 #endif
-    if (UNLIKELY(any))
-        for (int l = 0; l < c->n; l++)
-            if (c->outw[l] == t0) vctx_verify(c, l);
+        if (UNLIKELY(any))
+            for (int l = 0; l < PZ_LANES && k * PZ_LANES + l < c->n; l++)
+                if (c->outw[l] == t0) vctx_verify(c, b, l);
+    }
     c->n = 0;
 }
 
@@ -83,14 +98,15 @@ static PZ_VABI void vctx_add_scalar(vctx_t *c, const pz_fe *x, const pz_fe *y, u
     pz_fe xn = *x, yn = *y;
     pz_fe_normalize(&xn);
     pz_fe_normalize(&yn);
-    const int l = c->n;
-    c->X[0][l] = (u32)(xn.n[3] >> 32); c->X[1][l] = (u32)xn.n[3];
-    c->X[2][l] = (u32)(xn.n[2] >> 32); c->X[3][l] = (u32)xn.n[2];
-    c->X[4][l] = (u32)(xn.n[1] >> 32); c->X[5][l] = (u32)xn.n[1];
-    c->X[6][l] = (u32)(xn.n[0] >> 32); c->X[7][l] = (u32)xn.n[0];
-    c->pfx[l] = 2u + (u32)(yn.n[0] & 1);
-    c->koff[l] = koff;
-    if (++c->n == PZ_LANES) vctx_flush(c);
+    vbatch_t *b = &c->b[c->n / PZ_LANES];
+    const int l = c->n % PZ_LANES;
+    b->X[0][l] = (u32)(xn.n[3] >> 32); b->X[1][l] = (u32)xn.n[3];
+    b->X[2][l] = (u32)(xn.n[2] >> 32); b->X[3][l] = (u32)xn.n[2];
+    b->X[4][l] = (u32)(xn.n[1] >> 32); b->X[5][l] = (u32)xn.n[1];
+    b->X[6][l] = (u32)(xn.n[0] >> 32); b->X[7][l] = (u32)xn.n[0];
+    b->pfx[l] = 2u + (u32)(yn.n[0] & 1);
+    b->koff[l] = koff;
+    if (++c->n == VBATCHES * PZ_LANES) vctx_flush(c);
 }
 
 typedef u32 vw __attribute__((vector_size(NL * 4)));
@@ -116,7 +132,8 @@ static inline PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev *y, pz_v
         pz_fev_normalize(&yn);
         par = yn.l[0] & pz_vl_set(1);
     }
-    const int n = c->n;
+    vbatch_t *b = &c->b[c->n / PZ_LANES];
+    const int n = c->n % PZ_LANES;
 #pragma GCC unroll 8
     for (int j = 0; j < 8; j++) {            /* word j counted from the least significant end: bits [32j, 32j+32) */
         const int bit = 32 * j, a = bit / PZ_FEV_BITS, sh = bit % PZ_FEV_BITS;
@@ -126,13 +143,13 @@ static inline PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev *y, pz_v
             if (k * PZ_FEV_BITS - sh < 32 && a + k < PZ_FEV_NLIMB) w |= x->l[a + k] << (k * PZ_FEV_BITS - sh);
         w &= pz_vl_set(0xFFFFFFFFULL);
         vw w32 = __builtin_convertvector(w, vw);
-        memcpy(&c->X[7 - j][n], &w32, sizeof w32);
+        memcpy(&b->X[7 - j][n], &w32, sizeof w32);
     }
     vw p32 = __builtin_convertvector(par + pz_vl_set(2), vw);
-    memcpy(&c->pfx[n], &p32, sizeof p32);
-    memcpy(&c->koff[n], &koff, sizeof koff);
-    c->n = n + NL;
-    if (c->n == PZ_LANES) vctx_flush(c);
+    memcpy(&b->pfx[n], &p32, sizeof p32);
+    memcpy(&b->koff[n], &koff, sizeof koff);
+    c->n += NL;
+    if (c->n == VBATCHES * PZ_LANES) vctx_flush(c);
 }
 
 /* the same operations with one operand a constant given as limbs, broadcast to every lane */
