@@ -249,9 +249,13 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   are loaded dynamically (`dlopen` / `LoadLibrary`): no build-time dependency and no SDK at runtime.
 * With CUDA: 128 threads per block (`__launch_bounds__(128)`), grid rounded up and extra work-items that exit immediately
   (each kernel receives the number of work-items as its last argument); hash160 and modular inversion are compiled once as real
-  functions (smaller PTX and fewer registers: 128 for the linear kernel on sm_86, no significant spill); the context waits
+  functions (smaller PTX and fewer registers); the context waits
   for the kernels to finish without busy-waiting, so the core is left to the CPU compute threads.
-* **CUDA arithmetic**: carry chains in PTX for the addition, the subtraction and the reduction, and a dedicated square. The instruction counts and
+* **CUDA arithmetic**: carry chains in PTX for the addition, the subtraction and the reduction, and a dedicated square; the products are chains
+  of `mad.lo.cc`/`madc.hi.cc` pairs that `ptxas` fuses into one `IMAD.WIDE.U32` per limb product, in two accumulators (the products at even
+  and at odd positions) so that every addend is an aligned register pair. **OpenCL arithmetic**: the same carry chains with clang's
+  add-with-carry builtins on AMD GPUs (and pocl), a branch-free C equivalent elsewhere. **Inversion**: Bernstein–Yang divsteps, 30 per
+  round, done in variable time (runs of zero bits at once, up to three bits cancelled per swap). The instruction counts and
   the measurements, made on the sm_86 (Ampere) code and on the reference laptop GPU (20 SM, 4 GB, 192 GB/s, 2 MiB of L2; the card on which the GPU speeds
   in this document were measured): RESEARCH.md section 5.
 * **Linear kernel with "fused" inversion**: the backward pass of Montgomery's trick derives each inverse and uses it
@@ -264,7 +268,7 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
   `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
-  (≈ 160) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
+  (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
   run on a device the program measures them all (a few seconds each) and keeps the default (256 with CUDA, 128 with OpenCL) unless another one
   is more than 3% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
   `PZ_GPU_HALF=N` forces it, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.

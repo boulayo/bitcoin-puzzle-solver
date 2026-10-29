@@ -486,9 +486,10 @@ void gpu_kang_autotune(gpu_session *s, int idx)
 
 typedef struct { double copy_gbs, lo_gops, hi_gops, add3_gops; } gpu_diag;
 
-/* per step of the CUDA kangaroo kernel (mc=0/1, NK 64..256): device memory traffic and integer instructions (SASS counts, docs/en/RESEARCH.md 8.4) */
+/* per step of the CUDA kangaroo kernel (the default NK 128): device memory traffic and integer instructions (SASS counts for sm_86, the step and
+ * its share of the inversion: docs/en/RESEARCH.md 5 and 8.4) */
 #define KANG_MODEL_BYTES 215
-#define KANG_MODEL_INSNS 2200
+#define KANG_MODEL_INSNS 1300
 
 /* Throughput probes: memory copy bandwidth and 32-bit integer instruction rates (the two limits of the kangaroo kernel:
  * it is bound by both, see docs/en/RESEARCH.md 8.4). About two seconds. False when a probe cannot run. */

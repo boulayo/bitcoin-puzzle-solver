@@ -212,7 +212,7 @@ kangaroo kernel.
   addition, subtraction and the reduction after a product use PTX carry chains (`add.cc`/`addc`, `sub.cc`/`subc`,
   `mad.lo.cc`/`madc.hi.cc` for the multiplication by 977): add+sub from 176 to 88 instructions, multiplication from 328 to 288, a dedicated
   square (36 products instead of 64) from 328 to ≈ 232. The 8×8 product stays in C because Ampere has no native `madc.hi` (the all-PTX
-  version measured 368). Estimate: ≈ 11% fewer instructions per key. The logic of the chains is verified with an
+  version measured 368; *after 1.13.0 the product is on PTX chains after all, in a form `ptxas` fuses: see the end of this section*). Estimate: ≈ 11% fewer instructions per key. The logic of the chains is verified with an
   exact emulation of the PTX semantics (`tests/t_gpufe.c`, 5 million combinations, edge cases of the double carries; mutation testing);
   on the device it is confirmed by the self-test.
 
@@ -239,6 +239,51 @@ Kangaroo kernel (rewritten in 1.5.0, kernel v2 in 1.7.0), continuing the Kangaro
   goes down, then up, ...): Montgomery's trick works with both, and each pass reads and overwrites the products
   left by the previous one; (c) the inversion is by divstep (sec. 8.4); (d) a launch does at most 64 rounds (depth of the history; since 1.13.0 the depth is 64 to 256, chosen per herd from the device memory),
   starting from the step number common to the whole herd.
+
+**After 1.13.0: instruction counts of the kernels.** No GPU was available: every figure is SASS from NVRTC 12.0 and `ptxas` (sm_86 unless
+stated; sm_75 and sm_89 give the same within a few instructions), counted on the executed path of the loops (`nvdisasm`), or AMD ISA from
+clang 18 for the OpenCL kernels. Correctness: `tests/t_gpufe.c` (5.4 million combinations per build, mutations of every new routine), the
+self-test and planted-key hunts on the simulated CUDA driver and on pocl.
+
+* **Products on `mad.wide` chains.** `ptxas` turns a `mad.lo.cc` and a `madc.hi.cc` of the same two limbs into one `IMAD.WIDE.U32` (`.X` with
+  the carry) when their addends are the two halves of a 64-bit register pair. The all-PTX product of 1.3.0 (368) did not keep the pairs; the
+  product written in C needs ≈ 2.9 instructions per limb product (section 8.6). Two accumulators keep every pair aligned: E takes the products
+  whose position `i + j` is even, O the odd ones (each row of the schoolbook product is one chain into each), and `E + O` is formed once. The
+  reduction folds `H·(2^32 + 977)` the same way: the even limbs of `H` times 977 with `L` as addend pairs, the odd ones with the limbs of `H`
+  itself (the `H·2^32` term). Multiplication 235 → 121 instructions, square 160 → 81 (the routine alone; sm_61, which has no `IMAD.WIDE`:
+  831 → 700 and 464 → 405). The kangaroo step (loop of `kang64`) goes from 1852 to 1185 instructions (−36 %), the linear kernel from ≈ 3371
+  to ≈ 2876 per key (−14.7 %). The register-capped linear variants (`m4`) and most `b` kangaroo variants lose their spills.
+* **Jump table in 16-byte loads.** The entries (80 bytes) start on 16-byte boundaries: `jx`, `jy` and the `jx` of the next denominator are 6
+  loads instead of 24. The work-items of a warp read different entries, so each load instruction is served one cache line per work-item: a
+  quarter of the L1 requests for the table. Step 1185 → 1167; the table of the linear kernel likewise (2876 → 2868 per key).
+* **Inversion in variable time.** The 30 divsteps of a round were done one at a time, ≈ 28 instructions each; executed per warp an inversion
+  cost ≈ 22,000 instructions (19 rounds for the slowest of 32 random inputs, ≈ 1160 each; the ≈ 10,500 of 8.4 was not an executed count),
+  i.e. ≈ 350 per step at NK = 64, a fifth of the step after the products above. Now as libsecp256k1's `modinv32_var`: a run of zero bits of `g`
+  in one go (`brev` + `bfind.shiftamt`, a sentinel bit at the steps left) and, after a swap, the bottom bits of `g` cancelled with `w·f`, `w`
+  taken mod 8 where `f⁻¹ = f` (no table: indexed per work-item it would be served one address at a time from the constant cache). Simulated
+  on 1280 warps of random inputs: 9.8 turns of the loop per round on average, 12.6 for the slowest of a warp (cancelling 4, 6 or 8 bits saves
+  at most 0.5 turns for the cost of the inverse mod 2^k); a turn is 33 instructions. An inversion is ≈ 14,600 executed instructions per warp, of
+  which ≈ 6,500 are the products of the 2×2 matrix with `d, e, f, g`: per step ≈ 120 fewer at NK = 64, 60 at NK = 128, 30 at NK = 256.
+* **Byte swaps as `PRMT`.** NVRTC compiles the shift-and-mask `bswap32` of the RIPEMD-160 message to about six instructions; `__byte_perm` is
+  one. Hash filter 2078 → 2030, ≈ 2867 → 2819 per key. (LLVM recognises the expression: on AMD it is already one `v_perm_b32`.)
+* **OpenCL on AMD.** The portable field arithmetic was 64-bit C, two 64-bit additions per limb plus branches on the carries. With clang's
+  `__builtin_addc`/`__builtin_subc` (used on AMD GPUs and on pocl only; Intel and other compilers keep a branch-free C stand-in) it is the
+  same carry chains as CUDA (`v_add_co_ci_u32`), and the product goes by rows with `v_mad_u64_u32` and one chain per row. gfx1030:
+  multiplication 307 → 226, square 204 → 108, addition 69 → 15, subtraction 93 → 22; loop of the kangaroo step 2529 → 1522 (gfx1100 3223 →
+  1641, gfx906 2534 → 1540). The E/O form of the CUDA product does not carry over: `v_mad_u64_u32` has a carry out but no carry in.
+* **Where the step stands.** Kangaroo, NK = 128: ≈ 1170 instructions plus ≈ 115 for the inversion, against ≈ 2200 before; with ≈ 215 bytes of
+  traffic per step the kernel is now well on the memory side of the crossover on cards like the reference one (the `b` and `c` variants, which
+  trade half or three quarters of a product for 32 or 48 bytes, have become cheaper: the tuner decides on the device). Linear: ≈ 2820 per
+  key, 72 % of it the hash filter, which has no slack left (each rotation is one `SHF`, every constant word folds).
+* **Tried and left out:** the tags of the last two points as a ring of two (one 4-byte store per step instead of 8): +6 instructions per step for
+  the per-round slot, 2 % of the traffic, not clearly a gain; `p·md` in the update of `d, e` from the shape of `p` (three terms instead of nine
+  products): −18 instructions per round of the inversion, 0.4 % of the step at NK = 64; register caps of 96 or 80 for the kangaroo (5 or 6
+  blocks per SM) spill 136 and 216 bytes, 168 for the `c` variants 220; a cap of 168 for the linear kernel (3 blocks per SM) has no spill and
+  the same count, but the `m4` variants (4 blocks) no longer spill either, so no third variant was added; column sums with 64-bit
+  accumulators for AMD in C: 411 instructions against 307; the PTX chains emulated with the clang builtins on AMD: 1031.
+* **Need a GPU:** the speed of all the above (if an `IMAD.WIDE` takes two issue cycles, as some measurements of earlier architectures suggest,
+  the products gain less time than instructions: both forms have 64 of them per product); the jump table in shared memory (random 16-byte reads, ≈ 2.5-way bank conflicts against one cache line per work-item
+  from L1) and the inline assembly for `v_mad_u64_u32` carries on AMD.
 
 ## 8. Theoretical limits: how much can still be improved?
 
@@ -295,7 +340,8 @@ occupancy but by the traffic of the private arrays, which with 512 threads per S
 (≈ 40 B), and 1 B of history is added: ≈ **230 bytes** (estimate by construction, not measured), so the bandwidth limit is ≈ 830 M steps/s.
 Instruction count (sm_86, from `ptxas`, parts measured separately): multiplication ≈ 250, square ≈ 200, subtraction ≈ 40,
 normalization ≈ 30; the step is worth ≈ 2000 instructions plus the share of the inversion, which with the power `p − 2` (≈ 55,000
-instructions) was ≈ 430 per step at NK = 128 (a fifth of the total) and with the divstep (≈ 10,500) is ≈ 80. At the integer throughput observed on the
+instructions) was ≈ 430 per step at NK = 128 (a fifth of the total) and with the divstep (≈ 10,500) is ≈ 80 (*executed per warp it was ≈ 22,000,
+≈ 170 per step at NK = 128; ≈ 14,600 after 1.13.0: section 5*). At the integer throughput observed on the
 linear kernel (≈ 2.5·10¹² instructions/s) the compute limit goes from ≈ 1.0 to ≈ 1.2 G steps/s: **after v2 the kernel should
 still be bandwidth-limited, but close to the crossover point**. These are estimates: they have to be confirmed with `bench` on the card.
 * **Measurement of 1.7.0 on the reference laptop GPU: 810.7 M steps/s** (NK 64, paired products), ×1.67 over v1; the count by construction
@@ -385,11 +431,12 @@ function:
 
   | 8×8-limb product, without reduction | instructions |
   |---|---|
-  | schoolbook (in use) | 184 |
+  | schoolbook (in use up to 1.13.0) | 184 |
   | additive Karatsuba | 248 (+35 %) |
   | subtractive Karatsuba | 256 (+39 %) |
   | by columns, one `IMAD.WIDE` and two sums per product | 232 (+26 %) |
   | by rows, one carry chain per row | 176 (−4 %) |
+  | two accumulators on `mad.wide` chains (after 1.13.0, section 5) | 92 (−50 %) |
 
   The code generated for the schoolbook product has 64 `IMAD.WIDE.U32` (plus 24 that compute addresses in the test bench), 86 sums
   `IADD3`/`IADD3.X` and 13 `IMAD.X`: ≈ 2.9 instructions per limb product. Karatsuba saves 16 products (≈ 48 instructions) but the sums
