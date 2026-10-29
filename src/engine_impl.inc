@@ -87,13 +87,13 @@ static inline bool group_step(ctx_t *c, u64 cbase, pz_ge *C, pz_fe *dx, pz_fe *t
     for (int i = 1; i <= HALF; i++) {
         const pz_ge *S = &cpu_gtab[i - 1];
         const pz_fe *inv = &dx[i - 1];
-        pz_fe lam, t, x3, y3;
+        pz_fe lam, t, x3, y3, xs;
+        pz_fe_add(&xs, &xc, &S->x);          /* x3 = lam^2 - (xc + S.x) for both points */
         if (i < HALF) {
             pz_fe_sub(&t, &S->y, &yc);
             pz_fe_mul(&lam, &t, inv);
             pz_fe_sqr(&x3, &lam);
-            pz_fe_sub(&x3, &x3, &xc);
-            pz_fe_sub(&x3, &x3, &S->x);
+            pz_fe_sub(&x3, &x3, &xs);
             pz_fe_sub(&t, &xc, &x3);
             pz_fe_mul(&y3, &lam, &t);
             pz_fe_sub(&y3, &y3, &yc);
@@ -103,8 +103,7 @@ static inline bool group_step(ctx_t *c, u64 cbase, pz_ge *C, pz_fe *dx, pz_fe *t
         pz_fe_add(&t, &S->y, &yc);
         pz_fe_mul(&lam, &t, inv);
         pz_fe_sqr(&x3, &lam);
-        pz_fe_sub(&x3, &x3, &xc);
-        pz_fe_sub(&x3, &x3, &S->x);
+        pz_fe_sub(&x3, &x3, &xs);
         pz_fe_sub(&t, &x3, &xc);
         pz_fe_mul(&y3, &lam, &t);
         pz_fe_sub(&y3, &y3, &yc);
