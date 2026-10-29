@@ -224,7 +224,7 @@ void run_write_found(run_ctx *r)
         "campaign:        %s\n"
         "%s"
         "address:         %s\n"
-        "private key hex: %s\n"
+        "private key hex: 0x%s\n"
         "WIF compressed:  %s\n"
         "public key:      %s\n"
         "campaign seed:   %s\n"
@@ -341,23 +341,34 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         snprintf(partline + pl, sizeof partline - pl, "Limit:          %d%% of the machine (fewer CPU threads and GPU work-items, always at full speed)\n", r->limit_pct);
     }
     pz_u256 rsz = cfg_range_size(&r->cfg);
-    unsigned rbits = pz_u256_bits(&rsz) ? pz_u256_bits(&rsz) - 1 : 0;
+    char rbits[32];
+    ui_fmt_range_bits(&rsz, rbits, sizeof rbits);
     char pzt[32] = "";
     if (r->cfg.puzzle) snprintf(pzt, sizeof pzt, "puzzle #%d  ", r->cfg.puzzle);
 
-    char detail[900], tleft[400] = "", rej[96] = "";
+    char detail[900], tleft[400] = "", rej[96] = "", speed[160] = "";
     wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
     const u64 bad = atomic_load(&r->hits_bad);
     if (bad) snprintf(rej, sizeof rej, "Rejected:       %llu candidate%s that failed the verification\n", (unsigned long long)bad, bad == 1 ? "" : "s");
     const bool over = !strcmp(state, "FOUND") || !strcmp(state, "COMPLETED");   /* nothing left to estimate */
+    const double tl = kang ? es.t99 : es.t_full;
+    if (!over) snprintf(speed, sizeof speed, "Speed:          %s %s/s   (CPU %s, GPU %s)\n", rate, pi->unit, cr, gr);   /* a finished campaign has none */
     if (over) tleft[0] = 0;
     else if (pi->beyond)
         snprintf(tleft, sizeof tleft, "Time left:      unknown (beyond the model: 5x the expected effort without a collision)\n");
-    else
-        snprintf(tleft, sizeof tleft, "Time left:      50%%: %s   90%%: %s   %s: %s   (at the %s)\n"
-                 "Chance within:  %s: %s   %s: %s   %s: %s   %s: %s   %s: %s\n", t50, t90, kang ? "99%" : "100%", tfull,
-                 final ? "last speed" : "recent average speed",
-                 ETA_WINDOW_NAMES[0], pw[0], ETA_WINDOW_NAMES[1], pw[1], ETA_WINDOW_NAMES[2], pw[2], ETA_WINDOW_NAMES[3], pw[3], ETA_WINDOW_NAMES[4], pw[4]);
+    else if (!(pi->rate > 0))
+        snprintf(tleft, sizeof tleft, "Time left:      unknown (no speed was measured)\n");
+    else if (!isfinite(es.t50) && !isfinite(es.t90) && !isfinite(tl))
+        snprintf(tleft, sizeof tleft, "Time left:      beyond any horizon (at the %s)\n", final ? "last speed" : "recent average speed");
+    else {
+        int o = snprintf(tleft, sizeof tleft, "Time left:      50%%: %s   90%%: %s   %s: %s   (at the %s)\nChance within: ", t50, t90, kang ? "99%" : "100%", tfull,
+                         final ? "last speed" : "recent average speed");
+        for (int i = 0; i < ETA_NWIN && o > 0 && (size_t)o < sizeof tleft; i++) {
+            o += snprintf(tleft + o, sizeof tleft - (size_t)o, " %s: %s  ", ETA_WINDOW_NAMES[i], pw[i]);
+            if (!strcmp(pw[i], "100%")) break;                      /* the longer windows say the same */
+        }
+        if (o > 2 && (size_t)o < sizeof tleft) memcpy(tleft + o - 2, "\n", 2);
+    }
     int n = snprintf(buf, bcap,
         "=== pzsolve %s - campaign report ===\n"
         "Updated:        %s\n"
@@ -367,22 +378,22 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "Target:         %saddress %s\n"
         "                hash160 %s%s\n"
         "Mode:           %s\n"
-        "Range:          0x%s - 0x%s  (~2^%u keys)\n"
+        "Range:          0x%s - 0x%s  (%s keys)\n"
         "%s"
         "Sessions:       %d, total compute time %s\n"
         "\n"
         "%s%s   (%s)\n"
-        "Speed:          %s %s/s   (CPU %s, GPU %s)\n"
+        "%s"
         "%s"
         "Detail:         %s\n"
-        "%s"
-        "\nWorkers:\n",
+        "%s",
         PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
-        pct, amount, rate, pi->unit, cr, gr, tleft,
+        pct, amount, speed, tleft,
         detail, rej);
-    for (int i = 0; i < r->nws && (size_t)n + 200 < bcap; i++) {
+    if (!over && r->nws > 0) n += snprintf(buf + n, bcap - (size_t)n, "\nWorkers:\n");
+    for (int i = 0; i < r->nws && !over && (size_t)n + 200 < bcap; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
         n += snprintf(buf + n, bcap - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);
     }

@@ -20,7 +20,7 @@ for n in $(seq 1 $MAXN); do
   K=$(rndkey $n $((n*7+1)))
   A=$(field $K addr)
   $BIN hunt -p $n -a "$A" -c lin$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/lin$n/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/lin$n/FOUND.txt" 2>/dev/null)
   WANT=${K#0x}
   [ "$GOT" = "$WANT" ] && ok "puzzle $n key $K" || bad "puzzle $n: expected $WANT found '$GOT'"
 done
@@ -30,7 +30,7 @@ for K in 0x80000 0xfffff; do
   A=$(field $K addr)
   rm -rf "$DIR/edge"
   $BIN hunt -p 20 -a "$A" -c edge -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/edge/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/edge/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${K#0x}" ] && ok "end $K" || bad "end $K (found '$GOT')"
 done
 
@@ -50,7 +50,7 @@ timeout -s INT 3 $BIN hunt -p 31 -a "$A" -c res -d "$DIR" --ui log -q --no-gpu >
 [ -f "$DIR/res/state.dat" ] && ok "checkpoint written" || bad "checkpoint missing"
 K1=$(grep -c "^iv" "$DIR/res/state.dat")
 $BIN hunt -c res -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-GOT=$(awk '/private key hex/{print $4}' "$DIR/res/FOUND.txt" 2>/dev/null)
+GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/res/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "key found after resuming" || bad "after resuming: expected ${K#0x} found '$GOT'"
 OUT=$($BIN hunt -c res -d "$DIR" --ui log -q --no-gpu 2>&1)
 echo "$OUT" | grep -q "already found" && ok "a finished campaign is not run again" || bad "finished campaign run again"
@@ -68,7 +68,7 @@ echo "== kangaroo (public key known)"
 for n in 32 38 44 50; do
   K=$(rndkey $n $((n*13+5))); PUB=$(field $K pub); A=$(field $K addr)
   $BIN hunt -p $n -a "$A" -k "$PUB" -m kangaroo -c kang$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/kang$n/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/kang$n/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${K#0x}" ] && ok "kangaroo puzzle $n key $K" || bad "kangaroo puzzle $n: expected ${K#0x} found '$GOT'"
 done
 
@@ -78,7 +78,7 @@ timeout -s INT 4 $BIN hunt -p 56 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR"
 SZ=$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)
 [ "$SZ" -gt 42 ] && ok "distinguished-point log written ($SZ bytes)" || bad "dp.bin empty"
 $BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-GOT=$(awk '/private key hex/{print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
+GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"
 
 echo "== kangaroo: a tiny --dp-bits on puzzle 140 (the table is sized by the memory limit; the number of points expected does not fit in 64 bits)"
@@ -92,14 +92,14 @@ LO=$((0x1000000+5)); HI=$((LO+99999))
 for K in $LO $HI $((LO+54321)); do
   KH=$(printf '0x%x' $K); A=$(field $KH addr); rm -rf "$DIR/cus"
   $BIN hunt -r $(printf '%x:%x' $LO $HI) -a "$A" -c cus -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/cus/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/cus/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "linear on an interval of 100000 keys: $KH" || bad "custom interval $KH (found '$GOT')"
 done
 LO=$((0x7000000000+12345)); W=1000003; HI=$((LO+W-1))
 for K in $LO $HI $((LO+W/2)) $((LO+777777)); do
   KH=$(printf '0x%x' $K); P=$(field $KH pub); A=$(field $KH addr); rm -rf "$DIR/cusk"
   $BIN hunt -r $(printf '%x:%x' $LO $HI) -a "$A" -k "$P" -m kangaroo -c cusk -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/cusk/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/cusk/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "kangaroo on an interval of $W keys: $KH" || bad "kangaroo custom interval $KH (found '$GOT')"
 done
 
@@ -107,14 +107,14 @@ echo "== BSGS in RAM (public key known)"
 for n in 30 44 52; do
   rm -rf "$DIR/bs$n"
   $BIN hunt -p $n --mode bsgs -c bs$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/bs$n/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bs$n/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "$(dbfield $n 4)" ] && ok "bsgs puzzle $n" || bad "bsgs puzzle $n: expected $(dbfield $n 4) found '$GOT'"
 done
 LO=$((0x123456789a)); W=3000017
 for K in $LO $((LO+W-1)) $((LO+(W-1)/2)) $((LO+1234567)); do
   KH=$(printf '0x%x' $K); P=$(field $KH pub); A=$(field $KH addr); rm -rf "$DIR/bsc"
   $BIN hunt -r $(printf '%x:%x' $LO $((LO+W-1))) -a "$A" -k "$P" -m bsgs -c bsc -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/bsc/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bsc/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "bsgs on an interval of $W keys: $KH" || bad "bsgs custom interval $KH (found '$GOT')"
 done
 rm -rf "$DIR/bst"
@@ -123,13 +123,13 @@ $BIN hunt -p 46 -m bsgs --table "$DIR/t.tbl" -c bst1 -d "$DIR" --ui log -q --no-
 [ "$(head -c 8 "$DIR/t.tbl")" = "PZBSGS02" ] && ok "table saved in the bucket format" || bad "table saved with magic '$(head -c 8 "$DIR/t.tbl")'"
 OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" -c bst2 -d "$DIR" --ui log --no-gpu 2>&1)
 echo "$OUT" | grep -q "reading the table" && ok "table read back from file for another puzzle" || bad "table not read back"
-GOT=$(awk '/private key hex/{print $4}' "$DIR/bst2/FOUND.txt" 2>/dev/null)
+GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bst2/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "$(dbfield 47 4)" ] && ok "bsgs with table from file: key found" || bad "bsgs with table from file: '$GOT'"
 # a table of the first format (PZBSGS01: one array of cells, linear probing; 500 baby steps, written by the version that had it) is still read, used as it is, and left alone
 cp tests/data/bsgs_v1_t500.bin "$DIR/old.tbl"
 OUT=$($BIN hunt -p 20 -m bsgs --table "$DIR/old.tbl" -c bsold -d "$DIR" --ui log --no-gpu 2>&1)
 echo "$OUT" | grep -q "reading the table" && ok "table of the old format read" || bad "table of the old format not read"
-GOT=$(awk '/private key hex/{print $4}' "$DIR/bsold/FOUND.txt" 2>/dev/null)
+GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bsold/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "$(dbfield 20 4)" ] && ok "bsgs with a table of the old format: key found" || bad "bsgs with a table of the old format: '$GOT'"
 cmp -s tests/data/bsgs_v1_t500.bin "$DIR/old.tbl" && ok "table of the old format not rewritten" || bad "table of the old format modified"
 head -c 100000 "$DIR/t.tbl" > "$DIR/trunc.tbl"
@@ -154,13 +154,13 @@ echo "== built-in database: automatic target with -p N (already solved puzzles)"
 for n in 18 23; do
   rm -rf "$DIR/db$n"
   $BIN hunt -p $n --mode linear -c db$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/db$n/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/db$n/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "$(dbfield $n 4)" ] && ok "db linear puzzle $n" || bad "db linear puzzle $n: expected $(dbfield $n 4) found '$GOT'"
 done
 for n in 36 42; do
   rm -rf "$DIR/dbk$n"
   $BIN hunt -p $n -c dbk$n -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  GOT=$(awk '/private key hex/{print $4}' "$DIR/dbk$n/FOUND.txt" 2>/dev/null)
+  GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/dbk$n/FOUND.txt" 2>/dev/null)
   MODE=$(awk -F= '$1=="mode"{print $2}' "$DIR/dbk$n/campaign.conf")
   [ "$GOT" = "$(dbfield $n 4)" ] && { [ "$MODE" = kangaroo ] || [ "$MODE" = bsgs ]; } && ok "db automatic mode ($MODE) puzzle $n" || bad "db puzzle $n: expected $(dbfield $n 4) found '$GOT' mode '$MODE'"
 done

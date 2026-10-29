@@ -49,8 +49,9 @@ static void bs_progress(run_ctx *r, progress_info *pi)
         pi->eta = (eta_in){ETA_UNIFORM, done, total - done, 0, false, 0};
         pz_fmt_bytes((double)b->table_bytes, a, sizeof a);
         char tb[32], fp[32];
-        snprintf(det, sizeof det, "table: %s baby steps (%s, %s%s) | table false positives: %s", pz_fmt_u64(b->P.T, tb, sizeof tb), a,
-                 b->tab.thp ? "huge pages" : "normal pages", b->table_from_file ? ", from file" : "", pz_fmt_u64(atomic_load(&b->falsepos), fp, sizeof fp));
+        snprintf(det, sizeof det, "table: %s baby steps (%s, %s%s)%s%s", pz_fmt_u64(b->P.T, tb, sizeof tb), a, b->tab.thp ? "huge pages" : "normal pages",
+                 b->table_from_file ? ", from file" : "", pz_log_verbose() ? " | table false positives: " : "",
+                 pz_log_verbose() ? pz_fmt_u64(atomic_load(&b->falsepos), fp, sizeof fp) : "");
         char iv[48] = "";
         if (pz_log_verbose()) snprintf(iv, sizeof iv, ", open intervals: %zu", sched_open_intervals(r->sched));
         snprintf(pi->detail, sizeof pi->detail, "%s\nrandom order: blocks of 2^%u giant steps%s", det, r->sched->cbits, iv);

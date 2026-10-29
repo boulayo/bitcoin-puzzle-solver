@@ -98,8 +98,11 @@ int rt_enumerate(rt_dev *out, int max, char *note, size_t nl)
 {
     char n1[160] = "", n2[160] = "";
     int nc = 0, no = 0;
+    /* a runtime switched off by the environment is said to be so: "not found" would send the user looking for a driver */
     if (!g_env.no_cuda) nc = rtcu_enumerate(out, max, n1, sizeof n1);
+    else snprintf(n1, sizeof n1, "CUDA disabled by PZ_NO_CUDA");
     if (!g_env.no_opencl) no = rtcl_enumerate(out + nc, max - nc, n2, sizeof n2);
+    else snprintf(n2, sizeof n2, "OpenCL disabled by PZ_NO_OPENCL");
     int n = nc + no;
     for (int i = 0; i < n; i++) { out[i].index = i; out[i].dup_of = -1; }
     /* the NVIDIA OpenCL driver exposes the same GPUs that CUDA drives: pair them by PCI location, or by name and order

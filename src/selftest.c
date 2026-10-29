@@ -81,18 +81,15 @@ static void t_puzzle_db(void)
     int bad = puzzles_verify(err, sizeof err);
     if (bad) printf("  %s\n", err);
     CHECK(bad == 0);
-    int solved = 0, withpub = 0;
-    for (int i = 0; i < PZ_NUM_PUZZLES; i++) {
-        solved += PZ_PUZZLES[i].privkey[0] != 0;
-        withpub += PZ_PUZZLES[i].pubkey[0] != 0;
-    }
-    pz_result_line("puzzle database", "%d puzzles (%d solved, %d with a known public key) + %d emptied in 2017", PZ_NUM_PUZZLES, solved, withpub, PZ_NUM_RETIRED);
+    if (bad) pz_result_line("puzzle database", "FAILED");
+    else pz_result_line("puzzle database", "OK: %d puzzles + %d emptied", PZ_NUM_PUZZLES, PZ_NUM_RETIRED);
 }
 
 static void t_bsgs(void)
 {
     struct { unsigned wbits; u64 T; } cases[] = {{24, 2048}, {30, 1 << 14}, {33, 50000}};
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        const int f0 = g_fail;
         pz_u256 lo = pz_u256_pow2(cases[i].wbits - 1), hi = pz_u256_pow2(cases[i].wbits), one = pz_u256_from_u64(1);
         pz_u256_sub(&hi, &hi, &one);
         for (int kind = 0; kind < 3; kind++) {
@@ -113,7 +110,7 @@ static void t_bsgs(void)
         }
         char lb[64];
         snprintf(lb, sizeof lb, "BSGS W=2^%u, %llu baby steps", cases[i].wbits - 1, (unsigned long long)cases[i].T);
-        pz_result_line(lb, "random keys and both ends of the range found");
+        pz_result_line(lb, "%s", g_fail == f0 ? "OK (random keys, range ends)" : "FAILED");
     }
 }
 
@@ -535,7 +532,14 @@ int selftest_checks(bool banner)
     t_rate_memory();
     t_twin_runs();
 #undef SECTION
-    if (banner) printf(g_fail ? "\nSELFTEST FAILED: %d of %d checks\n" : "\nSELFTEST PASSED: %d checks, no errors\n", g_fail ? g_fail : g_checks, g_checks);
+    if (banner) {
+        const int ng = gpu_count_usable();                          /* the GPU checks count as one: say what they covered */
+        char what[48];
+        if (ng > 0) snprintf(what, sizeof what, "CPU and %d GPU%s", ng, ng == 1 ? "" : "s");
+        else snprintf(what, sizeof what, "CPU only");
+        if (g_fail) printf("\nSELFTEST FAILED: %d of %d checks (%s)\n", g_fail, g_checks, what);
+        else printf("\nSELFTEST PASSED: %d checks (%s), no errors\n", g_checks, what);
+    }
     pz_log_set_quiet(was_quiet);
     return g_fail != 0;
 }
@@ -642,9 +646,10 @@ int bench_run(int argc, char **argv)
             else pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", v);
             prio_given = true;
         }
-        else pz_die("bench: unrecognized option '%s' (see 'pzsolve help bench')", a);
+        else if (!strcmp(a, "-t") || !strcmp(a, "--threads") || !strcmp(a, "--gpu") || !strcmp(a, "--prio-gpu")) pz_usage_error("bench", "the option '%s' needs a value", a);
+        else pz_usage_error("bench", "unrecognized option '%s'", a);
     }
-    if ((threads || gpus || linear || prio_given) && !together) pz_die("bench: -t, --gpu, --prio-gpu and --linear are used together with --together (see 'pzsolve help bench')");
+    if ((threads || gpus || linear || prio_given) && !together) pz_usage_error("bench", "-t, --gpu, --prio-gpu and --linear are used together with --together");
     if (gpus) gpu_check_filter(gpus);
     if (together) {
         tg_choice ch;

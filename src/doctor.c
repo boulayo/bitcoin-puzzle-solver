@@ -116,6 +116,7 @@ static void check_cache(void)
     if (!sl) sl = strrchr(dir, '\\');
     if (sl) *sl = 0;
     doctor_line('i', "folder: %s", dir);
+    if (gpu_count_usable() <= 0) return;      /* both entries are about GPUs: the kernel tuning and the CPU+GPU profile */
     gpu_doctor_cache();
     profile_doctor();
 }
@@ -231,7 +232,8 @@ static void check_env(void)
     section("Environment variables PZ_*");
     const int n = pz_env_each_pz(env_entry_line, NULL);
     if (!n) doctor_line('i', "none set");
-    else doctor_line('w', "%d PZ_* variables set: they change the behavior (tuning, GPU, engines); if you did not set them yourself, remove them", n);
+    else doctor_line('w', "%d PZ_* variable%s set: %s the behavior (tuning, GPU, engines); if you did not set %s yourself, remove %s", n, n == 1 ? "" : "s",
+                     n == 1 ? "it changes" : "they change", n == 1 ? "it" : "them", n == 1 ? "it" : "them");
 }
 
 int doctor_run(int argc, char **argv)
@@ -244,7 +246,8 @@ int doctor_run(int argc, char **argv)
             if (!base[0]) pz_die("--dir: invalid value '' (expected the name of a folder)");
         }
         else if (!strcmp(argv[i], "--full")) deep = true;
-        else pz_die("unrecognized option '%s' (see 'pzsolve help doctor')", argv[i]);
+        else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) pz_usage_error("doctor", "the option '%s' needs a value", argv[i]);
+        else pz_usage_error("doctor", "unrecognized option '%s'", argv[i]);
     }
     sysinfo_t s;
     sysinfo_detect(&s);

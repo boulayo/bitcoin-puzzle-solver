@@ -33,7 +33,7 @@
 
 static void help_print(FILE *f, const char *text) { pz_fputs_wrap(f, text, PZ_LINE_MAX, -1); }
 
-static void usage_main(FILE *f)
+static const char *main_text(void)
 {
     static char text[8192];
     snprintf(text, sizeof text,
@@ -45,30 +45,30 @@ static void usage_main(FILE *f)
 "\n"
 "COMMANDS\n"
 "  hunt       start (or resume) a search campaign\n"
-"  info       show the state of an existing campaign\n"
-"  list       list all campaigns in the folder with progress, speed and time left\n"
-"  where      tell when a given key will be visited in the campaign order: (-c NAME | -p N) --key HEX\n"
-"  split      divide the --part shares among several computers in proportion to their speeds: split 800M 120M ...\n"
-"  puzzle N   show data for puzzle N (address, public key, status) and effort estimates [--rate KEYS_PER_SECOND, e.g. 800M or 1.5G]\n"
-"  puzzles    list the 160 built-in puzzles [--open | --solved | --pubkey]\n"
-"  devices    list the detected CPU, SIMD instructions, RAM and GPUs\n"
-"  selftest   run the built-in correctness checks\n"
-"  merge      merge the distinguished points of other computers into a kangaroo campaign: -c NAME (or -p N) -f FILE_OR_FOLDER ... [-d DIR]\n"
-"  doctor     check the program, machine, GPUs, cache and campaigns and report what is wrong [-d DIR] [--full]\n"
-"  bench      measure the speed of the CPU and GPU engines\n"
-"  kstat      BITS TRIALS [THREADS [R [DP]]]: statistics of the kangaroo cost over intervals of 2^BITS keys (cycle study)\n"
-"  version    print the version\n"
+"  info       the state of a campaign\n"
+"  list       all campaigns of a folder: progress, speed, time left\n"
+"  where      when a key will be visited (linear, BSGS)\n"
+"  split      divide --part shares among computers by their speeds\n"
+"  puzzle     the data of a puzzle and the effort to solve it\n"
+"  puzzles    the 160 built-in puzzles\n"
+"  devices    the CPU, SIMD instructions, RAM and GPUs\n"
+"  selftest   the built-in correctness checks\n"
+"  merge      add the distinguished points of other computers (kangaroo)\n"
+"  doctor     check program, machine, GPUs, cache and campaigns\n"
+"  bench      the speed of the CPU and GPU engines\n"
+"  kstat      statistics of the kangaroo cost (cycle study)\n"
+"  version    the version\n"
 "\n"
 "EXAMPLES\n"
-"  pzsolve puzzles --open            list the puzzles that are still unsolved\n"
-"  pzsolve hunt -p 71                start (or resume) puzzle 71: everything is already in the database\n"
-"  pzsolve hunt -p 71 -r 400000000000000000:5fffffffffffffffff   only part of the range\n"
-"  pzsolve hunt -p 66 -a 13zb1hQbWVsc2S7ZTZnP2G4undNNpdh5so -c test   custom target\n"
+"  pzsolve puzzles --open            the puzzles that are still unsolved\n"
+"  pzsolve hunt -p 71                start or resume puzzle 71\n"
+"  pzsolve hunt -p 71 -r 400000000000000000:5fffffffffffffffff   a part only\n"
+"  pzsolve hunt -r 8000:ffff -a ADDRESS -c mine   a custom range and target\n"
 "  pzsolve info -c p71\n", PZ_VERSION);
-    help_print(f, text);
+    return text;
 }
 
-static void usage_hunt(FILE *f)
+static const char *hunt_text(void)
 {
     static char text[16384];
     snprintf(text, sizeof text,
@@ -131,22 +131,22 @@ static void usage_hunt(FILE *f)
 "DISPLAY AND FILES\n"
 "      --ui U              auto | full (multi-line panel updated in place) | line (one line) | log (one line per minute, suited\n"
 "                          to files)   [auto: full on a terminal]\n"
-"      --report-interval S seconds between panel updates [1]\n"
-"      --checkpoint-interval S   seconds between state saves [60]\n"
-"  -q, --quiet             fewer messages\n"
+"      --report-interval S\n"
+"                          seconds between panel updates [1]\n"
+"      --checkpoint-interval S\n"
+"                          seconds between state saves [60]\n"
+"  -q, --quiet             no progress display: only warnings, errors and the result\n"
 "  -v, --verbose           more messages\n"
 "\n"
 "EXIT STATUS\n"
 "  0                       the key was found (also when the campaign had already found it: it is in FOUND.txt)\n"
 "  1                       the search finished without finding the key (the whole range, or the whole --part, was covered)\n"
-"  130                     interrupted by Ctrl-C, SIGTERM or the closing of the terminal: the state is saved, the same command resumes\n"
-"  2                       error: invalid options, campaign in use, unreadable files, a state that could not be saved\n");
-    help_print(f, text);
+"  2                       error: invalid options, campaign in use, unreadable files, a state that could not be saved\n"
+"  130                     interrupted by Ctrl-C, SIGTERM or the closing of the terminal: the state is saved, the same command resumes\n");
+    return text;
 }
 
-static void usage_bench(FILE *f)
-{
-    help_print(f,
+static const char bench_text[] =
 "pzsolve bench - measure the speed of the CPU and GPU engines\n"
 "\n"
 "USAGE\n"
@@ -162,8 +162,7 @@ static void usage_bench(FILE *f)
 "      --gpu LIST          with --together: use only the listed GPUs (as in hunt)\n"
 "      --prio-gpu P        with --together: auto | yes | no, as in hunt\n"
 "      --gpu-only          skip the CPU tests and run only the GPU ones (bandwidth, integer instructions, linear search, kangaroo)\n"
-"      --retune            ignore the saved choice of the GPU kernel variant and measure it again\n");
-}
+"      --retune            ignore the saved choice of the GPU kernel variant and measure it again\n";
 
 /* The short help of the other commands: usage line, then one line per option. */
 static const struct { const char *cmd, *text; } short_help[] = {
@@ -189,7 +188,7 @@ static const struct { const char *cmd, *text; } short_help[] = {
                "  pzsolve doctor [-d DIR] [--full]\n\nOPTIONS\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
                "      --full              also run the full selftest, GPUs included\n"},
     {"puzzle", "pzsolve puzzle - show the data of a puzzle and the effort to solve it\n\nUSAGE\n  pzsolve puzzle N [--rate SPEED]\n\nOPTIONS\n"
-               "      --rate SPEED        the speed of the times, keys per second with k, M, G or T allowed (800M, 1.5G) [measured on\n"
+               "      --rate SPEED        the speed used for the times, keys per second with k, M, G or T allowed (800M, 1.5G) [measured on\n"
                "                          the CPU of this machine]\n"},
     {"puzzles", "pzsolve puzzles - list the 160 built-in puzzles\n\nUSAGE\n  pzsolve puzzles [--open | --solved] [--pubkey]\n\nOPTIONS\n"
                 "      --open              only the puzzles still unsolved\n      --solved            only the solved puzzles\n"
@@ -204,15 +203,42 @@ static const struct { const char *cmd, *text; } short_help[] = {
     {"version", "pzsolve version - print the version\n\nUSAGE\n  pzsolve version\n"},
 };
 
+/* The help text of a command (NULL: the general one); NULL when there is no such command. */
+static const char *help_text(const char *topic)
+{
+    if (!topic) return main_text();
+    if (!strcmp(topic, "hunt")) return hunt_text();
+    if (!strcmp(topic, "bench")) return bench_text;
+    for (size_t i = 0; i < sizeof short_help / sizeof *short_help; i++)
+        if (!strcmp(topic, short_help[i].cmd)) return short_help[i].text;
+    return NULL;
+}
+
 /* The help of a command: "pzsolve help hunt", "pzsolve hunt --help". False when there is no such command. */
 bool pz_help(const char *topic, FILE *f)
 {
-    if (!topic) { usage_main(f); return true; }
-    if (!strcmp(topic, "hunt")) { usage_hunt(f); return true; }
-    if (!strcmp(topic, "bench")) { usage_bench(f); return true; }
-    for (size_t i = 0; i < sizeof short_help / sizeof *short_help; i++)
-        if (!strcmp(topic, short_help[i].cmd)) { help_print(f, short_help[i].text); return true; }
-    return false;
+    const char *t = help_text(topic);
+    if (t) help_print(f, t);
+    return t != NULL;
+}
+
+/* A command line that cannot be run: the message, then the usage line of the command, taken from its help (the only copy), and where to
+ * read the rest. */
+void pz_usage_error(const char *cmd, const char *fmt, ...)
+{
+    char msg[600], use[400] = "";
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    const char *t = cmd && cmd[0] ? help_text(cmd) : NULL, *u = t ? strstr(t, "USAGE\n") : NULL;
+    if (u) {
+        u += 6;
+        while (*u == ' ') u++;
+        snprintf(use, sizeof use, "\n  usage: %.*s", (int)strcspn(u, "\n"), u);
+    }
+    if (t) pz_die("%s%s\n  (see 'pzsolve help %s')", msg, use, cmd);
+    pz_die("%s (see 'pzsolve help')", msg);
 }
 
 static const char *g_cmd = "";
@@ -413,18 +439,18 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             else pz_die("--ui: invalid value '%s' (expected auto, full, line or log)", optarg);
             break;
         case 'h':
-            if (!pz_help(g_cmd, stdout)) usage_main(stdout);
+            if (!pz_help(g_cmd, stdout)) pz_help(NULL, stdout);
             exit(0);
-        case ':': pz_die("the option '%s' needs a value (see 'pzsolve help %s')", bad_option(argv, optbuf, sizeof optbuf), g_cmd);
-        default: pz_die("unrecognized option '%s' (see 'pzsolve help %s')", bad_option(argv, optbuf, sizeof optbuf), g_cmd);
+        case ':': pz_usage_error(g_cmd, "the option '%s' needs a value", bad_option(argv, optbuf, sizeof optbuf));
+        default: pz_usage_error(g_cmd, "unrecognized option '%s'", bad_option(argv, optbuf, sizeof optbuf));
         }
     }
     if (optind < argc) {
         /* a bare value is almost always a forgotten option name ("hunt 71" instead of "hunt -p 71") */
         const char *a = argv[optind];
         bool num = a[0] >= '0' && a[0] <= '9';
-        if (num) pz_die("unexpected argument '%s' (did you mean -p %s?)", a, a);
-        pz_die("unexpected argument '%s' (options start with - or --: see 'pzsolve help %s')", a, g_cmd);
+        if (num) pz_usage_error(g_cmd, "unexpected argument '%s' (did you mean -p %s?)", a, a);
+        pz_usage_error(g_cmd, "unexpected argument '%s' (options start with - or --)", a);
     }
     if (o->want_new && o->want_resume) pz_die("--new and --resume are mutually exclusive: --new requires a new campaign, --resume an existing one");
 }
@@ -706,8 +732,8 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
 static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
 {
     if (o->puzzle && c->puzzle != o->puzzle) {
-        if (c->puzzle) pz_die("the existing campaign is for puzzle %d, not %d", c->puzzle, o->puzzle);
-        pz_die("the existing campaign is not associated with a puzzle of the database (use -c %s without -p)", c->name);
+        if (c->puzzle) pz_die("campaign '%s' is for puzzle %d, not %d", c->name, c->puzzle, o->puzzle);
+        pz_die("campaign '%s' is not associated with a puzzle of the database (use -c %s without -p)", c->name, c->name);
     }
     if (o->range[0]) {
         pz_u256 a, b;
@@ -754,8 +780,10 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         bool from_table;
         const u64 T = requested_bsgs_entries(o, &from_table);
         if (T && T != c->bsgs_t) {
-            if (from_table) pz_die("table %s has %llu baby steps but the campaign uses %llu (this cannot be changed after creation)", o->table, (unsigned long long)T, (unsigned long long)c->bsgs_t);
-            pz_die("--bsgs-entries cannot be changed on an existing campaign (the table has %llu entries)", (unsigned long long)c->bsgs_t);
+            char t1[32], t2[32];
+            if (from_table) pz_die("table %s has %s baby steps but the campaign uses %s (this cannot be changed after creation)", o->table, pz_fmt_u64(T, t1, sizeof t1),
+                                   pz_fmt_u64(c->bsgs_t, t2, sizeof t2));
+            pz_die("--bsgs-entries cannot be changed on an existing campaign (its table has %s baby steps)", pz_fmt_u64(c->bsgs_t, t2, sizeof t2));
         }
     }
 }
@@ -952,7 +980,9 @@ static int cmd_hunt(int argc, char **argv)
     if (r->cfg.part[0]) {
         char sd[65];
         pz_hex_encode(r->cfg.seed, 32, sd);
-        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --chunk-bits and this seed (-s %s) with the other shares", r->cfg.part, sd);
+        const bool text_seed = o.seed[0] && strcmp(o.seed, "auto") != 0;   /* the seed the user typed is the one to give the others */
+        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --chunk-bits and %s%s%s with the other shares",
+               r->cfg.part, text_seed ? "the same -s" : "this seed (-s ", text_seed ? "" : sd, text_seed ? "" : ")");
     }
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
     if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes, PLURAL(r->engine->lanes));
@@ -1064,7 +1094,8 @@ static int cmd_merge(int argc, char **argv)
     parse_opts(argc, argv, &o);
     pz_log_set_quiet(o.quiet);
     if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
-    if (!o.campaign[0] || !o.nfiles) pz_die("usage: pzsolve merge (-c NAME | -p N) [-d DIR] -f FILE_OR_FOLDER [-f ...]  (the files are the dp.bin of the other computers)");
+    if (!o.campaign[0]) pz_usage_error("merge", "the campaign is missing: -c NAME or -p N");
+    if (!o.nfiles) pz_usage_error("merge", "the files to merge are missing: -f FILE_OR_FOLDER (the dp.bin of another computer, or its campaign folder)");
     char cdir[600], conf[700], err[256];
     snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
     snprintf(conf, sizeof conf, "%s/campaign.conf", cdir);
@@ -1106,7 +1137,7 @@ static int cmd_merge(int argc, char **argv)
 
 static int cmd_split(int argc, char **argv)
 {
-    if (argc < 3) pz_die("usage: pzsolve split SPEED_1 SPEED_2 [...]   (keys per second, with k, M, G or T allowed: for example 800M 1.5G)");
+    if (argc < 3) pz_usage_error("split", "the speeds of at least two computers are needed (keys per second: 800M, 1.5G)");
     const unsigned n = (unsigned)(argc - 1);
     if (n > 64) pz_die("at most 64 computers");
     u64 speed[64];
@@ -1167,7 +1198,8 @@ static int cmd_where(int argc, char **argv)
     opts_t o;
     parse_opts(argc, argv, &o);
     if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
-    if (!o.campaign[0] || !o.key[0]) pz_die("usage: pzsolve where (-c NAME | -p N) --key HEX_KEY");
+    if (!o.campaign[0]) pz_usage_error("where", "the campaign is missing: -c NAME or -p N");
+    if (!o.key[0]) pz_usage_error("where", "the key is missing: --key HEX");
     campaign_cfg c;
     char p[700], err[256], cdir[600];
     snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
@@ -1253,7 +1285,7 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
         long double st = KANG_C_MEAN * sqrtl(W);
         pz_prop_line("kangaroo", "%.3Le steps on average (2^%.1f)", st, (double)log2l(st));
         if (rate_kang > 0)
-            pz_prop_line("", "time: median %s, 90%% in %s", pz_fmt_duration((double)(0.9395L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t1, sizeof t1),
+            pz_prop_line("", "time: 50%% in %s, 90%% in %s", pz_fmt_duration((double)(0.9395L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t1, sizeof t1),
                          pz_fmt_duration((double)(1.7122L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t3, sizeof t3));
         /* BSGS with a RAM table, if one that beats the kangaroo fits in 70% of the free memory */
         sysinfo_t si;
@@ -1276,15 +1308,15 @@ static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double ra
 
 static int cmd_puzzle(int argc, char **argv)
 {
-    if (argc < 3) pz_die("usage: pzsolve puzzle N [--rate KEYS_PER_SECOND]");
+    if (argc < 3) pz_usage_error("puzzle", "the number of the puzzle is missing");
     int n = (int)pz_arg_int("puzzle", argv[2], 1, 256);
     double rate_lin = -1, rate_kang = -1;
     for (int i = 3; i < argc; i++)
         if (!strcmp(argv[i], "--rate")) {
-            if (i + 1 >= argc) pz_die("--rate requires a value (keys per second, for example --rate 800M or --rate 1.5G)");
+            if (i + 1 >= argc) pz_usage_error("puzzle", "the option '--rate' needs a value");
             rate_lin = rate_kang = opt_rate("--rate", argv[++i]);
         }
-        else pz_die("unrecognized option '%s' (see 'pzsolve help puzzle')", argv[i]);
+        else pz_usage_error("puzzle", "unrecognized option '%s'", argv[i]);
     pz_u256 a, b;
     if (!puzzle_range(n, &a, &b)) pz_die("puzzle out of range (1..256)");
     char ha[80], hb[80], ds[100];
@@ -1326,10 +1358,9 @@ static int cmd_puzzle(int argc, char **argv)
         if (solved) printf("A test run (the key is known): pzsolve hunt -p %d\n", n);
         else printf("To start the campaign: pzsolve hunt -p %d\n", n);
     } else {
-        long double w = ldexpl(1.0L, n - 1), st = KANG_C_MEAN * sqrtl(w);
+        long double w = ldexpl(1.0L, n - 1);          /* emptied: no public key, so only the linear search */
         pz_section("Mean effort");
         pz_prop_line("linear search", "%.3Le keys on average (2^%d), %.3Le in the worst case", w / 2, n - 2, w);
-        pz_prop_line("kangaroo", "%.3Le steps on average (2^%.1f), with the public key", st, (double)log2l(st));
     }
     return 0;
 }
@@ -1341,7 +1372,7 @@ static int cmd_puzzles(int argc, char **argv)
         if (!strcmp(argv[i], "--open")) only_open = true;
         else if (!strcmp(argv[i], "--solved")) only_solved = true;
         else if (!strcmp(argv[i], "--pubkey")) only_pub = true;
-        else pz_die("unrecognized option '%s' (see 'pzsolve help puzzles')", argv[i]);
+        else pz_usage_error("puzzles", "unrecognized option '%s'", argv[i]);
     }
     if (only_open && only_solved) pz_die("--open and --solved are mutually exclusive");
     printf("%4s  %-9s %-6s %-36s %s\n", "N", "status", "pubkey", "address", "mean effort");
@@ -1388,7 +1419,7 @@ int main(int argc, char **argv)
     pz_console_init();
     pz_env_init();                                         /* the only place that reads the environment (envopts.h) */
     if (argc < 2) {
-        usage_main(stderr);
+        pz_help(NULL, stderr);
         if (pz_console_is_own()) {
             /* double-clicked in Explorer: the window would vanish before the text could be read */
             fprintf(stderr, "\nThis is a command-line program: open PowerShell (or the Command Prompt) in its folder\n"
@@ -1401,7 +1432,7 @@ int main(int argc, char **argv)
     g_cmd = cmd;
     if (argc == 3 && (!strcmp(argv[2], "--help") || !strcmp(argv[2], "-h")) && pz_help(cmd, stdout)) return 0;   /* every command: "pzsolve puzzle --help" */
     const bool noargs = !strcmp(cmd, "devices") || !strcmp(cmd, "selftest") || !strcmp(cmd, "version");
-    if (noargs && argc > 2) pz_die("the command '%s' takes no arguments ('%s' not recognized)", cmd, argv[2]);
+    if (noargs && argc > 2) pz_usage_error(cmd, "the command '%s' takes no arguments ('%s' not recognized)", cmd, argv[2]);
     if (!strcmp(cmd, "hunt")) return cmd_hunt(argc - 1, argv + 1);
     if (!strcmp(cmd, "info")) return cmd_info(argc - 1, argv + 1);
     if (!strcmp(cmd, "list")) return cmd_list(argc - 1, argv + 1);

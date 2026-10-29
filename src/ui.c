@@ -42,6 +42,15 @@ char *ui_fmt_count(long double v, char *buf, size_t n)
     return buf;
 }
 
+char *ui_fmt_range_bits(const pz_u256 *sz, char *buf, size_t n)
+{
+    int ones = 0;
+    for (int i = 0; i < 4; i++) ones += __builtin_popcountll(sz->w[i]);
+    if (ones == 1) snprintf(buf, n, "2^%u", pz_u256_bits(sz) - 1);
+    else snprintf(buf, n, "~2^%.1f", (double)log2l(pz_u256_to_ld(sz)));
+    return buf;
+}
+
 char *ui_fmt_eta(double secs, char *buf, size_t n)
 {
     if (!(secs >= 0) || isinf(secs)) { snprintf(buf, n, "n/a"); return buf; }
@@ -151,8 +160,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
 
     pz_u256 rsz = cfg_range_size(&r->cfg);
-    unsigned rbits = pz_u256_bits(&rsz) ? pz_u256_bits(&rsz) - 1 : 0;
-    snprintf(ln, sizeof ln, "Target        %s   range of 2^%u keys", r->cfg.address, rbits);
+    snprintf(ln, sizeof ln, "Target        %s   range of %s keys", r->cfg.address, ui_fmt_range_bits(&rsz, a, sizeof a));
     len = add_line(buf, n, len, &lines, cols, "", "", ln);
 
     char bb[48], pc[32];
@@ -258,6 +266,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
             if (o + (size_t)w >= sizeof ln) break;
             memcpy(ln + o, one, (size_t)w + 1);
             o += (size_t)w;
+            if (!strcmp(a, "100%")) break;                            /* the longer windows say the same */
         }
         len = add_line(buf, n, len, &lines, cols, "", "", ln);
         if (pi->est_state == RATE_PROVISIONAL) {

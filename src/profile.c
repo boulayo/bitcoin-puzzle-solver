@@ -123,7 +123,7 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
     if (t == 0) r->use_cpu = false;
     if (g[0]) pz_strlcpy(r->gpu_filter, g, sizeof r->gpu_filter);
     pz_log(PZ_LOG_INFO, "profile of this machine%s%s%s: %d CPU thread%s%s%s%s (-t and --gpu override them; --retune measures again)",
-           fresh ? " (just measured)" : "", when[0] ? " from " : "", when, t, t == 1 ? "" : "s", g[0] ? ", GPU " : ", all GPUs", g, pn);
+           fresh ? " (just measured)" : "", when[0] ? " from " : "", when, t, t == 1 ? "" : "s", g[0] ? ", --gpu " : ", all GPUs", g, pn);
 }
 
 void profile_apply(run_ctx *r, bool force, bool disable)

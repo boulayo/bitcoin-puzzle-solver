@@ -179,7 +179,7 @@ static int solve_selftest(void)
     }
     pz_log_set_quiet(was_quiet);
     char lb[64];
-    snprintf(lb, sizeof lb, "collisions between all kinds of walkers (%d pairs)", pairs);
+    snprintf(lb, sizeof lb, "walker collisions (%d pairs)", pairs);
     pz_result_line(lb, "%s", fails ? "FAILED" : "OK");
     return fails;
 }
@@ -441,7 +441,7 @@ static int table_selftest(void)
     fails += table_size_checks();
     pz_log_set_quiet(was_quiet);
     fails += table_collision_checks();
-    pz_result_line("distinguished-point table: growth and thinning", "%s", fails ? "FAILED" : "OK");
+    pz_result_line("DP table: growth, thinning", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -698,7 +698,7 @@ int kang_log_file_selftest(void)
     pz_log_set_quiet(2);                                  /* the messages about files that are refused or repaired are the point of the test */
     const int fails = log_file_checks();
     pz_log_set_quiet(was_quiet);
-    pz_result_line("distinguished-point log: loading", "%s", fails ? "FAILED" : "OK");
+    pz_result_line("DP log: loading", "%s", fails ? "FAILED" : "OK");
     return fails;
 }
 
@@ -1000,7 +1000,7 @@ int kang_log_fault_selftest(void)
     }
     signal(SIGXFSZ, old_sig);
     kang_free_test_state(ks);
-    pz_result_line("distinguished-point log on a full disk", "%s", fails ? "FAILED" : "OK");
+    pz_result_line("DP log on a full disk", "%s", fails ? "FAILED" : "OK");
     int tf = 0;
 #ifdef __GLIBC__
     {
@@ -1009,12 +1009,12 @@ int kang_log_fault_selftest(void)
         fails += tf = log_thread_checks();
         pz_log_set_quiet(q);
     }
-    pz_result_line("distinguished-point log: writes outside the table lock", "%s", tf ? "FAILED" : "OK");
+    pz_result_line("DP log: writes outside the lock", "%s", tf ? "FAILED" : "OK");
 #else
-    pz_result_line("distinguished-point log: writes outside the table lock", "not tested here");
+    pz_result_line("DP log: writes outside the lock", "not tested here");
 #endif
     return fails;
 }
 #else
-int kang_log_fault_selftest(void) { pz_result_line("distinguished-point log on a full disk", "not tested on Windows"); return 0; }
+int kang_log_fault_selftest(void) { pz_result_line("DP log on a full disk", "not tested on Windows"); return 0; }
 #endif

@@ -17,7 +17,7 @@ K=$(python3 -c "import random; random.seed(5); print(hex(random.randrange(2**25,
 KK=$(python3 -c "import random; random.seed(15); print(hex(random.randrange(2**43, 2**44)))"); KP=$(field "$KK" pub); KA=$(field "$KK" addr)
 # outhas PATTERN COMMAND...: the whole output is captured first (grep -q exiting early would kill the command with SIGPIPE, and pipefail turns that into a failure)
 outhas() { local pat=$1 o; shift; o=$("$@" 2>&1); grep -q -- "$pat" <<<"$o"; }
-check_found() { grep -q "private key hex: ${2#0x}" "$1/FOUND.txt" 2>/dev/null; }
+check_found() { grep -q "private key hex: 0x${2#0x}" "$1/FOUND.txt" 2>/dev/null; }
 
 step "puzzle database (re-checked with the independent implementation)"
 run python3 -I tools/gen_puzzles.py --check
