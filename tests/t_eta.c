@@ -39,7 +39,9 @@ static void t_rate_est(void)
         if (t >= 9 && t < 12) CHECK(v == 0 && st == RATE_MEASURING);      /* and 3 s after that */
         if (t >= 20 && t < 60) CHECK(near(v, 990e6, 0.04) && st == RATE_PROVISIONAL);
         if (t >= 70) CHECK(near(v, 990e6, 0.015) && st == RATE_STEADY);
+        CHECK((st == RATE_STEADY) == (rate_est_settle_time(&e) > 0 && t >= rate_est_settle_time(&e)));   /* the time the panel counts down to */
     }
+    CHECK(rate_est_settle_time(&e) == 9 + 60);
     CHECK(rate_est_sustained(&e, 100) == 0);                              /* not enough steady time yet */
     /* the old way of seeding (the first one-second sample, CPU only) would have said 190 M/s: the estimate never does */
     /* a remembered rate: the first estimate is the memory, the measure takes over by 150 s */
@@ -51,7 +53,9 @@ static void t_rate_est(void)
         if (t == 1) { first = v; CHECK(st == RATE_PROVISIONAL); }
         if (t == 20) at20 = v;
         if (t == 200) { at200 = v; CHECK(st == RATE_STEADY); }
+        CHECK((st == RATE_STEADY) == (rate_est_settle_time(&e) > 0 && t >= rate_est_settle_time(&e)));
     }
+    CHECK(rate_est_settle_time(&e) == 9 + 150);
     CHECK(near(first, 800e6, 1e-12));
     CHECK(at20 > 800e6 && at20 < 990e6 * 1.01);                           /* moving from the memory to the measure */
     CHECK(near(at200, 990e6, 0.01));

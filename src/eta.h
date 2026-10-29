@@ -66,6 +66,8 @@ void rate_est_add(rate_est *e, double t, double units, bool started);
 void rate_est_gap(rate_est *e, double gap);
 /* The rate for the completion times at `now` (0 while there is nothing to go by) and how far to trust it. */
 double rate_est_value(const rate_est *e, double now, rate_state *state);
+/* The time at which rate_est_value turns RATE_STEADY (if a measure exists by then), 0 while not every worker has produced something. */
+double rate_est_settle_time(const rate_est *e);
 /* The steady rate worth remembering: the average from 90 s after the start over at most the last 10 minutes; 0 until 120 s of it exist. */
 double rate_est_sustained(const rate_est *e, double now);
 
