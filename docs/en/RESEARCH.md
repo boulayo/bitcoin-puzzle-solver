@@ -286,6 +286,67 @@ self-test and planted-key hunts on the simulated CUDA driver and on pocl.
   the products gain less time than instructions: both forms have 64 of them per product); the jump table in shared memory (random 16-byte reads, ≈ 2.5-way bank conflicts against one cache line per work-item
   from L1) and the inline assembly for `v_mad_u64_u32` carries on AMD.
 
+**After 1.14.0: normalized operands, the AMD product, and what a table could still buy.** Same method as above (SASS from NVRTC 12.0 and
+`ptxas` for sm_86, AMD ISA from clang 18; sm_75 and sm_89 within a few instructions of sm_86), and the same checks (`tests/t_gpufe.c`
+with mutations of the new routines, the self-test and the planted-key hunts on the simulated CUDA driver and on pocl).
+
+* **Subtractions from normalized values.** The walker's x and y, the jump points, the centre and the table of the linear search are
+  normalized (below p). Subtracting such a value borrows at most once and leaves at least 2^32 + 978, so the second correction of `fe_sub`
+  cannot fire (`fe_sub_norm`, seven instructions fewer than `fe_sub`); the sum of two normalized values needs one fold (`fe_add_norm`).
+  The step normalizes x3 before `x − x3` (it is normalized anyway). Kangaroo step 1167 → 1132 (`b` variants 2519 → 2443 per two steps, and
+  `kang128b` loses its spill); linear 2820 → 2791 per key. The register-capped linear variants now spill 4 bytes, outside the loop over the
+  keys (once per group).
+* **The product on AMD in inline assembly.** `v_mad_u64_u32` adds a 32×32-bit product to a register pair and sets a carry out that C cannot
+  reach, so the row-wise product needed a move to zero each high half and two additions per limb product (73 `v_mad_u64_u32`, 55 moves).
+  With two instructions per limb product (the `v_mad_u64_u32` and an add-with-carry that counts its carry), the products on pairs at even
+  and at odd positions as on CUDA, and the counters of positions 3 to 8 in the high halves of the addends of the reduction (which were
+  zeros), the multiplication goes from 226 to 176 instructions on gfx1030 (gfx1100 238 → 184, gfx906 225 → 172, gfx90a 229 → 175, gfx1200
+  235 → 185). Loop of the kangaroo step 2394 → 2139 (gfx1030), 2667 → 2393 (gfx1100), 2451 → 2191 (gfx906); loop over the pairs of keys
+  of the linear search (the hash is a call) 2253 → 1864, 2388 → 2013, 2280 → 1893. The linear kernel reaches 256 VGPRs and spills 32 to 80
+  bytes once per group; the kangaroo kernel keeps 222 (234 on gfx906). `v_mad_u64_u32` is not a full-rate instruction, and the 50
+  instructions removed per product are full-rate adds and moves: if it takes four cycles, as on GCN, the gain in time is about half the
+  gain in instructions. The same form for the square does not pay (estimated ≈ 150 against the ≈ 150 measured for the rows: the doubling
+  and the squares need chains of their own; the 108 of the table above subtracted a bench with two operands, the square loads one). The
+  assembly is used on gfx9 to gfx12
+  (`__GFX9__` .. `__GFX12__`, wave32 and wave64), never on pocl or other OpenCL compilers; `t_gpufe` runs the same product with the two
+  instructions in C. No AMD GPU was at hand: a build that fails is repeated with `-DPZ_NO_ASM`, and an AMD device whose start-up self-test
+  fails is tried again without the assembly before it is excluded (both paths checked on pocl with a kernel broken on purpose).
+* **Tables and precomputation, evaluated** (the size and where each would be read from):
+  * *The window of the linear search* (`i·G`, `HALF` × 64 bytes: 8, 16 or 32 KiB) is read at the same index by the whole warp: one
+    broadcast L1 hit per 16-byte load. Per key the inversion costs ≈ 14,600/(2·`HALF`) instructions (57, 28 and 14 for the three windows)
+    and the next centre ≈ 600/(2·`HALF`) (≤ 2.3). A window of 1024 would save ≤ 8 per key (0.3 %) for twice the private array (32 KiB
+    per work-item); the tuner already measures 128, 256 and 512.
+  * *SHA-256 and RIPEMD-160 constant words*: `hash160_w2` has no load from the constant bank and 700 `SHF.L.W` plus 155 `LEA.HI` (a
+    rotation and an addition), the 855 rotations of the two compressions: the padding, the length and the schedule terms of constant
+    words are folded by the compiler, and only word 0 depends on the parity (one `LOP3`). Every other word depends on x, which differs
+    from key to key: nothing to keep between keys.
+  * *The jump table in shared memory*: 272 entries × 64 bytes (x and y; the distances only serve the replay) = 17 KiB per block, 68 KiB
+    per SM at four blocks of 128 (sm_86 has 100 KiB; sm_75's 64 KiB would need blocks of 256). The instructions stay (two fewer per step
+    with 32-bit addresses). What changes is the work of L1: the 6 `LDG.128` of a step read 32 different lines per warp (up to 192 L1
+    wavefronts per warp and step), against ≈ 10.2 wavefronts per `LDS.128` with the entries stored chunk by chunk (2.55-way bank
+    conflicts in each quarter warp, simulated), ≈ 61 per step. Four warps of steps take ≈ 1,360 issue cycles of an SM and ≈ 1,000 of
+    L1 today (with the private arrays): L1 is busy but is not the limit, and on the reference card the step is limited by DRAM (≈ 226
+    bytes per step). It can matter only where the herd fits in L2: not implemented, a GPU is needed to know.
+  * *Per-jump constants*: the step uses `jx` and `jy` only in subtractions from x and y; `−jx` or `−jy` stored would make additions of
+    the same cost. *DP test*: two `LOP3` and a compare. *Batch-inversion tree across rounds*: every denominator changes every round.
+  * *Starting points*: kangaroo starts and restarts are computed on the host (comb of `ec_mul_g`). The linear kernel computes its centre
+    `P0 + gid·D` by double-and-add, ≈ 100,000 instructions per warp and launch (estimated), ≈ 2.4 per key with the 41,000 keys per work-item of a
+    0.35 s launch on the reference card; a table of the 32 points `2^b·D` (2 KiB, uniform) would remove the doublings, ≈ 1.4 per key
+    (0.05 %). Not done.
+* **Tried and left out:** x passed to the hash by value instead of through the stack (8 `LDL` in `hash160_w2`): the callee loses 9
+  instructions, the caller gains moves, −6 per key on sm_86, the m4 spill grows from 4 to 28 bytes, and clang then inlines the hash several
+  times on AMD (15,602 instructions in the linear kernel against 4,321); the history entry addressed from a pointer per round (one
+  `IMAD.WIDE` instead of seven 64-bit instructions): +3 moves and +3 uniform instructions, step 1132 → 1134; f and g of the inversion on
+  fewer limbs as they shrink (libsecp256k1's variable-time functions do it): simulated on 300 warps, the slowest lane of a warp needs
+  on average 4.9 limbs over its 19 rounds, so the update of f and g (≈ 85 instructions per round, d and e ≈ 115) would lose ≈ 45 %,
+  ≈ 700 per inversion, 11 per step at NK = 64 (0.8 %) and 44 at NK = 16, ≈ 550 with three fixed sizes: it needs a warp vote on CUDA and
+  diverges on OpenCL, not done; one inversion per warp (the products of the 32 work-items combined with shuffles): the inversion already
+  runs once per warp for its 32 lanes, so only the wait for the slowest lane would go (12.6 → 9.8 turns per round, ≈ 3,000 instructions)
+  against ≈ 1,550 for the prefix and suffix products across the warp, 1.6 % at NK = 64, not done; on CUDA, the `SEL` and the move (≈ 12
+  per product) where a row chain carries into an occupied pair: counting the carries elsewhere, as on AMD, costs the same 12.
+* **Need a GPU:** the time of the AMD product (and of the assembly on the drivers that compile OpenCL on Windows), the jump table in
+  shared memory.
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts

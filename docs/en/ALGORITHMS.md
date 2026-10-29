@@ -254,7 +254,10 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
 * **CUDA arithmetic**: carry chains in PTX for the addition, the subtraction and the reduction, and a dedicated square; the products are chains
   of `mad.lo.cc`/`madc.hi.cc` pairs that `ptxas` fuses into one `IMAD.WIDE.U32` per limb product, in two accumulators (the products at even
   and at odd positions) so that every addend is an aligned register pair. **OpenCL arithmetic**: the same carry chains with clang's
-  add-with-carry builtins on AMD GPUs (and pocl), a branch-free C equivalent elsewhere. **Inversion**: Bernstein–Yang divsteps, 30 per
+  add-with-carry builtins on AMD GPUs (and pocl), a branch-free C equivalent elsewhere; on AMD GPUs from gfx9 to gfx12 the product is
+  in inline assembly, `v_mad_u64_u32` with its carry out counted by one add-with-carry, on pairs at even and odd positions as on CUDA
+  (without it, `-DPZ_NO_ASM`, when the driver refuses it or the device fails the self-test with it). Subtractions of a normalized value
+  (the walker's x and y, the jump points, the centre and the table of the linear search) skip the second correction. **Inversion**: Bernstein–Yang divsteps, 30 per
   round, done in variable time (runs of zero bits at once, up to three bits cancelled per swap). The instruction counts and
   the measurements, made on the sm_86 (Ampere) code and on the reference laptop GPU (20 SM, 4 GB, 192 GB/s, 2 MiB of L2; the card on which the GPU speeds
   in this document were measured): RESEARCH.md section 5.
@@ -289,7 +292,8 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,
   with a bit-by-bit comparison of states, DPs and restarts** (with a low step limit, so that restarts really happen). A device
-  that fails is excluded; an NVIDIA card that fails through CUDA is retried through OpenCL. Every key found is
+  that fails is excluded; an NVIDIA card that fails through CUDA is retried through OpenCL, an AMD GPU that fails with the products in
+  inline assembly is retried without them. Every key found is
   re-verified on the CPU anyway.
 * Performance: measured on the reference laptop GPU (RESEARCH.md section 8.4 has the figures); run `bench` to measure your own cards. Functional verification: OpenCL on pocl (OpenCL on CPU); CUDA with a simulated driver that
   runs the same kernel sources behind the driver APIs (`tests/mock_cuda/`), while the translation of PTX into GPU code by the real driver is
