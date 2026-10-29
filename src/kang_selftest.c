@@ -594,6 +594,12 @@ static int log_file_checks(void)
         FCHK(f != NULL);
         if (f) { fputs("hello", f); fclose(f); }
         FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == 5);
+        /* a file that cannot be opened for another reason than its absence (here a path through a file, not a folder) is an error, and
+         * nothing is created in its place */
+        char inner[700];
+        snprintf(inner, sizeof inner, "%s/dp.bin", ks->log_path);
+        pz_strlcpy(ks->log_path, inner, sizeof ks->log_path);
+        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(inner) == -1);
         kang_free_test_state(ks);
     }
     {   /* the other magics: only PZDP1 to PZDP3 are older layouts that are set aside; PZDP4 is still read; PZDP6 and the like come from a newer

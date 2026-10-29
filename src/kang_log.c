@@ -227,9 +227,13 @@ static void jump_id_text(const u8 tag[4], char out[9]) { snprintf(out, 9, "%02x%
 int kang_load_log(kang_state *ks)
 {
     FILE *f = fopen(ks->log_path, "rb");
+    const int open_err = f ? 0 : errno;
     u8 fp[32];
     kang_log_fp(ks, fp);
     if (!f) {
+        /* only a file that is not there is made anew: any other failure (permissions, I/O error, too many open files) may be passing,
+         * and creating the file would empty it */
+        if (open_err != ENOENT) return log_unreadable(ks, open_err);
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
     }
