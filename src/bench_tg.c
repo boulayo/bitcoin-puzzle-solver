@@ -185,13 +185,17 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
     out.boost = c->prio == PRIO_YES;
     gpu_set_boost(out.boost);                 /* the warm-up and (unless measured below) the whole scan run with this */
 
-    /* CPU thread counts: all, three quarters, one per physical core, half of those, none */
+    /* CPU thread counts: all, all but the threads that serve CUDA devices, three quarters, one per physical core, half of those, none.
+     * An OpenCL device has a core set aside for its service thread (`full` is already without it); the CUDA thread sleeps while
+     * the device works, but with every CPU busy it waits for the scheduler at the end of each launch, so the configuration that
+     * leaves it a CPU is measured too. */
     int cand[8], nc = 0;
     if (c->fixed) cand[nc++] = c->full;
     else {
         const int P = r->sys.ncore > 0 && r->sys.ncore <= c->full ? r->sys.ncore : c->full;
-        const int v[5] = {c->full, (c->full * 3 + 2) / 4, P, P / 2, 0};
-        for (int i = 0; i < 5; i++) {
+        const int cuda = c->ngpu - gpu_cores_needed(c->g, c->ngpu);        /* the devices without a core set aside */
+        const int v[6] = {c->full, cuda && c->full > cuda ? c->full - cuda : 0, (c->full * 3 + 2) / 4, P, P / 2, 0};
+        for (int i = 0; i < 6; i++) {
             bool dup = false;
             for (int j = 0; j < nc; j++) dup = dup || cand[j] == v[i];
             if (!dup && v[i] <= c->full) cand[nc++] = v[i];

@@ -302,8 +302,8 @@ GPU tests in this project are done with a simulated driver: the effect on the wa
 ### 7.9 `bench --together`
 
 It starts, as in a campaign (puzzle 140), the CPU threads and all the GPUs and measures the total speed with
-5 numbers of CPU threads (all, three quarters, one per physical core, half of those, none), then switches off in turn each slower GPU
-(giving back to the CPU the core that serves it). Every configuration lasts 10 s (2 of settling and 8 of measurement) plus a final repetition
+several numbers of CPU threads (all, all but one per CUDA GPU, three quarters, one per physical core, half of those, none), then switches
+off in turn each slower GPU (giving back to the CPU the core that serves it). Every configuration lasts 10 s (2 of settling and 8 of measurement) plus a final repetition
 of the first one that estimates the noise. At the end it indicates the best configuration, for example `-t 11 --gpu 0`, if it beats
 the default one by more than the noise. `-t N` tries only N CPU
 threads, `--gpu LIST` restricts the GPUs, `--linear` measures the linear search instead of the kangaroo. The first `hunt` of a version runs the

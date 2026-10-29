@@ -303,8 +303,8 @@ misurato.
 
 ### 7.9 `bench --together`
 
-Avvia come in una campagna (puzzle 140) i thread CPU e tutte le GPU e misura la velocità totale con 5 numeri di thread CPU (tutti, tre quarti,
-uno per core fisico, la metà di questi, nessuno), poi spegne a turno ogni GPU più lenta (restituendo alla CPU il core che le serve). Ogni
+Avvia come in una campagna (puzzle 140) i thread CPU e tutte le GPU e misura la velocità totale con vari numeri di thread CPU (tutti, tutti meno
+uno per GPU CUDA, tre quarti, uno per core fisico, la metà di questi, nessuno), poi spegne a turno ogni GPU più lenta (restituendo alla CPU il core che le serve). Ogni
 configurazione dura 10 s (2 di assestamento e 8 di misura) più una ripetizione finale della prima che stima il rumore. Alla fine indica la
 configurazione migliore, per esempio `-t 11 --gpu 0`, se supera quella predefinita di più del rumore. `-t N` prova solo N thread CPU, `--gpu LISTA` limita le GPU, `--linear` misura la ricerca lineare invece del canguro. Il primo
 `hunt` di una versione fa lo stesso confronto da solo (sezione 7.6).
