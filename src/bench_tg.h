@@ -8,7 +8,8 @@
 #include "gpu.h"
 
 typedef struct tg_choice {
-    bool better;             /* a configuration beats the default clearly (beyond the noise), confirmed by alternating pairs */
+    bool better;             /* a configuration beats the default clearly (beyond the noise), confirmed by alternating pairs, or `spare` */
+    bool spare;              /* the configuration only leaves out a GPU whose loss is not measurable (within 1 %, confirmed in pairs) */
     int cap;                 /* CPU threads of the best configuration (what -t takes) */
     unsigned off;            /* bit j set: GPU j (order of the sessions) is better switched off */
     int ngpu, gidx[16];      /* device index (what --gpu takes) of each GPU session */
@@ -54,5 +55,9 @@ void tg_print_advice(const tg_choice *ch, const char *unit);
 /* Verdict on the priority of the GPU service threads from two alternating pairs (off, on) then (on, off): the higher priority is
  * kept when it is faster by at least `min_pct` over the four runs together and in each pair. *gain gets the gain over the four runs. */
 bool tg_prio_verdict(double off1, double on1, double on2, double off2, double min_pct, double *gain);
+/* Among n measured configurations (total rate, GPUs switched off as a bit mask) with `best` the fastest: the index of the fastest one that
+ * leaves a GPU out and is within 1 % of `best`, or -1 when there is none or `best` itself leaves one out. The GPU of such a configuration
+ * adds nothing that can be measured and is better left out (the caller confirms it in alternating pairs). */
+int tg_spare_index(const double *totals, const unsigned *offs, int n, int best);
 
 #endif

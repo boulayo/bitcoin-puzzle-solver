@@ -188,6 +188,16 @@ static void t_priority(void)
     CHECK(!tg_prio_verdict(100, 110, 100, 101, 2.0, &g) && g > 4.4 && g < 4.6);      /* 4.5% overall but the second pair is against it */
     CHECK(!tg_prio_verdict(100, 90, 90, 100, 2.0, &g) && g < -9.9 && g > -10.1);     /* slower with it */
     CHECK(!tg_prio_verdict(0, 100, 100, 100, 2.0, &g));                               /* a run that measured nothing */
+    {
+        const double tot[5] = {100, 97, 99.5, 99.8, 60};
+        const unsigned off[5] = {0, 0, 2, 1, 3};
+        CHECK(tg_spare_index(tot, off, 5, 0) == 3);                    /* two GPUs each within 1 %: the faster configuration without one */
+        CHECK(tg_spare_index(tot, off, 5, 3) == -1);                   /* the best already leaves a GPU out */
+        const double tot2[3] = {100, 98.9, 99};
+        const unsigned off2[3] = {0, 1, 0};
+        CHECK(tg_spare_index(tot2, off2, 3, 0) == -1);                 /* 1.1 % slower without the GPU: it does measurably help */
+        CHECK(tg_spare_index(tot2, off2, 0, 0) == -1);
+    }
     int lv[4] = {0, 0, 0, 0};
     pthread_t th;
     CHECK(pthread_create(&th, NULL, prio_thread, lv) == 0);

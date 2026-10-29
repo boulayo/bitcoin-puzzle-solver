@@ -140,6 +140,15 @@ static void tg_print_tag(const tg_scan_cfg *c, const tg_res *o, const char *tag)
 
 static void tg_print(const tg_scan_cfg *c, const tg_res *o) { tg_print_tag(c, o, NULL); }
 
+int tg_spare_index(const double *totals, const unsigned *offs, int n, int best)
+{
+    if (best < 0 || best >= n || offs[best]) return -1;             /* the best already leaves a GPU out: nothing to add */
+    int k = -1;
+    for (int i = 0; i < n; i++)
+        if (offs[i] && totals[i] >= totals[best] * 0.99 && (k < 0 || totals[i] > totals[k])) k = i;
+    return k;
+}
+
 bool tg_prio_verdict(double off1, double on1, double on2, double off2, double min_pct, double *gain)
 {
     const double a = off1 + off2, b = on1 + on2;
@@ -236,6 +245,17 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
         if (res[nres].total > res[best].total) best = nres;
         nres++;
     }
+    /* A GPU whose loss is not measurable (within 1 % of the best configuration with it on) is better left out: it costs a core when it
+     * is an OpenCL device, and on a laptop the power it draws comes off the clocks of the CPU cores and of the other GPU. The configuration
+     * without it goes through the same confirmation as a faster one. */
+    bool spare = false;
+    {
+        double totals[32];
+        unsigned offs[32];
+        for (int k = 0; k < nres; k++) { totals[k] = res[k].total; offs[k] = res[k].off; }
+        const int k = tg_spare_index(totals, offs, nres, best);
+        if (k >= 0) { best = k; spare = true; }
+    }
     /* The scan runs while the machine warms up, which favours the first configurations: a candidate that beats the default is
      * confirmed by alternating the two (default, candidate, default, candidate), which cancels a slow drift. */
     double conf_a = 0, conf_b = 0, noise = 2.0;
@@ -261,8 +281,9 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
     out.def_rate = conf_a > 0 ? conf_a : res[0].total;
     out.best_rate = conf_b > 0 ? conf_b : res[0].total;
     out.gain_pct = conf_a > 0 ? 100.0 * (conf_b / conf_a - 1.0) : 0;
-    if (best != 0 && conf_a > 0 && out.gain_pct >= noise + 1.0 && !atomic_load(&r->stop)) {
+    if (best != 0 && conf_a > 0 && (spare ? out.gain_pct >= -1.0 : out.gain_pct >= noise + 1.0) && !atomic_load(&r->stop)) {
         out.better = true;
+        out.spare = spare;
         out.cap = res[best].cap;
         out.off = res[best].off;
     }
@@ -298,6 +319,16 @@ void tg_print_advice(const tg_choice *ch, const char *unit)
         return;
     }
     tg_gpu_list(ch, gl, sizeof gl);
+    if (ch->spare) {
+        char offl[64] = "";
+        size_t o = 0;
+        for (int j = 0; j < ch->ngpu && o + 8 < sizeof offl; j++)
+            if ((ch->off >> j) & 1) o += (size_t)snprintf(offl + o, sizeof offl - o, "%sGPU[%d]", o ? ", " : "", ch->gidx[j]);
+        tg_printf("  -> %s adds nothing measurable (%s %s without it, %+.1f%% against %s with it, confirmed in pairs): leave it out, it only costs"
+                  " power and a core: start with -t %d --gpu %s%s\n", offl, pz_fmt_si(ch->best_rate, b1, sizeof b1), unit, ch->gain_pct,
+                  pz_fmt_si(ch->def_rate, b2, sizeof b2), ch->cap, gl, prio);
+        return;
+    }
     tg_printf("  -> best: %s %s, %+.1f%% over the default (%s) when confirmed in pairs: start with -t %d%s%s%s\n",
            pz_fmt_si(ch->best_rate, b1, sizeof b1), unit, ch->gain_pct, pz_fmt_si(ch->def_rate, b2, sizeof b2), ch->cap, gl[0] ? " --gpu " : "", gl, prio);
 }
