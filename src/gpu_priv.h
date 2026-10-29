@@ -23,6 +23,9 @@
 #define KV_L2(v) (((v) >> 24) & 1)            /* the herd is sized to fit the L2 cache (fewer work-items), see kang_l2_threads */
 #define KV_KERNEL(v) ((v) & 0xFFFFF)          /* NK | cfg << 16: what the kernel build takes */
 #define KV_L2FLAG (1 << 24)
+#define KV_WIDE(v) (((v) >> 25) & 3)          /* a herd wider than the default one (more work-items), see kang_wide_threads_for */
+#define KV_WIDEFLAG(w) ((w) << 25)
+enum { KV_WIDE_X4 = 1, KV_WIDE_X8 = 2, KV_WIDE_FULL = 3 };   /* OpenCL: 4 or 8 times the work-items; CUDA: 512 per SM past the cap */
 
 /* GPUs with a large last-level cache (RTX 30/40 series: 6-72 MiB; some laptop GPUs have 2) can keep a herd of some
  * hundred thousand walkers (about 130 bytes each in the work-items' private arrays) on the chip, where the traffic that
@@ -60,6 +63,7 @@ struct gpu_session {
     size_t rc_off;               /* the restart count is b_rc, a part of b_flags at this offset (one transfer reads both counts); 0: a buffer of its own */
     int T, NK, kvar;             /* kangaroo kernel: walkers per work-item, kernel variant (NK | cfg << 16) */
     bool l2fit;                  /* the herd is sized to the L2 cache (see kang_l2_threads_for) */
+    int wide;                    /* KV_WIDE_*: the herd is wider than the default one (see kang_wide_threads_for), 0: it is not */
     u64 dps_cap, rl_cap;
     uint32_t hist_rounds;        /* depth of the jump history: the most rounds a launch can run */
     u64 gstep;                   /* steps taken by every walker so far (the step number of the next round) */

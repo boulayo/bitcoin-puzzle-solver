@@ -9,7 +9,7 @@
  *
  * Environment, read once in the first cuInit (mock_env): PZ_MOCK_DEVICES=n shows n devices (PZ_MOCK_SAME_NAME=1: all with one name),
  * PZ_MOCK_COUNT=1 reports the modules loaded and the kernels launched at exit, PZ_MOCK_FAIL_FILE=path fails one launch while that file
- * exists. The two-state variables are on with any value except empty and 0, as in pzsolve. This library is not linked with pzsolve, so it
+ * exists, PZ_MOCK_SMS=n and PZ_MOCK_MEM=GiB make the devices report n SMs (default 2) and that much memory (default 1), like a large card. The two-state variables are on with any value except empty and 0, as in pzsolve. This library is not linked with pzsolve, so it
  * has its own small reader. */
 #include <stdint.h>
 #include <stdio.h>
@@ -72,6 +72,8 @@ static int g_ndev = 1;                  /* PZ_MOCK_DEVICES=n (1 to 8): how many 
 static int g_same_name;                 /* PZ_MOCK_SAME_NAME=1: they all have the same name, like the cards of one model in a machine */
 static int g_count;                     /* PZ_MOCK_COUNT=1: report the counts at exit */
 static char g_fail_file[1024];          /* PZ_MOCK_FAIL_FILE=path (empty: none) */
+static int g_sms = 2;                   /* PZ_MOCK_SMS=n: SMs of each device (small by default: the mock runs on the CPU) */
+static int g_mem_gib = 1;               /* PZ_MOCK_MEM=n: GiB of memory of each device */
 static int g_ctx_tokens[MAX_DEVICES];   /* a context is the address of the token of its device */
 static void *g_current;                 /* the context last made current (checked only for "there is one") */
 #define CURRENT() __atomic_load_n(&g_current, __ATOMIC_RELAXED)
@@ -137,6 +139,9 @@ static void mock_env(void)
             g_same_name = mock_flag("PZ_MOCK_SAME_NAME");
         }
     }
+    const char *sm = getenv("PZ_MOCK_SMS"), *mem = getenv("PZ_MOCK_MEM");
+    if (sm && atoi(sm) > 0) g_sms = atoi(sm);
+    if (mem && atoi(mem) > 0) g_mem_gib = atoi(mem);
     const char *ff = getenv("PZ_MOCK_FAIL_FILE");
     if (ff && strlen(ff) < sizeof g_fail_file) strcpy(g_fail_file, ff);
 }
@@ -162,13 +167,13 @@ EXPORT CUresult cuDeviceGetName(char *name, int len, int d)
     else snprintf(name, (size_t)len, "Mock CUDA GPU %d (CPU)", d);
     return E_OK;
 }
-EXPORT CUresult cuDeviceTotalMem_v2(size_t *b, int d) { (void)d; *b = (size_t)1 << 30; return E_OK; }
+EXPORT CUresult cuDeviceTotalMem_v2(size_t *b, int d) { (void)d; *b = (size_t)g_mem_gib << 30; return E_OK; }
 
 EXPORT CUresult cuDeviceGetAttribute(int *v, int attr, int d)
 {
     switch (attr) {
     case 13: *v = 1500000; return E_OK;   /* clock, kHz */
-    case 16: *v = 2; return E_OK;         /* SMs (small: the mock runs on the CPU) */
+    case 16: *v = g_sms; return E_OK;     /* SMs */
     case 18: *v = 0; return E_OK;         /* integrated */
     case 36: *v = 6001000; return E_OK;   /* memory clock, kHz */
     case 38: *v = 10 << 20; return E_OK;  /* L2 cache (large enough to exercise the cache-sized herd variants) */

@@ -439,13 +439,13 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
 {
     run_ctx *r = s->r;
     const rt_dev info = s->info;
-    const struct { int T, NK, kvar, variant; bool l2fit; } keep = {s->T, s->NK, s->kvar, s->variant, s->l2fit};
+    const struct { int T, NK, kvar, variant, wide; bool l2fit; } keep = {s->T, s->NK, s->kvar, s->variant, s->wide, s->l2fit};
     const int paused = atomic_load(&s->paused);
     double wait = 1.0;
     for (int attempt = 0; attempt < 9 && !atomic_load(&r->stop); attempt++) {
         if (kangaroo) gpu_kang_release(s); else gpu_linear_release_program(s);
         gpu_session_release(s);                           /* clears everything after the context */
-        s->T = keep.T; s->NK = keep.NK; s->kvar = keep.kvar; s->variant = keep.variant; s->l2fit = keep.l2fit;
+        s->T = keep.T; s->NK = keep.NK; s->kvar = keep.kvar; s->variant = keep.variant; s->wide = keep.wide; s->l2fit = keep.l2fit;
         atomic_store(&s->paused, paused);
         gpu_sleep_unless_stopped(r, wait);                /* Ctrl-C must not wait for up to 30 s */
         wait = wait < 30 ? wait * 2 : 30;

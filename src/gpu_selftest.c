@@ -521,8 +521,8 @@ int gpu_selftest(void)
         if (ok) { gpu_session_release(s); memset(s, 0, sizeof *s); ok = gpu_session_open(s, &devs[i]); }
         int ks[32];
         const int nk = gpu_kvariants_of(&devs[i], ks);
-        for (int k = 0; k < nk && ok; k++) {          /* every variant of the kangaroo kernel (the cache-sized herds use the same kernels) */
-            if (KV_L2(ks[k])) continue;
+        for (int k = 0; k < nk && ok; k++) {          /* every variant of the kangaroo kernel (the cache-sized and wide herds use the same kernels) */
+            if (KV_L2(ks[k]) || KV_WIDE(ks[k])) continue;
             s->kvar = ks[k];
             s->NK = KV_NK(ks[k]);
             ok = gpu_test_kang(s);
