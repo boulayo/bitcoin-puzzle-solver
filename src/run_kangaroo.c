@@ -475,6 +475,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     if (!r) return 1;
     if (gpu_filter && gpu_filter[0]) pz_strlcpy(r->gpu_filter, gpu_filter, sizeof r->gpu_filter);
     r->use_gpu = true;
+    r->silent_setup = true;                                /* the set-up of this campaign is not the one of the campaign that may be starting */
     r->mem_limit = 256ULL << 20;                           /* a small table of distinguished points: the walk is what is measured */
     pz_ec_init();
     tg_section("CPU and GPUs together: kangaroo, as in a campaign on puzzle 140");
