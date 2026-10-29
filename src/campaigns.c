@@ -228,7 +228,7 @@ int campaigns_list(const char *base)
         if ((l = (int)strlen(rows[i].rate)) > wr) wr = l;
         if ((l = (int)strlen(rows[i].eta)) > we) we = l;
     }
-    printf("%-*s %6s  %-8s %-*s %*s %*s %*s  %s\n", wn, "CAMPAIGN", "PUZZLE", "MODE", ws, "STATE", wf, "PROGRESS", wr, "SPEED", we, "LEFT (50%)", "UPDATED");
+    printf("%-*s %6s  %-8s %-*s %*s %*s %*s %s\n", wn, "CAMPAIGN", "PUZZLE", "MODE", ws, "STATE", wf, "PROGRESS", wr, "SPEED", we, "LEFT (50%)", "UPDATED");
     bool stopped = false;
     for (int i = 0; i < nc; i++) {
         const row_t *w = &rows[i];
@@ -237,7 +237,7 @@ int campaigns_list(const char *base)
         else {
             char pz[16] = "-";                                         /* a custom target has no puzzle */
             if (w->puzzle) snprintf(pz, sizeof pz, "%d", w->puzzle);
-            printf("%-*s %6s  %-8s %-*s %*s %*s %*s  %s\n", wn, w->name, pz, w->mode, ws, w->state, wf, w->frac, wr, w->rate, we, w->eta, w->upd);
+            printf("%-*s %6s  %-8s %-*s %*s %*s %*s %s\n", wn, w->name, pz, w->mode, ws, w->state, wf, w->frac, wr, w->rate, we, w->eta, w->upd);
         }
         free(w->name);
     }

@@ -152,14 +152,15 @@ static int break_score(const char *s, const char *q, const char *end)
 static const char *pick_break(const char *s, const char *end, int col0, int width, int hang)
 {
     const int low = col0 + (width - col0) * 75 / 100;
-    const char *best = NULL, *fit = NULL, *first_after = NULL, *keep_to = s;
+    const char *best = NULL, *fit = NULL, *first_after = NULL, *keep_to = s, *no_break = NULL;
     int best_score = -1;
     int col = col0;
     for (const char *w = s; w < end;) {                 /* the first word too long for a line of its own */
         const char *we = w;
         while (we < end && *we != ' ') we++;
         if (hang + text_cols(w, (size_t)(we - w)) > width) {
-            keep_to = col0 + text_cols(s, (size_t)(w - s)) < width ? w : w - 1;
+            if (col0 + text_cols(s, (size_t)(w - s)) < width) keep_to = w;   /* it starts on this line: it stays there */
+            else no_break = w - 1;                                               /* further on: only never alone on the next line */
             break;
         }
         w = we;
@@ -167,7 +168,7 @@ static const char *pick_break(const char *s, const char *end, int col0, int widt
     }
     for (const char *q = s; q < end; q++) {
         if (*q == ' ') {
-            const int sc = q < keep_to ? -1 : break_score(s, q, end);
+            const int sc = q < keep_to || q == no_break ? -1 : break_score(s, q, end);
             if (sc >= 0) {
                 if (col <= width) {
                     fit = q;
