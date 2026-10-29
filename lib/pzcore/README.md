@@ -60,8 +60,8 @@ Hot loops should include `fe.h`, `fev.h` and the templates and be compiled for t
 
 ## Tests
 
-`tests/` holds the unit tests and `gen_vectors.py`, which writes `vectors.h` with an independent Python implementation (integers, hashlib) and
-checks the BIP173 / BIP350 vectors it embeds. Run clean under ASan, UBSan, TSan, Valgrind, Wine and QEMU (aarch64, with and without the SHA-256
+`tests/` holds the unit tests and `gen_vectors.py`, which writes `vectors.h` with an independent Python implementation (integers, the SHA-256
+of hashlib, the pure-Python RIPEMD-160 of `tools/ref.py`) and checks the BIP173 / BIP350 vectors it embeds. Run clean under ASan, UBSan, TSan, Valgrind, Wine and QEMU (aarch64, with and without the SHA-256
 instructions); `tools/verify.sh` runs them all.
 
 ## Performance
