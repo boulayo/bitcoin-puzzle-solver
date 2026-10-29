@@ -202,24 +202,24 @@ int main(void)
 
         /* sub2 from three times a canonical element; the lazy subtractions, with a sum of two tight elements, then normalized */
         {
-            pz_fev x3, s;
+            pz_fev x3, d;
             for (int i = 0; i < 5; i++) x3.l[i] = (r.l[i] << 1) + r.l[i];
-            pz_fev_sub2(&s, &x3, &b, &c);
+            pz_fev_sub2(&d, &x3, &b, &c);
             for (int l = 0; l < PZ_FEV_LANES; l++) {
                 pz_fe t;
                 pz_fe_add(&t, &va[l], &va[l]); pz_fe_add(&t, &t, &va[l]);
                 pz_fe_sub(&t, &t, &vb[l]); pz_fe_sub(&want[l], &t, &vc[l]); pz_fe_normalize(&want[l]);
             }
-            check_lanes(&s, want, "sub2 of 3x");
-            for (int i = 0; i < 5; i++) s.l[i] = a.l[i] + b.l[i];
-            pz_fev_sub2_lazy(&s, &s, &c, &c);
-            pz_fev_normalize(&s);
+            check_lanes(&d, want, "sub2 of 3x");
+            for (int i = 0; i < 5; i++) d.l[i] = a.l[i] + b.l[i];
+            pz_fev_sub2_lazy(&d, &d, &c, &c);
+            pz_fev_normalize(&d);
             for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe t; pz_fe_add(&t, &va[l], &vb[l]); pz_fe_sub(&t, &t, &vc[l]); pz_fe_sub(&want[l], &t, &vc[l]); }
-            check_canonical(&s, want);
-            pz_fev_sub_lazy(&s, &a, &b);
-            pz_fev_normalize(&s);
+            check_canonical(&d, want);
+            pz_fev_sub_lazy(&d, &a, &b);
+            pz_fev_normalize(&d);
             for (int l = 0; l < PZ_FEV_LANES; l++) pz_fe_sub(&want[l], &va[l], &vb[l]);
-            check_canonical(&s, want);
+            check_canonical(&d, want);
         }
 
         if (it % 50 == 0) {
