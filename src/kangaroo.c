@@ -143,7 +143,9 @@ static void table_thin(kang_state *ks)
     ks->count = kept;
     atomic_store_explicit(&ks->count_mirror, kept, memory_order_relaxed);
     atomic_store_explicit(&ks->thin_mirror, ks->thin_level, memory_order_relaxed);
-    pz_log(PZ_LOG_WARN, "distinguished-point table full (RAM limit): halving the density of stored points (level %u). Raise --mem to avoid this", ks->thin_level);
+    /* by design about one run in five where memory sets dp_bits (KANG_DP_MEM_MARGIN): not a warning */
+    pz_log(PZ_LOG_INFO, "distinguished-point table full (RAM limit): halving the density of stored points (level %u). Expected in about one run in five "
+           "when memory sets dp-bits: the search goes on with a slightly later collision; a larger --mem helps only if the RAM is there", ks->thin_level);
 }
 
 /* mu held. Returns 1 inserted, 0 duplicate of same kind, 2 solved, -1 skipped (thinned out) */
