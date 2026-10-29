@@ -134,6 +134,18 @@ static inline PZ_VABI void fev_bcast(pz_fev *r, const u64 *a)
     for (int i = 0; i < PZ_FEV_NLIMB; i++) r->l[i] = pz_vl_set(a[i]);
 }
 static inline PZ_VABI void fev_bc_sub(pz_fev *r, const u64 *a, const pz_fev *b) { pz_fev t; fev_bcast(&t, a); pz_fev_sub(r, &t, b); }
+/* a - b for a difference that only meets a tight factor in a product, or goes to the hash: with 29-bit limbs without the carry
+ * pass (pz_fev_sub_lazy of two tight elements, a valid factor next to a tight one); IFMA reads only 52 bits of each limb and needs
+ * the carries. */
+static inline PZ_VABI void fev_sub_nc(pz_fev *r, const pz_fev *a, const pz_fev *b)
+{
+#ifdef PZ_FEV_IFMA
+    pz_fev_sub(r, a, b);
+#else
+    pz_fev_sub_lazy(r, a, b);
+#endif
+}
+static inline PZ_VABI void fev_bc_sub_nc(pz_fev *r, const u64 *a, const pz_fev *b) { pz_fev t; fev_bcast(&t, a); fev_sub_nc(r, &t, b); }
 static inline PZ_VABI void fev_bc_add(pz_fev *r, const pz_fev *a, const u64 *b) { pz_fev t; fev_bcast(&t, b); pz_fev_add(r, a, &t); }
 static inline PZ_VABI void fev_sub2_bc(pz_fev *r, const pz_fev *a, const pz_fev *b, const u64 *c) { pz_fev t; fev_bcast(&t, c); pz_fev_sub2(r, a, b, &t); }
 
@@ -146,7 +158,8 @@ static inline PZ_VABI bool vec_any_zero(const pz_fev *a)
     return false;
 }
 
-/* Montgomery batch inversion of a[0..n) (each lane independently); false if some lane has a zero element. */
+/* Montgomery batch inversion of a[0..n) (each lane independently); false if some lane has a zero element. a[0] is tight, the
+ * others may be fev_sub_nc results: each is only ever multiplied by a tight value. */
 static inline PZ_VABI bool vinv_batch(pz_fev *a, pz_fev *tmp, int n)
 {
     tmp[0] = a[0];
@@ -199,9 +212,12 @@ static inline PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, const vstep
     for (int l = 0; l < NL; l++) lane_off[l] = (u64)l * GRPV;
     const pz_vl kw = kb + lane_off;                 /* window start offsets of the lanes */
 
+    /* The differences below that only ever meet a tight factor in a product, or go to the hash, skip the carry pass
+     * (fev_sub_nc); the denominators too, except the first, which starts the chain of products of vinv_batch. */
+    fev_bc_sub(&dx[0], vtab_x[0], xc);
 #pragma GCC unroll 1
-    for (int i = 0; i < VHALF; i++) fev_bc_sub(&dx[i], vtab_x[i], xc);
-    fev_bc_sub(&dx[VHALF], st->sx, xc);
+    for (int i = 1; i < VHALF; i++) fev_bc_sub_nc(&dx[i], vtab_x[i], xc);
+    fev_bc_sub_nc(&dx[VHALF], st->sx, xc);
     if (UNLIKELY(!vinv_batch(dx, tmp, VHALF + 1))) return false;
 
     {   /* the centre itself */
@@ -214,7 +230,7 @@ static inline PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, const vstep
         /* C + i*G and C - i*G (slope -(S.y + yc)/(S.x - xc): only its square matters for x) are computed stage by stage,
          * side by side, so that the carry chains of one overlap the products of the other */
         pz_fev tp, tm, lp, lm, xp, xm, yp, ym;
-        fev_bc_sub(&tp, Sy, yc);
+        fev_bc_sub_nc(&tp, Sy, yc);
         fev_bc_add(&tm, yc, Sy);
         pz_fev_mul(&lp, &tp, inv);
         pz_fev_mul(&lm, &tm, inv);
@@ -222,12 +238,12 @@ static inline PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, const vstep
         pz_fev_sqr(&xm, &lm);
         fev_sub2_bc(&xp, &xp, xc, Sx);
         fev_sub2_bc(&xm, &xm, xc, Sx);
-        pz_fev_sub(&tp, xc, &xp);
-        pz_fev_sub(&tm, &xm, xc);
+        fev_sub_nc(&tp, xc, &xp);
+        fev_sub_nc(&tm, &xm, xc);
         pz_fev_mul(&yp, &lp, &tp);
         pz_fev_mul(&ym, &lm, &tm);
-        pz_fev_sub(&yp, &yp, yc);
-        pz_fev_sub(&ym, &ym, yc);
+        fev_sub_nc(&yp, &yp, yc);
+        fev_sub_nc(&ym, &ym, yc);
         vctx_emit(c, &xp, &yp, kw + pz_vl_set(VHALF + i));
         vctx_emit(c, &xm, &ym, kw + pz_vl_set(VHALF - i));
     }
@@ -238,18 +254,18 @@ static inline PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, const vstep
         pz_fev_mul(&lam, &t, &dx[VHALF - 1]);
         pz_fev_sqr(&x3, &lam);
         fev_sub2_bc(&x3, &x3, xc, Sx);
-        pz_fev_sub(&t, &x3, xc);
+        fev_sub_nc(&t, &x3, xc);
         pz_fev_mul(&y3, &lam, &t);
-        pz_fev_sub(&y3, &y3, yc);
+        fev_sub_nc(&y3, &y3, yc);
         vctx_emit(c, &x3, &y3, kw);
     }
     /* next centres: C + (N*GRP)*G */
     pz_fev lam, t, nx, ny;
-    fev_bc_sub(&t, st->sy, yc);
+    fev_bc_sub_nc(&t, st->sy, yc);
     pz_fev_mul(&lam, &t, &dx[VHALF]);
     pz_fev_sqr(&nx, &lam);
     fev_sub2_bc(&nx, &nx, xc, st->sx);
-    pz_fev_sub(&t, xc, &nx);
+    fev_sub_nc(&t, xc, &nx);
     pz_fev_mul(&ny, &lam, &t);
     pz_fev_sub(&ny, &ny, yc);
     *xc = nx;
