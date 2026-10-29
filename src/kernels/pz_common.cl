@@ -682,16 +682,17 @@ inline void ripemd160_32(const uint dig[8], uint out[5])
     out[4] = 0x67452301u + b + c2;
 }
 
-/* The first three hash160 words, the search filter (the host re-verifies every hit): they do not depend on the last step
- * of the left RIPEMD-160 line nor on the last two of the right one, which the compiler drops. */
-PZ_NOINLINE void hash160_w3(const fe *x, uint parity, uint out[3])
+/* Word 2 of the hash160, the filter of the linear search (the few keys that pass are hashed again in full): h3 + e + a2 is
+ * rol(t76, 10) + rol(t'75, 10), where t_j (t'_j) is the word made by step j of the left (right) line, so it does not depend on
+ * the last three steps of the left RIPEMD-160 line nor on the last four of the right one, which the compiler drops. */
+PZ_NOINLINE uint hash160_w2(const fe *x, uint parity)
 {
     uint xw[8], dig[8], h[5];
 #pragma unroll
     for (int i = 0; i < 8; i++) xw[i] = x->v[7 - i];
     sha256_33(2u + parity, xw, dig);
     ripemd160_32(dig, h);
-    out[0] = h[0]; out[1] = h[1]; out[2] = h[2];
+    return h[2];
 }
 
 /* hash160 words of the compressed key with x (normalized fe) and y parity */

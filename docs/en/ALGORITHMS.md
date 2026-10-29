@@ -249,9 +249,10 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   in this document were measured): RESEARCH.md section 5.
 * **Linear kernel with "fused" inversion**: the backward pass of Montgomery's trick derives each inverse and uses it
   immediately for the points `C ± i·G`, recomputing the denominator from the table instead of keeping it in an array: about 8.7 KB of
-  private memory per work-item with a window of 256 and ≈ 32 bytes of traffic to video memory per key. The hash filter uses the first three
-  words (96 bits; every candidate is re-verified on the CPU anyway): they do not depend on the last steps of RIPEMD-160, which the compiler
-  eliminates (≈ 0.4% of instructions).
+  private memory per work-item with a window of 256 and ≈ 32 bytes of traffic to video memory per key. The hash filter compares word 2 of the
+  hash160, which does not depend on the last three steps of the left RIPEMD-160 line nor on the last four of the right one (the compiler
+  eliminates them); the rare keys that pass are hashed again in full on the device, so a reported hit matches all 160 bits (and is re-verified
+  on the CPU anyway). Both points of a pair share `x(C) + x(i·G)`, so `x3 = λ² − (x(C) + x(i·G))` costs one subtraction.
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.

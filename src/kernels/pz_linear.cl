@@ -8,8 +8,8 @@
  * order: the inverses come out of the backward pass from the last one).
  *
  * prm layout (uints): P0.x[8] P0.y[8] D.x[8] D.y[8] GS.x[8] GS.y[8] target[5] ngroups
- * hits: [0] = number of hits, [1] = error flag, then pairs (koff_lo, koff_hi); a hit matches the first 96 bits of
- * the target hash160 and is re-verified by the host  */
+ * hits: [0] = number of hits, [1] = error flag, then pairs (koff_lo, koff_hi); a hit matches the whole target hash160
+ * (word 2 first, the other words only for the keys that pass it) and is re-verified by the host  */
 
 #ifndef HALF
 #define HALF 128
@@ -19,6 +19,21 @@
 inline void load_ge_c(ge *p, __constant const uint *q)
 {
     for (int i = 0; i < 8; i++) { p->x.v[i] = q[i]; p->y.v[i] = q[8 + i]; }
+}
+
+/* the key at offset ko with public point (x, y): compared with the target on word 2 of its hash160, then in full */
+inline void check_key(const fe *x, const fe *y, ulong ko, const uint tw[5], __global uint *hits, const uint max_hits)
+{
+    fe xn = *x, yn = *y;
+    fe_normalize(&xn); fe_normalize(&yn);          /* only bit 0 of yn is used: the compiler keeps just the carry chain */
+    const uint par = yn.v[0] & 1u;
+    if (hash160_w2(&xn, par) != tw[2]) return;
+    uint h[5];
+    hash160_words(&xn, par, h);
+    if (h[0] == tw[0] && h[1] == tw[1] && h[3] == tw[3] && h[4] == tw[4]) {
+        uint k = atomic_inc(&hits[0]);
+        if (k < max_hits) { hits[2 + 2 * k] = (uint)ko; hits[3 + 2 * k] = (uint)(ko >> 32); }
+    }
 }
 
 __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab, __global uint *hits, const uint max_hits, const uint pz_n)
@@ -95,47 +110,29 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             } else {
                 im = inv;
             }
+            fe xs;                                       /* x3 = lam^2 - (xc + sx) for both points */
+            fe_add(&xs, &xc, &sx);
             if (i < HALF) {
                 fe_sub(&t, &sy, &yc);
                 fe_mul(&lam, &t, &im);
                 fe_sqr(&x3, &lam);
-                fe_sub(&x3, &x3, &xc);
-                fe_sub(&x3, &x3, &sx);
+                fe_sub(&x3, &x3, &xs);
                 fe_sub(&t, &xc, &x3);
                 fe_mul(&y3, &lam, &t);
                 fe_sub(&y3, &y3, &yc);
-                {
-                    fe xn = x3, yn = y3;
-                    fe_normalize(&xn); fe_normalize(&yn);
-                    uint h[3];
-                    hash160_w3(&xn, yn.v[0] & 1u, h);
-                    if (h[0] == tw[0] && h[1] == tw[1] && h[2] == tw[2]) {
-                        uint k = atomic_inc(&hits[0]);
-                        if (k < max_hits) { ulong kk = koff + i; hits[2 + 2 * k] = (uint)kk; hits[3 + 2 * k] = (uint)(kk >> 32); }
-                    }
-                }
+                check_key(&x3, &y3, koff + (ulong)i, tw, hits, max_hits);
             }
             /* C - i*G */
             fe_add(&t, &sy, &yc);
             fe_mul(&lam, &t, &im);
             fe_sqr(&x3, &lam);
-            fe_sub(&x3, &x3, &xc);
-            fe_sub(&x3, &x3, &sx);
+            fe_sub(&x3, &x3, &xs);
             fe_sub(&t, &x3, &xc);
             fe_mul(&y3, &lam, &t);
             fe_sub(&y3, &y3, &yc);
             ko = koff - (ulong)i;
         check:;
-            {
-                fe xn = x3, yn = y3;
-                fe_normalize(&xn); fe_normalize(&yn);
-                uint h[3];
-                hash160_w3(&xn, yn.v[0] & 1u, h);
-                if (h[0] == tw[0] && h[1] == tw[1] && h[2] == tw[2]) {
-                    uint k = atomic_inc(&hits[0]);
-                    if (k < max_hits) { hits[2 + 2 * k] = (uint)ko; hits[3 + 2 * k] = (uint)(ko >> 32); }
-                }
-            }
+            check_key(&x3, &y3, ko, tw, hits, max_hits);
         }
         C.x = ncx; C.y = ncy;
         koff += GRP;
