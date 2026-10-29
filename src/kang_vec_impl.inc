@@ -377,8 +377,11 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     const bool bnd = (n & (KANG_CK_PERIOD - 1)) == 0;           /* checkpoint step: cycle detection, watchdog */
     const pz_vl bndv = bnd ? pz_vl_set(~0ULL) : pz_vl_set(0);
 
-    /* restarted kangaroos: reload their lanes from the scalar state */
-    for (int c = 0; c < nc; c++)
+    /* restarted kangaroos: reload their lanes from the scalar state (the flags of a vector are tested together) */
+    for (int c = 0; c < nc; c++) {
+        u64 any = 0;
+        memcpy(&any, w->vstale + (size_t)c * NL, NL);
+        if (LIKELY(!any)) continue;
         for (int l = 0; l < NL; l++) {
             const int i = c * NL + l;
             if (!w->vstale[i]) continue;
@@ -396,6 +399,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
             A[c].esc[l] = w->esc[i] ? ~0ULL : 0;
             w->vstale[i] = 0;
         }
+    }
 
     /* denominators x - jx and their prefix products */
     pz_fev acc;
