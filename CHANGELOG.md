@@ -3,6 +3,24 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.15.0] — 2026-10-29
+
+### Changed
+- CPU kangaroo: x and y of a step are made canonical by the fast reduction (the full one only for a vector with a lane that needs it); the
+  jump coordinates are stored as `K1 − c`, so the subtractions of the step become additions; on AVX2 the jump entries are read as rows and
+  transposed. Measured on one thread against 1.14.0: avx512i2 +7.2 %, avx2v +5.3 %, avx512i +4.0 %, avx512v +2.7 %. The jumps, the walk
+  and `dp.bin` are unchanged.
+- BSGS with AVX-512 IFMA: the x of a giant step is made canonical by its top limb, about 5 % faster.
+- Kangaroo walker starts about twice as fast: herd starts are made affine 64 at a time, and every `k·G` uses signed 8-bit comb windows (at
+  most 32 additions instead of 64; table 264 KB, was 61 KB). A GPU herd of 2^22 walkers needs about 26 s of CPU time to start instead of 52.
+- GPU kernels: a subtraction from a normalized value skips its second correction (CUDA kangaroo step 1167 to 1132 instructions, linear
+  search -1 % per key on sm_86; one spill of `kang128b` is gone).
+- OpenCL on AMD GPUs (gfx9 to gfx12): the field product in inline assembly on `v_mad_u64_u32` with its carry out (multiplication -22 %,
+  kangaroo step loop -11 %, linear loop -17 % in instructions). A build or a start-up self-test that fails with it falls back to the C form.
+- GPU figures are instruction counts (ptxas, clang for AMD); not yet measured on a card.
+- Documentation: RESEARCH.md 10.4 and section 5 log what was measured, including the tables that do not pay (the jump table in L1 or in
+  shared memory, a larger linear window, precomputed hash words, per-jump constants).
+
 ## [1.14.0] — 2026-10-29
 
 ### Changed

@@ -286,7 +286,7 @@ self-test and planted-key hunts on the simulated CUDA driver and on pocl.
   the products gain less time than instructions: both forms have 64 of them per product); the jump table in shared memory (random 16-byte reads, ≈ 2.5-way bank conflicts against one cache line per work-item
   from L1) and the inline assembly for `v_mad_u64_u32` carries on AMD.
 
-**After 1.14.0: normalized operands, the AMD product, and what a table could still buy.** Same method as above (SASS from NVRTC 12.0 and
+**In 1.15.0: normalized operands, the AMD product, and what a table could still buy.** Same method as above (SASS from NVRTC 12.0 and
 `ptxas` for sm_86, AMD ISA from clang 18; sm_75 and sm_89 within a few instructions of sm_86), and the same checks (`tests/t_gpufe.c`
 with mutations of the new routines, the self-test and the planted-key hunts on the simulated CUDA driver and on pocl).
 
