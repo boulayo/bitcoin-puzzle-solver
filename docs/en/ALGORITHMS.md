@@ -200,7 +200,7 @@ Here `K` is the total number of walkers and `N` the number of entries that the m
 | GPU walkers | `NK` per work-item (tuned, section 5) × work-items (by default 512 per SM with CUDA, 64 per compute unit with OpenCL, at most 32768) | at most `√W/256` in total, so each one walks long enough |
 | `dp_bits` | `max(⌊log2(0.01·√W/K)⌋, ⌈log2(1.3·√W/(0.8·N))⌉, 2)`, at most 60 | the overhead of the last DP below 1 % of the expected steps; the second term is the memory, below |
 | `--dp-bits B` | at most `⌊log2(√W/K)⌋ − 1` (a larger value is lowered, with a warning), never below what memory requires | a walker reaches its next DP after `2^dp_bits` steps: `K·2^dp_bits` must stay well below `√W` |
-| DP table | 32 bytes per entry, open addressing; limit `--mem` (default 40 % of the free RAM, at least 256 MiB and at most 64 GiB) | see below |
+| DP table | 16 bytes per entry (the tag and the index of the record in `dp.bin`), open addressing; limit `--mem` (default 40 % of the free RAM, at least 256 MiB and at most 64 GiB) | see below |
 
 The table must hold the DPs of `1.3·√W` steps at 80 % load when memory decides `dp_bits` (`KANG_DP_MEM_MARGIN = 1.3`): the search costs
 1.06·√W on average and goes beyond 1.3·√W about once in three. It starts with room for those points at 60 % load (within the limit) and
@@ -209,10 +209,19 @@ from then on only DPs whose tag has one more zero bit are kept, and the stored o
 with no second table. The search goes on, and a collision is seen with the delay of `dp_bits + 1`, the one a margin twice as large would have had
 from the start. Each bit less halves the delay of the distinguished points (about 1 to 2 `K·2^dp_bits/√W` steps, RESEARCH.md section 8.7).
 
+An entry holds the 64-bit `tagk` (61 bits of the abscissa and the 3-bit kind) and the index of the record in `dp.bin`, not the 24-byte distance:
+the distance is needed only when two points of different kinds share a tag, about once in a campaign plus a few false matches of the 61 bits.
+It is then read back from the buffer of the log, from the block being written, or from the file (under the table lock, then the lock of the log).
+A point that is in no log (no file, or a disk that refused it beyond the 2^22 buffered records) keeps a copy of its record beside the table; the
+copies count against `--mem` and are thinned with the table. Half the 32 bytes of a whole record means one bit less where memory sets `dp_bits`:
+in the model of 1.12.0, with 2^22 walkers, puzzle 140 costs 1.08·√W instead of 1.10 with 32 GB of RAM, 1.10 instead of 1.15 with 16 GB and
+1.15 instead of 1.23 with 8 GB; with 2^20 walkers or 64 GB and more the gain is 1 % or less. Measured on 2^40 keys with 4096 walkers and a
+`--mem` that sets `dp_bits` (400 keys): 1.27·√W with 32-byte entries, 1.15 with 16-byte ones; at equal `dp_bits` the walks are identical.
+
 ### 4.7 Resuming
 
 Every DP that enters the table is appended to `dp.bin`: a header of 42 bytes (the magic `"PZDP5\n"`, a SHA-256 fingerprint of `base`, `W`,
-the text `"PZDPLOG4"` and the public key, and the 4 bytes of the jump table id), then records of 32 bytes `{tagk, d}`. The records are
+the text `"PZDPLOG4"` and the public key, and the 4 bytes of the jump table id), then records of 32 bytes `{tagk, d}` (the table refers to them by their index). The records are
 collected under the lock of the table in a buffer of 32768 (1 MiB); a full buffer is exchanged for an empty one and written after the table lock
 is released, under a lock of its own, so a slow disk does not stall the search threads. If the disk refuses a write the buffer grows (up to
 2^22 records) and the write is tried again; a record cut short at the end of the file is cut off at the next start.

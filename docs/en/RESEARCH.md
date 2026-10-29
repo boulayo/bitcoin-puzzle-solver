@@ -563,8 +563,11 @@ do not help it. The same holds for multiple targets without a table (ALGORITHMS.
   `ec_mul_g`, already in use) and the sharing of the inversion (already done over 4096 walkers per CPU thread and over those of a GPU work-item, section 8.4).
 * *More memory for distinguished points*: it lowers `dp_bits` and so the delay with which a collision is recognized, about 1 to 2
   `K·2^dp_bits/√W` (8.7). When memory sets `dp_bits` that delay is several percent: in the model of 1.12.0 (CHANGELOG), puzzle 140 with 2^22
-  kangaroos costs 1.10·√W at 32 GB and 1.15 at 16 GB, against ≈ 1.02 without the delay. More RAM buys that back, and no more: the
-  factor of the walk itself does not move. (The ≈ 0.1 % of 8.7 assumed `dp ≈ 40` with `K ≈ 2^20` and the RAM for that table.)
+  kangaroos costs 1.10·√W at 32 GB and 1.15 at 16 GB, against ≈ 1.02 without the delay. Entries of 16 bytes instead of 32 (the table keeps
+  the index of the record in `dp.bin` and reads the distance back on a match of two kinds, after 1.12.0) have the effect of twice the RAM:
+  1.08 at 32 GB, 1.10 at 16 GB, 1.15 instead of 1.23 at 8 GB. Entries of 8 bytes (the tag alone, with a scan of `dp.bin` on every match of two
+  kinds) would give 1.07, 1.08 and 1.10, for a scan of a file of tens of GB, under the table lock or in the background, at every false match:
+  not done. More RAM buys that back, and no more: the factor of the walk itself does not move. (The ≈ 0.1 % of 8.7 assumed `dp ≈ 40` with `K ≈ 2^20` and the RAM for that table.)
 * *"Free" points*: with a single inversion one obtains both `P + J` and `P − J`, as in the giant steps of BSGS (ALGORITHMS.md section 9). In a walk the
   second point lies on no track: it is useful only if it is itself a distinguished point, i.e. once in `2^dp_bits`. Not worthwhile.
 

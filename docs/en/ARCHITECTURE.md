@@ -133,7 +133,7 @@ kang_insert_dps (under the table mutex): inserts or compares with the existing e
   type is being measured by another waits for the result. Progress counters are atomic *relaxed*; the stop flag is atomic.
 * Each thread allocates its own buffers (no false sharing); threads are pinned to cores with `sched_setaffinity` (Windows: "ideal" processor, a hint to the scheduler).
 * The only shared hot writes are the counters; ThreadSanitizer reports nothing on CPU, GPU and mixed campaigns.
-* Memory: linear search ≈ a few MiB; kangaroo: `32 bytes × entries` (limit `--mem`; the table never exceeds it, also while it is being rebuilt) plus ≈ 0.4 KiB per walker.
+* Memory: linear search ≈ a few MiB; kangaroo: `16 bytes × entries` (limit `--mem`, which also counts a copy of 32 bytes for each point that is in no `dp.bin`; the table never exceeds it, also while it is being rebuilt) plus ≈ 0.4 KiB per walker.
 
 ## 5b. The environment
 
