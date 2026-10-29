@@ -3,6 +3,13 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.15.1] — 2026-10-29
+
+### Fixed
+- OpenCL on GPUs other than AMD (Intel, NVIDIA through OpenCL): the add-with-carry and subtract-with-borrow helpers of the field
+  arithmetic went through a 64-bit sum, which the Intel Xe-LP compiler got wrong in a chain of eight: the start-up self-test reported
+  "operation 3 differs from the CPU" and the device was excluded. They use 32-bit operations only now. Reported on an Intel UHD (Tiger Lake).
+
 ## [1.15.0] — 2026-10-29
 
 ### Changed
