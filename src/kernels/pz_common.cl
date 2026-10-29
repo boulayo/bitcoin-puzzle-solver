@@ -53,6 +53,33 @@ inline uint pz_subc(uint a, uint b, uint ci, uint *co) { const ulong s = (ulong)
 #endif
 #endif
 
+/* AMD GPUs of the GCN 5 (gfx9) to RDNA 4 (gfx12) generations: v_mad_u64_u32 adds a 32x32-bit product to a 64-bit register pair and sets a
+ * carry out, which C cannot reach; one add-with-carry puts that carry in a counter. PZ_MAD_CY(acc, cy, x, y) is acc += x y, cy += the carry
+ * out of it; PZ_MAD_CY0 the same with cy = the carry. Two instructions per limb product (the product of fe_mul below). PZ_NO_ASM turns
+ * them off; tests/t_gpufe runs the same product with the C equivalent (PZ_TEST_AMD_MAD). */
+#if defined(PZ_CARRY) && defined(__AMDGCN__) && (defined(__GFX9__) || defined(__GFX10__) || defined(__GFX11__) || defined(__GFX12__)) \
+    && !defined(PZ_NO_ASM)
+#if __AMDGCN_WAVEFRONT_SIZE == 64
+typedef ulong pz_lane_mask;           /* the carry out is one bit per work-item of the wave, in a scalar register (a pair for 64 work-items) */
+#else
+typedef uint pz_lane_mask;
+#endif
+#ifdef __GFX9__
+#define PZ_ADDC_OP "v_addc_co_u32"
+#else
+#define PZ_ADDC_OP "v_add_co_ci_u32"
+#endif
+#define PZ_MAD_CY(acc, cy, x, y)  { pz_lane_mask k_; __asm__("v_mad_u64_u32 %0, %1, %3, %4, %0\n\t" PZ_ADDC_OP " %2, %1, %2, 0, %1" \
+                                    : "+v"(acc), "=&s"(k_), "+v"(cy) : "v"(x), "v"(y)); }
+#define PZ_MAD_CY0(acc, cy, x, y) { pz_lane_mask k_; __asm__("v_mad_u64_u32 %0, %1, %3, %4, %0\n\tv_cndmask_b32_e64 %2, 0, 1, %1" \
+                                    : "+v"(acc), "=&s"(k_), "=v"(cy) : "v"(x), "v"(y)); }
+#define PZ_AMD_MAD 1
+#elif defined(PZ_TEST_AMD_MAD)
+#define PZ_MAD_CY(acc, cy, x, y)  { const ulong p_ = (ulong)(x) * (y); (acc) += p_; (cy) += (acc) < p_; }
+#define PZ_MAD_CY0(acc, cy, x, y) { const ulong p_ = (ulong)(x) * (y); (acc) += p_; (cy) = (acc) < p_; }
+#define PZ_AMD_MAD 1
+#endif
+
 /* r = a + b, folding 2^256 = 2^32 + 977 (mod p); a second wrap leaves less than 2^32 + 977, so its fold stops at limb 2 */
 inline void fe_add(fe *r, const fe *a, const fe *b)
 {
@@ -337,14 +364,15 @@ inline void fe_sqr(fe *r, const fe *a)
     fe_reduce512(r, t);
 }
 #elif defined(PZ_CARRY)
-/* r = t mod p for a 512-bit t = L + H 2^256 (16 limbs), result < 2^256: u = L + 977 H (one 64-bit product per limb, the halves
- * added on one carry chain), u + H 2^32, then u + the top limbs of u (2^32 + 977) */
-inline void fe_reduce512(fe *r, const uint t[16])
+/* r = (t + the words x[k] at positions k = 1..8) mod p for a 512-bit t = L + H 2^256 (16 limbs), result < 2^256: u = L + 977 H (one
+ * 64-bit product per limb, whose addend has x in its high half, the halves added on one carry chain), u + H 2^32, then u + the top limbs of
+ * u (2^32 + 977). The x[k] must be small (a few bits: the carries of the AMD product); fe_reduce512 has none. */
+inline void fe_reduce512x(fe *r, const uint t[16], const uint x[9])
 {
     uint u[10], c = 0, w;
     ulong q[8];
 #pragma unroll
-    for (int i = 0; i < 8; i++) q[i] = (ulong)t[8 + i] * 977u + t[i];
+    for (int i = 0; i < 8; i++) q[i] = (ulong)t[8 + i] * 977u + ((ulong)x[i + 1] << 32 | t[i]);
     u[0] = (uint)q[0];
 #pragma unroll
     for (int i = 1; i < 8; i++) u[i] = PZ_ADDC((uint)q[i], (uint)(q[i - 1] >> 32), c, &c);
@@ -370,6 +398,56 @@ inline void fe_reduce512(fe *r, const uint t[16])
     for (int i = 0; i < 8; i++) r->v[i] = u[i];
 }
 
+inline void fe_reduce512(fe *r, const uint t[16])
+{
+    const uint x[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    fe_reduce512x(r, t, x);
+}
+
+#ifdef PZ_AMD_MAD
+/* the 8x8 product with PZ_MAD_CY: a[j] b[i] goes to position i + j of one of two sets of 64-bit pairs, E (pairs at even positions) when
+ * i + j is even, O (pairs at odd positions) when it is odd, so that every product lands on a whole pair; the carry out of a pair goes to the
+ * counter C of the position two above. The first product of a pair has no addend and no carry. Then t = E + O on one chain, the counters
+ * of positions 9 to 15 added on another, and those of positions 2 to 8 go into the reduction as the high halves of its addends. gfx1030:
+ * 176 instructions instead of the 226 of the product by rows (73 v_mad_u64_u32 either way, no moves of zero high halves). */
+inline void fe_mul(fe *r, const fe *a, const fe *b)
+{
+    ulong E[8], O[7];
+    uint C[16], t[16], x[9], c;
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+#pragma unroll
+        for (int j = 0; j < 8; j++) {
+            const int k = i + j, i0 = k > 7 ? k - 7 : 0;   /* i0: the row of the first product at position k */
+            if (k & 1) {
+                if (i == i0) O[k >> 1] = (ulong)a->v[j] * b->v[i];
+                else if (i == i0 + 1) PZ_MAD_CY0(O[k >> 1], C[k + 2], a->v[j], b->v[i])
+                else PZ_MAD_CY(O[k >> 1], C[k + 2], a->v[j], b->v[i])
+            } else {
+                if (i == i0) E[k >> 1] = (ulong)a->v[j] * b->v[i];
+                else if (i == i0 + 1) PZ_MAD_CY0(E[k >> 1], C[k + 2], a->v[j], b->v[i])
+                else PZ_MAD_CY(E[k >> 1], C[k + 2], a->v[j], b->v[i])
+            }
+        }
+    }
+    /* position k of E is half k >> 1 of its pairs, of O half (k - 1) >> 1 (O has positions 1 to 14) */
+    t[0] = (uint)E[0];
+    c = 0;
+#pragma unroll
+    for (int k = 1; k < 16; k++) {
+        const uint e = (k & 1) ? (uint)(E[k >> 1] >> 32) : (uint)E[k >> 1];
+        const uint o = (k & 1) ? (k <= 13 ? (uint)O[k >> 1] : 0u) : (k >= 2 && k <= 14 ? (uint)(O[(k >> 1) - 1] >> 32) : 0u);
+        t[k] = PZ_ADDC(e, o, c, &c);
+    }
+    c = 0;
+#pragma unroll
+    for (int k = 9; k < 16; k++) t[k] = PZ_ADDC(t[k], C[k], c, &c);   /* the product is < 2^512: no carry out of position 15 */
+    x[0] = x[1] = x[2] = 0;                                         /* position 0 has one product: no carry to position 2 */
+#pragma unroll
+    for (int k = 3; k < 9; k++) x[k] = C[k];
+    fe_reduce512x(r, t, x);
+}
+#else
 /* the 8x8 product by rows: the 64-bit products of a row, each with the limb of the rows before as addend, then their halves on one
  * carry chain */
 inline void fe_mul(fe *r, const fe *a, const fe *b)
@@ -390,6 +468,8 @@ inline void fe_mul(fe *r, const fe *a, const fe *b)
     }
     fe_reduce512(r, t);
 }
+
+#endif
 
 /* dedicated square: the 28 products a_i*a_j (i < j) once, doubled, plus the 8 squares (36 products instead of 64) */
 inline void fe_sqr(fe *r, const fe *a)

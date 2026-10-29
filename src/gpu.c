@@ -266,12 +266,22 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
     rt_log(PZ_LOG_DEBUG, "GPU[%d]: %s via %s, %u %s, %s - checking correctness...", d->index, d->name, rt_api_name(d->api), d->cu,
            d->api == RT_CUDA ? "SM" : "CU", mem);
     bool ok = false;
+    rt_dev dev = *d;
     for (int attempt = 1; !ok; attempt++) {
         s->mismatch = false;
-        ok = gpu_session_open(s, d) && gpu_test_fe(s);
+        ok = gpu_session_open(s, &dev) && gpu_test_fe(s);
         if (ok && !for_kangaroo) gpu_linear_autotune(s, d->index);
         if (ok && for_kangaroo) gpu_kang_autotune(s, d->index);
         ok = ok && (for_kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
+        if (!ok && s->mismatch && dev.api == RT_OPENCL && !dev.no_asm && (strstr(dev.vendor, "AMD") || strstr(dev.vendor, "Advanced Micro"))) {
+            /* the products of pz_common.cl in inline assembly are the part of the kernels that no device here could check: without them the
+             * kernels are those of other OpenCL devices */
+            rt_log(PZ_LOG_WARN, "GPU[%d]: the self-test failed with the kernels in inline assembly: trying again without it", d->index);
+            gpu_session_release(s);
+            dev.no_asm = true;
+            attempt = 0;
+            continue;
+        }
         if (ok || s->mismatch || attempt >= GPU_STARTUP_TRIES) break;
         /* an error of the API (a driver that is still busy, a display reset at that moment) is not a wrong result: the same error in the middle
          * of a campaign is retried nine times, and a wrong result is what excludes a device at once */

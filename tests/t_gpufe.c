@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* t_gpufe.c - the GPU field arithmetic (kernels/pz_common.cl: the PTX carry-chain variant, with the carry flag emulated exactly as
- * the PTX ISA defines it; the OpenCL variant on add-with-carry, with the C equivalent of the builtins; the OpenCL variant in 64-bit C)
+ * the PTX ISA defines it; the OpenCL variant on add-with-carry, with the C equivalent of the builtins, also with the product of AMD GPUs;
+ * the OpenCL variant in 64-bit C)
  * against the CPU implementation: random values and every combination of the limb patterns that trigger the rare carry/borrow paths
  * (values near 0, near p, near 2^256). */
 #include "../src/common.h"
@@ -23,6 +24,7 @@ typedef unsigned int uint;
     void p##invpow(uint *r, const uint *a);
 GPUFE_DECL(gp_)   /* OpenCL, 64-bit C */
 GPUFE_DECL(gc_)   /* OpenCL, add-with-carry */
+GPUFE_DECL(ga_)   /* OpenCL, add-with-carry, the product of AMD GPUs (v_mad_u64_u32 with its carry, emulated) */
 GPUFE_DECL(gf_)   /* PZ_FAST_FE (PTX chains, emulated) */
 
 typedef struct {
@@ -34,7 +36,7 @@ typedef struct {
     void (*inv)(uint *, const uint *), (*invpow)(uint *, const uint *);
 } gpufe;
 #define GPUFE(p, n) {n, p##add, p##sub, p##subn, p##addn, p##sub2, p##mul, p##sqr, p##norm, p##cneg, p##inv, p##invpow}
-static const gpufe V[] = {GPUFE(gp_, "portable"), GPUFE(gc_, "carry"), GPUFE(gf_, "PTX")};
+static const gpufe V[] = {GPUFE(gp_, "portable"), GPUFE(gc_, "carry"), GPUFE(ga_, "AMD"), GPUFE(gf_, "PTX")};
 #define NV ((int)(sizeof V / sizeof *V))
 
 static int fails;
@@ -184,6 +186,6 @@ int main(void)
         n += ninv;
     }
     if (fails) printf("t_gpufe: %d FAILED\n", fails);
-    else printf("t_gpufe: OK (%ld combinations, portable, carry and PTX variants)\n", n);
+    else printf("t_gpufe: OK (%ld combinations, portable, carry, AMD and PTX variants)\n", n);
     return fails != 0;
 }

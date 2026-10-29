@@ -113,7 +113,7 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
     const char *src[3] = {(const char *)pz_common_cl, NULL, NULL};
     size_t len[3] = {pz_common_cl_len, 0, 0};
     cl_uint nsrc = 2;
-    char opts[96];
+    char opts[112];
     switch (prog) {
     case RT_PROG_LINEAR: src[1] = (const char *)pz_linear_cl; len[1] = pz_linear_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DHALF=%d", param & 0xFFFF); break;
     case RT_PROG_KANG:        /* pz_kang.h, the numbers shared with the host, goes in front of the kernel */
@@ -123,12 +123,20 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
         snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", param & 0xFFFF, (param >> 16) == 1 ? " -DMC=2" : (param >> 16) == 2 ? " -DMC=4" : ""); break;
     default: src[1] = (const char *)pz_test_cl; len[1] = pz_test_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2"); break;
     }
+    if (m->c->dev.no_asm) strcat(opts, " -DPZ_NO_ASM");
     cl_int rc;
     cl_context ctx = (cl_context)m->c->a;
     cl_device_id dev = m->c->dev.cl_dev;
     cl_program p = cl->CreateProgramWithSource(ctx, nsrc, src, len, &rc);
     if (!p || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: program creation failed (%d)", rc); return false; }
     rc = cl->BuildProgram(p, 1, &dev, opts, NULL, NULL);
+    if (rc != CL_SUCCESS && !m->c->dev.no_asm) {
+        /* the inline assembly of the products on AMD GPUs (pz_common.cl) is the part a compiler is most likely to refuse */
+        rt_log(PZ_LOG_WARN, "OpenCL: kernel build failed on %s (%d): building it again without inline assembly", m->c->dev.name, rc);
+        m->c->dev.no_asm = true;
+        strcat(opts, " -DPZ_NO_ASM");
+        rc = cl->BuildProgram(p, 1, &dev, opts, NULL, NULL);
+    }
     if (rc != CL_SUCCESS) {
         size_t sz = 0;
         cl->GetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &sz);

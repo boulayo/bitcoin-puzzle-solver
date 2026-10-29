@@ -20,6 +20,7 @@ typedef struct {
     u64 l2_bytes, smem_bytes;      /* last-level cache of the device and fast local memory per SM / compute unit (0 when unknown) */
     double peak_gbs;               /* theoretical memory bandwidth in GB/s when the runtime tells (CUDA), else 0 */
     bool unified;                  /* the device uses the system RAM (integrated GPU): gmem is the share of it the driver may map, not own memory */
+    bool no_asm;                   /* OpenCL: kernels built with -DPZ_NO_ASM (no inline assembly), after a build or a self-test that failed with it */
     int dup_of;                    /* OpenCL entry of a GPU that CUDA also drives: index of the CUDA entry, else -1 */
     /* backend handles */
     void *cl_dev;                  /* OpenCL */
