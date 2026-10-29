@@ -44,8 +44,9 @@ inline void fe_set_u32(fe *r, uint a) { r->v[0] = a; for (int i = 1; i < 8; i++)
 #define PZ_SUBC(a, b, ci, co) __builtin_subc((uint)(a), (uint)(b), (ci), (co))
 #define PZ_CARRY 1                    /* the products on carry chains too (below) */
 #else
-inline uint pz_addc(uint a, uint b, uint ci, uint *co) { const ulong s = (ulong)a + b + ci; *co = (uint)(s >> 32); return (uint)s; }
-inline uint pz_subc(uint a, uint b, uint ci, uint *co) { const ulong s = (ulong)a - b - ci; *co = (uint)(s >> 63); return (uint)s; }
+/* 32-bit operations only: no 64-bit integer is needed for a carry, which GPUs without native 64-bit integers (Intel Xe-LP) emulate */
+inline uint pz_addc(uint a, uint b, uint ci, uint *co) { const uint s = a + b, t = s + ci; *co = (uint)(s < a) | (uint)(t < s); return t; }
+inline uint pz_subc(uint a, uint b, uint ci, uint *co) { const uint d = a - b, t = d - ci; *co = (uint)(a < b) | (uint)(d < ci); return t; }
 #define PZ_ADDC(a, b, ci, co) pz_addc((a), (b), (ci), (co))
 #define PZ_SUBC(a, b, ci, co) pz_subc((a), (b), (ci), (co))
 #ifdef PZ_TEST_CARRY
