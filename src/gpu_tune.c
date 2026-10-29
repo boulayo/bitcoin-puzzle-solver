@@ -226,7 +226,7 @@ static void linear_set_variant(gpu_session *s, int v) { s->variant = v; }
 static int linear_code(const gpu_session *s) { return s->variant; }
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
- * OpenCL the historical 64 per compute unit; bounded by the state and the history in a sixth of the device memory. */
+ * OpenCL the historical 64 per compute unit; bounded by the state and the history of the least depth in a sixth of the device memory. */
 size_t gpu_kang_threads(const gpu_session *s)
 {
     size_t t = s->l2fit ? kang_l2_threads_for(&s->info, s->NK) : 0;
@@ -236,6 +236,17 @@ size_t gpu_kang_threads(const gpu_session *s)
     if (t < 64) t = 64;
     if (t > 32768) t = 32768;
     return t;
+}
+
+/* The depth of the jump history of a herd of K walkers, that is the most rounds a launch can run: KANG_HIST_MAX while the history takes at most an
+ * eighth of the device memory and the state with it at most the sixth that gpu_kang_threads allows, halved until it does, never below
+ * KANG_HIST_ROUNDS (the herd is sized for that). Longer launches pay the fixed costs of a launch (the state read and written back, the first
+ * batch products, the transfers and the wait) less often. */
+uint32_t gpu_kang_depth(const rt_dev *d, size_t K)
+{
+    uint32_t depth = KANG_HIST_MAX;
+    while (depth > KANG_HIST_ROUNDS && (K * 2 * depth > d->gmem / 8 || K * (KSTRIDE * 4 + 2 * (size_t)depth) > d->gmem / 6)) depth /= 2;
+    return depth;
 }
 
 /* Kangaroo steps per second of the kernel for s->NK; 0 if it cannot be built or run (e.g. not enough memory for
@@ -248,7 +259,7 @@ static double kang_measure(gpu_session *s)
     ks->P.cap_since = ~0ULL;
     const int T = (int)gpu_kang_threads(s);
     double rate = 0;
-    if (gpu_kang_prepare(s, &ks->P, T, KANG_HIST_ROUNDS)) {
+    if (gpu_kang_prepare(s, &ks->P, T, gpu_kang_depth(&s->info, (size_t)T * s->NK))) {
         const size_t K = (size_t)T * s->NK;
         uint32_t *st = pz_xcalloc(K * KSTRIDE, 4);
         u64 x = 0x9E3779B97F4A7C15ULL;

@@ -241,9 +241,15 @@ bool rtcu_buf_new(rt_buf *b, const void *init)
     return cuok(cu.MemsetD8(p, 0, b->bytes), "GPU memory clearing");
 }
 
+bool rtcu_buf_part(rt_buf *b, rt_buf *of, size_t off)
+{
+    b->dptr = of->dptr + off;
+    return true;
+}
+
 void rtcu_buf_free(rt_buf *b)
 {
-    if (b->dptr && use_ctx(b->c)) cu.MemFree((CUdeviceptr)b->dptr);
+    if (b->dptr && !b->part && use_ctx(b->c)) cu.MemFree((CUdeviceptr)b->dptr);
 }
 
 bool rtcu_write(rt_ctx *c, rt_buf *b, size_t off, const void *src, size_t n)

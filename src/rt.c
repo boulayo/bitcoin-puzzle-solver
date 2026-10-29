@@ -187,6 +187,19 @@ rt_buf *rt_buf_new(rt_ctx *c, size_t bytes, const void *init)
     return b;
 }
 
+rt_buf *rt_buf_part(rt_buf *of, size_t off, size_t bytes)
+{
+    if (!of || !bytes || off + bytes > of->bytes || off % rt_part_align(of->c)) return NULL;
+    rt_buf *b = pz_xcalloc(1, sizeof *b);
+    b->c = of->c;
+    b->bytes = bytes;
+    b->part = true;
+    if (!(of->c->api == RT_CUDA ? rtcu_buf_part(b, of, off) : rtcl_buf_part(b, of, off))) { free(b); return NULL; }
+    return b;
+}
+
+size_t rt_part_align(rt_ctx *c) { return c->api == RT_CUDA ? 4 : rtcl_part_align(c); }
+
 void rt_buf_free(rt_buf *b)
 {
     if (!b) return;

@@ -578,6 +578,7 @@ void gpu_linear_join(gpu_session *s, int n)
 /* ---------------- kangaroo ---------------- */
 
 #define JSTRIDE KANG_JUMP_WORDS     /* words of an entry of the jump table on the device (pz_kang.h) */
+#define KANG_CTR_MAX 1028           /* bytes of the buffer of the two counts at most (an OpenCL device may align sub-buffers to 1024 bytes) */
 
 /* The buffers of a herd, not the compiled kernel: the self-tests prepare and release many times with the same kernel. */
 void gpu_kang_release_buffers(gpu_session *s)
@@ -626,11 +627,20 @@ bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hi
     s->rl_cap = 1u << 14;
     s->b_state = rt_buf_new(s->c, K * KSTRIDE * 4, NULL);
     s->b_dps = rt_buf_new(s->c, (size_t)s->dps_cap * 40, NULL);
-    s->b_flags = rt_buf_new(s->c, 4, NULL);
-    s->b_rc = rt_buf_new(s->c, 4, NULL);
+    /* the DP count, and after it the restart count, in one buffer: a launch then writes and reads both with one transfer each way */
+    const size_t al = rt_part_align(s->c);
+    s->rc_off = al < 4 ? 4 : al;
+    s->b_flags = s->rc_off <= KANG_CTR_MAX - 4 ? rt_buf_new(s->c, s->rc_off + 4, NULL) : NULL;
+    s->b_rc = rt_buf_part(s->b_flags, s->rc_off, 4);
+    if (!s->b_rc) {                                       /* a runtime without sub-buffers: two buffers */
+        rt_buf_free(s->b_flags);
+        s->rc_off = 0;
+        s->b_flags = rt_buf_new(s->c, 4, NULL);
+        s->b_rc = rt_buf_new(s->c, 4, NULL);
+    }
     s->b_rl = rt_buf_new(s->c, (size_t)s->rl_cap * 4, NULL);
     s->b_hist = rt_buf_new(s->c, K * hist_rounds * 2, NULL);
-    s->mem_used = (size_t)nj * JSTRIDE * 4 + K * KSTRIDE * 4 + (size_t)s->dps_cap * 40 + 8 + (size_t)s->rl_cap * 4 + K * hist_rounds * 2;
+    s->mem_used = (size_t)nj * JSTRIDE * 4 + K * KSTRIDE * 4 + (size_t)s->dps_cap * 40 + (s->rc_off ? s->rc_off + 4 : 8) + (size_t)s->rl_cap * 4 + K * hist_rounds * 2;
     return s->b_jump && s->b_state && s->b_dps && s->b_flags && s->b_rc && s->b_rl && s->b_hist;
 }
 
@@ -638,8 +648,11 @@ bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hi
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl)
 {
     if (rounds > s->hist_rounds) rounds = s->hist_rounds;
-    uint32_t zero = 0;
-    if (!rt_write(s->c, s->b_flags, 0, &zero, 4) || !rt_write(s->c, s->b_rc, 0, &zero, 4)) return false;
+    uint32_t ctr[KANG_CTR_MAX / 4];                       /* the two counts (and the padding between them) */
+    const size_t cb = s->rc_off + 4;
+    memset(ctr, 0, sizeof ctr);
+    if (s->rc_off) { if (!rt_write(s->c, s->b_flags, 0, ctr, cb)) return false; }
+    else if (!rt_write(s->c, s->b_flags, 0, ctr, 4) || !rt_write(s->c, s->b_rc, 0, ctr, 4)) return false;
     rt_kern *k = s->kstep;
     rt_arg_buf(k, 0, s->b_state);
     rt_arg_buf(k, 1, s->b_jump);
@@ -660,7 +673,11 @@ bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint3
     rt_arg_u32(k, 16, (uint32_t)(s->gstep >> 32));
     if (!rt_run(s->c, k, (size_t)s->T)) return false;
     s->gstep += rounds;
-    return rt_read(s->c, s->b_flags, 0, ndp, 4) && rt_read(s->c, s->b_rc, 0, nrl, 4);
+    if (!s->rc_off) return rt_read(s->c, s->b_flags, 0, ndp, 4) && rt_read(s->c, s->b_rc, 0, nrl, 4);
+    if (!rt_read(s->c, s->b_flags, 0, ctr, cb)) return false;
+    *ndp = ctr[0];
+    *nrl = ctr[s->rc_off / 4];
+    return true;
 }
 
 int gpu_kangaroo_start(run_ctx *r, gpu_session **out, int *k_total)
@@ -691,7 +708,7 @@ int gpu_kangaroo_start(run_ctx *r, gpu_session **out, int *k_total)
 static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, u64 stream)
 {
     const int K = s->T * s->NK;
-    if (!gpu_kang_prepare(s, &ks->P, s->T, KANG_HIST_ROUNDS)) return false;
+    if (!gpu_kang_prepare(s, &ks->P, s->T, gpu_kang_depth(&s->info, (size_t)K))) return false;
     if (*mirror) kang_worker_free(*mirror);
     *mirror = kang_worker_new(ks, K, stream);
     kang_init_herd_parallel(ks, *mirror, s->r->sys.ncpu, stream);

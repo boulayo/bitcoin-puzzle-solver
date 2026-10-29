@@ -166,6 +166,26 @@ bool rtcl_buf_new(rt_buf *b, const void *init)
     return true;
 }
 
+bool rtcl_buf_part(rt_buf *b, rt_buf *of, size_t off)
+{
+    const cl_api *cl = cl_load();
+    if (!cl->CreateSubBuffer) return false;
+    const size_t region[2] = {off, b->bytes};
+    cl_int rc;
+    cl_mem m = cl->CreateSubBuffer((cl_mem)of->h, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, region, &rc);
+    if (!m || rc != CL_SUCCESS) { rt_log(PZ_LOG_DEBUG, "OpenCL: sub-buffer not available (%d)", rc); return false; }
+    b->h = m;
+    return true;
+}
+
+/* CL_DEVICE_MEM_BASE_ADDR_ALIGN is in bits */
+size_t rtcl_part_align(rt_ctx *c)
+{
+    cl_uint bits = 0;
+    if (cl_load()->GetDeviceInfo((cl_device_id)c->dev.cl_dev, CL_DEVICE_MEM_BASE_ADDR_ALIGN, sizeof bits, &bits, NULL) != CL_SUCCESS || bits < 32) bits = 4096;
+    return bits / 8;
+}
+
 void rtcl_buf_free(rt_buf *b) { if (b->h) cl_load()->ReleaseMemObject((cl_mem)b->h); }
 
 bool rtcl_write(rt_ctx *c, rt_buf *b, size_t off, const void *src, size_t n)

@@ -57,6 +57,7 @@ struct gpu_session {
     rt_kern *kstep;
     int kprog_var;               /* the kernel variant (kvar) that kprog was built for */
     rt_buf *b_state, *b_jump, *b_dps, *b_flags, *b_rc, *b_rl, *b_hist;
+    size_t rc_off;               /* the restart count is b_rc, a part of b_flags at this offset (one transfer reads both counts); 0: a buffer of its own */
     int T, NK, kvar;             /* kangaroo kernel: walkers per work-item, kernel variant (NK | cfg << 16) */
     bool l2fit;                  /* the herd is sized to the L2 cache (see kang_l2_threads_for) */
     u64 dps_cap, rl_cap;
@@ -97,7 +98,8 @@ static inline void pack_state(uint32_t *o, const kang_worker *w, int i)
 }
 
 #define KSTRIDE KANG_STATE_WORDS   /* words of the state of a kangaroo on the device (pz_kang.h) */
-#define KANG_HIST_ROUNDS 64        /* depth of the jump history (rounds per launch) of a production herd */
+#define KANG_HIST_ROUNDS 64        /* the least depth of the jump history (rounds per launch) of a production herd: gpu_kang_threads sizes it for this */
+#define KANG_HIST_MAX 256          /* the most (gpu_kang_depth) */
 
 typedef struct {
     pz_u256 key_start;
@@ -144,6 +146,7 @@ int gpu_variants_of(const rt_dev *d, const int **v);
 int gpu_default_variant(const rt_dev *d);
 int gpu_kvariants_of(const rt_dev *d, int *out);
 size_t gpu_kang_threads(const gpu_session *s);
+uint32_t gpu_kang_depth(const rt_dev *d, size_t K);      /* the depth of the jump history of a herd of K walkers */
 void gpu_linear_autotune(gpu_session *s, int idx);
 void gpu_kang_autotune(gpu_session *s, int idx);
 /* The kernel variant in use, as the start-up line of a device names it: "window 256", "kangaroo NK 128". */

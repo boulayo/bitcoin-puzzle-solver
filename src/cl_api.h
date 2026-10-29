@@ -41,6 +41,8 @@ typedef struct _cl_event *cl_event;
 #define CL_DEVICE_NAME 0x102B
 #define CL_DEVICE_VENDOR 0x102C
 #define CL_DEVICE_VERSION 0x102F
+#define CL_DEVICE_MEM_BASE_ADDR_ALIGN 0x1019
+#define CL_BUFFER_CREATE_TYPE_REGION 0x1220
 #define CL_PLATFORM_NAME 0x0902
 #define CL_PROGRAM_BUILD_LOG 0x1183
 #define CL_MEM_READ_WRITE (1u << 0)
@@ -58,6 +60,7 @@ typedef struct {
     cl_int (*ReleaseCommandQueue)(cl_command_queue);
     cl_mem (*CreateBuffer)(cl_context, cl_mem_flags, size_t, void *, cl_int *);
     cl_int (*ReleaseMemObject)(cl_mem);
+    cl_mem (*CreateSubBuffer)(cl_mem, cl_mem_flags, cl_uint, const void *, cl_int *);   /* OpenCL 1.1: NULL when the runtime lacks it */
     cl_program (*CreateProgramWithSource)(cl_context, cl_uint, const char **, const size_t *, cl_int *);
     cl_int (*BuildProgram)(cl_program, cl_uint, const cl_device_id *, const char *, void (*)(cl_program, void *), void *);
     cl_int (*GetProgramBuildInfo)(cl_program, cl_device_id, cl_program_build_info, size_t, void *, size_t *);

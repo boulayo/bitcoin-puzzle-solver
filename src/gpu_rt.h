@@ -49,6 +49,10 @@ void rt_kern_free(rt_kern *k);
 
 rt_buf *rt_buf_new(rt_ctx *c, size_t bytes, const void *init);
 void rt_buf_free(rt_buf *b);
+/* The bytes [off, off + bytes) of `of` as a buffer of their own, for a kernel argument: a single transfer then reads or writes what several arguments
+ * of a kernel point to. `off` is a multiple of rt_part_align(); `of` must outlive the part. NULL when the runtime cannot make one. */
+rt_buf *rt_buf_part(rt_buf *of, size_t off, size_t bytes);
+size_t rt_part_align(rt_ctx *c);
 bool rt_write(rt_ctx *c, rt_buf *b, size_t off, const void *src, size_t n);
 bool rt_read(rt_ctx *c, rt_buf *b, size_t off, void *dst, size_t n);
 

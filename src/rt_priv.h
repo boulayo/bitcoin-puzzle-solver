@@ -20,6 +20,7 @@ struct rt_buf {
     size_t bytes;
     void *h;                       /* cl_mem */
     u64 dptr;                      /* CUdeviceptr */
+    bool part;                     /* a range of another buffer (rt_buf_part): owns no device memory */
 };
 struct rt_kern {
     rt_mod *m;
@@ -40,6 +41,8 @@ void rtcl_mod_free(rt_mod *m);
 bool rtcl_kernel(rt_kern *k, const char *name);
 void rtcl_kern_free(rt_kern *k);
 bool rtcl_buf_new(rt_buf *b, const void *init);
+bool rtcl_buf_part(rt_buf *b, rt_buf *of, size_t off);
+size_t rtcl_part_align(rt_ctx *c);
 void rtcl_buf_free(rt_buf *b);
 bool rtcl_write(rt_ctx *c, rt_buf *b, size_t off, const void *src, size_t n);
 bool rtcl_read(rt_ctx *c, rt_buf *b, size_t off, void *dst, size_t n);
@@ -58,6 +61,7 @@ void rtcu_mod_free(rt_mod *m);
 bool rtcu_kernel(rt_kern *k, const char *name);
 void rtcu_kern_free(rt_kern *k);
 bool rtcu_buf_new(rt_buf *b, const void *init);
+bool rtcu_buf_part(rt_buf *b, rt_buf *of, size_t off);
 void rtcu_buf_free(rt_buf *b);
 bool rtcu_write(rt_ctx *c, rt_buf *b, size_t off, const void *src, size_t n);
 bool rtcu_read(rt_ctx *c, rt_buf *b, size_t off, void *dst, size_t n);
