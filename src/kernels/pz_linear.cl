@@ -62,7 +62,7 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
         fe acc;
         for (int m = 0; m <= HALF; m++) {
             fe sx, d;
-            if (m < HALF) fe_load_c(&sx, gtab + m * 16);
+            if (m < HALF) fe_load_c16(&sx, gtab + m * 16);
             else sx = GS.x;
             fe_sub(&d, &sx, &xc);
             if (m == 0) acc = d;
@@ -100,8 +100,8 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
                 x3 = xc; y3 = yc; ko = koff;
                 goto check;
             }
-            fe_load_c(&sx, gtab + (i - 1) * 16);
-            fe_load_c(&sy, gtab + (i - 1) * 16 + 8);
+            fe_load_c16(&sx, gtab + (i - 1) * 16);
+            fe_load_c16(&sy, gtab + (i - 1) * 16 + 8);
             if (i > 1) {
                 fe d;
                 fe_mul(&im, &inv, &tmp[i - 2]);

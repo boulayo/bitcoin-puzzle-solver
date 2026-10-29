@@ -221,7 +221,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
     fe acc;
     for (int k = 0; k < NK; k++) {
         fe jx, d;
-        fe_load_g(&jx, jump + (FL[k] >> FL_JSHIFT) * JS);
+        fe_load_g16(&jx, jump + (FL[k] >> FL_JSHIFT) * JS);
         fe_sub(&d, &X[k], &jx);
 #if MC > 1
         if (k % MC == 0) { if (k == 0) fe_set_u32(&TP[0][0], 1); else TP[0][k / MC] = acc; }
@@ -264,7 +264,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 const int i = b * MC + c, k = dir ? i : NK - 1 - i;
                 fe jx0;
                 BX[c] = X[k];
-                fe_load_g(&jx0, jump + (FL[k] >> FL_JSHIFT) * JS);
+                fe_load_g16(&jx0, jump + (FL[k] >> FL_JSHIFT) * JS);
                 fe_sub(&BD[c], &BX[c], &jx0);
             }
             BQ[MC - 1] = TP[rd & 1][NK / MC - 1 - b];
@@ -279,8 +279,8 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 const fe xk = BX[c], yk = Y[k];
                 fe jx, jy, ik, lam, t, x3, y3;
                 uint J2;
-                fe_load_g(&jx, jump + J * JS);
-                fe_load_g(&jy, jump + J * JS + 8);
+                fe_load_g16(&jx, jump + J * JS);
+                fe_load_g16(&jy, jump + J * JS + 8);
                 if (i < NK - 1) {
                     fe_mul(&ik, &inv, &BQ[c]);
                     fe_mul(&inv, &inv, &BD[c]);
@@ -290,7 +290,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 KANG_STEP
                 if (more) {                                /* denominator of the next round, running product */
                     fe jx2, d2;
-                    fe_load_g(&jx2, jump + J2 * JS);
+                    fe_load_g16(&jx2, jump + J2 * JS);
                     fe_sub(&d2, &x3, &jx2);
                     if (i == 0) accn = d2;
                     else fe_mul(&accn, &accn, &d2);
@@ -305,8 +305,8 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
             const fe xk = X[k], yk = Y[k];
             fe jx, jy, ik, lam, t, x3, y3;
             uint J2;
-            fe_load_g(&jx, jump + J * JS);
-            fe_load_g(&jy, jump + J * JS + 8);
+            fe_load_g16(&jx, jump + J * JS);
+            fe_load_g16(&jy, jump + J * JS + 8);
             if (i < NK - 1) {
                 const fe pk = TP[dir ? k + 1 : k - 1];
                 fe d;
@@ -319,7 +319,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
             KANG_STEP
             if (more) {                                    /* denominator of the next round, running product */
                 fe jx2, d2;
-                fe_load_g(&jx2, jump + J2 * JS);
+                fe_load_g16(&jx2, jump + J2 * JS);
                 fe_sub(&d2, &x3, &jx2);
                 if (i == 0) accn = d2;
                 else fe_mul(&accn, &accn, &d2);

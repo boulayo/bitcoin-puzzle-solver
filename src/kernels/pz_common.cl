@@ -584,6 +584,18 @@ PZ_NOINLINE void fe_inv(fe *r, const fe *a)
 
 inline void fe_load_g(fe *r, __global const uint *p) { for (int i = 0; i < 8; i++) r->v[i] = p[i]; }
 inline void fe_load_c(fe *r, __constant const uint *p) { for (int i = 0; i < 8; i++) r->v[i] = p[i]; }
+/* the same from a 16-byte aligned address, as two 16-byte loads: a quarter of the load instructions, and where the work-items of a warp
+ * read different entries (the jump table of the kangaroo) a quarter of the cache lines served */
+inline void fe_load_g16(fe *r, __global const uint *p)
+{
+    const uint4 a = *(__global const uint4 *)p, b = *(__global const uint4 *)(p + 4);
+    r->v[0] = a.x; r->v[1] = a.y; r->v[2] = a.z; r->v[3] = a.w; r->v[4] = b.x; r->v[5] = b.y; r->v[6] = b.z; r->v[7] = b.w;
+}
+inline void fe_load_c16(fe *r, __constant const uint *p)
+{
+    const uint4 a = *(__constant const uint4 *)p, b = *(__constant const uint4 *)(p + 4);
+    r->v[0] = a.x; r->v[1] = a.y; r->v[2] = a.z; r->v[3] = a.w; r->v[4] = b.x; r->v[5] = b.y; r->v[6] = b.z; r->v[7] = b.w;
+}
 inline void fe_store_g(__global uint *p, const fe *r) { for (int i = 0; i < 8; i++) p[i] = r->v[i]; }
 
 /* ---------------- Jacobian points (for start-point computation) ---------------- */
