@@ -146,16 +146,28 @@ static int break_score(const char *s, const char *q, const char *end)
 }
 
 /* Where to break the text s..end so that the first line fits `width` columns (it starts at column col0): at the best place in the
- * second half of the line, never leaving a last line of a few characters; NULL when there is no space to break at. */
-static const char *pick_break(const char *s, const char *end, int col0, int width)
+ * second half of the line, never leaving a last line of a few characters; NULL when there is no space to break at. The next line starts
+ * at column `hang`: a word that would not fit there either (a key, a path) is never moved to it, nor is the text before it when the
+ * word starts on this line: the line is left longer instead, and broken after the word. */
+static const char *pick_break(const char *s, const char *end, int col0, int width, int hang)
 {
     const int low = col0 + (width - col0) * 75 / 100;
-    const char *best = NULL, *fit = NULL, *first_after = NULL;
+    const char *best = NULL, *fit = NULL, *first_after = NULL, *keep_to = s;
     int best_score = -1;
     int col = col0;
+    for (const char *w = s; w < end;) {                 /* the first word too long for a line of its own */
+        const char *we = w;
+        while (we < end && *we != ' ') we++;
+        if (hang + text_cols(w, (size_t)(we - w)) > width) {
+            keep_to = col0 + text_cols(s, (size_t)(w - s)) < width ? w : w - 1;
+            break;
+        }
+        w = we;
+        while (w < end && *w == ' ') w++;
+    }
     for (const char *q = s; q < end; q++) {
         if (*q == ' ') {
-            const int sc = break_score(s, q, end);
+            const int sc = q < keep_to ? -1 : break_score(s, q, end);
             if (sc >= 0) {
                 if (col <= width) {
                     fit = q;
@@ -246,7 +258,7 @@ void pz_fputs_wrap(FILE *fp, const char *text, int width, int hang)
         const char *s = p, *end = p + len;
         int col0 = 0;
         while (text_cols(s, (size_t)(end - s)) + col0 > width) {
-            const char *brk = pick_break(s, end, col0, width);
+            const char *brk = pick_break(s, end, col0, width, h);
             if (!brk) break;
             const char *e = brk;
             while (e > s && e[-1] == ' ') e--;

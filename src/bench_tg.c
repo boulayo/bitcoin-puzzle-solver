@@ -73,41 +73,69 @@ static tg_res tg_run(const tg_scan_cfg *c, int cap, unsigned off, double settle,
     return o;
 }
 
-/* The columns of the table: threads, total, CPU, then one column per GPU (a switched-off GPU shows "off"); beyond 5 GPUs one column
- * with their sum. */
+/* The columns of the table: threads, total, CPU, then one column per GPU (a switched-off GPU shows "off"). With more than 5 GPUs, or when
+ * the row would not fit the terminal, one column with their sum, and the GPUs switched off are named at the end of the row. */
 #define TG_MAXCOLS 5
+
+static bool tg_gpu_columns(const tg_scan_cfg *c)
+{
+    if (c->ngpu > TG_MAXCOLS) return false;
+    const int cols = pz_fd_terminal_cols(1), width = cols > 0 && cols <= PZ_LINE_MAX ? cols - 1 : PZ_LINE_MAX;
+    return 38 + 12 * c->ngpu + 19 <= width;      /* the widest row: 3 columns, the GPUs and "    normal priority" */
+}
+
+/* A row of the table: never wrapped (its columns would no longer line up), without blanks at the end. */
+static void tg_row(const char *line, const char *tag)
+{
+    if (tg_silent) return;
+    char b[400];
+    snprintf(b, sizeof b, "%s%s%s", line, tag && tag[0] ? "    " : "", tag ? tag : "");
+    size_t l = strlen(b);
+    while (l && b[l - 1] == ' ') b[--l] = 0;
+    puts(b);
+    fflush(stdout);
+}
 
 static void tg_header(const tg_scan_cfg *c)
 {
-    char line[300];
+    char line[300], unit[48];
     size_t n = (size_t)snprintf(line, sizeof line, "  %-12s%12s%12s", "threads", "total", "CPU");
-    if (c->ngpu <= TG_MAXCOLS) {
+    if (tg_gpu_columns(c)) {
         for (int j = 0; j < c->ngpu; j++) {
             char h[16];
             snprintf(h, sizeof h, "GPU[%d]", c->gidx[j]);
             n += (size_t)snprintf(line + n, sizeof line - n, "%12s", h);
         }
     } else n += (size_t)snprintf(line + n, sizeof line - n, "%12s", "GPUs");
-    tg_say("%s    (%s)\n", line, c->unit);
+    snprintf(unit, sizeof unit, "(%s)", c->unit);
+    tg_row(line, unit);
 }
 
 static void tg_print_tag(const tg_scan_cfg *c, const tg_res *o, const char *tag)
 {
-    char b[32], line[300];
+    char b[32], line[300], off[160] = "";
     char th[24];
     snprintf(th, sizeof th, "%d thread%s", o->cap, o->cap == 1 ? "" : "s");
     size_t n = (size_t)snprintf(line, sizeof line, "  %-12s", th);
     n += (size_t)snprintf(line + n, sizeof line - n, "%12s", pz_fmt_cell(o->total, b, sizeof b));
     n += (size_t)snprintf(line + n, sizeof line - n, "%12s", pz_fmt_cell(o->cpu, b, sizeof b));
-    if (c->ngpu <= TG_MAXCOLS) {
+    if (tg_gpu_columns(c)) {
         for (int j = 0; j < c->ngpu; j++)
             n += (size_t)snprintf(line + n, sizeof line - n, "%12s", (o->off >> j) & 1 ? "off" : pz_fmt_cell(o->gpu[j], b, sizeof b));
     } else {
         double sum = 0;
-        for (int j = 0; j < c->ngpu; j++) sum += (o->off >> j) & 1 ? 0 : o->gpu[j];
+        size_t k = 0;
+        for (int j = 0; j < c->ngpu; j++) {
+            if (!((o->off >> j) & 1)) sum += o->gpu[j];
+            else if (k + 12 < sizeof off) k += (size_t)snprintf(off + k, sizeof off - k, "%sGPU[%d]", k ? ", " : "off: ", c->gidx[j]);
+        }
         n += (size_t)snprintf(line + n, sizeof line - n, "%12s", pz_fmt_cell(sum, b, sizeof b));
+        if (off[0] && tag) {
+            const size_t k2 = strlen(off);
+            snprintf(off + k2, sizeof off - k2, "; %s", tag);
+        }
     }
-    tg_say("%s%s%s\n", line, tag ? "    " : "", tag ? tag : "");
+    tg_row(line, off[0] ? off : tag);
 }
 
 static void tg_print(const tg_scan_cfg *c, const tg_res *o) { tg_print_tag(c, o, NULL); }

@@ -1357,11 +1357,10 @@ static int cmd_puzzles(int argc, char **argv)
         shown++;
     }
     char tail[300];
-    snprintf(tail, sizeof tail, "\n%d puzzles shown out of %d (%d solved, %d open). The database is verified by 'selftest'. Mean effort: steps of "
-             "the kangaroo with a known public key, keys of the linear search without.\n", shown, PZ_NUM_PUZZLES, nsolved, nopen);
+    snprintf(tail, sizeof tail, "%d of %d puzzles (%d solved, %d open). Mean effort: kangaroo steps with a known public key, linear-search keys "
+             "without. Puzzles 161..256 (emptied in 2017): 'pzsolve puzzle N'.\n", shown, PZ_NUM_PUZZLES, nsolved, nopen);
+    putchar('\n');
     pz_fputs_wrap(stdout, tail, PZ_LINE_MAX, 0);
-    pz_fputs_wrap(stdout, "Puzzles 161..256 existed in the original 2015 transaction but the creator withdrew their funds in 2017: they are not listed "
-                          "here; 'pzsolve puzzle N' shows their address.\n", PZ_LINE_MAX, 0);
     return 0;
 }
 
