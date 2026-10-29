@@ -46,6 +46,21 @@ static inline PZ_VABI pz_vl bsv_word64(const pz_fev *x, int k)
     return w;
 }
 
+/* Canonical form of a tight element. With IFMA a tight element has exact limbs, and the fast reduction of the header only checks the top
+ * limb (the full one runs for a vector with a lane at or above 2^256 - 2^208: about 2^-48 per lane); with 29-bit limbs the fast form
+ * needs a carry ripple too and measured no cheaper than the full one. */
+static inline PZ_VABI void bsv_canon(pz_fev *x)
+{
+#ifdef PZ_FEV_IFMA
+    const pz_vl u = pz_fev_normalize_fast(x);
+    u64 any = 0;
+    for (int l = 0; l < NL; l++) any |= u[l];
+    if (UNLIKELY(any)) pz_fev_normalize(x);
+#else
+    pz_fev_normalize(x);
+#endif
+}
+
 static void *CAT(bsv_prepare_, ISA)(const bs_steps *st)
 {
     CAT(bsv_tab_, ISA) *t = pz_xaligned(64, sizeof *t);
@@ -115,7 +130,7 @@ static bool CAT(bsv_groups_, ISA)(const void *vt, pz_ge *C, u64 *xlo, u64 *xhi, 
             pz_fev_mul(&lam, &t, &dx[i - 1]);
             pz_fev_sqr(&x3, &lam);
             pz_fev_sub2(&x3, &x3, &xc, &sx);
-            pz_fev_normalize(&x3);
+            bsv_canon(&x3);
             const pz_vl w0 = bsv_word64(&x3, 0), w1 = bsv_word64(&x3, 1);
             memcpy(xlo + (size_t)(BS_HALF + i) * NL, &w0, sizeof w0);
             memcpy(xhi + (size_t)(BS_HALF + i) * NL, &w1, sizeof w1);
@@ -124,7 +139,7 @@ static bool CAT(bsv_groups_, ISA)(const void *vt, pz_ge *C, u64 *xlo, u64 *xhi, 
         pz_fev_mul(&lam, &t, &dx[i - 1]);
         pz_fev_sqr(&x3, &lam);
         pz_fev_sub2(&x3, &x3, &xc, &sx);
-        pz_fev_normalize(&x3);
+        bsv_canon(&x3);
         const pz_vl w0 = bsv_word64(&x3, 0), w1 = bsv_word64(&x3, 1);
         memcpy(xlo + (size_t)(BS_HALF - i) * NL, &w0, sizeof w0);
         memcpy(xhi + (size_t)(BS_HALF - i) * NL, &w1, sizeof w1);
