@@ -662,6 +662,17 @@ int pz_keyed_file_put(const char *path, const char *key, const char *val)
     return rc;
 }
 
+char *pz_keyed_line(char **pos, char **eq)
+{
+    char *line = *pos;
+    if (!line || !*line) return NULL;
+    char *nl = strchr(line, '\n');
+    if (nl) *nl = 0;
+    *pos = nl ? nl + 1 : NULL;
+    *eq = strchr(line, '=');
+    return line;
+}
+
 char *pz_read_file(const char *path, size_t *len)
 {
     FILE *f = fopen(path, "rb");

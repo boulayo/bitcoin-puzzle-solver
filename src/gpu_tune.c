@@ -757,10 +757,8 @@ void gpu_doctor_cache(void)
     char *t = pz_read_file(path, NULL);
     int cnt = 0;
     const size_t pz_vl = strlen(PZ_VERSION);
-    for (char *line = t; line && *line;) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = 0;
-        char *eq = strrchr(line, '=');
+    char *eq;
+    for (char *p = t, *line; (line = pz_keyed_line(&p, &eq));) {
         if (eq && (size_t)(eq - line) > pz_vl && !strncmp(eq - pz_vl - 1, "|" PZ_VERSION, pz_vl + 1)) {
             /* "[kang|]API|NAME|VERSION|CU|PZVERSION=VARIANT" (tune_key) -> "NAME (API, VERSION): kangaroo NK 128" */
             const bool kang = !strncmp(line, "kang|", 5);
@@ -778,7 +776,6 @@ void gpu_doctor_cache(void)
             } else doctor_line('i', "saved GPU tuning: %.150s", line);
             cnt++;
         }
-        line = nl ? nl + 1 : NULL;
     }
     free(t);
     if (!cnt) doctor_line('i', "no GPU kernel tuning saved for version %s: it is done the first time each GPU is used (20-60 s, one time only)", PZ_VERSION);

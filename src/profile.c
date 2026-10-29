@@ -34,7 +34,8 @@ static void profile_key(const run_ctx *r, char *out, size_t n)
     for (char *c = out; *c; c++) if (*c == '\n' || *c == '\r' || *c == '=') *c = '_';
 }
 
-/* Non-negative integer with an optional fractional part ("1030000000", "8.3e8" is not written by us): no strtod needed. */
+/* The whole part of a non-negative number: the rates are saved as integers ("%.0f": "1030000000"), so no strtod is needed; a fraction or an
+ * exponent ends the number. */
 static double parse_rate(const char *p)
 {
     double v = 0;
@@ -216,11 +217,9 @@ void profile_doctor(void)
     int cnt = 0;
     char needle[64];
     snprintf(needle, sizeof needle, "|%s|", PZ_VERSION);
-    for (char *line = t; line && *line;) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = 0;
+    char *eq;
+    for (char *p = t, *line; (line = pz_keyed_line(&p, &eq));) {
         if (strstr(line, needle)) {
-            const char *eq = strchr(line, '=');
             const char *cfg = strstr(line, "|t_");                       /* "sus|...|t_16|g_all|hi=826000000 at=...": a steady rate */
             if (!strncmp(line, "sus|", 4) && eq && cfg && cfg < eq) {
                 char b[32], c[96];
@@ -243,7 +242,6 @@ void profile_doctor(void)
             } else doctor_line('i', "saved profile: %.170s", line);
             cnt++;
         }
-        line = nl ? nl + 1 : NULL;
     }
     free(t);
     if (!cnt) doctor_line('i', "no CPU+GPU profile saved for version %s: the first 'hunt' on a machine with a GPU measures it by itself (about 2 minutes; --no-tune skips it)", PZ_VERSION);

@@ -274,6 +274,19 @@ static void t_kv(void)
     /* the text is a C string: a NUL ends it */
     const char nul[] = "a=1\n\0b=2\n";
     CHECK(pz_kv_find(nul, "b", '=', 0) == NULL && pz_kv_find(nul, "a", '=', 0) != NULL);
+    /* pz_keyed_line: every line, an empty one included, cut out in place; the first '=' ends the key */
+    char kt[] = "a=1\n\nb=c=2\nnone";
+    char *p = kt, *eq = NULL, *l;
+    CHECK((l = pz_keyed_line(&p, &eq)) && !strcmp(l, "a=1") && eq == l + 1);
+    CHECK((l = pz_keyed_line(&p, &eq)) && !strcmp(l, "") && !eq);
+    CHECK((l = pz_keyed_line(&p, &eq)) && !strcmp(l, "b=c=2") && eq == l + 1);
+    CHECK((l = pz_keyed_line(&p, &eq)) && !strcmp(l, "none") && !eq);
+    CHECK(pz_keyed_line(&p, &eq) == NULL && pz_keyed_line(&p, &eq) == NULL);
+    char kn[] = "k=v\n";
+    p = kn;
+    CHECK((l = pz_keyed_line(&p, &eq)) && !strcmp(l, "k=v") && pz_keyed_line(&p, &eq) == NULL);   /* the last newline makes no empty line */
+    p = NULL;
+    CHECK(pz_keyed_line(&p, &eq) == NULL);
 }
 
 /* pz_truncate_path cuts a file above 4 GiB to the byte (MinGW's truncate() takes a 32-bit length): the size of a dp.bin of 4 GiB, a

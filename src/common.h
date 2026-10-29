@@ -136,6 +136,9 @@ int pz_write_file_atomic_ex(const char *path, const void *data, size_t len, int 
  * files shared by every pzsolve of the user. Atomic like pz_write_file_atomic, and serialised between programs by a lock on path.lock when
  * the system gives one. 0 on success. */
 int pz_keyed_file_put(const char *path, const char *key, const char *val);
+/* The lines of such a file read whole (pz_read_file), one at a time, cut out in place: *pos starts at the text (NULL: none) and moves on; *eq is
+ * the '=' that ends the key, NULL on a line without one. NULL at the end of the text. */
+char *pz_keyed_line(char **pos, char **eq);
 /* Reads a whole file into a malloc'd, NUL-terminated buffer. */
 char *pz_read_file(const char *path, size_t *len);
 /* Number of places where `needle` (not empty) occurs in the file, overlapping ones included. The file is read in blocks of 64 KiB, so a log of
