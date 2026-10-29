@@ -1040,3 +1040,93 @@ instead, and where a table is cheaper to read than its contents are to compute (
     layout of the giant steps, so one per engine would change them too). Neither was taken.
   * *The comb in BMI2/ADX code*: compiled with those flags the start code takes half the instructions but only 14 % less time (the
     additions of a start wait for each other); after the larger windows not tried again.
+
+### 10.5 The linear search on a laptop with AVX-512, SHA-NI and a small Ampere GPU (after 1.15.0)
+
+The owner's machine: Core i7-11850H (Tiger Lake-H, 8 cores, 16 threads, AVX-512 with IFMA, SHA extensions, 45 W), RTX A2000 Laptop (GA106, 20
+SM, 4 GB, the reference laptop GPU of sections 5 and 8.4), Intel UHD (Xe-LP, 32 EU) through OpenCL, Windows 11. The question was why the linear
+search felt slower than the machine should allow. The model below was built from instruction counts, the port tables of Tiger Lake (uops.info) and
+what could be measured here (the test machine of 10.2 to 10.4, one thread pinned, `PZ_ASSUME_IFMA=1`); the owner's `bench` and three hunts on
+puzzle 71 then came in and are the ground truth it is checked against.
+
+* **What the laptop measured** (1.15.0, `bench`). Linear search, keys/s on 1 / 8 / 16 threads: avx512i 30.3 / 141.3 / 157.9 M, avx512v 19.1 /
+  107.5 / 115.7, avx2v 10.4 / 52.9 / 57.4, avx512 11.1 / 57.7 / 71.3, shani 7.19 / 41.9 / 52.7, avx2 7.19 / 41.1 / 49.8, baseline 3.6 / 18.6 /
+  22.0. Kangaroo steps/s (1 / 8 / 16): IFMA lanes 48.0 / 236 / 261 M, IFMA pairs 52.3 / 230 / 261, AVX-512 lanes 23.5 / 132 / 140, the mixed
+  layout 205 (−22 %, not used). A2000 through CUDA: linear 793 M keys/s (window 512 with the register cap), kangaroo 895 M steps/s, copy
+  bandwidth 164 GB/s of 192, probes of `mad.lo` 2.42 T/s, `mad.hi` 1.00, three-input add 2.52 T/s. Intel UHD through OpenCL: 17.5 M keys/s, 56 M
+  steps/s. Hunts on puzzle 71 (Speed rows after about two minutes): default (16 threads, both GPUs) 865 M keys/s = CPU x15 133 + A2000 715 + UHD
+  16; `-t 8` 882 = 113 + 754 + 16 (after 9.5 minutes); `--no-gpu` 153.5. Then with the UHD excluded (`--gpu 0`): `-t 14` 948 = 142 + 807 after
+  two minutes; `-t 8` 854 = 125 + 729 after 8.5 minutes (the long runs sit lower than the two-minute ones: the laptop throttles over time, so
+  only runs of equal length compare).
+* **Instructions per key** (single-stepped here, one round of 4096 keys): avx512i 279.9 (188 of them the hash filter: 3009 per batch of 16 keys),
+  avx512v 397.5, avx2v 1237 and avx2 1489 (callgrind, 10.2). The `shani` engine (the scalar curve of avx2, SHA-256 on the SHA instructions,
+  RIPEMD-160 on 8 AVX2 lanes) cannot run here: from its code the filter is about 3120 instructions per 8 keys (1150 the SHA-256 stage, 64
+  `sha256rnds2` for 8 keys; 1970 RIPEMD-160), 390 per key against 679 for avx2 and 188 for avx512i, about 1200 per key with the curve.
+* **The ports of Tiger Lake** (uops.info; the same as Skylake-X for 512-bit integer operations): `vpaddd` and `vpternlogd` zmm on p0 or p5 (two per
+  cycle), `vprold`, `vpsrld` and `vpmadd52luq` zmm on p0 only, `vpshufb` zmm on p5 only; the second 512-bit FMA unit of the server parts plays no
+  role (no floating point). Per key of avx512i about 224 vector operations go to those two ports: 169 in the hash (62 of them rotations and shifts,
+  p0 only), about 55 in the curve (26 IFMA, p0 only); the two ports balance at **about 112 cycles per key, the floor**. Measured: 33.0 ns per key on
+  the laptop at one thread (30.3 M keys/s), 158 cycles at the 4.8 GHz turbo (fewer if the AVX-512 licence lowers it), 50.2 ns here at about 3.2 GHz:
+  **the two cores do the same work per clock, 70 to 75 % of the port floor**; the rest is latency (the field products are a chain, 10.2). The
+  kangaroo step: 20.9 ns on the laptop, 27.6 ns here; one thread does 0.55 to 0.63 keys per step.
+* **CPU: what the 8 cores give.** 141.3 M keys/s on 8 threads is 17.7 M per core, **2.8 GHz on every core** at 158 cycles per key: the all-core
+  AVX-512 clock of a 45 W part (the single core runs at 4.8). SMT adds 11.8 % (157.9 M on 16 threads): the second thread of a core fills part of
+  the 25 to 30 % the first leaves idle on p0 and p5, and the working set of a thread (window table 20 KiB, denominators and products 296 KiB, hash
+  batches 12 KiB) fits twice in the 1.25 MiB L2. The hunt without GPUs gives 153.5 M, 3 % under `bench` (claims, the reporter, heat). What is left on
+  the CPU is the 25 % of latency between the port floor and the engine, which the two chains of products and the eight batches of 10.2 already
+  attacked; nothing in the tables of 10.4 reaches it.
+* **SHA-NI on Tiger Lake, by its port cost** (uops.info): `sha256rnds2` is one uop on **p5 only, one every 3 cycles** (latency 6); `sha256msg1` 6
+  uops (p01, p015, p5), one every 4 cycles; `sha256msg2` 12 uops, one every 5. A 33-byte key is one block, 32 `rnds2`, 12 `msg1`, 12 `msg2`: SHA-256
+  alone costs **96 cycles of p5 plus about 108 of p0/p1 per key**, against about 55 cycles of p0 + p5 per key (27 of p5) for the 16-lane AVX-512
+  SHA-256 (1750 operations per 16 keys). A hybrid engine (SHA-256 on the SHA unit, RIPEMD-160 and the curve on the lanes) would need at least 96 +
+  35 (RIPEMD-160, 1120 operations per 16 keys) = 131 cycles per key for the hash against 92 now: **−30 to −35 % on the engine**, with p0 and p1
+  taken by the message schedule into the bargain; computing the schedule on the lanes (17 cycles per key) leaves the 96 cycles of p5. Not
+  implemented. The laptop confirms the table: `shani` measures exactly `avx2` on one thread (7.19 M both; the SHA unit replaces 290 instructions
+  per key by a p5 queue of the same length), +6 % on 16 threads. On Zen 3 and Zen 4 `rnds2` issues every cycle (`msg1` 0.5, `msg2` 2): about 62 cycles
+  per key against 73 for the 8-lane AVX2 SHA-256 on three ports, which is where the `shani` engine can win; `--isa auto` measures and decides.
+* **GPU: the A2000 is on the ceiling of its ALU pipe.** The sm_86 SASS of `linear256` (NVRTC 12.0, `ptxas`): 2791 instructions per key, of which
+  `hash160_w2` 2030 (794 `SHF`, 495 `LOP3`, 457 `IADD3`, 155 `LEA.HI`, 108 `IMAD.IADD`, 8 `PRMT`, 8 `LDL`) and the field about 700 (354 `IMAD`, mostly
+  `IMAD.WIDE.U32`, 232 `IADD3.X`, 49 `SEL`, the rest shifts and control); `linear512` with the register cap, the variant the tuner chose on the card,
+  is the same within a few instructions, 128 registers, four blocks of 128 per SM, one 4-byte spill outside the loop over the keys. On GA10x an SM
+  partition dispatches one warp instruction per cycle; `IADD3`, `LOP3`, `SHF`, `LEA`, `SEL` and `PRMT` run on the 16-lane ALU pipe, `IMAD` on the
+  16-lane FMA pipe, so a warp instruction holds its pipe two cycles. Per key about **2230 instructions go to the ALU pipe and 470 to the FMA pipe**.
+  The probes of `bench` give the clock: `mad.lo` 2.42 T/s is 16 lanes × 80 partitions × **1.89 GHz** (the card boosts past its 1687 MHz rating when
+  cold), and the three-input add 2.52 T/s is that pipe plus a few `IMAD.IADD`. The ALU pipe at 1.89 GHz does 2.42 T operations/s, which is **1.09 G
+  keys/s at 2230 per key**; measured 793 M, **73 % of the pipe**, and 2.21 T instructions/s in all: the
+  kernel is issue-bound on one pipe, and only fewer ALU-pipe instructions per key help; the FMA pipe is a fifth busy. The 27 % missing are
+  dependency stalls (the hash is a chain of 4 to 5 cycle operations with 2 to 3 independent at a time; the capped variant with 16 warps per SM
+  was chosen for that). Moving adds to the FMA pipe was tried on the SASS: `mad.lo` with the constant 1 is folded back to `IADD3` by `ptxas`; with
+  a multiplier it cannot see, the three adds of a SHA-256 round move (192 `IMAD`) but the three-input fusion of `IADD3` is lost: ALU pipe −3.8 %,
+  instructions +2.9 % per hash; all the adds of both hashes: ALU −8 %, instructions +14.5 % (the `LEA.HI` rotate-and-add fusion goes too). Not
+  worth a card's time. The kangaroo is no calibration for the linear kernel: 895 M steps/s × 1132 instructions use 40 % of the ALU pipe; it sits
+  between its two ceilings (760 M by bandwidth, 1.86 G by instructions, `bench`).
+* **The campaign against `bench`** (puzzle 71, both GPUs, two minutes): the A2000 does 715 M with 15 CPU threads and 754 M with 8, against 793 M
+  alone; the CPU 133 M on 15 threads against 148 expected from `bench` (15/16 of 157.9), and 113 M on 8 threads against 141: **CPU and GPU each
+  lose 5 to 20 % to the other**, and the losses move together with the thread count: the chassis shares one power and heat budget (Dynamic
+  Boost, 45 + 95 W nominal). The thread that serves the CUDA device is not the cause: it sleeps on the context (`CU_CTX_SCHED_BLOCKING_SYNC`) and
+  per launch of 0.35 s (about 250 M keys) it computes three `k·G`, writes 264 bytes and reads 8, under a millisecond; and with 8 threads it had
+  eight idle CPUs and the card still lost 5 %. The first-run measurement does run everything together and tries 16, 12, 8, 4 and 0 threads
+  (with the high priority for the GPU threads, which it chose on this machine); it saw no configuration beyond its 3 % margin, which the numbers
+  confirm: `-t 8` against the default is +2 % on the total (882 against 865). From this round it also tries one thread fewer per CUDA device, and
+  it leaves a GPU out when its loss is not measurable (within 1 %, confirmed in alternating pairs): the Intel UHD gives 16 M keys/s, 1.9 % of
+  the total, costs the core that drives it (the 16th thread, about 2 M) and draws from the package the CPU cores run on, the 10 to 15 M more that
+  the CPU loses with the GPUs on than its 16th thread is worth. The two runs with `--gpu 0` (the index `devices` gives the A2000) then showed
+  the whole size of it: **the A2000 goes from 715 to 807 M keys/s and the total from 865 to 948 M (+10 %)** once the UHD stops drawing from the
+  shared budget, far more than the 16 M it contributed; the first-run measurement had tried that configuration and seen nothing beyond its 3 %
+  margin, because the power moves back to the card over more than its 10 s window. The new rule leaves such a device out even when the window
+  shows no gain. SMT: +12 % for the CPU alone, so 16 threads stay right; with the A2000 running the thread count is a wash within ±2 % (`-t 14`
+  and `-t 8` after two minutes). Whether the thread serving the card needs a CPU of its own is still to be measured (`-t 16` against `-t 15` with
+  `--gpu 0`): the first-run measurement now tries both. The driver API does not expose the clock or the throttling state of the card (NVML would,
+  a new dependency): `nvidia-smi -q -d CLOCK,PERFORMANCE` during a hunt shows them.
+* **Expected on this laptop:** CPU 150 to 158 M keys/s alone, 125 to 145 with the A2000 running; A2000 790 to 810 M alone or with the CPU, 715
+  to 760 with the UHD also on; **together 940 to 960 M keys/s after two minutes with `--gpu 0`** (880 to 900 after ten, when the chassis is
+  hot), 865 with every device. The best choice is `--gpu 0` with 14 to 16 threads; 8 threads cost about 4 % and leave the machine usable. The kangaroo line of the puzzle-140 run (GPU 486 M steps/s after 5.8 s against 895 in `bench`)
+  is a warm-up reading: the launches grow from 2 rounds to the 0.35 s target by at most a factor of 2 each, the first ones are mostly launch
+  overhead and the 1.3 M walkers of the herd (10240 work-items × 128, the same herd as in `bench`) and those of the CPU threads take seconds of
+  CPU time to start (10.4).
+  After a minute 800 to 850 M steps/s is what to expect with the CPU threads running.
+* **What would move the numbers.** CPU: only the latency between the port floor (112 cycles per key) and the engine (158): a third of it is in the
+  hash, whose 16 lanes are one chain of 64 + 80 rounds; two batches interleaved at the instruction level would need 32 registers for the states
+  alone. GPU: fewer ALU-pipe instructions in the hash (1909 of 2230 per key); the SHA-256 message schedule is 48 × 11 operations of that pipe per
+  key, the RIPEMD-160 lines 160 × 7, both at the minimum of their expressions. Neither is a table or a constant (10.4). What a laptop user can do
+  today is in USAGE 8: `--gpu 0`, `-t`, `--prio-gpu`, `--limit`, `--retune`; the heat budget decides the rest.
