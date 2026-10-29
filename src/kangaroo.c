@@ -587,9 +587,9 @@ static u32 i192_mod_u32(const i192 *a, u32 m)
     return neg && rem ? m - rem : rem;
 }
 
-/* A start of species sp, E = c*x + u: the point c*Qp + u*G and u. False when it cannot be used (u = 0 on a tame
- * walker, or the point at infinity, which reveals the key). */
-static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz_ge *p, i192 *d)
+/* A start of species sp, E = c*x + u: the point c*Qp + u*G, in Jacobian form, and u. False when it cannot be used (u = 0 on a
+ * tame walker). The point is at infinity when c*x + u = 0: start_at_infinity handles that. */
+static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz_gej *p, i192 *d)
 {
     pz_u256 lo = pz_u256_mul_u32(&ks->W, (u32)(sp->lo < 0 ? -sp->lo : sp->lo)), span = pz_u256_mul_u32(&ks->W, (u32)(sp->hi - sp->lo));
     u32 rem;
@@ -610,80 +610,119 @@ static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz
     const pz_ge *cq = sp->coef == 3 ? &ks->Q3 : &ks->Qp;
     if (pz_u256_is_zero(&mag)) {
         if (sp->coef == 0) return false;
-        *p = *cq;
+        pz_gej_set_ge(p, cq);
     } else {
-        pz_gej ug;                                        /* in Jacobian form: one inversion for the start, not one per operation */
-        pz_ec_mul_g_j(&ug, &mag);                         /* 0 < mag < 2^192: never the point at infinity */
-        if (neg) pz_fe_neg(&ug.y, &ug.y);
-        if (sp->coef != 0) pz_gej_add_ge(&ug, &ug, cq);
-        if (!pz_gej_to_ge(p, &ug)) {
-            /* c*x + u = 0: x = -u / c */
-            pz_u256 x;
-            if (!neg) return false;                       /* x would be negative */
-            x = sp->coef == 3 ? pz_u256_divmod_u32(&mag, 3, &rem) : mag;
-            if (sp->coef == 3 && rem) return false;
-            pz_u256 key;
-            pz_u256_add(&key, &ks->base, &x);
-            run_submit_key(ks->r, &key, "kangaroo (start)");
-            return false;
-        }
+        pz_ec_mul_g_j(p, &mag);                           /* 0 < mag < 2^192: never the point at infinity */
+        if (neg) pz_fe_neg(&p->y, &p->y);
+        if (sp->coef != 0) pz_gej_add_ge(p, p, cq);
     }
     *d = u;
     return true;
 }
 
+/* A start c*Qp + u*G at infinity: c*x + u = 0, so x = -u / c, which is the key when it is a whole number in the interval. */
+static void start_at_infinity(kang_state *ks, const kang_species *sp, const i192 *u)
+{
+    if (!i192_is_neg(u)) return;                          /* x would be negative */
+    i192 m = *u;
+    i192_neg(&m);
+    const pz_u256 mag = {{m.w[0], m.w[1], m.w[2], 0}};
+    u32 rem = 0;
+    const pz_u256 x = sp->coef == 3 ? pz_u256_divmod_u32(&mag, 3, &rem) : mag;
+    if (sp->coef == 3 && rem) return;
+    pz_u256 key;
+    pz_u256_add(&key, &ks->base, &x);
+    run_submit_key(ks->r, &key, "kangaroo (start)");
+}
+
+/* The band of a new start of walker i: one of the bands of its group, by their shares. */
+static const kang_species *start_band(const kang_worker *w, int i, u64 rng[4])
+{
+    const int ns = NKSPEC3;
+    const kang_species *sp = KSPEC3, *band = &sp[w->spec[i]];
+    u64 tot = 0;
+    for (int s = 0; s < ns; s++)
+        if (sp[s].coef == band->coef && sp[s].res == band->res) tot += sp[s].w;
+    u64 pick = krng_next(rng) % tot;
+    for (int s = 0; s < ns; s++)
+        if (sp[s].coef == band->coef && sp[s].res == band->res) {
+            if (pick < sp[s].w) return &sp[s];
+            pick -= sp[s].w;
+        }
+    return band;
+}
+
+/* Walker i starts at the affine point p (normalized) with distance d. */
+static void start_set(kang_worker *w, int i, pz_ge *p, i192 d)
+{
+    int8_t sg = 1;
+    if (pz_fe_is_odd(&p->y)) {   /* canonical representative: even y */
+        pz_ge_neg(p, p);
+        i192_neg(&d);
+        sg = (int8_t)-sg;
+    }
+    w->x[i] = p->x;
+    w->y[i] = p->y;
+    w->vstale[i] = 1;
+    w->d[i] = d;
+    w->sigma[i] = w->kind[i] == 0 ? 1 : sg;
+    w->prev[i] = w->prev2[i] = KANG_NOTAG;
+    w->ck[i] = w->mn[i] = KANG_NOTAG;
+    w->esc[i] = 0;
+    w->lastdp[i] = w->round;
+}
+
 static void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
 {
     for (;;) {
+        const kang_species *band = start_band(w, i, rng);
+        pz_gej pj;
         pz_ge p;
         i192 d;
-        int8_t sg = 1;
-        {
-            const int ns = NKSPEC3;
-            const kang_species *sp = KSPEC3, *band = &sp[w->spec[i]];
-            u64 tot = 0;                                 /* a band of the walker's group, by the shares */
-            for (int s = 0; s < ns; s++)
-                if (sp[s].coef == band->coef && sp[s].res == band->res) tot += sp[s].w;
-            u64 pick = krng_next(rng) % tot;
-            for (int s = 0; s < ns; s++)
-                if (sp[s].coef == band->coef && sp[s].res == band->res) {
-                    if (pick < sp[s].w) { band = &sp[s]; break; }
-                    pick -= sp[s].w;
-                }
-            if (!start_species(ks, band, rng, &p, &d)) continue;
+        if (!start_species(ks, band, rng, &pj, &d)) continue;
+        if (!pz_gej_to_ge(&p, &pj)) {
+            start_at_infinity(ks, band, &d);
+            continue;
         }
-        pz_fe_normalize(&p.y);
-        if (pz_fe_is_odd(&p.y)) {   /* canonical representative: even y */
-            pz_ge_neg(&p, &p);
-            i192_neg(&d);
-            sg = (int8_t)-sg;
-        }
-        w->x[i] = p.x;
-        w->y[i] = p.y;
-        w->vstale[i] = 1;
-        w->d[i] = d;
-        w->sigma[i] = w->kind[i] == 0 ? 1 : sg;
-        w->prev[i] = w->prev2[i] = KANG_NOTAG;
-        w->ck[i] = w->mn[i] = KANG_NOTAG;
-        w->esc[i] = 0;
-        w->lastdp[i] = w->round;
+        start_set(w, i, &p, d);
         return;
+    }
+}
+
+/* Starts walkers [from, to) as kang_restart_rng does one after the other, with the same draws and the same points, but brought to
+ * affine form KANG_START_BATCH at a time with one inversion. A batch with a start at infinity (practically never) is drawn again
+ * one walker at a time from the same state of the generator. */
+#define KANG_START_BATCH 64
+static void kang_start_range(kang_state *ks, kang_worker *w, int from, int to, u64 rng[4])
+{
+    pz_gej pj[KANG_START_BATCH];
+    pz_ge p[KANG_START_BATCH];
+    i192 d[KANG_START_BATCH];
+    for (int i0 = from; i0 < to; i0 += KANG_START_BATCH) {
+        const int n = to - i0 < KANG_START_BATCH ? to - i0 : KANG_START_BATCH;
+        u64 saved[4];
+        memcpy(saved, rng, sizeof saved);
+        for (int k = 0; k < n; k++)
+            while (!start_species(ks, start_band(w, i0 + k, rng), rng, &pj[k], &d[k])) {}
+        if (pz_gej_to_ge_batch(p, pj, (size_t)n)) {
+            for (int k = 0; k < n; k++) start_set(w, i0 + k, &p[k], d[k]);
+        } else {
+            memcpy(rng, saved, sizeof saved);
+            for (int k = 0; k < n; k++) kang_restart_rng(ks, w, i0 + k, rng);
+        }
     }
 }
 
 void kang_restart_one(kang_state *ks, kang_worker *w, int i) { kang_restart_rng(ks, w, i, w->rng); }
 
-void kang_init_herd(kang_state *ks, kang_worker *w)
-{
-    for (int i = 0; i < w->K; i++) kang_restart_one(ks, w, i);
-}
+void kang_init_herd(kang_state *ks, kang_worker *w) { kang_start_range(ks, w, 0, w->K, w->rng); }
 
 typedef struct { kang_state *ks; kang_worker *w; int from, to; u64 rng[4]; } init_task;
 
 static void *init_thread(void *p)
 {
     init_task *t = p;
-    for (int i = t->from; i < t->to; i++) kang_restart_rng(t->ks, t->w, i, t->rng);
+    kang_start_range(t->ks, t->w, t->from, t->to, t->rng);
     return NULL;
 }
 
