@@ -233,11 +233,6 @@ static inline void kang_dp_recode(const kang_worker *w, dp_rec *r, int i)
     r->tagk = (r->tagk & ~7ULL) | k;
 }
 
-/* Pseudo-random generator (xoshiro256**) seeded from the campaign seed. */
-void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b);
-u64 krng_next(u64 s[4]);
-pz_u256 krng_below(u64 s[4], const pz_u256 *bound);   /* uniform in [0, bound) */
-
 kang_state *kang_create(run_ctx *r);
 int kang_configure(kang_state *ks, int k_gpu_total);
 void kang_destroy(kang_state *ks);
@@ -276,7 +271,6 @@ int kang_kind_coef(unsigned k);                                                 
 kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream);
 void kang_worker_free(kang_worker *w);
 void kang_restart_one(kang_state *ks, kang_worker *w, int i);
-void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4]);
 void kang_init_herd_parallel(kang_state *ks, kang_worker *w, int nthreads, u64 stream);
 void kang_init_herd(kang_state *ks, kang_worker *w);
 

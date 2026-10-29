@@ -208,7 +208,11 @@ static void synth_free(run_ctx *r)
     free(r);
 }
 
-double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
+/* Runs the CPU kangaroo on [lo, lo + 2^wbits) until `key` is found; returns the steps used or -1. Test overrides: R jumps
+ * instead of 256 (R > 0, a power of two), dp_bits (dp > 0) and no restart of walkers without distinguished points. */
+typedef struct { unsigned R, dp; bool no_watchdog; } kang_try_opts;
+
+static double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
 {
     run_ctx *r = synth_new(lo, wbits, key);
     if (!r) return -1;
@@ -545,8 +549,6 @@ static void say_wrapped(const char *fmt, ...)
     pz_fputs_wrap(stdout, buf, PZ_LINE_MAX, 4);
 }
 
-static char *count_text(u64 v, char *out, size_t n) { return pz_fmt_u64(v, out, n); }
-
 int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
 {
     pz_ec_init();
@@ -560,7 +562,7 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
     const int lr = kang_load_log(ks);
     if (lr < 0) pz_die("cannot use the distinguished-point file %s", ks->log_path);
     char c1[32], c2[32], c3[32];
-    say_wrapped("campaign '%s': %s distinguished points already in %s\n", r->cfg.name, count_text(ks->loaded, c1, sizeof c1), ks->log_path);
+    say_wrapped("campaign '%s': %s distinguished points already in %s\n", r->cfg.name, pz_fmt_u64(ks->loaded, c1, sizeof c1), ks->log_path);
     int bad = 0;
     for (int i = 0; i < nfiles && !atomic_load(&r->found); i++) {
         char path[1300];
@@ -585,8 +587,8 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
             bad++;
             continue;
         }
-        say_wrapped("  %s: %s points read, %s new, %s already known\n", path, count_text(st.read, c1, sizeof c1), count_text(st.added, c2, sizeof c2), count_text(st.dups, c3, sizeof c3));
-        if (st.skipped) say_wrapped("  (%s points discarded because of the RAM limit: raise --mem)\n", count_text(st.skipped, c1, sizeof c1));
+        say_wrapped("  %s: %s points read, %s new, %s already known\n", path, pz_fmt_u64(st.read, c1, sizeof c1), pz_fmt_u64(st.added, c2, sizeof c2), pz_fmt_u64(st.dups, c3, sizeof c3));
+        if (st.skipped) say_wrapped("  (%s points discarded because of the RAM limit: raise --mem)\n", pz_fmt_u64(st.skipped, c1, sizeof c1));
     }
     if (kang_flush_log(ks) != 0) { pz_log(PZ_LOG_ERR, "writing %s failed (disk full?)", ks->log_path); bad++; }
     kang_destroy(ks);

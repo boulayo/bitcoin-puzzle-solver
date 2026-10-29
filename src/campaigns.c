@@ -43,7 +43,8 @@ int campaign_lock(const char *dir)
     return fd;
 }
 
-bool campaign_is_running(const char *dir)
+/* True when some process currently holds the campaign lock. */
+static bool campaign_is_running(const char *dir)
 {
     char p[4200];
     snprintf(p, sizeof p, "%s/lock", dir);

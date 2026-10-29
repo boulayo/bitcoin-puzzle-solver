@@ -12,7 +12,8 @@
 
 static inline u64 rotl64(u64 x, int k) { return (x << k) | (x >> (64 - k)); }
 
-u64 krng_next(u64 s[4])
+/* Pseudo-random generator (xoshiro256**) seeded from the campaign seed. */
+static u64 krng_next(u64 s[4])
 {
     const u64 result = rotl64(s[1] * 5, 7) * 9;
     const u64 t = s[1] << 17;
@@ -22,7 +23,7 @@ u64 krng_next(u64 s[4])
     return result;
 }
 
-void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b)
+static void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b)
 {
     u8 buf[32 + 16 + 16 + 16];
     memcpy(buf, seed, 32);
@@ -37,7 +38,8 @@ void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b)
     for (int i = 0; i < 8; i++) krng_next(s);
 }
 
-pz_u256 krng_below(u64 s[4], const pz_u256 *bound)
+/* uniform in [0, bound) */
+static pz_u256 krng_below(u64 s[4], const pz_u256 *bound)
 {
     unsigned bits = pz_u256_bits(bound);
     if (bits == 0) return pz_u256_zero();
@@ -197,8 +199,6 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
 
 /* ---------------- setup ---------------- */
 
-static long double u256_ld(const pz_u256 *v) { return pz_u256_to_ld(v); }
-
 /* The species of walkers (docs/en/ALGORITHMS.md, sections 8.8 and 8.10): tame walkers near 0 in the four residues mod 12 that are
  * multiples of 3, wild ones on Q in three residues 4 apart, wild ones on 3Q in one residue, every zone split into bands with their own
  * shares, optimized in the exact coverage model (tools/research/kbands.py), from tools/research/kang_schema3.txt by tools/research/kspec_table.py. */
@@ -260,7 +260,7 @@ kang_state *kang_create(run_ctx *r)
     ks->W = cfg_range_size(&r->cfg);
     const char *rerr = kang_range_error(&ks->W);
     if (rerr) pz_die("%s", rerr);
-    ks->sqrtW = sqrtl(u256_ld(&ks->W));
+    ks->sqrtW = sqrtl(pz_u256_to_ld(&ks->W));
     ks->epoch = (u64)r->sessions | (u64)r->node << 32;   /* node 0 keeps the streams of the single-computer campaigns */
 
     int nthr = r->use_cpu ? r->nthreads : 0;
@@ -415,7 +415,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     char b1[32], b2[32], b3[32], jid[9];
     kang_jump_id(ks->jump_tag, jid);
     pz_log(PZ_LOG_INFO, "kangaroo: W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
-           log2l(u256_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
+           log2l(pz_u256_to_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
     pz_log(r->node ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);
     pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
@@ -561,7 +561,7 @@ static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz
     return true;
 }
 
-void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
+static void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
 {
     for (;;) {
         pz_ge p;

@@ -8,8 +8,6 @@
 /* Takes the exclusive lock of a campaign directory (held until the process exits); dies with a clear message
  * when another process already runs the campaign. Returns the descriptor holding the lock. */
 int campaign_lock(const char *dir);
-/* True when some process currently holds the campaign lock. */
-bool campaign_is_running(const char *dir);
 /* The state to show for a campaign, given the one its files say (`written`: "RUNNING", "STOPPED", "COMPLETED"...), whether FOUND.txt
  * exists and whether some process holds the lock. The files say RUNNING until the next write, so a process that was killed leaves
  * it behind: without the lock the state is STOPPED. 'list' and 'info' both use it. Returns `written` itself or a constant. */

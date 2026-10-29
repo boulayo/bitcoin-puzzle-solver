@@ -33,8 +33,7 @@ double eta_prob_within(const eta_in *m, long double extra);
 double eta_seconds(const eta_in *m, double q, double rate);
 
 #define ETA_NWIN 5
-extern const double ETA_WINDOWS[ETA_NWIN];        /* 1 h, 24 h, 7 d, 30 d, 365 d (seconds) */
-extern const char *const ETA_WINDOW_NAMES[ETA_NWIN];
+extern const char *const ETA_WINDOW_NAMES[ETA_NWIN];   /* the windows of p_win: 1 h, 24 h, 7 d, 30 d, 365 d */
 
 typedef struct {
     double rate;               /* units/s used (0 = unknown) */

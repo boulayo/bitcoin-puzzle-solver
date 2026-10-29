@@ -7,8 +7,6 @@
 
 #define V_CAP (((u128)1) << 126)
 
-static pz_u256 u256_from_u128v(u128 v) { return pz_u256_from_u128(v); }
-
 static char *u128_to_hex(u128 v, char *buf)
 {
     if (v >> 64 == 0) snprintf(buf, 40, "%llx", (unsigned long long)v);
@@ -176,9 +174,9 @@ static u128 first_gap(const sched_t *s)
 /* Position in the order of the whole range of the seq-th block of this computer's part. */
 static pz_u256 global_seq(const sched_t *s, u128 seq)
 {
-    if (!s->part.total) return u256_from_u128v(seq);
+    if (!s->part.total) return pz_u256_from_u128(seq);
     const u32 m = s->part.count;
-    const pz_u256 base = u256_from_u128v(seq / m);
+    const pz_u256 base = pz_u256_from_u128(seq / m);
     pz_u256 k = pz_u256_mul_u32(&base, s->part.total);
     pz_u256_add_u64(&k, &k, s->part.res[(unsigned)(seq % m)]);
     return k;

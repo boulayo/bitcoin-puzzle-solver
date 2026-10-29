@@ -47,7 +47,7 @@ double eta_seconds(const eta_in *m, double q, double rate)
     return (double)(u / rate);
 }
 
-const double ETA_WINDOWS[ETA_NWIN] = {3600.0, 86400.0, 7 * 86400.0, 30 * 86400.0, 365.25 * 86400.0};
+static const double ETA_WINDOWS[ETA_NWIN] = {          /* 1 h, 24 h, 7 d, 30 d, 365 d */3600.0, 86400.0, 7 * 86400.0, 30 * 86400.0, 365.25 * 86400.0};
 const char *const ETA_WINDOW_NAMES[ETA_NWIN] = {"1h", "24h", "7d", "30d", "365d"};
 
 void eta_summarize(const eta_in *m, double rate, eta_summary *o)
