@@ -344,13 +344,13 @@ static void kang_setup(kang_state *ks)
     ks->expected_steps = KANG_C_MEAN * ks->sqrtW;
 }
 
-/* dp_bits: the larger of what the overhead of the walkers allows and what memory requires (the table must hold the points of
- * KANG_DP_MEM_MARGIN sqrt(W) steps), or --dp-bits as far as the number of walkers allows. */
+/* dp_bits: the larger of what the overhead of the walkers allows (KANG_DP_OVERHEAD) and what memory requires (the table must hold the points
+ * of KANG_DP_MEM_MARGIN sqrt(W) steps), or --dp-bits as far as the number of walkers allows. */
 static int pick_dp_bits(kang_state *ks, u64 max_entries)
 {
     run_ctx *r = ks->r;
     int dp_ov = 0;
-    long double ov = 0.01L * ks->sqrtW / ks->K_total;
+    long double ov = KANG_DP_OVERHEAD * ks->sqrtW / ks->K_total;
     if (ov >= 1.0L) dp_ov = (int)floorl(log2l(ov));
     int dp_mem = 0;
     long double need = KANG_DP_MEM_MARGIN * ks->sqrtW / (0.8L * (long double)max_entries);

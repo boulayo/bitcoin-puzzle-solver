@@ -435,7 +435,7 @@ int kangaroo_stats(int argc, char **argv)
     if (o.R && (o.R < 2 || (o.R & (o.R - 1)))) pz_die("kstat R: invalid value '%s' (expected a power of 2 between 2 and %d)", argv[5], KANG_R);
     pz_log_set_quiet(1);
     u64 s = 0xABCDEF987ULL;
-    double sum = 0, *v = pz_xmalloc(sizeof(double) * (size_t)runs);
+    double sum = 0, sumsq = 0, *v = pz_xmalloc(sizeof(double) * (size_t)runs);
     int fails = 0, n = 0;
     for (int i = 0; i < runs; i++) {
         pz_u256 lo = pz_u256_pow2(70);
@@ -450,11 +450,13 @@ int kangaroo_stats(int argc, char **argv)
         if (steps < 0) { fails++; continue; }
         v[n++] = steps / sqrt(ldexp(1.0, (int)bits));
         sum += v[n - 1];
+        sumsq += v[n - 1] * v[n - 1];
     }
     if (n == 0) { free(v); printf("W = 2^%u: none of the %d trials succeeded\n", bits, runs); return 1; }
     qsort(v, (size_t)n, sizeof(double), cmp_double);
     printf("kangaroo cost over %d trial%s on W = 2^%u (%d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits, thr, thr == 1 ? "" : "s");
     pz_prop_line("mean", "%.3f", sum / n);
+    if (n > 1) pz_prop_line("std. error", "%.4f", sqrt((sumsq / n - (sum / n) * (sum / n)) / (n - 1)));
     pz_prop_line("median", "%.3f", v[n / 2]);
     pz_prop_line("90th percentile", "%.3f", v[n * 9 / 10]);
     if (fails) pz_prop_line("failed trials", "%d", fails);

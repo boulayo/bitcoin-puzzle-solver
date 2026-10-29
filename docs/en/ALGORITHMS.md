@@ -209,7 +209,7 @@ Here `K` is the total number of walkers and `N` the number of entries that the m
 | jumps | 256 multiples of 12, uniform in `[2/3, 4/3]` of `W^¾/16` (+16 for leaving cycles) | long walks without drift (section 8.10) |
 | walkers per CPU thread | `clamp(√W/(256·threads), 16, 4096)`, multiple of 16 | the batch inversion is shared by the whole herd of the thread; 4096 is the measured optimum (RESEARCH.md sections 8.4 and 10.3) |
 | GPU walkers | `NK` per work-item (tuned, section 5) × work-items (by default 512 per SM with CUDA, 64 per compute unit with OpenCL, at most 32768) | at most `√W/256` in total, so each one walks long enough |
-| `dp_bits` | `max(⌊log2(0.01·√W/K)⌋, ⌈log2(1.3·√W/(0.8·N))⌉, 2)`, at most 60 | the overhead of the last DP below 1 % of the expected steps; the second term is the memory, below |
+| `dp_bits` | `max(⌊log2(0.005·√W/K)⌋, ⌈log2(1.3·√W/(0.8·N))⌉, 2)`, at most 60 | the delay of the last DP (`≈ 0.95·K·2^dp_bits` steps, RESEARCH.md 8.13) between 0.25 and 0.5 % of `√W`, 0.35 % on average (0.7 % with the 0.01 of the versions up to 1.15.1, for half the table and half the `dp.bin`); the second term is the memory, below |
 | `--dp-bits B` | at most `⌊log2(√W/K)⌋ − 1` (a larger value is lowered, with a warning), never below what memory requires | a walker reaches its next DP after `2^dp_bits` steps: `K·2^dp_bits` must stay well below `√W` |
 | DP table | 16 bytes per entry (the tag and the index of the record in `dp.bin`), open addressing; limit `--mem` (default 40 % of the free RAM, at least 256 MiB and at most 64 GiB) | see below |
 

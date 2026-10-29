@@ -33,6 +33,11 @@
  * of 4 of the versions before the thinning cost one or two bits wherever memory decides: on puzzles 135 and 140 with 2^20 to 2^22
  * walkers (GPUs) and 8 to 64 GiB of RAM, up to 29 % more steps (8 % at 32 GiB). The file of distinguished points is 2 to 4 times larger. */
 #define KANG_DP_MEM_MARGIN 1.3L
+/* The overhead rule of dp_bits: the largest dp with K 2^dp / sqrt(W) at most this (so between half of it and it). After the collision that
+ * solves, the walker that arrived second still has to reach a distinguished point, 2^dp steps on average while the whole herd walks: the
+ * search costs about 0.95 K 2^dp more steps (docs/en/RESEARCH.md 8.13), 0.35 % of sqrt(W) on average with 0.005 (0.7 % with the 0.01 of the
+ * versions up to 1.15.1). Each halving costs twice the table and twice dp.bin; where memory sets dp_bits the rule changes nothing. */
+#define KANG_DP_OVERHEAD 0.005L
 
 /* signed 192-bit integer (two's complement) */
 typedef struct { u64 w[3]; } i192;
