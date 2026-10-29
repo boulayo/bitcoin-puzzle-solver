@@ -68,7 +68,7 @@ static void kang_cleanup(run_ctx *r)
     r->kang = NULL;
 }
 
-/* Starts workers; returns the number of CPU threads started. r->nthreads is at most MAX_WORKERS - 16 (main, and the callers here). */
+/* Starts workers; returns the number of CPU threads started. r->nthreads is at most MAX_WORKERS - 16 (main, the profile and the callers here). */
 static int kang_launch_cpu(run_ctx *r, kang_state *ks, pthread_t *th, kth_arg *args, _Atomic int *active)
 {
     int n = 0;

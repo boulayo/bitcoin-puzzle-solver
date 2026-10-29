@@ -109,14 +109,14 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
     int t = -1;
     char g[64] = "";
     const char *tp = strstr(val, "t=");
-    if (tp) t = pz_atoi(tp + 2);
+    if (tp && tp[2] >= '0' && tp[2] <= '9') t = pz_atoi(tp + 2);
     const char *gp = strstr(val, "g=");
     if (gp) {
         size_t i = 0;
         for (gp += 2; *gp && *gp != ' ' && i + 1 < sizeof g; gp++) g[i++] = *gp;
         g[i] = 0;
     }
-    if (t < 0) return;
+    if (t < 0 || t > MAX_WORKERS - 16) return;          /* not a count a measurement writes (an edited file): the entry is ignored */
     r->nthreads = t;
     r->threads_explicit = true;
     if (t == 0) r->use_cpu = false;
