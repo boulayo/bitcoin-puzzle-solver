@@ -7,10 +7,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](docs/en/RELEASING.
 
 ### Removed
 - `--limit 100` is refused (no `--limit` means no limit, as before). Scripts that passed 100 must drop the option.
-- **Upgrade note.** The kangaroo log `dp.bin` now starts with `PZDP5` and records the jump table: versions before 1.12.0 cannot read a log written
-  by 1.12.0. Logs written by 1.9.1 to 1.11.0 (`PZDP4`) are still read, appended to and merged.
 
 ### Changed
+- **Upgrade note.** The kangaroo log `dp.bin` now starts with `PZDP5` and records the jump table: versions before 1.12.0 cannot read a log written
+  by 1.12.0. Logs written by 1.9.1 to 1.11.0 (`PZDP4`) are still read, appended to and merged.
 - Faster hash160 stage: the filter on the first word of the hash no longer computes the unused part of RIPEMD-160, the SHA-256 round constants
   are read as broadcasts from memory and the byte swap is one shuffle on AVX-512. Instructions per key: -7.4 % (AVX-512), -3.6 % (AVX2); time
   measured in interleaved runs: about -4 % on both.

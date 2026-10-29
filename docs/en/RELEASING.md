@@ -21,7 +21,7 @@
 
 * Each release has a section `## [X.Y.Z] — YYYY-MM-DD`, newest first. The section must exist before the release script is run, and the
   script refuses to release without it.
-* Group the changes under headings such as Added, Changed, Fixed, Performance, Compatibility, Known limitations, Tests and Documentation.
+* Group the changes under the headings Added, Changed, Removed and Fixed.
 * Anything that affects existing users goes in the entry: renamed or removed options, changes to the log lines or the output files, any
   change to the campaign file formats (and whether old campaigns still resume).
 * Say what was measured and what was not. Performance claims that rest on a model, an estimate or a simulated device are marked as
@@ -65,8 +65,8 @@ copy (when the binary can run on the packaging machine) and stops if the origina
 5. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
    Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine), checks the Linux binary
    (no glibc symbol newer than 2.34) and the Windows one (system DLLs only) with `tools/check_binary.sh`, and publishes the five archives, together
-   with `SHA256SUMS`, as a GitHub Release for the tag. The binary in every archive is a stripped copy. When it has finished, open the release
-   page and check that every archive and the checksum file are there.
+   with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page and check that every archive and the
+   checksum file are there.
 
 The workflow can also be run by hand (Actions tab, "Run workflow"). Without "publish" it only builds the archives and keeps them as artifacts of the
 run. With "publish" ticked it creates the tag on the selected commit and a **draft** release (untick "draft" to publish at once).

@@ -7,20 +7,12 @@
 | `common.h`, `util.c` | types, logging (terminal + `log.txt`), formatting, atomic files, memory with error checking, the readers of numbers (strict `pz_parse_u64` / `pz_parse_i64`, `pz_arg_int` for the command line) and of `key=value` lines (`pz_kv_find`) |
 | `envopts.h/.c` | **the only place that reads the environment**: `pz_env_init`, called first thing in `main` and in the test programs, takes the `PZ_*` variables and the standard ones the program looks at into the structure `g_env`; the rest of the code reads its fields (section 5b) |
 | `platform.h/.c` | **the only operating-system-dependent point** (POSIX and Windows): binary files with 64-bit offsets, atomic rename, campaign lock, large memory (mmap/THP, VirtualAlloc/large pages), clocks, entropy, console (ANSI sequences, width), Ctrl-C / SIGTERM / SIGHUP / window close, dynamic libraries. The rest of the program is C11 + pthread; a few `#ifdef _WIN32` remain only where the code is specific anyway (`cl_api.c`, `rt_cuda.c`, `sysinfo.c`, `doctor.c`, `util.c`, `kang_selftest.c`, `common.h`) |
-| `../lib/pzcore/` | **the reusable crypto core** (own README): `u256`, `fe` (field), `ec` (curve), `hash`, `address` (Base58Check, bech32, WIF), `hash160_batch`, `perm`, `cpu`, and the lane headers `fev.h` / `fev52.h` and templates in `impl/`; built into `build/libpzcore.a` with nothing from `src/`. The rows below for these files now refer to `lib/pzcore/include/pzcore/` and `lib/pzcore/src/` |
-| `u256.h/.c` | 256-bit integers, group order `n` |
-| `fe.h` | field `GF(p)` (all `static inline`, so every compilation unit gets the code for its *own* instruction set; multiplication and addition/subtraction in MULX/ADX assembly with a C fallback) |
-| `fev.h` | **SIMD-lane** field `GF(p)` (9 limbs of 29 bits, `vpmuludq`): one lane = one independent element; limb bounds documented in the header |
-| `fev52.h` | the same interface with **AVX-512 IFMA** (5 limbs of 52 bits, `vpmadd52luq/huq`); `fev_chain.inc` holds the parts common to both (inversion chain, broadcast) |
-| `ec.h/.c` | secp256k1 curve: Jacobian/affine sums, `k·G` multiplication with a 4-bit window table, (de)serialization of public keys |
-| `hash.h/.c`, `hash_tables.h` | SHA-256, RIPEMD-160, hash160, Base58Check, WIF (scalar reference) |
-| `hash_lanes.inc` (+ `hash_lanes_neon.inc`, `hash_lanes_shani.inc`) | multi-lane SHA-256 + RIPEMD-160 (GCC vector extensions; the SHA-256 stage on the ARMv8 or x86 SHA instructions in the other two), included once per ISA from `lib/pzcore/include/pzcore/impl/` |
+| `../lib/pzcore/` | **the reusable crypto core** (own README, with the table of its headers): `u256`, `fe` (field), `ec` (curve), `hash`, `address` (Base58Check, bech32, WIF), `hash160_batch`, `perm` (the visiting order), `cpu`, the lane headers `fev.h` (9 limbs of 29 bits) / `fev52.h` (5 limbs of 52 bits, IFMA; `fev_chain.inc` holds their common parts) and the hash-lane templates `hash_lanes*.inc` in `impl/`, included once per ISA; built into `build/libpzcore.a` with nothing from `src/` |
 | `engine_impl.inc` + `eng_base.c` / `eng_avx2.c` / `eng_avx512.c` | CPU engine of the linear search with scalar arithmetic, instantiated per ISA with different flags (`Makefile`) |
 | `eng_shani.c` (+ `hash_lanes_shani.inc`, `h160_shani.c`) | the `avx2` engine with the SHA-256 stage on the x86 SHA instructions (`sha256rnds2`, two blocks in flight), RIPEMD-160 on the 8 AVX2 lanes, a transposition between the two; used only when the CPU has the instructions and the autotune measures it faster; built with `-msha -mavx2 -mssse3 -msse4.1`, tested under QEMU by `make test-shani` |
 | `eng_neon.c` / `eng_neon2.c` | aarch64: the same engine with the SHA-256 stage on the ARMv8 SHA2 instructions and RIPEMD-160 on NEON vectors, 4 or 8 lanes (`neon2` advances two vectors together); built with `-march=armv8-a+crypto`, used only when the CPU reports SHA2, the autotune decides between them |
 | `engine_vec_impl.inc` + `eng_avx2v.c` / `eng_avx512v.c` / `eng_avx512i.c` | CPU engine with curve arithmetic on SIMD lanes (N independent windows per round); `eng_avx512i.c` instantiates it with `fev52.h` |
 | `cpu_engine.h`, `cpu_common.c` | engine interface (`scan_job`, `cpu_engine`); shared tables (`i·G`, `cpu_gmultiples` for tables of any size), engine registry, ISA detection, quick check of every engine (known key), autotune |
-| `perm.h/.c` | Feistel permutation with SHA-256 rounds (visiting order) |
 | `jobq.h/.c` | interval scheduler (work requests, completion, checkpoint, resume) |
 | `campaign.h/.c` | immutable campaign configuration, seed generation |
 | `puzzles.h/.c`, `puzzles_data.c` | database of the 160 puzzles (generated from `data/puzzles.csv`) plus the addresses of the emptied puzzles 161-256 (`data/puzzles_withdrawn.csv`) and its verification |
@@ -54,13 +46,12 @@ machine. The OpenCL sources (53 KB) become plain arrays (`build/kernels_gen.c`).
 committed) are embedded compressed (`build/ptx_gen.c`, `embed -z`) in the format described at the top of `src/lz.c`; the encoder is in
 `embed.c`, which checks each stream it writes with the real decoder, so the build stops if a stream does not unpack to its file. The
 modules of a family differ in few lines (`linear128` and `linear256` in 148 of 38,000), so each module is stored against another one
-(`PTXBASE` in the `Makefile`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
+(the `base` column of `src/kernels/ptx/modules.txt`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
 the modules take about 1 MB instead of 12 MB, and the stripped Linux executable is under 3 MB instead of 14 MB. `rtcu_build` unpacks the
 module it is about to load (a few milliseconds, once per module load; no hot path touches this), hands the NUL-terminated text to the
 driver and frees it. `tools/gen_ptx.py` and the `.ptx` files are unchanged. The simulated CUDA driver embeds the same files plain
 (`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves;
-`tests/t_kernels.c` does the same for every module without a driver. The Makefile builds with `-g`; only the binaries in the release
-archives are stripped (`tools/package_release.sh`, see `RELEASING.md`).
+`tests/t_kernels.c` does the same for every module without a driver.
 
 The x86 SIMD engines are optional. When the `Makefile` builds for a target other than x86-64 it defines `PZ_NO_X86_VARIANTS`; the engine
 registry (`cpu_common.c`), BSGS (`bsgs.c`) and the kangaroo (`kang_cpu.c`) then use only the scalar code.
@@ -151,19 +142,7 @@ every variable once into `struct pz_env` (`g_env`, declared in `src/envopts.h` w
 fields. A program that does not call it sees the values of a clean environment. The rules are the same for all the variables: unset and empty are the
 same thing; a flag is on with any value except `""` and `"0"`; a value that cannot be used (a number that is not a whole decimal number in its range, a
 name that is not one of the allowed ones, a folder name that does not fit) is reported once, as a warning `NAME=TEXT ignored (...)`, and the default
-stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (section 7.10); those for tests and diagnostics are only here:
-
-* `PZ_KANG_ROUND=base|x86|avx2v|avx512v|avx512i|avx512i2` imposes the CPU step of the kangaroo (`avx512i2`: IFMA on pairs of vectors), when this
-  CPU can run it; `PZ_KANG_VERBOSE=1` prints the speed of every step variant measured for the choice; `PZ_BSGS_SCALAR=1` disables the lane-based
-  BSGS windows.
-* `PZ_TEST_DP_CAP=N`: the table of distinguished points starts with N entries (at least 64), a tiny table to exercise its growth and thinning;
-  `PZ_TEST_KTHREAD=N` (16 to 1048576): walkers per CPU thread; `PZ_TEST_JUMP=N` (1 or more): the mean jump in units of √W (the regime of long
-  walks on a small range).
-* `PZ_ASSUME_IFMA=1`: the CPU is taken to have IFMA when it has AVX-512 (for the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID
-  hides it); `PZ_EXPECT_SHANI=1`: the tests fail if the SHA-extension code cannot run (`make test-shani`).
-* The simulated CUDA driver of `tests/mock_cuda` (section 6): `PZ_MOCK_DEVICES=n` (it shows n devices, 1 to 8), `PZ_MOCK_SAME_NAME=1` (all with
-  one name, like the cards of one model), `PZ_MOCK_COUNT=1` (at exit it reports how many modules were loaded and kernels launched) and
-  `PZ_MOCK_FAIL_FILE=path` (it fails one launch while that file exists, and removes the file: a device reset after sleep).
+stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (section 7.10); those for tests and diagnostics only here:
 
 | Variable | Field of `g_env` | Used in |
 |----------|------------------|---------|
@@ -176,17 +155,19 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | `XDG_CACHE_HOME`, `HOME`, `LOCALAPPDATA` | `xdg_cache_home`, `home`, `local_app_data` | `util.c`: `pz_cache_file` |
 | `TMPDIR` | `tmpdir` | `platform.c`: `pz_make_temp_dir` (POSIX) |
 | `TERM`, `NO_COLOR` | `term_dumb`, `no_color` | `platform.c` (`pz_stderr_is_terminal`), `run_common.c` (the panel) |
-| `PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_KANG_MIX` | `kang_round`, `kang_verbose`, `kang_mix` | `kang_cpu.c`: choice of the CPU step of the kangaroo |
-| `PZ_BSGS_SCALAR` | `bsgs_scalar` | `bsgs.c`: scalar windows only |
-| `PZ_ASSUME_IFMA` | `assume_ifma` | `cpu_common.c`: `cpu_has_ifma` |
-| `PZ_TEST_KTHREAD`, `PZ_TEST_JUMP`, `PZ_TEST_DP_CAP` | `test_kthread`, `test_jump`, `test_dp_cap` | `kangaroo.c`: `kang_create`, `kang_configure` |
-| `PZ_EXPECT_SHANI` | `expect_shani` | `tests/t_engine.c` |
+| `PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_KANG_MIX` | `kang_round`, `kang_verbose`, `kang_mix` | `kang_cpu.c`: choice of the CPU step of the kangaroo; `PZ_KANG_ROUND=base\|x86\|avx2v\|avx512v\|avx512i\|avx512i2` imposes one when the CPU can run it (`avx512i2`: IFMA on pairs of vectors), `PZ_KANG_VERBOSE=1` prints the speed of every variant measured |
+| `PZ_BSGS_SCALAR` | `bsgs_scalar` | `bsgs.c`: scalar windows only, no lane-based ones |
+| `PZ_ASSUME_IFMA` | `assume_ifma` | `cpu_common.c`: `cpu_has_ifma` is true when the CPU has AVX-512 (for the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID hides IFMA) |
+| `PZ_TEST_KTHREAD`, `PZ_TEST_JUMP`, `PZ_TEST_DP_CAP` | `test_kthread`, `test_jump`, `test_dp_cap` | `kangaroo.c` (`kang_create`, `kang_configure`): walkers per CPU thread (16 to 1048576); the mean jump in units of √W (1 or more: long walks on a small range); the first size of the table of distinguished points (at least 64: a tiny table exercises its growth and thinning) |
+| `PZ_EXPECT_SHANI` | `expect_shani` | `tests/t_engine.c`: the tests fail if the SHA-extension code cannot run (`make test-shani`) |
 
 None of them is read in a loop that runs per key or per step: they are read at start-up, when a device or a campaign is set up, or in a one-time choice.
 The tests that need another value set the field and put it back (`xdg_cache_home` in the self-tests, `test_dp_cap` for the first size of a table);
 `tests/t_env.c` tests the reading itself by setting the variables and calling `pz_env_init` again. Two things are outside: the simulated CUDA driver
-(`tests/mock_cuda/mock_cuda.c`) is a library of its own and reads its four variables (`PZ_MOCK_DEVICES`, `PZ_MOCK_SAME_NAME`, `PZ_MOCK_COUNT`,
-`PZ_MOCK_FAIL_FILE`) in one function, `mock_env`, at its first `cuInit`; and the tests of the library (`lib/pzcore/tests/t_batch.c`, `t_fev52.c`) read
+(`tests/mock_cuda/mock_cuda.c`, section 6) is a library of its own and reads its four variables in one function, `mock_env`, at its first
+`cuInit`: `PZ_MOCK_DEVICES=n` (n devices, 1 to 8), `PZ_MOCK_SAME_NAME=1` (all with one name, like the cards of one model), `PZ_MOCK_COUNT=1`
+(at exit it reports how many modules were loaded and kernels launched), `PZ_MOCK_FAIL_FILE=path` (it fails one launch while that file
+exists, and removes the file: a device reset after sleep); and the tests of the library (`lib/pzcore/tests/t_batch.c`, `t_fev52.c`) read
 `PZ_EXPECT_SHANI` and `PZ_ASSUME_IFMA` in `main`, because they link nothing of `src/`.
 
 ## 6. Tests and verification
