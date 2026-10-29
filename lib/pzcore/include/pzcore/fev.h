@@ -23,6 +23,11 @@
 #endif
 
 #define PZ_FEV_LANES (PZ_VBYTES / 8)
+/* The includer may define PZ_FEV_INLINE (as __attribute__((always_inline))) to have the products inlined at every call; by
+ * default the compiler decides, and in a large loop it keeps them out of line. */
+#ifndef PZ_FEV_INLINE
+#define PZ_FEV_INLINE
+#endif
 #define PZ_FEV_NLIMB 9
 typedef uint64_t pz_vl __attribute__((vector_size(PZ_VBYTES)));
 typedef struct { pz_vl l[9]; } pz_fev;
@@ -209,7 +214,7 @@ static inline PZ_VABI void pz_fev_reduce_cols(pz_fev *r, const pz_vl *c)
     pz_fev_carry(r);
 }
 
-static inline PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, const pz_fev *b)
+static inline PZ_FEV_INLINE PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, const pz_fev *b)
 {
     pz_vl c[17];
 #pragma GCC unroll 17
@@ -223,7 +228,7 @@ static inline PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, const pz_fev *
     pz_fev_reduce_cols(r, c);
 }
 
-static inline PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
+static inline PZ_FEV_INLINE PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
 {
     pz_vl a2[9], c[17];
 #pragma GCC unroll 9

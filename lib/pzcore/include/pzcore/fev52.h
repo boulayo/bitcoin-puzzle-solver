@@ -23,6 +23,11 @@
 #endif
 
 #define PZ_FEV_LANES 8
+/* The includer may define PZ_FEV_INLINE (as __attribute__((always_inline))) to have the products inlined at every call; by
+ * default the compiler decides, and in a large loop it keeps them out of line. */
+#ifndef PZ_FEV_INLINE
+#define PZ_FEV_INLINE
+#endif
 #define PZ_FEV_NLIMB 5
 #define PZ_FEV_BITS 52
 #define PZ_FEV_MASK (((uint64_t)1 << PZ_FEV_BITS) - 1)
@@ -153,7 +158,7 @@ static inline PZ_VABI void pz_fev_reduce_cols(pz_fev *r, pz_vl *t)
     r->l[4] = t[4];
 }
 
-static inline PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, const pz_fev *b)
+static inline PZ_FEV_INLINE PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, const pz_fev *b)
 {
     pz_vl t[10];
 #pragma GCC unroll 10
@@ -168,7 +173,7 @@ static inline PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, const pz_fev *
     pz_fev_reduce_cols(r, t);
 }
 
-static inline PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
+static inline PZ_FEV_INLINE PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
 {
     pz_vl t[10];
 #pragma GCC unroll 10

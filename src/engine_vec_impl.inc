@@ -16,6 +16,14 @@
 #define CAT(a, b) CAT_(a, b)
 #define PZ_HASH_LANES_FN CAT(hash_lanes_, ISA)
 #include <pzcore/impl/hash_lanes.inc>
+/* With 32 vector registers the search runs faster with the products, vctx_emit and vround inlined (measured: 2.4 % with IFMA,
+ * 3 % without); with the 16 of AVX2 the spills make it slower. */
+#if PZ_VBYTES == 64
+#define PZ_FEV_INLINE __attribute__((always_inline))
+#define VINLINE __attribute__((always_inline))
+#else
+#define VINLINE
+#endif
 #ifdef PZ_FEV_IFMA
 #include <pzcore/fev52.h>
 #else
@@ -122,7 +130,7 @@ static inline PZ_VABI bool vl_any(pz_vl v)
 
 /* Canonical x and the parity of the canonical y, then NL candidates appended to the hash batch. The fast forms cover all but
  * about 2^-24 of the lanes; for those the full normalization runs on the whole vector. */
-static inline PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev *y, pz_vl koff)
+static inline VINLINE PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev *y, pz_vl koff)
 {
     pz_vl unsure = pz_fev_normalize_fast(x);
     pz_vl par = pz_fev_parity_fast(y, &unsure);
@@ -250,7 +258,7 @@ static void vtab_build(void)
 }
 
 /* One round: the NL windows whose centres are in (xc, yc). Advances the centres by N*GRP*G. false = zero denominator. */
-static inline PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, const vstep_t *st, u64 wbase, pz_fev *dx, pz_fev *tmp)
+static inline VINLINE PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, const vstep_t *st, u64 wbase, pz_fev *dx, pz_fev *tmp)
 {
     const pz_vl kb = pz_vl_set(wbase);
     pz_vl lane_off = pz_vl_set(0);
