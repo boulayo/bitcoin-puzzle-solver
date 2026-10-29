@@ -171,10 +171,20 @@ static inline PZ_VABI void kv_load_words(pz_vl *out, int first, int nw, const u6
             if (blk * 8 + k >= first && blk * 8 + k < first + nw) out[blk * 8 + k - first] = (pz_vl)r[k];
     }
 #else
-    u64 t[KV_STRIDE][NL] PZ_ALIGN(64);
-    for (int l = 0; l < NL; l++)
-        for (int i = 0; i < nw; i++) t[i][l] = vjt[jb[l] + (u64)(first + i)];
-    memcpy(out, t, sizeof(pz_vl) * (size_t)nw);
+    /* AVX2: one 32-byte row of four words per lane and block, transposed as 4x4 (the words a block does not need are not formed) */
+#pragma GCC unroll 8
+    for (int blk = first / 4; blk * 4 < first + nw; blk++) {
+        __m256i r[4];
+#pragma GCC unroll 4
+        for (int l = 0; l < 4; l++) r[l] = _mm256_load_si256((const __m256i *)(vjt + jb[l] + 4 * blk));
+        const __m256i t0 = _mm256_unpacklo_epi64(r[0], r[1]), t1 = _mm256_unpackhi_epi64(r[0], r[1]);
+        const __m256i t2 = _mm256_unpacklo_epi64(r[2], r[3]), t3 = _mm256_unpackhi_epi64(r[2], r[3]);
+        const __m256i w[4] = {_mm256_permute2x128_si256(t0, t2, 0x20), _mm256_permute2x128_si256(t1, t3, 0x20),
+                              _mm256_permute2x128_si256(t0, t2, 0x31), _mm256_permute2x128_si256(t1, t3, 0x31)};
+#pragma GCC unroll 4
+        for (int k = 0; k < 4; k++)
+            if (blk * 4 + k >= first && blk * 4 + k < first + nw) out[blk * 4 + k - first] = (pz_vl)w[k];
+    }
 #endif
 }
 
