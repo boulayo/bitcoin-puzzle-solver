@@ -11,7 +11,7 @@
 | `pzsolve info (-c NAME \| -p N)` | prints the report of a campaign (its `State` line is the one `list` shows: `FOUND` if `FOUND.txt` exists, `RUNNING` only while a process holds the campaign lock, so a campaign that was killed is `STOPPED`) |
 | `pzsolve where (-c NAME \| -p N) --key HEX` | tells at which point of the visiting order of a linear or BSGS campaign a key comes, and whether it was already scanned |
 | `pzsolve split V1 V2 …` | divides the `--part` shares among several computers in proportion to their speeds (for example `split 800M 120M`; see section 8.2) |
-| `pzsolve merge (-c NAME \| -p N) -f FILE_OR_FOLDER … [-d DIR] [--mem GB]` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
+| `pzsolve merge (-c NAME \| -p N) -f FILE_OR_FOLDER … [-d DIR] [--mem GiB]` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
 | `pzsolve doctor [-d DIR] [--full]` | checks program, system, CPU, GPU, the saved tuning and profile, campaigns, disk, clock and `PZ_*` variables, and says what is wrong; paste its output when asking for help |
 | `pzsolve devices`   | detected CPU, instruction sets, RAM and GPUs (CUDA and OpenCL) |
 | `pzsolve selftest`  | built-in correctness checks (primitives, database, SIMD engines, kangaroo, BSGS, GPU) |
@@ -24,22 +24,13 @@ wrapped at the width of the terminal (128 columns at most).
 
 ## 2. Quick start: all the puzzles are already inside
 
-```sh
-pzsolve puzzles --open            # which puzzles are still unsolved
-pzsolve puzzle 71                 # address, range and how long it would take on this machine
-pzsolve hunt -p 71                # go: range and address come from the database
-# … Ctrl-C whenever you like …
-pzsolve hunt -p 71                # the same command resumes where you stopped
-pzsolve list                      # status of all the campaigns
-```
-
 `hunt -p N` creates the campaign `pN` in the folder `./campaigns`; running the same command again **resumes** it (same seed,
 no work repeated). For the puzzles with a known public key (140, 145, 150, 155, 160 and all the ones already solved) the public
 key is used automatically and the program chooses between BSGS and kangaroo (section 4).
 
 The database holds the address, the public key (if it ever appeared on the blockchain) and, for the solved puzzles, the private
 key (which serves as a test bench: `hunt -p 40` finds a known key in a few seconds, and `puzzle N` of a solved puzzle says
-`A test run (the key is known): …`). Provenance and checks: [`data/README.md`](../../data/README.md).
+`A test run (the key is known): …`). Provenance and checks: [`data/README.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/data/README.md).
 **The "solved/open" status is the one at the date the database was created**: before starting a long campaign, check on the
 address (blockchain explorer) that the funds are still there. The program warns you if you choose a puzzle that is already solved.
 
@@ -53,48 +44,14 @@ stops at `n − 1` (the group order), because keys beyond it do not exist. Prove
 
 ## 3. `hunt`: options
 
-```
--p, --puzzle N          puzzle 1..256: range, address and (if known) public key from the built-in database
-                        (161..256: the address only, funds withdrawn in 2017, see above). With -r it only
-                        selects the target, the range is the one of -r
--r, --range S:E         custom range (hexadecimal, inclusive): e.g. a single part of a puzzle. A key outside it is not reported
-                        by the linear search, not even when its last block happens to reach it (the engines scan whole lanes)
--a, --address ADDR      mainnet address different from the one in the database: P2PKH (`1...`, Base58Check) or native SegWit P2WPKH (`bc1q...`, bech32)
--H, --hash160 HEX       alternative to the address (40 hex digits)
--k, --pubkey HEX        known public key (33 bytes compressed or 65 uncompressed)
--c, --campaign NAME     campaign name: folder <dir>/<NAME>; if it already exists it is resumed [pN with -p N]
--d, --dir DIR           base folder of the campaigns [./campaigns]
--s, --seed SEED         64 hex digits (used verbatim) or any text (hashed); default or `auto`: random
--m, --mode M            auto | linear | kangaroo | bsgs   [auto, see section 4]
-    --table FILE        bsgs: reads the baby-step table from FILE if it exists, otherwise builds it and saves it
-    --bsgs-entries N    bsgs: baby steps of the table (when the campaign is created)
-    --part Q/T          linear search on several computers: the blocks of the visiting order are divided into T shares and this computer scans share Q
-                        (numbered from 0; more than one is allowed: `0,1/4`, `0-6/9`). See "Several computers on a linear search" (section 8.2)
-    --node N            kangaroo on several computers: number of this computer (0..65535); see "Several computers on one kangaroo campaign" (section 8.1)
-    --prio-gpu P        auto | yes | no: threads that serve the cards run at a higher priority than the compute threads [auto: the tuning tries it]
-    --limit X           use only X % of the machine (1..99), always at full speed and without pauses: fewer CPU threads and fewer work-items on the GPUs
-                        [off]; see "Using only part of the machine" (section 7.8)
-    --retune            measure again the best combination of CPU threads and GPUs of this machine
-    --no-tune           do not measure and do not use the machine profile or the remembered speed
-    --keep-awake        Windows and macOS: prevents the system from going to sleep while the campaign runs
--t, --threads N         CPU threads [all available cores; without -t, one core is left to drive each OpenCL GPU in use]
-    --no-cpu / --no-gpu disable the CPU or the GPUs
-    --gpu LIST          indices (see `devices`) separated by commas; also allows OpenCL devices on a CPU
-    --gpu-api A         auto | cuda | opencl   [auto: CUDA for NVIDIA, OpenCL as a fallback and for the other cards]
-    --isa I             auto | baseline | avx2 | shani | avx512 | avx2v | avx512v | avx512i   [auto: micro-benchmark]
-                        shani: avx2 with the SHA-256 instructions of the CPU (AMD Zen 2 and later, Intel Ice Lake and later)
-                        on arm64: auto | baseline | neon | neon2 (hardware SHA-256 of the CPU, 4 or 8 keys at a time)
-    --chunk-bits B      blocks of 2^B keys (20..40) [36, reduced for small ranges]; smaller blocks
-                        would slow down the CPU and above all the GPUs (every launch receives a single block)
-    --dp-bits B         kangaroo: bits of the distinguished points (0..60) [0 = automatic]
-    --mem GB            kangaroo and bsgs: maximum RAM for the table [kangaroo: 40 % of the free RAM, at least 256 MiB and at most
-                        64 GiB; bsgs: the table is chosen to fit in 70 % of the free RAM]
-    --ui U              auto | full | line | log   (see section 6)
-    --report-interval S seconds between panel updates [1]
-    --checkpoint-interval S  seconds between saves [60]
--q / -v                 fewer / more messages
-    --new / --resume    fails if the campaign exists / does not exist
-```
+`pzsolve hunt --help` lists every option with its default. What needs more than a line of the help:
+
+* `-p N` with `-r S:E` takes the target of puzzle N and the range of `-r`. A key outside the `-r` range is not reported by the
+  linear search, not even when its last block happens to reach it (the engines scan whole lanes).
+* `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random.
+* `--mem` is in GiB (`--mem 0.25` is 256 MiB). Without it the kangaroo takes 40 % of the free RAM for the table of distinguished points
+  (at least 256 MiB, at most 64 GiB) and BSGS chooses a table that fits in 70 % of it.
+* A `--chunk-bits` below the default slows down the CPU and above all the GPUs, since every launch receives a single block.
 
 A value that cannot be used stops the command with a message such as `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`.
@@ -121,12 +78,19 @@ pzsolve hunt -r 40000000000:7fffffffff -a <ADDRESS> -c zone1
 
 ## 4. Which algorithm? (`--mode auto`)
 
+Terms used from here on: **W** is the size of the range (2^(n-1) for puzzle n). A **key** is one candidate of the linear search, a **step**
+one kangaroo jump or one BSGS giant step. A **distinguished point** is a point of a kangaroo walk that is stored, about one in 2^dp-bits
+(`--dp-bits`). A **work-item** is one GPU thread; with the kangaroo it moves `NK` walkers.
+
 | Situation | Choice |
 |-----------|--------|
 | address only | `linear`: scan of the whole range (CPU and GPU) |
 | known public key, range < 2^20 | `linear` (instantaneous) |
-| known public key, the optimal BSGS table (or the largest that fits in 70 % of the free RAM) costs less than the kangaroo, **and there is no usable GPU** (or the work lasts only a few seconds, or you already have a `--table`) | `bsgs`: cost ≈ 1.0·√W, deterministic |
+| known public key, a BSGS table that costs no more than the kangaroo, and one of: no usable GPU (or `--no-gpu`), `--bsgs-entries` given, the `--table` file exists, the work lasts only a few seconds | `bsgs`: cost ≈ 1.0·√W, deterministic |
 | known public key, otherwise | `kangaroo`: ≈ 1.06·√W, it uses the GPUs as well |
+
+The BSGS table is the one of `--bsgs-entries` or of the existing `--table` file; otherwise the optimal one, or the largest that fits in
+70 % of the free RAM (or in `--mem`). A `--table` file that does not exist yet does not count: with `bsgs` it is built and saved.
 
 BSGS uses only CPU and RAM; with a powerful GPU the kangaroo can be faster despite its higher cost: if you know that this is the
 case, force `--mode kangaroo`. The mode stays fixed in the campaign (`campaign.conf`). Without a public key only the linear search
@@ -135,8 +99,7 @@ applies: `-m kangaroo` or `-m bsgs` stops with `puzzle 71 has no known public ke
 large for BSGS ends with `: use -m kangaroo`.
 
 The BSGS table takes about 11.4 bytes per baby step (cells of 8 bytes, 70 % of them in use); `--bsgs-entries` counts baby steps, not
-bytes. A table saved by versions up to 1.10.0 (file `PZBSGS01`, 12.3 bytes per baby step) is read and used as it is, with the RAM it
-needs; tables saved now have a new format (`PZBSGS02`) that those versions cannot read.
+bytes. Tables of other versions: [`RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md#compatibility-of-the-files-between-versions), compatibility table.
 
 ## 5. The folder of a campaign
 
@@ -159,8 +122,7 @@ campaigns/NAME/
 * **Resuming**: the same command (`hunt -p N`, or `hunt -c NAME`). The seed and the parameters that define the search
   cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits` or `--bsgs-entries` different from those of the
   existing campaign, the program **refuses** with an error (it does not silently ignore them); you can however change threads, GPUs,
-  ISA, memory and the look of the panel. **`pzsolve list`** shows all the campaigns and their state; `info -p N` / `where -p N --key K` accept
-  `-p` in place of `-c pN`.
+  ISA, memory and the look of the panel. **`pzsolve list`** shows all the campaigns and their state.
 * **Campaign name** (without `-c`): `pN` for a whole puzzle; for a sub-range (`-r`) or a custom target
   `pN-xxxxxxxx` / `custom-xxxxxxxx`, where `xxxxxxxx` depends on puzzle, range and target: **the same command always finds
   the same campaign**. For two independent campaigns on the same range use `-c` with different names (and different seeds). Names
@@ -178,8 +140,6 @@ campaigns/NAME/
 * A restart loses at most the work of the blocks in progress (a few seconds per worker); the rest is never redone. In BSGS the
   table is rebuilt (a few minutes) unless you use `--table`.
 * A campaign that has already found the key does not start again: it shows `FOUND.txt`.
-* **Several computers**: in the linear search use `--part` (section 8.2): no duplicated work and no exchange of
-  data; in the kangaroo `--node` and `merge` (section 8.1). With different seeds and without `--part` the campaigns overlap at random.
 
 ## 6. The progress panel
 
@@ -208,17 +168,13 @@ Ctrl-C: stop and save progress; run the same command again to resume.
   meant to be realistic from the very beginning (see below); in BSGS it remains a moving average of ≈ 30 s. Past 5 times the expected effort
   without a collision the kangaroo warns once (`kangaroo: 5x the expected effort without a collision: check the public key (-k) and the range`)
   and the line says `Time left     unknown (beyond the model)`.
-* **Provisional estimate**. In the first seconds the displayed speed is misleading: a GPU is counted only when its
-  first launch ends, the clocks rise, and a laptop slows down after a few minutes under load (on one laptop: 1.03 G steps/s
-  measured cold by the tuning, 834 M after three minutes). For this reason the time left: (1) does not appear until every engine has
-  produced something (the line says `Time left     measuring...` and the speed carries the remark `[starting: not all engines are counted yet]`);
-  (2) then uses the average over a sliding window of up to 2 minutes, not a moving average started from the first sample; (3) starts from a
-  **remembered speed**, if there is one: the *steady-state* speed reached by a previous run of the same configuration (same machine, version,
-  engine, threads, GPUs and priority; saved in the profile every 5 minutes and at the end, only after at least 3.5 minutes of running), otherwise
-  the one measured cold by the tuning; the measurement replaces the remembered value in about 2 minutes. While the estimate settles a line
-  says so: `provisional (from the remembered speed, settles in ~2 min)`, `provisional (from the tuning run, settles in ~40 s)`, or
-  `provisional (settles in ~34 s)` when there is nothing to start from. With `--no-tune` the memory is neither used nor updated.
-  `pzsolve doctor` lists the remembered speeds.
+* **Provisional estimate**. In the first seconds the displayed speed is misleading: a GPU is counted only when its first launch ends, the
+  clocks rise, and a laptop slows down after a few minutes under load. For this reason the time left does not appear until every engine has
+  produced something (the line says `Time left     measuring...` and the speed carries the remark `[starting: not all engines are counted yet]`),
+  and then starts from the steady-state speed of a previous run of the same configuration, if there is one, otherwise from the one measured
+  by the tuning (ALGORITHMS.md section 11). While the estimate settles a line says so: `provisional (from the remembered speed, settles in ~2 min)`,
+  `provisional (from the tuning run, settles in ~40 s)`, or `provisional (settles in ~34 s)` when there is nothing to start from. With
+  `--no-tune` the remembered speeds are neither used nor updated; `pzsolve doctor` lists them.
 * **Chance**: probability of success within the next hour, day, week, month and year at this rate, *assuming that the key is in
   the range* (formulas in [`ALGORITHMS.md`](ALGORITHMS.md) section 11).
 * In BSGS, while the table is being built, the panel shows phase 1 of 2 and how many giant steps will follow.
@@ -255,9 +211,9 @@ The program uses two runtimes, each loaded at startup only if present (with neit
 `devices` and the startup log show the memory that the driver declares. For a card with its own memory (NVIDIA, discrete AMD) it is the VRAM; for an
 **integrated GPU** (Intel UHD/Iris, AMD APUs) the OpenCL driver declares the share of system RAM that the card can address, usually more than half of the RAM
 (`59.58 GiB, shared system RAM`): it is neither reserved nor allocated memory. The program uses only as much as its buffers need, and at every
-start of the kangaroo it says so (`GPU[2]: 54272 kangaroos (…), memory used 29.80 MiB of system RAM`; on NVIDIA, `… MiB of 4.00 GiB`). The kangaroo uses
-≈ 55 MiB for every 1000 work-items of 64 kangaroos (≈ 230 bytes per kangaroo including the jump history), within the limit of one sixth
-of the declared memory. NVIDIA cards have less declared memory but more speed: bandwidth, not capacity, is the limit.
+start of the kangaroo it says so (`GPU[0]: 131072 kangaroos (1024 work-items x 128), memory used 72.08 MiB of 1.00 GiB`; on an integrated GPU,
+`… MiB of system RAM`). The kangaroo uses ≈ 40 MiB for the buffer of distinguished points plus 256 bytes per kangaroo (state and jump history);
+the herd is limited to one sixth of the declared memory. NVIDIA cards have less declared memory but more speed: bandwidth, not capacity, is the limit.
 
 ### 7.3 Device selection and self-test
 
@@ -276,21 +232,16 @@ three attempts with a short pause, as a transient error such as a display reset 
 
 ### 7.4 First run and kernel tuning
 
-The driver compiles the kernels for your card (with CUDA about 10 s per module; with the tuning of the six variants
+The driver compiles the kernels for your card (with CUDA about 10 s per module; with the tuning of the variants
 of the linear kernel about one minute, then the kangaroo variants the first time you use it) and keeps the result in its cache:
 from the next runs on, the startup is immediate. With several cards the tuning of the devices runs at the same time, and cards of one type are
 measured once (the others read the result: `from earlier tuning`). The tuning is stored in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` on Windows,
 `~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes. The default variant stays unless another one is
 more than 3 % faster.
 
-The variants tried by the tuning are: linear search with CUDA window 128, 256 or 512 × registers free or capped at 128, with
-OpenCL window 64, 128, 256 or 512; kangaroo with 64, 128 or 256 walkers per thread (CUDA) or 32, 64, 128 (OpenCL), each plain or with the
-products of the batch kept for every other walker (`b`, less memory traffic), and with CUDA also 64 or 128 walkers with the products kept for
-every fourth walker (`c`). On cards with an L2 cache of at least 8 MiB (non-laptop RTX 30/40: 6-72 MiB) the tuning also tries an
-**L2-sized herd**: fewer work-items (and NK 16, 32 or 64, plain or `b`) so that the private arrays of the walkers fit in half of the L2, where
-the traffic that limits the kernel does not reach the memory of the card (`NK 64 L2 herd` in the log; `PZ_GPU_NK=64l`). It is chosen only if
-measured faster. `bench` shows, for every GPU, the variant chosen and its speed (`bench --retune` measures them all again). On a **laptop** CPU and GPU share power and cooling: `bench --together`
-(section 7.9) finds how many CPU threads and which GPUs pay off.
+The variants (window, walkers per thread, L2-sized herds) are listed in [`ALGORITHMS.md`](ALGORITHMS.md) section 5. `bench` shows,
+for every GPU, the variant chosen and its speed. On a **laptop** CPU and GPU share power and cooling: `bench --together` (section 7.9)
+finds how many CPU threads and which GPUs pay off.
 
 ### 7.5 `bench` and the GPUs
 
@@ -318,10 +269,8 @@ to (no `HOME` or `XDG_CACHE_HOME`, as for a service) the measurement is skipped 
 ### 7.7 Priority of the threads that serve the cards
 
 Every GPU is served by a thread that launches the kernels, collects the results and launches again. When all the cores are busy computing, that thread may
-wait for its turn while the card sits idle; on laptops the effect is mixed up with the shared power limit. In the tuning, right after the warm-up and with all the CPU
-threads, the program compares normal and high priority in alternating pairs (normal, high, high, normal: a thermal drift cannot
-falsify the comparison; the second pair is run only if the first one favors the high priority by at least 1 %) and keeps it only if it wins by
-at least 2 % overall and in both pairs. The outcome goes into the profile (`prio=1`) and the log says it
+wait for its turn while the card sits idle; on laptops the effect is mixed up with the shared power limit. The tuning compares normal and
+high priority with all the CPU threads and keeps the high one only if it is measurably faster. The outcome goes into the profile (`prio=1`) and the log says it
 (`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). `--prio-gpu yes|no` imposes or excludes it (and it is
 not measured); `--prio-gpu auto` is the default. On Windows it is `ABOVE_NORMAL` for the card threads only (which sleep almost all the time
 waiting for the kernel: they take no time away from the computation); on Linux it is `nice -5` and needs root or `CAP_SYS_NICE`: without it the
@@ -333,9 +282,9 @@ the measurement will give ~0 % and the priority stays normal.
 Off by default. `hunt -p 71 --limit 50` uses about half of the machine to run cooler and consume less, accepting to go slower. There are no pauses or "work and rest" cycles: the load stays constant, so the fan
 does not start and stop in waves. It is achieved with fewer compute units, all at full speed:
 
-* **CPU**: X % of the threads (rounded to the nearest, at least one). With `-t` the X % applies to the threads given. Threads go first on different physical
-  cores, one per core, and only beyond the number of cores on the second SMT thread of the same core: for example on 8 cores and 16 threads, `--limit 50` is
-  8 threads on 8 cores, `--limit 25` is 4 threads on 4 cores, `--limit 75` is 12 threads. On Windows the assignment is a hint to the system, which may move the threads.
+* **CPU**: X % of the threads (rounded to the nearest, at least one). With `-t` the X % applies to the threads given. As always (section 8) the threads
+  go first on different physical cores: for example on 8 cores and 16 threads, `--limit 50` is 8 threads on 8 cores, `--limit 25` is 4 threads
+  on 4 cores, `--limit 75` is 12 threads.
 * **GPU**: X % of the work-items of every launch (rounded to blocks of 128, at least one) in both the linear search and the kangaroo: the card works
   all the time, but with fewer blocks in flight. The kangaroo consequently has fewer kangaroos. The log writes it
   (`limit 40%: CPU 6 of 16 threads, GPUs at 40% of the work-items`, then `GPU[0]: limit 40%: 3328 work-items per launch`).
@@ -348,8 +297,7 @@ does not start and stop in waves. It is achieved with fewer compute units, all a
 The consumption does not scale exactly like X: with fewer active cores the CPU can raise the frequency of the remaining ones, and part of the consumption (RAM, idle card,
 fans) stays. If you want a firmer cap, try lower values and watch temperatures and fan (HWiNFO, `nvidia-smi`). On Windows
 the "Maximum processor state" in the power options (set to 99 % it usually disables turbo) also holds back the frequency without touching the program.
-GPU tests in this project are done with a simulated driver: the effect on the watts of a real card has not been measured. The accepted values are
-1 to 99: for the whole machine leave `--limit` out.
+GPU tests in this project are done with a simulated driver: the effect on the watts of a real card has not been measured.
 
 ### 7.9 `bench --together`
 
@@ -357,8 +305,7 @@ It starts, as in a campaign (puzzle 140), the CPU threads and all the GPUs and m
 5 numbers of CPU threads (all, three quarters, one per physical core, half of those, none), then switches off in turn each slower GPU
 (giving back to the CPU the core that serves it). Every configuration lasts 10 s (2 of settling and 8 of measurement) plus a final repetition
 of the first one that estimates the noise. At the end it indicates the best configuration, for example `-t 11 --gpu 0`, if it beats
-the default one by more than the noise. On a laptop, CPU, integrated GPU and discrete GPU share power and cooling:
-often the integrated GPU gives less than it takes away, and hyper-threading adds little in the linear search and heats. `-t N` tries only N CPU
+the default one by more than the noise. `-t N` tries only N CPU
 threads, `--gpu LIST` restricts the GPUs, `--linear` measures the linear search instead of the kangaroo. The first `hunt` of a version runs the
 same comparison by itself (section 7.6).
 
@@ -372,14 +319,14 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 |----------|--------|
 | `PZ_GPU_API=cuda\|opencl` | same as `--gpu-api` (which takes precedence) |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | do not load that runtime |
-| `PZ_GPU_HALF=128\|256\|512` (CUDA) or `64\|128\|256\|512` (OpenCL) | fix the window of the linear kernel (skips the tuning); a number that the device does not offer is reported for each device |
-| `PZ_GPU_NK=64\|128\|256` (CUDA) or `32\|64\|128` (OpenCL) | fix the walkers per thread of the kangaroo kernel (skips the tuning); an optional suffix `b` selects the products for every other walker (e.g. `128b`), `c` (CUDA, 64 or 128) those for every fourth walker (e.g. `64c`), and a final `l` the L2-sized herd (16, 32 or 64, plain or `b`: e.g. `64l`, `32bl`) |
+| `PZ_GPU_HALF=N` | fix the window of the linear kernel (skips the tuning; the values are in ALGORITHMS.md section 5); a number that the device does not offer is reported for each device |
+| `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `64l` |
 | `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
 | `PZ_OPENCL_ALL=1` | use OpenCL CPU devices too (section 7.1) |
 | `PZ_NO_PROFILE=1` | same as `--no-tune` |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
 | `PZ_BENCH_SCALE=0.2` | shortens the measurements of `bench --together` and of the machine profile to a fifth, for tests (a number from 0.01 to 100) |
-| `PZ_KANG_MIX=1` | experimental: on hyper-threaded cores the first thread uses the vector step of the kangaroo and the other one the scalar BMI2/ADX step, which uses the integer multiplier instead of the vector unit; `bench` measures whether it pays off (line "mixed") and suggests it |
+| `PZ_KANG_MIX=0\|1` | turns off or forces the mixed kangaroo mode (section 8): on hyper-threaded cores the first thread uses the vector step and the other one the scalar BMI2/ADX step, which uses the integer multiplier instead of the vector unit; without it the mode is used when measured faster |
 | `XDG_CACHE_HOME` | cache folder (also on Windows); without it `%LOCALAPPDATA%` on Windows, then `HOME` (`~/.cache/pzsolve`) |
 | `TMPDIR` | folder of the scratch campaigns of the measurements and of the tests (Linux and macOS; `/tmp` without it) |
 | `NO_COLOR` | any value but the empty one: no bold type in the panel |
@@ -391,20 +338,20 @@ and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](ARC
 ## 8. Performance tips
 
 * Run `pzsolve bench` once: it compares the engines and the number of threads; with a GPU also run `pzsolve bench --together` (section 7.9).
-  `--isa auto` chooses by itself among `baseline`, `avx2`, `shani` (the same lanes with the SHA-256 stage on the CPU's SHA instructions, only on
-  processors that have them, and only if it measures faster: on an AMD EPYC CI runner, 7.19 M keys/s against 6.43 M for `avx2` with one thread),
-  `avx512`, the variants `avx2v`/`avx512v` (curve arithmetic on SIMD lanes) and `avx512i` (the same with AVX-512 **IFMA**, on the processors that
-  have it: Ice Lake, Tiger Lake, Rocket Lake, Sapphire Rapids, Zen 4 and later; it is about 1.5 times faster than `avx512v`, and where it exists
-  it is the fastest). Every engine, before being used, passes a quick check with a known key: an engine that got it wrong would be excluded.
+  `--isa auto` picks the fastest engine; `bench` shows them all. Every engine, before being used, passes a quick check with a known key: an
+  engine that got it wrong would be excluded.
+* The compute threads go first on different physical cores, one per core, and only beyond the number of cores on the second SMT thread of a
+  core (on Windows the assignment is a hint to the system, which may move the threads).
 * The kangaroo on the CPU uses the same SIMD lanes as the linear search; the variant is chosen by measuring, after a bit-by-bit comparison
   with the reference one. `bench` says which one is in use and measures every variant with 1 thread, one thread per physical core and all the
-  logical threads, plus the "mixed" combination on hyper-threading (see `PZ_KANG_MIX`).
+  logical threads. On hyper-threaded cores the **mixed** mode (the lane step on the first thread of each core, the scalar step on its SMT
+  sibling) is chosen by itself when it measures faster; `PZ_KANG_MIX=0` or `=1` turns it off or on.
 * The kangaroo wastes less with more RAM (a large `--mem` allows lower `dp-bits`); BSGS is limited only by RAM.
 * **Large pages**: for BSGS `echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/enabled` is worth it (often already so).
 * **Laptop: the steady-state speed is lower than the peak.** In the first seconds CPU and GPU run at maximum power, then the cooling and the shared
-  power limit slow them down (on one laptop the GPU went from ~790 M to ~606 M steps/s in 3 minutes). The automatic
-  tuning lasts a few seconds per configuration and mostly sees the peak: to choose `-t`, judge the "Speed" line after 5-10 minutes of
-  campaign, comparing for example `hunt -p 140` and `hunt -p 140 -t 8`.
+  power limit slow them down (on one laptop the GPU went from ~790 M to ~606 M steps/s in 3 minutes); often the integrated GPU gives less
+  than it takes away. The automatic tuning lasts a few seconds per configuration and mostly sees the peak: to choose `-t`, judge the
+  "Speed" line after 5-10 minutes of campaign, comparing for example `hunt -p 140` and `hunt -p 140 -t 8`.
 * Do not use several processes on the same campaign (the lock prevents it: the second one stops with an error).
 * For long sessions: `nohup pzsolve hunt -p N --ui log > /dev/null &` and check `pzsolve list` or `report.txt`.
 * **Realism**: `pzsolve puzzle N` estimates the time on the CPU of this machine; the GPUs add up. The puzzles 71+ without a public key
@@ -431,11 +378,7 @@ says how many points are new and whether there is a collision between a "tame" a
 `FOUND.txt` and shows it. You can also merge the other way round (A into B) or both ways: points already known are recognized. After the merge `hunt`
 resumes where it was, with the enriched table.
 
-What `merge` refuses, each with a line under the file name: a file that `does not exist`; a log of another campaign (different range or key);
-one `written with another jump table (id d1662844, this campaign: e9b00b95): another seed or another computer setup, the points cannot meet`;
-one written by an older layout of the kangaroo (versions up to 1.9.0 on campaigns with fewer than 256 kangaroos, that is small ranges), which
-`hunt` keeps as `dp.bin.vN` before going on with a new log; and one written by a later version of the program, which `hunt` does not touch
-either (use that version, or move the file away). For the linear search see section 8.2.
+A file `merge` refuses is named with the reason (section 9.3). For the linear search see section 8.2.
 
 ### 8.2 Several computers on a linear search
 
@@ -508,7 +451,7 @@ The state on disk is never at risk: every write is atomic and the checkpoint is 
 | `CUDA driver not found` (in `devices`) | normal without an NVIDIA card; with an NVIDIA card, reinstall the graphics driver |
 | `the CPU does not support the instruction set …` | use `--isa auto` or `--isa baseline` |
 | `NAME=TEXT ignored (…)` | an environment variable has a value the program cannot use and is ignored: correct or remove it (section 7.10) |
-| `distinguished-point table full (RAM limit): halving the density of stored points` | the RAM limit was reached in a run much longer than expected: the campaign goes on with less efficiency; resume with a larger `--mem` to avoid it |
+| `distinguished-point table full (RAM limit): halving the density of stored points` | expected in about one run in five when memory sets dp-bits (ALGORITHMS.md section 4.4): the search goes on with a slightly later collision; a larger `--mem` helps only if the RAM is there |
 | very low speed | check `devices` (how many lanes/GPUs are used) and that no other process is running |
 | slow first BSGS run | the freshly allocated RAM is "touched" for the first time (on some virtual machines this costs seconds per GiB) |
 
@@ -527,7 +470,7 @@ shows the help and waits for Enter.
   Windows 10 1607+). To keep the PC from going to sleep overnight: Settings → System → Power (or use `--keep-awake`, section 9.2).
   On laptops keep the charger connected and the "Best performance" mode.
 * **Memory**: the limits are computed on the available RAM reported by Windows (as on Linux: BSGS at most 70 %, kangaroo 40 %,
-  adjustable with `--mem GB`). Windows must be able to "commit" the memory: with the paging file disabled or small, a very large BSGS
+  adjustable with `--mem GiB`). Windows must be able to "commit" the memory: with the paging file disabled or small, a very large BSGS
   table may be refused (the program says so); leave the paging file managed by the system.
 * **Large pages** (optional, useful only for BSGS with tables ≥ 1 GiB): they need the "Lock pages in memory" right
   (`secpol.msc` → Local Policies → User Rights Assignment → *Lock pages in memory*: add your user, then log out and

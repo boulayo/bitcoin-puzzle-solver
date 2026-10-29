@@ -11,7 +11,7 @@
 | `pzsolve info (-c NOME \| -p N)` | stampa il report di una campagna (la riga `State` è quella che mostra `list`: `FOUND` se esiste `FOUND.txt`, `RUNNING` solo mentre un processo tiene il blocco della campagna, quindi una campagna uccisa risulta `STOPPED`) |
 | `pzsolve where (-c NOME \| -p N) --key HEX` | dice in che punto dell'ordine di visita di una campagna lineare o BSGS arriva una chiave, e se è già stata scandita |
 | `pzsolve split V1 V2 …` | divide le quote di `--part` fra più computer in proporzione alle loro velocità (per esempio `split 800M 120M`; vedi sezione 8.2) |
-| `pzsolve merge (-c NOME \| -p N) -f FILE_O_CARTELLA … [-d DIR] [--mem GB]` | unisce i punti distinti di altri computer a una campagna canguro (vedi sezione 8.1) |
+| `pzsolve merge (-c NOME \| -p N) -f FILE_O_CARTELLA … [-d DIR] [--mem GiB]` | unisce i punti distinti di altri computer a una campagna canguro (vedi sezione 8.1) |
 | `pzsolve doctor [-d DIR] [--full]` | controlla programma, sistema, CPU, GPU, taratura e profilo salvati, campagne, disco, orologio e variabili `PZ_*`, e dice cosa non va; da incollare quando si chiede aiuto |
 | `pzsolve devices`   | CPU, set di istruzioni, RAM e GPU (CUDA e OpenCL) rilevate |
 | `pzsolve selftest`  | controlli di correttezza integrati (primitive, database, motori SIMD, canguro, BSGS, GPU) |
@@ -24,22 +24,13 @@ guida sono citati così come appaiono, e il testo italiano li spiega. Le righe l
 
 ## 2. Avvio rapido: tutti i puzzle sono già dentro
 
-```sh
-pzsolve puzzles --open            # quali puzzle sono ancora irrisolti
-pzsolve puzzle 71                 # indirizzo, intervallo e quanto tempo servirebbe su questa macchina
-pzsolve hunt -p 71                # parte: intervallo e indirizzo vengono dal database
-# … Ctrl-C quando vuoi …
-pzsolve hunt -p 71                # lo stesso comando riprende da dove eri arrivato
-pzsolve list                      # lo stato di tutte le campagne
-```
-
 `hunt -p N` crea la campagna `pN` nella cartella `./campaigns`; rilanciare lo stesso comando la **riprende** (stesso seed,
 nessun lavoro rifatto). Per i puzzle con chiave pubblica nota (140, 145, 150, 155, 160 e tutti quelli già risolti) la chiave
 pubblica viene usata da sola e il programma sceglie tra BSGS e canguro (sezione 4).
 
 Il database contiene indirizzo, chiave pubblica (se mai comparsa sulla blockchain) e, per i puzzle risolti, la chiave privata (che
 serve come banco di prova: `hunt -p 40` ritrova una chiave nota in pochi secondi, e `puzzle N` di un puzzle risolto dice
-`A test run (the key is known): …`, cioè una corsa di prova). Provenienza e verifiche: [`data/README.md`](../../data/README.md).
+`A test run (the key is known): …`, cioè una corsa di prova). Provenienza e verifiche: [`data/README.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/data/README.md).
 **Lo stato "risolto/aperto" è quello della data di creazione del database**: prima di lanciare una campagna lunga controlla
 sull'indirizzo (esploratore della blockchain) che i fondi ci siano ancora. Il programma avvisa se scegli un puzzle già risolto.
 
@@ -53,49 +44,14 @@ ferma a `n − 1` (l'ordine del gruppo), perché le chiavi oltre non esistono. P
 
 ## 3. `hunt`: opzioni
 
-```
--p, --puzzle N          puzzle 1..256: intervallo, indirizzo e (se nota) chiave pubblica dal database integrato
-                        (161..256: solo l'indirizzo, fondi ritirati nel 2017, vedi sopra). Con -r sceglie solo il
-                        bersaglio, l'intervallo è quello di -r
--r, --range S:E         intervallo personalizzato (esadecimale, inclusivo): p. es. una sola parte del puzzle. Una chiave fuori
-                        dall'intervallo non viene segnalata dalla ricerca lineare, nemmeno quando l'ultimo blocco la raggiunge
-                        (i motori scandiscono corsie intere)
--a, --address ADDR      indirizzo mainnet diverso da quello del database: P2PKH (`1...`, Base58Check) o SegWit nativo P2WPKH (`bc1q...`, bech32)
--H, --hash160 HEX       alternativa all'indirizzo (40 cifre hex)
--k, --pubkey HEX        chiave pubblica nota (33 byte compressa o 65 non compressa)
--c, --campaign NOME     nome della campagna: cartella <dir>/<NOME>; se esiste già viene ripresa [pN con -p N]
--d, --dir DIR           cartella base delle campagne [./campaigns]
--s, --seed SEED         64 cifre hex (usate così come sono) o testo qualsiasi (hashato); predefinito o `auto`: casuale
--m, --mode M            auto | linear | kangaroo | bsgs   [auto, vedi la sezione 4]
-    --table FILE        bsgs: legge la tabella dei baby step da FILE se esiste, altrimenti la costruisce e la salva
-    --bsgs-entries N    bsgs: baby step della tabella (alla creazione della campagna)
-    --part Q/T          ricerca lineare su più computer: i blocchi dell'ordine di visita sono divisi in T quote e questo computer scandisce le quote Q
-                        (numerate da 0; anche più d'una: `0,1/4`, `0-6/9`). Vedi «Più computer sulla ricerca lineare» (sezione 8.2)
-    --node N            canguro su più computer: numero di questo computer (0..65535); vedi «Più computer sulla stessa campagna canguro» (sezione 8.1)
-    --prio-gpu P        auto | yes | no: thread che servono le schede con priorità più alta dei thread di calcolo [auto: la taratura lo prova]
-    --limit X           usa solo il X % della macchina (1..99), sempre a pieno ritmo e senza pause: meno thread CPU e meno work-item sulle GPU
-                        [spento]; vedi «Usare solo una parte della macchina» (sezione 7.8)
-    --retune            misura di nuovo la combinazione migliore di thread CPU e GPU di questa macchina
-    --no-tune           non misurare e non usare il profilo della macchina né la velocità ricordata
-    --keep-awake        Windows e macOS: impedisce al sistema di andare in sospensione finché la campagna gira
--t, --threads N         thread CPU [tutti i core disponibili; senza -t resta libero un core per pilotare ogni GPU OpenCL in uso]
-    --no-cpu / --no-gpu disabilita CPU o GPU
-    --gpu LISTA         indici (vedi `devices`) separati da virgola; permette anche dispositivi OpenCL su CPU
-    --gpu-api A         auto | cuda | opencl   [auto: CUDA per le NVIDIA, OpenCL come riserva e per le altre schede]
-    --isa I             auto | baseline | avx2 | shani | avx512 | avx2v | avx512v | avx512i   [auto: micro-benchmark]
-                        shani: avx2 con le istruzioni SHA-256 della CPU (AMD Zen 2 e successivi, Intel Ice Lake e successivi)
-                        su arm64: auto | baseline | neon | neon2 (SHA-256 hardware della CPU, 4 o 8 chiavi alla volta)
-    --chunk-bits B      blocchi di 2^B chiavi (20..40) [36, ridotto per intervalli piccoli]; blocchi più piccoli
-                        rallenterebbero la CPU e soprattutto le GPU (ogni lancio riceve un solo blocco)
-    --dp-bits B         canguro: bit dei punti distinti (0..60) [0 = automatico]
-    --mem GB            canguro e bsgs: RAM massima per la tabella [canguro: 40 % della RAM libera, almeno 256 MiB e al massimo
-                        64 GiB; bsgs: la tabella è scelta perché stia nel 70 % della RAM libera]
-    --ui U              auto | full | line | log   (vedi la sezione 6)
-    --report-interval S secondi tra gli aggiornamenti del pannello [1]
-    --checkpoint-interval S  secondi tra i salvataggi [60]
--q / -v                 meno / più messaggi
-    --new / --resume    fallisce se la campagna esiste / non esiste
-```
+`pzsolve hunt --help` elenca tutte le opzioni con il loro valore predefinito. Quello che richiede più di una riga dell'aiuto:
+
+* `-p N` con `-r S:E` prende il bersaglio del puzzle N e l'intervallo di `-r`. Una chiave fuori dall'intervallo di `-r` non viene segnalata dalla
+  ricerca lineare, nemmeno quando l'ultimo blocco la raggiunge (i motori scandiscono corsie intere).
+* `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale.
+* `--mem` è in GiB (`--mem 0.25` sono 256 MiB). Senza, il canguro prende il 40 % della RAM libera per la tabella dei punti distinti
+  (almeno 256 MiB, al massimo 64 GiB) e il BSGS sceglie una tabella che stia nel 70 % della RAM libera.
+* Un `--chunk-bits` sotto il predefinito rallenta la CPU e soprattutto le GPU, perché ogni lancio riceve un solo blocco.
 
 Un valore che non si può usare ferma il comando con un messaggio come `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 e un'opzione sconosciuta con `unrecognized option '--foo' (see 'pzsolve help hunt')`.
@@ -122,12 +78,19 @@ pzsolve hunt -r 40000000000:7fffffffff -a <INDIRIZZO> -c zona1
 
 ## 4. Quale algoritmo? (`--mode auto`)
 
+Termini usati da qui in poi: **W** è l'ampiezza dell'intervallo (2^(n-1) per il puzzle n). Una **chiave** è una candidata della ricerca lineare,
+un **passo** un salto del canguro o un passo gigante del BSGS. Un **punto distinto** è un punto del cammino di un canguro che viene memorizzato,
+circa uno su 2^dp-bits (`--dp-bits`). Un **work-item** è un thread della GPU; nel canguro muove `NK` camminatori.
+
 | Situazione | Scelta |
 |------------|--------|
 | solo indirizzo | `linear`: scansione di tutto l'intervallo (CPU e GPU) |
 | chiave pubblica nota, intervallo < 2^20 | `linear` (istantaneo) |
-| chiave pubblica nota, la tabella BSGS ottima (o la massima che sta nel 70 % della RAM libera) costa meno del canguro, **e non c'è una GPU utilizzabile** (oppure il lavoro dura pochi secondi, oppure hai già una `--table`) | `bsgs`: costo ≈ 1,0·√W, deterministico |
+| chiave pubblica nota, una tabella BSGS che non costa più del canguro, e uno fra: nessuna GPU utilizzabile (o `--no-gpu`), `--bsgs-entries` dato, il file di `--table` esiste, il lavoro dura pochi secondi | `bsgs`: costo ≈ 1,0·√W, deterministico |
 | chiave pubblica nota, altrimenti | `kangaroo`: ≈ 1,06·√W, usa anche le GPU |
+
+La tabella BSGS è quella di `--bsgs-entries` o del file di `--table` esistente; altrimenti quella ottima, o la più grande che sta nel 70 % della
+RAM libera (o in `--mem`). Un file di `--table` che non esiste ancora non conta: con `bsgs` viene costruito e salvato.
 
 Il BSGS usa solo CPU e RAM; con una GPU potente il canguro può essere più veloce nonostante il costo maggiore: se sai che è
 così, forza `--mode kangaroo`. La modalità resta fissata nella campagna (`campaign.conf`). Senza chiave pubblica vale solo la ricerca lineare:
@@ -136,8 +99,7 @@ chiavi (i puzzle dal 190 in su vengono rifiutati con un messaggio; gli esponenti
 troppo grande per il BSGS finisce con `: use -m kangaroo`.
 
 La tabella del BSGS occupa circa 11,4 byte per baby step (celle da 8 byte, usate al 70 %); `--bsgs-entries` conta i baby step, non i byte.
-Una tabella salvata dalle versioni fino alla 1.10.0 (file `PZBSGS01`, 12,3 byte per baby step) viene letta e usata così com'è, con la RAM che
-richiede; le tabelle salvate ora hanno un formato nuovo (`PZBSGS02`) che quelle versioni non sanno leggere.
+Tabelle di altre versioni: [`RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md#compatibility-of-the-files-between-versions) (in inglese), tabella di compatibilità.
 
 ## 5. La cartella di una campagna
 
@@ -160,8 +122,7 @@ campaigns/NOME/
 * **Riprendere**: lo stesso comando (`hunt -p N`, oppure `hunt -c NOME`). Il seed e i parametri che definiscono la ricerca non
   possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits` o `--bsgs-entries` diversi da quelli della campagna
   esistente il programma **rifiuta** con un errore (non li ignora in silenzio); puoi invece cambiare thread, GPU, ISA, memoria e
-  aspetto del pannello. **`pzsolve list`** mostra tutte le campagne e il loro stato; `info -p N` / `where -p N --key K` accettano
-  `-p` al posto di `-c pN`.
+  aspetto del pannello. **`pzsolve list`** mostra tutte le campagne e il loro stato.
 * **Nome della campagna** (senza `-c`): `pN` per un puzzle intero; per un sotto-intervallo (`-r`) o un bersaglio personalizzato
   `pN-xxxxxxxx` / `custom-xxxxxxxx`, dove `xxxxxxxx` dipende da puzzle, intervallo e bersaglio: **lo stesso comando ritrova sempre
   la stessa campagna**. Per due campagne indipendenti sullo stesso intervallo usa `-c` con nomi diversi (e seed diversi). I nomi
@@ -179,8 +140,6 @@ campaigns/NOME/
 * Un riavvio perde al massimo il lavoro dei blocchi in corso (pochi secondi per worker); il resto non viene mai rifatto. Nel BSGS la
   tabella viene ricostruita (pochi minuti) a meno che tu non usi `--table`.
 * Una campagna che ha già trovato la chiave non riparte: mostra `FOUND.txt`.
-* **Più computer**: nella ricerca lineare usa `--part` (sezione 8.2): niente doppioni e niente scambio di
-  dati; nel canguro `--node` e `merge` (sezione 8.1). Con seed diversi e senza `--part` le campagne si sovrappongono a caso.
 
 ## 6. Il pannello di avanzamento
 
@@ -210,15 +169,12 @@ Ctrl-C: stop and save progress; run the same command again to resume.
   canguro avvisa una volta (`kangaroo: 5x the expected effort without a collision: check the public key (-k) and the range`: controlla la chiave
   pubblica e l'intervallo) e la riga dice `Time left     unknown (beyond the model)`.
 * **Stima provvisoria**. Nei primi secondi la velocità mostrata inganna: una GPU viene contata solo quando finisce il suo primo lancio, i clock
-  salgono, e un portatile dopo qualche minuto sotto carico rallenta (su un portatile: 1,03 G passi/s misurati a freddo dalla taratura, 834 M dopo
-  tre minuti). Per questo il tempo residuo: (1) non compare finché ogni motore non ha prodotto qualcosa (la riga dice `Time left     measuring...`
-  e la velocità porta l'annotazione `[starting: not all engines are counted yet]`); (2) usa poi la media su una finestra scorrevole fino a 2
-  minuti, non una media mobile partita dal primo campione; (3) parte da una **velocità ricordata**, se c'è: quella *a regime* raggiunta da una
-  corsa precedente della stessa configurazione (stessa macchina, versione, motore, thread, GPU e priorità; salvata nel profilo ogni 5 minuti e
-  alla fine, solo dopo almeno 3,5 minuti di corsa), altrimenti quella misurata a freddo dalla taratura; la misura prende il posto del ricordo in
-  circa 2 minuti. Finché la stima si assesta una riga lo dice: `provisional (from the remembered speed, settles in ~2 min)` (dalla velocità
-  ricordata), `provisional (from the tuning run, settles in ~40 s)` (dalla taratura), oppure `provisional (settles in ~34 s)` quando non c'è
-  nulla da cui partire. Con `--no-tune` la memoria non si usa né si aggiorna. `pzsolve doctor` elenca le velocità ricordate.
+  salgono, e un portatile dopo qualche minuto sotto carico rallenta. Per questo il tempo residuo non compare finché ogni motore non ha prodotto
+  qualcosa (la riga dice `Time left     measuring...` e la velocità porta l'annotazione `[starting: not all engines are counted yet]`), e poi parte
+  dalla velocità a regime di una corsa precedente della stessa configurazione, se c'è, altrimenti da quella misurata dalla taratura (ALGORITHMS.md
+  sezione 11, in inglese). Finché la stima si assesta una riga lo dice: `provisional (from the remembered speed, settles in ~2 min)` (dalla velocità
+  ricordata), `provisional (from the tuning run, settles in ~40 s)` (dalla taratura), oppure `provisional (settles in ~34 s)` quando non c'è nulla
+  da cui partire. Con `--no-tune` le velocità ricordate non si usano né si aggiornano; `pzsolve doctor` le elenca.
 * **Chance** (probabilità): probabilità di successo entro la prossima ora, il prossimo giorno, settimana, mese e anno a questo ritmo,
   *supponendo che la chiave sia nell'intervallo* (formule in [`ALGORITHMS.md`](../en/ALGORITHMS.md) sezione 11, in inglese).
 * Nel BSGS, durante la costruzione della tabella, il pannello mostra la fase 1 di 2 e quanti passi giganti seguiranno.
@@ -256,9 +212,9 @@ Il programma usa due runtime, entrambi caricati all'avvio solo se presenti (senz
 `devices` e l'avvio mostrano la memoria che il driver dichiara. Per una scheda con memoria propria (le NVIDIA, le AMD discrete) è la VRAM; per
 una **GPU integrata** (Intel UHD/Iris, le APU AMD) il driver OpenCL dichiara la quota di RAM di sistema che la scheda può indirizzare, di solito
 più della metà della RAM (`59.58 GiB, shared system RAM`): non è memoria riservata né allocata. Il programma ne usa solo quanto serve ai suoi
-buffer, e a ogni avvio del canguro lo dice (`GPU[2]: 54272 kangaroos (…), memory used 29.80 MiB of system RAM`; sulle NVIDIA, `… MiB of 4.00 GiB`).
-Il canguro ne usa ≈ 55 MiB per ogni 1000 work-item di 64 canguri (≈ 230 byte per canguro compresa la storia dei salti), nel limite di un sesto
-della memoria dichiarata. Le schede NVIDIA hanno meno memoria dichiarata ma più velocità: la banda, non la capacità, è il limite.
+buffer, e a ogni avvio del canguro lo dice (`GPU[0]: 131072 kangaroos (1024 work-items x 128), memory used 72.08 MiB of 1.00 GiB`; su una GPU
+integrata, `… MiB of system RAM`). Il canguro ne usa ≈ 40 MiB per il buffer dei punti distinti più 256 byte per canguro (stato e storia dei
+salti); il branco è limitato a un sesto della memoria dichiarata. Le schede NVIDIA hanno meno memoria dichiarata ma più velocità: la banda, non la capacità, è il limite.
 
 ### 7.3 Scelta dei dispositivi e self-test
 
@@ -277,21 +233,16 @@ candidata viene comunque riverificata sulla CPU.
 
 ### 7.4 Prima esecuzione e taratura dei kernel
 
-Il driver compila i kernel per la tua scheda (con CUDA circa 10 s per modulo; con la taratura delle sei varianti
+Il driver compila i kernel per la tua scheda (con CUDA circa 10 s per modulo; con la taratura delle varianti
 del kernel lineare circa un minuto, poi le varianti del canguro la prima volta che lo usi) e conserva il risultato nella sua cache:
 dalle volte successive l'avvio è immediato. Con più schede la taratura dei dispositivi gira insieme, e le schede dello stesso tipo si misurano una
 volta sola (le altre leggono il risultato: `from earlier tuning`). La taratura è memorizzata in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` su Windows,
 `~/.cache/pzsolve/gpu_tune.txt` su Linux, e si ripete quando cambia la versione del programma. La variante predefinita resta, a meno che un'altra
 non sia più veloce di oltre il 3 %.
 
-Le varianti provate dalla taratura sono: ricerca lineare con CUDA finestra 128, 256 o 512 × registri liberi o limitati a 128, con
-OpenCL finestra 64, 128, 256 o 512; canguro con 64, 128 o 256 camminatori per thread (CUDA) o 32, 64, 128 (OpenCL), ciascuno semplice o con i
-prodotti del lotto tenuti per un camminatore su due (`b`, meno traffico di memoria), e con CUDA anche 64 o 128 camminatori con i prodotti tenuti
-per un camminatore su quattro (`c`). Sulle schede con una cache L2 di almeno 8 MiB (RTX 30/40 non portatili: 6-72 MiB) la taratura prova anche
-un **branco dimensionato sulla L2**: meno work-item (e NK 16, 32 o 64, semplice o `b`) in modo che gli array privati dei camminatori stiano in
-mezza L2, dove il traffico che limita il kernel non arriva alla memoria della scheda (`NK 64 L2 herd` nel log; `PZ_GPU_NK=64l`). Viene scelto solo
-se misurato più veloce. `bench` mostra, per ogni GPU, la variante scelta e la sua velocità (`bench --retune` le misura di nuovo tutte). Su un
-**portatile** CPU e GPU condividono alimentazione e raffreddamento: `bench --together` (sezione 7.9) trova quanti thread CPU e quali GPU convengono.
+Le varianti (finestra, camminatori per thread, branchi dimensionati sulla L2) sono elencate in [`ALGORITHMS.md`](../en/ALGORITHMS.md) sezione 5
+(in inglese). `bench` mostra, per ogni GPU, la variante scelta e la sua velocità. Su un **portatile** CPU e GPU condividono alimentazione e
+raffreddamento: `bench --together` (sezione 7.9) trova quanti thread CPU e quali GPU convengono.
 
 ### 7.5 `bench` e le GPU
 
@@ -319,10 +270,8 @@ saltata con un solo avviso, perché non si potrebbe conservare.
 ### 7.7 Priorità dei thread che servono le schede
 
 Ogni GPU è servita da un thread che lancia i kernel, raccoglie i risultati e rilancia. Quando tutti i core sono occupati dal calcolo, quel thread
-può aspettare il suo turno mentre la scheda resta ferma; sui portatili l'effetto si confonde con il limite di potenza condiviso. Nella taratura,
-subito dopo il riscaldamento e con tutti i thread CPU, il programma confronta priorità normale e alta a coppie alternate (normale, alta, alta,
-normale: una deriva termica non può falsare il confronto; la seconda coppia si fa solo se la prima favorisce la priorità alta di almeno l'1 %) e
-la tiene solo se vince di almeno il 2 % in complesso e in entrambe le coppie. L'esito entra nel profilo (`prio=1`) e il log lo dice
+può aspettare il suo turno mentre la scheda resta ferma; sui portatili l'effetto si confonde con il limite di potenza condiviso. La taratura
+confronta priorità normale e alta con tutti i thread CPU e tiene quella alta solo se è misurabilmente più veloce. L'esito entra nel profilo (`prio=1`) e il log lo dice
 (`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). `--prio-gpu yes|no` la impone o la esclude (e non si
 misura); `--prio-gpu auto` è il predefinito. Su Windows è `ABOVE_NORMAL` per i soli thread delle schede (che dormono quasi sempre in attesa del
 kernel: non tolgono tempo al calcolo); su Linux è `nice -5` e serve root o `CAP_SYS_NICE`: senza, la misura viene saltata e `doctor` lo dice. Non
@@ -334,9 +283,9 @@ Spento di default. `hunt -p 71 --limit 50` usa circa metà della macchina per sc
 ci sono pause né cicli «lavora e riposa»: il carico resta costante, così la ventola non parte e si ferma a ondate. Si ottiene con meno unità di
 calcolo, tutte al massimo:
 
-* **CPU**: il X % dei thread (arrotondato al più vicino, almeno uno). Con `-t` il X % si applica ai thread indicati. I thread vanno prima su core
-  fisici diversi, uno per core, e solo oltre il numero dei core sul secondo thread SMT dello stesso core: su 8 core e 16 thread, `--limit 50` sono
-  8 thread su 8 core, `--limit 25` sono 4 thread su 4 core, `--limit 75` sono 12 thread. Su Windows l'assegnazione è un suggerimento al sistema, che può spostare i thread.
+* **CPU**: il X % dei thread (arrotondato al più vicino, almeno uno). Con `-t` il X % si applica ai thread indicati. Come sempre (sezione 8) i thread
+  vanno prima su core fisici diversi: su 8 core e 16 thread, `--limit 50` sono 8 thread su 8 core, `--limit 25` sono 4 thread su 4 core,
+  `--limit 75` sono 12 thread.
 * **GPU**: il X % dei work-item di ogni lancio (arrotondato a blocchi di 128, almeno uno) sia nella ricerca lineare sia nel canguro: la scheda lavora
   sempre, ma con meno blocchi in corso. Il canguro ha di conseguenza meno canguri. Il log lo scrive
   (`limit 40%: CPU 6 of 16 threads, GPUs at 40% of the work-items`, poi `GPU[0]: limit 40%: 3328 work-items per launch`).
@@ -350,16 +299,14 @@ Il consumo non scala esattamente come X: con meno core attivi la CPU può alzare
 in attesa, ventole) resta. Se vuoi un tetto più deciso, prova valori più bassi e guarda temperature e ventola (HWiNFO, `nvidia-smi`). Su Windows
 anche «Stato massimo del processore» nelle opzioni risparmio energia (impostato al 99 % disattiva di solito il turbo) frena la frequenza senza
 toccare il programma. Le prove su GPU in questo progetto sono fatte con un driver simulato: l'effetto sui watt di una scheda vera non è stato
-misurato. I valori accettati vanno da 1 a 99: per tutta la macchina si omette `--limit`.
+misurato.
 
 ### 7.9 `bench --together`
 
 Avvia come in una campagna (puzzle 140) i thread CPU e tutte le GPU e misura la velocità totale con 5 numeri di thread CPU (tutti, tre quarti,
 uno per core fisico, la metà di questi, nessuno), poi spegne a turno ogni GPU più lenta (restituendo alla CPU il core che le serve). Ogni
 configurazione dura 10 s (2 di assestamento e 8 di misura) più una ripetizione finale della prima che stima il rumore. Alla fine indica la
-configurazione migliore, per esempio `-t 11 --gpu 0`, se supera quella predefinita di più del rumore. Su un portatile CPU, GPU integrata e GPU
-discreta condividono potenza e raffreddamento: spesso la GPU integrata dà meno di quanto toglie, e l'hyper-threading aggiunge poco nella ricerca
-lineare e scalda. `-t N` prova solo N thread CPU, `--gpu LISTA` limita le GPU, `--linear` misura la ricerca lineare invece del canguro. Il primo
+configurazione migliore, per esempio `-t 11 --gpu 0`, se supera quella predefinita di più del rumore. `-t N` prova solo N thread CPU, `--gpu LISTA` limita le GPU, `--linear` misura la ricerca lineare invece del canguro. Il primo
 `hunt` di una versione fa lo stesso confronto da solo (sezione 7.6).
 
 ### 7.10 Variabili d'ambiente
@@ -373,14 +320,14 @@ come se la variabile non ci fosse.
 |-----------|---------|
 | `PZ_GPU_API=cuda\|opencl` | come `--gpu-api` (che ha la precedenza) |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
-| `PZ_GPU_HALF=128\|256\|512` (CUDA) o `64\|128\|256\|512` (OpenCL) | fissa la finestra del kernel lineare (salta la taratura); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
-| `PZ_GPU_NK=64\|128\|256` (CUDA) o `32\|64\|128` (OpenCL) | fissa i camminatori per thread del kernel del canguro (salta la taratura); il suffisso facoltativo `b` sceglie i prodotti per un camminatore su due (es. `128b`), `c` (CUDA, 64 o 128) quelli per uno su quattro (es. `64c`), e una `l` finale il branco dimensionato sulla L2 (16, 32 o 64, semplice o `b`: es. `64l`, `32bl`) |
+| `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
+| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `64l` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |
 | `PZ_OPENCL_ALL=1` | usa anche i dispositivi OpenCL su CPU (sezione 7.1) |
 | `PZ_NO_PROFILE=1` | come `--no-tune` |
 | `PZ_NO_LARGE_PAGES=1` | niente pagine grandi (Windows, sezione 10) |
 | `PZ_BENCH_SCALE=0.2` | accorcia a un quinto le misure di `bench --together` e del profilo della macchina, per i test (un numero da 0,01 a 100) |
-| `PZ_KANG_MIX=1` | sperimentale: sui core con hyper-threading il primo thread usa il passo vettoriale del canguro e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale; `bench` misura se conviene (riga "mixed") e lo suggerisce |
+| `PZ_KANG_MIX=0\|1` | spegne o impone la modalità mista del canguro (sezione 8): sui core con hyper-threading il primo thread usa il passo vettoriale e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale; senza, la modalità si usa quando misura più veloce |
 | `XDG_CACHE_HOME` | cartella della cache (anche su Windows); senza, `%LOCALAPPDATA%` su Windows, poi `HOME` (`~/.cache/pzsolve`) |
 | `TMPDIR` | cartella delle campagne di prova delle misure e dei test (Linux e macOS; senza, `/tmp`) |
 | `NO_COLOR` | qualunque valore non vuoto: niente grassetto nel pannello |
@@ -392,20 +339,20 @@ e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](../en/A
 ## 8. Consigli prestazionali
 
 * Lancia `pzsolve bench` una volta: confronta i motori e il numero di thread; con una GPU lancia anche `pzsolve bench --together` (sezione 7.9).
-  `--isa auto` sceglie da solo tra `baseline`, `avx2`, `shani` (le stesse corsie con lo stadio SHA-256 sulle istruzioni SHA della CPU, solo sui
-  processori che le hanno, e solo se misura più veloce: su un runner di CI AMD EPYC, 7,19 M chiavi/s contro 6,43 M di `avx2` con un thread),
-  `avx512`, le varianti `avx2v`/`avx512v` (aritmetica della curva su corsie SIMD) e `avx512i` (la stessa con AVX-512 **IFMA**, sui processori che
-  la hanno: Ice Lake, Tiger Lake, Rocket Lake, Sapphire Rapids, Zen 4 e successivi; è circa 1,5 volte `avx512v`, e dove c'è è la più veloce). Ogni
-  motore, prima di essere usato, supera una verifica rapida con una chiave nota: un motore che sbagliasse verrebbe escluso.
+  `--isa auto` sceglie il motore più veloce; `bench` li mostra tutti. Ogni motore, prima di essere usato, supera una verifica rapida con una
+  chiave nota: un motore che sbagliasse verrebbe escluso.
+* I thread di calcolo vanno prima su core fisici diversi, uno per core, e solo oltre il numero dei core sul secondo thread SMT di un core (su
+  Windows l'assegnazione è un suggerimento al sistema, che può spostare i thread).
 * Il canguro sulla CPU usa le stesse corsie SIMD della ricerca lineare; la variante viene scelta misurando, dopo un confronto bit per bit con
-  quella di riferimento. `bench` indica quale è in uso e misura ogni variante con 1 thread, un thread per core fisico e tutti i thread logici, più
-  la combinazione "mixed" su hyper-threading (vedi `PZ_KANG_MIX`).
+  quella di riferimento. `bench` indica quale è in uso e misura ogni variante con 1 thread, un thread per core fisico e tutti i thread logici.
+  Sui core con hyper-threading la modalità **mista** (il passo a corsie sul primo thread di ogni core, quello scalare sul suo gemello SMT) viene
+  scelta da sola quando misura più veloce; `PZ_KANG_MIX=0` o `=1` la spegne o la impone.
 * Il canguro con più RAM spreca meno (`--mem` grande consente `dp-bits` più bassi); il BSGS è limitato soltanto dalla RAM.
 * **Pagine grandi**: per il BSGS conviene `echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/enabled` (spesso già così).
 * **Portatile: la velocità a regime è più bassa del picco.** Nei primi secondi CPU e GPU corrono alla massima potenza, poi il raffreddamento e il
-  limite di potenza condivisa le rallentano (su un portatile la GPU è passata da ~790 M a ~606 M passi/s in 3 minuti). La taratura automatica dura
-  pochi secondi per configurazione e vede soprattutto il picco: per scegliere `-t` giudica la riga "Speed" dopo 5-10 minuti di campagna,
-  confrontando per esempio `hunt -p 140` e `hunt -p 140 -t 8`.
+  limite di potenza condivisa le rallentano (su un portatile la GPU è passata da ~790 M a ~606 M passi/s in 3 minuti); spesso la GPU integrata
+  dà meno di quanto toglie. La taratura automatica dura pochi secondi per configurazione e vede soprattutto il picco: per scegliere `-t` giudica
+  la riga "Speed" dopo 5-10 minuti di campagna, confrontando per esempio `hunt -p 140` e `hunt -p 140 -t 8`.
 * Non usare più processi sulla stessa campagna (il blocco lo impedisce: il secondo si ferma con un errore).
 * Per sessioni lunghe: `nohup pzsolve hunt -p N --ui log > /dev/null &` e controlla `pzsolve list` o `report.txt`.
 * **Realismo**: `pzsolve puzzle N` stima il tempo sulla CPU di questa macchina; le GPU si sommano. I puzzle 71+ senza chiave pubblica
@@ -432,12 +379,7 @@ dice quanti punti sono nuovi e se c'è una collisione fra un punto "domato" e un
 `FOUND.txt` e la mostra. Si può anche unire in senso inverso (A su B) o in entrambi: i punti già noti vengono riconosciuti. Dopo l'unione `hunt`
 riprende da dove era, con la tabella arricchita.
 
-Cosa rifiuta `merge`, ciascuno con una riga sotto il nome del file: un file che non esiste (`does not exist`); un registro di un'altra campagna
-(intervallo o chiave diversi); uno scritto con un'altra tabella dei salti
-(`written with another jump table (id d1662844, this campaign: e9b00b95): another seed or another computer setup, the points cannot meet`);
-uno scritto da una vecchia disposizione del canguro (versioni fino alla 1.9.0 nelle campagne con meno di 256 canguri, cioè intervalli piccoli),
-che `hunt` conserva come `dp.bin.vN` prima di proseguire con un registro nuovo; e uno scritto da una versione successiva del programma, che
-neanche `hunt` tocca (usa quella versione, oppure sposta il file). Per la ricerca lineare vedi la sezione 8.2.
+Un file che `merge` rifiuta viene nominato con il motivo (sezione 9.3). Per la ricerca lineare vedi la sezione 8.2.
 
 ### 8.2 Più computer sulla ricerca lineare
 
@@ -510,7 +452,7 @@ Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoin
 | `CUDA driver not found` (in `devices`) | normale senza scheda NVIDIA; con una NVIDIA, reinstalla il driver grafico |
 | `the CPU does not support the instruction set …` | usa `--isa auto` o `--isa baseline` |
 | `NAME=TEXT ignored (…)` | una variabile d'ambiente ha un valore che il programma non può usare e viene ignorata: correggila o toglila (sezione 7.10) |
-| `distinguished-point table full (RAM limit): halving the density of stored points` | il limite di RAM è stato raggiunto in una corsa molto più lunga del previsto: la campagna prosegue con meno efficienza; riprendi con `--mem` più grande per evitarlo |
+| `distinguished-point table full (RAM limit): halving the density of stored points` | atteso in circa una corsa su cinque quando è la memoria a fissare i dp-bits (ALGORITHMS.md sezione 4.4, in inglese): la ricerca prosegue con una collisione un po' più tardiva; un `--mem` più grande aiuta solo se la RAM c'è |
 | velocità molto bassa | controlla `devices` (quante corsie/GPU usate) e che nessun altro processo sia in esecuzione |
 | prima esecuzione del BSGS lenta | la RAM appena allocata viene "toccata" per la prima volta (su alcune macchine virtuali costa secondi per GiB) |
 
@@ -529,7 +471,7 @@ Con un doppio clic mostra l'aiuto e attende Invio.
   Windows 10 1607+). Per impedire che il PC vada in sospensione durante la notte: Impostazioni → Sistema → Alimentazione (oppure usa
   `--keep-awake`, sezione 9.2). Sui portatili tieni l'alimentatore collegato e la modalità "Prestazioni migliori".
 * **Memoria**: i limiti sono calcolati sulla RAM disponibile riportata da Windows (come su Linux: BSGS al massimo il 70 %, canguro il
-  40 %, modificabili con `--mem GB`). Windows deve poter "impegnare" la memoria: con file di paging disattivato o piccolo una tabella
+  40 %, modificabili con `--mem GiB`). Windows deve poter "impegnare" la memoria: con file di paging disattivato o piccolo una tabella
   BSGS molto grande può essere rifiutata (il programma lo dice); lascia il file di paging gestito dal sistema.
 * **Pagine grandi** (opzionali, utili solo per il BSGS con tabelle ≥ 1 GiB): servono il diritto "Blocco di pagine in memoria"
   (`secpol.msc` → Criteri locali → Assegnazione diritti utente → *Blocco di pagine in memoria*: aggiungi il tuo utente, poi esci e
