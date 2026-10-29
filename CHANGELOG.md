@@ -3,6 +3,39 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.14.0] — 2026-10-29
+
+### Changed
+- **Upgrade note.** BSGS tables are saved as `PZBSGS03`, which 1.13.0 and earlier cannot read. `PZBSGS02` and `PZBSGS01` tables are still
+  read and used as they are.
+- BSGS: the baby-step table keeps a 32-bit tag in 4-byte cells (16 per cache line, 70 % in use): 5.7 bytes per baby step instead of 11.4, so
+  twice the baby steps fit in the same RAM. When a tag matches, the baby index is found again by a small search, a few milliseconds about once
+  per 3·10^8 giant steps. Measured: 0.78 of the time per giant step at equal table size, and about half the time per key when RAM limits the
+  table (2^51 keys with `--mem 0.05`: 3.5 s to 1.2 s). With 128 GB BSGS now pays off up to about 2^71 keys instead of 2^69.
+- Faster field inversion on the CPU: divsteps in variable time instead of an addition chain (about 4 times faster), and the SIMD lanes are
+  inverted together through one scalar inversion. Herd start about twice as fast; a walker start needs one inversion instead of two.
+- Faster lane arithmetic: the canonical reduction needs two carry passes instead of four; subtractions that only feed a product skip their
+  carry pass; on AVX2 the column sums of a product are no longer reordered and spilled by the compiler.
+- Faster lane kangaroo: x3 and x − x3 come from the denominator with lazy carries, and restarted walkers are found a vector at a time.
+  Measured on one thread against 1.13.0 (interleaved runs): about +38 % on AVX2 lanes, +18 % on AVX-512 lanes, +10 % with IFMA.
+- Faster CPU linear search: x and the parity of y are made canonical by a fast path; the filter compares hash160 word 2, which needs four
+  fewer RIPEMD-160 steps; the lane engines hash eight batches at a time; with IFMA the batch inversion runs as two chains of products; on
+  AVX-512 the field products are inlined; on AVX2 the byte swap and the rotations by 8 are one byte shuffle; the scalar engines form
+  x(C)+x(i·G) once per pair. Measured on one thread against 1.13.0: avx2v about +25 %, avx512v about +20 %, avx512i +12 %, avx2 +10 %,
+  avx512 +9 %. BSGS giant steps on lanes: +4 to +13 % from the same arithmetic.
+- GPU (CUDA): one `IMAD.WIDE` per limb product in the field multiplication and square (multiplication 235 to 121 instructions); the modular
+  inversion does its divsteps in variable time (about 14,600 instead of 22,000 instructions per warp); the jump table is read with 16-byte
+  loads; RIPEMD-160 byte swaps are one `PRMT`; x3 on one pair of borrow chains. Instructions per kangaroo step on sm_86: 1868 to 1167
+  (-38 %); per key of the linear search: about -18 %. Counted with ptxas, not yet measured on a card; the tuner picks the fastest variant.
+- GPU linear kernel: filter on hash160 word 2, and the keys that pass are hashed again in full on the device, so a hit matches all 160 bits.
+- OpenCL on AMD GPUs (and pocl): field arithmetic on add-with-carry chains, 40 to 49 % fewer instructions per kangaroo step (static counts
+  for gfx906, gfx1030, gfx1100). NVIDIA through OpenCL and Intel keep the portable code.
+- `bench`: kangaroo ceilings computed from about 1300 instructions per GPU step instead of 2200.
+- Documentation: the expected cost of the kangaroo at the scale of the open puzzles is about 1.04·√W (was 1.02, from a run of 300 trials);
+  RESEARCH.md 8.12 splits the cost from the counting bound 0.67 to the measured 1.06 and lists the ideas measured and dropped (longer jumps,
+  other jump distributions, finer bands, other species); 8.11, 10.2 and 10.3 and section 5 log every measurement of this release.
+- Research tools: `tools/research/kwalk.c` (the walk of schema 3 with the split of its cost) and `tools/research/kcover.py`.
+
 ## [1.13.0] — 2026-10-29
 
 ### Changed

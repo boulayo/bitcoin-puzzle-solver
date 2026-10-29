@@ -213,7 +213,7 @@ kangaroo kernel.
   addition, subtraction and the reduction after a product use PTX carry chains (`add.cc`/`addc`, `sub.cc`/`subc`,
   `mad.lo.cc`/`madc.hi.cc` for the multiplication by 977): add+sub from 176 to 88 instructions, multiplication from 328 to 288, a dedicated
   square (36 products instead of 64) from 328 to ≈ 232. The 8×8 product stays in C because Ampere has no native `madc.hi` (the all-PTX
-  version measured 368; *after 1.13.0 the product is on PTX chains after all, in a form `ptxas` fuses: see the end of this section*). Estimate: ≈ 11% fewer instructions per key. The logic of the chains is verified with an
+  version measured 368; *in 1.14.0 the product is on PTX chains after all, in a form `ptxas` fuses: see the end of this section*). Estimate: ≈ 11% fewer instructions per key. The logic of the chains is verified with an
   exact emulation of the PTX semantics (`tests/t_gpufe.c`, 5 million combinations, edge cases of the double carries; mutation testing);
   on the device it is confirmed by the self-test.
 
@@ -342,7 +342,7 @@ occupancy but by the traffic of the private arrays, which with 512 threads per S
 Instruction count (sm_86, from `ptxas`, parts measured separately): multiplication ≈ 250, square ≈ 200, subtraction ≈ 40,
 normalization ≈ 30; the step is worth ≈ 2000 instructions plus the share of the inversion, which with the power `p − 2` (≈ 55,000
 instructions) was ≈ 430 per step at NK = 128 (a fifth of the total) and with the divstep (≈ 10,500) is ≈ 80 (*executed per warp it was ≈ 22,000,
-≈ 170 per step at NK = 128; ≈ 14,600 after 1.13.0: section 5*). At the integer throughput observed on the
+≈ 170 per step at NK = 128; ≈ 14,600 in 1.14.0: section 5*). At the integer throughput observed on the
 linear kernel (≈ 2.5·10¹² instructions/s) the compute limit goes from ≈ 1.0 to ≈ 1.2 G steps/s: **after v2 the kernel should
 still be bandwidth-limited, but close to the crossover point**. These are estimates: they have to be confirmed with `bench` on the card.
 * **Measurement of 1.7.0 on the reference laptop GPU: 810.7 M steps/s** (NK 64, paired products), ×1.67 over v1; the count by construction
@@ -437,7 +437,7 @@ function:
   | subtractive Karatsuba | 256 (+39 %) |
   | by columns, one `IMAD.WIDE` and two sums per product | 232 (+26 %) |
   | by rows, one carry chain per row | 176 (−4 %) |
-  | two accumulators on `mad.wide` chains (after 1.13.0, section 5) | 92 (−50 %) |
+  | two accumulators on `mad.wide` chains (in 1.14.0, section 5) | 92 (−50 %) |
 
   The code generated for the schoolbook product has 64 `IMAD.WIDE.U32` (plus 24 that compute addresses in the test bench), 86 sums
   `IADD3`/`IADD3.X` and 13 `IMAD.X`: ≈ 2.9 instructions per limb product. Karatsuba saves 16 products (≈ 48 instructions) but the sums
@@ -676,7 +676,7 @@ covered when the RAM limits the table. Time to the key with 4 threads and a fixe
 `--mem 0.01`, 1.01 s against 0.64 s (20 keys); `2^46` keys without a limit (the optimal table in both), 0.43 s against 0.45 s (16 keys, mostly
 start-up). Building the table (`2^26` baby steps, 4 threads, 7 pairs): 1.09 times the speed (1.00 to 2.0).
 
-**Tried and left out (after 1.13.0)**, same machine, medians of paired ratios with the quartiles:
+**Tried and left out (in 1.14.0)**, same machine, medians of paired ratios with the quartiles:
 * *Lookups overlapped with the arithmetic*: the group routine called back after each step, so that the bucket of every new x-coordinate was
   prefetched at once, the next bucket one step later when the last cell was in use, and the lookup made two steps later. Slower: 1.22 to 1.29
   times the time per giant step. Prefetching alone (no lookups at all) took the 36 ns of arithmetic to 58 to 62 ns: the reads of the table
@@ -689,7 +689,7 @@ start-up). Building the table (`2^26` baby steps, 4 threads, 7 pairs): 1.09 time
 * *A flag per bucket* telling whether an entry went past it (a lookup would go on only then, not whenever the bucket is full): simulated
   1.27 instead of 1.44 lines at 0.70 with 8 cells, 1.10 instead of 1.15 with 16; not done: a bit of every tag for 5 % fewer lines.
 
-### 8.12 Where the constant of schema 3 goes, and what is left (after 1.13.0)
+### 8.12 Where the constant of schema 3 goes, and what is left (in 1.14.0)
 
 Tools: `tools/research/kwalk.c` runs the walk of schema 3 as the program does (groups, a band drawn at every start, the jumps, the cycle exits,
 the distinguished points, the restart on a duplicate, steps counted by whole rounds) and keeps every class visited in a second table: the step
@@ -835,7 +835,7 @@ additions of the 29-bit representation. The engine (`engine_vec_impl.inc`) is th
 * **SHA-NI, tried and rejected**: one SHA-256 block with the SHA-NI instructions costs ≈ 63 ns on the same CPU, while SHA-256 +
   RIPEMD-160 on the 16 AVX-512 lanes cost ≈ 39 ns per key in total. It does not pay off.
 
-### 10.2 Linear search: what was measured after 1.13.0
+### 10.2 Linear search: what was measured in 1.14.0
 
 Same test machine as above (x86-64 server CPU with AVX-512; its CPUID hides IFMA but the processor executes it, `PZ_ASSUME_IFMA=1`), one
 thread pinned to one CPU, a harness that calls the engines directly; times are the best of 100 scans of 65,536 keys, base and new run
@@ -872,7 +872,7 @@ in 9 alternating pairs (the machine was shared, load 1 to 6): median gain and ra
   with a full hash of the few keys that pass (2103 to 2077 instructions) and the shared `x(C) + x(i·G)` (loop per pair 2315 to 2269) give
   ≈ 3419 to 3370 instructions per key (-1.4 %); registers 172 to 174, same occupancy.
 
-### 10.3 CPU kangaroo and linear search: a second round after 1.13.0
+### 10.3 CPU kangaroo and linear search: a second round in 1.14.0
 
 Same machine and method as 10.2 (one thread pinned, harnesses that call the step variants and the engines directly, alternating pairs,
 median gain and interquartile range; the machine was shared, load 1 to 7), plus exact instruction counts by single-stepping a round
