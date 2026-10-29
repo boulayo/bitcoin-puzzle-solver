@@ -471,7 +471,7 @@ static u64 pick_bsgs_entries(const opts_t *o, const pz_u256 *rsz, bool *viable)
     bool from_table;
     u64 T = requested_bsgs_entries(o, &from_table);
     if (T) {
-        if (viable) *viable = bsgs_mean_cost(rsz, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(rsz));
+        if (viable) *viable = bsgs_mean_cost(rsz, T) <= kang_mean_cost(rsz);
         return T;
     }
     sysinfo_t si;

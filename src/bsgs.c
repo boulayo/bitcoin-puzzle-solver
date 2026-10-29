@@ -65,7 +65,7 @@ u64 bsgs_choose_T(const pz_u256 *W, u64 budget_bytes, bool *viable)
     u64 topt = bsgs_optimal_T(W), tmax = bsgs_max_T_for_bytes(budget_bytes);
     u64 T = topt ? (topt < tmax ? topt : tmax) : tmax;
     bool ok = false;
-    if (T >= 1) ok = bsgs_mean_cost(W, T) <= KANG_C_MEAN * sqrtl(pz_u256_to_ld(W));
+    if (T >= 1) ok = bsgs_mean_cost(W, T) <= kang_mean_cost(W);
     if (viable) *viable = ok;
     return T;
 }

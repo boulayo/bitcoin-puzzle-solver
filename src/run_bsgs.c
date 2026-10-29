@@ -257,12 +257,12 @@ int run_bsgs(run_ctx *r)
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
     pz_fmt_bytes((double)r->sys.mem_avail, ma, sizeof ma);
     pz_fmt_si((double)bsgs_mean_cost(&b->P.W, T), c1, sizeof c1);
-    pz_fmt_si(KANG_C_MEAN * (double)sqrtl(pz_u256_to_ld(&b->P.W)), c2, sizeof c2);
+    pz_fmt_si((double)kang_mean_cost(&b->P.W), c2, sizeof c2);
     pz_log(PZ_LOG_INFO, "BSGS: %s baby steps (table %s, available RAM %s), %s giant steps; expected mean cost %s operations (kangaroo: %s)",
            pz_fmt_u64(T, tg, sizeof tg), mb, ma, pz_fmt_u64(b->P.Ng, ng, sizeof ng), c1, c2);
     if (r->use_gpu && gpu_count_usable() > 0)
         pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode%s", r->mode_auto ? "" : " (use --mode kangaroo to put them to work)");
-    if (bsgs_mean_cost(&b->P.W, T) > KANG_C_MEAN * sqrtl(pz_u256_to_ld(&b->P.W)))
+    if (bsgs_mean_cost(&b->P.W, T) > kang_mean_cost(&b->P.W))
         pz_log(PZ_LOG_WARN, "BSGS: with %s baby steps it costs more than the kangaroo (table too small for this range)", tg);
 
     b->table_bytes = bytes;

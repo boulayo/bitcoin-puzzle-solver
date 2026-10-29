@@ -3,7 +3,10 @@
 #ifndef PZ_KANGAROO_H
 #define PZ_KANGAROO_H
 #include "run.h"
+#include <math.h>
 #define KANG_C_MEAN 1.06         /* measured mean cost of the kangaroo, in units of sqrt(W) (W = 2^32..2^44) */
+/* The mean cost of the kangaroo on an interval of W keys, in steps: KANG_C_MEAN sqrt(W). */
+static inline long double kang_mean_cost(const pz_u256 *W) { return KANG_C_MEAN * sqrtl(pz_u256_to_ld(W)); }
 #define KANG_MAX_W_LOG2 188      /* the largest interval, 2^188 keys: the exponents are signed 192-bit numbers (+-2^191), the wild walkers on 3Q start
                                   * as far as 3W below zero and the collision of two of them, 6x = d2 - d1, needs 6W < 2^191 */
 /* NULL if the kangaroo can work on an interval of W keys, else the reason it cannot (too small, or beyond KANG_MAX_W_LOG2). */
