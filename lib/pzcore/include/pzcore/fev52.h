@@ -213,6 +213,20 @@ static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
     for (int i = 0; i < 5; i++) r->l[i] = (t[i] & sel) | (r->l[i] & ~sel);
 }
 
+/* Canonical reduction in the common case, with the interface of pz_fev.h. A tight element has exact limbs 0..3, so it is
+ * canonical already when limb 4 is below 2^48 - 1 (the value is then below 2^256 - 2^208 < p): nothing to do but check. The
+ * returned vector is non-zero in the other lanes (about 2^-48 per lane, every value >= p among them), which keep their value
+ * and need pz_fev_normalize. */
+static inline PZ_VABI pz_vl pz_fev_normalize_fast(pz_fev *r) { return (r->l[4] + pz_vl_set(1)) >> PZ_FEV_TOPBITS; }
+
+/* Bit 0 of the canonical value of each lane of a tight element: that of limb 0, except in the lanes set in *unsure as by
+ * pz_fev_normalize_fast. */
+static inline PZ_VABI pz_vl pz_fev_parity_fast(const pz_fev *a, pz_vl *unsure)
+{
+    *unsure |= (a->l[4] + pz_vl_set(1)) >> PZ_FEV_TOPBITS;
+    return a->l[0] & pz_vl_set(1);
+}
+
 #include <pzcore/impl/fev_chain.inc>
 
 #endif

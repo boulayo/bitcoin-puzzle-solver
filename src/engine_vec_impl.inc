@@ -87,11 +87,27 @@ static PZ_VABI void vctx_add_scalar(vctx_t *c, const pz_fe *x, const pz_fe *y, u
 
 typedef u32 vw __attribute__((vector_size(NL * 4)));
 
-/* Canonical reduction of x and y, then NL candidates appended to the hash batch. */
-static inline PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, pz_fev *y, pz_vl koff)
+static inline PZ_VABI bool vl_any(pz_vl v)
 {
-    pz_fev_normalize(x);
-    pz_fev_normalize(y);
+#if PZ_VBYTES == 64
+    return _mm512_test_epi64_mask((__m512i)v, (__m512i)v) != 0;
+#else
+    return !_mm256_testz_si256((__m256i)v, (__m256i)v);
+#endif
+}
+
+/* Canonical x and the parity of the canonical y, then NL candidates appended to the hash batch. The fast forms cover all but
+ * about 2^-24 of the lanes; for those the full normalization runs on the whole vector. */
+static inline PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev *y, pz_vl koff)
+{
+    pz_vl unsure = pz_fev_normalize_fast(x);
+    pz_vl par = pz_fev_parity_fast(y, &unsure);
+    if (UNLIKELY(vl_any(unsure))) {
+        pz_fev yn = *y;
+        pz_fev_normalize(x);
+        pz_fev_normalize(&yn);
+        par = yn.l[0] & pz_vl_set(1);
+    }
     const int n = c->n;
 #pragma GCC unroll 8
     for (int j = 0; j < 8; j++) {            /* word j counted from the least significant end: bits [32j, 32j+32) */
@@ -104,8 +120,7 @@ static inline PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, pz_fev *y, pz_vl koff
         vw w32 = __builtin_convertvector(w, vw);
         memcpy(&c->X[7 - j][n], &w32, sizeof w32);
     }
-    pz_vl par = (y->l[0] & pz_vl_set(1)) + pz_vl_set(2);
-    vw p32 = __builtin_convertvector(par, vw);
+    vw p32 = __builtin_convertvector(par + pz_vl_set(2), vw);
     memcpy(&c->pfx[n], &p32, sizeof p32);
     memcpy(&c->koff[n], &koff, sizeof koff);
     c->n = n + NL;

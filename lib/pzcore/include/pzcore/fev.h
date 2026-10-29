@@ -159,8 +159,10 @@ static inline PZ_VABI void pz_fev_sub2(pz_fev *r, const pz_fev *a, const pz_fev 
     pz_fev_carry_small(r);
 }
 
-/* pz_fev_sub and pz_fev_sub2 without their carry pass, for a result that only goes to pz_fev_normalize: limbs below 2^33 for the
- * operands those accept. */
+/* pz_fev_sub and pz_fev_sub2 without their carry pass: limbs below 2^33 for the operands those accept, a result that may go to
+ * pz_fev_normalize, pz_fev_normalize_fast or pz_fev_parity_fast. pz_fev_sub_lazy of two tight elements has limbs below
+ * 2^31 + 2^23 and may also be a factor of pz_fev_mul whose other factor is tight (nine such products fit in 64 bits, as with two
+ * loose factors). */
 static inline PZ_VABI void pz_fev_sub_lazy(pz_fev *r, const pz_fev *a, const pz_fev *b)
 {
 #pragma GCC unroll 9
@@ -276,6 +278,43 @@ static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
     t[8] &= M24;
 #pragma GCC unroll 9
     for (int i = 0; i < 9; i++) r->l[i] = (t[i] & sel) | (r->l[i] & ~sel);
+}
+
+/* Canonical reduction in the common case, for the limbs pz_fev_normalize accepts (below 2^34): one carry ripple, one fold of the
+ * bits at and above 2^256, and two more carry steps. The result is canonical in every lane where the returned vector is zero.
+ * The other lanes, where limb 2 overflowed or the top limb ended all ones (about 2^-24 per lane, which includes every value
+ * >= p), keep their value and pz_fev_normalize finishes them. */
+static inline PZ_VABI pz_vl pz_fev_normalize_fast(pz_fev *r)
+{
+    const pz_vl M = pz_vl_set(PZ_FEV_MASK), M24 = pz_vl_set(((uint64_t)1 << 24) - 1);
+    pz_vl c = pz_vl_set(0);
+#pragma GCC unroll 9
+    for (int i = 0; i < 9; i++) {
+        pz_vl t = r->l[i] + c;
+        c = t >> PZ_FEV_BITS;
+        r->l[i] = t & M;
+    }
+    const pz_vl h = (r->l[8] >> 24) + (c << 5);          /* the value divided by 2^256; h * 2^256 = h * (2^32 + 977) */
+    r->l[8] &= M24;
+    const pz_vl t0 = r->l[0] + pz_vl_mul32(h, pz_vl_set(977));
+    const pz_vl t1 = r->l[1] + (h << 3) + (t0 >> PZ_FEV_BITS);
+    r->l[0] = t0 & M;
+    r->l[1] = t1 & M;
+    r->l[2] += t1 >> PZ_FEV_BITS;
+    return (r->l[2] >> PZ_FEV_BITS) | ((r->l[8] + pz_vl_set(1)) >> 24);
+}
+
+/* Bit 0 of the canonical value of each lane of a (limbs below 2^34, as for pz_fev_normalize), a unchanged. With
+ * h = floor(a / 2^256) the residue is (a mod 2^256) + h * (2^32 + 977), whose bit 0 is that of limb 0 xor h, unless that sum
+ * reaches p: only possible when the top limb ends all ones, and those lanes are set in *unsure (as by pz_fev_normalize_fast). */
+static inline PZ_VABI pz_vl pz_fev_parity_fast(const pz_fev *a, pz_vl *unsure)
+{
+    pz_vl t = a->l[0];
+#pragma GCC unroll 8
+    for (int i = 1; i < 9; i++) t = a->l[i] + (t >> PZ_FEV_BITS);         /* only the carries: t ends as limb 8 with its carry */
+    const pz_vl h = t >> 24;
+    *unsure |= ((t & pz_vl_set(((uint64_t)1 << 24) - 1)) + pz_vl_set(1)) >> 24;
+    return (a->l[0] ^ h) & pz_vl_set(1);
 }
 
 #include <pzcore/impl/fev_chain.inc>

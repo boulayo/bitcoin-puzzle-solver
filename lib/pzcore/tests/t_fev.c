@@ -92,6 +92,36 @@ static void check_lanes(const pz_fev *r, const pz_fe *want, uint64_t bound, cons
     }
 }
 
+/* The fast canonical form and parity used by the linear search: exact in every lane they do not flag, and the flagged lanes keep
+ * their value for pz_fev_normalize. Counts the flagged lanes in *flagged. */
+static void check_fast(const pz_fev *a, const pz_fe *va, int *flagged)
+{
+    pz_fev r = *a;
+    pz_vl un = pz_fev_normalize_fast(&r), un2 = pz_vl_set(0);
+    const pz_vl par = pz_fev_parity_fast(a, &un2);
+    for (int l = 0; l < PZ_FEV_LANES; l++) {
+        pz_fe w = va[l], got;
+        pz_fe_normalize(&w);
+        if (un[l] == 0) {
+            pz_fev_get_lane(&got, &r, l);
+            CHECK(pz_fe_eq(&got, &w));
+            CHECK(r.l[PZ_FEV_NLIMB - 1][l] < ((uint64_t)1 << PZ_FEV_TOPBITS));
+            for (int i = 0; i < PZ_FEV_NLIMB - 1; i++) CHECK(r.l[i][l] <= PZ_FEV_MASK);
+        } else {
+            (*flagged)++;
+        }
+        if (un2[l] == 0) CHECK(par[l] == (w.n[0] & 1));
+        else CHECK(un[l] != 0);              /* the parity is never unsure where the value is sure */
+    }
+    pz_fev_normalize(&r);
+    for (int l = 0; l < PZ_FEV_LANES; l++) {
+        pz_fe w = va[l], got;
+        pz_fe_normalize(&w);
+        pz_fev_get_lane(&got, &r, l);
+        CHECK(pz_fe_eq(&got, &w));
+    }
+}
+
 int main(void)
 {
 #if PZ_VBYTES == 64
@@ -102,6 +132,7 @@ int main(void)
     const char *name = "avx2";
 #endif
     const uint64_t TIGHT = PZ_FEV_TIGHT, LOOSE = PZ_FEV_LOOSE;
+    int flagged = 0, flagged_crafted = 0;
     /* the subtraction constants really are multiples of p and dominate their subtrahends */
     {
         pz_fe base, acc, t;
@@ -201,6 +232,11 @@ int main(void)
             }
             check_lanes(&d, want, TIGHT, "sub2 of 3x");
             pz_fev_sub2_lazy(&d, &a, &bl, &cl);
+            {
+                pz_fe vd[PZ_FEV_LANES];
+                for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe t; pz_fe_sub(&t, &va[l], &vbl[l]); pz_fe_sub(&vd[l], &t, &vcl[l]); }
+                check_fast(&d, vd, &flagged);          /* the fast forms accept the same limbs as pz_fev_normalize */
+            }
             pz_fev_normalize(&d);
             for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe t; pz_fe_sub(&t, &va[l], &vbl[l]); pz_fe_sub(&want[l], &t, &vcl[l]); pz_fe_normalize(&want[l]); }
             check_lanes(&d, want, PZ_FEV_MASK, "sub2_lazy");
@@ -210,6 +246,23 @@ int main(void)
                 for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe_sub(&want[l], &va[l], &vb[l]); pz_fe_normalize(&want[l]); }
                 check_lanes(&d, want, PZ_FEV_MASK, "sub_lazy");
             }
+        }
+        check_fast(&a, va, &flagged);
+        /* the subtraction without carry pass of two tight elements: fast forms, and a product with a tight factor */
+        if (ba == TIGHT && bb == TIGHT) {
+            pz_fev d;
+            pz_fe vd[PZ_FEV_LANES];
+            pz_fev_sub_lazy(&d, &a, &b);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe_sub(&vd[l], &va[l], &vb[l]); pz_fe_normalize(&vd[l]); }
+            check_fast(&d, vd, &flagged);
+            pz_fev_mul(&r, &d, &c);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe_mul(&want[l], &vd[l], &vc[l]); pz_fe_normalize(&want[l]); }
+            check_lanes(&r, want, TIGHT, "sub_lazy * c");
+            pz_fev_mul(&r, &c, &d);
+            check_lanes(&r, want, TIGHT, "c * sub_lazy");
+            r = d;
+            pz_fev_normalize(&r);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe got; pz_fev_get_lane(&got, &r, l); CHECK(pz_fe_eq(&got, &vd[l])); }
         }
         /* inversion */
         if (it % 50 == 0) {
@@ -261,6 +314,7 @@ int main(void)
             set_lane_words(&x, l, w);
         }
         for (int l = 0; l < PZ_FEV_LANES; l++) lane_value(&vx[l], &x, l);
+        check_fast(&x, vx, &flagged_crafted);
         r = x;
         pz_fev_normalize(&r);
         for (int l = 0; l < PZ_FEV_LANES; l++) {
@@ -332,6 +386,10 @@ int main(void)
         for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe t; pz_fe_sub(&t, &va[l], &vb[l]); pz_fe_sub(&want[l], &t, &vc[l]); pz_fe_normalize(&want[l]); }
         check_lanes(&r, want, TIGHT, "sub2 in place");
     }
+    /* the crafted values reach the flagged lanes (values at and above p); random tight values hardly ever do, except the
+     * patterns with every limb at the bound */
+    CHECK(flagged_crafted > 0);
+    printf("t_fev (%s): fast normalization flagged %d random and %d crafted lanes\n", name, flagged, flagged_crafted);
     printf(fails ? "t_fev (%s): %d FAILED\n" : "t_fev (%s): OK\n", name, fails);
     return fails != 0;
 }

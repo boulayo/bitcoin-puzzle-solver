@@ -113,6 +113,36 @@ static void check_canonical(const pz_fev *r, const pz_fe *want)
     }
 }
 
+/* The fast canonical form and parity used by the linear search: exact in every lane they do not flag, and the flagged lanes keep
+ * their value for pz_fev_normalize. Counts the flagged lanes in *flagged. */
+static void check_fast(const pz_fev *a, const pz_fe *va, int *flagged)
+{
+    pz_fev r = *a;
+    pz_vl un = pz_fev_normalize_fast(&r), un2 = pz_vl_set(0);
+    const pz_vl par = pz_fev_parity_fast(a, &un2);
+    for (int l = 0; l < PZ_FEV_LANES; l++) {
+        pz_fe w = va[l], got;
+        pz_fe_normalize(&w);
+        if (un[l] == 0) {
+            pz_fev_get_lane(&got, &r, l);
+            CHECK(pz_fe_eq(&got, &w));
+            CHECK(r.l[PZ_FEV_NLIMB - 1][l] < ((uint64_t)1 << PZ_FEV_TOPBITS));
+            for (int i = 0; i < PZ_FEV_NLIMB - 1; i++) CHECK(r.l[i][l] <= PZ_FEV_MASK);
+        } else {
+            (*flagged)++;
+        }
+        if (un2[l] == 0) CHECK(par[l] == (w.n[0] & 1));
+        else CHECK(un[l] != 0);              /* the parity is never unsure where the value is sure */
+    }
+    pz_fev_normalize(&r);
+    for (int l = 0; l < PZ_FEV_LANES; l++) {
+        pz_fe w = va[l], got;
+        pz_fe_normalize(&w);
+        pz_fev_get_lane(&got, &r, l);
+        CHECK(pz_fe_eq(&got, &w));
+    }
+}
+
 /* PZ_ASSUME_IFMA: on with any value except "" and "0", as for pzsolve */
 static int assume_ifma(void)
 {
@@ -123,6 +153,7 @@ static int assume_ifma(void)
 int main(void)
 {
     if (!pz_cpu_has_ifma() && !assume_ifma()) { printf("t_fev52: CPU without AVX-512 IFMA, skipped\n"); return 0; }
+    int flagged = 0, flagged_crafted = 0;
     /* the subtraction constants are multiples of p whose limbs dominate one (K1) or two (K2) tight subtrahends */
     {
         pz_fe base, acc, t;
@@ -167,6 +198,7 @@ int main(void)
         r = a;
         pz_fev_normalize(&r);
         check_canonical(&r, va);
+        check_fast(&a, va, &flagged);
 
         /* sub2 from three times a canonical element; the lazy subtractions, with a sum of two tight elements, then normalized */
         {
@@ -240,6 +272,7 @@ int main(void)
             lane_value(&vx[l], &x, l);
             for (int i = 0; i < 5; i++) CHECK(x.l[i][l] <= bound(i));
         }
+        check_fast(&x, vx, &flagged_crafted);
         r = x;
         pz_fev_normalize(&r);
         check_canonical(&r, vx);
@@ -272,6 +305,8 @@ int main(void)
             }
         }
     }
+    CHECK(flagged_crafted > 0);
+    printf("t_fev52: fast normalization flagged %d random and %d crafted lanes\n", flagged, flagged_crafted);
     printf(fails ? "t_fev52: %d FAILED\n" : "t_fev52: OK\n", fails);
     return fails != 0;
 }
