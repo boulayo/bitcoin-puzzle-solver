@@ -589,7 +589,8 @@ path, which is also triggered by every zero denominator in the batch inversion.
 * **SIMD lane windows**: 4 (AVX2) or 8 (AVX-512, IFMA) consecutive windows per instruction, with the arithmetic of
   `fev.h`/`fev52.h`, both for the giants and for building the table. At startup each variant must produce exactly the
   x-coordinates of the scalar routine (two calls, so the advance of the centers is covered too), otherwise it is not used;
-  `PZ_BSGS_SCALAR=1` disables them. Here (4 threads, table 2^22): giants from 25.8 to ≈ 50 M/s; the limit is now the random read
+  `PZ_BSGS_SCALAR=1` disables them. With IFMA the `x` of a window point is made canonical by checking its top limb only (a tight element
+  has exact limbs; the full reduction runs for a vector with a lane at or above `2^256 − 2^208`). Here (4 threads, table 2^22): giants from 25.8 to ≈ 50 M/s; the limit is now the random read
   of the table.
 * **Search**: the giants are the "keys" 1…Ng of a scheduler identical to the linear one (same permutation from the seed,
   same checkpoints/resume); software `prefetch` at distance 16 hides the RAM latency (a bucket is one line, 1.15 per lookup on average).
@@ -633,6 +634,10 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
   the previous one is latency-bound, so the forward pass of the batch inversion runs as two interleaved chains (even and odd
   denominators). On AVX-512 (32 vector registers) the products are inlined in the loop of the engine. The column sums of a 29-bit product
   pass through an empty `asm` after every addition: otherwise GCC reassociates them, computes the 81 products first and spills them.
+* **Lane kangaroo**: `x3` and `y3` of a step are made canonical as in the linear search (the full reduction only for a vector with a lane
+  the fast form cannot settle), and the jump table keeps each coordinate `c` as `K1 − c`, so that `x − jx` and `y − jy` are an addition and
+  its carries (`K1` is the multiple of `p` that a subtraction adds). The entries are read one row per lane and transposed in registers
+  (8×8 words on AVX-512, 4×4 on AVX2).
 * **Inversion of a vector**: the lanes are inverted together by Montgomery's trick, one scalar inversion by divsteps and 21 (AVX-512) or
   9 (AVX2) scalar products, instead of an addition chain of 255 vector squarings that wait for each other (`pz_fev_inv`).
 * The reduction, the limb bounds, the order of the windows, the lane kangaroo (RESEARCH.md 10.0), the AVX-512 IFMA variant (RESEARCH.md 10.1),

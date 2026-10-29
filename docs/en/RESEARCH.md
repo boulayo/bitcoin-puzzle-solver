@@ -926,3 +926,56 @@ of 4096 walkers (`ptrace`; valgrind has no AVX-512) and the executed instruction
   3.80, avx512i 4.03. The 512-bit variants lose nothing at 4 threads on this machine, and the choices made on one thread stand (at
   4 threads avx512v does 1.31 times the steps of avx2v and 1.82 times its keys). On processors whose clock drops with 512-bit
   instructions on every core the margin is smaller; the kangaroo already times the IFMA pair with every thread busy.
+
+### 10.4 Precomputed tables and constants: a third round in 1.14.0
+
+Same machine and method as 10.2 and 10.3 (harnesses that call the step variants, the BSGS groups and the starts directly, one thread pinned,
+15 alternating pairs: median gain, interquartile range and the ratio of the best runs; the machine was shared, load 2 to 5), and exact
+instruction counts by single-stepping. The question of this round: which recurring computations can be read from a table or a constant
+instead, and where a table is cheaper to read than its contents are to compute (the L1 data cache is 32 KiB, the L2 1 MiB).
+
+* **Kept**:
+  * *x3 and y3 of the lane kangaroo by the fast reduction* (as the linear search since 10.2): the full reduction runs only for a vector with
+    a lane the fast form cannot settle. Instructions per step: avx512i 152.6 to 146.5, avx512i2 166.9 to 162.3, avx512v 325.4 to 313.6,
+    avx2v 711.1 to 676.8; time +2.0 % (avx512i, IQR +1.1..+3.7), +2.5 % (avx512i2), +2.3 % (avx512v), +2.1 % (avx2v);
+  * *the jump coordinates kept as `K1 − c`*: `pz_fev_sub` adds the multiple of `p` `K1` to the minuend; with `K1 − jx` and `K1 − jy` in the
+    table, `x − jx` and `y − jy` are an addition and its carries, the same limbs. Per step: avx512i 146.5 to 143.2, avx512i2 162.3 to 159.2,
+    avx512v 313.6 to 308.0, avx2v 671.1 to 662.1; time +0.3 to +2.0 % (within the spread on its own, the counts are exact);
+  * *AVX2 jump entries as 32-byte rows transposed 4x4* (two `vmovq`, two `vpinsrq` and a `vinserti128` per vector and word before):
+    avx2v 676.8 to 671.1 instructions per step, +2.3 % (IQR +1.4..+6.0);
+  * *BSGS lanes with IFMA*: a tight element has exact limbs, so the canonical `x` of a window point needs only the check of the top limb:
+    62.8 to 61.2 instructions per giant step, +6.1 % (IQR +5.3..+6.2). With 29-bit limbs the fast form needs a carry ripple too: avx512v
+    +0.45 % instructions, avx2v −1.8 %, times within ±2 %: not used there;
+  * *walker starts converted to affine form 64 at a time* (one inversion per 64 starts, the same draws and points; a batch with a start at
+    infinity is drawn again one walker at a time): 4096 walkers on one thread, 20.8 to 15.4 ms (`W = 2^40`), 51.1 to 45.5 ms (`2^130`);
+  * *`k·G` with signed windows of 8 bits*: a start at the scale of the puzzles was 82 % mixed additions of the comb (`libpzcore` is compiled
+    without BMI2, about 3900 instructions each), up to 64 of them with unsigned windows of 4 bits. Digits in `[−128, 128]` over 33 windows of
+    128 points (264 KB instead of 61, built in 3.7 ms instead of 0.9) need at most 32, a negative digit adds the negated point. 4096 starts
+    at `2^130`: 45.5 to 25.9 ms; signed windows of 6 bits (88 KB) 33.6 ms, of 4 bits 52.5 ms. Every `k·G` of the program gains the same.
+  * Together, against 1.14.0 (one thread): kangaroo avx512i2 +7.2 % (IQR +0.5..+10.2, best runs +7.2 %), avx512i +4.0 %, avx512v +2.7 %
+    (best runs +4.8 %), avx2v +5.3 %; BSGS groups avx512i +5.0 %; the start of 4096 walkers 2.0 times faster at `2^130` (50.7 to 25.9 ms)
+    and at `2^60` (26.9 to 12.6 ms). A GPU herd of 2^22 walkers is started by the CPU threads: at `2^130` about 26 s of CPU time instead of
+    52. The linear search does not change.
+* **Tables evaluated and left as they are**:
+  * *The jump table of the kangaroo* (272 entries): 128 bytes each with IFMA (34 KiB), 192 with 29-bit limbs (51 KiB). Between two uses of
+    an entry about 70 KiB of the herd (about 1 MiB per thread, read and written once per round) pass through L1, so the entries come from L2.
+    Bound on any layout that would keep them in L1: all the jumps on 16 entries (2 KiB) gives avx512i2 +0.8 % (best runs +1.8 %), avx512v
+    +2.0 % (+1.7 %). Entries of 96 bytes would straddle cache lines and still not fit with the herd: not done.
+  * *The window of multiples of `G` of the linear search* (`i·G`, `i ≤ 256`): 20 KiB with IFMA, 36 KiB with 29-bit limbs, read in order
+    once per round (L1 and L2 with the prefetchers); the denominators and their products, 148 to 296 KiB, live in L2. The batch costs three
+    products per denominator, 1.5 per key, whatever the window; what a larger window divides is one inversion of a vector (2452 instructions
+    per round of 4096 keys with avx512i) and the advance of the centres (about 300): 0.25 % of the 277 instructions per key. Windows of 512
+    measured +0.15 % (10.2).
+  * *Where the linear search spends its instructions* (avx512i, per key): 188 in the hash filter, 65 in the step and the emission of the
+    candidates, 23 in the batch inversion; avx2v: 679, 383 and 64.
+  * *Constant words of SHA-256 and RIPEMD-160*: the padding and length words of the 33-byte key, the zero words of the schedule and the
+    terms that depend only on them already fold at compile time, and the first message word holds the top of `x`, so no state after the
+    first round depends on the parity alone. What is left: the round constants are read through a pointer the compiler cannot see through,
+    so in rounds 0 to 3 (where `h` is a constant) and 15 (`W = 264`) two constants are added separately. Visible constants there: 3009 to
+    3006 instructions per AVX-512 batch, 5432 to 5424 per AVX2 batch, 0.1 %: not done.
+  * *BSGS windows*: the table of `(i+1)·U` is 40 KiB (IFMA) or 72 KiB, the denominators and their products 328 and 590 KiB. A backward pass
+    that forms each denominator again instead of keeping it (half the work area): avx512i +3.3 %, avx512v −1.2 %, avx2v −6.4 %; windows of
+    512 instead of 1024 giant steps: avx512v +6.8 %, avx512i −1.4 %, avx2v −2.6 % (arithmetic only; the window is shared by the callers'
+    layout of the giant steps, so one per engine would change them too). Neither was taken.
+  * *The comb in BMI2/ADX code*: compiled with those flags the start code takes half the instructions but only 14 % less time (the
+    additions of a start wait for each other); after the larger windows not tried again.
