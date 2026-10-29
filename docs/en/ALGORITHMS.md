@@ -246,7 +246,7 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
   `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
-  (≈ 160) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps); with OpenCL four: window 64, 128, 256 or 512. On the first
+  (≈ 160) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
   run on a device the program measures them all (a few seconds each) and keeps the default (256 with CUDA, 128 with OpenCL) unless another one
   is more than 3% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
   `PZ_GPU_HALF=N` forces it, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
@@ -254,12 +254,14 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. The state of the walkers is in
   global memory (x, y, the running products of the batch, 32-bit tags and flags: ≈ 130 bytes per walker). The distance does not travel from step
   to step: every step adds 16 bits (jump index, "negated" bit) to a history buffer, and `d` is rebuilt by replaying it, at the end of a launch of
-  at most 64 rounds for everyone and on the spot for the rare distinguished points. One pass per round moves the walkers and computes the
+  at most 64 to 256 rounds (as many as the device memory allows: the history takes at most an eighth of it) for everyone and on the spot for the rare distinguished points. One pass per round moves the walkers and computes the
   denominators of the next round. The DPs go out in a buffer and are inserted in the same table as the CPU's; restarts are handled by the
   host. Variants, measured on the device by the same procedure as the linear ones (the default stays unless another is more than 3% faster):
   with CUDA `NK` = 64, 128 or 256 (default 128), each plain or with the running products kept only for every other walker (`b`, less memory
-  traffic for half a multiplication more per step), and `NK` = 64 or 128 with the products every fourth walker (`c`); with OpenCL `NK` = 32, 64
-  or 128 (default 64), plain or `b`. On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
+  traffic for half a multiplication more per step), and `NK` = 64 or 128 with the products every fourth walker (`c`), and on cards of more than
+  64 SMs, where the default herd is capped at 32768 work-items, `NK` = 64 at 512 work-items per SM ("full herd"); with OpenCL `NK` = 32, 64
+  or 128 (default 64), plain or `b`, and `NK` = 32 or 64, plain or `b`, with 4 or 8 times the 64 work-items per compute unit ("4x herd", "8x
+  herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
   work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its
   measurements: RESEARCH.md sections 5 and 8.4.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
