@@ -612,11 +612,11 @@ static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz
         if (sp->coef == 0) return false;
         *p = *cq;
     } else {
-        pz_ge ug;
-        if (!pz_ec_mul_g(&ug, &mag)) return false;
-        if (neg) pz_ge_neg(&ug, &ug);
-        if (sp->coef == 0) *p = ug;
-        else if (!pz_ge_add(p, &ug, cq)) {
+        pz_gej ug;                                        /* in Jacobian form: one inversion for the start, not one per operation */
+        pz_ec_mul_g_j(&ug, &mag);                         /* 0 < mag < 2^192: never the point at infinity */
+        if (neg) pz_fe_neg(&ug.y, &ug.y);
+        if (sp->coef != 0) pz_gej_add_ge(&ug, &ug, cq);
+        if (!pz_gej_to_ge(p, &ug)) {
             /* c*x + u = 0: x = -u / c */
             pz_u256 x;
             if (!neg) return false;                       /* x would be negative */
