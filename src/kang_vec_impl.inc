@@ -35,6 +35,30 @@ static __attribute__((noinline)) PZ_VABI void kv_normalize(pz_fev *r) { pz_fev_n
 #define kv_sqr pz_fev_sqr
 #define kv_normalize pz_fev_normalize
 #endif
+
+/* x3 and y3 of the step to canonical form: the fast reduction of the header, and the full one only for a vector with a lane it cannot
+ * settle (about 2^-24 per lane with 29-bit limbs, 2^-48 with IFMA, every value >= p among them). With IFMA the fast form wants tight
+ * elements, so the carries go first. */
+#if PZ_VBYTES == 32
+static __attribute__((noinline))
+#else
+static inline
+#endif
+PZ_VABI void kv_canon(pz_fev *x3, pz_fev *y3)
+{
+#ifdef PZ_FEV_IFMA
+    pz_fev_settle(x3->l);
+    pz_fev_settle(y3->l);
+#endif
+    const pz_vl u = pz_fev_normalize_fast(x3) | pz_fev_normalize_fast(y3);
+    u64 any = 0;
+    for (int l = 0; l < NL; l++) any |= u[l];
+    if (UNLIKELY(any)) {
+        kv_normalize(x3);
+        kv_normalize(y3);
+    }
+}
+
 #define KV_WORDS (2 * PZ_FEV_NLIMB + 2)          /* table entry: x limbs, y limbs, distance (two words) */
 #define KV_STRIDE ((KV_WORDS + 7) & ~7)        /* padded to whole 64-byte rows */
 /* Word offsets in an entry. The backward pass reads y and the distance (KV_BN words from KV_B), the forward pass x: with 5 limbs
@@ -296,8 +320,7 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
     for (int u = 0; u < nu; u++) pz_fev_sub_lazy(&x[u].y3, &x[u].y3, &E->vy[c - u]);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
-        kv_normalize(&x[u].x3);
-        kv_normalize(&x[u].y3);
+        kv_canon(&x[u].x3, &x[u].y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
         const pz_vl sel = pz_vl_set(0) - (x[u].y3.l[0] & one);
         pz_fev ny;
@@ -472,8 +495,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         kv_x3_t(&x3, &t, &l2, &vx[c], &vdx[c]);
         kv_mul(&y3, &lam, &t);
         pz_fev_sub_lazy(&y3, &y3, &vy[c]);
-        kv_normalize(&x3);
-        kv_normalize(&y3);
+        kv_canon(&x3, &y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
         const pz_vl sel = pz_vl_set(0) - (y3.l[0] & one);
         {
