@@ -104,12 +104,12 @@ static int merge_selftest(void)
     char want_id[9];
     snprintf(want_id, sizeof want_id, "%02x%02x%02x%02x", tag[0], tag[1], tag[2], tag[3]);
     MCHK(kang_load_log(ks) < 0);               /* 1: a new log was created */
-    MCHK(kang_merge_file(ks, pa, &a) != 0 || a.read != 3 || a.added != 3 || a.solved);       /* A alone does not solve */
-    MCHK(kang_merge_file(ks, pa, &a2) != 0 || a2.read != 3 || a2.added != 0 || a2.dups != 3); /* again: all known */
-    MCHK(kang_merge_file(ks, pc, &c) != -2 || c.read != 0);                                   /* another campaign: refused */
-    MCHK(kang_merge_file(ks, "/nonexistent/dp.bin", &c) != -1);
-    MCHK(kang_merge_file(ks, pd, &d) != -3 || d.read != 0 || strcmp(d.jump_id, want_id) != 0);   /* another jump table: refused */
-    MCHK(kang_merge_file(ks, pb, &b) != 0 || !b.solved);                                      /* A and B together do */
+    MCHK(kang_merge_file(ks, pa, &a) != KANG_HDR_OK || a.read != 3 || a.added != 3 || a.solved);       /* A alone does not solve */
+    MCHK(kang_merge_file(ks, pa, &a2) != KANG_HDR_OK || a2.read != 3 || a2.added != 0 || a2.dups != 3); /* again: all known */
+    MCHK(kang_merge_file(ks, pc, &c) != KANG_HDR_FOREIGN || c.read != 0);                                   /* another campaign: refused */
+    MCHK(kang_merge_file(ks, "/nonexistent/dp.bin", &c) != KANG_HDR_READ_ERR);
+    MCHK(kang_merge_file(ks, pd, &d) != KANG_HDR_OTHER_JUMPS || d.read != 0 || strcmp(d.jump_id, want_id) != 0);   /* another jump table: refused */
+    MCHK(kang_merge_file(ks, pb, &b) != KANG_HDR_OK || !b.solved);                                      /* A and B together do */
     MCHK(!atomic_load(&ks->r->found) || pz_u256_cmp(&ks->r->found_key, &key) != 0);
     kang_free_test_state(ks);
     pz_result_line("merge of two computers' points", "%s", fails ? "FAILED" : "OK");

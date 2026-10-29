@@ -103,8 +103,8 @@ typedef struct {
 typedef struct kang_state {
     run_ctx *r;
     pz_u256 W;                      /* interval width */
-    char jump_id[9];             /* first 4 bytes of the SHA-256 of the jump table, in hex: equal on all computers of a campaign */
-    u8 jump_tag[4];              /* the same 4 bytes, as the header of the log stores them */
+    u8 jump_tag[4];              /* first 4 bytes of the SHA-256 of the jump table, equal on all computers of a campaign: in the header of the log,
+                                  * and in hex (kang_jump_id) the id the messages show */
     pz_u256 base;                   /* key = base + x */
     pz_ge Qp;                       /* pubkey - base*G */
     pz_ge Q3;                       /* 3*Qp */
@@ -245,7 +245,7 @@ int kang_load_log(kang_state *ks);
 int kang_flush_log(kang_state *ks);                                                      /* no lock held: writes every point collected so far; 0, or -1 when the file refuses */
 void kang_table_unlock(kang_state *ks);                                                  /* mu held: lets go of it, then writes the block this thread took out of the log, if any */
 typedef struct { u64 read, added, dups, skipped; bool solved; char jump_id[9]; } kang_merge_stats;   /* jump_id: that of the file, when it differs */
-int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);
+int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);                /* a KANG_HDR_* value (KANG_HDR_OK: merged) */
 
 /* The file of distinguished points (kang_log.c) and the table it feeds (kangaroo.c). Header of the logs of this campaign: the magic, the
  * fingerprint of the campaign (kang_log_fp) and the first 4 bytes of the hash of the jump table (jump_tag): a log written with another
@@ -262,6 +262,11 @@ void kang_log_fp(const kang_state *ks, u8 fp[32]);                              
  * layout (PZDP1 to PZDP3), or one that only a newer version of the program writes. */
 enum { KANG_LOG_FOREIGN, KANG_LOG_CURRENT, KANG_LOG_V4, KANG_LOG_OLDER, KANG_LOG_NEWER };
 int kang_log_class(const u8 magic[6]);
+/* What the header of a log says, for loading and for merging it: one of this campaign (version 4 included), shorter than its header but the
+ * beginning of one of ours, another campaign's or not a log, an older layout, a newer version, this campaign's with another jump table, or
+ * a read error. */
+enum { KANG_HDR_OK, KANG_HDR_SHORT, KANG_HDR_FOREIGN, KANG_HDR_OLDER, KANG_HDR_NEWER, KANG_HDR_OTHER_JUMPS, KANG_HDR_READ_ERR };
+void kang_jump_id(const u8 tag[4], char out[9]);                                         /* the id of a jump table, in hex */
 FILE *kang_log_create(kang_state *ks, const char *path, const u8 fp[32]);               /* a log with the current header; sets log_hdr */
 void kang_log_push(kang_state *ks, const dp_rec *rec);                                   /* mu held */
 long long kang_log_read(kang_state *ks, FILE *f);                                        /* the records of an open log into the table: their number, -1 on a read error */

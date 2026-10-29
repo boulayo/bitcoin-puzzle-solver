@@ -569,22 +569,16 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
         kang_merge_stats st;
         memset(&st, 0, sizeof st);
         const int rc = kang_merge_file(ks, path, &st);
-        if (rc == -1) { say_wrapped("  %s: %s\n", path, access(path, F_OK) != 0 ? "does not exist" : "cannot read the file"); bad++; continue; }
-        if (rc == -3) {
-            say_wrapped("  %s: written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet\n",
-                        path, st.jump_id, ks->jump_id);
-            bad++;
-            continue;
-        }
-        if (rc == -2) {
-            char hdr[6] = {0};
-            FILE *f = fopen(path, "rb");
-            const bool got = f && fread(hdr, 1, 6, f) == 6;
-            if (f) fclose(f);
-            const int cls = got ? kang_log_class((const u8 *)hdr) : KANG_LOG_FOREIGN;
-            if (cls == KANG_LOG_OLDER)
+        if (rc != KANG_HDR_OK) {
+            char ours[9];
+            kang_jump_id(ks->jump_tag, ours);
+            if (rc == KANG_HDR_READ_ERR)
+                say_wrapped("  %s: %s\n", path, access(path, F_OK) != 0 ? "does not exist" : "cannot read the file");
+            else if (rc == KANG_HDR_OTHER_JUMPS)
+                say_wrapped("  %s: written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet\n", path, st.jump_id, ours);
+            else if (rc == KANG_HDR_OLDER)
                 say_wrapped("  %s: log of an older layout of the kangaroo (versions up to 1.9.0, small intervals): its points cannot be combined with those of this version\n", path);
-            else if (cls == KANG_LOG_NEWER)
+            else if (rc == KANG_HDR_NEWER)
                 say_wrapped("  %s: log written by a newer version of pzsolve: its points cannot be combined with those of this version (the file is not touched)\n", path);
             else
                 say_wrapped("  %s: not the log of this campaign: the range or the public key differ, or it comes from an earlier version (open it with 'hunt' first)\n", path);
@@ -597,5 +591,5 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
     if (kang_flush_log(ks) != 0) { pz_log(PZ_LOG_ERR, "writing %s failed (disk full?)", ks->log_path); bad++; }
     kang_destroy(ks);
     r->kang = NULL;
-    return atomic_load(&r->found) ? 10 : (bad ? 1 : 0);
+    return bad ? 1 : 0;
 }

@@ -32,7 +32,7 @@ double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthre
 /* Measures the CPU walk rate (steps/s, all cores) over `secs` seconds; prints when `print` is set. */
 double kangaroo_bench(double secs, bool print);
 /* 'merge': adds the distinguished points of other computers' logs (or campaign folders) to the campaign of `r`, which must be
- * set up like for a hunt (cfg, paths, lock taken). Returns 10 when the key was found, 1 when a file could not be used, else 0. */
+ * set up like for a hunt (cfg, paths, lock taken). Returns 1 when a file could not be used, else 0; r->found tells whether the key was found. */
 int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles);
 /* 'bench --together': the CPU kangaroo threads and the GPUs running together as in a campaign (puzzle 140 shape), over several
  * CPU thread counts (or only `threads`, if > 0) and with each slower GPU switched off in turn; prints the rates and the

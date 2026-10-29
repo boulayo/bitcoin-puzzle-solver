@@ -223,7 +223,36 @@ static int log_foreign(const kang_state *ks)
     return -1;
 }
 
-static void jump_id_text(const u8 tag[4], char out[9]) { snprintf(out, 9, "%02x%02x%02x%02x", tag[0], tag[1], tag[2], tag[3]); }
+void kang_jump_id(const u8 tag[4], char out[9]) { snprintf(out, 9, "%02x%02x%02x%02x", tag[0], tag[1], tag[2], tag[3]); }
+
+/* Reads and judges the header of an open log, from its start: KANG_HDR_OK leaves the file after the header (*hlen bytes); *size is the size of
+ * the file and hdr holds what was read (the magic, and the jump table of a log of KANG_HDR_OTHER_JUMPS). A read error keeps errno. The magic
+ * says how long the header is; a file shorter than that is looked at as it is: a creation that did not finish (disk full, power cut) leaves
+ * nothing or the beginning of the header (KANG_HDR_SHORT, a file that holds no point), and any other short file is not ours. */
+static int log_read_header(const kang_state *ks, FILE *f, const u8 fp[32], off_t *size, size_t *hlen, u8 hdr[KANG_LOG_HDR])
+{
+    errno = 0;
+    *size = -1;
+    *hlen = KANG_LOG_HDR;
+    if (fseeko(f, 0, SEEK_END) == 0) *size = ftello(f);
+    if (*size < 0 || fseeko(f, 0, SEEK_SET) != 0) return KANG_HDR_READ_ERR;
+    const size_t got = *size < 6 ? (size_t)*size : 6;
+    if (fread(hdr, 1, got, f) != got) return KANG_HDR_READ_ERR;
+    const int cls = *size < 6 ? KANG_LOG_CURRENT : kang_log_class(hdr);
+    u8 want[KANG_LOG_HDR];
+    *hlen = cls == KANG_LOG_V4 ? KANG_LOG_HDR4 : KANG_LOG_HDR;
+    log_header(ks, fp, cls == KANG_LOG_V4, want);
+    if (*size < (off_t)*hlen && (cls == KANG_LOG_CURRENT || cls == KANG_LOG_V4 || *size < KANG_LOG_HDR4)) {
+        if (fread(hdr + got, 1, (size_t)*size - got, f) != (size_t)*size - got) return KANG_HDR_READ_ERR;
+        return memcmp(hdr, want, (size_t)*size) != 0 ? KANG_HDR_FOREIGN : KANG_HDR_SHORT;
+    }
+    if (cls == KANG_LOG_OLDER) return KANG_HDR_OLDER;
+    if (cls == KANG_LOG_NEWER) return KANG_HDR_NEWER;
+    if (cls == KANG_LOG_FOREIGN) return KANG_HDR_FOREIGN;
+    if (fread(hdr + 6, 1, *hlen - 6, f) != *hlen - 6) return KANG_HDR_READ_ERR;
+    if (memcmp(hdr + 6, fp, 32) != 0) return KANG_HDR_FOREIGN;
+    return memcmp(hdr, want, *hlen) != 0 ? KANG_HDR_OTHER_JUMPS : KANG_HDR_OK;
+}
 
 int kang_load_log(kang_state *ks)
 {
@@ -238,44 +267,25 @@ int kang_load_log(kang_state *ks)
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
     }
-    errno = 0;
-    off_t size = -1;
-    if (fseeko(f, 0, SEEK_END) == 0) size = ftello(f);
-    if (size < 0 || fseeko(f, 0, SEEK_SET) != 0) {
-        const int e = errno;
-        fclose(f);
-        return log_unreadable(ks, e);
-    }
-    /* the magic says how long the header is; a file shorter than that is looked at as it is */
-    u8 hdr[KANG_LOG_HDR], want[KANG_LOG_HDR];
-    const size_t got = fread(hdr, 1, size < 6 ? (size_t)size : 6, f);
-    if (got != (size < 6 ? (size_t)size : 6)) {
-        const int e = errno;
-        fclose(f);
-        return log_unreadable(ks, e);
-    }
-    const int cls = size < 6 ? KANG_LOG_CURRENT : kang_log_class(hdr);
-    const size_t hlen = cls == KANG_LOG_V4 ? KANG_LOG_HDR4 : KANG_LOG_HDR;
-    log_header(ks, fp, cls == KANG_LOG_V4, want);
-    if (size < (off_t)hlen && (cls == KANG_LOG_CURRENT || cls == KANG_LOG_V4 || size < KANG_LOG_HDR4)) {
-        /* Shorter than the header: a creation that did not finish (disk full, power cut) leaves nothing, or the beginning of the header. That
-         * file holds no point: the log starts again. Any other short file is not ours. */
-        const bool read_ok = fread(hdr + got, 1, (size_t)size - got, f) == (size_t)size - got;
-        const int e = errno;
-        fclose(f);
-        if (!read_ok) return log_unreadable(ks, e);
-        if (memcmp(hdr, want, (size_t)size) != 0) return log_foreign(ks);
+    off_t size;
+    size_t hlen;
+    u8 hdr[KANG_LOG_HDR];
+    const int hc = log_read_header(ks, f, fp, &size, &hlen, hdr);
+    const int e = errno;
+    if (hc != KANG_HDR_OK) fclose(f);
+    if (hc == KANG_HDR_READ_ERR) return log_unreadable(ks, e);
+    if (hc == KANG_HDR_FOREIGN) return log_foreign(ks);
+    if (hc == KANG_HDR_SHORT) {
         pz_log(PZ_LOG_WARN, "distinguished points: %s is shorter than its header (%lld of %zu bytes: an interrupted creation, disk full?); starting a new file",
                ks->log_path, (long long)size, hlen);
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
     }
-    if (cls == KANG_LOG_OLDER) {
+    if (hc == KANG_HDR_OLDER) {
         /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
          * small intervals): its points cannot be used. It is kept under another name and the campaign goes on with a new log. */
         char old[640];
         snprintf(old, sizeof old, "%s.v%c", ks->log_path, hdr[4]);
-        fclose(f);
         if (rename(ks->log_path, old) != 0) {
             pz_log(PZ_LOG_ERR, "file %s was written by an older layout of the kangaroo and cannot be used, and it could not be moved away", ks->log_path);
             return -1;
@@ -285,34 +295,23 @@ int kang_load_log(kang_state *ks)
         ks->log = kang_log_create(ks, ks->log_path, fp);
         return ks->log ? 1 : -1;
     }
-    if (cls == KANG_LOG_NEWER) {
-        fclose(f);
+    if (hc == KANG_HDR_NEWER) {
         pz_log(PZ_LOG_ERR, "file %s was written by a newer version of pzsolve (%.4s%c) and cannot be used by this one: it is left as it is; use that version, "
                "or move the file away to start the distinguished points again", ks->log_path, (const char *)hdr, isprint(hdr[4]) ? hdr[4] : '?');
         return -1;
     }
-    if (cls == KANG_LOG_FOREIGN || fread(hdr + 6, 1, hlen - 6, f) != hlen - 6) {
-        const int e = errno;
-        const bool err = cls != KANG_LOG_FOREIGN;
-        fclose(f);
-        return err ? log_unreadable(ks, e) : log_foreign(ks);
-    }
-    if (memcmp(hdr + 6, fp, 32) != 0) {
-        fclose(f);
-        return log_foreign(ks);
-    }
-    if (memcmp(hdr, want, hlen) != 0) {
-        char theirs[9];
-        jump_id_text(hdr + 38, theirs);
-        fclose(f);
+    if (hc == KANG_HDR_OTHER_JUMPS) {
+        char theirs[9], ours[9];
+        kang_jump_id(hdr + 38, theirs);
+        kang_jump_id(ks->jump_tag, ours);
         pz_log(PZ_LOG_ERR, "file %s was written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet; it is "
-               "left as it is: move it away to start the distinguished points again", ks->log_path, theirs, ks->jump_id);
+               "left as it is: move it away to start the distinguished points again", ks->log_path, theirs, ours);
         return -1;
     }
     const long long n = kang_log_read(ks, f);
-    const int e = errno;
+    const int re = errno;
     fclose(f);
-    if (n < 0) return log_unreadable(ks, e);
+    if (n < 0) return log_unreadable(ks, re);
     /* the whole records of the file: a record cut short at the end (the program stopped in the middle of a write) is cut off, and only that */
     const u64 rest = (u64)size - hlen, whole = rest / sizeof(dp_rec);
     if (rest % sizeof(dp_rec) && pz_truncate_path(ks->log_path, hlen + whole * sizeof(dp_rec)) != 0) {
@@ -326,24 +325,23 @@ int kang_load_log(kang_state *ks)
     return ks->log ? 0 : -1;
 }
 
-/* Adds the distinguished points of another computer's log of the same campaign (same range and public key; the jump table must
- * be the same too, i.e. the same seed, or the walks of the two computers never meet): returns 0, -1 if the file cannot be
- * opened, -2 if it is not a log of this campaign, -3 if it is one written with another jump table (its id in st->jump_id). A log of
- * version 4 has no jump table in its header: it is taken as it is. A collision between a tame and a wild point solves the key. */
+/* Adds the distinguished points of another computer's log of the same campaign (same range and public key; the jump table must be the same
+ * too, i.e. the same seed, or the walks of the two computers never meet). Returns what the header says (KANG_HDR_OK when the points were
+ * read; KANG_HDR_OTHER_JUMPS puts the id of the file's jump table in st->jump_id), or KANG_HDR_READ_ERR when the file cannot be opened or
+ * read. A log of version 4 has no jump table in its header: it is taken as it is. A collision between a tame and a wild point solves the key. */
 int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
 {
     FILE *f = fopen(path, "rb");
-    if (!f) return -1;
-    u8 hdr[KANG_LOG_HDR], want[KANG_LOG_HDR], fp[32];
+    if (!f) return KANG_HDR_READ_ERR;
+    u8 hdr[KANG_LOG_HDR], fp[32];
+    off_t size;
+    size_t hlen;
     kang_log_fp(ks, fp);
-    const int cls = fread(hdr, 1, 6, f) == 6 ? kang_log_class(hdr) : KANG_LOG_FOREIGN;
-    const size_t hlen = cls == KANG_LOG_V4 ? KANG_LOG_HDR4 : KANG_LOG_HDR;
-    log_header(ks, fp, cls == KANG_LOG_V4, want);
-    if ((cls != KANG_LOG_CURRENT && cls != KANG_LOG_V4) || fread(hdr + 6, 1, hlen - 6, f) != hlen - 6 || memcmp(hdr, want, 38) != 0) { fclose(f); return -2; }
-    if (memcmp(hdr + 38, want + 38, hlen - 38) != 0) {
-        jump_id_text(hdr + 38, st->jump_id);
+    const int hc = log_read_header(ks, f, fp, &size, &hlen, hdr);
+    if (hc != KANG_HDR_OK) {
+        if (hc == KANG_HDR_OTHER_JUMPS) kang_jump_id(hdr + 38, st->jump_id);
         fclose(f);
-        return -3;
+        return hc;
     }
     dp_rec rec;
     pthread_mutex_lock(&ks->mu);
@@ -358,5 +356,5 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
     kang_table_unlock(ks);
     const bool failed = ferror(f);
     fclose(f);
-    return failed ? -1 : 0;                           /* a failed read is not the end of the file */
+    return failed ? KANG_HDR_READ_ERR : KANG_HDR_OK;  /* a failed read is not the end of the file */
 }

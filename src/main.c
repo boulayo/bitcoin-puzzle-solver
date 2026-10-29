@@ -1059,7 +1059,7 @@ static int cmd_merge(int argc, char **argv)
     const char *fl[16];
     for (int i = 0; i < o.nfiles; i++) fl[i] = o.files[i];
     int rc = kangaroo_merge(r, fl, o.nfiles);
-    if (rc == 10 || atomic_load(&r->found)) {
+    if (atomic_load(&r->found)) {
         char hx[80], wif[80], addr[80];
         u8 kb[32];
         pz_u256_to_hex(&r->found_key, hx);

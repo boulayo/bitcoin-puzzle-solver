@@ -386,7 +386,6 @@ int kang_configure(kang_state *ks, int k_gpu_total)
             memcpy(jb + 16 * j + 8, &(u64){(u64)(ks->P.jv[j] >> 64)}, 8);
         }
         pz_sha256(jb, sizeof jb, jh);
-        snprintf(ks->jump_id, sizeof ks->jump_id, "%02x%02x%02x%02x", jh[0], jh[1], jh[2], jh[3]);
         memcpy(ks->jump_tag, jh, sizeof ks->jump_tag);
     }
 
@@ -413,11 +412,12 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     snprintf(ks->log_path, sizeof ks->log_path, "%s/dp.bin", r->cfg.dir);
 
     if (r->silent_setup) return 0;
-    char b1[32], b2[32], b3[32];
+    char b1[32], b2[32], b3[32], jid[9];
+    kang_jump_id(ks->jump_tag, jid);
     pz_log(PZ_LOG_INFO, "kangaroo: W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
            log2l(u256_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)cap * sizeof(dp_rec), b1, sizeof b1),
            pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
-    pz_log(r->node ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", ks->jump_id);
+    pz_log(r->node ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);
     pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
            pz_fmt_si((double)ks->expected_steps, b3, sizeof b3), (long double)KANG_C_MEAN, pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b1, sizeof b1));
     return 0;
