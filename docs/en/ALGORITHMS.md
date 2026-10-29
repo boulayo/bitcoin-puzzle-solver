@@ -1,9 +1,9 @@
 # pzsolve algorithms
 
 This document explains *what* the program computes and *why* it is efficient. For the structure of the code see
-[`ARCHITECTURE.md`](ARCHITECTURE.md), for usage see [`USAGE.md`](USAGE.md). What was tried and discarded, the intermediate measurements
-and the analyses behind the design are in the research log [`RESEARCH.md`](RESEARCH.md). The section numbers are the same in both files (they are cited
-from the source and from the tools); where a section was moved there, only a short pointer is left here.
+[`ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md), for usage see [`USAGE.md`](USAGE.md). What was tried and discarded, the intermediate measurements
+and the analyses behind the design are in the research log [`RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md). The section numbers are the same in both files (they are cited
+from the source and from the tools); sections 4.5, 4.6, 8.6, 8.7 and 8.9 are in RESEARCH.md only.
 
 Sections 1 to 7 cover the problem, the linear search, the seed-based visiting order, the interval kangaroo, the GPU kernels, rough running times and references. Section 8 is the theory: what is proven in the literature,
 what was measured, what is only modelled, and how much improvement is still possible. Sections 9 to 11 cover the BSGS mode, the SIMD
@@ -16,17 +16,15 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
 2. Linear search (address only): 2.1 Arithmetic, 2.2 Vectorized hash160, 2.3 Edge cases
 3. Unique visiting order (seed)
 4. The interval kangaroo (public key known): 4.1 Setup, 4.2 Why it costs less, 4.3 Unproductive cycles,
-   4.4 Parameters (chosen automatically), 4.5 Measurements, 4.6 Things evaluated and rejected, 4.7 Resuming (4.5 and 4.6 are in RESEARCH.md,
-   and so are the earlier layouts)
-5. GPU (CUDA and OpenCL) (the instruction-level detail is in RESEARCH.md)
+   4.4 Parameters (chosen automatically), 4.7 Resuming
+5. GPU (CUDA and OpenCL)
 6. How long it takes (orders of magnitude)
 7. References
 8. Theoretical limits: how much can still be improved? 8.1 The constant in front of sqrt(W), 8.2 The exponent, 8.3 Summary,
-   8.4 Cost of a step and hardware bottlenecks, 8.5 Comparison with the state of the art (puzzle 135 and RCKangaroo), 8.6 Modular multiplication,
-   8.7 How low can it go, 8.8 Species with fixed residues (schema 2), 8.9 More RAM or a precalculation, 8.10 Local walks, long jumps and banded zones
-   (schema 3). Sections 8.6, 8.7 and 8.9 are in RESEARCH.md; of 8.4, 8.8 and 8.10 the measurements are there
+   8.4 Cost of a step and hardware bottlenecks, 8.5 Comparison with the state of the art (puzzle 135 and RCKangaroo),
+   8.8 Species with fixed residues (schema 2), 8.10 Local walks, long jumps and banded zones (schema 3)
 9. Symmetric BSGS with a RAM table (`--mode bsgs`): 9.1 Algorithm, 9.2 How it is implemented, 9.3 When it pays off
-10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`) (the details are in RESEARCH.md)
+10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 11. Time-estimation model (`src/eta.c`)
 
 ## 1. The problem
@@ -210,16 +208,6 @@ doubles at 80 % load if the old and the new table fit in the limit together. Whe
 from then on only DPs whose tag has one more zero bit are kept, and the stored ones that do not have it are dropped in one sweep over the array,
 with no second table. The search goes on, and a collision is seen with the delay of `dp_bits + 1`, the one a margin twice as large would have had
 from the start. Each bit less halves the delay of the distinguished points (about 1 to 2 `K·2^dp_bits/√W` steps, RESEARCH.md section 8.7).
-
-### 4.5 Measurements (real curve, `pzsolve kstat BITS TRIALS THREADS`)
-
-The measurements of the layout in use are in section 8.10. The long-tailed distribution of the cost, on which the time estimates of
-section 11 are based, and the measurements of schema 1: RESEARCH.md section 4.5.
-
-### 4.6 Things evaluated and rejected
-
-The GLV endomorphism, BSGS with a table in RAM, the 4-animal kangaroo, the parameters of the centered variant, a third species of walkers on `2x`
-and the distribution of the solved keys: RESEARCH.md section 4.6.
 
 ### 4.7 Resuming
 
@@ -449,16 +437,6 @@ What follows for this program:
    of the jumps and inverts by divstep (section 5), and on cards with a large L2 it tries herds that fit in it; the reference laptop GPU has only
    2 MB of L2, so on that card the state of the walkers has to live in video memory.
 
-### 8.6 Modular multiplication: what was tried
-
-The 256-bit modular multiplication in use compared with 29-bit limbs on the GPU, one-level Karatsuba and a row-wise product (SASS instruction counts),
-the number of multiplications per step and the inversion: RESEARCH.md section 8.6.
-
-### 8.7 How low can it go: counting pairs with integer values
-
-The counting argument of 8.1 redone with integer values, the optimum of the mixtures of walker species, the measured cost against the number of walkers
-and the bits of the distinguished points, and the interleaved BSGS: RESEARCH.md section 8.7.
-
 ### 8.8 Below 1.085: species with fixed residues (schema 2)
 
 In RESEARCH.md 8.7 a pair of walkers with coefficients `b ≠ b'` gave an integer `x` only with probability `1/|b − b'|`, and no congruence
@@ -491,14 +469,6 @@ for every `x`, there are enough of them. The layout in use (schema 3, section 8.
   wild with its sign) and the host turns it into the 3-bit code of the species, so the GPU kernel is the same for every species. The abscissa
   tag in the table has 61 bits (false positives are verified anyway).
 * The walk model, the measurements on the real curve, the compatibility of the log and what remains to be gained: RESEARCH.md section 8.8.
-
-### 8.9 More RAM or a precalculation: what can be bought (analysis)
-
-Question: with a more complex algorithm, more RAM or a precomputation kept in memory, can the factor in front of √W be lowered by a lot?
-Short answer: **for a single key, no**. Memory lowers the factor only when it is of the order of √W, and a precomputation makes the
-later search fast only by moving the cost, increased, into the precomputation itself.
-The limits by amount of memory, the measurements of the Bernstein-Lange precomputation (`tools/research/blsim.c`), what it would mean for puzzle 135,
-when it pays off and the other ways of using RAM: RESEARCH.md section 8.9.
 
 ### 8.10 Local walks, long jumps and banded zones (schema 3)
 
@@ -599,10 +569,8 @@ path, which is also triggered by every zero denominator in the batch inversion.
   to `.tmp` with the header last, then `rename`) and read back for any later campaign (checks: size, checksum, number of entries,
   256 baby steps recomputed at random). For a fixed `T` the cost of a new key drops to
   `W/(4T)` giants.
-* **Automatic selection**: with a known public key and an interval ≥ 2^20 the program chooses `bsgs` if the optimal table (or the
-  largest one that fits in 70% of free RAM, or in `--mem`) costs less than the kangaroo (`KANG_C_MEAN`: 1.06·√W) and **there are no GPUs** (or the job
-  is a few seconds, or the table already exists on disk); otherwise it uses the kangaroo, which exploits the GPUs. `T` is fixed at
-  campaign creation and saved in `campaign.conf` (`bsgs_entries`).
+* **Automatic selection**: the rule of `--mode auto` is in [`USAGE.md`](USAGE.md) section 4. `T` is fixed at campaign creation and
+  saved in `campaign.conf` (`bsgs_entries`).
 * CPU and RAM only: the GPUs do not take part (the kangaroo remains the choice for using them).
 
 ### 9.3 When it pays off
@@ -618,8 +586,8 @@ path, which is also triggered by every zero denominator in the batch inversion.
 With 128 GB of RAM (table ≤ 90 GiB) the optimal BSGS fits up to `W ≈ 2^68.0`; with a table smaller than `√W/2` the cost is
 `T + W/(4T)`, which stays below the kangaroo (1.06·√W) for `T ≥ 0.35·√W`, that is up to `W ≈ 2^69.0`.
 
-**Honesty about applicability.** The open puzzles with a known public key (135, 140, 145, 150, 155, 160) have `W = 2^134…2^159`:
-`T` would be of the order of `√W = 2^67…2^79.5`, unthinkable. For them BSGS cannot help and the kangaroo remains (still ≈ 2^70 steps for 140). BSGS
+**Honesty about applicability.** The open puzzles with a known public key (140 … 160) have `W = 2^139…2^159`: `T` would be of the
+order of `2^69.5…2^79.5`, unthinkable. For them BSGS cannot help and the kangaroo remains (still ≈ 2^70 steps for 140). BSGS
 is useful for intervals with a known public key up to `W ≈ 2^69` and as a "universal solver" with a reusable
 precomputed table.
 

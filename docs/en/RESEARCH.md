@@ -7,12 +7,9 @@ and SIMD arithmetic. What the program does today is in ALGORITHMS.md. The text w
 the cross-references; the figures are those of the version named in each section, and several are superseded by later sections (the corrections are
 noted where they are).
 
-**Section numbers.** The sections keep the numbers they had when everything was in one document, because they are cited from the source, the tools and
-the other documents. Here are 4.1 to 4.7, 5, 8.1, 8.4 to 8.10 and 10; in ALGORITHMS.md are the others and a short pointer to each section that is here.
-Sections 4.5, 4.6, 8.6, 8.7 and 8.9 are only here. Sections 4.1 to 4.4, 4.7, 5, 8.1, 8.4, 8.5, 8.8, 8.10 and 10 are in both files: ALGORITHMS.md
-describes what the program does now (the layout in use, 4 and 8.8, 8.10; the arithmetic minimum of a step, 8.4; the GPU kernels, 5; the SIMD
-engines, 10), this file the earlier layouts and figures, and the note at the start of each section here says what is in the other file. A reference written as "ALGORITHMS.md section N" or "RESEARCH.md section N" names the file; one without a
-file name is to a section of the same file. The term "schema" is explained at the start of section 4 of ALGORITHMS.md.
+**Section numbers.** The sections keep the numbers they had when everything was in one document, because the source, the tools and the other
+documents cite them. Sections 4.5, 4.6, 8.6, 8.7 and 8.9 are only here; the others here give the earlier layouts and figures behind the section of the
+same number in ALGORITHMS.md. A reference without a file name is to a section of the same file. "Schema" is explained in ALGORITHMS.md section 4.
 
 ## Contents
 
@@ -46,7 +43,7 @@ and differ in the species of walkers, where they start, the length of the jumps 
 implements schema 3** (the species and residues of schema 2, long jumps of mean `W^¾/16` and start zones split into bands; sections 8.8 and 8.10).
 Schemas 1 and 2 were used by development builds (1.6.0 to 1.7.8) and, from 1.8.0 to 1.9.0, schema 1 for campaigns with fewer than 256 kangaroos;
 version 1.9.1 removed them together with their log formats (a `dp.bin` written by them is kept aside and not used). This section describes schema 1, which is the simplest and the base of the later
-ones: 4.1 to 4.6 (setup, parameters, measurements; 4.5 and 4.6 are in RESEARCH.md) refer to it, while 8.8 and 8.10 give the changes of schemas 2 and 3 and their measured cost
+ones: 4.1 to 4.6 (setup, parameters, measurements) refer to it, while 8.8 and 8.10 give the changes of schemas 2 and 3 and their measured cost
 (≈ 1.10 and ≈ 1.06 against 1.15·√W).
 
 ### 4.1 Setup of schema 1 (from 1.6.0)
@@ -446,7 +443,7 @@ placing the walkers is not counted, being negligible for `K ≪ √W`) measures 
 With `dp = 0` the cost goes down toward **1.085 as `K` grows**: the ideal random case is indeed the limit of this method. The overhead of the
 distinguished points is ≈ `1–2 · K·2^dp / √W` (a collision that has happened is recognized only at the next distinguished point, and meanwhile all `K` walkers
 advance by `2^dp` steps). At the scales of the open puzzles the ratio is tiny: `K ≈ 2^20`, `dp ≈ 40` (the table must fit in RAM), `√W = 2^69.5`
-give `2^−9.5` ≈ 0.1 %. **The expected cost at real scales is therefore ≈ 1.09, not 1.15** (*corrected in 8.10: this holds only with short walks
+give `2^−9.5` ≈ 0.1 % (*when memory sets `dp` it is several percent: 8.9*). **The expected cost at real scales is therefore ≈ 1.09, not 1.15** (*corrected in 8.10: this holds only with short walks
 or with a great many walkers; with one machine on puzzle 135 and jumps of `12·√W` the walks stay local and the cost rises to ≈ 1.35*): the 1.15 of 4.5 comes from
 measurements with 64–2048 walkers on small intervals, where the overhead and the length of the walks weigh more. The rest of the gap to 1.085 comes from
 the non-uniform overlap of the zones (by Jensen's inequality a non-uniform coverage costs more). Compared with the structured coverage (0.8165)
@@ -558,19 +555,21 @@ The precomputation costs 10,000 to 50,000 times the kangaroo. A table prepared b
 
 **3. When precomputation pays off.** With `m` keys of the same width (or smaller) sharing a table, the total is
 `P + m·S` with `P·S ≈ 2.3·W`. The minimum is `2·√(2.3·m·W)`, i.e. `≈ 3.0·√(W/m)` per key, and it beats the kangaroo (≈ 1.02·√W per key) from **about 9 keys on**.
-The open puzzles with a public key are 6 (135, 140, …, 160), with widths from `2^134` to `2^159`. The smallest dominates the cost and the others
+The open puzzles with a public key were 6 when this was written (135, 140, …, 160; 135 has since been solved), with widths from `2^134` to `2^159`. The smallest dominates the cost and the others
 do not help it. The same holds for multiple targets without a table (ALGORITHMS.md 8.2): with widths so different the gain is negligible.
 
 **4. Other ways of using RAM to go faster.**
 * *Cheaper step*: every new point requires at least one addition on the curve. Tables help only the starting points (the comb of
   `ec_mul_g`, already in use) and the sharing of the inversion (already done over 4096 walkers per CPU thread and over those of a GPU work-item, section 8.4).
-* *More memory for distinguished points*: it lowers `dp_bits` and so the delay with which a collision is recognized. At real scales that delay
-  is already worth ≈ 0.1 % (8.7).
+* *More memory for distinguished points*: it lowers `dp_bits` and so the delay with which a collision is recognized, about 1 to 2
+  `K·2^dp_bits/√W` (8.7). When memory sets `dp_bits` that delay is several percent: in the model of 1.12.0 (CHANGELOG), puzzle 140 with 2^22
+  kangaroos costs 1.10·√W at 32 GB and 1.15 at 16 GB, against ≈ 1.02 without the delay. More RAM buys that back, and no more: the
+  factor of the walk itself does not move. (The ≈ 0.1 % of 8.7 assumed `dp ≈ 40` with `K ≈ 2^20` and the RAM for that table.)
 * *"Free" points*: with a single inversion one obtains both `P + J` and `P − J`, as in the giant steps of BSGS (ALGORITHMS.md section 9). In a walk the
   second point lies on no track: it is useful only if it is itself a distinguished point, i.e. once in `2^dp_bits`. Not worthwhile.
 
-**Conclusion.** With the resources of one computer (or of many) the factor that matters is that of the kangaroo, ≈ 1.02 at large scale with schema 3 (8.10). RAM does not
-lower it appreciably and precomputation raises it. The levers left are those of the step (speed per step, sections 8.4–8.6) and, for a few
+**Conclusion.** With the resources of one computer (or of many) the factor that matters is that of the kangaroo, ≈ 1.02 at large scale with schema 3 (8.10). Beyond the delay
+of the distinguished points RAM does not lower it appreciably, and precomputation raises it. The levers left are those of the step (speed per step, sections 8.4–8.6) and, for a few
 percentage points, the geometry of the species (8.8).
 
 ### 8.10 Local walks, long jumps and banded zones (schema 3, from 1.7.9)
