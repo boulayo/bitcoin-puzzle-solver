@@ -354,7 +354,7 @@ This section separates what is **known in the literature** from what is **the au
 | 4 kangaroos / improved Gaudry–Schost | small | 1.715 / 1.661 | Galbraith–Pollard–Ruprai |
 | Gaudry–Schost with `±` classes | small | ≈ 1.36 (theoretical) | Galbraith–Ruprai |
 | **this implementation** | small (DP table) | **1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10)**; the earlier layouts: RESEARCH.md section 8.1 | `pzsolve kstat`, `ksim` |
-| BSGS with `±`, `T = √W/2` | `≈ 6·√W` bytes | **1.0** (worst case 1.5) | direct calculation (RESEARCH.md section 4.6) |
+| BSGS with `±`, `T = √W/2` | `≈ 2.9·√W` bytes | **1.0** (worst case 1.5) | direct calculation (RESEARCH.md section 4.6) |
 | counting lower bound | any | **≥ ≈ 0.67**, optimistic: with integer values the optimum of the model is 0.8165 (RESEARCH.md 8.7) | the author's own reasoning, below |
 
 **Is `q < 1` possible in theory? Only beyond a certain point.** With enough memory, BSGS with `±` reaches
@@ -368,9 +368,9 @@ With `n` elements there are at most `n²/2` pairs × 2 values, so the probabilit
 `≤ n²/W`, and therefore `E[cost] ≥ ∫₀^{√W} (1 − n²/W) dn = (2/3)·√W ≈ 0.67·√W`. It is a bound that errs on the side of optimism (pairs with
 `|b₁ − b₂| > 1` almost never give an integer `x` in the interval), not a construction: no known algorithm reaches it.
 
-**Where it is used.** BSGS with `q = 1.0` needs `T = √W/2` entries (≈ 11.4 bytes each): for puzzle 135 that would be `2^66` entries,
+**Where it is used.** BSGS with `q = 1.0` needs `T = √W/2` entries (≈ 5.7 bytes each): for puzzle 135 that would be `2^66` entries,
 out of reach for any machine, and for the open puzzles with a known public key (140–160) `2^69…2^79`. The gain (≈ 6 % of steps compared
-with the kangaroo, plus a *deterministic* cost without the long tail of the kangaroo) exists for `W ≲ 2^68` with 128 GB of RAM and is
+with the kangaroo, plus a *deterministic* cost without the long tail of the kangaroo) exists for `W ≲ 2^70` with 128 GB of RAM and is
 implemented (section 9). With little memory the best known minimum remains ≈ 1.2–1.3.
 
 ### 8.2 The exponent
@@ -402,7 +402,7 @@ implemented (section 9). With little memory the best known minimum remains ≈ 1
 | Goal | Possible? |
 |------|-----------|
 | `q < 1` with little memory | not known; the best known is ≈ 1.15–1.36 (here 1.06 measured, ≈ 1.02 at the scale of the open puzzles in the model, 8.10) |
-| `q ≈ 1.0` with a lot of RAM | yes (BSGS with `±`, section 9): `W ≲ 2^68` with 128 GB; better than the kangaroo up to `W ≈ 2^69` |
+| `q ≈ 1.0` with a lot of RAM | yes (BSGS with `±`, section 9): `W ≲ 2^70` with 128 GB; better than the kangaroo up to `W ≈ 2^71` |
 | exponent `< 1/2` for a single instance, classical | no in the generic model; no specific attack on secp256k1 is known |
 | exponent `1/3` per instance | yes with a `W^{2/3}` precomputation and many instances of the same width |
 | polynomial time | only with a fault-tolerant quantum computer |
@@ -558,22 +558,27 @@ path, which is also triggered by every zero denominator in the batch inversion.
 * **Giant steps in groups**: as in the linear search, one batch inversion (Montgomery's trick) serves a window of 1024
   giants `C ± i·U` with `U = −S·G`; only the x-coordinates are needed here, so the multiplication for `y` is saved too
   (≈ 2.5M + 1S per step, against the 3.5M + 1S of the linear search).
-* **Table**: **8 bytes per entry** (24-bit tag taken from `x.n[1]`, 40-bit index `b`) in **buckets of 8 cells = one 64-byte cache
-  line**, load factor 0.70 (≈ 11.4 bytes per baby step). The bucket of an entry is `⌊x.n[0]·B/2^64⌋` (`B` buckets, any number);
-  the entry takes the first free cell of its bucket and, when the bucket is full, of the next ones (wrapping around), so the cells of a
-  bucket are always filled in order and a lookup ends at the first bucket whose last cell is free. A lookup that finds nothing (all
-  of them but one) reads 1.44 buckets (cache lines) on average, with the 8 tags compared at once (SSE2; a plain loop elsewhere); linear
-  probing at load 0.65 reads about as many lines (4.6 cells, 1.45 lines) but walks them with unpredictable branches, which is where the
-  time went. The load is not higher because the spill into the next bucket makes runs of full buckets: measured lines read per lookup that
-  finds nothing, 1.28 at load 0.65, 1.44 at 0.70, 1.74 at 0.75, 2.3 at 0.80, 3.5 at 0.85, 7.0 at 0.90 (a table of 8-cell buckets at 0.90
-  holds 29 % more entries than at 0.70 and is about 4 times slower to read); 0.70 is the load that minimises the time per key covered
-  (0.65 to 0.70 are equivalent within the noise of the measurements, 0.75 and above lose). *Lock-free* insertion with `compare_exchange`
-  and **idempotent** (safe to run again), transparent huge pages (`madvise(MADV_HUGEPAGE)`) to reduce TLB misses. A tag that
-  matches by chance (probability `~2^-24` per occupied cell compared, about 9 per lookup, i.e. `~5·10^-7` per giant step) is a
-  false positive discarded by the `k·G = P` check and counted in the statistics (it costs two scalar multiplications, ≈ 20 µs: about
-  0.01 ns per giant step, against ≈ 100 ns for the step itself). Tables written by versions up to 1.10.0 (`PZBSGS01`: one array, linear
-  probing, load 0.65, 12.3 bytes per baby step) are read and used as they are; they cannot be converted without computing the baby
-  steps again.
+* **Table**: **4 bytes per entry**, a 32-bit tag taken from `x.n[1]` (0 is replaced by 1: 0 marks a free cell) and nothing else, in
+  **buckets of 16 cells = one 64-byte cache line**, load factor 0.70 (≈ 5.7 bytes per baby step). The bucket of an entry is
+  `⌊x.n[0]·B/2^64⌋` (`B` buckets, any number); the entry takes the first free cell of its bucket and, when the bucket is full, of the next
+  ones (wrapping around), so the cells of a bucket are always filled in order and a lookup ends at the first bucket whose last cell is
+  free. A lookup that finds nothing (all of them but one) reads 1.15 buckets (cache lines) on average, with the 16 tags compared at once
+  (SSE2; a plain loop elsewhere). Lines read per lookup that finds nothing (simulated): 1.08 at load 0.65, 1.15 at 0.70, 1.29 at 0.75,
+  1.55 at 0.80, 2.14 at 0.85, 3.85 at 0.90; measured time per key covered at equal RAM, relative to 0.75: 1.04 at 0.65, 0.99 at 0.70,
+  1.08 at 0.80, 1.38 at 0.85. 0.70 and 0.75 are equivalent at equal RAM, and with a table that RAM does not limit 0.70 is 8 % faster per
+  giant step. *Lock-free* insertion with `compare_exchange`, transparent huge pages (`madvise(MADV_HUGEPAGE)`) to reduce TLB misses.
+* **The baby index is recomputed, not stored.** A tag that matches gives `b` back by a second, small BSGS over `[1, T]`
+  (`bsgs_recover`): a table of `2·⌈√T⌉` entries in the format of 8-byte cells, which keep `b` (built at the first match: 23·√T bytes,
+  3 MiB for `T = 2^34`), and `≈ √T/4` giant steps for each sign (`Q_a = b·G` or `Q_a = −b·G`). Measured, one thread: 2 ms for
+  `T = 2^34` and 25 ms for `T = 2^40` when `b` is there, 6 and 48 ms when nothing is. Then the keys `c + a·S ± b` are checked against `P`
+  as before. A tag matches by chance with probability `2^-32` per occupied cell compared, about 13 per lookup, i.e. `≈ 3·10^-9` per
+  giant step: about 0.02 ns per giant step at `T = 2^34` and 0.15 ns at `T = 2^40`, against ≈ 70 ns for the step itself (one thread);
+  such a match is counted as a false positive in the statistics. Storing `b` took 40 of the 64 bits of a cell: without it a table holds
+  twice as many baby steps in the same RAM, so a search whose table is limited by the RAM needs half the giant steps.
+* **Tables of earlier versions** are read and used as they are: `PZBSGS02` (1.11.0 to 1.13.0: 8-byte cells, 24-bit tag and 40-bit `b`,
+  8 per bucket, load 0.70, 11.4 bytes per baby step) and `PZBSGS01` (up to 1.10.0: one array of the same cells, linear probing, load
+  0.65, 12.3 bytes per baby step). They cannot be converted without computing the baby steps again (a cell keeps 24 bits of `x.n[1]` and
+  its home bucket is known only to within its run), and they are written back in their own format.
 * **Parallel construction**: blocks of up to 2^22 baby steps taken from an atomic counter; each thread uses the same batch-inversion
   window. Measured on 4 cores (AVX-512): ≈ 40–50 M entries/s (smaller blocks on small tables, so every core works).
 * **SIMD lane windows**: 4 (AVX2) or 8 (AVX-512, IFMA) consecutive windows per instruction, with the arithmetic of
@@ -582,9 +587,9 @@ path, which is also triggered by every zero denominator in the batch inversion.
   `PZ_BSGS_SCALAR=1` disables them. Here (4 threads, table 2^22): giants from 25.8 to ≈ 50 M/s; the limit is now the random read
   of the table.
 * **Search**: the giants are the "keys" 1…Ng of a scheduler identical to the linear one (same permutation from the seed,
-  same checkpoints/resume); software `prefetch` at distance 16 hides the RAM latency (a bucket is one line, 1.4 per lookup on average).
+  same checkpoints/resume); software `prefetch` at distance 16 hides the RAM latency (a bucket is one line, 1.15 per lookup on average).
 * **Persistence (`--table FILE`)**: the table depends only on `G` and `T`, **not on the target or the interval**:
-  it is built once, saved (4 KiB header with SHA-256, `T`, x-coordinate of `T·G`, checksum of the body, format `PZBSGS02`; written
+  it is built once, saved (4 KiB header with SHA-256, `T`, x-coordinate of `T·G`, checksum of the body, format `PZBSGS03`; written
   to `.tmp` with the header last, then `rename`) and read back for any later campaign (checks: size, checksum, number of entries,
   256 baby steps recomputed at random). For a fixed `T` the cost of a new key drops to
   `W/(4T)` giants.
@@ -596,18 +601,18 @@ path, which is also triggered by every zero denominator in the batch inversion.
 
 | `W` | optimal `T` | table RAM | BSGS cost | kangaroo (1.06·√W) |
 |-----|-------------|-----------|-----------|--------------------|
-| 2^50 | 2^24 | 0.18 GiB | 3.4e7 | 3.6e7 |
-| 2^60 | 2^29 | 5.7 GiB | 1.1e9 | 1.1e9 |
-| 2^64 | 2^31 | 23 GiB | 4.3e9 | 4.6e9 |
-| 2^68 | 2^33 | 91 GiB | 1.7e10 | 1.8e10 |
-| 2^70 | 2^34 | 183 GiB | 3.4e10 | 3.6e10 |
+| 2^50 | 2^24 | 0.09 GiB | 3.4e7 | 3.6e7 |
+| 2^60 | 2^29 | 2.9 GiB | 1.1e9 | 1.1e9 |
+| 2^64 | 2^31 | 11 GiB | 4.3e9 | 4.6e9 |
+| 2^68 | 2^33 | 46 GiB | 1.7e10 | 1.8e10 |
+| 2^70 | 2^34 | 91 GiB | 3.4e10 | 3.6e10 |
 
-With 128 GB of RAM (table ≤ 90 GiB) the optimal BSGS fits up to `W ≈ 2^68.0`; with a table smaller than `√W/2` the cost is
-`T + W/(4T)`, which stays below the kangaroo (1.06·√W) for `T ≥ 0.35·√W`, that is up to `W ≈ 2^69.0`.
+With 128 GB of RAM (table ≤ 90 GiB) the optimal BSGS fits up to `W ≈ 2^70.0`; with a table smaller than `√W/2` the cost is
+`T + W/(4T)`, which stays below the kangaroo (1.06·√W) for `T ≥ 0.35·√W`, that is up to `W ≈ 2^70.9`.
 
 **Honesty about applicability.** The open puzzles with a known public key (140 … 160) have `W = 2^139…2^159`: `T` would be of the
 order of `2^69.5…2^79.5`, unthinkable. For them BSGS cannot help and the kangaroo remains (still ≈ 2^70 steps for 140). BSGS
-is useful for intervals with a known public key up to `W ≈ 2^69` and as a "universal solver" with a reusable
+is useful for intervals with a known public key up to `W ≈ 2^71` and as a "universal solver" with a reusable
 precomputed table.
 
 ## 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)

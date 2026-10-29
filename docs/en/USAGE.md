@@ -98,7 +98,7 @@ applies: `-m kangaroo` or `-m bsgs` stops with `puzzle 71 has no known public ke
 2^16 to 2^188 keys (puzzles 190 and above are refused with a message; the exponents of its walkers are 192-bit numbers); a range too
 large for BSGS ends with `: use -m kangaroo`.
 
-The BSGS table takes about 11.4 bytes per baby step (cells of 8 bytes, 70 % of them in use); `--bsgs-entries` counts baby steps, not
+The BSGS table takes about 5.7 bytes per baby step (cells of 4 bytes, 70 % of them in use); `--bsgs-entries` counts baby steps, not
 bytes. Tables of other versions: [`RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md#compatibility-of-the-files-between-versions), compatibility table.
 
 ## 5. The folder of a campaign

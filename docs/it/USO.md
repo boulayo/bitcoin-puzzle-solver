@@ -98,7 +98,7 @@ così, forza `--mode kangaroo`. La modalità resta fissata nella campagna (`camp
 chiavi (i puzzle dal 190 in su vengono rifiutati con un messaggio; gli esponenti dei suoi camminatori sono numeri a 192 bit); un intervallo
 troppo grande per il BSGS finisce con `: use -m kangaroo`.
 
-La tabella del BSGS occupa circa 11,4 byte per baby step (celle da 8 byte, usate al 70 %); `--bsgs-entries` conta i baby step, non i byte.
+La tabella del BSGS occupa circa 5,7 byte per baby step (celle da 4 byte, usate al 70 %); `--bsgs-entries` conta i baby step, non i byte.
 Tabelle di altre versioni: [`RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md#compatibility-of-the-files-between-versions) (in inglese), tabella di compatibilità.
 
 ## 5. La cartella di una campagna

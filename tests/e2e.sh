@@ -120,7 +120,7 @@ done
 rm -rf "$DIR/bst"
 $BIN hunt -p 46 -m bsgs --table "$DIR/t.tbl" -c bst1 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -s "$DIR/t.tbl" ] && ok "baby-step table saved to file" || bad "table not saved"
-[ "$(head -c 8 "$DIR/t.tbl")" = "PZBSGS02" ] && ok "table saved in the bucket format" || bad "table saved with magic '$(head -c 8 "$DIR/t.tbl")'"
+[ "$(head -c 8 "$DIR/t.tbl")" = "PZBSGS03" ] && ok "table saved in the format of 4-byte cells" || bad "table saved with magic '$(head -c 8 "$DIR/t.tbl")'"
 OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" -c bst2 -d "$DIR" --ui log --no-gpu 2>&1)
 echo "$OUT" | grep -q "reading the table" && ok "table read back from file for another puzzle" || bad "table not read back"
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bst2/FOUND.txt" 2>/dev/null)
@@ -132,6 +132,13 @@ echo "$OUT" | grep -q "reading the table" && ok "table of the old format read" |
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bsold/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "$(dbfield 20 4)" ] && ok "bsgs with a table of the old format: key found" || bad "bsgs with a table of the old format: '$GOT'"
 cmp -s tests/data/bsgs_v1_t500.bin "$DIR/old.tbl" && ok "table of the old format not rewritten" || bad "table of the old format modified"
+# the same for a table of the second format (PZBSGS02: 8-byte cells in buckets; 500 baby steps, written by 1.13.0)
+cp tests/data/bsgs_v2_t500.bin "$DIR/old2.tbl"
+OUT=$($BIN hunt -p 20 -m bsgs --table "$DIR/old2.tbl" -c bsold2 -d "$DIR" --ui log --no-gpu 2>&1)
+echo "$OUT" | grep -q "reading the table" && ok "table of the second format read" || bad "table of the second format not read"
+GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bsold2/FOUND.txt" 2>/dev/null)
+[ "$GOT" = "$(dbfield 20 4)" ] && ok "bsgs with a table of the second format: key found" || bad "bsgs with a table of the second format: '$GOT'"
+cmp -s tests/data/bsgs_v2_t500.bin "$DIR/old2.tbl" && ok "table of the second format not rewritten" || bad "table of the second format modified"
 head -c 100000 "$DIR/t.tbl" > "$DIR/trunc.tbl"
 $BIN hunt -p 48 -m bsgs --table "$DIR/trunc.tbl" -c bst3 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1 && bad "truncated table accepted" || ok "truncated table rejected"
 rm -rf "$DIR/bsr"

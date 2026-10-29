@@ -89,4 +89,47 @@ static inline bool bs_bucket_maybe(const u64 *bk, u64 tag)
 #endif
 }
 
+/* ---- PZBSGS03: 4-byte cells holding a tag only ---- */
+
+/* The tag of an x-coordinate: its 32 low bits of x.n[1], with 0 (an empty cell) replaced by 1 */
+static inline u32 bs_tag32(u64 xhi) { const u32 t = (u32)xhi; return t ? t : 1; }
+
+/* Lock-free insertion of a tag, in the first free cell of the bucket or of the following ones (wrapping around), as bs_insert. Equal tags
+ * are kept (two babies may have them): every call adds a cell. */
+static inline void bs_insert32(u32 *cells, u64 nbuckets, u64 xlo, u32 tag)
+{
+    u64 i = bs_bucket_index(nbuckets, xlo);
+    for (;;) {
+        u32 *bk = cells + i * BS_BUCKET32;
+        for (int j = 0; j < BS_BUCKET32; j++) {
+            u32 expected = 0;
+            if (__atomic_load_n(&bk[j], __ATOMIC_RELAXED) == 0 &&
+                __atomic_compare_exchange_n(&bk[j], &expected, tag, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+        }
+        if (++i == nbuckets) i = 0;
+    }
+}
+
+/* True when a cell of the bucket holds `tag` (never 0, so an empty cell does not match). The two versions give the same answer. */
+static inline bool bs_bucket32_has_scalar(const u32 *bk, u32 tag)
+{
+    unsigned m = 0;
+    for (int j = 0; j < BS_BUCKET32; j++) m |= (unsigned)(bk[j] == tag);
+    return m != 0;
+}
+
+static inline bool bs_bucket32_has(const u32 *bk, u32 tag)
+{
+#ifdef BS_SSE2
+    const __m128i want = _mm_set1_epi32((int)tag);
+    __m128i e0 = _mm_cmpeq_epi32(_mm_loadu_si128((const __m128i *)bk), want);
+    __m128i e1 = _mm_cmpeq_epi32(_mm_loadu_si128((const __m128i *)(bk + 4)), want);
+    __m128i e2 = _mm_cmpeq_epi32(_mm_loadu_si128((const __m128i *)(bk + 8)), want);
+    __m128i e3 = _mm_cmpeq_epi32(_mm_loadu_si128((const __m128i *)(bk + 12)), want);
+    return _mm_movemask_epi8(_mm_or_si128(_mm_or_si128(e0, e1), _mm_or_si128(e2, e3))) != 0;
+#else
+    return bs_bucket32_has_scalar(bk, tag);
+#endif
+}
+
 #endif

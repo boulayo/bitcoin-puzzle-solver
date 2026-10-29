@@ -80,7 +80,7 @@ run_bsgs ─ bsgs_params_init (c, T, S, A, Ng) ─ run_load_sched (giants 1..Ng,
          ├─ "driver" thread: table (bsgs_table_load from --table, or bsgs_table_build with N threads and save)
          │                   → N search threads: loop { sched_claim → bsgs_scan → sched_complete }
          └─ main thread: reporter (phase 1/2 during the table, then giants)
-bsgs_scan: 1, 4 or 8 groups of 1024 giants (batch inversion, on SIMD lanes if available) → x coordinates → prefetch of the bucket → table probe (a bucket is one cache line, 1.4 per lookup on average; its 8 tags are compared at once with SSE2) → candidate → check k·G = P → run_submit_key
+bsgs_scan: 1, 4 or 8 groups of 1024 giants (batch inversion, on SIMD lanes if available) → x coordinates → prefetch of the bucket → table probe (a bucket is one cache line, 1.15 per lookup on average; its 16 tags are compared at once with SSE2) → a tag that matches: the point of the giant, b from bsgs_recover (a small BSGS over [1, T]) → check k·G = P → run_submit_key
 ```
 
 ## 3. Flow of the kangaroo
@@ -110,12 +110,14 @@ kang_insert_dps (under the table mutex): inserts or compares with the existing e
   256 kangaroos): `hunt` keeps such a file as `dp.bin.vN` and starts a new log. Any other `PZDP` magic is a later version's: `hunt` and `merge`
   say so and leave the file as it is. A file shorter than the header that is the beginning of this campaign's header (the program stopped while
   creating it) holds no point and is replaced.
-* BSGS table (`--table`): 4 KiB header (magic, SHA-256, `T`, number of cells, abscissa of `T·G`, checksum) + little-endian 8-byte cells
-  (24-bit tag from the second word of the abscissa ∥ 40-bit baby index, 0 = empty). `PZBSGS02` (written now): buckets of 8 cells, one cache
-  line, 70 % of the cells in use, the bucket of an abscissa is `⌊x.n[0]·buckets/2^64⌋`, a full bucket spills into the next one, and the
-  cells of a bucket are taken in order (a lookup stops at the first bucket whose last cell is free; `load` checks that property).
-  `PZBSGS01` (up to 1.10.0): one array, linear probing, load 0.65; it is still loaded and used as it is (`bsgs_table.linear`, 12.3 bytes
-  per baby step) and written back in that format, because it cannot be turned into the new one without computing the baby steps again.
+* BSGS table (`--table`): 4 KiB header (magic, SHA-256, `T`, size of the body in 8-byte words, abscissa of `T·G`, checksum) + the
+  little-endian cells. `PZBSGS03` (written now): 4-byte cells holding a 32-bit tag (the low word of the second word of the abscissa, 0 =
+  empty) and not the baby index, which `bsgs_recover` computes again when a tag matches; buckets of 16 cells, one cache line, 70 % of the
+  cells in use, the bucket of an abscissa is `⌊x.n[0]·buckets/2^64⌋`, a full bucket spills into the next one, and the cells of a bucket
+  are taken in order (a lookup stops at the first bucket whose last cell is free; `load` checks that property). Earlier formats, still
+  loaded, used as they are and written back in their format (they cannot be turned into the new one without computing the baby steps
+  again): `PZBSGS02` (1.11.0 to 1.13.0) with 8-byte cells (24-bit tag ∥ 40-bit baby index) in buckets of 8, 11.4 bytes per baby step;
+  `PZBSGS01` (up to 1.10.0) with the same cells in one array, linear probing, load 0.65 (`bsgs_table.linear`, 12.3 bytes per baby step).
 * `session.txt`, `stats.csv`, `status.json`, `report.txt`: see [`USAGE.md`](USAGE.md).
 
 ## 5. Concurrency and memory
@@ -176,7 +178,7 @@ exists, and removes the file: a device reset after sleep); and the tests of the 
 |-------|-------|
 | Vectors from an independent reference (`tools/ref.py`, pure Python) | `tests/t_core.c`, `src/selftest.c` |
 | Field/assembly | `lib/pzcore/tests/t_fe.c` (two builds: C and MULX/ADX); `lib/pzcore/tests/t_fev.c` (AVX2 and AVX-512: limb bounds, extreme values, verified mutations) |
-| BSGS, ETA, database | `tests/t_bsgs.c` (both table formats, buckets, the file of an earlier version), `t_eta.c`, `t_puzzles.c` |
+| BSGS, ETA, database | `tests/t_bsgs.c` (the three table formats, buckets of either cell size, the recovery of `b`, the files of earlier versions), `t_eta.c`, `t_puzzles.c` |
 | Platform layer, environment | `tests/t_core.c`: files written by several processes at once, `pz_kv_find`, `pz_file_count`, the log and `pz_die` from several threads; `tests/t_env.c`: the reading of every variable into `g_env` (the flag rule, numbers, texts, values that are refused and reported once) |
 | Robustness on damaged input | `tests/t_fuzz.c`: corrupted and hostile files and strings (campaign files, checkpoint, BSGS tables, addresses) from a fixed-seed generator: nothing may crash, hang or read out of bounds (run under ASan/UBSan by `tools/verify.sh`); the state that `list` and `info` show |
 | GPU kernel arithmetic | `tests/t_gpufe.c`: the field of `kernels/pz_common.cl` compiled for the host, portable variant and PTX carry-chain variant (with the carry flag emulated according to the PTX ISA), against the CPU on 5 million combinations with all the edge cases |

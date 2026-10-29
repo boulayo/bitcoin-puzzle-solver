@@ -7,15 +7,18 @@
  *                Q_a = +-b*G, hence k = c + a*S +- b.
  * Every one of the (2A+1)*S >= 2H+1 values of d is covered exactly once, so the search is exhaustive and deterministic:
  * with the giants visited in a random order the expected cost is T + W/(4T) group operations, minimal (1.0*sqrt(W))
- * for T = sqrt(W)/2, against 1.06*sqrt(W) (KANG_C_MEAN) for the kangaroo, at the price of 8/0.70 ~ 11.4 bytes of RAM per baby step.
+ * for T = sqrt(W)/2, against 1.06*sqrt(W) (KANG_C_MEAN) for the kangaroo, at the price of 4/0.70 ~ 5.7 bytes of RAM per baby step.
  * The table does not depend on the target nor on the range: it can be saved to disk and reused.
  *
- * Table layout: 8-byte cells (24-bit tag of the x-coordinate | 40-bit baby index b, 0 = empty) grouped in buckets of BS_BUCKET
- * cells, one 64-byte cache line each.  An x-coordinate belongs to the bucket floor(x.n[0]*nbuckets/2^64); a baby goes into the
- * first free cell of its bucket, or, when the bucket is full, of the next ones (wrapping around), so the cells of a bucket are
- * always filled from the first one on.  A lookup reads its bucket (one line) and goes on to the next only when the last cell of
- * the bucket is in use.  Tables saved by the earlier versions ("PZBSGS01") are one array of cells probed linearly; they are still
- * read and used as they are (bsgs_table.linear), they only need more RAM per baby step (8/0.65 ~ 12.3 bytes). */
+ * Table layout ("PZBSGS03"): 4-byte cells holding a 32-bit tag of the x-coordinate (x.n[1], 0 = empty), BS_BUCKET32 of them per
+ * bucket, one 64-byte cache line.  An x-coordinate belongs to the bucket floor(x.n[0]*nbuckets/2^64); a baby goes into the first
+ * free cell of its bucket, or, when the bucket is full, of the next ones (wrapping around), so the cells of a bucket are always
+ * filled from the first one on.  A lookup reads its bucket (one line) and goes on to the next only when the last cell of the bucket
+ * is in use.  The cells do not keep b: when a tag matches, b is found by a small baby-step giant-step over [1, T] with a table of
+ * about 2*sqrt(T) entries that keep it (bsgs_recover), which a tag matching by chance (about once in 2^28 giant steps) costs too.
+ * Tables saved by the earlier versions are read and used as they are: "PZBSGS02" (8-byte cells: 24-bit tag | 40-bit b, 8 per
+ * bucket, load 0.70, 11.4 bytes per baby step) and "PZBSGS01" (the same cells in one array probed linearly, bsgs_table.linear, load
+ * 0.65, 12.3 bytes per baby step). */
 #ifndef PZ_BSGS_H
 #define PZ_BSGS_H
 
@@ -24,20 +27,25 @@
 
 #define BS_HALF 512                 /* points on each side of a group centre (one batch inversion per group) */
 #define BS_GRP (2 * BS_HALF)
-#define BS_MAX_T (((u64)1 << 40) - 1)   /* the baby index is stored in 40 bits */
-#define BS_BUCKET 8                 /* cells per bucket: 64 bytes, one cache line */
+#define BS_MAX_T (((u64)1 << 40) - 1)   /* the baby index is at most 40 bits (the cells of PZBSGS01/02 store it in 40 bits) */
+#define BS_BUCKET32 16              /* cells of 4 bytes per bucket: 64 bytes, one cache line */
 #define BS_LOAD_NUM 7               /* a new table has BS_LOAD_NUM / BS_LOAD_DEN of its cells in use (integers: its size must be */
 #define BS_LOAD_DEN 10              /* the same on every platform, the header of a saved table is checked against it) */
 #define BS_LOAD_FACTOR ((double)BS_LOAD_NUM / BS_LOAD_DEN)
+#define BS_BUCKET 8                 /* PZBSGS02: cells of 8 bytes per bucket (64 bytes), BS_LOAD2_NUM / BS_LOAD2_DEN of them in use */
+#define BS_LOAD2_NUM 7
+#define BS_LOAD2_DEN 10
 
 typedef struct {
-    u64 *slots;          /* cells (tag:24 | b:40); 0 = empty; 64-byte aligned */
-    u64 nslots;          /* number of cells (a multiple of BS_BUCKET) */
+    u64 *slots;          /* the cells, 64-byte aligned: 8 bytes (tag:24 | b:40) in PZBSGS01/02, two of 4 bytes (tag32) per word in PZBSGS03; 0 = empty */
+    u64 nslots;          /* number of 8-byte words (a multiple of BS_BUCKET: 64 bytes) */
     u64 T;               /* baby steps stored: b = 1..T */
     void *map;           /* mmap'd region (slots lives inside it) */
     size_t map_bytes;
     bool thp;            /* transparent huge pages accepted by the kernel */
+    bool tag32;          /* PZBSGS03: 4-byte cells with a tag only (every table built with bsgs_table_alloc) */
     bool linear;         /* table read from a PZBSGS01 file: one array of cells, linear probing (never true for a table that was built) */
+    _Atomic(void *) aux; /* PZBSGS03: the small table that gives b back when a tag matches, built on the first match (bsgs_recover) */
 } bsgs_table;
 
 typedef struct {
@@ -75,8 +83,13 @@ void bsgs_table_free(bsgs_table *t);
 bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic int *stop);
 /* Number of non-empty slots (parallel). */
 u64 bsgs_table_count(const bsgs_table *t, int nthreads);
-/* Looks the baby index up: true when the table has an entry for the x-coordinate (lo, hi are x.n[0], x.n[1], normalized). */
+/* Looks the x-coordinate up (lo, hi are x.n[0], x.n[1], normalized): true when the table has an entry with its tag. *b_out (optional)
+ * receives the baby index stored with it, 0 for a PZBSGS03 table, whose cells keep only the tag (bsgs_recover gives it back). */
 bool bsgs_table_contains(const bsgs_table *t, u64 xlo, u64 xhi, u64 *b_out);
+/* The baby step b in [1, T] with x(b*G) = x(q), 0 when there is none: what a matching tag of a PZBSGS03 table leaves to find. A
+ * baby-step giant-step over [1, T] with a table of about 2*sqrt(T) entries that keep b (built on the first call, kept with the
+ * table, safe from several threads): about sqrt(T)/4 giant steps for each sign of q. */
+u64 bsgs_recover(const bsgs_table *t, const pz_ge *q);
 /* Persistence. peek() reads only the header; peek_ram() also gives the RAM the table takes once loaded (more for an old-format file
  * than bsgs_bytes_for(T)). A table read from an old-format file is written back in that format. */
 bool bsgs_table_save(const bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen);

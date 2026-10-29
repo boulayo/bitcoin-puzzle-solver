@@ -31,6 +31,7 @@ same number in ALGORITHMS.md. A reference without a file name is to a section of
    * 8.8 Below 1.085: species with fixed residues (schema 2)
    * 8.9 More RAM or a precalculation: what can be bought
    * 8.10 Local walks, long jumps and banded zones (schema 3)
+   * 8.11 BSGS: the cells of the table and the cost of a lookup
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
 ## 4. The interval kangaroo (public key known)
@@ -176,7 +177,8 @@ The distribution has a long tail (it is of the "birthday" type: about `1 − exp
 * **BSGS with a table in RAM**: with `T` entries in the table (the x-coordinates of `t·G`, `t < T`, also hold for `−t`) every giant
   step covers `2T+1` values: mean cost `T + W/(4T)`, minimum `1.0·√W` for `T = √W/2` (worst case `1.41·√W`, or `1.5·√W` with this `T`, see ALGORITHMS.md 9.1). **With enough RAM
   it therefore beats the kangaroo (1.15·√W)**. It has been implemented since 1.1.0 (`--mode bsgs`, ALGORITHMS.md section 9); the table
-  takes `≈ 6.2·√W` bytes (25 GiB at `W = 2^64`, 98 GiB at `2^68`), so it is usable only for medium-small intervals. With the kangaroo
+  takes `≈ 2.9·√W` bytes (11 GiB at `W = 2^64`, 46 GiB at `2^68`; `≈ 6.2·√W` up to 1.10.0, section 8.11), so it is usable only for
+  medium-small intervals. With the kangaroo
   constant of 1.26 used up to 1.5.0, a table smaller than `√W/2` stayed below the kangaroo for `T ≥ 0.24·√W`, that is up to `2^70`.
 * **4-animal kangaroo** (≈ 1.715·√W) and Gaudry–Schost without symmetry (≈ 1.66·√W): superseded by the symmetric variant.
 * **Parameters of the centered variant (up to 1.5.0, `tools/research/ksim.c`, 8000 runs per point, W = 2^28, error ≈ ±0.007)**: a grid of 45
@@ -451,7 +453,7 @@ the non-uniform overlap of the zones (by Jensen's inequality a non-uniform cover
 
 **Why structured coverage is not available.** It requires keeping the elements in memory to compare them with the new ones, i.e. memory
 proportional to `√W`: for `W = 2^139` that is `2^69` entries. With the memory there is, one can only follow random walks and record distinguished
-points, so the coverage is random and the value to beat is 1.085. Where memory suffices (`W ≲ 2^68`) there is BSGS (ALGORITHMS.md section 9): table
+points, so the coverage is random and the value to beat is 1.085. Where memory suffices (`W ≲ 2^70`) there is BSGS (ALGORITHMS.md section 9): table
 first, giant steps afterwards, cost `1.0·√W` with `√W/2` entries. New calculation: **interleaving** the two phases, also keeping the giant points, brings
 the cost to `0.9428·√W` (in the pair model with `±`) but only with total memory `M ≳ 1.41·√W`; with `M = √W` it is 0.958, with `M ≈ 0.7·√W` it is worse than plain
 BSGS (1.046 against 1.000). The maximum gain is therefore 5.7 %, provided there is more than double the memory of the optimal BSGS;
@@ -599,6 +601,45 @@ after `N` steps) and real curve (`PZ_TEST_KTHREAD` and `PZ_TEST_JUMP` impose wal
   of puzzle 135 on one machine: **with schemas 1 and 2 the true cost would be ≈ 1.35–1.38·√W, not 1.10–1.15**. Restarting the walkers
   helps when `P` is small (64 walkers, `dp = 7`, jump `64·√W`: from 1.270 to 1.125, 1.106 and 1.063 restarting after 4096, 1024 and 128 steps), but
   with `P` of a few hundred it is not needed: it is not in the program (on the GPU every restart is a computation on the CPU).
+
+### 8.11 BSGS: the cells of the table and the cost of a lookup
+
+**1.11.0: buckets of 8 cells of 8 bytes** (`PZBSGS02`: 24-bit tag and 40-bit `b`). Up to 1.10.0 the cells were one array probed linearly at
+load 0.65 (4.6 cells, 1.45 lines per lookup that finds nothing, walked with unpredictable branches, which is where the time went). With buckets of
+one cache line whose 8 tags are compared at once the search became 20 to 30 % faster at equal RAM (tables of 256 MiB to 3.5 GiB). Lines read
+per lookup that finds nothing, measured: 1.28 at load 0.65, 1.44 at 0.70, 1.74 at 0.75, 2.3 at 0.80, 3.5 at 0.85, 7.0 at 0.90 (a table at 0.90
+holds 29 % more entries than at 0.70 and is about 4 times slower to read); 0.65 to 0.70 were equivalent per key covered, 0.75 and above lost.
+
+**After 1.13.0: cells of 4 bytes without `b`** (`PZBSGS03`). Where the time of a giant step goes (one thread, AVX-512 lanes, Xeon at 2.8 GHz
+under KVM with 1 MiB of L2, CPU time of the thread, other jobs running): arithmetic alone 36 ns (the lookups left out); the lookups add
+≈ 16 ns with the table in L2 (about 45 instructions and a branch on the spill that goes either way, ≈ 40 % mispredicted) and ≈ 40 to 45 ns with a table
+of 768 MiB (a DRAM access takes ≈ 200 ns on this machine, and at most 10 to 12 lines are in flight per core: ≈ 16 ns per line at best,
+measured with a separate test). The 40 bits of `b` are needed only when a tag matches, which happens once per ≈ 10^6 lookups with 24-bit tags.
+A cell of 4 bytes keeps a 32-bit tag only; `b` is computed again on a match by a second BSGS over `[1, T]` with a table of `2·⌈√T⌉` entries of
+the 8-byte format (`bsgs_recover`; 2 ms at `T = 2^34`, 25 ms at `2^40`, 6 and 48 ms when the match is a false one; one false match per
+≈ 3·10^8 giant steps). The bucket holds 16 cells, so runs of full buckets are rarer: simulated lines per lookup that finds nothing, 1.08 at
+0.65, 1.15 at 0.70, 1.29 at 0.75, 1.55 at 0.80, 2.14 at 0.85, 3.85 at 0.90. Time per key covered at equal RAM, measured (one process, the tables
+read in turn, 15 rounds, relative to 0.75): 1.04 at 0.65, 0.99 at 0.70, 1.08 at 0.80, 1.38 at 0.85; at equal `T` a giant step at 0.70 takes 0.92
+of the time at 0.75. 0.70 was kept: 5.7 bytes per baby step instead of 11.4. Measured against 1.13.0 (7 pairs of runs, one thread, CPU time per
+giant step, load average 4 to 8): same `T = 2^26` (366 against 768 MiB), 0.78 of the time per giant step (0.48 to 0.84); same RAM (`2^27` baby
+steps in 732 MiB against `2^26` in 768 MiB), 0.83 (0.50 to 1.06) per giant step, each covering twice as many keys: 0.42 of the time per key
+covered when the RAM limits the table. Time to the key with 4 threads and a fixed `--mem` (the same random keys for both versions, means):
+`2^51` keys with `--mem 0.05`, 3.53 s against 1.19 s (20 keys); `2^49` keys with `--mem 0.025`, 1.95 s against 0.77 s (8 keys); `2^47` keys with
+`--mem 0.01`, 1.01 s against 0.64 s (20 keys); `2^46` keys without a limit (the optimal table in both), 0.43 s against 0.45 s (16 keys, mostly
+start-up). Building the table (`2^26` baby steps, 4 threads, 7 pairs): 1.09 times the speed (1.00 to 2.0).
+
+**Tried and left out (after 1.13.0)**, same machine, medians of paired ratios with the quartiles:
+* *Lookups overlapped with the arithmetic*: the group routine called back after each step, so that the bucket of every new x-coordinate was
+  prefetched at once, the next bucket one step later when the last cell was in use, and the lookup made two steps later. Slower: 1.22 to 1.29
+  times the time per giant step. Prefetching alone (no lookups at all) took the 36 ns of arithmetic to 58 to 62 ns: the reads of the table
+  and the arithmetic, whose working set (≈ 0.8 MiB of 1 MiB of L2) also misses L1 all the time, share the same few fill buffers, so a read
+  during the arithmetic delays it about as much as it would after it. Other machines (lower DRAM latency, more fill buffers) may differ.
+* *Prefetch of the next bucket in the lookup loop* (8-byte cells): two stages (the home bucket 32 lookups ahead, its last cell read 16 ahead
+  and the next bucket prefetched when it is in use): 0.95 to 1.00 [0.91–1.15]; the home and the next bucket always: 0.94 [0.86–1.02];
+  distance 32 instead of 16: 1.03 [0.91–1.17]. With the 4-byte cells, distance 8, 24, 32 and 48 instead of 16: 1.02, 0.98, 0.94 and 0.97,
+  every quartile range across 1. Nothing beyond the noise.
+* *A flag per bucket* telling whether an entry went past it (a lookup would go on only then, not whenever the bucket is full): simulated
+  1.27 instead of 1.44 lines at 0.70 with 8 cells, 1.10 instead of 1.15 with 16; not done: a bit of every tag for 5 % fewer lines.
 
 ## 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
