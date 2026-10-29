@@ -459,12 +459,35 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
     return false;
 }
 
+/* After a failed launch: shrinks the launches that follow (*n: groups per work-item of the linear kernel, rounds of the kangaroo) and
+ * reopens the device; for the kangaroo `rebuild` then puts a fresh herd on it. False when the device is given up (both are logged). */
+typedef bool (*gpu_rebuild_fn)(gpu_session *s, void *ctx);
+static bool gpu_device_error(gpu_session *s, gpu_health *health, bool kangaroo, uint32_t *n, gpu_rebuild_fn rebuild, void *ctx)
+{
+    pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
+    *n = gpu_launch_after_failure(*n);
+    if (gpu_health_failed(health) || !gpu_recover(s, kangaroo) || (rebuild && !rebuild(s, ctx))) {
+        pz_log(PZ_LOG_ERR, "GPU[%d] %s: the device does not respond, excluding it", s->info.index, s->info.name);
+        return false;
+    }
+    if (kangaroo) pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed with a new herd (launches reduced to %u rounds, growing back while they succeed)", s->info.index, *n);
+    else pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed (launches reduced to %u groups per work-item, growing back while they succeed)", s->info.index, *n);
+    return true;
+}
+
+uint32_t gpu_launch_resize(uint32_t n, double dt, double min_dt, uint32_t max)
+{
+    if (dt <= min_dt) return n;
+    const double f = 0.35 / dt;
+    const double v = (double)n * (f < 0.5 ? 0.5 : (f > 2 ? 2 : f));
+    return (uint32_t)(v < 1 ? 1 : (v > max ? max : v));
+}
+
 static void *gpu_linear_thread(void *p)
 {
     gpu_session *s = p;
     run_ctx *r = s->r;
     uint32_t ngroups = 2;
-    const double target_s = 0.35;
     gpu_health health = {0};
     int boosted = 0;
     while (!atomic_load(&r->stop)) {
@@ -494,14 +517,7 @@ static void *gpu_linear_thread(void *p)
         double t0 = pz_mono();
         if (!gpu_linear_run(s, r->cfg.target_h160, &L)) {
             sched_complete(r->sched, &c, 0);                  /* the block goes back to the pool */
-            if (atomic_load(&r->stop)) break;
-            pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
-            ngroups = gpu_launch_after_failure(ngroups);
-            if (gpu_health_failed(&health) || !gpu_recover(s, false)) {
-                pz_log(PZ_LOG_ERR, "GPU[%d] %s: the device does not respond, excluding it", s->info.index, s->info.name);
-                break;
-            }
-            pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed (launches reduced to %u groups per work-item, growing back while they succeed)", s->info.index, ngroups);
+            if (atomic_load(&r->stop) || !gpu_device_error(s, &health, false, &ngroups, NULL, NULL)) break;
             continue;
         }
         const double t1 = pz_mono();
@@ -519,11 +535,7 @@ static void *gpu_linear_thread(void *p)
         }
         sched_complete(r->sched, &c, covered);
         atomic_fetch_add(&r->ws[s->widx].units, c.nkeys);
-        if (dt > 0.005 && c.nkeys == want) {
-            double f = target_s / dt;
-            double ng = (double)ngroups * (f < 0.5 ? 0.5 : (f > 2 ? 2 : f));
-            ngroups = (uint32_t)(ng < 1 ? 1 : (ng > 4096 ? 4096 : ng));
-        }
+        if (c.nkeys == want) ngroups = gpu_launch_resize(ngroups, dt, 0.005, 4096);
     }
     if (atomic_fetch_sub(s->active, 1) == 1) atomic_store(&r->stop, 1);
     return NULL;
@@ -689,6 +701,14 @@ static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, 
     return ok;
 }
 
+/* gpu_device_error's rebuild for the kangaroo: a fresh herd, from other starting points than every earlier one of the device */
+typedef struct { kang_state *ks; kang_worker **mirror; int recoveries; } kang_rebuild;
+static bool kang_gpu_reboot(gpu_session *s, void *ctx)
+{
+    kang_rebuild *k = ctx;
+    return kang_gpu_boot(s, k->ks, k->mirror, 1000 + (u64)s->info.index + 7919ULL * (u64)++k->recoveries);
+}
+
 static void *gpu_kang_thread(void *p)
 {
     gpu_session *s = p;
@@ -698,7 +718,7 @@ static void *gpu_kang_thread(void *p)
     const int K = T * s->NK;
     kang_worker *mirror = NULL;
     gpu_health health = {0};
-    int recoveries = 0;                                    /* the herds rebuilt so far: each one starts from other points */
+    kang_rebuild reb = {ks, &mirror, 0};                   /* counts the herds rebuilt so far: each one starts from other points */
     if (!kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index)) { pz_log(PZ_LOG_ERR, "GPU[%d] %s: kangaroo setup failed", s->info.index, s->info.name); goto done; }
     {
         char mu[80], kt[32], tt[32];
@@ -756,23 +776,12 @@ static void *gpu_kang_thread(void *p)
             rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, tmp, KSTRIDE * 4);
             atomic_fetch_add(&ks->restarts, 1);
         }
-        if (dt > 0.002) {
-            double f = 0.35 / dt;
-            double nrnds = (double)rounds * (f < 0.5 ? 0.5 : (f > 2 ? 2 : f));
-            rounds = (uint32_t)(nrnds < 1 ? 1 : (nrnds > rmax ? rmax : nrnds));
-        }
+        rounds = gpu_launch_resize(rounds, dt, 0.002, rmax);
         continue;
     device_error:
         /* typically the driver reset the device while the machine slept: reopen it and start a fresh herd (the walkers' progress
          * since their last distinguished point is lost; the points already found are on the host) */
-        if (atomic_load(&r->stop)) break;
-        pz_log(PZ_LOG_WARN, "GPU[%d] %s: execution error (it happens after the system sleeps): reopening the device", s->info.index, s->info.name);
-        rounds = gpu_launch_after_failure(rounds);
-        if (gpu_health_failed(&health) || !gpu_recover(s, true) || !kang_gpu_boot(s, ks, &mirror, 1000 + (u64)s->info.index + 7919ULL * (u64)++recoveries)) {
-            pz_log(PZ_LOG_ERR, "GPU[%d] %s: the device does not respond, excluding it", s->info.index, s->info.name);
-            break;
-        }
-        pz_log(PZ_LOG_INFO, "GPU[%d]: device resumed with a new herd (launches reduced to %u rounds, growing back while they succeed)", s->info.index, rounds);
+        if (atomic_load(&r->stop) || !gpu_device_error(s, &health, true, &rounds, kang_gpu_reboot, &reb)) break;
     }
     free(dpraw); free(rlraw); free(recs); free(dups);
 done:

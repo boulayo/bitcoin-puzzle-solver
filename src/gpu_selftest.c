@@ -373,6 +373,10 @@ int gpu_policy_selftest(void)
     int steps = 0;
     while (n > 1 && steps < 20) { n = gpu_launch_after_failure(n); steps++; }
     PCHK(n == 1 && steps == 6);                               /* 4096 to 1 in six failures */
+    /* the size of the launches follows their duration towards 0.35 s, by at most a factor of two, within its bounds */
+    PCHK(gpu_launch_resize(64, 0.175, 0.002, 4096) == 128 && gpu_launch_resize(64, 0.01, 0.002, 4096) == 128 && gpu_launch_resize(64, 3.0, 0.002, 4096) == 32);
+    PCHK(gpu_launch_resize(64, 0.7, 0.002, 4096) == 32 && gpu_launch_resize(3000, 0.1, 0.005, 4096) == 4096 && gpu_launch_resize(1, 9.0, 0.005, 4096) == 1);
+    PCHK(gpu_launch_resize(64, 0.002, 0.002, 4096) == 64 && gpu_launch_resize(64, 0.004, 0.005, 4096) == 64);   /* too short to time: unchanged */
     /* the budget of failures: 3 in a row are recovered from, the 4th gives up the device */
     gpu_health h = {0};
     PCHK(!gpu_health_failed(&h) && !gpu_health_failed(&h) && !gpu_health_failed(&h) && gpu_health_failed(&h));

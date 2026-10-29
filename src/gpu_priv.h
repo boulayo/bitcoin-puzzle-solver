@@ -124,6 +124,9 @@ void gpu_kang_release_buffers(gpu_session *s);
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds);
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
 uint32_t gpu_launch_after_failure(uint32_t n);          /* the size of the launches after a failed one */
+/* The size of the next launch (groups per work-item, rounds) from the duration `dt` of the last one: towards 0.35 s, at most halved or
+ * doubled at a time, from 1 to `max`. A launch of `min_dt` seconds or less is too short to time and changes nothing. */
+uint32_t gpu_launch_resize(uint32_t n, double dt, double min_dt, uint32_t max);
 void gpu_sleep_unless_stopped(run_ctx *r, double secs); /* the wait of a recovery: returns at once when the campaign is stopped */
 
 /* How many failed launches a device is allowed: more than GPU_FAIL_STREAK in a row, or more than GPU_FAIL_TOTAL without GPU_FAIL_FORGET
