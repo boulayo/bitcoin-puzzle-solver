@@ -32,6 +32,7 @@ same number in ALGORITHMS.md. A reference without a file name is to a section of
    * 8.9 More RAM or a precalculation: what can be bought
    * 8.10 Local walks, long jumps and banded zones (schema 3)
    * 8.11 BSGS: the cells of the table and the cost of a lookup
+   * 8.12 Where the constant of schema 3 goes, and what is left
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
 ## 4. The interval kangaroo (public key known)
@@ -290,7 +291,7 @@ self-test and planted-key hunts on the simulated CUDA driver and on pocl.
 ### 8.1 The constant: the figures of the earlier layouts
 
 ALGORITHMS.md section 8.1 gives the constant of the layout in use. Its table, when the earlier layouts were still in the program, gave for
-this implementation: **schema 3 (1.7.9): 1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10)**; schema 2 (1.7.8): ≈ 1.045
+this implementation: **schema 3 (1.7.9): 1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10; ≈ 1.04 in 8.12)**; schema 2 (1.7.8): ≈ 1.045
 with short walks (8.8); schema 1: 1.08–1.21, mean 1.15 (measured, 1.6.0; before that 1.26), ≈ 1.09 with many walkers (model, 8.7); for
 schemas 1 and 2 with long walks see the correction in 8.10.
 
@@ -561,7 +562,7 @@ later search fast only by moving the cost, increased, into the precomputation it
 
 | method | mean factor | memory |
 |---|---|---|
-| kangaroo, schema 3 (8.10) | ≈ 1.02 (model, open puzzles) | the table of distinguished points: negligible |
+| kangaroo, schema 3 (8.10) | ≈ 1.04 (model, open puzzles, 8.12) | the table of distinguished points: negligible |
 | BSGS with `±`, `T = √W/2` | 1.0 | `√W/2` entries |
 | interleaved BSGS (8.7) | 0.943 | `≳ 1.41·√W` entries |
 | structured coverage, tame and wild `±1` (8.7) | 0.8165 | `∝ √W` |
@@ -586,7 +587,7 @@ public key). Measurements in the abstract model (`tools/research/blsim.c`, kanga
 
   (Bernstein–Lange, with a more careful choice of walks, report 1.21·√(W·T) and 1.93·√(W/T): product 2.34·W.) The scaling laws are
   those of the theory: the search becomes `√T` times faster, but the precomputation costs `√T` times more than a whole kangaroo, and **precomputation ×
-  search ≥ ≈ 2.3·W** at every size. For a single key the minimum total is `2·√(2.3·W) ≈ 3.0·√W`, three times the kangaroo (1.02–1.06).
+  search ≥ ≈ 2.3·W** at every size. For a single key the minimum total is `2·√(2.3·W) ≈ 3.0·√W`, three times the kangaroo (1.04–1.06).
   With `±` classes (`sym=1`) the measured product is worse (≈ 4.5·W) because the walks are strolls without drift; the author did not optimize it
   further, the conclusion does not change. The generic theoretical limit for algorithms with precomputation (Corrigan-Gibbs–Kogan) is `S·T_online² ≳ W` with
   `S` bits of table, and the known precomputations all cost `≈ √(W·S)`.
@@ -603,7 +604,7 @@ public key). Measurements in the abstract model (`tools/research/blsim.c`, kanga
 The precomputation costs 10,000 to 50,000 times the kangaroo. A table prepared by others would change nothing: somebody would have had to pay for it.
 
 **3. When precomputation pays off.** With `m` keys of the same width (or smaller) sharing a table, the total is
-`P + m·S` with `P·S ≈ 2.3·W`. The minimum is `2·√(2.3·m·W)`, i.e. `≈ 3.0·√(W/m)` per key, and it beats the kangaroo (≈ 1.02·√W per key) from **about 9 keys on**.
+`P + m·S` with `P·S ≈ 2.3·W`. The minimum is `2·√(2.3·m·W)`, i.e. `≈ 3.0·√(W/m)` per key, and it beats the kangaroo (≈ 1.04·√W per key) from **about 9 keys on**.
 The open puzzles with a public key were 6 when this was written (135, 140, …, 160; 135 has since been solved), with widths from `2^134` to `2^159`. The smallest dominates the cost and the others
 do not help it. The same holds for multiple targets without a table (ALGORITHMS.md 8.2): with widths so different the gain is negligible.
 
@@ -612,7 +613,7 @@ do not help it. The same holds for multiple targets without a table (ALGORITHMS.
   `ec_mul_g`, already in use) and the sharing of the inversion (already done over 4096 walkers per CPU thread and over those of a GPU work-item, section 8.4).
 * *More memory for distinguished points*: it lowers `dp_bits` and so the delay with which a collision is recognized, about 1 to 2
   `K·2^dp_bits/√W` (8.7). When memory sets `dp_bits` that delay is several percent: in the model of 1.12.0 (CHANGELOG), puzzle 140 with 2^22
-  kangaroos costs 1.10·√W at 32 GB and 1.15 at 16 GB, against ≈ 1.02 without the delay. Entries of 16 bytes instead of 32 (the table keeps
+  kangaroos costs 1.10·√W at 32 GB and 1.15 at 16 GB, against ≈ 1.04 without the delay (8.12). Entries of 16 bytes instead of 32 (the table keeps
   the index of the record in `dp.bin` and reads the distance back on a match of two kinds, after 1.12.0) have the effect of twice the RAM:
   1.08 at 32 GB, 1.10 at 16 GB, 1.15 instead of 1.23 at 8 GB. Entries of 8 bytes (the tag alone, with a scan of `dp.bin` on every match of two
   kinds) would give 1.07, 1.08 and 1.10, for a scan of a file of tens of GB, under the table lock or in the background, at every false match:
@@ -620,7 +621,7 @@ do not help it. The same holds for multiple targets without a table (ALGORITHMS.
 * *"Free" points*: with a single inversion one obtains both `P + J` and `P − J`, as in the giant steps of BSGS (ALGORITHMS.md section 9). In a walk the
   second point lies on no track: it is useful only if it is itself a distinguished point, i.e. once in `2^dp_bits`. Not worthwhile.
 
-**Conclusion.** With the resources of one computer (or of many) the factor that matters is that of the kangaroo, ≈ 1.02 at large scale with schema 3 (8.10). Beyond the delay
+**Conclusion.** With the resources of one computer (or of many) the factor that matters is that of the kangaroo, ≈ 1.04 at large scale with schema 3 (8.12). Beyond the delay
 of the distinguished points RAM does not lower it appreciably, and precomputation raises it. The levers left are those of the step (speed per step, sections 8.4–8.6) and, for a few
 percentage points, the geometry of the species (8.8).
 
@@ -687,6 +688,92 @@ start-up). Building the table (`2^26` baby steps, 4 threads, 7 pairs): 1.09 time
   every quartile range across 1. Nothing beyond the noise.
 * *A flag per bucket* telling whether an entry went past it (a lookup would go on only then, not whenever the bucket is full): simulated
   1.27 instead of 1.44 lines at 0.70 with 8 cells, 1.10 instead of 1.15 with 16; not done: a bit of every tag for 5 % fewer lines.
+
+### 8.12 Where the constant of schema 3 goes, and what is left (after 1.13.0)
+
+Tools: `tools/research/kwalk.c` runs the walk of schema 3 as the program does (groups, a band drawn at every start, the jumps, the cycle exits,
+the distinguished points, the restart on a duplicate, steps counted by whole rounds) and keeps every class visited in a second table: the step
+of the first collision that solves, the distinct classes visited until then (the points of the coverage model, starting points included) and
+the redundant steps; `iid=1` draws independent points from the layout instead of walking. `tools/research/kcover.py` splits the exact pair
+model of 8.8 into its parts. The errors are one standard error.
+
+**From 0.67 to the cost at the scale of the puzzles.** Each line adds one constraint to the line above.
+
+| model | cost (`√W`) | factor | source |
+|---|---|---|---|
+| every pair of points certifies two keys, and no pair repeats (structured, as BSGS) | 0.667 | | ALGORITHMS.md 8.1 |
+| the same pairs drawn at random (birthday: not found after `n` points with probability `exp(−n²/W)`) | 0.886 | ×1.329 | `√π/2` against `2/3` |
+| species 0, 1, 3 with the residues mod 12 and the shares of schema 3, every pair inside `[0, W)`: tame–tame pairs certify nothing, pairs of one coefficient one key (0.991 with the best shares, 8.8) | 0.999 | ×1.128 | `kcover.py` |
+| the zones of schema 3: 5 % of the certified keys fall outside `[0, W)` (mean λ·W 0.754 against 0.791) | 1.021 | ×1.022 | `kcover.py` |
+| the keys are not covered evenly (λ·W by tenths of the interval: 0.70 and 0.66 at the two ends, 0.87 in the middle; even keys 0.71, odd 0.79) | 1.034 | ×1.013 | `kcover.py`; independent points: 1.030 ± 0.006 (`kwalk iid=1`, 8000 trials) |
+| walks instead of independent points | +0 from 4096 walkers | | below |
+| redundant steps (merged walkers until their next distinguished point, cycles) | +0.002 | | `kwalk` |
+| delay of the distinguished points | +(1.0 to 1.2)·`K·2^dp/√W` | | `kwalk`, `dp` 2 to 8 |
+
+With `dp_bits` set by the overhead rule (`K·2^dp/√W` between 0.005 and 0.01) the delay is 0.5 to 1 %, so the expected cost at the scale of the
+open puzzles is **≈ 1.04·√W** (1.042 for puzzle 140 with a CPU herd), more where memory sets `dp_bits` (puzzle 140 with 2^22 walkers: 1.044 at
+64 GB, 1.052 at 32 GB, 1.067 at 16 GB, 1.099 at 8 GB, in the model of the memory behind CHANGELOG 1.13.0 with 1.036 for the walk and 1.1 for the
+factor of the delay). The ≈ 1.02 of 8.10 came from 300 trials
+(±0.035); the 1.015 and 1.021 of its walk model counted steps with 4096 walkers on `W = 2^36`, whose starting points (1.6 % of `√W`) are free
+in the model: `kwalk` gives 1.016 steps there for 1.031 points.
+
+**Walks instead of independent points.** Points at the solving collision, `dp = 0`, against 1.034:
+
+| walkers `K` | `W = 2^36` | `W = 2^40` |
+|---|---|---|
+| 256 | 1.069 ± 0.009 (+3.4 %) | |
+| 1024 | 1.050 ± 0.006 (+1.5 %) | 1.049 ± 0.013 (+1.4 %) |
+| 4096 | 1.031 ± 0.008 (−0.3 %) | 1.039 ± 0.012 (`dp = 2`) |
+
+The excess depends on `K`, not on the length of the walks: a walk explores `W/(16·√K)` (8.10), so the walkers that can certify a given key
+grow as `√K` and the coverage of every key evens out. Campaigns run 2^14 (four CPU threads) to 2^22 walkers: nothing is lost there.
+
+**The 1.06 of the test intervals** (`kstat`, one thread, `K = √W/256`, `dp = 2`, the least the program takes) is the excess of the small herds,
+a delay of 1/64 of `√W` and the free starting points:
+
+| `W`, walkers | `kwalk`: cost | steps to the collision | delay | real curve, `kstat` |
+|---|---|---|---|---|
+| 2^36, 1024 | 1.071 ± 0.008 (6000 trials) | 1.057 | 0.014 | 1.066 ± 0.007 (6000) |
+| 2^40, 4096 | 1.051 ± 0.012 (2000) | 1.037 | 0.014 | 1.056 ± 0.013 (2000) |
+
+**What could still be cut.** Nothing reaches 1.5 % at the scale of the puzzles, and the program is unchanged:
+* *Jump length*: mean `W^¾/4` and `W^¾` against `W^¾/16` (`W = 2^36`, 1024 walkers): `kwalk` 1.062 and 1.060 against 1.071 (±0.007 each);
+  real curve, the same keys and seeds, 6000 per arm: 1.064 and 1.067 against 1.066, paired differences −0.2 % ± 1.0 % and +0.1 % ± 1.0 %.
+* *Jump distribution* (`dp = 0`, 1024 walkers, 4500 trials, against 1.048 ± 0.006): spread ±5 % instead of ±33 %, 1.056; eight powers of
+  two of the same mean, as in Pollard's kangaroo, 1.141 (7.5 % redundant steps: the short jumps walk back over their own points); 32 jumps
+  instead of 256, 1.038, only because a walker in a cycle comes back to its own distinguished point and starts again 4200 times per trial,
+  fresh starts that a campaign pays with a scalar multiplication each. Teske (*On random walks for Pollard's rho method*, Math. Comp. 2001)
+  finds about 20 jumps enough for a random walk.
+* *Shares and bands*: 70 bands optimized on a grid of 1536 points: 1.0321 against 1.0342. With 82 narrower bands the optimum found on a grid
+  of 384 points (1.024 there) costs 1.044 and 1.045 on the grids of 768 and 1536 points: finer bands only fit the grid.
+* *Restarts* (Gaudry–Schost style, or after a number of steps): they help where the excess of the walks is, below 4096 walkers (8.10), and
+  every start costs a scalar multiplication.
+* *The overhead term of `dp_bits`*: with `0.01·√W/K` the mean delay is 0.8 %; `0.0025` would make it 0.2 % for four times the points in the
+  table and in `dp.bin`.
+* *Table entries of 8 bytes* (a 30-bit tag and a 34-bit index of the record in `dp.bin`, the record read back at a tag match: a few tens of
+  false matches in a table of 2^31 points, no scan of the file as in 8.9): one bit less where memory sets `dp_bits`. Puzzle 140 with 2^22 walkers:
+  −2.9 % at 8 GB, −1.5 % at 16 GB, −0.7 % at 32 GB; 0.7 % or less with 2^20 walkers, nothing for CPU herds. Not done: it pays only for large
+  GPU herds on machines with little RAM.
+* *The negation map* is used (classes `{P, −P}`); the other point `P − S_j` of a step costs 1M + 1S and lies on no walk (8.9). *The
+  endomorphism*: `λ·e mod n` of an exponent of the interval is a 256-bit number, so its collisions certify no key (4.6). *A fourth species*,
+  other moduli: no share in the optimum (8.10). *Tame walkers elsewhere*: a tame–wild pair certifies both its keys inside `[0, W)` only when
+  the tame point is near 0; the zones of the optimizer reach `±0.08·W` and it keeps `±0.02·W`.
+
+**Literature** (as far as the author knows, not checked again here): Galbraith–Ruprai (PKC 2010), Gaudry–Schost with equivalence classes,
+1.36·√W; Galbraith–Pollard–Ruprai (Math. Comp. 2013), 1.661 and 1.714 without classes; Fowler–Galbraith (arXiv:1501.07019, 2015), kangaroos
+with five and seven herds, about 1.7; Zhu, Zhuang, Yi, Lv and Lin (Des. Codes Cryptogr. 2019) improve Galbraith–Ruprai, still above 1.2;
+Wu–Zhuang (Des. Codes Cryptogr. 2022) the multidimensional case; Bos–Kleinjung–Lenstra (ANTS 2010) and Bernstein–Lange–Schwabe (PKC 2011) on
+the negation map and its cycles; Bernstein–Lange (*Two grumpy giants and a baby*, ANTS 2012) and Galbraith–Wang–Zhang (Adv. Math. Commun. 2017)
+for baby-step giant-step, with memory of order `√W`. All the low-memory methods meet the birthday factor of the second line; none has more
+useful pairs than the species with residues.
+
+**The linear search** (no public key) cannot cover fewer than `W/2` keys on average. A key `k` is tested only through `hash160` of `k·G`, and
+the hashes of different keys are unrelated: after `q` distinct keys of the interval a uniformly random key is found with probability `q/W` in
+any order, so the mean is `(W + 1)/2` at best. The negation map gives `(n − k)·G` with the same `x` (another compressed key, another hash) and
+the endomorphism gives `λk` and `λ²k` (`x` times `β`) almost for free, but for a key of a short interval these are 256-bit numbers outside it
+(each lies in the interval with probability about `W/n`). The symmetry makes points cheaper (one inversion for `C ± i·G`,
+ALGORITHMS.md 2.1), not keys fewer. Only a non-uniform key (nothing of the kind in the solved keys, 4.6) or Grover's algorithm (8.2) would
+change `W/2`.
 
 ## 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 

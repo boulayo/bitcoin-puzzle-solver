@@ -24,7 +24,7 @@ Italian documentation: [docs/it/](docs/it/README.md). Free software: if it is us
 |---|---|---|
 | only the **address** | linear scan: batch inversion with the ± symmetry, SIMD curve arithmetic, SIMD/GPU hash160 | ½ · 2^(n-1) keys |
 | the **public key** too, and the table fits in RAM (no GPU) | **symmetric BSGS with a RAM table** (reusable from SSD) | **≈ 1.0 · √W** steps (W = 2^(n-1)), deterministic |
-| the **public key** too, table too large or GPU available | symmetric Pollard kangaroo | ≈ 1.06 · √W steps measured, ≈ 1.02 expected at puzzle scale (model) |
+| the **public key** too, table too large or GPU available | symmetric Pollard kangaroo | ≈ 1.06 · √W steps measured, ≈ 1.04 expected at puzzle scale (model) |
 
 `--mode auto` (the default) chooses for you. A "step" is one kangaroo jump or one BSGS giant step; a "key" is one candidate key of the
 linear scan. The algorithms are explained in [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md).
@@ -103,7 +103,7 @@ on hardware and kernel quality. Run `pzsolve bench` to measure yours, and please
 | symmetric kangaroo with ± classes (Galbraith-Ruprai) | ≈ 1.36·√W | theory |
 | RCKangaroo | 1.15·√W | the figure published by its author |
 | pzsolve | 1.06·√W | measured, W = 2^32 to 2^44, real curve |
-| pzsolve, at puzzle scale | ≈ 1.02·√W | modelled, not measured |
+| pzsolve, at puzzle scale | ≈ 1.04·√W | modelled, not measured |
 | BSGS with ± and a table of √W/2 entries | 1.0·√W | needs a table that fits in RAM: not feasible for the open puzzles |
 
 The full tables and the model are in [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md) (sections 8.8 and 8.10) and, for the measurements behind them,

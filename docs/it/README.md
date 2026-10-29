@@ -28,7 +28,7 @@ Software libero: se ti è utile puoi [sostenere il progetto](#sostieni-il-proget
 |---|---|---|
 | solo l'**indirizzo** | scansione lineare: inversione batch con simmetria ±, aritmetica della curva SIMD, hash160 SIMD/GPU | ½ · 2^(n-1) chiavi |
 | anche la **chiave pubblica**, tabella in RAM (senza GPU) | **BSGS simmetrico con tabella in RAM** (riusabile da SSD) | **≈ 1,0 · √W** passi (W = 2^(n-1)), deterministico |
-| anche la **chiave pubblica**, tabella troppo grande o con GPU | canguro di Pollard simmetrico | ≈ 1,06 · √W passi misurati, ≈ 1,02 attesi a scala di puzzle (modello) |
+| anche la **chiave pubblica**, tabella troppo grande o con GPU | canguro di Pollard simmetrico | ≈ 1,06 · √W passi misurati, ≈ 1,04 attesi a scala di puzzle (modello) |
 
 `--mode auto` (il predefinito) sceglie da solo. Un "passo" è un salto del canguro o un passo gigante del BSGS; una "chiave" è una chiave
 candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (in inglese).
@@ -110,7 +110,7 @@ con altri strumenti.
 | canguro simmetrico con classi ± (Galbraith-Ruprai) | ≈ 1,36·√W | teoria |
 | RCKangaroo | 1,15·√W | valore pubblicato dall'autore |
 | pzsolve | 1,06·√W | misurato, W = 2^32 … 2^44, curva reale |
-| pzsolve, a scala di puzzle | ≈ 1,02·√W | modellato, non misurato |
+| pzsolve, a scala di puzzle | ≈ 1,04·√W | modellato, non misurato |
 | BSGS con ± e tabella di √W/2 voci | 1,0·√W | serve una tabella che stia in RAM: non fattibile per i puzzle aperti |
 
 Le tabelle complete e il modello sono in [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (sezioni 8.8 e 8.10, in inglese) e, per le misure che li sostengono,

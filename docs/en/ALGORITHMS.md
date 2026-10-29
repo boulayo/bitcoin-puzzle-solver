@@ -166,7 +166,7 @@ two wild walkers at symmetric positions collide and give `x`. Each wild walker c
 *not* bipartite, more efficient), while the tame ones cover the zone near zero, where the folded wild ones are sparser. The residues mod 12
 choose which pairs can meet, so that every `x` receives enough pairs with an integer solution (section 8.8), and the bands set how densely each
 part of a zone is covered (section 8.10). Measured on the real curve: **1.06·√W** on average from `W = 2^32` to `2^44`; at the scale of the open
-puzzles the model gives ≈ 1.02·√W (section 8.10).
+puzzles the model gives ≈ 1.04·√W (RESEARCH.md section 8.12).
 
 ### 4.3 Unproductive cycles
 
@@ -358,7 +358,7 @@ This section separates what is **known in the literature** from what is **the au
 | classic kangaroo (van Oorschot–Wiener) | small | 2 | literature |
 | 4 kangaroos / improved Gaudry–Schost | small | 1.715 / 1.661 | Galbraith–Pollard–Ruprai |
 | Gaudry–Schost with `±` classes | small | ≈ 1.36 (theoretical) | Galbraith–Ruprai |
-| **this implementation** | small (DP table) | **1.06 measured from 2^32 to 2^44, ≈ 1.02 on the open puzzles (model, 8.10)**; the earlier layouts: RESEARCH.md section 8.1 | `pzsolve kstat`, `ksim` |
+| **this implementation** | small (DP table) | **1.06 measured from 2^32 to 2^44, ≈ 1.04 on the open puzzles (model, RESEARCH.md 8.12)**; the earlier layouts: RESEARCH.md section 8.1 | `pzsolve kstat`, `ksim` |
 | BSGS with `±`, `T = √W/2` | `≈ 2.9·√W` bytes | **1.0** (worst case 1.5) | direct calculation (RESEARCH.md section 4.6) |
 | counting lower bound | any | **≥ ≈ 0.67**, optimistic: with integer values the optimum of the model is 0.8165 (RESEARCH.md 8.7) | the author's own reasoning, below |
 
@@ -406,7 +406,7 @@ implemented (section 9). With little memory the best known minimum remains ≈ 1
 
 | Goal | Possible? |
 |------|-----------|
-| `q < 1` with little memory | not known; the best known is ≈ 1.15–1.36 (here 1.06 measured, ≈ 1.02 at the scale of the open puzzles in the model, 8.10) |
+| `q < 1` with little memory | not known; the best known is ≈ 1.15–1.36 (here 1.06 measured, ≈ 1.04 at the scale of the open puzzles in the model, RESEARCH.md 8.12) |
 | `q ≈ 1.0` with a lot of RAM | yes (BSGS with `±`, section 9): `W ≲ 2^70` with 128 GB; better than the kangaroo up to `W ≈ 2^71` |
 | exponent `< 1/2` for a single instance, classical | no in the generic model; no specific attack on secp256k1 is known |
 | exponent `1/3` per instance | yes with a `W^{2/3}` precomputation and many instances of the same width |
@@ -518,7 +518,7 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
   program `src/kang_spec3.inc`, generated from `tools/research/kang_schema3.txt` with `tools/research/kspec_table.py`). The density of the wild walkers on `Q` concentrates
   near the two ends of the zone, that of those on `3Q` in the middle. Coverage model: 1.0455 to 1.0344 (1.0304 with finer bands, not adopted: in the
   walks no difference). Walk model, `W = 2^36`, 4096 walkers, `dp = 0`, 5000 trials, two seeds: **1.015 and 1.021 against 1.044 and
-  1.053** for schema 2. With 64 walkers the bands do not help (1.063 against 1.054).
+  1.053** for schema 2 (steps; the starting points, free in the model, are 1.6 % of `√W` there: RESEARCH.md 8.12). With 64 walkers the bands do not help (1.063 against 1.054).
 * Each walker has its group fixed (coefficient and residue, as in schema 2) and at every start draws the band according to the shares: with
   50 bands and few walkers, a fixed band per walker left some residues uncovered and certain keys without a solution (found
   by the self-test on `W = 2^24` with 32 walkers).
@@ -535,7 +535,7 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
 | 2^44 | 16384 (8192 for schema 3: 2 threads) | 400 | 1.188 | 1.071 | **1.051** |
 
   Mean from `2^32` to `2^44`: **1.060** against 1.100 (schema 2) and 1.164 (schema 1); it is the constant of the time estimates (`KANG_C_MEAN`). At the scales of the
-  open puzzles the model gives ≈ 1.02.
+  open puzzles the model gives ≈ 1.04 (RESEARCH.md section 8.12, where the cost is split into its parts).
 
 **Compatibility.** The log of schema 3 is `dp.bin` in the `PZDP5` format (section 4.7); a `dp.bin` of an older layout is kept aside by `hunt`
 and not used.
