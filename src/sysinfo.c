@@ -21,7 +21,7 @@ static void cpu_brand(char *out, size_t n)
     snprintf(out, n, "%s", *p ? p : "unknown CPU");
 }
 
-void sysinfo_detect(sysinfo_t *s)
+static void detect_os(sysinfo_t *s)
 {
     memset(s, 0, sizeof *s);
     DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);   /* logical processors (SMT included), all groups */
@@ -94,7 +94,7 @@ static bool sysctl_str(const char *name, char *out, size_t n)
     return out[0] != 0;
 }
 
-void sysinfo_detect(sysinfo_t *s)
+static void detect_os(sysinfo_t *s)
 {
     memset(s, 0, sizeof *s);
     u64 logical = sysctl_num("hw.logicalcpu");
@@ -203,7 +203,7 @@ static u64 cgroup_headroom(void)
     return 0;
 }
 
-void sysinfo_detect(sysinfo_t *s)
+static void detect_os(sysinfo_t *s)
 {
     memset(s, 0, sizeof *s);
     cpu_set_t set;
@@ -267,6 +267,16 @@ void sysinfo_pin_thread(const sysinfo_t *s, int n)
 }
 
 #endif
+
+void sysinfo_detect(sysinfo_t *s)
+{
+    detect_os(s);
+    /* Thread n is pinned to cpu_ids[n], so the order decides where the first threads go. Linux numbers the SMT siblings after all
+     * the cores, but Windows, macOS and Linux on Intel hybrid CPUs number the two threads of a core next to each other: in OS order
+     * `-t N`, the calibrated profile and the measurements with fewer threads than CPUs would put N threads on N/2 cores. One CPU of
+     * every physical core first; nothing changes when every CPU is used. */
+    sysinfo_spread_order(s);
+}
 
 void sysinfo_spread_order(sysinfo_t *s)
 {

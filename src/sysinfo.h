@@ -7,7 +7,7 @@
 
 typedef struct {
     int ncpu;                 /* CPUs this process may run on */
-    int cpu_ids[1024];        /* their ids, ascending (sysinfo_spread_order changes the order) */
+    int cpu_ids[1024];        /* their ids: one CPU of every physical core first, then the SMT siblings (sysinfo_spread_order) */
     int core_of[1024];        /* physical core of each of them (index in 0 .. ncore-1; SMT siblings share it) */
     int ncore;                /* physical cores among them */
     char model[128];
@@ -15,6 +15,7 @@ typedef struct {
     int l2_kib, l3_kib;
 } sysinfo_t;
 
+/* Fills s; the CPUs come in the order of sysinfo_spread_order. */
 void sysinfo_detect(sysinfo_t *s);
 /* Pins the calling thread to the n-th allowed CPU (wraps around). A hint on Windows; does nothing on macOS, which has no affinity API. */
 void sysinfo_pin_thread(const sysinfo_t *s, int n);

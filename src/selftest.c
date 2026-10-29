@@ -469,6 +469,10 @@ static void t_limit(void)
     for (int i = 0; i < 3; i++) { s.cpu_ids[i] = 10 + i; s.core_of[i] = i; }
     sysinfo_spread_order(&s);
     CHECK(s.cpu_ids[0] == 10 && s.cpu_ids[2] == 12 && s.core_of[2] == 2);
+    sysinfo_detect(&s);                                                              /* this machine: one CPU of every core first */
+    ok = s.ncore >= 1 && s.ncore <= s.ncpu;
+    for (int i = 0; i < s.ncpu && ok; i++) ok = i < s.ncore ? s.core_of[i] == i : s.core_of[i] < s.ncore;
+    CHECK(ok);
 }
 
 int selftest_run(int argc, char **argv)

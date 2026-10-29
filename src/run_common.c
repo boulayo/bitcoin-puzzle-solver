@@ -77,7 +77,6 @@ void run_limit_setup(run_ctx *r)
     if (r->limit_pct < 1 || r->limit_pct > 99) { r->limit_pct = 0; return; }
     if (r->use_cpu) {
         r->nthreads = run_limit_threads(r->nthreads, r->limit_pct);
-        sysinfo_spread_order(&r->sys);   /* thread 0, 1, ... go to different physical cores before any core gets a second thread */
     }
 }
 
