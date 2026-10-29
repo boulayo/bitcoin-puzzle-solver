@@ -100,10 +100,9 @@ inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
 }
 
 #else
-/* ---- CUDA: addition, subtraction and (below) the reduction after a product on PTX carry chains (PZ_FAST_FE,
- * pz_cuda.h): on sm_86 add+sub take 88 instead of 176 instructions, a multiplication 288 instead of 328. Same results
- * (congruent, < 2^256); the start-up self-test compares them with the CPU bit for bit. The 8x8 product itself stays in
- * C: Ampere has no native madc.hi and the all-PTX product measured larger (368). ---- */
+/* ---- CUDA: addition, subtraction and (below) the products and their reduction on PTX carry chains (PZ_FAST_FE,
+ * pz_cuda.h): on sm_86 add+sub take 88 instead of 176 instructions. Same results (congruent, < 2^256); the start-up
+ * self-test compares them with the CPU bit for bit. ---- */
 
 
 inline void fe_add(fe *r, const fe *a, const fe *b)
@@ -159,20 +158,59 @@ inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
 
 #endif
 
-/* r = t mod p for a 512-bit t (16 limbs), result < 2^256 */
 #ifdef PZ_FAST_FE
+/* ---- CUDA: the products on mad.wide chains. ptxas turns a mad.lo.cc and a madc.hi.cc of the same two limbs, whose addends are
+ * the low and high halves of a 64-bit register pair, into one IMAD.WIDE.U32 (.X when it takes the carry): one instruction per
+ * limb product, against about three for the product written in C (an IMAD.WIDE.U32 plus the 64-bit additions of the column and
+ * a move that zeroes the high half of the addend). For the pairs to stay aligned the products go to two accumulators: E gets
+ * the ones whose position (i + j for a[j] * b[i]) is even, O the odd ones, and E + O is formed once at the end. On sm_86
+ * (ptxas 12.0, the routine alone) a multiplication goes from 235 to 121 instructions and a square from 160 to 81. ---- */
+
+/* acc[i + j] += a[j] * bi for j = j0, j0 + 2, .. 7, as one carry chain over the pairs (i + j, i + j + 1). The positions of acc
+ * up to *top hold values, the ones above are zero; the carry out of the last pair goes to the next position. All the
+ * arguments but the limbs are constants once the loops are unrolled, so the tests below cost nothing. */
+inline void fe_mad_chain(uint *acc, int *top, const uint *a, const uint bi, const int i, const int j0)
+{
+    const int tp = *top;
+    int k = i + j0;
+#pragma unroll
+    for (int j = j0; j < 8; j += 2) {
+        k = i + j;
+        const uint lo = k <= tp ? acc[k] : 0u, hi = k + 1 <= tp ? acc[k + 1] : 0u;
+        if (j == j0) MADLO_CC(acc[k], a[j], bi, lo);
+        else MADLOC_CC(acc[k], a[j], bi, lo);
+        if (j + 2 < 8 || k + 1 <= tp) MADHIC_CC(acc[k + 1], a[j], bi, hi);
+        else MADHIC(acc[k + 1], a[j], bi, hi);   /* the last pair was zero or half zero: no carry out */
+    }
+    if (k + 1 <= tp) { ADDC(acc[k + 2], 0u, 0u); *top = k + 2; }
+    else *top = k + 1;
+}
+
+/* t = E + O, with E[0] at position 0 and O starting at position 1 */
+inline void fe_eo_sum(uint t[16], const uint *E, const int te, const uint *O, const int to)
+{
+    t[0] = E[0];
+    ADD_CC(t[1], E[1], O[1]);
+#pragma unroll
+    for (int k = 2; k < 15; k++) ADDC_CC(t[k], k <= te ? E[k] : 0u, k <= to ? O[k] : 0u);
+    ADDC(t[15], 15 <= te ? E[15] : 0u, 15 <= to ? O[15] : 0u);
+}
+
+/* r = t mod p for a 512-bit t = L + H 2^256 (16 limbs), result < 2^256: u = L + H (2^32 + 977) in two chains of mad.wide, the
+ * limbs of H at even positions times 977 with L, those at odd positions times 977 with H 2^32 (whose limbs, two by two, are
+ * the addend pairs), then u + the top limbs of u (2^32 + 977). */
 inline void fe_reduce512(fe *r, const uint t[16])
 {
-    /* u = L + H*977 + H*2^32  (10 limbs: u8 < 2^32 + 977, u9 <= 1) */
-    uint u0, u1, u2, u3, u4, u5, u6, u7, u8, u9;
-    MADLO_CC(u0, t[8], 977u, t[0]); MADLOC_CC(u1, t[9], 977u, t[1]); MADLOC_CC(u2, t[10], 977u, t[2]); MADLOC_CC(u3, t[11], 977u, t[3]);
-    MADLOC_CC(u4, t[12], 977u, t[4]); MADLOC_CC(u5, t[13], 977u, t[5]); MADLOC_CC(u6, t[14], 977u, t[6]); MADLOC_CC(u7, t[15], 977u, t[7]);
+    uint u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, z1, z2, z3, z4, z5, z6, z7, z8, z9;
+    MADLO_CC(u0, t[8], 977u, t[0]); MADHIC_CC(u1, t[8], 977u, t[1]); MADLOC_CC(u2, t[10], 977u, t[2]); MADHIC_CC(u3, t[10], 977u, t[3]);
+    MADLOC_CC(u4, t[12], 977u, t[4]); MADHIC_CC(u5, t[12], 977u, t[5]); MADLOC_CC(u6, t[14], 977u, t[6]); MADHIC_CC(u7, t[14], 977u, t[7]);
     ADDC(u8, 0u, 0u);
-    MADHI_CC(u1, t[8], 977u, u1); MADHIC_CC(u2, t[9], 977u, u2); MADHIC_CC(u3, t[10], 977u, u3); MADHIC_CC(u4, t[11], 977u, u4);
-    MADHIC_CC(u5, t[12], 977u, u5); MADHIC_CC(u6, t[13], 977u, u6); MADHIC_CC(u7, t[14], 977u, u7); MADHIC(u8, t[15], 977u, u8);
-    ADD_CC(u1, u1, t[8]); ADDC_CC(u2, u2, t[9]); ADDC_CC(u3, u3, t[10]); ADDC_CC(u4, u4, t[11]);
-    ADDC_CC(u5, u5, t[12]); ADDC_CC(u6, u6, t[13]); ADDC_CC(u7, u7, t[14]); ADDC_CC(u8, u8, t[15]);
-    ADDC(u9, 0u, 0u);
+    MADLO_CC(z1, t[9], 977u, t[8]); MADHIC_CC(z2, t[9], 977u, t[9]); MADLOC_CC(z3, t[11], 977u, t[10]); MADHIC_CC(z4, t[11], 977u, t[11]);
+    MADLOC_CC(z5, t[13], 977u, t[12]); MADHIC_CC(z6, t[13], 977u, t[13]); MADLOC_CC(z7, t[15], 977u, t[14]); MADHIC_CC(z8, t[15], 977u, t[15]);
+    ADDC(z9, 0u, 0u);
+    /* u = 10 limbs: u8 + u9 2^32 < 2^32 + 977 */
+    ADD_CC(u1, u1, z1); ADDC_CC(u2, u2, z2); ADDC_CC(u3, u3, z3); ADDC_CC(u4, u4, z4); ADDC_CC(u5, u5, z5); ADDC_CC(u6, u6, z6);
+    ADDC_CC(u7, u7, z7); ADDC_CC(u8, u8, z8); ADDC(u9, z9, 0u);
     /* fold top = u8 + u9*2^32 (< 2^33): add top*977 + top*2^32 (< 2^66) to the low 256 bits */
     const ulong top = (ulong)u8 | ((ulong)u9 << 32);
     const ulong v = top * 977UL;
@@ -186,7 +224,50 @@ inline void fe_reduce512(fe *r, const uint t[16])
     ADD_CC(u0, u0, c * 977u); ADDC_CC(u1, u1, c); ADDC(u2, u2, 0u);
     r->v[0] = u0; r->v[1] = u1; r->v[2] = u2; r->v[3] = u3; r->v[4] = u4; r->v[5] = u5; r->v[6] = u6; r->v[7] = u7;
 }
+
+inline void fe_mul(fe *r, const fe *a, const fe *b)
+{
+    uint E[18], O[18], t[16];
+    int te = -1, to = -1;
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+        /* a[j] * b[i] is at position i + j: the even j go to E when i is even, to O when it is odd */
+        fe_mad_chain((i & 1) ? O : E, (i & 1) ? &to : &te, a->v, b->v[i], i, 0);
+        fe_mad_chain((i & 1) ? E : O, (i & 1) ? &te : &to, a->v, b->v[i], i, 1);
+    }
+    fe_eo_sum(t, E, te, O, to);
+    fe_reduce512(r, t);
+}
+
+/* dedicated square: the 28 products a_i*a_j (i < j) once, doubled, plus the 8 squares a_i^2 on one chain (36 products instead of 64) */
+inline void fe_sqr(fe *r, const fe *a)
+{
+    uint E[18], O[18], s[16], t[16];
+    int te = -1, to = -1;
+#pragma unroll
+    for (int i = 0; i < 7; i++) {
+        fe_mad_chain(O, &to, a->v, a->v[i], i, i + 1);       /* j = i + 1, i + 3, ..: odd positions */
+        if (i < 6) fe_mad_chain(E, &te, a->v, a->v[i], i, i + 2);   /* j = i + 2, i + 4, ..: even positions from 2 */
+    }
+    /* s = E + O: position 1 is O alone, E starts at position 2; the sum is < 2^511 */
+    s[0] = 0;
+    s[1] = O[1];
+    ADD_CC(s[2], E[2], O[2]);
+#pragma unroll
+    for (int k = 3; k < 15; k++) ADDC_CC(s[k], k <= te ? E[k] : 0u, k <= to ? O[k] : 0u);
+    ADDC(s[15], 15 <= te ? E[15] : 0u, 15 <= to ? O[15] : 0u);
+#pragma unroll
+    for (int k = 15; k > 1; k--) t[k] = (s[k] << 1) | (s[k - 1] >> 31);
+    t[1] = s[1] << 1;
+    t[0] = 0;
+    MADLO_CC(t[0], a->v[0], a->v[0], t[0]); MADHIC_CC(t[1], a->v[0], a->v[0], t[1]);
+#pragma unroll
+    for (int i = 1; i < 7; i++) { MADLOC_CC(t[2 * i], a->v[i], a->v[i], t[2 * i]); MADHIC_CC(t[2 * i + 1], a->v[i], a->v[i], t[2 * i + 1]); }
+    MADLOC_CC(t[14], a->v[7], a->v[7], t[14]); MADHIC(t[15], a->v[7], a->v[7], t[15]);
+    fe_reduce512(r, t);
+}
 #else
+/* r = t mod p for a 512-bit t (16 limbs), result < 2^256 */
 inline void fe_reduce512(fe *r, const uint t[16])
 {
     /* low + high*(2^32 + 977) */
@@ -214,7 +295,6 @@ inline void fe_reduce512(fe *r, const uint t[16])
     if (carry) fe_fold(&o, 1u);
     *r = o;
 }
-#endif
 
 inline void fe_mul(fe *r, const fe *a, const fe *b)
 {
@@ -272,6 +352,7 @@ inline void fe_sqr(fe *r, const fe *a)
     fe_reduce512(r, t);
 }
 
+#endif
 
 inline void fe_sqr_n(fe *r, const fe *a, int n)
 {
