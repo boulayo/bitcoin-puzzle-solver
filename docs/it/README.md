@@ -39,20 +39,16 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
 * **Un ordine di visita per campagna.** Un seed casuale a 256 bit (riusabile con `--seed`) guida una permutazione pseudo-casuale
   biiettiva dei blocchi: nessun blocco è saltato o ripetuto e dentro il blocco si scansiona in sequenza.
 * **Motori CPU.** Inversione batch di Montgomery con la simmetria ±, aritmetica della curva su corsie SIMD (AVX2, AVX-512, AVX-512 IFMA) e
-  hash160 SIMD, con lo stadio SHA-256 sulle istruzioni SHA dove la CPU le ha. Il motore è scelto a runtime con un micro-benchmark, dopo una
-  verifica con una chiave nota: sul runner della CI (AMD EPYC, un thread) `shani` fa 7,19 M chiavi/s contro 6,43 M di `avx2`, e dove c'è
-  AVX-512 IFMA il più veloce è `avx512i`.
+  hash160 SIMD, con lo stadio SHA-256 sulle istruzioni SHA dove la CPU le ha.
 * **GPU: CUDA e OpenCL.** CUDA usa il driver installato con il normale driver NVIDIA (nessun toolkit necessario); OpenCL copre AMD e
-  Intel. All'avvio ogni GPU deve superare un **self-test bit-esatto contro la CPU** e ogni chiave candidata è riverificata sulla CPU.
+  Intel.
 * **Più computer.** Ricerca lineare: `--part Q/T` (stesso seed) divide il lavoro senza comunicazione e `pzsolve split` lo ripartisce in
   proporzione alle velocità. Canguro: `--node N` e `pzsolve merge` uniscono i punti distinti.
 * **Usare solo una parte della macchina.** `--limit X` usa il X % dei thread CPU e dei work-item GPU a pieno ritmo, senza pause.
 * **Campagne persistenti.** Checkpoint atomici, ripresa dopo Ctrl-C, crash, riavvio o sospensione, blocco contro due processi sulla
   stessa campagna. `--keep-awake` impedisce la sospensione su Windows e macOS.
-* **Taratura automatica.** Su una macchina con una GPU utilizzabile, il primo `hunt` di ogni versione misura la combinazione migliore di
-  thread CPU e GPU (circa 2 minuti, poi ricordata); non nel BSGS, né con `-t`, `--gpu`, `--no-cpu`, `--no-gpu` o `--limit`. Si ripete con
-  `--retune`, si salta con `--no-tune`. `pzsolve bench --together` misura la
-  combinazione e `pzsolve doctor` controlla programma, macchina e campagne.
+* **Taratura automatica.** `--retune` misura di nuovo la macchina, `--no-tune` la salta; `bench --together` e `doctor`: vedi
+  [USO](USO.md) 7.6.
 * **Pannello e file.** Un pannello aggiornato ogni secondo mostra velocità per dispositivo, tempo residuo e probabilità di successo. La
   cartella della campagna contiene `report.txt`, `status.json`, `stats.csv`, `log.txt` e, a chiave trovata, `FOUND.txt` (permessi 0600).
 

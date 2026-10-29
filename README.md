@@ -35,20 +35,16 @@ linear scan. The algorithms are explained in [`docs/en/ALGORITHMS.md`](docs/en/A
 * **One visiting order per campaign.** A random 256-bit seed (reusable with `--seed`) drives a bijective pseudo-random permutation of
   blocks: nothing is skipped or repeated, and inside a block the scan is sequential.
 * **CPU engines.** Montgomery batch inversion with the ± symmetry, curve arithmetic on SIMD lanes (AVX2, AVX-512, AVX-512 IFMA) and
-  SIMD hash160, with the SHA-256 stage on the SHA instructions where the CPU has them. The engine is chosen at run time by a micro-benchmark,
-  after a check against a known key: on the CI runner (AMD EPYC, one thread) `shani` does 7.19 M keys/s against 6.43 M for `avx2`, and where
-  AVX-512 IFMA exists `avx512i` is the fastest.
+  SIMD hash160, with the SHA-256 stage on the SHA instructions where the CPU has them.
 * **GPU: CUDA and OpenCL.** CUDA uses the driver that comes with the normal NVIDIA driver (no toolkit needed); OpenCL covers AMD and
-  Intel. At start-up every GPU must pass a **bit-exact self-test against the CPU**, and every candidate key is re-verified on the CPU.
+  Intel.
 * **Several computers.** Linear scan: `--part Q/T` (same seed) splits the work with no communication, and `pzsolve split` divides it in
   proportion to speed. Kangaroo: `--node N` and `pzsolve merge` combine the distinguished points.
 * **Use only part of the machine.** `--limit X` uses X % of the CPU threads and of the GPU work-items at full speed, without pauses.
 * **Persistent campaigns.** Atomic checkpoints, resume after Ctrl-C, crash, reboot or sleep, and a lock against two processes on the
   same campaign. `--keep-awake` prevents sleep on Windows and macOS.
-* **Self-tuning.** On a machine with a usable GPU, the first `hunt` of each version measures the best mix of CPU threads and GPUs (about
-  2 minutes, then remembered); not in BSGS, nor with `-t`, `--gpu`, `--no-cpu`, `--no-gpu` or `--limit`. Measure again with `--retune`, skip
-  with `--no-tune`. `pzsolve bench --together` measures the
-  combination and `pzsolve doctor` checks the program, the machine and the campaigns.
+* **Self-tuning.** `--retune` measures the machine again, `--no-tune` skips it; `bench --together` and `doctor`: see
+  [USAGE](docs/en/USAGE.md) 7.6.
 * **Live panel and files.** A panel updated once per second shows speed per device, time left and success probability. The campaign
   folder holds `report.txt`, `status.json`, `stats.csv`, `log.txt` and, when the key is found, `FOUND.txt` (permissions 0600).
 
