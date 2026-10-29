@@ -759,13 +759,13 @@ a delay of 1/64 of `√W` and the free starting points:
   other moduli: no share in the optimum (8.10). *Tame walkers elsewhere*: a tame–wild pair certifies both its keys inside `[0, W)` only when
   the tame point is near 0; the zones of the optimizer reach `±0.08·W` and it keeps `±0.02·W`.
 
-**Literature** (as far as the author knows, not checked again here): Galbraith–Ruprai (PKC 2010), Gaudry–Schost with equivalence classes,
-1.36·√W; Galbraith–Pollard–Ruprai (Math. Comp. 2013), 1.661 and 1.714 without classes; Fowler–Galbraith (arXiv:1501.07019, 2015), kangaroos
-with five and seven herds, about 1.7; Zhu, Zhuang, Yi, Lv and Lin (Des. Codes Cryptogr. 2019) improve Galbraith–Ruprai, still above 1.2;
-Wu–Zhuang (Des. Codes Cryptogr. 2022) the multidimensional case; Bos–Kleinjung–Lenstra (ANTS 2010) and Bernstein–Lange–Schwabe (PKC 2011) on
-the negation map and its cycles; Bernstein–Lange (*Two grumpy giants and a baby*, ANTS 2012) and Galbraith–Wang–Zhang (Adv. Math. Commun. 2017)
-for baby-step giant-step, with memory of order `√W`. All the low-memory methods meet the birthday factor of the second line; none has more
-useful pairs than the species with residues.
+**Literature**: Galbraith–Ruprai (PKC 2010), Gaudry–Schost with equivalence classes, 1.361·√W; Galbraith–Pollard–Ruprai (Math. Comp. 82,
+2013), the three- and four-kangaroo methods, 1.661 and 1.714 without classes; Fowler–Galbraith (arXiv:1501.07019, 2015), kangaroo methods
+with five and seven herds; Zhu, Zhuang, Yi, Lv and Lin (Des. Codes Cryptogr. 87, 2019), a variant of Galbraith–Ruprai close to 1.253·√W for
+large `W`; Wu–Zhuang (Des. Codes Cryptogr., 2021) the multidimensional case; Bos–Kleinjung–Lenstra (ANTS 2010) and Bernstein–Lange–Schwabe
+(PKC 2011) on the negation map and its cycles; Bernstein–Lange (*Two grumpy giants and a baby*, ANTS 2012) and Galbraith–Wang–Zhang (Adv.
+Math. Commun. 11, 2017) for baby-step giant-step, with memory of order `√W`. All the low-memory methods meet the birthday factor of the second
+line; none has more useful pairs than the species with residues.
 
 **The linear search** (no public key) cannot cover fewer than `W/2` keys on average. A key `k` is tested only through `hash160` of `k·G`, and
 the hashes of different keys are unrelated: after `q` distinct keys of the interval a uniformly random key is found with probability `q/W` in
