@@ -190,10 +190,11 @@ bool gpu_linear_prepare_variant(gpu_session *s, int variant)
     s->b_prm = rt_buf_new(s->c, 64 * 4, NULL);
     s->b_hits = rt_buf_new(s->c, (2 + 2 * 64) * 4, NULL);
     if (!s->b_gtab || !s->b_prm || !s->b_hits) return false;
-    /* thread budget: compute units x 256, bounded by the private scratch of a work-item (two arrays of half+1 field
+    /* thread budget: compute units x 256 (two resident blocks of 128 per SM, what the registers of the plain CUDA kernel allow), or as many
+     * blocks as a register-capped variant keeps resident; bounded by the private scratch of a work-item (two arrays of half+1 field
      * elements plus slack) in a quarter of the device memory */
     size_t item_bytes = (size_t)(half + 1) * 64 + 4096;
-    size_t t = (size_t)s->info.cu * 256;
+    size_t t = (size_t)s->info.cu * (VAR_MINB(variant) ? 128 * (size_t)VAR_MINB(variant) : 256);
     size_t by_mem = (size_t)(s->info.gmem / 4 / item_bytes);
     if (t > by_mem) t = by_mem;
     if (t < 64) t = 64;
