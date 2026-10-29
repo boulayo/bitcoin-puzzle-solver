@@ -93,6 +93,21 @@ static inline PZ_VABI void kv_x3_t(pz_fev *x3, pz_fev *t, const pz_fev *l2, cons
     pz_fev_sub2(t, &x3x, l2, dx);
 }
 
+#if PZ_VBYTES == 64 && !defined(PZ_FEV_IFMA)
+/* r = a^-1 in every lane, a canonical and nonzero: the 8 lanes are inverted together by the scalar Montgomery trick, one scalar
+ * inversion and 21 scalar products, instead of the 255 squarings and 15 products of a vector inversion (pz_fev_inv). Once a round:
+ * per step of a herd of 4096, 391 to 377 instructions (avx512v). Not with IFMA, whose vector inversion is cheap enough, nor on AVX2:
+ * there the step then gets the square and the reduction of the products inlined by the compiler, which costs more than the 4 lanes
+ * save (767 to 811 instructions per step). */
+static PZ_VABI void kv_inv_lanes(pz_fev *r, const pz_fev *a)
+{
+    pz_fe e[NL], t[NL];
+    for (int l = 0; l < NL; l++) pz_fev_get_lane(&e[l], a, l);
+    pz_fe_inv_batch(e, t, NL);
+    for (int l = 0; l < NL; l++) pz_fev_set_lane(r, l, &e[l]);
+}
+#endif
+
 #if PZ_VBYTES == 64
 /* 8x8 transpose of 64-bit words: r[l] = row of lane l -> r[w] = word w of every lane */
 static inline PZ_VABI void kv_tr8(__m512i r[8])
@@ -395,8 +410,8 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         else pz_fev_mul(&acc, &acc, &vdx[c]);
         vtmp[c] = acc;
     }
+    pz_fev chk = acc;                                           /* canonical: the zero test, then the inversion */
     {
-        pz_fev chk = acc;
         pz_fev_normalize(&chk);
         pz_vl z = chk.l[0];
         for (int i = 1; i < PZ_FEV_NLIMB; i++) z |= chk.l[i];
@@ -426,7 +441,11 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     /* Montgomery, backward pass fused with the step: each inverse is used as soon as it is peeled off, from the last
      * vector to the first; the rare events are sorted back into index order at the end */
     pz_fev inv;
+#if PZ_VBYTES == 64 && !defined(PZ_FEV_IFMA)
+    kv_inv_lanes(&inv, &chk);
+#else
     pz_fev_inv(&inv, &acc);
+#endif
     const int ndp0 = w->ndp, nrs0 = w->nrestart;
     const pz_vl one = pz_vl_set(1), dpmask = pz_vl_set(P->dp_mask), cap = pz_vl_set(P->cap_since);
 #ifdef KV_PAIR
