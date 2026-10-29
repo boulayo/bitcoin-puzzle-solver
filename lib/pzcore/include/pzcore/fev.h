@@ -179,6 +179,16 @@ static inline PZ_VABI void pz_fev_sub2_lazy(pz_fev *r, const pz_fev *a, const pz
     for (int i = 0; i < 9; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k2[i]) - b->l[i] - c->l[i];
 }
 
+/* Returns s unchanged, opaque to the optimizer. The column sums of the products pass through it after every addition: otherwise GCC
+ * reassociates them, computes all 81 products ahead of the sums and spills them (AVX2 has 16 vector registers). Measured with the
+ * barrier: avx2v lanes 815 to 711 instructions per kangaroo step and 10 % less time, linear search 13 % less time per key;
+ * avx512v 358 to 325 instructions, time unchanged (kangaroo) or 1 % less (linear search). */
+static inline PZ_VABI pz_vl pz_vl_keep(pz_vl s)
+{
+    __asm__("" : "+v"(s));
+    return s;
+}
+
 /* Reduces the 17 product columns c[0..16] (each < 2^64) to a tight element. */
 static inline PZ_VABI void pz_fev_reduce_cols(pz_fev *r, const pz_vl *c)
 {
@@ -222,7 +232,7 @@ static inline PZ_FEV_INLINE PZ_VABI void pz_fev_mul(pz_fev *r, const pz_fev *a, 
         const int i0 = k > 8 ? k - 8 : 0, i1 = k < 8 ? k : 8;
         pz_vl s = pz_vl_mul32(a->l[i0], b->l[k - i0]);
 #pragma GCC unroll 9
-        for (int i = i0 + 1; i <= i1; i++) s += pz_vl_mul32(a->l[i], b->l[k - i]);
+        for (int i = i0 + 1; i <= i1; i++) s = pz_vl_keep(s + pz_vl_mul32(a->l[i], b->l[k - i]));
         c[k] = s;
     }
     pz_fev_reduce_cols(r, c);
@@ -241,7 +251,7 @@ static inline PZ_FEV_INLINE PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
         for (int i = 0; i < 9; i++) {
             const int j = k - i;
             if (j < i || j > 8) continue;
-            s += (i == j) ? pz_vl_mul32(a->l[i], a->l[i]) : pz_vl_mul32(a2[i], a->l[j]);
+            s = pz_vl_keep(s + ((i == j) ? pz_vl_mul32(a->l[i], a->l[i]) : pz_vl_mul32(a2[i], a->l[j])));
         }
         c[k] = s;
     }
