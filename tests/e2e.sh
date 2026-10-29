@@ -455,9 +455,9 @@ OUT=$($BIN doctor -d "$DIR/dr" 2>&1)
 echo "$OUT" | grep -q "system suspensions detected during the campaign: 3 " && ok "doctor: 3 suspensions in a log of $(stat -c %s "$DIR/dr/p71/log.txt") bytes" || bad "doctor suspensions: $(echo "$OUT" | grep suspensions)"
 
 echo "== line width: nothing printed is longer than 128 columns"
-chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr
+chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr; log records ("[12:00:00] INFO ...") are one line each in a pipe
   local label=$1 out w; shift
-  out=$(timeout 300 "$@" 2>&1 </dev/null)
+  out=$(timeout 300 "$@" 2>&1 </dev/null | grep -v -E '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] ')
   w=$(printf '%s\n' "$out" | tr -d '\r' | python3 -c "import sys; print(max((len(l.rstrip('\n')) for l in sys.stdin), default=0))")
   [ "$w" -le 128 ] && ok "$label (longest line: $w)" || bad "$label: a line of $w columns"
 }

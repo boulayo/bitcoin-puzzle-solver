@@ -89,8 +89,8 @@ check_found "$T/c4/c" "$KK" && echo "  OK kangaroo via CUDA with --limit" || { e
 outhas "copy bandwidth" $MOCK PZ_GPU_TUNE=1 build/pzsolve bench --gpu-only && echo "  OK GPU bench (bandwidth and throughput probes) via CUDA" || { echo "  FAIL GPU bench via CUDA"; fail=$((fail+1)); }
 outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together via CUDA" || { echo "  FAIL bench --together via CUDA"; fail=$((fail+1)); }
 outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear via CUDA" || { echo "  FAIL bench --together --linear via CUDA"; fail=$((fail+1)); }
-# nothing printed is longer than 128 columns, GPUs included
-width() { awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }'; }
+# nothing printed is longer than 128 columns, GPUs included (log records are one line each when stderr is not a terminal: not counted)
+width() { grep -v -E '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] ' | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }'; }
 for c in "build/pzsolve devices" "build/pzsolve selftest" "build/pzsolve bench --gpu-only" "build/pzsolve bench --together -t 1" "build/pzsolve bench --together --linear -t 1"; do
   w=$($MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 $c 2>&1 | width)
   [ "$w" -le 128 ] && echo "  OK '${c#build/pzsolve }' via CUDA: lines of at most 128 columns ($w)" || { echo "  FAIL '${c#build/pzsolve }' via CUDA: a line of $w columns"; fail=$((fail+1)); }
