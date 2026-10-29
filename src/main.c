@@ -176,11 +176,13 @@ static const struct { const char *cmd, *text; } short_help[] = {
               "  -c, --campaign NAME     the campaign\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
               "      --key HEX           the private key, in hexadecimal\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"},
     {"merge", "pzsolve merge - merge the distinguished points of other computers into a kangaroo campaign\n\nUSAGE\n"
-              "  pzsolve merge (-c NAME | -p N) -f FILE_OR_FOLDER [-f ...] [-d DIR] [--mem GB]\n\nOPTIONS\n"
+              "  pzsolve merge (-c NAME | -p N) -f FILE_OR_FOLDER [-f ...] [-d DIR] [--mem GIB]\n\nOPTIONS\n"
               "  -c, --campaign NAME     the campaign (it must not be running)\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
               "  -f, --file PATH         the dp.bin of another computer, or its campaign folder (up to 16)\n"
               "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
-              "      --mem GB            maximum RAM for the table of distinguished points [auto]\n  -q, --quiet             fewer messages\n"},
+              "      --mem GIB           maximum RAM for the table of distinguished points, in GiB [auto]\n  -q, --quiet             fewer messages\n"
+              "\nEXIT STATUS\n  0                       the files were merged (or the key was found)\n"
+              "  2                       a file could not be merged, or another error\n"},
     {"split", "pzsolve split - divide the --part shares among several computers in proportion to their speeds\n\nUSAGE\n"
               "  pzsolve split SPEED_1 SPEED_2 [...]\n\nARGUMENTS\n"
               "  SPEED                   keys per second of each computer, with k, M, G or T allowed (800M, 1.5G); at most 64\n"},
@@ -278,15 +280,20 @@ static const struct option long_opts[] = {
  * pz_parse_* rather than strtoll: on glibc >= 2.38 strtoll resolves to __isoc23_strtoll and the binary would refuse
  * to start on older distributions. Integers: pz_arg_int (util.c). */
 
-/* A positive number of at most `max`. */
-static double opt_positive_double(const char *opt, const char *s, double max)
+/* --mem: GiB, at least 1 MiB (less leaves no room for a table: 32 bytes would make a table of no entries) and at most 1e9 GiB, which still
+ * fits in 64 bits of bytes. */
+static double opt_mem_gib(const char *opt, const char *s)
 {
     char *end;
     errno = 0;
     double v = strtod(s, &end);
-    if (end == s || *end || errno == ERANGE || !(v > 0) || v > max) pz_die("%s: invalid value '%s' (expected a positive number, at most %.0f)", opt, s, max);
+    if (end == s || *end || errno == ERANGE || !(v >= 0.001) || v > 1e9)
+        pz_die("%s: invalid value '%s' (expected GiB, at least 0.001 and at most 1000000000)", opt, s);
     return v;
 }
+
+/* The bytes of a --mem value; 0 when it was not given. */
+static u64 mem_bytes(double gib) { return gib > 0 ? (u64)(gib * 1073741824.0) : 0; }
 
 /* Copies the value of an option into a field of the options: a value that does not fit is refused, not cut. */
 static void opt_copy(const char *opt, char *dst, size_t n, const char *val)
@@ -348,6 +355,35 @@ static const char *bad_option(char **argv, char *buf, size_t n)
     return argv[optind - 1];
 }
 
+/* The options each command takes (the long names, between blanks); hunt takes all of them but those named in `not`. Any other is refused, rather
+ * than silently ignored. */
+static const struct { const char *cmd, *only, *not; } cmd_opts[] = {
+    {"hunt", NULL, " key file "},
+    {"info", " campaign puzzle dir ", NULL},
+    {"list", " dir ", NULL},
+    {"where", " campaign puzzle dir key ", NULL},
+    {"merge", " campaign puzzle dir file mem quiet ", NULL},
+};
+
+/* Refuses the option `c` (as getopt_long returned it) when the command does not use it. */
+static void check_option_used(int c)
+{
+    const struct option *lo = NULL;
+    for (const struct option *q = long_opts; q->name; q++)
+        if (q->val == c) { lo = q; break; }
+    if (!lo || c == 'h') return;
+    char key[40];
+    snprintf(key, sizeof key, " %s ", lo->name);
+    for (size_t i = 0; i < sizeof cmd_opts / sizeof *cmd_opts; i++) {
+        if (strcmp(cmd_opts[i].cmd, g_cmd) != 0) continue;
+        const bool used = cmd_opts[i].only ? strstr(cmd_opts[i].only, key) != NULL : !strstr(cmd_opts[i].not, key);
+        if (used) return;
+        char sh[8] = "";
+        if (c > 32 && c < 127) snprintf(sh, sizeof sh, " (-%c)", c);
+        pz_usage_error(g_cmd, "the option --%s%s is not used by '%s'", lo->name, sh, g_cmd);
+    }
+}
+
 static void parse_opts(int argc, char **argv, opts_t *o)
 {
     memset(o, 0, sizeof *o);
@@ -365,6 +401,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
     char optbuf[8];
     opterr = 0;
     while ((c = getopt_long(argc, argv, ":p:r:a:H:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
+        check_option_used(c);
         switch (c) {
         case 'p': o->puzzle = (int)pz_arg_int("--puzzle", optarg, 1, 256); break;
         case 'r': opt_copy("--range", o->range, sizeof o->range, optarg); break;
@@ -421,7 +458,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         case O_ISA: opt_copy("--isa", o->isa, sizeof o->isa, optarg); break;
         case O_CHUNK: o->chunk_bits = (int)pz_arg_int("--chunk-bits", optarg, 20, 40); break;   /* smaller blocks starve the GPUs and slow the CPU */
         case O_DP: o->dp_bits = (int)pz_arg_int("--dp-bits", optarg, 0, 60); break;
-        case O_MEM: o->mem_gb = opt_positive_double("--mem", optarg, 1e9); break;   /* GB: 1e9 of them still fit in 64 bits of bytes */
+        case O_MEM: o->mem_gb = opt_mem_gib("--mem", optarg); break;
         case O_REPORT: o->report_interval = (int)pz_arg_int("--report-interval", optarg, 1, 86400); break;
         case O_CKPT: o->checkpoint_interval = (int)pz_arg_int("--checkpoint-interval", optarg, 1, 86400); break;
         case 'q': o->quiet = true; break;
@@ -503,7 +540,7 @@ static u64 pick_bsgs_entries(const opts_t *o, const pz_u256 *rsz, bool *viable)
     }
     sysinfo_t si;
     sysinfo_detect(&si);
-    u64 budget = o->mem_gb > 0 ? (u64)(o->mem_gb * 1073741824.0) : (u64)(0.70 * (double)si.mem_avail);
+    u64 budget = o->mem_gb > 0 ? mem_bytes(o->mem_gb) : (u64)(0.70 * (double)si.mem_avail);
     T = bsgs_choose_T(rsz, budget, viable);
     if (T < 1) pz_die("not enough memory for a BSGS table");
     return T;
@@ -793,7 +830,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
 static void check_options_for_campaign(const opts_t *o, const campaign_cfg *c, const run_ctx *r, bool fresh)
 {
     if (o->node && c->mode != MODE_KANGAROO) pz_die("--node is only used with the kangaroo (in linear search split the range with -r)");
-    if (fresh && c->mode == MODE_BSGS) run_bsgs_check(c, &r->sys, !o->no_cpu, o->mem_gb > 0 ? (u64)(o->mem_gb * 1073741824.0) : 0, o->table, NULL);
+    if (fresh && c->mode == MODE_BSGS) run_bsgs_check(c, &r->sys, !o->no_cpu, mem_bytes(o->mem_gb), o->table, NULL);
 }
 
 static void parse_gpu_filter(run_ctx *r, const char *list) { pz_strlcpy(r->gpu_filter, list, sizeof r->gpu_filter); }
@@ -921,7 +958,7 @@ static int cmd_hunt(int argc, char **argv)
     if (o.report_interval > 0) r->report_interval = o.report_interval;
     if (o.checkpoint_interval > 0) r->checkpoint_interval = o.checkpoint_interval;
     r->ui = o.quiet ? UI_LOG : o.ui;
-    if (o.mem_gb > 0) r->mem_limit = (u64)(o.mem_gb * 1073741824.0);
+    r->mem_limit = mem_bytes(o.mem_gb);
     pz_strlcpy(r->table_path, o.table, sizeof r->table_path);
     if (o.dp_bits >= 0) r->cfg.dp_bits = (unsigned)o.dp_bits;
 
@@ -1113,7 +1150,7 @@ static int cmd_merge(int argc, char **argv)
         return 0;
     }
     campaign_lock(cdir);   /* a campaign that is running must be stopped first: both would write the same log */
-    if (o.mem_gb > 0) r->mem_limit = (u64)(o.mem_gb * 1073741824.0);
+    r->mem_limit = mem_bytes(o.mem_gb);
     const char *fl[16];
     for (int i = 0; i < o.nfiles; i++) fl[i] = o.files[i];
     int rc = kangaroo_merge(r, fl, o.nfiles);
@@ -1132,7 +1169,7 @@ static int cmd_merge(int argc, char **argv)
     if (rc == 0) pz_fputs_wrap(stdout, "\nNo collision between the points yet: continue with 'hunt' on this campaign.\n", PZ_LINE_MAX, 2);
     else pz_fputs_wrap(stdout, "\nSome of the files could not be merged (see above).\n", PZ_LINE_MAX, 2);
     free(r);
-    return rc;
+    return rc ? PZ_EXIT_ERROR : 0;                  /* a file that could not be merged is an error, as for every command but hunt */
 }
 
 static int cmd_split(int argc, char **argv)

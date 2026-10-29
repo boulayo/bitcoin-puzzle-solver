@@ -259,14 +259,15 @@ void run_final_progress(run_ctx *r, progress_info *pi)
 }
 
 /* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines, and the
- * lines after a '\n' of the text, are indented by `hang` columns. */
+ * lines after a '\n' of the text, are indented by `hang` columns. Text that does not fit in `out` is cut. */
 static void wrap_fields(const char *in, int width, int hang, char *out, size_t n)
 {
     size_t o = 0;
     int col = 0;
+#define APPEND(...) do { const int w_ = snprintf(out + o, n - o, __VA_ARGS__); o = w_ < 0 ? o : o + (size_t)w_ >= n ? n - 1 : o + (size_t)w_; } while (0)
     for (const char *p = in; *p && o + 2 < n;) {
         if (*p == '\n') {
-            o += (size_t)snprintf(out + o, n - o, "\n%*s", hang, "");
+            APPEND("\n%*s", hang, "");
             col = 0;
             p++;
             continue;
@@ -276,18 +277,18 @@ static void wrap_fields(const char *in, int width, int hang, char *out, size_t n
         if (nl && (!sep || nl < sep)) sep = NULL;
         const size_t len = sep ? (size_t)(sep - p) : nl ? (size_t)(nl - p) : strlen(p);
         if (col > 0 && col + 3 + (int)len > width) {
-            o += (size_t)snprintf(out + o, n - o, " |\n%*s", hang, "");
+            APPEND(" |\n%*s", hang, "");
             col = 0;
         } else if (col > 0) {
-            o += (size_t)snprintf(out + o, n - o, " | ");
+            APPEND(" | ");
             col += 3;
         }
-        o += (size_t)snprintf(out + o, n - o, "%.*s", (int)len, p);
+        APPEND("%.*s", (int)len, p);
         col += (int)len;
         p = sep ? sep + 3 : p + len;
-        if (o >= n) break;
     }
-    out[o < n ? o : n - 1] = 0;
+#undef APPEND
+    out[o] = 0;
 }
 
 void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)

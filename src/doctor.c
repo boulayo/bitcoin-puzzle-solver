@@ -149,7 +149,7 @@ static void check_campaigns(const char *base)
         names[nn++] = pz_xstrdup(e->d_name);
     }
     closedir(d);
-    qsort(names, nn, sizeof *names, cmp_names);                 /* in the order of 'list' */
+    if (nn > 1) qsort(names, nn, sizeof *names, cmp_names);     /* in the order of 'list' (an empty folder: names is NULL) */
     int n = 0;
     for (size_t k = 0; k < nn; k++) {
         const char *name = names[k];

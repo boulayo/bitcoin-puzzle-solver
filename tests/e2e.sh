@@ -242,7 +242,7 @@ mkdir -p "$DIR/xm2"; cp -r "$DIR/xm/xk" "$DIR/xm2/xk"
 OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/xk" 2>&1); RC=$?
 [ $RC -eq 0 ] && echo "$OUT" | grep -q "No collision" && ok "merge without a collision: exit status 0" || bad "merge without a collision: exit status $RC"
 $BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/nonexistent.bin" >/dev/null 2>&1; RC=$?
-[ $RC -eq 1 ] && ok "merge of a file that cannot be read: exit status 1" || bad "merge of an unreadable file: exit status $RC"
+[ $RC -eq 2 ] && ok "merge of a file that cannot be read: exit status 2" || bad "merge of an unreadable file: exit status $RC"
 $BIN merge -c xn -d "$DIR" -f "$DIR/xm2/xk" >/dev/null 2>&1; RC=$?
 [ $RC -eq 2 ] && ok "merge into a campaign that is not a kangaroo one: exit status 2" || bad "merge into a linear campaign: exit status $RC"
 # the header of dp.bin carries the jump table (PZDP5): a log of another seed is refused, one of version 4 (no jump table) is taken as it is
@@ -253,7 +253,7 @@ open(sys.argv[2], 'wb').write(d[:41] + bytes([d[41] ^ 1]) + d[42:])
 open(sys.argv[3], 'wb').write(b'PZDP4\n' + d[6:38] + d[42:])
 PY
 OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/seed.bin" 2>&1); RC=$?
-[ $RC -eq 1 ] && echo "$OUT" | grep -q "another jump table" && ok "merge of a log written with another jump table: refused, exit status 1" || bad "merge of a log of another seed: exit status $RC"
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "another jump table" && ok "merge of a log written with another jump table: refused, exit status 2" || bad "merge of a log of another seed: exit status $RC"
 OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/v4.bin" 2>&1); RC=$?
 [ $RC -eq 0 ] && echo "$OUT" | grep -q "already known" && ok "merge of a log of version 4: taken as it is" || bad "merge of a log of version 4: exit status $RC"
 
