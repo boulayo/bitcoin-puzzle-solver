@@ -32,7 +32,7 @@
 typedef struct {
     u32 X[8][PZ_LANES] PZ_ALIGN(64);
     u32 pfx[PZ_LANES] PZ_ALIGN(64);
-    u32 out[5][PZ_LANES] PZ_ALIGN(64);
+    u32 outw[PZ_LANES] PZ_ALIGN(64);      /* the filter word of the digests */
     u64 koff[PZ_LANES] PZ_ALIGN(64);
     int n;
     const scan_job *job;
@@ -62,10 +62,18 @@ static inline PZ_VABI void vctx_flush(vctx_t *c)
     c->n = 0;
     return;
 #endif
-    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
+    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, c->outw);
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
-    for (int l = 0; l < c->n; l++)
-        if (UNLIKELY(c->out[0][l] == t0)) vctx_verify(c, l);
+    /* one vector comparison for the batch; lanes past n hold older keys, which the loop skips */
+    const pz_vu w = pz_v_load(c->outw), t = pz_v_set(t0);
+#if PZ_VBYTES == 64
+    const bool any = _mm512_cmpeq_epi32_mask((__m512i)w, (__m512i)t) != 0;
+#else
+    const bool any = _mm256_movemask_epi8(_mm256_cmpeq_epi32((__m256i)w, (__m256i)t)) != 0;
+#endif
+    if (UNLIKELY(any))
+        for (int l = 0; l < c->n; l++)
+            if (c->outw[l] == t0) vctx_verify(c, l);
     c->n = 0;
 }
 
