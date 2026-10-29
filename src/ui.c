@@ -180,16 +180,17 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     const u64 base = r->t_base > 0 ? atomic_load(&r->units_base) : 0;
     double avg = el_unit > 1 && session_units > base ? (double)(session_units - base) / el_unit : 0;
     pz_fmt_si(pi->rate, a, sizeof a);
-    pz_fmt_si(r->peak_rate, b, sizeof b);
+    pz_fmt_si(r->peak_rate > avg ? r->peak_rate : avg, b, sizeof b);   /* the peak is sampled once a second: never below the average */
     pz_fmt_si(avg, c, sizeof c);
     if (pi->rate > 0 && !r->all_started)                      /* the first seconds: a GPU that has not finished a launch is not counted yet */
         snprintf(ln, sizeof ln, "Speed         %s %s/s   [starting: not all engines are counted yet]", a, pi->unit);
     else if (pi->rate > 0 && r->peak_rate > 0) snprintf(ln, sizeof ln, "Speed         %s %s/s   (peak %s, session average %s)", a, pi->unit, b, c);
     else if (pi->rate > 0) snprintf(ln, sizeof ln, "Speed         %s %s/s", a, pi->unit);
     else snprintf(ln, sizeof ln, "Speed         measuring...");
-    len = add_line(buf, n, len, &lines, cols, "", "", ln);
+    const bool idle = final && !(pi->rate > 0);                  /* a session over before a speed was measured: no rows of zeros */
+    if (!idle) len = add_line(buf, n, len, &lines, cols, "", "", ln);
 
-    if (r->nws > 0) {
+    if (r->nws > 0 && !idle) {
         size_t o = 0;
         ln[0] = 0;
         o += (size_t)snprintf(ln + o, sizeof ln - o, "              ");
@@ -214,8 +215,14 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     snprintf(ln, sizeof ln, "Time          this session %s | total %s | session no. %d", a, b, r->sessions);
     len = add_line(buf, n, len, &lines, cols, "", "", ln);
 
+    const char *state = ui_state_name(r, final);
     if (final && atomic_load(&r->found)) {
         len = add_line(buf, n, len, &lines, cols, B0, B1, "KEY FOUND");   /* the box below gives the file */
+    } else if (!strcmp(state, "COMPLETED")) {
+        len = add_line(buf, n, len, &lines, cols, B0, B1, r->cfg.part[0] ? "Time left     none: the whole part was covered"
+                                                                          : "Time left     none: the whole range was covered");
+    } else if (idle || (final && pi->eta.model == ETA_NONE)) {
+        /* stopped before a speed or before the search started (BSGS table phase): no time left to give */
     } else if (pi->beyond) {
         len = add_line(buf, n, len, &lines, cols, B0, B1, "Time left     unknown (beyond the model)");
     } else if (pi->eta.model == ETA_NONE) {

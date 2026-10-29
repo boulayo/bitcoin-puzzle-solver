@@ -805,6 +805,14 @@ static void print_resume_hint(const run_ctx *r, const char *dir)
         printf("\nCampaign interrupted. Resume with:  pzsolve hunt -c %s%s%s\n", r->cfg.name, other_dir ? " -d " : "", other_dir ? dir : "");
 }
 
+/* Whether the campaign has already covered its whole range (or its whole --part): the state of its last session, if the saved state is
+ * still there to show it. */
+static bool campaign_completed(const run_ctx *r)
+{
+    char st[32];
+    return file_exists(r->path_state) && !strcmp(campaign_state(r->cfg.dir, st, sizeof st), "COMPLETED");
+}
+
 static int cmd_hunt(int argc, char **argv)
 {
     opts_t o;
@@ -855,6 +863,16 @@ static int cmd_hunt(int argc, char **argv)
         free(t);
         free(r);
         return PZ_EXIT_FOUND;
+    }
+    if (resuming && campaign_completed(r)) {
+        char msg[1400];
+        const bool other_dir = strcmp(o.dir, "campaigns") != 0;
+        if (r->cfg.part[0]) snprintf(msg, sizeof msg, "Part %s of campaign '%s' was already scanned in full without the key.\n", r->cfg.part, r->cfg.name);
+        else snprintf(msg, sizeof msg, "Campaign '%s' is already completed: the whole range was covered without the key (see 'pzsolve info -c %s%s%s').\n",
+                      r->cfg.name, r->cfg.name, other_dir ? " -d " : "", other_dir ? o.dir : "");
+        pz_fputs_wrap(stdout, msg, PZ_LINE_MAX, 2);
+        free(r);
+        return PZ_EXIT_NOT_FOUND;
     }
     if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
     pz_log_set_file(r->path_log);
@@ -989,8 +1007,8 @@ static int cmd_hunt(int argc, char **argv)
         if (r->cfg.part[0]) {
             printf("\nPart %s was scanned in full without finding the key: the shares of the other computers remain.\n", r->cfg.part);
         } else {
-            printf("\nCampaign completed: the whole range was covered without finding the key.\n");
-            printf("(Check that the puzzle/address are correct; the computation was tested with 'pzsolve selftest'.)\n");
+            pz_fputs_wrap(stdout, "\nCampaign completed: the whole range was covered without the key. Check the address and the range; "
+                                  "'pzsolve selftest' checks the computation.\n", PZ_LINE_MAX, 0);
         }
     } else {
         print_resume_hint(r, o.dir);

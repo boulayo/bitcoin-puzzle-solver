@@ -131,7 +131,8 @@ int main(void)
                         /* fields are dropped whole: a probability is never cut after the '=' */
                         const char *pp = strstr(one, "P(24h)=");
                         if (pp) CHECK(one[strlen(one) - 1] == '%' || one[strlen(one) - 1] == 'a');
-                        if (variant == 7 && cols >= 100) CHECK(strstr(buf, "current phase") && !strstr(buf, "50%:"));
+                        if (variant == 7 && cols >= 100) CHECK(fin ? !strstr(buf, "Time left") : strstr(buf, "current phase") && !strstr(buf, "50%:"));
+                        if (variant == 0 && fin) CHECK(!strstr(buf, "Speed") && !strstr(buf, "CPU x"));   /* stopped before a speed: no rows of zeros */
                     }
                 }
             }
