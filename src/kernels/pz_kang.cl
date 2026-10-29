@@ -152,8 +152,7 @@ PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hi
             fe_sub(&t, &yk, &jy); \
             fe_mul(&lam, &t, &ik); \
             fe_sqr(&x3, &lam); \
-            fe_sub(&x3, &x3, &xk); \
-            fe_sub(&x3, &x3, &jx); \
+            fe_sub2(&x3, &x3, &xk, &jx); \
             fe_sub(&t, &xk, &x3); \
             fe_mul(&y3, &lam, &t); \
             fe_sub(&y3, &y3, &yk); \

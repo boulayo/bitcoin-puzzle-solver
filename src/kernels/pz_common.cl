@@ -91,6 +91,14 @@ inline void fe_sub(fe *r, const fe *a, const fe *b)
     *r = o;
 }
 
+/* r = a - b - c */
+inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
+{
+    fe t;
+    fe_sub(&t, a, b);
+    fe_sub(r, &t, c);
+}
+
 #else
 /* ---- CUDA: addition, subtraction and (below) the reduction after a product on PTX carry chains (PZ_FAST_FE,
  * pz_cuda.h): on sm_86 add+sub take 88 instead of 176 instructions, a multiplication 288 instead of 328. Same results
@@ -124,6 +132,27 @@ inline void fe_sub(fe *r, const fe *a, const fe *b)
     SUBC_CC(r4, r4, 0u); SUBC_CC(r5, r5, 0u); SUBC_CC(r6, r6, 0u); SUBC_CC(r7, r7, 0u);
     SUBC(w, 0u, 0u);
     w &= 1u;   /* borrowed again: the value is now >= 2^256 - 2^32 - 977, subtract once more (stops at limb 2) */
+    SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC(r2, r2, 0u);
+    r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
+}
+
+/* r = a - b - c: both borrow chains first, then one correction by the number of borrows w (0 to 2), w (2^32 + 977); if that borrows
+ * again the value is at least 2^256 - 2^33 - 1954 and one more 2^32 + 977 is subtracted (it stops at limb 2). 36 instructions
+ * instead of the 50 of two fe_sub. */
+inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
+{
+    uint r0, r1, r2, r3, r4, r5, r6, r7, w, w2;
+    SUB_CC(r0, a->v[0], b->v[0]); SUBC_CC(r1, a->v[1], b->v[1]); SUBC_CC(r2, a->v[2], b->v[2]); SUBC_CC(r3, a->v[3], b->v[3]);
+    SUBC_CC(r4, a->v[4], b->v[4]); SUBC_CC(r5, a->v[5], b->v[5]); SUBC_CC(r6, a->v[6], b->v[6]); SUBC_CC(r7, a->v[7], b->v[7]);
+    SUBC(w, 0u, 0u);
+    SUB_CC(r0, r0, c->v[0]); SUBC_CC(r1, r1, c->v[1]); SUBC_CC(r2, r2, c->v[2]); SUBC_CC(r3, r3, c->v[3]);
+    SUBC_CC(r4, r4, c->v[4]); SUBC_CC(r5, r5, c->v[5]); SUBC_CC(r6, r6, c->v[6]); SUBC_CC(r7, r7, c->v[7]);
+    SUBC(w2, 0u, 0u);
+    w = (w & 1u) + (w2 & 1u);
+    SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC_CC(r2, r2, 0u); SUBC_CC(r3, r3, 0u);
+    SUBC_CC(r4, r4, 0u); SUBC_CC(r5, r5, 0u); SUBC_CC(r6, r6, 0u); SUBC_CC(r7, r7, 0u);
+    SUBC(w, 0u, 0u);
+    w &= 1u;
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC(r2, r2, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
 }

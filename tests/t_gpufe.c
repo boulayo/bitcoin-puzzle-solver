@@ -10,6 +10,7 @@
 typedef unsigned int uint;
 void gf_add(uint *r, const uint *a, const uint *b);   /* PZ_FAST_FE (PTX chains, emulated) */
 void gf_sub(uint *r, const uint *a, const uint *b);
+void gf_sub2(uint *r, const uint *a, const uint *b, const uint *c);
 void gf_mul(uint *r, const uint *a, const uint *b);
 void gf_sqr(uint *r, const uint *a);
 void gf_norm(uint *r, const uint *a);
@@ -17,6 +18,7 @@ void gf_inv(uint *r, const uint *a);
 void gf_invpow(uint *r, const uint *a);
 void gp_add(uint *r, const uint *a, const uint *b);   /* portable */
 void gp_sub(uint *r, const uint *a, const uint *b);
+void gp_sub2(uint *r, const uint *a, const uint *b, const uint *c);
 void gp_mul(uint *r, const uint *a, const uint *b);
 void gp_sqr(uint *r, const uint *a);
 void gp_norm(uint *r, const uint *a);
@@ -58,6 +60,7 @@ static void check(const uint a[8], const uint b[8])
     uint r[8];
     void (*add[2])(uint *, const uint *, const uint *) = {gp_add, gf_add};
     void (*sub[2])(uint *, const uint *, const uint *) = {gp_sub, gf_sub};
+    void (*sub2[2])(uint *, const uint *, const uint *, const uint *) = {gp_sub2, gf_sub2};
     void (*mul[2])(uint *, const uint *, const uint *) = {gp_mul, gf_mul};
     void (*sqr[2])(uint *, const uint *) = {gp_sqr, gf_sqr};
     void (*nrm[2])(uint *, const uint *) = {gp_norm, gf_norm};
@@ -65,6 +68,9 @@ static void check(const uint a[8], const uint b[8])
         add[v](r, a, b); pz_fe_add(&w, &A, &B); expect("add", v, r, &w, a, b, false);
         sub[v](r, a, b); pz_fe_sub(&w, &A, &B); expect("sub", v, r, &w, a, b, false);
         sub[v](r, b, a); pz_fe_sub(&w, &B, &A); expect("sub", v, r, &w, b, a, false);
+        /* a - b - b and b - a - a: up to two borrows, and the corrections after them */
+        sub2[v](r, a, b, b); pz_fe_sub(&w, &A, &B); pz_fe_sub(&w, &w, &B); expect("sub2", v, r, &w, a, b, false);
+        sub2[v](r, b, a, a); pz_fe_sub(&w, &B, &A); pz_fe_sub(&w, &w, &A); expect("sub2", v, r, &w, b, a, false);
         mul[v](r, a, b); pz_fe_mul(&w, &A, &B); expect("mul", v, r, &w, a, b, false);
         sqr[v](r, a); pz_fe_sqr(&w, &A); expect("sqr", v, r, &w, a, NULL, false);
         nrm[v](r, a); w = A; expect("normalize", v, r, &w, a, NULL, true);
