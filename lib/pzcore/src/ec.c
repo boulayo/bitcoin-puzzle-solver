@@ -9,9 +9,13 @@ const pz_ge pz_ec_g = {
     {{0x9C47D08FFB10D4B8ULL, 0xFD17B448A6855419ULL, 0x5DA4FBFC0E1108A8ULL, 0x483ADA7726A3C465ULL}}
 };
 
-/* comb table for k*G: g_comb[i][d-1] = d * 16^i * G, for the 64 windows i of four bits and the digits d = 1..15 */
-#define COMB_W 64
-static pz_ge g_comb[COMB_W][15];
+/* Comb table for k*G with signed digits: k = sum of d_i * 2^(COMB_B*i), d_i in [-COMB_D, COMB_D], and g_comb[i][d-1] = d * 2^(COMB_B*i) * G
+ * for d = 1..COMB_D (a negative digit adds the negated point). The last window takes the carry out of the top bits. With windows of 8 bits:
+ * 33 windows of 128 points (264 KB), and at most 32 additions for a 256-bit k (half those of unsigned windows of 4 bits). */
+#define COMB_B 8
+#define COMB_D (1 << (COMB_B - 1))
+#define COMB_W ((256 + COMB_B - 1) / COMB_B + (256 % COMB_B == 0))
+static pz_ge g_comb[COMB_W][COMB_D];
 static _Atomic int g_comb_state;      /* 0: not built, 1: a thread is building it, 2: ready */
 
 static void gej_set_inf(pz_gej *r)
@@ -220,25 +224,26 @@ bool pz_ge_on_curve(const pz_ge *p)
     return pz_fe_equiv(&y2, &x3);
 }
 
-/* Builds the table in groups of eight windows, so that the Jacobian points of a group fit in a small buffer on the stack and are
- * brought to affine with one inversion per group. */
+/* Builds the table a few windows at a time, so that the Jacobian points of a group fit in a small buffer on the stack and are brought to
+ * affine with one inversion per group. */
 static void comb_build(void)
 {
-    enum { GROUP = 8 };
-    pz_gej pts[GROUP * 15];
+    enum { GROUP = 128 / COMB_D > 0 ? 128 / COMB_D : 1 };
+    pz_gej pts[GROUP * COMB_D];
     pz_gej base;
     pz_gej_set_ge(&base, &pz_ec_g);
     for (int w0 = 0; w0 < COMB_W; w0 += GROUP) {
-        for (int i = 0; i < GROUP; i++) {
+        const int nw = COMB_W - w0 < GROUP ? COMB_W - w0 : GROUP;
+        for (int i = 0; i < nw; i++) {
             pz_gej cur = base;
-            pts[i * 15] = cur;
-            for (int j = 1; j < 15; j++) {
+            pts[i * COMB_D] = cur;
+            for (int j = 1; j < COMB_D; j++) {
                 pz_gej_add(&cur, &cur, &base);
-                pts[i * 15 + j] = cur;
+                pts[i * COMB_D + j] = cur;
             }
-            for (int k = 0; k < 4; k++) pz_gej_double(&base, &base);
+            for (int k = 0; k < COMB_B; k++) pz_gej_double(&base, &base);
         }
-        pz_gej_to_ge_batch(&g_comb[w0][0], pts, GROUP * 15);   /* cannot fail: no multiple of G below 16^64 is the identity */
+        pz_gej_to_ge_batch(&g_comb[w0][0], pts, (size_t)nw * COMB_D);   /* cannot fail: n is prime and divides none of the multiples */
     }
 }
 
@@ -259,9 +264,22 @@ void pz_ec_mul_g_j(pz_gej *r, const pz_u256 *k)
     pz_ec_init();
     pz_gej acc;
     gej_set_inf(&acc);
+    unsigned carry = 0;
     for (int i = 0; i < COMB_W; i++) {
-        unsigned d = (unsigned)(k->w[i >> 4] >> ((i & 15) * 4)) & 15;
-        if (d) pz_gej_add_ge(&acc, &acc, &g_comb[i][d - 1]);
+        const int bit = COMB_B * i;
+        uint64_t v = bit < 256 ? k->w[bit >> 6] >> (bit & 63) : 0;
+        if ((bit & 63) + COMB_B > 64 && bit + 64 - (bit & 63) < 256) v |= k->w[(bit >> 6) + 1] << (64 - (bit & 63));
+        const unsigned d = (unsigned)(v & ((1u << COMB_B) - 1)) + carry;
+        if (d == 0 || d == 1u << COMB_B) { carry = d != 0; continue; }
+        if (d <= COMB_D) {
+            carry = 0;
+            pz_gej_add_ge(&acc, &acc, &g_comb[i][d - 1]);
+        } else {                                            /* d - 2^COMB_B: the negated point, and a carry into the next window */
+            carry = 1;
+            pz_ge t = g_comb[i][(1u << COMB_B) - d - 1];
+            pz_fe_neg(&t.y, &t.y);
+            pz_gej_add_ge(&acc, &acc, &t);
+        }
     }
     *r = acc;
 }

@@ -6,7 +6,7 @@
  * elements (see fe.h), so compare points with pz_ge_equal, not with memcmp. The group has prime order n and cofactor 1: every
  * point on the curve is in the group.
  *
- * Nothing here allocates or can fail except by the documented return values. pz_ec_mul_g and pz_ec_init build a table of 61 KB on
+ * Nothing here allocates or can fail except by the documented return values. pz_ec_mul_g and pz_ec_init build a table of 264 KB on
  * first use; both may be called from any number of threads at any time. The code is not constant-time (table lookups and
  * branches depend on the scalar): do not use it with secret scalars where a side channel matters. */
 #ifndef PZCORE_EC_H
@@ -19,7 +19,7 @@ PZ_BEGIN_DECLS
 typedef struct { pz_fe x, y; } pz_ge;                  /* affine point (never infinity) */
 typedef struct { pz_fe x, y, z; bool inf; } pz_gej;    /* Jacobian point: (x/z^2, y/z^3), or infinity when inf is set */
 
-/* Builds the table of pz_ec_mul_g now (a millisecond). Optional: the multiplication does it on first use. Idempotent and
+/* Builds the table of pz_ec_mul_g now (a few milliseconds). Optional: the multiplication does it on first use. Idempotent and
  * thread-safe; threads that arrive while another one is building wait for it. */
 void pz_ec_init(void);
 

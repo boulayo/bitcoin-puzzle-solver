@@ -31,7 +31,7 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
   happens to the output (mostly it is left untouched; after a failed `pz_fe_sqrt` or `pz_gej_to_ge_batch` its contents are unspecified). A function that writes text takes the buffer size and refuses rather than truncates.
 * **Hostile input** (text, lengths, public keys) is accepted by every parser and refused cleanly: wrong characters, mixed case, bad
   checksums, over-long strings, coordinates not below p, points off the curve.
-* **Threads:** everything is thread-safe. Global state is the curve table (built once, atomically, 61 KB static), the choice of batch
+* **Threads:** everything is thread-safe. Global state is the curve table (built once, atomically, 264 KB static), the choice of batch
   implementation (an atomic pointer) and a cached CPU probe. No initialisation call is needed.
 * **Not constant-time.** Branches and table lookups depend on the data: do not use it with secret scalars where a side channel matters.
   It has no signatures, no random numbers, no wiping of secrets.
