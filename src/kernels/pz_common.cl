@@ -6,6 +6,7 @@
 #ifndef PZ_CUDA
 #define PZ_CONST_TABLE __constant     /* file-scope constant tables (CUDA: __constant__, see pz_cuda.h) */
 #define PZ_NOINLINE inline            /* CUDA: a real call, so the big routines are compiled once (much smaller PTX) */
+#define PZ_CTZ(x) (31 - (int)clz((x) & (0u - (x))))   /* trailing zeros of a non-zero x (OpenCL C 1.2 has clz only) */
 typedef long s64;
 #endif
 /* Every kernel takes the number of work-items as its last argument: CUDA launches whole blocks, so the threads past
@@ -452,7 +453,9 @@ PZ_NOINLINE void fe_inv_pow(fe *r, const fe *a)
  * a matrix t = (u v; q r) with (f', g') = t (f, g) / 2^30, |u| + |v|, |q| + |r| <= 2^30. The coefficients d, e with
  * f = d x and g = e x (mod p) follow the same matrix, divided by 2^30 modulo p (a multiple of p is added to make the
  * division exact). After ~18 rounds g = 0 and f = +-1, so x^-1 = +-d. Numbers are 9 limbs of 30 bits, signed on top.
- * About 12000 instructions, against 64000 for the power a^(p-2). Same method as secp256k1's modinv32. */
+ * Same method as secp256k1's modinv32_var. On sm_86 a warp executes about 14600 instructions for an inversion (19 rounds for the
+ * slowest of its 32 inputs: 760 each, 340 of them for the two matrix products), against 22000 with the divsteps one at a time
+ * (the steps of a round one at a time) and 64000 for the power a^(p-2). */
 #define SG_M30 0x3FFFFFFF
 typedef struct { int v[9]; } sg9;
 typedef struct { int u, v, q, r; } sg_t;
@@ -460,27 +463,41 @@ typedef struct { int u, v, q, r; } sg_t;
 PZ_CONST_TABLE int SG_P[9] = {1073740847, 1073741819, 1073741823, 1073741823, 1073741823, 1073741823, 1073741823, 1073741823, 65535};
 #define SG_PINV 769313487u
 
-inline int sg_divsteps(int delta, uint f, uint g, sg_t *t)
+/* 30 divsteps in variable time, as libsecp256k1's modinv32_var does them (eta = -delta): a run of zero bits of g is done in one go
+ * (g /= 2^zeros and the row of f doubled as many times), and when f and g swap roles the bottom bits of g are cancelled by adding
+ * w f, which counts as that many divsteps on an odd g; w is taken mod 8 at most, where f^-1 = f, so no table is needed. The matrix
+ * is that of the 30 divsteps one by one. With random inputs a batch takes 9.8 turns of the loop on average and 12.6 for the slowest
+ * of 32 work-items (a warp waits for its slowest), against 30 for the steps one at a time; each turn costs about as much as one
+ * divstep did. */
+inline int sg_divsteps(int eta, uint f, uint g, sg_t *t)
 {
-    int u = 1, v = 0, q = 0, r = 1;
-    for (int i = 0; i < 30; i++) {
-        const uint odd = g & 1u;
-        const uint swap = odd & (uint)(delta > 0);
-        const uint ms = 0u - swap, mo = 0u - odd;
-        const uint x = (f ^ ms) - ms;                /* -f when swapping */
-        const uint gn = (g + (x & mo)) >> 1;         /* (g -+ f)/2 when odd, g/2 when even */
-        const int ru = (int)(swap ? (uint)q : (uint)u), rv = (int)(swap ? (uint)r : (uint)v);
-        const int nu = (int)((uint)u ^ ms) - (int)ms, nv = (int)((uint)v ^ ms) - (int)ms;   /* -u, -v when swapping */
-        f = swap ? g : f;
-        g = gn;
-        delta = ((delta ^ (int)ms) - (int)ms) + 1;   /* 1 - delta when swapping, delta + 1 otherwise */
-        q += nu & (int)mo;
-        r += nv & (int)mo;
-        u = ru + ru;
-        v = rv + rv;
+    uint u = 1, v = 0, q = 0, r = 1;
+    int i = 30;
+    for (;;) {
+        const int zeros = PZ_CTZ(g | (0xFFFFFFFFu << i));   /* the bit at i stops the count after the steps that are left */
+        g >>= zeros;
+        u <<= zeros;
+        v <<= zeros;
+        eta -= zeros;
+        i -= zeros;
+        if (i == 0) break;
+        if (eta < 0) {                                     /* (f, g) -> (g, -f) */
+            uint x;
+            eta = -eta;
+            x = f; f = g; g = 0u - x;
+            x = u; u = q; q = 0u - x;
+            x = v; v = r; r = 0u - x;
+        }
+        /* cancel the bottom min(eta + 1, i, 3) bits of g: no more than i steps are left, and after eta + 1 the swap is due */
+        const int limit = eta + 1 > i ? i : eta + 1;
+        const uint m = (0xFFFFFFFFu >> (32 - limit)) & 7u;
+        const uint w = (g * (0u - f)) & m;
+        g += f * w;
+        q += u * w;
+        r += v * w;
     }
-    t->u = u; t->v = v; t->q = q; t->r = r;
-    return delta;
+    t->u = (int)u; t->v = (int)v; t->q = (int)q; t->r = (int)r;
+    return eta;
 }
 
 inline void sg_update_fg(sg9 *f, sg9 *g, const sg_t *t)
@@ -546,10 +563,10 @@ PZ_NOINLINE void fe_inv(fe *r, const fe *a)
         const ulong t = (ulong)n.v[w] | (w + 1 < 8 ? (ulong)n.v[w + 1 < 8 ? w + 1 : 7] << 32 : 0UL);
         g.v[i] = (int)((t >> sh) & SG_M30);
     }
-    int delta = 1;
+    int eta = -1;
     for (int it = 0; it < 25; it++) {
         sg_t t;
-        delta = sg_divsteps(delta, (uint)f.v[0], (uint)g.v[0], &t);
+        eta = sg_divsteps(eta, (uint)f.v[0], (uint)g.v[0], &t);
         sg_update_de(&d, &e, &t);
         sg_update_fg(&f, &g, &t);
         int z = 0;

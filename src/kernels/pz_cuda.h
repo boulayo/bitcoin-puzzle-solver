@@ -39,3 +39,13 @@ typedef unsigned short ushort;
 #define MADHI_CC(d, a, b, c)  asm volatile("mad.hi.cc.u32 %0, %1, %2, %3;" : "=r"(d) : "r"(a), "r"(b), "r"(c))
 #define MADHIC_CC(d, a, b, c) asm volatile("madc.hi.cc.u32 %0, %1, %2, %3;" : "=r"(d) : "r"(a), "r"(b), "r"(c))
 #define MADHIC(d, a, b, c)    asm volatile("madc.hi.u32 %0, %1, %2, %3;" : "=r"(d) : "r"(a), "r"(b), "r"(c))
+
+/* trailing zeros of a non-zero x: bit reversal and bfind.shiftamt (the leading zeros in one instruction, where __clz takes two) */
+inline int pz_ctz(uint x)
+{
+    uint r;
+    asm("brev.b32 %0, %1;" : "=r"(r) : "r"(x));
+    asm("bfind.shiftamt.u32 %0, %1;" : "=r"(r) : "r"(r));
+    return (int)r;
+}
+#define PZ_CTZ(x) pz_ctz(x)
