@@ -227,15 +227,15 @@ static inline PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
     pz_fev_reduce_cols(r, c);
 }
 
-/* Canonical reduction: every lane in [0, p), limbs < 2^29 and limb 8 < 2^24. */
+/* Canonical reduction: every lane in [0, p), limbs < 2^29 and limb 8 < 2^24. The limbs must be below 2^34: every tight or loose
+ * element, and the sums and differences of this header before their carry pass. The bits of limb 8 at and above 2^24 (weight
+ * 2^256 = 2^32 + 977, at most 2^10 of them) are folded first, so a single carry ripple leaves the limbs below 2^29 and limb 8 at most
+ * 2^24 + 32: r < 2^256 + 2^237. Then r >= p  <=>  r + (2^32 + 977) reaches 2^256, and r - p < p. */
 static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
 {
     const pz_vl M = pz_vl_set(PZ_FEV_MASK), M24 = pz_vl_set(((uint64_t)1 << 24) - 1);
-    pz_fev_carry(r);
-    /* fold the bits at and above 2^256 (limb 8 >> 24): h * 2^256 = h * (2^32 + 977); twice, the second time only matters
-     * when the first carry ripple produced exactly 2^256 */
-    for (int pass = 0; pass < 2; pass++) {
-        pz_vl h = r->l[8] >> 24;
+    {
+        const pz_vl h = r->l[8] >> 24;
         r->l[8] &= M24;
         r->l[0] += pz_vl_mul32(h, pz_vl_set(977));
         r->l[1] += h << 3;                      /* 2^32 = 8 * 2^29 */
@@ -247,7 +247,6 @@ static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
             r->l[i] = t & M;
         }
     }
-    /* r < 2^256; r >= p  <=>  r + (2^32 + 977) overflows bit 256 */
     pz_vl t[9], c = pz_vl_set(0);
     t[0] = r->l[0] + pz_vl_set(977);
     t[1] = r->l[1] + pz_vl_set(8);

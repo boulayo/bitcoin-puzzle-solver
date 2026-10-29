@@ -161,14 +161,21 @@ int main(void)
             }
             check_lanes(&r, want, TIGHT, "(a+b)(a-b)");
         }
-        /* normalization is canonical and keeps the value */
-        {
-            r = a;
+        /* normalization is canonical and keeps the value, for tight and loose elements and for limbs up to its bound of 2^34 */
+        for (int big = 0; big < 2; big++) {
+            pz_fe vr[PZ_FEV_LANES];
+            if (big) {
+                fill(&r, ((uint64_t)1 << 34) - 1, it);
+                for (int l = 0; l < PZ_FEV_LANES; l++) lane_value(&vr[l], &r, l);
+            } else {
+                r = a;
+                memcpy(vr, va, sizeof vr);
+            }
             pz_fev_normalize(&r);
             for (int l = 0; l < PZ_FEV_LANES; l++) {
                 pz_fe got;
                 pz_fev_get_lane(&got, &r, l);
-                pz_fe w = va[l];
+                pz_fe w = vr[l];
                 pz_fe_normalize(&w);
                 CHECK(pz_fe_eq(&got, &w));
                 CHECK(r.l[8][l] < ((uint64_t)1 << 24));
