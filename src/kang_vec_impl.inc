@@ -78,6 +78,21 @@ static inline PZ_VABI void kv_cycle_update(kv_aux *a, pz_vl t, pz_vl bnd)
     a->mn = (notag & out) | (t & (set | lt)) | (a->mn & ~(out | set | lt));
 }
 
+/* From the square l2 of the slope, the walker x (canonical) and dx = x - jx, jx the x of its jump point: x3 = l2 - x - jx = l2 + dx - 2x
+ * without its carries (it only goes to pz_fev_normalize), and t = x - x3 = 3x - l2 - dx, tight. Neither needs jx, and t does not wait
+ * for x3. */
+static inline PZ_VABI void kv_x3_t(pz_fev *x3, pz_fev *t, const pz_fev *l2, const pz_fev *x, const pz_fev *dx)
+{
+    pz_fev s, x3x;
+#pragma GCC unroll 9
+    for (int i = 0; i < PZ_FEV_NLIMB; i++) {
+        s.l[i] = l2->l[i] + dx->l[i];
+        x3x.l[i] = (x->l[i] << 1) + x->l[i];
+    }
+    pz_fev_sub2_lazy(x3, &s, x, x);
+    pz_fev_sub2(t, &x3x, l2, dx);
+}
+
 #if PZ_VBYTES == 64
 /* 8x8 transpose of 64-bit words: r[l] = row of lane l -> r[w] = word w of every lane */
 static inline PZ_VABI void kv_tr8(__m512i r[8])
@@ -220,7 +235,7 @@ typedef struct {
 
 typedef struct {
     kv_aux *a;
-    pz_fev ic, jx, jy, t, lam, x3, y3;          /* jx: x - dx, the x of the jump point up to a multiple of p */
+    pz_fev ic, jy, t, lam, l2, x3, y3;
     pz_vl jv0, jv1, sel, dpm, rsm, s0, s1, s2;
 } kv_ctx;
 
@@ -253,22 +268,19 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
         memcpy(x[u].jy.l, e + KV_Y - KV_B, sizeof x[u].jy.l);
         x[u].jv0 = e[KV_V - KV_B];
         x[u].jv1 = e[KV_V - KV_B + 1];
-        pz_fev_sub(&x[u].jx, &E->vx[c - u], &E->vdx[c - u]);
     }
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vy[c - u], &x[u].jy);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) pz_fev_mul(&x[u].lam, &x[u].t, &x[u].ic);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sqr(&x[u].x3, &x[u].lam);
+    for (int u = 0; u < nu; u++) pz_fev_sqr(&x[u].l2, &x[u].lam);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sub2(&x[u].x3, &x[u].x3, &E->vx[c - u], &x[u].jx);
-#pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].t, &E->vx[c - u], &x[u].x3);
+    for (int u = 0; u < nu; u++) kv_x3_t(&x[u].x3, &x[u].t, &x[u].l2, &E->vx[c - u], &E->vdx[c - u]);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) pz_fev_mul(&x[u].y3, &x[u].lam, &x[u].t);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sub(&x[u].y3, &x[u].y3, &E->vy[c - u]);
+    for (int u = 0; u < nu; u++) pz_fev_sub_lazy(&x[u].y3, &x[u].y3, &E->vy[c - u]);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
         pz_fev_normalize(&x[u].x3);
@@ -432,19 +444,17 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         } else {
             ic = inv;
         }
-        pz_fev jx, jy, t, lam, x3, y3, ny;
+        pz_fev jy, t, lam, l2, x3, y3, ny;
         pz_vl e[KV_BN];
         kv_load_words(e, KV_B, KV_BN, vjt, a->jb);
         memcpy(jy.l, e + KV_Y - KV_B, sizeof jy.l);
         const pz_vl jv0 = e[KV_V - KV_B], jv1 = e[KV_V - KV_B + 1];
-        pz_fev_sub(&jx, &vx[c], &vdx[c]);                   /* the x of the jump point up to a multiple of p: x3 = lam^2 - x - jx */
         pz_fev_sub(&t, &vy[c], &jy);
         pz_fev_mul(&lam, &t, &ic);
-        pz_fev_sqr(&x3, &lam);
-        pz_fev_sub2(&x3, &x3, &vx[c], &jx);
-        pz_fev_sub(&t, &vx[c], &x3);
+        pz_fev_sqr(&l2, &lam);
+        kv_x3_t(&x3, &t, &l2, &vx[c], &vdx[c]);
         pz_fev_mul(&y3, &lam, &t);
-        pz_fev_sub(&y3, &y3, &vy[c]);
+        pz_fev_sub_lazy(&y3, &y3, &vy[c]);
         pz_fev_normalize(&x3);
         pz_fev_normalize(&y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */

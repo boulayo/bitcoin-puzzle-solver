@@ -100,12 +100,25 @@ static inline PZ_VABI void pz_fev_sub(pz_fev *r, const pz_fev *a, const pz_fev *
     pz_fev_settle(r->l);
 }
 
-/* r = a - b - c */
+/* r = a - b - c; a may also be three times a canonical element (limbs below 2^54) */
 static inline PZ_VABI void pz_fev_sub2(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *c)
 {
 #pragma GCC unroll 5
     for (int i = 0; i < 5; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k2[i]) - b->l[i] - c->l[i];
     pz_fev_settle(r->l);
+}
+
+/* pz_fev_sub and pz_fev_sub2 without the final carries, for a result that only goes to pz_fev_normalize (which settles first); a may
+ * also be the sum of two tight elements, limb by limb. */
+static inline PZ_VABI void pz_fev_sub_lazy(pz_fev *r, const pz_fev *a, const pz_fev *b)
+{
+#pragma GCC unroll 5
+    for (int i = 0; i < 5; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k1[i]) - b->l[i];
+}
+static inline PZ_VABI void pz_fev_sub2_lazy(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *c)
+{
+#pragma GCC unroll 5
+    for (int i = 0; i < 5; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k2[i]) - b->l[i] - c->l[i];
 }
 
 /* Reduces the product columns t[0..9] (t[k] < 2^57, value = a*b with a, b < 2^257) to a tight element. */
@@ -182,7 +195,8 @@ static inline PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
 static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
 {
     const pz_vl M = pz_vl_set(PZ_FEV_MASK), M48 = pz_vl_set(((uint64_t)1 << PZ_FEV_TOPBITS) - 1);
-    /* one fold leaves limb 4 <= 2^48, so r < 2^256 + 2^208; then r >= p  <=>  r + c reaches 2^256 (and r - p < p) */
+    /* one fold leaves limb 4 below 2^48 + 2^11 (limbs below 2^63; at most 2^48 for tight ones), so r < 2^256 + 2^219; then r >= p  <=>
+     * r + c reaches 2^256 (and r - p < p) */
     pz_fev_settle(r->l);
     pz_vl t[5];
     t[0] = r->l[0] + pz_vl_set(PZ_FEV_C);

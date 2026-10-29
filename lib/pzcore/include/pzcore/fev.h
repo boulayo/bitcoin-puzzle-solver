@@ -150,12 +150,26 @@ static inline PZ_VABI void pz_fev_sub(pz_fev *r, const pz_fev *a, const pz_fev *
     pz_fev_carry_small(r);
 }
 
-/* r = a - b - c; a tight or loose, b and c tight or loose. Result tight. */
+/* r = a - b - c; b and c tight or loose, a with limbs below 2^31 (tight, loose, or three times a canonical element: the carries
+ * of the pass are then at most 12). Result tight. */
 static inline PZ_VABI void pz_fev_sub2(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *c)
 {
 #pragma GCC unroll 9
     for (int i = 0; i < 9; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k2[i]) - b->l[i] - c->l[i];
     pz_fev_carry_small(r);
+}
+
+/* pz_fev_sub and pz_fev_sub2 without their carry pass, for a result that only goes to pz_fev_normalize: limbs below 2^33 for the
+ * operands those accept. */
+static inline PZ_VABI void pz_fev_sub_lazy(pz_fev *r, const pz_fev *a, const pz_fev *b)
+{
+#pragma GCC unroll 9
+    for (int i = 0; i < 9; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k1[i]) - b->l[i];
+}
+static inline PZ_VABI void pz_fev_sub2_lazy(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *c)
+{
+#pragma GCC unroll 9
+    for (int i = 0; i < 9; i++) r->l[i] = a->l[i] + pz_vl_set(pz_fev_k2[i]) - b->l[i] - c->l[i];
 }
 
 /* Reduces the 17 product columns c[0..16] (each < 2^64) to a tight element. */

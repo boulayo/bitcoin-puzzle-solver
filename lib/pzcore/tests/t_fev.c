@@ -182,6 +182,35 @@ int main(void)
                 for (int i = 0; i < 8; i++) CHECK(r.l[i][l] <= PZ_FEV_MASK);
             }
         }
+        /* sub2 from three times a canonical element (b and c loose); the lazy subtractions, normalized */
+        {
+            pz_fev x3, d;
+            r = a;
+            pz_fev_normalize(&r);
+            for (int i = 0; i < 9; i++) x3.l[i] = (r.l[i] << 1) + r.l[i];
+            pz_fev bl, cl;
+            pz_fe vbl[PZ_FEV_LANES], vcl[PZ_FEV_LANES];
+            fill(&bl, LOOSE, it + 1);
+            fill(&cl, LOOSE, it + 2);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { lane_value(&vbl[l], &bl, l); lane_value(&vcl[l], &cl, l); }
+            pz_fev_sub2(&d, &x3, &bl, &cl);
+            for (int l = 0; l < PZ_FEV_LANES; l++) {
+                pz_fe t;
+                pz_fe_add(&t, &va[l], &va[l]); pz_fe_add(&t, &t, &va[l]);
+                pz_fe_sub(&t, &t, &vbl[l]); pz_fe_sub(&want[l], &t, &vcl[l]); pz_fe_normalize(&want[l]);
+            }
+            check_lanes(&d, want, TIGHT, "sub2 of 3x");
+            pz_fev_sub2_lazy(&d, &a, &bl, &cl);
+            pz_fev_normalize(&d);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe t; pz_fe_sub(&t, &va[l], &vbl[l]); pz_fe_sub(&want[l], &t, &vcl[l]); pz_fe_normalize(&want[l]); }
+            check_lanes(&d, want, PZ_FEV_MASK, "sub2_lazy");
+            if (bb == TIGHT) {
+                pz_fev_sub_lazy(&d, &a, &b);
+                pz_fev_normalize(&d);
+                for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe_sub(&want[l], &va[l], &vb[l]); pz_fe_normalize(&want[l]); }
+                check_lanes(&d, want, PZ_FEV_MASK, "sub_lazy");
+            }
+        }
         /* inversion */
         if (it % 50 == 0) {
             pz_fev inv, one;
