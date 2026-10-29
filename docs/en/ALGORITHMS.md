@@ -45,7 +45,8 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
   The 4×4 multiplication is inline assembly with **MULX** and the two carry chains **ADCX/ADOX** (ADX); a portable C version
   serves CPUs without BMI2/ADX (the two are compared in `lib/pzcore/tests/t_fe.c` on 400,000 pairs, edge cases included).
 * Consecutive keys of a block are obtained by **adding affine points** instead of redoing a scalar multiplication for every
-  key. An affine addition needs one modular inversion, which costs about as much as 270 multiplications: it is amortized with
+  key. An affine addition needs one modular inversion, which costs about as much as 70 multiplications (the divsteps of Bernstein and
+  Yang, in variable time, `lib/pzcore/src/fe.c`; the addition chain to `p − 2` costs 270): it is amortized with
   **Montgomery's trick** (a single inversion for a whole vector of denominators).
 * **Symmetric group.** For a center `C = c·G` and the table `i·G` (i = 1…H), the denominators `x(i·G) − x(C)` serve both
   `C + i·G` and `C − i·G` (same x-coordinate, opposite y): one inversion for `2H` consecutive keys, plus the next
@@ -203,7 +204,7 @@ Here `K` is the total number of walkers and `N` the number of entries that the m
 | base | the start of the range | `x = key − base` in `[0, W)` |
 | species, zones | the table of 4.1 (`src/kang_spec3.inc`) | optimized in the exact coverage model (sections 8.8 and 8.10) |
 | jumps | 256 multiples of 12, uniform in `[2/3, 4/3]` of `W^¾/16` (+16 for leaving cycles) | long walks without drift (section 8.10) |
-| walkers per CPU thread | `clamp(√W/(256·threads), 16, 4096)`, multiple of 16 | the batch inversion is shared by the whole herd of the thread; 4096 is the measured optimum (RESEARCH.md section 8.4) |
+| walkers per CPU thread | `clamp(√W/(256·threads), 16, 4096)`, multiple of 16 | the batch inversion is shared by the whole herd of the thread; 4096 is the measured optimum (RESEARCH.md sections 8.4 and 10.3) |
 | GPU walkers | `NK` per work-item (tuned, section 5) × work-items (by default 512 per SM with CUDA, 64 per compute unit with OpenCL, at most 32768) | at most `√W/256` in total, so each one walks long enough |
 | `dp_bits` | `max(⌊log2(0.01·√W/K)⌋, ⌈log2(1.3·√W/(0.8·N))⌉, 2)`, at most 60 | the overhead of the last DP below 1 % of the expected steps; the second term is the memory, below |
 | `--dp-bits B` | at most `⌊log2(√W/K)⌋ − 1` (a larger value is lowered, with a warning), never below what memory requires | a walker reaches its next DP after `2^dp_bits` steps: `K·2^dp_bits` must stay well below `√W` |
@@ -626,7 +627,10 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 * With 29-bit limbs a difference `a − b + k·p` that only meets a tight factor in a product (or goes to the hash) skips its carry pass: its
   limbs stay below 2^31 + 2^23, and nine products of such a limb and a tight one still fit in 64 bits. With IFMA a product that waits for
   the previous one is latency-bound, so the forward pass of the batch inversion runs as two interleaved chains (even and odd
-  denominators). On AVX-512 (32 vector registers) the products are inlined in the loop of the engine.
+  denominators). On AVX-512 (32 vector registers) the products are inlined in the loop of the engine. The column sums of a 29-bit product
+  pass through an empty `asm` after every addition: otherwise GCC reassociates them, computes the 81 products first and spills them.
+* **Inversion of a vector**: the lanes are inverted together by Montgomery's trick, one scalar inversion by divsteps and 21 (AVX-512) or
+  9 (AVX2) scalar products, instead of an addition chain of 255 vector squarings that wait for each other (`pz_fev_inv`).
 * The reduction, the limb bounds, the order of the windows, the lane kangaroo (RESEARCH.md 10.0), the AVX-512 IFMA variant (RESEARCH.md 10.1),
   their verification and the measurements on the test machine mentioned above: RESEARCH.md section 10.
 

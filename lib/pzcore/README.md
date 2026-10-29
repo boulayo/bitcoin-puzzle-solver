@@ -16,7 +16,7 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 |---|---|
 | `defs.h` | fixed-width types, `pz_u128`, attribute macros, `extern "C"` brackets |
 | `u256.h` | `pz_u256` (four 64-bit limbs): arithmetic, shifts, compare, hex / decimal text, big-endian bytes, arithmetic modulo the curve order |
-| `fe.h` | field GF(p), p = 2^256 - 2^32 - 977: add, sub, mul, sqr (MULX/ADX assembly when built with `-mbmi2 -madx`), inversion, batch inversion, square root |
+| `fe.h` | field GF(p), p = 2^256 - 2^32 - 977: add, sub, mul, sqr (MULX/ADX assembly when built with `-mbmi2 -madx`), inversion (divsteps, variable time), batch inversion, square root |
 | `ec.h` | affine and Jacobian points, sums, `k*G` (comb table, built on first use), SEC1 public keys (33 and 65 bytes, strictly validated) |
 | `hash.h` | `pz_sha256`, `pz_sha256d`, `pz_ripemd160`, `pz_hash160`, the compression functions, `pz_hash160_pub33` |
 | `address.h` | Base58Check, bech32 and bech32m (BIP173, BIP350), SegWit addresses, P2PKH / P2WPKH helpers, WIF |

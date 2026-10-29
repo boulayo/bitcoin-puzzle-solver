@@ -737,3 +737,58 @@ in 9 alternating pairs (the machine was shared, load 1 to 6): median gain and ra
 * **GPU linear kernel** (sm_86 SASS from NVRTC 12.0 and `ptxas`, executed path of `linear256`; not measured on a card): the filter on word 2
   with a full hash of the few keys that pass (2103 to 2077 instructions) and the shared `x(C) + x(i·G)` (loop per pair 2315 to 2269) give
   ≈ 3419 to 3370 instructions per key (-1.4 %); registers 172 to 174, same occupancy.
+
+### 10.3 CPU kangaroo and linear search: a second round after 1.13.0
+
+Same machine and method as 10.2 (one thread pinned, harnesses that call the step variants and the engines directly, alternating pairs,
+median gain and interquartile range; the machine was shared, load 1 to 7), plus exact instruction counts by single-stepping a round
+of 4096 walkers (`ptrace`; valgrind has no AVX-512) and the executed instructions sorted by kind and by source line.
+
+* **Kept**:
+  * *inversion by divsteps* (`pz_fe_inv`, the variable-time form of libsecp256k1's modinv64): 1.4 to 2 µs against 6 to 9 for the
+    addition chain, about 70 chained products instead of 270. The vector inversion (`pz_fev_inv`), an addition chain of 255 vector
+    squarings that wait for each other (7.3 µs with IFMA, 13 with AVX-512 and 11 with AVX2 on 29-bit limbs), now inverts the lanes
+    together by Montgomery's trick with one scalar inversion: about 2 µs. Linear search avx512i +4.9 % (IQR +3.5..+6.1), avx512v +3.4 %,
+    avx2v +2.8 %, avx2 +4.6 %, avx512 +5.9 %, baseline +1.8 %; kangaroo step avx512i +6.2 %, avx512i2 +6.9 %, avx2v +6.5 %, avx512v
+    +1.3 % (IQR −2.0..+2.0), x86 +0.4 %; BSGS groups +3 to +5 %; the start of a herd of 4096 walkers 61 to 32 ms. The AVX2 products of
+    the kangaroo step stay out of line: once the chain was gone the compiler inlined them and the step took 6.5 % more time;
+  * *the stale flags of a vector tested at once*: every round looked at one byte per walker, about 12 instructions each, to find the
+    restarted ones. Instructions per step: avx512i 165.4 to 152.6, avx512i2 179.7 to 166.9, avx512v 369.1 to 357.6, avx2v 827.3 to
+    816.0; time +4.6 %, +3.1 %, +4.7 %, +1.6 %;
+  * *a walker start with one inversion* (`u·G` in Jacobian form, `Q` added there): 32 to 27 ms per 4096 walkers, the same points;
+  * *the column sums of a 29-bit product in their order*: GCC reassociated them, computed all 81 products first and spilled them
+    (379 stores per vector of the avx512v step, 284 of them products). An empty `asm` after every addition (`pz_vl_keep`) keeps each
+    product next to its sum: avx2v 816 to 711 instructions per step, kangaroo +10.5 % (IQR +9.9..+11.8), linear search +13.5 %, BSGS
+    +5.8 %; avx512v 357.6 to 325.4 instructions (176 stores per vector), kangaroo unchanged, linear search +1.3 %.
+  * Together (one thread): kangaroo avx512i +9.8 %, avx512i2 +8.8 %, avx512v +3.4 %, avx2v +12.1 %; linear search avx512i +4.9 %,
+    avx512v +5.0 %, avx2v +17.0 %, avx2 +4.5 %, avx512 +5.9 %, baseline +2.8 %; BSGS groups x86 +4.1 %, avx2v +13.0 %, avx512v +5.8 %,
+    avx512i +4.0 %.
+* **Where the time of a step goes now** (avx512i2, executed instructions per vector of 8 walkers, 1335 in all): 357 multiply-adds
+  (5 products and a square, `vpmadd52luq`/`huq`), about 470 other vector operations on the two ports that run 512-bit operations
+  (carries, masks, subtractions, the transposes of the jump table), 98 stores, 82 loads and 167 register moves (the multiply-add
+  overwrites its accumulator). The forward and backward passes are near the limit of those two ports; the rest is latency.
+* **Tried and dropped**:
+  * herds of 2048 or 8192 walkers per thread now that the inversion is cheap: avx512i2 −2.1 % and −1.5 %, avx512v +1.0 % and −1.2 %,
+    avx2v +1.5 % and 0.0 % (IQR across 0 except the losses of avx512i2): 4096 stays;
+  * windows of 256 keys in the lane linear engines (`VHALF` 128): avx512i +0.7 to +2.8 % in three series, lower quartile −0.3 to +0.3 %;
+    avx512v −0.1 %, avx2v −0.4 %;
+  * the 29-bit product row by row (17 accumulators, each limb of `b` kept in a register): kangaroo avx512v −3.7 %, avx2v −4.4 %, linear
+    search −0.9 % and −1.3 %;
+  * GCC's pressure-aware scheduling (`-fschedule-insns -fsched-pressure`): on the whole build, before the barrier, kangaroo avx2v +10 %,
+    avx512v +5 %, but linear search avx512i −1.7 %, avx2 −1.6 %, baseline −1.7 %; on the 29-bit lane objects alone, after it, losses
+    everywhere (linear search avx2v −12 %, kangaroo avx2v −6.6 %, BSGS −3 to −9 %);
+  * `-fno-tree-reassoc`: on the whole build linear search avx512i −4.8 %, avx2 −2.9 %, avx512 −2.8 %; on the IFMA kangaroo objects
+    alone +2.0 % (IQR +0.6..+7.0) and +1.6 % (+0.5..+2.5) with 0.8 % fewer instructions (the subtractions of `fev52.h` in another order):
+    a compiler flag per object for a gain this close to the spread was not taken;
+  * the AVX2 products inlined again in the kangaroo step after the barrier: 711 to 684 instructions per step, but 7.0 % more time.
+* **Not a bottleneck** (estimates): a worker of the kangaroo adds its counter once per round of 4096 steps (about 120 µs); the counters
+  of the workers share cache lines and the reporter reads them once a second, which costs well under 0.1 %. The linear engines add
+  theirs every 8 rounds (about 1 ms). The reporter wakes every 0.1 s and takes no lock of the workers; the scheduler formats its
+  checkpoint under its lock and writes it outside, and the kangaroo writes its log outside the table lock (1.11.0). Huge pages for the
+  herd: about 1 MiB per thread in five sequential streams, one TLB fill per 4 KiB of each, under 0.5 %: not tried. One NUMA node and no
+  SMT on this machine: neither the placement nor the mixed layout of 1.13.0 could be measured here.
+* **AVX-512 against AVX2 with every core busy**: 4 threads against 1 (the other jobs on the machine took about 2 of the 4 cores at times,
+  so the ratios are below 4): kangaroo avx2v 3.78, avx512v 3.79, avx512i2 3.73; linear search avx2 3.49, avx2v 3.37, avx512 3.93, avx512v
+  3.80, avx512i 4.03. The 512-bit variants lose nothing at 4 threads on this machine, and the choices made on one thread stand (at
+  4 threads avx512v does 1.31 times the steps of avx2v and 1.82 times its keys). On processors whose clock drops with 512-bit
+  instructions on every core the margin is smaller; the kangaroo already times the IFMA pair with every thread busy.
