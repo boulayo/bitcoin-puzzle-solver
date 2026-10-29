@@ -10,7 +10,7 @@ extern char **environ;
 #define ENVIRON environ
 #endif
 
-#define ENV_INIT {.bench_scale = 1.0, .test_dp_cap = -1}
+#define ENV_INIT {.bench_scale = 1.0, .kang_mix = -1, .test_dp_cap = -1}
 
 struct pz_env g_env = ENV_INIT;
 
@@ -152,7 +152,7 @@ void pz_env_init(void)
     g_env.no_color = env_get("NO_COLOR") != NULL;
 
     g_env.kang_verbose = env_flag("PZ_KANG_VERBOSE");
-    g_env.kang_mix = env_flag("PZ_KANG_MIX");
+    if (env_get("PZ_KANG_MIX")) g_env.kang_mix = env_flag("PZ_KANG_MIX");     /* unset: measured */
     env_text("PZ_KANG_ROUND", g_env.kang_round, sizeof g_env.kang_round);
     g_env.bsgs_scalar = env_flag("PZ_BSGS_SCALAR");
     g_env.assume_ifma = env_flag("PZ_ASSUME_IFMA");

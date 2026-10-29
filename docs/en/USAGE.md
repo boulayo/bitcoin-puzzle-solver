@@ -326,7 +326,7 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 | `PZ_NO_PROFILE=1` | same as `--no-tune` |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
 | `PZ_BENCH_SCALE=0.2` | shortens the measurements of `bench --together` and of the machine profile to a fifth, for tests (a number from 0.01 to 100) |
-| `PZ_KANG_MIX=0\|1` | turns off or forces the mixed kangaroo mode (section 8): on hyper-threaded cores the first thread uses the vector step and the other one the scalar BMI2/ADX step, which uses the integer multiplier instead of the vector unit; without it the mode is used when measured faster |
+| `PZ_KANG_MIX=0\|1` | on hyper-threaded cores the first thread can use the vector step of the kangaroo and the other one the scalar BMI2/ADX step, which uses the integer multiplier instead of the vector unit. Without the variable the kangaroo measures both at start-up and uses the mixed one when it is at least 3% faster (a line in the log says so); `=0` never uses it, `=1` always does. `bench` shows the gain and whether it is in use (line "mixed") |
 | `XDG_CACHE_HOME` | cache folder (also on Windows); without it `%LOCALAPPDATA%` on Windows, then `HOME` (`~/.cache/pzsolve`) |
 | `TMPDIR` | folder of the scratch campaigns of the measurements and of the tests (Linux and macOS; `/tmp` without it) |
 | `NO_COLOR` | any value but the empty one: no bold type in the panel |

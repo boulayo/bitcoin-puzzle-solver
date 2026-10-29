@@ -77,7 +77,7 @@ static void t_defaults(void)
     CHECK(g_env.gpu_half == 0 && g_env.gpu_nk == 0 && g_env.gpu_nk_cfg == 0 && !g_env.gpu_nk_l2 && !g_env.gpu_nk_text[0]);
     CHECK(g_env.bench_scale == 1.0);
     CHECK(!g_env.xdg_cache_home[0] && !g_env.home[0] && !g_env.local_app_data[0] && !g_env.tmpdir[0] && !g_env.term_dumb && !g_env.no_color);
-    CHECK(!g_env.kang_verbose && !g_env.kang_mix && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma && !g_env.expect_shani);
+    CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma && !g_env.expect_shani);
     CHECK(g_env.test_kthread == 0 && g_env.test_jump == 0 && g_env.test_dp_cap == -1);
 }
 
@@ -86,7 +86,7 @@ static const struct { const char *name; size_t off; } FLAGS[] = {
     {"PZ_NO_CUDA", offsetof(struct pz_env, no_cuda)}, {"PZ_NO_OPENCL", offsetof(struct pz_env, no_opencl)},
     {"PZ_OPENCL_ALL", offsetof(struct pz_env, opencl_all)}, {"PZ_NO_PROFILE", offsetof(struct pz_env, no_profile)},
     {"PZ_NO_LARGE_PAGES", offsetof(struct pz_env, no_large_pages)}, {"PZ_KANG_VERBOSE", offsetof(struct pz_env, kang_verbose)},
-    {"PZ_KANG_MIX", offsetof(struct pz_env, kang_mix)}, {"PZ_BSGS_SCALAR", offsetof(struct pz_env, bsgs_scalar)},
+    {"PZ_BSGS_SCALAR", offsetof(struct pz_env, bsgs_scalar)},
     {"PZ_ASSUME_IFMA", offsetof(struct pz_env, assume_ifma)}, {"PZ_EXPECT_SHANI", offsetof(struct pz_env, expect_shani)}};
 #define NFLAGS ((int)(sizeof FLAGS / sizeof *FLAGS))
 
@@ -107,6 +107,17 @@ static void t_flags(void)
             for (int j = 0; j < NFLAGS; j++) CHECK(!flag_at(j));
         }
     }
+}
+
+/* PZ_KANG_MIX has a third state: unset, the program measures; "0" forces the uniform step, any other value the mixed layout. */
+static void t_kang_mix(void)
+{
+    static const char *const ON[] = {"1", "yes", "00", "false"};
+    char last[200];
+    for (size_t k = 0; k < sizeof ON / sizeof *ON; k++) CHECK(try_value("PZ_KANG_MIX", ON[k], last, sizeof last) == 0 && g_env.kang_mix == 1);
+    CHECK(try_value("PZ_KANG_MIX", "0", last, sizeof last) == 0 && g_env.kang_mix == 0);
+    CHECK(try_value("PZ_KANG_MIX", "", last, sizeof last) == 0 && g_env.kang_mix == -1);
+    for (int i = 0; i < NFLAGS; i++) CHECK(!flag_at(i));
 }
 
 static void t_gpu_api(void)
@@ -283,6 +294,7 @@ int main(void)
     pz_log_set_file(g_logpath);
     t_defaults();
     t_flags();
+    t_kang_mix();
     t_gpu_api();
     t_numbers();
     t_tune_and_nk();

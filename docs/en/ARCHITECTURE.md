@@ -155,7 +155,7 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | `XDG_CACHE_HOME`, `HOME`, `LOCALAPPDATA` | `xdg_cache_home`, `home`, `local_app_data` | `util.c`: `pz_cache_file` |
 | `TMPDIR` | `tmpdir` | `platform.c`: `pz_make_temp_dir` (POSIX) |
 | `TERM`, `NO_COLOR` | `term_dumb`, `no_color` | `platform.c` (`pz_stderr_is_terminal`), `run_common.c` (the panel) |
-| `PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_KANG_MIX` | `kang_round`, `kang_verbose`, `kang_mix` | `kang_cpu.c`: choice of the CPU step of the kangaroo; `PZ_KANG_ROUND=base\|x86\|avx2v\|avx512v\|avx512i\|avx512i2` imposes one when the CPU can run it (`avx512i2`: IFMA on pairs of vectors), `PZ_KANG_VERBOSE=1` prints the speed of every variant measured |
+| `PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_KANG_MIX` | `kang_round`, `kang_verbose`, `kang_mix` (-1 when unset: measured) | `kang_cpu.c`: choice of the CPU step of the kangaroo; `PZ_KANG_ROUND=base\|x86\|avx2v\|avx512v\|avx512i\|avx512i2` imposes one when the CPU can run it (`avx512i2`: IFMA on pairs of vectors), `PZ_KANG_VERBOSE=1` prints the speed of every variant measured |
 | `PZ_BSGS_SCALAR` | `bsgs_scalar` | `bsgs.c`: scalar windows only, no lane-based ones |
 | `PZ_ASSUME_IFMA` | `assume_ifma` | `cpu_common.c`: `cpu_has_ifma` is true when the CPU has AVX-512 (for the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID hides IFMA) |
 | `PZ_TEST_KTHREAD`, `PZ_TEST_JUMP`, `PZ_TEST_DP_CAP` | `test_kthread`, `test_jump`, `test_dp_cap` | `kangaroo.c` (`kang_create`, `kang_configure`): walkers per CPU thread (16 to 1048576); the mean jump in units of √W (1 or more: long walks on a small range); the first size of the table of distinguished points (at least 64: a tiny table exercises its growth and thinning) |

@@ -298,6 +298,11 @@ void kang_worker_sync(kang_worker *w);
 /* Runs `fn` and the portable scalar round side by side on identical herds (distinguished points, restarts, a kangaroo
  * forced onto its jump point) and compares everything; false at the first difference. */
 bool kang_round_check(kang_round_fn fn, int K, int rounds);
+/* PZ_KANG_MIX: whether the threads after the first of a core run the scalar step. env 0 or 1 decides; -1: the rates of whole cores
+ * with the chosen step on every thread (uniform) and in the mixed layout (mixed) do, with a 3 % margin. */
+bool kang_mix_wanted(int env, double uniform, double mixed);
+/* Whether thread `slot` (pinned by sysinfo_pin_thread) is on a CPU that is not the first of its physical core. */
+bool kang_slot_is_sibling(const sysinfo_t *s, int slot);
 
 /* Runs the CPU herd until stop. */
 void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream);

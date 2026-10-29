@@ -22,6 +22,20 @@ int kang_round_selftest(void)
         pz_result_line(lb, "%s", ok ? "identical to the reference" : "DIFFERENT FROM THE REFERENCE");
         fails += !ok;
     }
+    /* the mixed SMT layout (PZ_KANG_MIX): the choice from given rates, and which threads land on the second CPU of a core */
+    bool ok = !kang_mix_wanted(-1, 100, 103) && kang_mix_wanted(-1, 100, 103.5) && !kang_mix_wanted(-1, 0, 50) &&
+              !kang_mix_wanted(0, 100, 200) && kang_mix_wanted(1, 100, 50) && kang_mix_wanted(1, 0, 0);
+    sysinfo_t s;
+    memset(&s, 0, sizeof s);
+    for (int layout = 0; layout < 3; layout++) {
+        s.ncpu = layout < 2 ? 8 : 4;
+        s.ncore = 4;
+        for (int i = 0; i < s.ncpu; i++) { s.cpu_ids[i] = i; s.core_of[i] = layout == 0 ? i / 2 : i % 4; }   /* siblings neighbours, second, none */
+        sysinfo_spread_order(&s);
+        for (int slot = 0; slot < 2 * s.ncpu; slot++) ok &= kang_slot_is_sibling(&s, slot) == (slot % s.ncpu >= 4);
+    }
+    pz_result_line("kangaroo mixed SMT layout", "%s", ok ? "OK" : "FAILED");
+    fails += !ok;
     return fails;
 }
 

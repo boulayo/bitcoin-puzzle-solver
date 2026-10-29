@@ -327,7 +327,7 @@ come se la variabile non ci fosse.
 | `PZ_NO_PROFILE=1` | come `--no-tune` |
 | `PZ_NO_LARGE_PAGES=1` | niente pagine grandi (Windows, sezione 10) |
 | `PZ_BENCH_SCALE=0.2` | accorcia a un quinto le misure di `bench --together` e del profilo della macchina, per i test (un numero da 0,01 a 100) |
-| `PZ_KANG_MIX=0\|1` | spegne o impone la modalità mista del canguro (sezione 8): sui core con hyper-threading il primo thread usa il passo vettoriale e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale; senza, la modalità si usa quando misura più veloce |
+| `PZ_KANG_MIX=0\|1` | sui core con hyper-threading il primo thread può usare il passo vettoriale del canguro e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale. Senza la variabile il canguro misura le due soluzioni all'avvio e usa quella mista quando è più veloce almeno del 3% (lo dice una riga del log); `=0` non la usa mai, `=1` sempre. `bench` mostra il guadagno e se è in uso (riga "mixed") |
 | `XDG_CACHE_HOME` | cartella della cache (anche su Windows); senza, `%LOCALAPPDATA%` su Windows, poi `HOME` (`~/.cache/pzsolve`) |
 | `TMPDIR` | cartella delle campagne di prova delle misure e dei test (Linux e macOS; senza, `/tmp`) |
 | `NO_COLOR` | qualunque valore non vuoto: niente grassetto nel pannello |

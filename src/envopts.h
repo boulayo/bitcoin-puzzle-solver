@@ -39,7 +39,7 @@ struct pz_env {
     bool no_color;                  /* NO_COLOR set to anything but "" */
     /* tests and diagnostics */
     bool kang_verbose;              /* PZ_KANG_VERBOSE: the speed of every kangaroo step */
-    bool kang_mix;                  /* PZ_KANG_MIX: scalar step on the second thread of a core */
+    int kang_mix;                   /* PZ_KANG_MIX=0|1: scalar step on the other threads of a core off or on (the flag rule), -1 unset: measured */
     char kang_round[16];            /* PZ_KANG_ROUND=id: imposes the CPU kangaroo step (the check against the steps of this CPU is made where it is used) */
     bool bsgs_scalar;               /* PZ_BSGS_SCALAR: BSGS with the scalar windows only */
     bool assume_ifma;               /* PZ_ASSUME_IFMA: IFMA is taken as present when AVX-512 is (tests on hosts whose CPUID hides it) */

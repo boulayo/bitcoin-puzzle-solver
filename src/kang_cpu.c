@@ -116,6 +116,8 @@ bool kang_round_check(kang_round_fn fn, int K, int rounds)
 static pthread_once_t g_kround_once = PTHREAD_ONCE_INIT;
 static int g_kround;
 static bool g_kround_ok[NKROUNDS];      /* supported by this CPU and equal to the portable round (set by kround_pick) */
+static bool g_kmix;                     /* the threads after the first of a core run the scalar step (kround_choose_mix) */
+static double g_kmix_gain;              /* the mixed layout against the uniform one at the start-up measurement, 0 when not measured */
 
 /* Steps per second of `fn` on one thread (a short run on a test herd). */
 static double kround_rate(kang_round_fn fn)
@@ -142,6 +144,7 @@ static double kround_rate(kang_round_fn fn)
 
 static double kbench_run(kang_state *ks, const sysinfo_t *s, int n, const kang_round_fn *fn, const int *pos, double secs);
 static void kround_choose_pair(void);
+static void kround_choose_mix(bool measured);
 
 static void kround_pick(void)
 {
@@ -150,7 +153,7 @@ static void kround_pick(void)
     const char *forced = g_env.kang_round;                 /* diagnostics: base, x86, avx2v, avx512v, avx512i */
     if (forced[0]) {
         const int f = kround_find(forced);
-        if (f >= 0 && KROUNDS[f].supported()) { g_kround = f; return; }
+        if (f >= 0 && KROUNDS[f].supported()) { g_kround = f; kround_choose_mix(false); return; }
         pz_log(PZ_LOG_WARN, "PZ_KANG_ROUND=%s is not available on this CPU: choosing automatically", forced);
     }
     for (int i = 0; i < NKROUNDS; i++) {
@@ -165,6 +168,7 @@ static void kround_pick(void)
         if (r > best * 1.03) { best = r; g_kround = i; }
     }
     kround_choose_pair();
+    kround_choose_mix(true);
 }
 
 kang_round_fn kang_pick_round(void)
@@ -270,6 +274,74 @@ static void kround_choose_pair(void)
     g_kround = r[1] > r[0] * 1.03 ? two : one;
 }
 
+bool kang_mix_wanted(int env, double uniform, double mixed)
+{
+    if (env >= 0) return env > 0;
+    return uniform > 0 && mixed > uniform * 1.03;              /* the margin of the choice of the step */
+}
+
+bool kang_slot_is_sibling(const sysinfo_t *s, int slot)
+{
+    if (s->ncpu <= 0) return false;
+    const int pos = slot % s->ncpu;                            /* as sysinfo_pin_thread */
+    int p[1];
+    return sysinfo_core_cpus(s, s->core_of[pos], p, 1) && p[0] != pos;
+}
+
+/* On cores with SMT the first thread can run the chosen (vector) step and the others the scalar BMI2/ADX one, which uses the
+ * integer multiplier instead of the vector unit: +14 % on a Zen runner without AVX-512, a loss elsewhere. PZ_KANG_MIX=0 or 1
+ * decides; unset, the two layouts are timed with every thread of whole cores busy (at most 64), twice and interleaved, and the
+ * mixed one is kept when it is faster by the margin of kang_mix_wanted. `measured`: kround_pick has checked the variants (the
+ * scalar step is checked here otherwise, when it is wanted). */
+static void kround_choose_mix(bool measured)
+{
+    const int vx86 = kround_find("x86");
+    if (g_env.kang_mix == 0 || vx86 < 0 || g_kround == vx86 || !KROUNDS[vx86].supported()) return;
+    if (g_env.kang_mix < 0 && !measured) return;               /* PZ_KANG_ROUND imposes the step: no measured layout either */
+    sysinfo_t s;
+    sysinfo_detect(&s);
+    if (s.ncpu <= s.ncore) return;                             /* no SMT */
+    if (measured ? !g_kround_ok[vx86] : !kang_round_check(KROUNDS[vx86].fn, 96, 75)) return;
+    double ru = 0, rm = 0;
+    if (g_env.kang_mix < 0) {
+        int pos[64], n = 0;
+        kang_round_fn uni[64], mix[64];
+        for (int c = 0; c < s.ncore && n < 64; c++) {
+            int p[8];
+            const int k = sysinfo_core_cpus(&s, c, p, 8);
+            if (n + k > 64) break;                             /* whole cores only */
+            for (int j = 0; j < k; j++) {
+                pos[n] = p[j];
+                uni[n] = KROUNDS[g_kround].fn;
+                mix[n++] = j == 0 ? KROUNDS[g_kround].fn : KROUNDS[vx86].fn;
+            }
+        }
+        kang_state *ks = kang_make_test_state(60, 1);
+        if (!ks) return;
+        ks->P.dp_mask = ~0ULL >> 8;
+        ks->P.cap_since = ~0ULL;
+        for (int rep = 0; rep < 2; rep++) {
+            const double u = kbench_run(ks, &s, n, uni, pos, 0.15), m = kbench_run(ks, &s, n, mix, pos, 0.15);
+            if (u > ru) ru = u;
+            if (m > rm) rm = m;
+        }
+        kang_free_test_state(ks);
+        if (g_env.kang_verbose)
+            fprintf(stderr, "kangaroo CPU: %d threads: %s on all %.2f, mixed with %s %.2f M steps/s\n", n, KROUNDS[g_kround].name, ru / 1e6,
+                    KROUNDS[vx86].name, rm / 1e6);
+    }
+    g_kmix = kang_mix_wanted(g_env.kang_mix, ru, rm);
+    g_kmix_gain = ru > 0 ? rm / ru - 1.0 : 0;
+    if (g_kmix && g_env.kang_mix > 0)
+        pz_log(PZ_LOG_INFO, "kangaroo CPU: the other threads of each core run the %s step (PZ_KANG_MIX=1)", KROUNDS[vx86].name);
+    else if (g_kmix)
+        pz_log(PZ_LOG_INFO, "kangaroo CPU: the other threads of each core run the %s step, %+.0f%% measured against %s on every thread "
+               "(PZ_KANG_MIX=0 turns it off)", KROUNDS[vx86].name, 100.0 * g_kmix_gain, KROUNDS[g_kround].name);
+    else
+        pz_log_file(PZ_LOG_INFO, "kangaroo CPU: %s on every thread; with %s on the other threads of each core: %+.0f%%, not used",
+                    KROUNDS[g_kround].name, KROUNDS[vx86].name, 100.0 * g_kmix_gain);
+}
+
 void kang_bench_cpu(const sysinfo_t *s, double secs)
 {
     kang_state *ks = kang_make_test_state(60, 1);
@@ -321,26 +393,28 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
             for (int j = 0; j < k && n < 256; j++) { pos_all[n] = p[j]; fns[n] = j == 0 ? KROUNDS[best_v].fn : KROUNDS[vx86].fn; n++; }
         }
         const double rm = kbench_run(ks, s, n, fns, pos_all, secs);
-        char ln[400];
-        snprintf(ln, sizeof ln, "  mixed: %s on the first thread of each core and %s on the other: %s steps/s, %+.0f%% against the best uniform setup%s",
-                 KROUNDS[best_v].name, KROUNDS[vx86].name, pz_fmt_si(rm, b1, sizeof b1), 100.0 * (rm / best - 1.0),
-                 rm > best * 1.03 ? " (worth it: start with PZ_KANG_MIX=1)" : "");
+        const int was_quiet = pz_log_quiet();
+        pz_log_set_quiet(1);
+        kang_pick_round();                                     /* the layout the campaigns use */
+        pz_log_set_quiet(was_quiet);
+        char ln[480], use[160];
+        if (g_kmix && g_env.kang_mix > 0) snprintf(use, sizeof use, "in use (PZ_KANG_MIX=1)");
+        else if (g_kmix) snprintf(use, sizeof use, "in use: %+.0f%% at the start-up measurement (PZ_KANG_MIX=0 turns it off)", 100.0 * g_kmix_gain);
+        else if (g_env.kang_mix == 0) snprintf(use, sizeof use, "not used (PZ_KANG_MIX=0)");
+        else snprintf(use, sizeof use, "not used (PZ_KANG_MIX=1 imposes it)");
+        snprintf(ln, sizeof ln, "  mixed: %s on the first thread of each core and %s on the other: %s steps/s, %+.0f%% against the best uniform setup; %s",
+                 KROUNDS[best_v].name, KROUNDS[vx86].name, pz_fmt_si(rm, b1, sizeof b1), 100.0 * (rm / best - 1.0), use);
         pz_fputs_wrap(stdout, ln, PZ_LINE_MAX, 4);
         putchar('\n');
     }
     kang_free_test_state(ks);
 }
 
-/* PZ_KANG_MIX=1: on cores with SMT, the threads after the first run the scalar step (see kang_bench_cpu). */
+/* The mixed layout (kround_choose_mix): on cores with SMT, the threads after the first run the scalar step. */
 static kang_round_fn kang_round_for_slot(const sysinfo_t *s, int slot)
 {
     kang_round_fn fn = kang_pick_round();
-    if (!g_env.kang_mix || s->ncpu <= 0) return fn;
-    const int pos = slot % s->ncpu;
-    int p[1];
-    if (sysinfo_core_cpus(s, s->core_of[pos], p, 1) && p[0] == pos) return fn;
-    const int v = kround_find("x86");
-    return v >= 0 && KROUNDS[v].supported() && kang_round_check(KROUNDS[v].fn, 96, 75) ? KROUNDS[v].fn : fn;
+    return g_kmix && kang_slot_is_sibling(s, slot) ? KROUNDS[kround_find("x86")].fn : fn;
 }
 
 void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)
