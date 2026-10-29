@@ -1,29 +1,38 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* t_gpufe.c - the GPU field arithmetic (kernels/pz_common.cl, portable and PTX carry-chain variants, the latter with
- * the carry flag emulated exactly as the PTX ISA defines it) against the CPU implementation: random values and every
- * combination of the limb patterns that trigger the rare carry/borrow paths (values near 0, near p, near 2^256). */
+/* t_gpufe.c - the GPU field arithmetic (kernels/pz_common.cl: the PTX carry-chain variant, with the carry flag emulated exactly as
+ * the PTX ISA defines it; the OpenCL variant on add-with-carry, with the C equivalent of the builtins; the OpenCL variant in 64-bit C)
+ * against the CPU implementation: random values and every combination of the limb patterns that trigger the rare carry/borrow paths
+ * (values near 0, near p, near 2^256). */
 #include "../src/common.h"
 #include "../src/envopts.h"
 #include <pzcore/fe.h>
 #include <stdio.h>
 
 typedef unsigned int uint;
-void gf_add(uint *r, const uint *a, const uint *b);   /* PZ_FAST_FE (PTX chains, emulated) */
-void gf_sub(uint *r, const uint *a, const uint *b);
-void gf_sub2(uint *r, const uint *a, const uint *b, const uint *c);
-void gf_mul(uint *r, const uint *a, const uint *b);
-void gf_sqr(uint *r, const uint *a);
-void gf_norm(uint *r, const uint *a);
-void gf_inv(uint *r, const uint *a);
-void gf_invpow(uint *r, const uint *a);
-void gp_add(uint *r, const uint *a, const uint *b);   /* portable */
-void gp_sub(uint *r, const uint *a, const uint *b);
-void gp_sub2(uint *r, const uint *a, const uint *b, const uint *c);
-void gp_mul(uint *r, const uint *a, const uint *b);
-void gp_sqr(uint *r, const uint *a);
-void gp_norm(uint *r, const uint *a);
-void gp_inv(uint *r, const uint *a);
-void gp_invpow(uint *r, const uint *a);
+#define GPUFE_DECL(p)                                                                                              \
+    void p##add(uint *r, const uint *a, const uint *b);                                                           \
+    void p##sub(uint *r, const uint *a, const uint *b);                                                           \
+    void p##sub2(uint *r, const uint *a, const uint *b, const uint *c);                                           \
+    void p##mul(uint *r, const uint *a, const uint *b);                                                           \
+    void p##sqr(uint *r, const uint *a);                                                                          \
+    void p##norm(uint *r, const uint *a);                                                                         \
+    void p##cneg(uint *r, const uint *a, uint c);                                                                 \
+    void p##inv(uint *r, const uint *a);                                                                          \
+    void p##invpow(uint *r, const uint *a);
+GPUFE_DECL(gp_)   /* OpenCL, 64-bit C */
+GPUFE_DECL(gc_)   /* OpenCL, add-with-carry */
+GPUFE_DECL(gf_)   /* PZ_FAST_FE (PTX chains, emulated) */
+
+typedef struct {
+    const char *name;
+    void (*add)(uint *, const uint *, const uint *), (*sub)(uint *, const uint *, const uint *);
+    void (*sub2)(uint *, const uint *, const uint *, const uint *), (*mul)(uint *, const uint *, const uint *);
+    void (*sqr)(uint *, const uint *), (*norm)(uint *, const uint *), (*cneg)(uint *, const uint *, uint);
+    void (*inv)(uint *, const uint *), (*invpow)(uint *, const uint *);
+} gpufe;
+#define GPUFE(p, n) {n, p##add, p##sub, p##sub2, p##mul, p##sqr, p##norm, p##cneg, p##inv, p##invpow}
+static const gpufe V[] = {GPUFE(gp_, "portable"), GPUFE(gc_, "carry"), GPUFE(gf_, "PTX")};
+#define NV ((int)(sizeof V / sizeof *V))
 
 static int fails;
 static u64 rs = 0x6A09E667F3BCC908ULL;
@@ -44,7 +53,7 @@ static void expect(const char *op, int variant, const uint got[8], const pz_fe *
     if (pz_fe_equiv(&g, &w)) return;
 bad:
     if (fails++ < 10) {
-        printf("FAIL %s (%s): a=", op, variant ? "PTX" : "portable");
+        printf("FAIL %s (%s): a=", op, V[variant].name);
         for (int i = 7; i >= 0; i--) printf("%08x", a[i]);
         printf(" b=");
         for (int i = 7; i >= 0; i--) printf("%08x", b ? b[i] : 0);
@@ -58,22 +67,26 @@ static void check(const uint a[8], const uint b[8])
     from32(&A, a);
     from32(&B, b);
     uint r[8];
-    void (*add[2])(uint *, const uint *, const uint *) = {gp_add, gf_add};
-    void (*sub[2])(uint *, const uint *, const uint *) = {gp_sub, gf_sub};
-    void (*sub2[2])(uint *, const uint *, const uint *, const uint *) = {gp_sub2, gf_sub2};
-    void (*mul[2])(uint *, const uint *, const uint *) = {gp_mul, gf_mul};
-    void (*sqr[2])(uint *, const uint *) = {gp_sqr, gf_sqr};
-    void (*nrm[2])(uint *, const uint *) = {gp_norm, gf_norm};
-    for (int v = 0; v < 2; v++) {
-        add[v](r, a, b); pz_fe_add(&w, &A, &B); expect("add", v, r, &w, a, b, false);
-        sub[v](r, a, b); pz_fe_sub(&w, &A, &B); expect("sub", v, r, &w, a, b, false);
-        sub[v](r, b, a); pz_fe_sub(&w, &B, &A); expect("sub", v, r, &w, b, a, false);
+    for (int v = 0; v < NV; v++) {
+        V[v].add(r, a, b); pz_fe_add(&w, &A, &B); expect("add", v, r, &w, a, b, false);
+        V[v].sub(r, a, b); pz_fe_sub(&w, &A, &B); expect("sub", v, r, &w, a, b, false);
+        V[v].sub(r, b, a); pz_fe_sub(&w, &B, &A); expect("sub", v, r, &w, b, a, false);
         /* a - b - b and b - a - a: up to two borrows, and the corrections after them */
-        sub2[v](r, a, b, b); pz_fe_sub(&w, &A, &B); pz_fe_sub(&w, &w, &B); expect("sub2", v, r, &w, a, b, false);
-        sub2[v](r, b, a, a); pz_fe_sub(&w, &B, &A); pz_fe_sub(&w, &w, &A); expect("sub2", v, r, &w, b, a, false);
-        mul[v](r, a, b); pz_fe_mul(&w, &A, &B); expect("mul", v, r, &w, a, b, false);
-        sqr[v](r, a); pz_fe_sqr(&w, &A); expect("sqr", v, r, &w, a, NULL, false);
-        nrm[v](r, a); w = A; expect("normalize", v, r, &w, a, NULL, true);
+        V[v].sub2(r, a, b, b); pz_fe_sub(&w, &A, &B); pz_fe_sub(&w, &w, &B); expect("sub2", v, r, &w, a, b, false);
+        V[v].sub2(r, b, a, a); pz_fe_sub(&w, &B, &A); pz_fe_sub(&w, &w, &A); expect("sub2", v, r, &w, b, a, false);
+        V[v].mul(r, a, b); pz_fe_mul(&w, &A, &B); expect("mul", v, r, &w, a, b, false);
+        V[v].sqr(r, a); pz_fe_sqr(&w, &A); expect("sqr", v, r, &w, a, NULL, false);
+        V[v].norm(r, a); w = A; expect("normalize", v, r, &w, a, NULL, true);
+        /* p - a of a canonical, non-zero a */
+        uint n[8];
+        V[v].norm(n, a);
+        if (n[0] | n[1] | n[2] | n[3] | n[4] | n[5] | n[6] | n[7]) {
+            pz_fe N, z;
+            from32(&N, n);
+            memset(&z, 0, sizeof z);
+            V[v].cneg(r, n, 1); pz_fe_sub(&w, &z, &N); expect("cneg", v, r, &w, n, NULL, true);
+            V[v].cneg(r, n, 0); expect("cneg", v, r, &N, n, NULL, true);
+        }
     }
 }
 
@@ -134,10 +147,10 @@ int main(void)
             pz_fe A, w;
             from32(&A, a);
             pz_fe_inv(&w, &A);
-            for (int v = 0; v < 2; v++) {
-                (v ? gf_inv : gp_inv)(r, a);
+            for (int v = 0; v < NV; v++) {
+                V[v].inv(r, a);
                 expect("inv", v, r, &w, a, NULL, true);
-                (v ? gf_invpow : gp_invpow)(r, a);
+                V[v].invpow(r, a);
                 expect("invpow", v, r, &w, a, NULL, false);
             }
             ninv++;
@@ -153,12 +166,12 @@ int main(void)
                 pz_fe A, w;
                 from32(&A, a);
                 pz_fe_inv(&w, &A);
-                for (int v = 0; v < 2; v++) { (v ? gf_inv : gp_inv)(r, a); expect("inv", v, r, &w, a, NULL, true); }
+                for (int v = 0; v < NV; v++) { V[v].inv(r, a); expect("inv", v, r, &w, a, NULL, true); }
             }
         }
         n += ninv;
     }
     if (fails) printf("t_gpufe: %d FAILED\n", fails);
-    else printf("t_gpufe: OK (%ld combinations, portable and PTX variants)\n", n);
+    else printf("t_gpufe: OK (%ld combinations, portable, carry and PTX variants)\n", n);
     return fails != 0;
 }

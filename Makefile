@@ -275,13 +275,16 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 TESTS := t_core t_env t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
 TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_mods.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
-# t_gpufe: the kernel field arithmetic compiled for the host, PTX carry-chain variant (emulated) and portable variant
+# t_gpufe: the kernel field arithmetic compiled for the host: PTX carry-chain variant (emulated), the OpenCL one with add-with-carry
+# (builtins of the compiler or their C equivalent) and the OpenCL one in 64-bit C
 $(BUILD)/kfe_fast.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kernels/pz_common.cl | $(BUILD)
 	$(CC) $(DEPLOY) -std=gnu11 -O2 -w -Itests/mock_cuda -DPZ_FAST_FE -DGK=gf_ -c $< -o $@
+$(BUILD)/kfe_carry.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kernels/pz_common.cl | $(BUILD)
+	$(CC) $(DEPLOY) -std=gnu11 -O2 -w -Itests/mock_cuda -DPZ_TEST_CARRY -DGK=gc_ -Dpz_mock_gid=pz_mock_gid3 -c $< -o $@
 $(BUILD)/kfe_port.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kernels/pz_common.cl | $(BUILD)
-	$(CC) $(DEPLOY) -std=gnu11 -O2 -w -Itests/mock_cuda -DGK=gp_ -Dpz_mock_gid=pz_mock_gid2 -c $< -o $@
-$(BUILD)/t_gpufe$(EXE): tests/t_gpufe.c $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) -o $@ $< $(BUILD)/kfe_fast.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) $(LDLIBS)
+	$(CC) $(DEPLOY) -std=gnu11 -O2 -w -Itests/mock_cuda -DPZ_TEST_NO_BUILTINS -DGK=gp_ -Dpz_mock_gid=pz_mock_gid2 -c $< -o $@
+$(BUILD)/t_gpufe$(EXE): tests/t_gpufe.c $(BUILD)/kfe_fast.o $(BUILD)/kfe_carry.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) | $(BUILD)
+	$(CC) $(COMMON) -o $@ $< $(BUILD)/kfe_fast.o $(BUILD)/kfe_carry.o $(BUILD)/kfe_port.o $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 # t_lz tests the decoder and the encoder (tools/embed.c, which it includes); t_kernels checks that the modules embedded in the program
 # unpack to the files of src/kernels/ptx, which is what the simulated CUDA driver compares them with

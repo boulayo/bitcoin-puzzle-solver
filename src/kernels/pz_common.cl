@@ -31,73 +31,85 @@ PZ_CONST_TABLE uint RMD_KR[5] = {0x50A28BE6u, 0x5C4DD124u, 0x6D703EF3u, 0x7A6D76
 
 inline void fe_set_u32(fe *r, uint a) { r->v[0] = a; for (int i = 1; i < 8; i++) r->v[i] = 0; }
 
-/* r += c * (2^32 + 977), keeping r < 2^256 */
-inline void fe_fold(fe *r, uint c)
-{
-    ulong acc = (ulong)r->v[0] + (ulong)c * 0x3D1u;
-    r->v[0] = (uint)acc;
-    ulong carry = acc >> 32;
-    acc = (ulong)r->v[1] + (ulong)c + carry;
-    r->v[1] = (uint)acc;
-    carry = acc >> 32;
-#pragma unroll
-    for (int i = 2; i < 8; i++) { acc = (ulong)r->v[i] + carry; r->v[i] = (uint)acc; carry = acc >> 32; }
-    if (carry) {
-        acc = (ulong)r->v[0] + 0x3D1u;
-        r->v[0] = (uint)acc;
-        carry = acc >> 32;
-        acc = (ulong)r->v[1] + 1u + carry;
-        r->v[1] = (uint)acc;
-        carry = acc >> 32;
-#pragma unroll
-        for (int i = 2; i < 8; i++) { acc = (ulong)r->v[i] + carry; r->v[i] = (uint)acc; carry = acc >> 32; }
-    }
-}
-
 #ifndef PZ_FAST_FE
+/* ---- OpenCL: the same carry chains with clang's add-with-carry builtins on AMD GPUs, where they become v_add_co_ci_u32 chains (an
+ * addition takes 15 instructions instead of 69 on gfx1030), and on pocl, which tests that path; elsewhere a C stand-in for them
+ * (other compilers may not have the builtins, or not lower them well). ---- */
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+#if (defined(__AMDGCN__) || defined(POCL_DEVICE_ADDRESS_BITS)) && __has_builtin(__builtin_addc) && __has_builtin(__builtin_subc) \
+    && !defined(PZ_TEST_NO_BUILTINS)
+#define PZ_ADDC(a, b, ci, co) __builtin_addc((uint)(a), (uint)(b), (ci), (co))
+#define PZ_SUBC(a, b, ci, co) __builtin_subc((uint)(a), (uint)(b), (ci), (co))
+#define PZ_CARRY 1                    /* the products on carry chains too (below) */
+#else
+inline uint pz_addc(uint a, uint b, uint ci, uint *co) { const ulong s = (ulong)a + b + ci; *co = (uint)(s >> 32); return (uint)s; }
+inline uint pz_subc(uint a, uint b, uint ci, uint *co) { const ulong s = (ulong)a - b - ci; *co = (uint)(s >> 63); return (uint)s; }
+#define PZ_ADDC(a, b, ci, co) pz_addc((a), (b), (ci), (co))
+#define PZ_SUBC(a, b, ci, co) pz_subc((a), (b), (ci), (co))
+#ifdef PZ_TEST_CARRY
+#define PZ_CARRY 1                    /* tests/t_gpufe: the products of the builtin path, here with the C helpers */
+#endif
+#endif
+
+/* r = a + b, folding 2^256 = 2^32 + 977 (mod p); a second wrap leaves less than 2^32 + 977, so its fold stops at limb 2 */
 inline void fe_add(fe *r, const fe *a, const fe *b)
 {
-    ulong carry = 0;
-    fe o;
+    uint o[8], c = 0, w;
 #pragma unroll
-    for (int i = 0; i < 8; i++) { ulong s = (ulong)a->v[i] + b->v[i] + carry; o.v[i] = (uint)s; carry = s >> 32; }
-    if (carry) fe_fold(&o, (uint)carry);
-    *r = o;
+    for (int i = 0; i < 8; i++) o[i] = PZ_ADDC(a->v[i], b->v[i], c, &c);
+    w = c;
+    o[0] = PZ_ADDC(o[0], w * 977u, 0u, &c);
+    o[1] = PZ_ADDC(o[1], w, c, &c);
+#pragma unroll
+    for (int i = 2; i < 8; i++) o[i] = PZ_ADDC(o[i], 0u, c, &c);
+    w = c;
+    o[0] = PZ_ADDC(o[0], w * 977u, 0u, &c);
+    o[1] = PZ_ADDC(o[1], w, c, &c);
+    o[2] += c;
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = o[i];
 }
 
+/* r = a - b: a borrow means a - b + 2^256, too large by 2^32 + 977; if subtracting that borrows again, once more (it stops at limb 2) */
 inline void fe_sub(fe *r, const fe *a, const fe *b)
 {
-    fe o;
-    ulong br = 0;
+    uint o[8], c = 0, w;
 #pragma unroll
-    for (int i = 0; i < 8; i++) {
-        ulong d = (ulong)a->v[i] - b->v[i] - br;
-        o.v[i] = (uint)d;
-        br = (d >> 32) & 1;
-    }
-    if (br) {
-        /* a - b + 2^256 ; subtract 2^32 + 977 (twice if it borrows again) */
-        for (int rep = 0; rep < 2; rep++) {
-            ulong d = (ulong)o.v[0] - 0x3D1u;
-            o.v[0] = (uint)d;
-            br = (d >> 32) & 1;
-            d = (ulong)o.v[1] - 1u - br;
-            o.v[1] = (uint)d;
-            br = (d >> 32) & 1;
+    for (int i = 0; i < 8; i++) o[i] = PZ_SUBC(a->v[i], b->v[i], c, &c);
+    w = c;
+    o[0] = PZ_SUBC(o[0], w * 977u, 0u, &c);
+    o[1] = PZ_SUBC(o[1], w, c, &c);
 #pragma unroll
-            for (int i = 2; i < 8; i++) { d = (ulong)o.v[i] - br; o.v[i] = (uint)d; br = (d >> 32) & 1; }
-            if (!br) break;
-        }
-    }
-    *r = o;
+    for (int i = 2; i < 8; i++) o[i] = PZ_SUBC(o[i], 0u, c, &c);
+    w = c;
+    o[0] = PZ_SUBC(o[0], w * 977u, 0u, &c);
+    o[1] = PZ_SUBC(o[1], w, c, &c);
+    o[2] -= c;
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = o[i];
 }
 
-/* r = a - b - c */
+/* r = a - b - c: both borrow chains, then one correction by the number of borrows (0 to 2), as in the CUDA version */
 inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
 {
-    fe t;
-    fe_sub(&t, a, b);
-    fe_sub(r, &t, c);
+    uint o[8], k = 0, k2 = 0, w;
+#pragma unroll
+    for (int i = 0; i < 8; i++) o[i] = PZ_SUBC(a->v[i], b->v[i], k, &k);
+#pragma unroll
+    for (int i = 0; i < 8; i++) o[i] = PZ_SUBC(o[i], c->v[i], k2, &k2);
+    w = k + k2;
+    o[0] = PZ_SUBC(o[0], w * 977u, 0u, &k);
+    o[1] = PZ_SUBC(o[1], w, k, &k);
+#pragma unroll
+    for (int i = 2; i < 8; i++) o[i] = PZ_SUBC(o[i], 0u, k, &k);
+    w = k;
+    o[0] = PZ_SUBC(o[0], w * 977u, 0u, &k);
+    o[1] = PZ_SUBC(o[1], w, k, &k);
+    o[2] -= k;
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = o[i];
 }
 
 #else
@@ -267,7 +279,117 @@ inline void fe_sqr(fe *r, const fe *a)
     MADLOC_CC(t[14], a->v[7], a->v[7], t[14]); MADHIC(t[15], a->v[7], a->v[7], t[15]);
     fe_reduce512(r, t);
 }
+#elif defined(PZ_CARRY)
+/* r = t mod p for a 512-bit t = L + H 2^256 (16 limbs), result < 2^256: u = L + 977 H (one 64-bit product per limb, the halves
+ * added on one carry chain), u + H 2^32, then u + the top limbs of u (2^32 + 977) */
+inline void fe_reduce512(fe *r, const uint t[16])
+{
+    uint u[10], c = 0, w;
+    ulong q[8];
+#pragma unroll
+    for (int i = 0; i < 8; i++) q[i] = (ulong)t[8 + i] * 977u + t[i];
+    u[0] = (uint)q[0];
+#pragma unroll
+    for (int i = 1; i < 8; i++) u[i] = PZ_ADDC((uint)q[i], (uint)(q[i - 1] >> 32), c, &c);
+    u[8] = (uint)(q[7] >> 32) + c;
+    c = 0;
+#pragma unroll
+    for (int i = 1; i < 9; i++) u[i] = PZ_ADDC(u[i], t[7 + i], c, &c);
+    u[9] = c;
+    /* fold top = u8 + u9*2^32 (< 2^33): add top*977 + top*2^32 (< 2^66) to the low 256 bits; a wrap leaves less than 2^66 */
+    const ulong top = (ulong)u[8] | ((ulong)u[9] << 32);
+    const ulong v = top * 977UL;
+    const ulong mid = (v >> 32) + (top & 0xFFFFFFFFUL);
+    u[0] = PZ_ADDC(u[0], (uint)v, 0u, &c);
+    u[1] = PZ_ADDC(u[1], (uint)mid, c, &c);
+    u[2] = PZ_ADDC(u[2], (uint)((top >> 32) + (mid >> 32)), c, &c);
+#pragma unroll
+    for (int i = 3; i < 8; i++) u[i] = PZ_ADDC(u[i], 0u, c, &c);
+    w = c;
+    u[0] = PZ_ADDC(u[0], w * 977u, 0u, &c);
+    u[1] = PZ_ADDC(u[1], w, c, &c);
+    u[2] += c;
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = u[i];
+}
+
+/* the 8x8 product by rows: the 64-bit products of a row, each with the limb of the rows before as addend, then their halves on one
+ * carry chain */
+inline void fe_mul(fe *r, const fe *a, const fe *b)
+{
+    uint t[16];
+#pragma unroll
+    for (int i = 0; i < 16; i++) t[i] = 0;
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+        ulong q[8];
+        uint c = 0;
+#pragma unroll
+        for (int j = 0; j < 8; j++) q[j] = (ulong)a->v[j] * b->v[i] + t[i + j];
+        t[i] = (uint)q[0];
+#pragma unroll
+        for (int j = 1; j < 8; j++) t[i + j] = PZ_ADDC((uint)q[j], (uint)(q[j - 1] >> 32), c, &c);
+        t[i + 8] = (uint)(q[7] >> 32) + c;
+    }
+    fe_reduce512(r, t);
+}
+
+/* dedicated square: the 28 products a_i*a_j (i < j) once, doubled, plus the 8 squares (36 products instead of 64) */
+inline void fe_sqr(fe *r, const fe *a)
+{
+    uint t[16], c;
+#pragma unroll
+    for (int i = 0; i < 16; i++) t[i] = 0;
+#pragma unroll
+    for (int i = 0; i < 7; i++) {
+        ulong q[8];
+        c = 0;
+#pragma unroll
+        for (int j = i + 1; j < 8; j++) q[j] = (ulong)a->v[j] * a->v[i] + t[i + j];
+        t[2 * i + 1] = (uint)q[i + 1];
+#pragma unroll
+        for (int j = i + 2; j < 8; j++) t[i + j] = PZ_ADDC((uint)q[j], (uint)(q[j - 1] >> 32), c, &c);
+        t[i + 8] = (uint)(q[7] >> 32) + c;
+    }
+    /* double (the off-diagonal sum is < 2^511), then add the squares at positions 2i */
+    t[15] = t[14] >> 31;
+#pragma unroll
+    for (int k = 14; k > 0; k--) t[k] = (t[k] << 1) | (t[k - 1] >> 31);
+    t[0] <<= 1;
+    c = 0;
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+        const ulong q = (ulong)a->v[i] * a->v[i];
+        t[2 * i] = PZ_ADDC(t[2 * i], (uint)q, c, &c);
+        t[2 * i + 1] = PZ_ADDC(t[2 * i + 1], (uint)(q >> 32), c, &c);
+    }
+    fe_reduce512(r, t);
+}
 #else
+/* without add-with-carry builtins: 64-bit C, which such compilers turn into better code than the carry chains above */
+/* r += c * (2^32 + 977), keeping r < 2^256 */
+inline void fe_fold(fe *r, uint c)
+{
+    ulong acc = (ulong)r->v[0] + (ulong)c * 0x3D1u;
+    r->v[0] = (uint)acc;
+    ulong carry = acc >> 32;
+    acc = (ulong)r->v[1] + (ulong)c + carry;
+    r->v[1] = (uint)acc;
+    carry = acc >> 32;
+#pragma unroll
+    for (int i = 2; i < 8; i++) { acc = (ulong)r->v[i] + carry; r->v[i] = (uint)acc; carry = acc >> 32; }
+    if (carry) {
+        acc = (ulong)r->v[0] + 0x3D1u;
+        r->v[0] = (uint)acc;
+        carry = acc >> 32;
+        acc = (ulong)r->v[1] + 1u + carry;
+        r->v[1] = (uint)acc;
+        carry = acc >> 32;
+#pragma unroll
+        for (int i = 2; i < 8; i++) { acc = (ulong)r->v[i] + carry; r->v[i] = (uint)acc; carry = acc >> 32; }
+    }
+}
+
 /* r = t mod p for a 512-bit t (16 limbs), result < 2^256 */
 inline void fe_reduce512(fe *r, const uint t[16])
 {
@@ -378,17 +500,13 @@ inline void fe_normalize(fe *r)
 #else
 inline void fe_normalize(fe *r)
 {
-    ulong carry = 0x3D1UL;
-    fe o;
-    ulong acc = (ulong)r->v[0] + 0x3D1UL;
-    o.v[0] = (uint)acc;
-    carry = acc >> 32;
-    acc = (ulong)r->v[1] + 1UL + carry;
-    o.v[1] = (uint)acc;
-    carry = acc >> 32;
+    uint t[8], c = 0;
+    t[0] = PZ_ADDC(r->v[0], 0x3D1u, 0u, &c);
+    t[1] = PZ_ADDC(r->v[1], 1u, c, &c);
 #pragma unroll
-    for (int i = 2; i < 8; i++) { acc = (ulong)r->v[i] + carry; o.v[i] = (uint)acc; carry = acc >> 32; }
-    if (carry) *r = o;
+    for (int i = 2; i < 8; i++) t[i] = PZ_ADDC(r->v[i], 0u, c, &c);
+#pragma unroll
+    for (int i = 0; i < 8; i++) r->v[i] = c ? t[i] : r->v[i];
 }
 #endif
 
@@ -408,12 +526,12 @@ inline void fe_cneg_norm(fe *r, uint c)
 #else
 inline void fe_cneg_norm(fe *r, uint c)
 {
-    if (c) {
-        fe z, ny;
-        fe_set_u32(&z, 0);
-        fe_sub(&ny, &z, r);
-        *r = ny;
-    }
+    const uint m = 0u - c;
+    uint k = 0;
+    r->v[0] = PZ_SUBC(r->v[0] ^ m, m & 0x3D0u, 0u, &k);
+    r->v[1] = PZ_SUBC(r->v[1] ^ m, m & 1u, k, &k);
+#pragma unroll
+    for (int i = 2; i < 8; i++) r->v[i] = PZ_SUBC(r->v[i] ^ m, 0u, k, &k);
 }
 #endif
 

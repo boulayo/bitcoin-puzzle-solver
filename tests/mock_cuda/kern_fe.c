@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* kern_fe.c - the kernel field arithmetic (pz_common.cl) compiled for the host, for tests/t_gpufe.c. Built twice:
- * with -DPZ_FAST_FE (PTX carry chains, emulated by pz_host.h) and without (portable version); the prefix of the
- * exported functions is chosen with -DGK=... */
+/* kern_fe.c - the kernel field arithmetic (pz_common.cl) compiled for the host, for tests/t_gpufe.c. Built three times:
+ * with -DPZ_FAST_FE (PTX carry chains, emulated by pz_host.h), with -DPZ_TEST_CARRY (the OpenCL version on add-with-carry) and with
+ * -DPZ_TEST_NO_BUILTINS (the OpenCL version in 64-bit C); the prefix of the exported functions is chosen with -DGK=... */
 #include "pz_host.h"
 PZ_MOCK_TLS unsigned pz_mock_gid;
 #pragma GCC diagnostic ignored "-Wunknown-pragmas"
@@ -18,5 +18,6 @@ void CAT(GK, sub2)(uint *r, const uint *a, const uint *b, const uint *c) { fe x,
 void CAT(GK, mul)(uint *r, const uint *a, const uint *b) { fe x, y, z; ld(&x, a); ld(&y, b); fe_mul(&z, &x, &y); st(r, &z); }
 void CAT(GK, sqr)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_sqr(&z, &x); st(r, &z); }
 void CAT(GK, norm)(uint *r, const uint *a) { fe x; ld(&x, a); fe_normalize(&x); st(r, &x); }
+void CAT(GK, cneg)(uint *r, const uint *a, uint c) { fe x; ld(&x, a); fe_cneg_norm(&x, c); st(r, &x); }
 void CAT(GK, inv)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_inv(&z, &x); st(r, &z); }
 void CAT(GK, invpow)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_inv_pow(&z, &x); st(r, &z); }
