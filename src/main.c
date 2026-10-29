@@ -418,18 +418,13 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             break;
         case 's': opt_copy("--seed", o->seed, sizeof o->seed, optarg); break;
         case 'm': opt_copy("--mode", o->mode, sizeof o->mode, optarg); break;
-        case 't': o->threads = (int)pz_arg_int("--threads", optarg, 1, MAX_WORKERS - 16); break;
+        case 't': o->threads = (int)pz_arg_int("--threads", optarg, 1, RUN_MAX_THREADS); break;
         case O_NOCPU: o->no_cpu = true; break;
         case O_NOGPU: o->no_gpu = true; break;
         case O_RETUNE: o->retune = true; break;
         case O_NOTUNE: o->no_tune = true; break;
         case O_AWAKE: o->keep_awake = true; break;
-        case O_PRIO:
-            if (!strcmp(optarg, "auto")) o->prio_gpu = PRIO_AUTO;
-            else if (!strcmp(optarg, "yes")) o->prio_gpu = PRIO_YES;
-            else if (!strcmp(optarg, "no")) o->prio_gpu = PRIO_NO;
-            else pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", optarg);
-            break;
+        case O_PRIO: o->prio_gpu = run_prio_arg(optarg); break;
         case O_PART: {
             part_spec ps;
             char perr[300];
@@ -850,12 +845,29 @@ static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
 }
 
 /* The banner printed when the key is found (by 'hunt' or by 'merge'). */
-static void print_found_banner(const run_ctx *r, const char *addr, const char *hx, const char *wif)
+static void print_found_banner(const run_ctx *r)
 {
+    char hx[80], wif[80], addr[80];
+    u8 kb[32];
+    pz_u256_to_hex(&r->found_key, hx);
+    pz_u256_to_be(&r->found_key, kb);
+    pz_privkey_to_wif(kb, true, wif, sizeof wif);
+    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
+    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
     printf("\a\n======================= KEY FOUND =======================\n");
     if (r->cfg.puzzle) printf("  puzzle:         #%d\n", r->cfg.puzzle);
     printf("  address:        %s\n  key (hex):      0x%s\n  WIF compressed: %s\n", addr, hx, wif);
     printf("  saved in:       %s\n=========================================================\n", r->path_found);
+}
+
+/* A campaign that has already found the key ('hunt' and 'merge' end there): FOUND.txt is shown. False when it has not. */
+static bool print_already_found(const run_ctx *r)
+{
+    if (!file_exists(r->path_found)) return false;
+    char *t = pz_read_file(r->path_found, NULL);
+    printf("This campaign has already found the key (%s):\n\n%s\n", r->path_found, t ? t : "");
+    free(t);
+    return true;
 }
 
 /* The line that tells how to resume an interrupted campaign. */
@@ -922,10 +934,7 @@ static int cmd_hunt(int argc, char **argv)
         pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
     }
     run_paths(r);
-    if (resuming && file_exists(r->path_found)) {
-        char *t = pz_read_file(r->path_found, NULL);
-        printf("This campaign has already found the key (%s):\n\n%s\n", r->path_found, t ? t : "");
-        free(t);
+    if (resuming && print_already_found(r)) {
         free(r);
         return PZ_EXIT_FOUND;
     }
@@ -1059,12 +1068,7 @@ static int cmd_hunt(int argc, char **argv)
     char ds[48];
     pz_log(PZ_LOG_INFO, "session ended after %s", pz_fmt_duration(el, ds, sizeof ds));
     if (atomic_load(&r->found)) {
-        char hx[80], wif[80];
-        u8 kb[32];
-        pz_u256_to_hex(&r->found_key, hx);
-        pz_u256_to_be(&r->found_key, kb);
-        pz_privkey_to_wif(kb, true, wif, sizeof wif);
-        print_found_banner(r, addr, hx, wif);
+        print_found_banner(r);
         pz_log_set_file(NULL);
         free(r);
         return PZ_EXIT_FOUND;
@@ -1142,10 +1146,7 @@ static int cmd_merge(int argc, char **argv)
     if (r->cfg.mode != MODE_KANGAROO) pz_die("campaign '%s' does not use the kangaroo: 'merge' merges the distinguished points of the kangaroo", o.campaign);
     pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
     run_paths(r);
-    if (file_exists(r->path_found)) {
-        char *t = pz_read_file(r->path_found, NULL);
-        printf("This campaign has already found the key (%s):\n\n%s\n", r->path_found, t ? t : "");
-        free(t);
+    if (print_already_found(r)) {
         free(r);
         return 0;
     }
@@ -1155,14 +1156,7 @@ static int cmd_merge(int argc, char **argv)
     for (int i = 0; i < o.nfiles; i++) fl[i] = o.files[i];
     int rc = kangaroo_merge(r, fl, o.nfiles);
     if (atomic_load(&r->found)) {
-        char hx[80], wif[80], addr[80];
-        u8 kb[32];
-        pz_u256_to_hex(&r->found_key, hx);
-        pz_u256_to_be(&r->found_key, kb);
-        pz_privkey_to_wif(kb, true, wif, sizeof wif);
-        if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-        else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
-        print_found_banner(r, addr, hx, wif);
+        print_found_banner(r);
         free(r);
         return 0;
     }

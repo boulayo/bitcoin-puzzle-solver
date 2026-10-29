@@ -344,12 +344,6 @@ bool pz_stderr_is_terminal(void)
     return isatty(2) && !g_env.term_dumb;   /* a dumb terminal cannot move the cursor */
 }
 
-int pz_terminal_cols(void)
-{
-    struct winsize ws;
-    return ioctl(2, TIOCGWINSZ, &ws) == 0 ? ws.ws_col : 0;
-}
-
 int pz_fd_terminal_cols(int fd)
 {
     struct winsize ws;
@@ -726,14 +720,6 @@ bool pz_stderr_is_terminal(void)
     DWORD mode;
     HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
     return g_vt_ok && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode);
-}
-
-int pz_terminal_cols(void)
-{
-    CONSOLE_SCREEN_BUFFER_INFO ci;
-    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
-    if (h == INVALID_HANDLE_VALUE || !GetConsoleScreenBufferInfo(h, &ci)) return 0;
-    return ci.srWindow.Right - ci.srWindow.Left + 1;
 }
 
 int pz_fd_terminal_cols(int fd)

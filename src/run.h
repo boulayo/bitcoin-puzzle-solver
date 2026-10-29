@@ -140,6 +140,8 @@ void run_write_found(run_ctx *r);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);
+prio_mode run_prio_arg(const char *v);              /* the value of --prio-gpu (auto, yes, no): exits with a message on any other */
+#define RUN_MAX_THREADS (MAX_WORKERS - 16)          /* the most CPU threads -t accepts (hunt and bench) */
 /* GPU work-items: pct percent of n, rounded to a multiple of `quantum`, never below `quantum` (and never above n). pct outside 1..99: n. */
 size_t run_limit_items(size_t n, int pct, size_t quantum);
 /* After the thread count is known (before any worker starts): with r->limit_pct set, cuts r->nthreads to that share and puts the

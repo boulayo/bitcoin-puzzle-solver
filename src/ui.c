@@ -93,8 +93,6 @@ static void bar(char *b, int width, double frac)
     b[width] = 0;
 }
 
-static void percent(double frac, char *buf, size_t n) { pz_fmt_percent(frac, buf, n); }
-
 /* Shortens a line of the panel to at most maxw columns without cutting a word: first a remark in brackets at its end ("(peak ...)",
  * "[starting: ...]"), then its last fields ("a | b | c", "a  |  b"), and as a last resort its last words. */
 static void fit_line(char *t, int maxw)
@@ -165,7 +163,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
 
     char bb[48], pc[32];
     bar(bb, 30, pi->fraction);
-    percent(pi->fraction, pc, sizeof pc);
+    pz_fmt_percent(pi->fraction, pc, sizeof pc);
     if (kang) {
         ui_fmt_count(pi->done, a, sizeof a);
         ui_fmt_count(pi->total, b, sizeof b);
@@ -308,7 +306,7 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
     ui_target_tag(r, tag, sizeof tag);
     pz_fmt_si(pi->rate, rate, sizeof rate);
     bar(bb, 20, pi->fraction);
-    percent(pi->fraction, pc, sizeof pc);
+    pz_fmt_percent(pi->fraction, pc, sizeof pc);
     ui_fmt_eta(es->t50, t1, sizeof t1);
     ui_fmt_eta(es->t90, t2, sizeof t2);
     const bool kang = r->cfg.mode == MODE_KANGAROO;
@@ -346,7 +344,7 @@ void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_s
 {
     char pc[32], tag[96], cnt[48], a[128];
     ui_target_tag(r, tag, sizeof tag);
-    percent(pi->fraction, pc, sizeof pc);
+    pz_fmt_percent(pi->fraction, pc, sizeof pc);
     const bool kang = r->cfg.mode == MODE_KANGAROO;
     const char *state = ui_state_name(r, true);
     if (kang) snprintf(a, sizeof a, "%s steps, success probability %s", ui_fmt_count(pi->done, cnt, sizeof cnt), pc);

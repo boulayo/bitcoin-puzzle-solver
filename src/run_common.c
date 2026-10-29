@@ -64,6 +64,14 @@ int run_limit_threads(int n, int pct)
     return t < 1 ? 1 : t > n ? n : t;
 }
 
+prio_mode run_prio_arg(const char *v)
+{
+    if (!strcmp(v, "auto")) return PRIO_AUTO;
+    if (!strcmp(v, "yes")) return PRIO_YES;
+    if (!strcmp(v, "no")) return PRIO_NO;
+    pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", v);
+}
+
 size_t run_limit_items(size_t n, int pct, size_t quantum)
 {
     if (pct < 1 || pct > 99 || quantum == 0 || n <= quantum) return n;
@@ -446,7 +454,7 @@ static void append_stats_csv(run_ctx *r, const progress_info *pi)
 
 static int term_cols(void)
 {
-    int c = pz_terminal_cols();
+    int c = pz_fd_terminal_cols(2);
     return c > 20 ? c : 100;
 }
 

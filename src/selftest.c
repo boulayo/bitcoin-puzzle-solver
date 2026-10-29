@@ -633,17 +633,13 @@ int bench_run(int argc, char **argv)
         else if (!strcmp(a, "--gpu-only")) gpu_only = true;
         else if (!strcmp(a, "--linear")) linear = true;
         else if (!strcmp(a, "--retune")) gpu_set_retune(true);
-        else if ((!strcmp(a, "-t") || !strcmp(a, "--threads")) && i + 1 < argc) { threads = (int)pz_arg_int(a, argv[i + 1], 1, 512); i++; }
+        else if ((!strcmp(a, "-t") || !strcmp(a, "--threads")) && i + 1 < argc) { threads = (int)pz_arg_int(a, argv[i + 1], 1, RUN_MAX_THREADS); i++; }
         else if (!strcmp(a, "--gpu") && i + 1 < argc) {
             gpus = argv[++i];
             if (!pz_index_list_valid(gpus)) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", gpus);
         }
         else if (!strcmp(a, "--prio-gpu") && i + 1 < argc) {
-            const char *v = argv[++i];
-            if (!strcmp(v, "auto")) prio = PRIO_AUTO;
-            else if (!strcmp(v, "yes")) prio = PRIO_YES;
-            else if (!strcmp(v, "no")) prio = PRIO_NO;
-            else pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", v);
+            prio = run_prio_arg(argv[++i]);
             prio_given = true;
         }
         else if (!strcmp(a, "-t") || !strcmp(a, "--threads") || !strcmp(a, "--gpu") || !strcmp(a, "--prio-gpu")) pz_usage_error("bench", "the option '%s' needs a value", a);
