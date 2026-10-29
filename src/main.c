@@ -614,27 +614,9 @@ static void warn_solved(const opts_t *o, const campaign_cfg *c)
         pz_log(PZ_LOG_WARN, "the known key of puzzle %d is not in the given range: the campaign will not find it", db->n);
 }
 
-/* Builds a new campaign configuration from the command line. */
-static void build_new_cfg(const opts_t *o, campaign_cfg *c)
+/* The target of a new campaign (c->target_h160, c->address, the public key): from the options, or from the database for -p N. */
+static void set_target(const opts_t *o, campaign_cfg *c)
 {
-    memset(c, 0, sizeof *c);
-    c->format_version = PZ_FORMAT_VERSION;
-    pz_strlcpy(c->created_with, PZ_VERSION, sizeof c->created_with);
-    c->created_at = pz_now();
-    if (o->range[0]) {
-        const char *why;
-        if (!range_parse(o->range, &c->range_start, &c->range_end, &why)) pz_die("%s", why);
-        c->puzzle = o->puzzle;
-    } else if (o->puzzle) {
-        if (!puzzle_range(o->puzzle, &c->range_start, &c->range_end)) pz_die("puzzle %d is outside the supported limits (1..256)", o->puzzle);
-        c->puzzle = o->puzzle;
-    } else {
-        pz_die("specify the range with --puzzle N or --range START:END");
-    }
-    if (pz_u256_is_zero(&c->range_start)) pz_die("the range must start from a key >= 1");
-    if (pz_u256_cmp(&c->range_start, &c->range_end) > 0) pz_die("empty range (start > end)");
-    if (pz_u256_cmp(&c->range_end, &pz_secp256k1_n) >= 0) pz_die("the range exceeds the order of the secp256k1 group");
-
     bool have_target = false;
     const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
     bool from_db = false;
@@ -712,13 +694,12 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     if (!have_target) pz_die("a target is required: --address, --hash160 or --pubkey");
     if (!c->address[0]) pz_hash160_to_address(c->target_h160, c->address, sizeof c->address);
 
-    if (o->seed[0] && strcmp(o->seed, "auto") != 0) seed_from_text(o->seed, c->seed);
-    else seed_generate(c->seed);
+}
 
-    pz_u256 rsz = cfg_range_size(c);
-    c->chunk_bits = effective_chunk_bits(&rsz, o->chunk_bits);
-    c->dp_bits = o->dp_bits > 0 ? (unsigned)o->dp_bits : 0;
-
+/* The method of a new campaign (-m); auto picks BSGS when its table fits and it is the better choice, the kangaroo otherwise, the linear
+ * search without a public key or for a small range. */
+static void set_mode(const opts_t *o, campaign_cfg *c, const pz_u256 *rsz)
+{
     if (!strcmp(o->mode, "linear")) c->mode = MODE_LINEAR;
     else if (!strcmp(o->mode, "kangaroo")) {
         if (!c->has_pubkey) no_pubkey(c, "kangaroo");
@@ -726,15 +707,15 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     } else if (!strcmp(o->mode, "bsgs")) {
         if (!c->has_pubkey) no_pubkey(c, "bsgs");
         c->mode = MODE_BSGS;
-        c->bsgs_t = pick_bsgs_entries(o, &rsz, NULL);
+        c->bsgs_t = pick_bsgs_entries(o, rsz, NULL);
     } else if (!strcmp(o->mode, "auto")) {
         pz_u256 lim = pz_u256_pow2(20);
-        if (!c->has_pubkey || pz_u256_cmp(&rsz, &lim) < 0) c->mode = MODE_LINEAR;
+        if (!c->has_pubkey || pz_u256_cmp(rsz, &lim) < 0) c->mode = MODE_LINEAR;
         else {
             bool viable;
-            u64 T = pick_bsgs_entries(o, &rsz, &viable);
+            u64 T = pick_bsgs_entries(o, rsz, &viable);
             bool given = o->table[0] && access(o->table, F_OK) == 0;
-            bool small = viable && bsgs_mean_cost(&rsz, T) < 4e9L;               /* seconds of work: no point in waking the GPUs */
+            bool small = viable && bsgs_mean_cost(rsz, T) < 4e9L;               /* seconds of work: no point in waking the GPUs */
             bool gpus = !o->no_gpu && gpu_count_usable() > 0;
             if (viable && (given || small || !gpus || o->bsgs_entries)) {
                 c->mode = MODE_BSGS;
@@ -742,6 +723,39 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
             } else c->mode = MODE_KANGAROO;
         }
     } else pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", o->mode);
+}
+
+/* Builds a new campaign configuration from the command line. */
+static void build_new_cfg(const opts_t *o, campaign_cfg *c)
+{
+    memset(c, 0, sizeof *c);
+    c->format_version = PZ_FORMAT_VERSION;
+    pz_strlcpy(c->created_with, PZ_VERSION, sizeof c->created_with);
+    c->created_at = pz_now();
+    if (o->range[0]) {
+        const char *why;
+        if (!range_parse(o->range, &c->range_start, &c->range_end, &why)) pz_die("%s", why);
+        c->puzzle = o->puzzle;
+    } else if (o->puzzle) {
+        if (!puzzle_range(o->puzzle, &c->range_start, &c->range_end)) pz_die("puzzle %d is outside the supported limits (1..256)", o->puzzle);
+        c->puzzle = o->puzzle;
+    } else {
+        pz_die("specify the range with --puzzle N or --range START:END");
+    }
+    if (pz_u256_is_zero(&c->range_start)) pz_die("the range must start from a key >= 1");
+    if (pz_u256_cmp(&c->range_start, &c->range_end) > 0) pz_die("empty range (start > end)");
+    if (pz_u256_cmp(&c->range_end, &pz_secp256k1_n) >= 0) pz_die("the range exceeds the order of the secp256k1 group");
+
+    set_target(o, c);
+
+    if (o->seed[0] && strcmp(o->seed, "auto") != 0) seed_from_text(o->seed, c->seed);
+    else seed_generate(c->seed);
+
+    pz_u256 rsz = cfg_range_size(c);
+    c->chunk_bits = effective_chunk_bits(&rsz, o->chunk_bits);
+    c->dp_bits = o->dp_bits > 0 ? (unsigned)o->dp_bits : 0;
+
+    set_mode(o, c, &rsz);
     if (c->mode == MODE_KANGAROO) {                  /* before anything is created on disk */
         const char *why = kang_range_error(&rsz);
         if (why) pz_die("%s", why);
@@ -890,116 +904,107 @@ static bool campaign_completed(const run_ctx *r)
     return file_exists(r->path_state) && !strcmp(campaign_state(r->cfg.dir, st, sizeof st), "COMPLETED");
 }
 
-static int cmd_hunt(int argc, char **argv)
+/* The campaign of the command: opened when it exists, otherwise created (its folder and campaign.conf, under its lock), with the options
+ * checked against it either way. Returns whether it existed; *locked tells whether its lock is already taken. */
+static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
 {
-    opts_t o;
-    parse_opts(argc, argv, &o);
-    pz_log_set_quiet(o.quiet);
-    pz_log_set_verbose(o.verbose);
-    check_isa_option(o.isa);
-    if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
-    if (o.retune && o.limit) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
-    if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */
-    run_ctx *r = pz_xcalloc(1, sizeof *r);
-    run_init(r);
     char cdir[600], conf[700];
-    if (!o.campaign[0]) derive_campaign_name(&o, o.campaign, sizeof o.campaign);   /* stable name: re-running resumes */
-    snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
+    if (!o->campaign[0]) derive_campaign_name(o, o->campaign, sizeof o->campaign);   /* stable name: re-running resumes */
+    snprintf(cdir, sizeof cdir, "%s/%s", o->dir, o->campaign);
     snprintf(conf, sizeof conf, "%s/campaign.conf", cdir);
-    bool resuming = file_exists(conf), locked = false;
-    if (o.want_new && resuming) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o.campaign);
-    if (o.want_resume && !resuming) pz_die("--resume: campaign '%s' does not exist", o.campaign);
+    bool resuming = file_exists(conf);
+    *locked = false;
+    if (o->want_new && resuming) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o->campaign);
+    if (o->want_resume && !resuming) pz_die("--resume: campaign '%s' does not exist", o->campaign);
     if (!resuming) {
-        build_new_cfg(&o, &r->cfg);
-        check_options_for_campaign(&o, &r->cfg, r, true);
-        warn_solved(&o, &r->cfg);
-        snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o.dir, r->cfg.name);
+        build_new_cfg(o, &r->cfg);
+        check_options_for_campaign(o, &r->cfg, r, true);
+        warn_solved(o, &r->cfg);
+        snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o->dir, r->cfg.name);
         if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
         /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the
          * lock decides, and only then is it known whether the configuration exists. Writing it before the lock would let the loser
          * leave its seed in campaign.conf while the winner checkpoints with another one. */
         campaign_lock(r->cfg.dir);   /* released at process exit */
-        locked = true;
+        *locked = true;
         snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
         if (file_exists(conf)) {      /* created by a command that has finished meanwhile: this one resumes it */
-            if (o.want_new) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o.campaign);
+            if (o->want_new) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o->campaign);
             resuming = true;
         } else if (cfg_save(&r->cfg, conf) != 0) pz_die("cannot save %s", conf);
     }
     if (resuming) {
         char err[256];
         if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
-        check_resume_consistency(&o, &r->cfg);
-        check_options_for_campaign(&o, &r->cfg, r, false);
+        check_resume_consistency(o, &r->cfg);
+        check_options_for_campaign(o, &r->cfg, r, false);
         pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
     }
-    run_paths(r);
-    if (resuming && print_already_found(r)) {
-        free(r);
-        return PZ_EXIT_FOUND;
-    }
-    if (resuming && campaign_completed(r)) {
-        char msg[1400];
-        const bool other_dir = strcmp(o.dir, "campaigns") != 0;
-        if (r->cfg.part[0]) snprintf(msg, sizeof msg, "Part %s of campaign '%s' was already scanned in full without the key.\n", r->cfg.part, r->cfg.name);
-        else snprintf(msg, sizeof msg, "Campaign '%s' is already completed: the whole range was covered without the key (see 'pzsolve info -c %s%s%s').\n",
-                      r->cfg.name, r->cfg.name, other_dir ? " -d " : "", other_dir ? o.dir : "");
-        pz_fputs_wrap(stdout, msg, PZ_LINE_MAX, 2);
-        free(r);
-        return PZ_EXIT_NOT_FOUND;
-    }
-    if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
-    pz_log_set_file(r->path_log);
-    run_install_signals(r);   /* before the measurement of the machine, which takes minutes: a Ctrl-C ends it and cleans up instead of killing the program */
+    return resuming;
+}
 
-    r->nthreads = o.threads > 0 ? o.threads : r->sys.ncpu;
-    if (r->nthreads > MAX_WORKERS - 16) {
-        pz_log(PZ_LOG_WARN, "%d cores detected: using at most %d threads", r->nthreads, MAX_WORKERS - 16);
-        r->nthreads = MAX_WORKERS - 16;
+/* A campaign that has covered its whole range (or its --part) has nothing left to do: one line says so. */
+static void print_completed(const run_ctx *r, const char *dir)
+{
+    char msg[1400];
+    const bool other_dir = strcmp(dir, "campaigns") != 0;
+    if (r->cfg.part[0]) snprintf(msg, sizeof msg, "Part %s of campaign '%s' was already scanned in full without the key.\n", r->cfg.part, r->cfg.name);
+    else snprintf(msg, sizeof msg, "Campaign '%s' is already completed: the whole range was covered without the key (see 'pzsolve info -c %s%s%s').\n",
+                  r->cfg.name, r->cfg.name, other_dir ? " -d " : "", other_dir ? dir : "");
+    pz_fputs_wrap(stdout, msg, PZ_LINE_MAX, 2);
+}
+
+/* The settings of the session from the options (threads, devices, display, memory, CPU engine), then the machine profile and --limit.
+ * False when a Ctrl-C interrupted the measurement of the machine. *thr_full: the CPU threads before --limit. */
+static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
+{
+    r->nthreads = o->threads > 0 ? o->threads : r->sys.ncpu;
+    if (r->nthreads > RUN_MAX_THREADS) {
+        pz_log(PZ_LOG_WARN, "%d cores detected: using at most %d threads", r->nthreads, RUN_MAX_THREADS);
+        r->nthreads = RUN_MAX_THREADS;
     }
-    r->threads_explicit = o.threads > 0;
-    r->mode_auto = !strcmp(o.mode, "auto");
-    r->node = (u32)o.node;
-    r->node_given = o.node_given;
-    r->use_cpu = !o.no_cpu;
-    r->use_gpu = !o.no_gpu;
-    if (o.gpu[0]) parse_gpu_filter(r, o.gpu);
-    if (o.report_interval > 0) r->report_interval = o.report_interval;
-    if (o.checkpoint_interval > 0) r->checkpoint_interval = o.checkpoint_interval;
-    r->ui = o.quiet ? UI_LOG : o.ui;
-    r->mem_limit = mem_bytes(o.mem_gb);
-    pz_strlcpy(r->table_path, o.table, sizeof r->table_path);
-    if (o.dp_bits >= 0) r->cfg.dp_bits = (unsigned)o.dp_bits;
+    r->threads_explicit = o->threads > 0;
+    r->mode_auto = !strcmp(o->mode, "auto");
+    r->node = (u32)o->node;
+    r->node_given = o->node_given;
+    r->use_cpu = !o->no_cpu;
+    r->use_gpu = !o->no_gpu;
+    if (o->gpu[0]) parse_gpu_filter(r, o->gpu);
+    if (o->report_interval > 0) r->report_interval = o->report_interval;
+    if (o->checkpoint_interval > 0) r->checkpoint_interval = o->checkpoint_interval;
+    r->ui = o->quiet ? UI_LOG : o->ui;
+    r->mem_limit = mem_bytes(o->mem_gb);
+    pz_strlcpy(r->table_path, o->table, sizeof r->table_path);
+    if (o->dp_bits >= 0) r->cfg.dp_bits = (unsigned)o->dp_bits;
 
     if (r->use_cpu && r->cfg.mode == MODE_LINEAR) {
-        if (strcmp(o.isa, "auto") == 0) r->engine = cpu_engine_autotune(0.25, o.verbose);
+        if (strcmp(o->isa, "auto") == 0) r->engine = cpu_engine_autotune(0.25, o->verbose);
         else {
-            r->engine = cpu_engine_by_name(o.isa);             /* known and supported: check_isa_option() has already said otherwise and exited */
-            if (!cpu_engine_quickcheck(r->engine)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: use another --isa", o.isa);
+            r->engine = cpu_engine_by_name(o->isa);             /* known and supported: check_isa_option() has already said otherwise and exited */
+            if (!cpu_engine_quickcheck(r->engine)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: use another --isa", o->isa);
         }
     }
 
-    r->prio_gpu = o.prio_gpu;
-    r->gpu_boost = o.prio_gpu == PRIO_YES;
-    r->limit_pct = o.limit;
-    profile_apply(r, o.retune, o.no_tune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
-    if (run_interrupted()) {                 /* Ctrl-C during the measurement: nothing has started, nothing is lost */
-        pz_log(PZ_LOG_INFO, "interrupted during the measurement of the machine: the search was not started");
-        print_resume_hint(r, o.dir);
-        pz_interrupt_done();
-        pz_log_set_file(NULL);
-        free(r);
-        return PZ_EXIT_INTERRUPTED;
-    }
-    const int thr_full = r->nthreads;
+    r->prio_gpu = o->prio_gpu;
+    r->gpu_boost = o->prio_gpu == PRIO_YES;
+    r->limit_pct = o->limit;
+    profile_apply(r, o->retune, o->no_tune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
+    if (run_interrupted()) return false;    /* Ctrl-C during the measurement: nothing has started, nothing is lost */
+    *thr_full = r->nthreads;
     run_limit_setup(r);
     if (r->gpu_boost && !pz_boost_possible()) {
         pz_log(PZ_LOG_WARN, "high priority for the threads that serve the GPUs: the system does not allow it for this user (on Linux it needs root or CAP_SYS_NICE): staying normal");
         r->gpu_boost = false;
     }
     gpu_set_boost(r->use_gpu && r->gpu_boost);
-    if (!o.no_tune && !g_env.no_profile) profile_rate_setup(r);
+    if (!o->no_tune && !g_env.no_profile) profile_rate_setup(r);
 
+    return true;
+}
+
+/* The lines that start the session in the log: version, target, range, mode, hardware and what the options changed. */
+static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming, int thr_full)
+{
     char idb[17], rs[80], re[80], rsz[80], addr[80];
     seed_to_id(r->cfg.seed, idb);
     pz_u256_to_hex(&r->cfg.range_start, rs);
@@ -1026,7 +1031,7 @@ static int cmd_hunt(int argc, char **argv)
     if (r->cfg.part[0]) {
         char sd[65];
         pz_hex_encode(r->cfg.seed, 32, sd);
-        const bool text_seed = o.seed[0] && strcmp(o.seed, "auto") != 0;   /* the seed the user typed is the one to give the others */
+        const bool text_seed = o->seed[0] && strcmp(o->seed, "auto") != 0;   /* the seed the user typed is the one to give the others */
         pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --chunk-bits and %s%s%s with the other shares",
                r->cfg.part, text_seed ? "the same -s" : "this seed (-s ", text_seed ? "" : sd, text_seed ? "" : ")");
     }
@@ -1040,17 +1045,15 @@ static int cmd_hunt(int argc, char **argv)
         if (r->use_gpu) snprintf(gpu, sizeof gpu, "%sGPUs at %d%% of the work-items", r->use_cpu ? ", " : "", r->limit_pct);
         pz_log(PZ_LOG_INFO, "limit %d%%: %s%s", r->limit_pct, cpu, gpu);
     }
-    if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", o.prio_gpu == PRIO_YES ? " (--prio-gpu yes)" : " (from the machine profile)");
+    if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", o->prio_gpu == PRIO_YES ? " (--prio-gpu yes)" : " (from the machine profile)");
     if (r->node) pz_log(PZ_LOG_INFO, "node %u: kangaroo starting points differ from those of the other computers on the same campaign", r->node);
     pz_log(PZ_LOG_INFO, "campaign folder: %s", r->cfg.dir);
 
-    run_session_load(r);
-    r->sessions++;
-    r->t_start = pz_mono();
-    if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
+}
 
-    int rc = r->cfg.mode == MODE_KANGAROO ? run_kangaroo(r) : r->cfg.mode == MODE_BSGS ? run_bsgs(r) : run_linear(r);
-
+/* The end of a session: the last save, the reports, the final frame, then the found key or what is left to do. Returns the exit status. */
+static int end_session(run_ctx *r, const opts_t *o, int rc)
+{
     double el = run_session_elapsed(r);
     if (r->checkpoint && r->checkpoint(r) != 0) {
         /* the progress of this session may not be on disk: say so loudly and fail the command */
@@ -1076,13 +1079,15 @@ static int cmd_hunt(int argc, char **argv)
     int status = PZ_EXIT_NOT_FOUND;
     if (finished) {
         if (r->cfg.part[0]) {
-            printf("\nPart %s was scanned in full without finding the key: the shares of the other computers remain.\n", r->cfg.part);
+            char msg[PART_TEXT + 120];
+            snprintf(msg, sizeof msg, "\nPart %s was scanned in full without finding the key: the shares of the other computers remain.\n", r->cfg.part);
+            pz_fputs_wrap(stdout, msg, PZ_LINE_MAX, 0);
         } else {
             pz_fputs_wrap(stdout, "\nCampaign completed: the whole range was covered without the key. Check the address and the range; "
                                   "'pzsolve selftest' checks the computation.\n", PZ_LINE_MAX, 0);
         }
     } else {
-        print_resume_hint(r, o.dir);
+        print_resume_hint(r, o->dir);
         /* a stop that no signal asked for: the workers ended on their own (every GPU failed and the CPU is off), the log says why */
         status = run_interrupted() ? PZ_EXIT_INTERRUPTED : PZ_EXIT_ERROR;
     }
@@ -1090,6 +1095,53 @@ static int cmd_hunt(int argc, char **argv)
     pz_log_set_file(NULL);
     free(r);
     return status;
+}
+
+static int cmd_hunt(int argc, char **argv)
+{
+    opts_t o;
+    parse_opts(argc, argv, &o);
+    pz_log_set_quiet(o.quiet);
+    pz_log_set_verbose(o.verbose);
+    check_isa_option(o.isa);
+    if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
+    if (o.retune && o.limit) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
+    if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */
+    run_ctx *r = pz_xcalloc(1, sizeof *r);
+    run_init(r);
+    bool locked;
+    const bool resuming = open_or_create_campaign(&o, r, &locked);
+    run_paths(r);
+    if (resuming && print_already_found(r)) {
+        free(r);
+        return PZ_EXIT_FOUND;
+    }
+    if (resuming && campaign_completed(r)) {
+        print_completed(r, o.dir);
+        free(r);
+        return PZ_EXIT_NOT_FOUND;
+    }
+    if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
+    pz_log_set_file(r->path_log);
+    run_install_signals(r);   /* before the measurement of the machine, which takes minutes: a Ctrl-C ends it and cleans up instead of killing the program */
+    int thr_full;
+    if (!apply_options(&o, r, &thr_full)) {
+        pz_log(PZ_LOG_INFO, "interrupted during the measurement of the machine: the search was not started");
+        print_resume_hint(r, o.dir);
+        pz_interrupt_done();
+        pz_log_set_file(NULL);
+        free(r);
+        return PZ_EXIT_INTERRUPTED;
+    }
+    log_session_header(&o, r, resuming, thr_full);
+
+    run_session_load(r);
+    r->sessions++;
+    r->t_start = pz_mono();
+    if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
+
+    int rc = r->cfg.mode == MODE_KANGAROO ? run_kangaroo(r) : r->cfg.mode == MODE_BSGS ? run_bsgs(r) : run_linear(r);
+    return end_session(r, &o, rc);
 }
 
 static int cmd_info(int argc, char **argv)

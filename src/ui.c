@@ -123,58 +123,33 @@ static void fit_line(char *t, int maxw)
     }
 }
 
-/* Appends a line to buf (shortened to `cols - 1` columns by fit_line), separated by '\n'. Returns the new length. */
-static size_t add_line(char *buf, size_t n, size_t len, int *lines, int cols, const char *prefix, const char *suffix, const char *text)
+/* The panel being drawn: the text so far, its number of lines, the width of the terminal and the escape sequences of bold and dim text
+ * (empty without colours). */
+typedef struct {
+    char *buf;
+    size_t n, len;
+    int lines, cols;
+    const char *B0, *B1, *D0, *D1;
+} panel_t;
+
+/* Appends a line to the panel (shortened to `cols - 1` columns by fit_line), separated by '\n'. */
+static void add_line(panel_t *p, const char *prefix, const char *suffix, const char *text)
 {
     char t[640];
     snprintf(t, sizeof t, "%s", text);
-    int maxw = cols - 1;
+    int maxw = p->cols - 1;
     if (maxw < 20) maxw = 20;
     fit_line(t, maxw);
-    int w = snprintf(buf + len, n - len, "%s%s%s%s", *lines ? "\n" : "", prefix, t, suffix);
-    if (w < 0 || (size_t)w >= n - len) return len;   /* does not fit: drop the line */
-    (*lines)++;
-    return len + (size_t)w;
+    int w = snprintf(p->buf + p->len, p->n - p->len, "%s%s%s%s", p->lines ? "\n" : "", prefix, t, suffix);
+    if (w < 0 || (size_t)w >= p->n - p->len) return;   /* does not fit: drop the line */
+    p->lines++;
+    p->len += (size_t)w;
 }
 
-int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary *es, bool final, int cols, bool color, char *buf, size_t n)
+/* The speed row and the row of the workers; nothing when `idle`. */
+static void panel_speed(panel_t *p, const run_ctx *r, const progress_info *pi, bool idle)
 {
-    if (cols > PZ_LINE_MAX) cols = PZ_LINE_MAX;
-    char idb[17], ln[640], a[96], b[96], c[96];
-    seed_to_id(r->cfg.seed, idb);
-    int lines = 0;
-    size_t len = 0;
-    buf[0] = 0;
-    const char *B0 = color ? "\x1b[1m" : "", *B1 = color ? "\x1b[0m" : "";
-    const char *D0 = color ? "\x1b[2m" : "", *D1 = color ? "\x1b[0m" : "";
-    const bool kang = r->cfg.mode == MODE_KANGAROO;
-
-    char pz[32] = "";
-    if (r->cfg.puzzle) snprintf(pz, sizeof pz, " | puzzle #%d", r->cfg.puzzle);   /* a custom target: the campaign name says it all */
-    snprintf(ln, sizeof ln, "pzsolve %s | campaign %s%s | %s | seed id %s | %s", PZ_VERSION, r->cfg.name, pz,
-             mode_name(r->cfg.mode), idb, ui_state_name(r, final));
-    if ((int)strlen(ln) > cols - 1)                    /* a narrow terminal: the state matters more than the version */
-        snprintf(ln, sizeof ln, "campaign %s%s | %s | seed id %s | %s", r->cfg.name, pz, mode_name(r->cfg.mode), idb, ui_state_name(r, final));
-    len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
-
-    pz_u256 rsz = cfg_range_size(&r->cfg);
-    snprintf(ln, sizeof ln, "Target        %s   range of %s keys", r->cfg.address, ui_fmt_range_bits(&rsz, a, sizeof a));
-    len = add_line(buf, n, len, &lines, cols, "", "", ln);
-
-    char bb[48], pc[32];
-    bar(bb, 30, pi->fraction);
-    pz_fmt_percent(pi->fraction, pc, sizeof pc);
-    if (kang) {
-        ui_fmt_count(pi->done, a, sizeof a);
-        ui_fmt_count(pi->total, b, sizeof b);
-        snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bb, pc, a, b, pi->unit);
-    } else {
-        ui_fmt_count(pi->done, a, sizeof a);
-        ui_fmt_count(pi->total, b, sizeof b);
-        snprintf(ln, sizeof ln, "Progress      [%s] %s   (%s / %s %s)", bb, pc, a, b, pi->unit);
-    }
-    len = add_line(buf, n, len, &lines, cols, "", "", ln);
-
+    char ln[640], a[96], b[96], c[96];
     double cpur, gpur;
     int ncpu;
     ui_rates(r, &cpur, &gpur, &ncpu);
@@ -193,8 +168,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     else if (pi->rate > 0 && r->peak_rate > 0) snprintf(ln, sizeof ln, "Speed         %s %s/s   (peak %s, session average %s)", a, pi->unit, b, c);
     else if (pi->rate > 0) snprintf(ln, sizeof ln, "Speed         %s %s/s", a, pi->unit);
     else snprintf(ln, sizeof ln, "Speed         measuring...");
-    const bool idle = final && !(pi->rate > 0);                  /* a session over before a speed was measured: no rows of zeros */
-    if (!idle) len = add_line(buf, n, len, &lines, cols, "", "", ln);
+    if (!idle) add_line(p, "", "", ln);
 
     if (r->nws > 0 && !idle) {
         size_t o = 0;
@@ -212,92 +186,139 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
             o += (size_t)snprintf(ln + o, sizeof ln - o, "%s%.40s: %s", (ncpu > 0 || shown) ? "  |  " : "", r->ws[i].name, a);
             shown++;
         }
-        len = add_line(buf, n, len, &lines, cols, D0, D1, ln);
+        add_line(p, p->D0, p->D1, ln);
     }
+}
 
-    double el_total = r->elapsed_prev + el_session;
-    pz_fmt_duration(el_session, a, sizeof a);
-    pz_fmt_duration(el_total, b, sizeof b);
-    snprintf(ln, sizeof ln, "Time          this session %s | total %s | session no. %d", a, b, r->sessions);
-    len = add_line(buf, n, len, &lines, cols, "", "", ln);
+/* The completion times and the chances to find the key within each window, at the estimated speed. */
+static void panel_estimate(panel_t *p, const run_ctx *r, const progress_info *pi, const eta_summary *es, bool final)
+{
+    char ln[640], a[96], b[96], c[96];
+    const bool kang = r->cfg.mode == MODE_KANGAROO;
+    const double tlast = kang ? es->t99 : es->t_full;
+    const char *lastlab = kang ? "99%" : "100%";
+    /* richest layout that fits the terminal: with clock times, without them, then dropping the last fields */
+    int variant = 0;
+    for (; variant < 4; variant++) {
+        const int clock = variant == 0;
+        fmt_eta_at(es->t50, clock, a, sizeof a);
+        fmt_eta_at(es->t90, clock, b, sizeof b);
+        fmt_eta_at(tlast, clock, c, sizeof c);
+        if (variant < 2) snprintf(ln, sizeof ln, "Time left     50%%: %s | 90%%: %s | %s: %s", a, b, lastlab, c);
+        else if (variant == 2) snprintf(ln, sizeof ln, "Time left     50%%: %s | 90%%: %s", a, b);
+        else snprintf(ln, sizeof ln, "Time left     50%%: %s", a);
+        if ((int)strlen(ln) < p->cols - 1) break;
+    }
+    add_line(p, p->B0, p->B1, ln);
+    ln[0] = 0;
+    size_t o = (size_t)snprintf(ln, sizeof ln, "Chance        ");     /* to find the key within each window from now */
+    for (int i = 0; i < ETA_NWIN; i++) {
+        char one[48];
+        ui_fmt_prob(es->p_win[i], a, sizeof a);
+        int w = snprintf(one, sizeof one, "%s%s: %s", i ? " | " : "", ETA_WINDOW_NAMES[i], a);
+        if (i > 0 && (int)(o + (size_t)w) >= p->cols - 1) break;   /* drop whole windows rather than cutting one in half */
+        if (o + (size_t)w >= sizeof ln) break;
+        memcpy(ln + o, one, (size_t)w + 1);
+        o += (size_t)w;
+        if (!strcmp(a, "100%")) break;                            /* the longer windows say the same */
+    }
+    add_line(p, "", "", ln);
+    if (pi->est_state == RATE_PROVISIONAL) {
+        const char *from = r->rate_prior_kind == 2 ? "from the remembered speed" : r->rate_prior_kind == 1 ? "from the tuning run" : "";
+        const double left = r->settle_at > 0 && !final ? r->settle_at - pz_mono() : -1;   /* never a time that has passed, nor one after a stop */
+        char when[48] = "";
+        if (left >= 60) snprintf(when, sizeof when, "settles in ~%d min", (int)ceil(left / 60));
+        else if (left > 0) snprintf(when, sizeof when, "settles in ~%d s", (int)ceil(left));
+        if (from[0] && when[0]) snprintf(ln, sizeof ln, "              provisional (%s, %s)", from, when);
+        else if (from[0] || when[0]) snprintf(ln, sizeof ln, "              provisional (%s%s)", from, when);
+        else snprintf(ln, sizeof ln, "              provisional");
+        add_line(p, p->D0, p->D1, ln);
+    }
+}
 
+/* The rows of the time left: the estimate, or the reason there is none. */
+static void panel_time_left(panel_t *p, const run_ctx *r, const progress_info *pi, const eta_summary *es, bool final, bool idle)
+{
+    char ln[640], a[96];
     const char *state = ui_state_name(r, final);
     if (final && atomic_load(&r->found)) {
-        len = add_line(buf, n, len, &lines, cols, B0, B1, "KEY FOUND");   /* the box below gives the file */
+        add_line(p, p->B0, p->B1, "KEY FOUND");   /* the box below gives the file */
     } else if (!strcmp(state, "COMPLETED")) {
-        len = add_line(buf, n, len, &lines, cols, B0, B1, r->cfg.part[0] ? "Time left     none: the whole part was covered"
-                                                                          : "Time left     none: the whole range was covered");
+        add_line(p, p->B0, p->B1, r->cfg.part[0] ? "Time left     none: the whole part was covered" : "Time left     none: the whole range was covered");
     } else if (idle || (final && pi->eta.model == ETA_NONE)) {
         /* stopped before a speed or before the search started (BSGS table phase): no time left to give */
     } else if (pi->beyond) {
-        len = add_line(buf, n, len, &lines, cols, B0, B1, "Time left     unknown (beyond the model)");
+        add_line(p, p->B0, p->B1, "Time left     unknown (beyond the model)");
     } else if (pi->eta.model == ETA_NONE) {
         /* the search itself has not started (BSGS table phase): the only meaningful time is the end of this phase */
         if (pi->rate > 0 && pi->total > pi->done) {
             fmt_eta_at((double)((pi->total - pi->done) / pi->rate), 1, a, sizeof a);
             snprintf(ln, sizeof ln, "Time left     current phase: %s | the search estimate appears when it starts", a);
         } else snprintf(ln, sizeof ln, "Time left     calculating (the search estimate appears when it starts)");
-        len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
+        add_line(p, p->B0, p->B1, ln);
     } else if (pi->rate > 0 && pi->est_state != RATE_MEASURING) {
-        const double tlast = kang ? es->t99 : es->t_full;
-        const char *lastlab = kang ? "99%" : "100%";
-        /* richest layout that fits the terminal: with clock times, without them, then dropping the last fields */
-        int variant = 0;
-        for (; variant < 4; variant++) {
-            const int clock = variant == 0;
-            fmt_eta_at(es->t50, clock, a, sizeof a);
-            fmt_eta_at(es->t90, clock, b, sizeof b);
-            fmt_eta_at(tlast, clock, c, sizeof c);
-            if (variant < 2) snprintf(ln, sizeof ln, "Time left     50%%: %s | 90%%: %s | %s: %s", a, b, lastlab, c);
-            else if (variant == 2) snprintf(ln, sizeof ln, "Time left     50%%: %s | 90%%: %s", a, b);
-            else snprintf(ln, sizeof ln, "Time left     50%%: %s", a);
-            if ((int)strlen(ln) < cols - 1) break;
-        }
-        len = add_line(buf, n, len, &lines, cols, B0, B1, ln);
-        ln[0] = 0;
-        size_t o = (size_t)snprintf(ln, sizeof ln, "Chance        ");     /* to find the key within each window from now */
-        for (int i = 0; i < ETA_NWIN; i++) {
-            char one[48];
-            ui_fmt_prob(es->p_win[i], a, sizeof a);
-            int w = snprintf(one, sizeof one, "%s%s: %s", i ? " | " : "", ETA_WINDOW_NAMES[i], a);
-            if (i > 0 && (int)(o + (size_t)w) >= cols - 1) break;   /* drop whole windows rather than cutting one in half */
-            if (o + (size_t)w >= sizeof ln) break;
-            memcpy(ln + o, one, (size_t)w + 1);
-            o += (size_t)w;
-            if (!strcmp(a, "100%")) break;                            /* the longer windows say the same */
-        }
-        len = add_line(buf, n, len, &lines, cols, "", "", ln);
-        if (pi->est_state == RATE_PROVISIONAL) {
-            const char *from = r->rate_prior_kind == 2 ? "from the remembered speed" : r->rate_prior_kind == 1 ? "from the tuning run" : "";
-            const double left = r->settle_at > 0 && !final ? r->settle_at - pz_mono() : -1;   /* never a time that has passed, nor one after a stop */
-            char when[48] = "";
-            if (left >= 60) snprintf(when, sizeof when, "settles in ~%d min", (int)ceil(left / 60));
-            else if (left > 0) snprintf(when, sizeof when, "settles in ~%d s", (int)ceil(left));
-            if (from[0] && when[0]) snprintf(ln, sizeof ln, "              provisional (%s, %s)", from, when);
-            else if (from[0] || when[0]) snprintf(ln, sizeof ln, "              provisional (%s%s)", from, when);
-            else snprintf(ln, sizeof ln, "              provisional");
-            len = add_line(buf, n, len, &lines, cols, D0, D1, ln);
-        }
+        panel_estimate(p, r, pi, es, final);
     } else if (pi->rate > 0) {
-        len = add_line(buf, n, len, &lines, cols, "", "", "Time left     measuring...");
+        add_line(p, "", "", "Time left     measuring...");
     } else {
-        len = add_line(buf, n, len, &lines, cols, "", "", "Time left     calculating...");
+        add_line(p, "", "", "Time left     calculating...");
     }
+}
+
+int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary *es, bool final, int cols, bool color, char *buf, size_t n)
+{
+    if (cols > PZ_LINE_MAX) cols = PZ_LINE_MAX;
+    panel_t p = {buf, n, 0, 0, cols, color ? "\x1b[1m" : "", color ? "\x1b[0m" : "", color ? "\x1b[2m" : "", color ? "\x1b[0m" : ""};
+    char idb[17], ln[640], a[96], b[96];
+    seed_to_id(r->cfg.seed, idb);
+    buf[0] = 0;
+    const bool kang = r->cfg.mode == MODE_KANGAROO;
+
+    char pz[32] = "";
+    if (r->cfg.puzzle) snprintf(pz, sizeof pz, " | puzzle #%d", r->cfg.puzzle);   /* a custom target: the campaign name says it all */
+    snprintf(ln, sizeof ln, "pzsolve %s | campaign %s%s | %s | seed id %s | %s", PZ_VERSION, r->cfg.name, pz,
+             mode_name(r->cfg.mode), idb, ui_state_name(r, final));
+    if ((int)strlen(ln) > cols - 1)                    /* a narrow terminal: the state matters more than the version */
+        snprintf(ln, sizeof ln, "campaign %s%s | %s | seed id %s | %s", r->cfg.name, pz, mode_name(r->cfg.mode), idb, ui_state_name(r, final));
+    add_line(&p, p.B0, p.B1, ln);
+
+    pz_u256 rsz = cfg_range_size(&r->cfg);
+    snprintf(ln, sizeof ln, "Target        %s   range of %s keys", r->cfg.address, ui_fmt_range_bits(&rsz, a, sizeof a));
+    add_line(&p, "", "", ln);
+
+    char bb[48], pc[32];
+    bar(bb, 30, pi->fraction);
+    pz_fmt_percent(pi->fraction, pc, sizeof pc);
+    ui_fmt_count(pi->done, a, sizeof a);
+    ui_fmt_count(pi->total, b, sizeof b);
+    if (kang) snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bb, pc, a, b, pi->unit);
+    else snprintf(ln, sizeof ln, "Progress      [%s] %s   (%s / %s %s)", bb, pc, a, b, pi->unit);
+    add_line(&p, "", "", ln);
+
+    const bool idle = final && !(pi->rate > 0);                  /* a session over before a speed was measured: no rows of zeros */
+    panel_speed(&p, r, pi, idle);
+
+    const double el_session = run_session_elapsed(r), el_total = r->elapsed_prev + el_session;
+    pz_fmt_duration(el_session, a, sizeof a);
+    pz_fmt_duration(el_total, b, sizeof b);
+    snprintf(ln, sizeof ln, "Time          this session %s | total %s | session no. %d", a, b, r->sessions);
+    add_line(&p, "", "", ln);
+
+    panel_time_left(&p, r, pi, es, final, idle);
 
     if (pi->detail[0]) {
         char det[320];
         pz_strlcpy(det, pi->detail, sizeof det);
-        for (char *p = det; p && *p;) {
-            char *nl = strchr(p, '\n');
+        for (char *q = det; q && *q;) {
+            char *nl = strchr(q, '\n');
             if (nl) *nl = 0;
-            snprintf(ln, sizeof ln, "              %s", p);
-            len = add_line(buf, n, len, &lines, cols, D0, D1, ln);
-            p = nl ? nl + 1 : NULL;
+            snprintf(ln, sizeof ln, "              %s", q);
+            add_line(&p, p.D0, p.D1, ln);
+            q = nl ? nl + 1 : NULL;
         }
     }
-    if (!final) len = add_line(buf, n, len, &lines, cols, D0, D1, "Ctrl-C: stop and save progress; run the same command again to resume.");
-    (void)len;
-    return lines;
+    if (!final) add_line(&p, p.D0, p.D1, "Ctrl-C: stop and save progress; run the same command again to resume.");
+    return p.lines;
 }
 
 void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, int cols, char *buf, size_t n)
