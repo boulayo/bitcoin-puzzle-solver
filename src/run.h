@@ -86,6 +86,7 @@ typedef struct run_ctx {
     prio_mode prio_gpu;              /* --prio-gpu */
     bool gpu_boost;                  /* the threads serving the GPUs run above the CPU workers (from --prio-gpu or the profile) */
     u32 node;                        /* kangaroo: this computer's number in a campaign shared by several (--node): different starting points */
+    bool node_given;                 /* --node was given (0 included): the jump table id goes to the terminal too */
     char gpu_filter[128];
     u64 mem_limit;                   /* bytes for DP tables / the BSGS table (0 = automatic) */
     char table_path[600];            /* bsgs: file to load the baby-step table from / save it to (empty = RAM only) */

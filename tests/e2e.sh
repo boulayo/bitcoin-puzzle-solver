@@ -84,7 +84,7 @@ GOT=$(awk '/private key hex/{print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 echo "== kangaroo: a tiny --dp-bits on puzzle 140 (the table is sized by the memory limit; the number of points expected does not fit in 64 bits)"
 rm -rf "$DIR/k140"
 timeout -s INT 6 $BIN hunt -p 140 --dp-bits 2 --mem 0.05 -c k140 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/k140.out" 2>&1
-grep -q "dp-bits 2, mean jump .*, table 32.00 MiB (max 51.20 MiB)" "$DIR/k140/log.txt" && ok "puzzle 140 with --dp-bits 2: table of 32 MiB under a limit of 51.2 MiB" \
+grep -q "dp-bits 2, table 32.00 MiB (max 51.20 MiB)" "$DIR/k140/log.txt" && ok "puzzle 140 with --dp-bits 2: table of 32 MiB under a limit of 51.2 MiB" \
   || bad "puzzle 140 with --dp-bits 2: $(grep -o 'table [0-9.]* [KMG]iB (max [0-9.]* [KMG]iB)' "$DIR/k140/log.txt" | head -1)"
 
 echo "== custom intervals (size not a power of two)"

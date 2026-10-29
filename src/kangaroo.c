@@ -431,14 +431,18 @@ int kang_configure(kang_state *ks, int k_gpu_total)
     alloc_table(ks, dp, max_entries);
 
     if (r->silent_setup) return 0;
-    char b1[32], b2[32], b3[32], jid[9];
+    /* one line for the terminal, the internals for -v; the digits grouped as in the panel, and no "GPU 0" when no GPU walks */
+    char kt[32], kc[32], kg[32], cpu[64] = "", gpu[48] = "", b1[32], b2[32], b3[32], b4[32], jid[9];
+    if (nthr) snprintf(cpu, sizeof cpu, "CPU %d x %s", nthr, pz_fmt_u64((u64)ks->K_thread, kc, sizeof kc));
+    if (k_gpu_total) snprintf(gpu, sizeof gpu, "%sGPU %s", nthr ? ", " : "", pz_fmt_u64((u64)k_gpu_total, kg, sizeof kg));
+    pz_log(PZ_LOG_INFO, "kangaroo: %s kangaroos (%s%s), dp-bits %d, table %s (max %s); expected ~%s steps, ~%s distinguished points",
+           pz_fmt_u64((u64)ks->K_total, kt, sizeof kt), cpu, gpu, dp, pz_fmt_bytes((double)ks->cap * sizeof(dp_rec), b1, sizeof b1),
+           pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2), pz_fmt_si((double)ks->expected_steps, b3, sizeof b3),
+           pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b4, sizeof b4));
+    pz_log(PZ_LOG_DEBUG, "kangaroo: W = 2^%.1Lf, mean jump %.3Le, expected effort %.2Lf x sqrt(W)", log2l(pz_u256_to_ld(&ks->W)), mean, (long double)KANG_C_MEAN);
+    /* every computer of a shared campaign compares it, node 0 (the one that usually receives the merges) too; log.txt always has it */
     kang_jump_id(ks->jump_tag, jid);
-    pz_log(PZ_LOG_INFO, "kangaroo: W = 2^%.1Lf, %d kangaroos (CPU %d x %d, GPU %d), dp-bits %d, mean jump %.3Le, table %s (max %s)",
-           log2l(pz_u256_to_ld(&ks->W)), ks->K_total, nthr, ks->K_thread, k_gpu_total, dp, mean, pz_fmt_bytes((double)ks->cap * sizeof(dp_rec), b1, sizeof b1),
-           pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2));
-    pz_log(r->node ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);
-    pz_log(PZ_LOG_INFO, "kangaroo: expected effort ~%s steps (%.2Lf x sqrt(W)); expected distinguished points ~%s",
-           pz_fmt_si((double)ks->expected_steps, b3, sizeof b3), (long double)KANG_C_MEAN, pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b1, sizeof b1));
+    pz_log(r->node_given ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);
     return 0;
 }
 

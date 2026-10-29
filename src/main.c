@@ -227,6 +227,7 @@ typedef struct {
     prio_mode prio_gpu;
     char part[PART_TEXT];
     int node, nfiles;
+    bool node_given;              /* --node was given, 0 included */
     int limit;                    /* --limit: percentage of the machine to use (1..99; 0 = no limit) */
     char files[16][600];
     char key[100];
@@ -375,7 +376,7 @@ static void parse_opts(int argc, char **argv, opts_t *o)
             break;
         }
         case O_LIMIT: o->limit = (int)pz_arg_int("--limit", optarg, 1, 99); break;
-        case O_NODE: o->node = (int)pz_arg_int("--node", optarg, 0, 65535); break;
+        case O_NODE: o->node = (int)pz_arg_int("--node", optarg, 0, 65535); o->node_given = true; break;
         case 'f':
             if (o->nfiles >= 16) pz_die("at most 16 files at a time with -f");
             opt_copy("--file", o->files[o->nfiles], sizeof o->files[0], optarg);
@@ -867,6 +868,7 @@ static int cmd_hunt(int argc, char **argv)
     r->threads_explicit = o.threads > 0;
     r->mode_auto = !strcmp(o.mode, "auto");
     r->node = (u32)o.node;
+    r->node_given = o.node_given;
     r->use_cpu = !o.no_cpu;
     r->use_gpu = !o.no_gpu;
     if (o.gpu[0]) parse_gpu_filter(r, o.gpu);
