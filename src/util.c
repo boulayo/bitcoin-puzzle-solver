@@ -392,9 +392,12 @@ const char *pz_kv_find(const char *text, const char *key, char sep, unsigned fla
 
 bool pz_parse_rate(const char *s, double *out)
 {
+    if (!((*s >= '0' && *s <= '9') || *s == '.')) return false;     /* no blank, sign, "inf" or "nan" before the number */
     char *end;
     errno = 0;
     double v = strtod(s, &end);
+    for (const char *q = s; q < end; q++)
+        if (!strchr("0123456789.eE+-", *q)) return false;              /* decimal only: strtod also reads hexadecimal ("0x10") */
     if (end != s && end[0] && !end[1]) {
         switch (end[0]) {
         case 'k': case 'K': v *= 1e3; end++; break;

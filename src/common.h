@@ -98,7 +98,8 @@ bool pz_parse_u64(const char *s, u64 *out);
 long long pz_arg_int(const char *name, const char *s, long long lo, long long hi);
 /* Whether `s` is a list of non-negative integers in decimal, separated by single commas ("0", "0,2"), as --gpu takes. */
 bool pz_index_list_valid(const char *s);
-/* A speed in units per second: a number, decimals allowed, with an optional k, M, G or T ("800M", "1.5G"); positive, at most 1e15. */
+/* A speed in units per second: a decimal number (it starts with a digit or a point; an exponent is allowed), with an optional k, M, G or T
+ * ("800M", "1.5G"); positive, at most 1e15. No blank, sign or hexadecimal. */
 bool pz_parse_rate(const char *s, double *out);
 
 /* Finds "key<sep>value" in a text and returns a pointer to the first character after the separator (the value runs to the end of the line,

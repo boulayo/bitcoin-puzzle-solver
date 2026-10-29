@@ -6,6 +6,7 @@
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
 #include <assert.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <dirent.h>
@@ -289,6 +290,33 @@ static void t_kv(void)
     CHECK(pz_keyed_line(&p, &eq) == NULL);
 }
 
+/* The speeds of 'split' and 'puzzle --rate', and the formats of the panel and of 'list'. */
+static void t_parse_fmt(void)
+{
+    static const struct { const char *s; double v; } rates[] = {
+        {"800M", 8e8}, {"1.5G", 1.5e9}, {"5", 5}, {".5k", 500}, {"2e3", 2000}, {"1T", 1e12}, {"1000T", 1e15}, {"3g", 3e9}, {"7m", 7e6}, {"0.25K", 250},
+        {"1001T", 0}, {"0", 0}, {"0G", 0}, {"", 0}, {" 5G", 0}, {"5G ", 0}, {"5 G", 0}, {"+3G", 0}, {"-3G", 0}, {"0x10", 0}, {"0X1G", 0},
+        {"5GG", 0}, {"5P", 0}, {"G", 0}, {".", 0}, {"inf", 0}, {"nan", 0}, {"1e400", 0}, {"1e", 0}, {"1.5.2", 0},
+    };
+    for (size_t i = 0; i < sizeof rates / sizeof *rates; i++) {
+        double v = -1;
+        const bool ok = pz_parse_rate(rates[i].s, &v);
+        if (rates[i].v > 0 ? !(ok && v == rates[i].v) : ok) { printf("FAIL pz_parse_rate(\"%s\"): %d %g\n", rates[i].s, ok, v); fails++; }
+    }
+    static const struct { double secs; const char *want; } ages[] = {
+        {0, "just now"}, {1.9, "just now"}, {-5, "just now"}, {NAN, "just now"}, {2, "2s ago"}, {7.9, "7s ago"}, {59.5, "59s ago"},
+        {60, "1m 0s ago"}, {192, "3m 12s ago"}, {7500, "2h 5m ago"}, {90000, "1d 1h 0m ago"},
+    };
+    char b[64];
+    for (size_t i = 0; i < sizeof ages / sizeof *ages; i++)
+        if (strcmp(pz_fmt_age(ages[i].secs, b, sizeof b), ages[i].want)) { printf("FAIL pz_fmt_age(%g): \"%s\"\n", ages[i].secs, b); fails++; }
+    static const struct { double frac; const char *want; } pcts[] = {
+        {0, "0.0000%"}, {1, "100.0000%"}, {0.123456, "12.3456%"}, {0.5, "50.0000%"}, {1e-5, "0.0010%"}, {1.2e-9, "1.200e-07%"}, {3.4e-12, "3.400e-10%"},
+    };
+    for (size_t i = 0; i < sizeof pcts / sizeof *pcts; i++)
+        if (strcmp(pz_fmt_percent(pcts[i].frac, b, sizeof b), pcts[i].want)) { printf("FAIL pz_fmt_percent(%g): \"%s\"\n", pcts[i].frac, b); fails++; }
+}
+
 /* pz_truncate_path cuts a file above 4 GiB to the byte (MinGW's truncate() takes a 32-bit length): the size of a dp.bin of 4 GiB, a
  * header and one block of records, with a torn record at the end. The file is sparse: it takes no room on the disk. */
 static void t_truncate_path(void)
@@ -347,6 +375,7 @@ int main(void)
 #endif
     t_writers();
     t_kv();
+    t_parse_fmt();
     t_file_count();
     t_truncate_path();
 #ifndef _WIN32
