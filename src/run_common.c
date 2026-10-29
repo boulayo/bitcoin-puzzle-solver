@@ -331,6 +331,9 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     ui_fmt_eta(es.t90, t90, sizeof t90);
     ui_fmt_eta(kang ? es.t99 : es.t_full, tfull, sizeof tfull);
     for (int i = 0; i < ETA_NWIN; i++) ui_fmt_prob(es.p_win[i], pw[i], sizeof pw[i]);
+    char amount[160];                                     /* the kangaroo has no total: its steps are compared with the mean cost */
+    if (kang) snprintf(amount, sizeof amount, "%s %s, ~%s expected on average", done, pi->unit, total);
+    else snprintf(amount, sizeof amount, "%s of %s %s", done, total, pi->unit);
     char partline[PART_TEXT + 200] = "";
     if (r->cfg.part[0]) snprintf(partline, sizeof partline, "Part:           %s  (this computer scans only its shares of the blocks)\n", r->cfg.part);
     if (r->limit_pct) {
@@ -368,7 +371,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "%s"
         "Sessions:       %d, total compute time %s\n"
         "\n"
-        "%s%s   (%s of %s %s)\n"
+        "%s%s   (%s)\n"
         "Speed:          %s %s/s   (CPU %s, GPU %s)\n"
         "%s"
         "Detail:         %s\n"
@@ -377,7 +380,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
-        pct, done, total, pi->unit, rate, pi->unit, cr, gr, tleft,
+        pct, amount, rate, pi->unit, cr, gr, tleft,
         detail, rej);
     for (int i = 0; i < r->nws && (size_t)n + 200 < bcap; i++) {
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
@@ -470,22 +473,21 @@ static void ui_draw(run_ctx *r, const progress_info *pi, bool final)
 
 void run_ui_final(run_ctx *r, const progress_info *pi)
 {
-    ui_mode m = effective_ui(r);
+    const ui_mode m = effective_ui(r);
+    char buf[512];
+    eta_summary es;
+    make_summary(pi, &es);
     if (m == UI_FULL) {
         ui_draw(r, pi, true);
         pz_log_terminal_line_break();
-    } else {
-        char buf[512];
-        eta_summary es;
-        make_summary(pi, &es);
-        ui_render_final_line(r, pi, &es, buf, sizeof buf);
-        if (m == UI_LINE) {
-            pz_ui_block(buf, 1);
-            pz_log_terminal_line_break();
-        }
-        pz_log_file(PZ_LOG_INFO, "final state: %s", buf);
-        if (m != UI_LINE) pz_log(PZ_LOG_INFO, "final state: %s", buf);
+    } else if (m == UI_LINE) {
+        ui_render_final_line(r, pi, &es, term_cols(), buf, sizeof buf);   /* the terminal line fits the window, the log keeps it whole */
+        pz_ui_block(buf, 1);
+        pz_log_terminal_line_break();
     }
+    /* one "final state" line in log.txt for every session; on the terminal only in log mode, where nothing else shows it */
+    ui_render_final_line(r, pi, &es, 0, buf, sizeof buf);
+    (m == UI_LOG ? pz_log : pz_log_file)(PZ_LOG_INFO, "final state: %s", buf);
 }
 
 int run_clock_gap(double dm, double dw, double *gap)

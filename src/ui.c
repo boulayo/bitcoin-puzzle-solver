@@ -132,7 +132,7 @@ static size_t add_line(char *buf, size_t n, size_t len, int *lines, int cols, co
 
 int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary *es, bool final, int cols, bool color, char *buf, size_t n)
 {
-    if (cols > 110) cols = 110;
+    if (cols > PZ_LINE_MAX) cols = PZ_LINE_MAX;
     char idb[17], ln[640], a[96], b[96], c[96];
     seed_to_id(r->cfg.seed, idb);
     int lines = 0;
@@ -161,7 +161,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     if (kang) {
         ui_fmt_count(pi->done, a, sizeof a);
         ui_fmt_count(pi->total, b, sizeof b);
-        snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s %s done, ~%s expected on average)", bb, pc, a, pi->unit, b);
+        snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bb, pc, a, b, pi->unit);
     } else {
         ui_fmt_count(pi->done, a, sizeof a);
         ui_fmt_count(pi->total, b, sizeof b);
@@ -326,7 +326,7 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
     if (limit && (int)strlen(buf) > limit) buf[limit] = 0;
 }
 
-void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, char *buf, size_t n)
+void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, int cols, char *buf, size_t n)
 {
     char pc[32], tag[96], cnt[48], a[128];
     ui_target_tag(r, tag, sizeof tag);
@@ -336,6 +336,7 @@ void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_s
     if (kang) snprintf(a, sizeof a, "%s steps, success probability %s", ui_fmt_count(pi->done, cnt, sizeof cnt), pc);
     else snprintf(a, sizeof a, "%s covered", pc);
     if (strcmp(state, "STOPPED") != 0) snprintf(buf, n, "%s %s, %s", tag, state, a);   /* FOUND, COMPLETED: nothing left to estimate */
-    else if (pi->rate > 0 && pi->est_state != RATE_MEASURING && !pi->beyond) ui_render_line(r, pi, es, 0, buf, n);
+    else if (pi->rate > 0 && pi->est_state != RATE_MEASURING && !pi->beyond) { ui_render_line(r, pi, es, cols, buf, n); return; }
     else snprintf(buf, n, "%s %s, %s", tag, state, a);
+    if (cols > 20 && (int)strlen(buf) > cols - 1) buf[cols - 1] = 0;
 }

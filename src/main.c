@@ -1013,7 +1013,14 @@ static int cmd_info(int argc, char **argv)
     snprintf(p, sizeof p, "%s/%s", o.dir, o.campaign);
     char *t = campaign_report(p);
     if (t) {
-        fputs(t, stdout);
+        /* report.txt is written for any width: on a terminal each line is wrapped under its value (column 16) */
+        for (char *q = t; *q;) {
+            char *nl = strchr(q, '\n');
+            if (nl) *nl = 0;
+            pz_fputs_wrap(stdout, q, PZ_LINE_MAX, 16);
+            putchar('\n');
+            q = nl ? nl + 1 : q + strlen(q);
+        }
         free(t);
         return 0;
     }

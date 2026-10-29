@@ -281,7 +281,8 @@ static void vlog(pz_loglevel lvl, bool terminal, const char *fmt, va_list ap)
         block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
         char ln[1100 + 32];
         snprintf(ln, sizeof ln, "[%s] %-6s %s", ts + 11, tag[lvl], msg);
-        pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 18);
+        if (pz_fd_terminal_cols(2) > 0) pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 18);
+        else fputs(ln, stderr);   /* a file or a pipe: one record per line, for grep and for tools that read the log */
         fputc('\n', stderr);
     }
     log_unlock();
