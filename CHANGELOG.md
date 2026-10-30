@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.18.0] — 2026-10-30
 
 ### Changed
 - CUDA linear search: the additions of SHA-256 and RIPEMD-160, the carries out of the field addition chains and the normalization of x
@@ -12,8 +12,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   ALU-pipe instructions and 515 to 1385 FMA-pipe ones (3155 in all, was 2791), modelled time per key -20 to -23 % (RESEARCH.md section 5
   has the model, checked against the 793 M keys/s of the A2000, the budget per phase, and why the borrow of a subtraction cannot be
   taken that way: `ptxas` carries the inverse of the PTX borrow, which the first test build read wrongly on the card). Counted with
-  ptxas, to be measured on a card: `pzsolve bench --gpu-only` gives the keys/s. The register-capped variants no longer spill; the
-  kangaroo kernels are unchanged; the OpenCL kernels compile to the same code as before.
+  ptxas; measured on an RTX A2000 Laptop: 793 to 882 M keys/s in `bench` (+11 %), self-tests passing. The register-capped variants no
+  longer spill; the kangaroo kernels are unchanged; the OpenCL kernels compile to the same code as before.
 
 ## [1.17.0] — 2026-10-30
 
