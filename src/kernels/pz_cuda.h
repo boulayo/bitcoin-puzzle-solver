@@ -46,6 +46,7 @@ typedef unsigned short ushort;
  * IADD3, LOP3 and SHF run, while the FMA pipe, where IMAD runs, is mostly idle: the hash moves part of its additions there (RESEARCH.md
  * section 5). The multiplier is read from c[3][0] as an operand, or held in one register where the addend is an immediate. */
 __constant__ uint pz_one = 1;
+__constant__ uint pz_zero = 0;
 inline uint pz_addf(uint a, uint b)
 {
     uint d;
@@ -53,6 +54,11 @@ inline uint pz_addf(uint a, uint b)
     return d;
 }
 #define PZ_ADDF(a, b) pz_addf((a), (b))
+/* the carry, or the borrow, out of a chain as a 0/1 value: x*0 + 0 + CF on the FMA pipe, where addc.u32 d, 0, 0 is a SEL on the ALU
+ * pipe and the borrow of subc.u32 d, 0, 0 needs an AND besides; x is any register already at hand (its value does not matter: the
+ * zero comes from the constant bank as an operand, so the instruction needs no other register) */
+#define ADDC_CF(d, x)         asm volatile("madc.lo.u32 %0, %1, %2, 0;" : "=r"(d) : "r"(x), "r"(pz_zero))
+#define PZ_NORMALIZE_FMA 1    /* fe_normalize_fma: the selects of the normalization as predicated mad.lo (pz_common.cl) */
 
 /* trailing zeros of a non-zero x: bit reversal and bfind.shiftamt (the leading zeros in one instruction, where __clz takes two) */
 inline int pz_ctz(uint x)

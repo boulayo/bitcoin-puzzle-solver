@@ -186,11 +186,11 @@ inline void fe_add(fe *r, const fe *a, const fe *b)
     uint r0, r1, r2, r3, r4, r5, r6, r7, c;
     ADD_CC(r0, a->v[0], b->v[0]); ADDC_CC(r1, a->v[1], b->v[1]); ADDC_CC(r2, a->v[2], b->v[2]); ADDC_CC(r3, a->v[3], b->v[3]);
     ADDC_CC(r4, a->v[4], b->v[4]); ADDC_CC(r5, a->v[5], b->v[5]); ADDC_CC(r6, a->v[6], b->v[6]); ADDC_CC(r7, a->v[7], b->v[7]);
-    ADDC(c, 0u, 0u);
+    ADDC_CF(c, r7);
     /* 2^256 = 2^32 + 977 (mod p) */
     ADD_CC(r0, r0, c * 977u); ADDC_CC(r1, r1, c); ADDC_CC(r2, r2, 0u); ADDC_CC(r3, r3, 0u);
     ADDC_CC(r4, r4, 0u); ADDC_CC(r5, r5, 0u); ADDC_CC(r6, r6, 0u); ADDC_CC(r7, r7, 0u);
-    ADDC(c, 0u, 0u);
+    ADDC_CF(c, r7);
     /* a second wrap leaves r < 2^32 + 977: the fold stops at limb 2 */
     ADD_CC(r0, r0, c * 977u); ADDC_CC(r1, r1, c); ADDC(r2, r2, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
@@ -201,12 +201,10 @@ inline void fe_sub(fe *r, const fe *a, const fe *b)
     uint r0, r1, r2, r3, r4, r5, r6, r7, w;
     SUB_CC(r0, a->v[0], b->v[0]); SUBC_CC(r1, a->v[1], b->v[1]); SUBC_CC(r2, a->v[2], b->v[2]); SUBC_CC(r3, a->v[3], b->v[3]);
     SUBC_CC(r4, a->v[4], b->v[4]); SUBC_CC(r5, a->v[5], b->v[5]); SUBC_CC(r6, a->v[6], b->v[6]); SUBC_CC(r7, a->v[7], b->v[7]);
-    SUBC(w, 0u, 0u);
-    w &= 1u;   /* borrow: the result is a - b + 2^256, i.e. too large by 2^32 + 977 */
+    ADDC_CF(w, r7);   /* borrow: the result is a - b + 2^256, i.e. too large by 2^32 + 977 */
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC_CC(r2, r2, 0u); SUBC_CC(r3, r3, 0u);
     SUBC_CC(r4, r4, 0u); SUBC_CC(r5, r5, 0u); SUBC_CC(r6, r6, 0u); SUBC_CC(r7, r7, 0u);
-    SUBC(w, 0u, 0u);
-    w &= 1u;   /* borrowed again: the value is now >= 2^256 - 2^32 - 977, subtract once more (stops at limb 2) */
+    ADDC_CF(w, r7);   /* borrowed again: the value is now >= 2^256 - 2^32 - 977, subtract once more (stops at limb 2) */
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC(r2, r2, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
 }
@@ -219,15 +217,14 @@ inline void fe_sub2(fe *r, const fe *a, const fe *b, const fe *c)
     uint r0, r1, r2, r3, r4, r5, r6, r7, w, w2;
     SUB_CC(r0, a->v[0], b->v[0]); SUBC_CC(r1, a->v[1], b->v[1]); SUBC_CC(r2, a->v[2], b->v[2]); SUBC_CC(r3, a->v[3], b->v[3]);
     SUBC_CC(r4, a->v[4], b->v[4]); SUBC_CC(r5, a->v[5], b->v[5]); SUBC_CC(r6, a->v[6], b->v[6]); SUBC_CC(r7, a->v[7], b->v[7]);
-    SUBC(w, 0u, 0u);
+    ADDC_CF(w, r7);
     SUB_CC(r0, r0, c->v[0]); SUBC_CC(r1, r1, c->v[1]); SUBC_CC(r2, r2, c->v[2]); SUBC_CC(r3, r3, c->v[3]);
     SUBC_CC(r4, r4, c->v[4]); SUBC_CC(r5, r5, c->v[5]); SUBC_CC(r6, r6, c->v[6]); SUBC_CC(r7, r7, c->v[7]);
-    SUBC(w2, 0u, 0u);
-    w = (w & 1u) + (w2 & 1u);
+    ADDC_CF(w2, r7);
+    w = PZ_ADDF(w, w2);
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC_CC(r2, r2, 0u); SUBC_CC(r3, r3, 0u);
     SUBC_CC(r4, r4, 0u); SUBC_CC(r5, r5, 0u); SUBC_CC(r6, r6, 0u); SUBC_CC(r7, r7, 0u);
-    SUBC(w, 0u, 0u);
-    w &= 1u;
+    ADDC_CF(w, r7);
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC(r2, r2, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
 }
@@ -239,8 +236,7 @@ inline void fe_sub_norm(fe *r, const fe *a, const fe *b)
     uint r0, r1, r2, r3, r4, r5, r6, r7, w;
     SUB_CC(r0, a->v[0], b->v[0]); SUBC_CC(r1, a->v[1], b->v[1]); SUBC_CC(r2, a->v[2], b->v[2]); SUBC_CC(r3, a->v[3], b->v[3]);
     SUBC_CC(r4, a->v[4], b->v[4]); SUBC_CC(r5, a->v[5], b->v[5]); SUBC_CC(r6, a->v[6], b->v[6]); SUBC_CC(r7, a->v[7], b->v[7]);
-    SUBC(w, 0u, 0u);
-    w &= 1u;
+    ADDC_CF(w, r7);
     SUB_CC(r0, r0, w * 977u); SUBC_CC(r1, r1, w); SUBC_CC(r2, r2, 0u); SUBC_CC(r3, r3, 0u);
     SUBC_CC(r4, r4, 0u); SUBC_CC(r5, r5, 0u); SUBC_CC(r6, r6, 0u); SUBC(r7, r7, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
@@ -252,7 +248,7 @@ inline void fe_add_norm(fe *r, const fe *a, const fe *b)
     uint r0, r1, r2, r3, r4, r5, r6, r7, c;
     ADD_CC(r0, a->v[0], b->v[0]); ADDC_CC(r1, a->v[1], b->v[1]); ADDC_CC(r2, a->v[2], b->v[2]); ADDC_CC(r3, a->v[3], b->v[3]);
     ADDC_CC(r4, a->v[4], b->v[4]); ADDC_CC(r5, a->v[5], b->v[5]); ADDC_CC(r6, a->v[6], b->v[6]); ADDC_CC(r7, a->v[7], b->v[7]);
-    ADDC(c, 0u, 0u);
+    ADDC_CF(c, r7);
     ADD_CC(r0, r0, c * 977u); ADDC_CC(r1, r1, c); ADDC_CC(r2, r2, 0u); ADDC_CC(r3, r3, 0u);
     ADDC_CC(r4, r4, 0u); ADDC_CC(r5, r5, 0u); ADDC_CC(r6, r6, 0u); ADDC(r7, r7, 0u);
     r->v[0] = r0; r->v[1] = r1; r->v[2] = r2; r->v[3] = r3; r->v[4] = r4; r->v[5] = r5; r->v[6] = r6; r->v[7] = r7;
@@ -284,7 +280,7 @@ inline void fe_mad_chain(uint *acc, int *top, const uint *a, const uint bi, cons
         if (j + 2 < 8 || k + 1 <= tp) MADHIC_CC(acc[k + 1], a[j], bi, hi);
         else MADHIC(acc[k + 1], a[j], bi, hi);   /* the last pair was zero or half zero: no carry out */
     }
-    if (k + 1 <= tp) { ADDC(acc[k + 2], 0u, 0u); *top = k + 2; }
+    if (k + 1 <= tp) { ADDC_CF(acc[k + 2], acc[k + 1]); *top = k + 2; }
     else *top = k + 1;
 }
 
@@ -306,10 +302,10 @@ inline void fe_reduce512(fe *r, const uint t[16])
     uint u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, z1, z2, z3, z4, z5, z6, z7, z8, z9;
     MADLO_CC(u0, t[8], 977u, t[0]); MADHIC_CC(u1, t[8], 977u, t[1]); MADLOC_CC(u2, t[10], 977u, t[2]); MADHIC_CC(u3, t[10], 977u, t[3]);
     MADLOC_CC(u4, t[12], 977u, t[4]); MADHIC_CC(u5, t[12], 977u, t[5]); MADLOC_CC(u6, t[14], 977u, t[6]); MADHIC_CC(u7, t[14], 977u, t[7]);
-    ADDC(u8, 0u, 0u);
+    ADDC_CF(u8, u7);
     MADLO_CC(z1, t[9], 977u, t[8]); MADHIC_CC(z2, t[9], 977u, t[9]); MADLOC_CC(z3, t[11], 977u, t[10]); MADHIC_CC(z4, t[11], 977u, t[11]);
     MADLOC_CC(z5, t[13], 977u, t[12]); MADHIC_CC(z6, t[13], 977u, t[13]); MADLOC_CC(z7, t[15], 977u, t[14]); MADHIC_CC(z8, t[15], 977u, t[15]);
-    ADDC(z9, 0u, 0u);
+    ADDC_CF(z9, z8);
     /* u = 10 limbs: u8 + u9 2^32 < 2^32 + 977 */
     ADD_CC(u1, u1, z1); ADDC_CC(u2, u2, z2); ADDC_CC(u3, u3, z3); ADDC_CC(u4, u4, z4); ADDC_CC(u5, u5, z5); ADDC_CC(u6, u6, z6);
     ADDC_CC(u7, u7, z7); ADDC_CC(u8, u8, z8); ADDC(u9, z9, 0u);
@@ -321,7 +317,7 @@ inline void fe_reduce512(fe *r, const uint t[16])
     uint c;
     ADD_CC(u0, u0, w0); ADDC_CC(u1, u1, w1); ADDC_CC(u2, u2, w2); ADDC_CC(u3, u3, 0u);
     ADDC_CC(u4, u4, 0u); ADDC_CC(u5, u5, 0u); ADDC_CC(u6, u6, 0u); ADDC_CC(u7, u7, 0u);
-    ADDC(c, 0u, 0u);
+    ADDC_CF(c, u7);
     /* a wrap leaves a value < 2^66: the last fold stops at limb 2 */
     ADD_CC(u0, u0, c * 977u); ADDC_CC(u1, u1, c); ADDC(u2, u2, 0u);
     r->v[0] = u0; r->v[1] = u1; r->v[2] = u2; r->v[3] = u3; r->v[4] = u4; r->v[5] = u5; r->v[6] = u6; r->v[7] = u7;
@@ -635,9 +631,39 @@ inline void fe_normalize(fe *r)
     uint t0, t1, t2, t3, t4, t5, t6, t7, c;
     ADD_CC(t0, r->v[0], 0x3D1u); ADDC_CC(t1, r->v[1], 1u); ADDC_CC(t2, r->v[2], 0u); ADDC_CC(t3, r->v[3], 0u);
     ADDC_CC(t4, r->v[4], 0u); ADDC_CC(t5, r->v[5], 0u); ADDC_CC(t6, r->v[6], 0u); ADDC_CC(t7, r->v[7], 0u);
-    ADDC(c, 0u, 0u);
+    ADDC_CF(c, t7);
     r->v[0] = c ? t0 : r->v[0]; r->v[1] = c ? t1 : r->v[1]; r->v[2] = c ? t2 : r->v[2]; r->v[3] = c ? t3 : r->v[3];
     r->v[4] = c ? t4 : r->v[4]; r->v[5] = c ? t5 : r->v[5]; r->v[6] = c ? t6 : r->v[6]; r->v[7] = c ? t7 : r->v[7];
+}
+
+#ifdef PZ_NORMALIZE_FMA
+/* the same with the eight limbs replaced under the carry predicate by mad.lo with the multiplier 1 (pz_cuda.h): eight IMAD on the FMA
+ * pipe where the selects are SEL on the ALU pipe, which bounds the linear kernel. For a value held in registers: around an array in
+ * local memory the asm block costs scalar loads and stores (the kangaroo keeps fe_normalize). */
+inline void fe_normalize_fma(fe *r)
+{
+    asm volatile("{\n\t.reg .pred p;\n\t.reg .u32 t0, t1, t2, t3, t4, t5, t6, t7, c;\n\t"
+                 "add.cc.u32 t0, %0, 0x3D1;\n\taddc.cc.u32 t1, %1, 1;\n\taddc.cc.u32 t2, %2, 0;\n\taddc.cc.u32 t3, %3, 0;\n\t"
+                 "addc.cc.u32 t4, %4, 0;\n\taddc.cc.u32 t5, %5, 0;\n\taddc.cc.u32 t6, %6, 0;\n\taddc.cc.u32 t7, %7, 0;\n\t"
+                 "addc.u32 c, 0, 0;\n\tsetp.ne.u32 p, c, 0;\n\t"
+                 "@p mad.lo.u32 %0, t0, %8, 0;\n\t@p mad.lo.u32 %1, t1, %8, 0;\n\t@p mad.lo.u32 %2, t2, %8, 0;\n\t@p mad.lo.u32 %3, t3, %8, 0;\n\t"
+                 "@p mad.lo.u32 %4, t4, %8, 0;\n\t@p mad.lo.u32 %5, t5, %8, 0;\n\t@p mad.lo.u32 %6, t6, %8, 0;\n\t@p mad.lo.u32 %7, t7, %8, 0;\n\t}"
+                 : "+r"(r->v[0]), "+r"(r->v[1]), "+r"(r->v[2]), "+r"(r->v[3]), "+r"(r->v[4]), "+r"(r->v[5]), "+r"(r->v[6]), "+r"(r->v[7])
+                 : "r"(pz_one));
+}
+#else
+#define fe_normalize_fma fe_normalize
+#endif
+
+/* bit 0 of the canonical value of a lazy y (the parity of the point): when y >= p, that is when y + 2^32 + 977 carries out of 2^256,
+ * the canonical value is y - p, whose bit 0 is the opposite of y's, p being odd: the carry chain alone, no select */
+inline uint fe_parity(const fe *y)
+{
+    uint t, c;
+    ADD_CC(t, y->v[0], 0x3D1u); ADDC_CC(t, y->v[1], 1u); ADDC_CC(t, y->v[2], 0u); ADDC_CC(t, y->v[3], 0u);
+    ADDC_CC(t, y->v[4], 0u); ADDC_CC(t, y->v[5], 0u); ADDC_CC(t, y->v[6], 0u); ADDC_CC(t, y->v[7], 0u);
+    ADDC_CF(c, t);
+    return (y->v[0] ^ c) & 1u;
 }
 #else
 inline void fe_normalize(fe *r)
@@ -649,6 +675,14 @@ inline void fe_normalize(fe *r)
     for (int i = 2; i < 8; i++) t[i] = PZ_ADDC(r->v[i], 0u, c, &c);
 #pragma unroll
     for (int i = 0; i < 8; i++) r->v[i] = c ? t[i] : r->v[i];
+}
+#define fe_normalize_fma fe_normalize
+
+inline uint fe_parity(const fe *y)   /* bit 0 of the canonical value of a lazy y: the compiler keeps only the carry chain */
+{
+    fe t = *y;
+    fe_normalize(&t);
+    return t.v[0] & 1u;
 }
 #endif
 

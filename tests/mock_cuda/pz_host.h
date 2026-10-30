@@ -50,3 +50,4 @@ static PZ_MOCK_TLS uint pz_cf;
 #define MADHI_CC(d, a, b, c)  do { ulong s_ = (((ulong)(uint)(a) * (uint)(b)) >> 32) + (uint)(c); (d) = (uint)s_; pz_cf = (uint)(s_ >> 32); } while (0)
 #define MADHIC_CC(d, a, b, c) do { ulong s_ = (((ulong)(uint)(a) * (uint)(b)) >> 32) + (uint)(c) + pz_cf; (d) = (uint)s_; pz_cf = (uint)(s_ >> 32); } while (0)
 #define MADHIC(d, a, b, c)    do { (d) = (uint)((((ulong)(uint)(a) * (uint)(b)) >> 32) + (uint)(c) + pz_cf); } while (0)
+#define ADDC_CF(d, x)         do { (d) = pz_cf; } while (0)
