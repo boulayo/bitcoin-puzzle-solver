@@ -3,6 +3,19 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- CPU linear search, lane engines: the hash filter has fewer operations on the two vector ports. The majority function of SHA-256 is one
+  `vpternlogd` with AVX-512 (GCC made two of it) and four operations instead of five elsewhere; the RIPEMD-160 round constants, folded with
+  the padding words, are read as broadcast operands from a table instead of being moved to a general register and broadcast on port 5 (57
+  times per batch). Per batch of 16 keys 3009 to 2904 instructions; measured on one thread avx512i +2.0 % (275 to 269 instructions per
+  key), avx512v +1.2 %; the AVX2 and SSE2 engines change by less than 0.1 % in instructions. Same digests, same candidates.
+- Documentation: RESEARCH.md 10.7 records what was measured and dropped: the step of the next points interleaved with the hash of the last
+  batch at the instruction level (no gain: the hash is bound by the vector ports and the decoder alike, and the merge costs spills), the
+  compiler variants for the engine object, and why the second thread of a core adds 9 to 12 % on the laptop of 10.5, with the test that
+  would show otherwise.
+
 ## [1.18.0] — 2026-10-30
 
 ### Changed
