@@ -524,7 +524,7 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
   `0.1·W`; on `3Q`: bands of `0.2·W`) and a share per band, optimized in the exact coverage model (`tools/research/kbands.py`; in the
   program `src/kang_spec3.inc`, generated from `tools/research/kang_schema3.txt` with `tools/research/kspec_table.py`). The density of the wild walkers on `Q` concentrates
   near the two ends of the zone, that of those on `3Q` in the middle. Coverage model: 1.0455 to 1.0344 (1.0304 with finer bands, not adopted: in the
-  walks no difference). Walk model, `W = 2^36`, 4096 walkers, `dp = 0`, 5000 trials, two seeds: **1.015 and 1.021 against 1.044 and
+  walks no difference; a second try on fine grids, RESEARCH.md 8.13, holds at 1.0319 and is not adopted either). Walk model, `W = 2^36`, 4096 walkers, `dp = 0`, 5000 trials, two seeds: **1.015 and 1.021 against 1.044 and
   1.053** for schema 2 (steps; the starting points, free in the model, are 1.6 % of `√W` there: RESEARCH.md 8.12). With 64 walkers the bands do not help (1.063 against 1.054).
 * Each walker has its group fixed (coefficient and residue, as in schema 2) and at every start draws the band according to the shares: with
   50 bands and few walkers, a fixed band per walker left some residues uncovered and certain keys without a solution (found

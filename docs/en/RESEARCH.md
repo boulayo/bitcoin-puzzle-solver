@@ -33,6 +33,7 @@ same number in ALGORITHMS.md. A reference without a file name is to a section of
    * 8.10 Local walks, long jumps and banded zones (schema 3)
    * 8.11 BSGS: the cells of the table and the cost of a lookup
    * 8.12 Where the constant of schema 3 goes, and what is left
+   * 8.13 The last percent: the delay of the distinguished points, and what the layout could still give
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
 ## 4. The interval kangaroo (public key known)
@@ -835,6 +836,103 @@ the endomorphism gives `λk` and `λ²k` (`x` times `β`) almost for free, but f
 (each lies in the interval with probability about `W/n`). The symmetry makes points cheaper (one inversion for `C ± i·G`,
 ALGORITHMS.md 2.1), not keys fewer. Only a non-uniform key (nothing of the kind in the solved keys, 4.6) or Grover's algorithm (8.2) would
 change `W/2`.
+
+### 8.13 The last percent: the delay of the distinguished points, and what the layout could still give (after 1.15.1)
+
+The owner asked for the remaining percent of 8.12, even one, in two forms: parameters that leave the walk alone (a campaign goes on as it is)
+and, for new campaigns only, a fourth schema with the shares, bands and zones re-optimized. Tools as in 8.12 (`kwalk`, `kcover.py`, `kbands.py`,
+`pzsolve kstat`), the errors are one standard error. Outcome: the overhead term of `dp_bits` goes from 0.01 to 0.005 (about 0.4 % of the steps
+where RAM does not set `dp_bits`, for twice the table and twice `dp.bin`); the layout is not changed, because the best layout found in the
+family of the banded zones is 0.2 % better than schema 3 in the exact model and about 1 ± 0.35 % in the walk model, and the curve does not
+separate the two: the bar of the question is not reached.
+
+**What a resumed campaign needs, and what is a schema.** The jump table id (`kang_jump_id`) covers the 272 jumps, which depend on the seed and
+`W` only. On resume the walkers do not take up their old walks: every session draws new starts (the herd streams are seeded with the session
+number, `kang_worker_new`), and the points of the earlier sessions stay useful because the new walks run on the same jump table with the same
+coefficients and residues, so a new trail meets an old one as the trails of two threads do. The shares of the species and the bands decide how
+densely each part of a zone is covered, not whether the recorded points keep their meaning: a build with other shares or other bands would resume
+a campaign and use its `dp.bin` (checked with a `dp.bin` of 1.15.1 resumed by this version, which also lowers `dp_bits` by one: the points are
+loaded and the key is found). What cannot change without a new log format are the kind codes (coefficients 0, 1, 3 and the signs), the residues
+mod 12 (points of other residues are harmless but never met) and the jumps. A new layout is therefore a question of gain alone; with the numbers
+below there is none worth a second table of species.
+
+**A. The delay of the distinguished points.** After the collision that solves, the walker that arrived second on the shared trail still has to
+reach a distinguished point, `2^dp` steps on average, while the whole herd walks: about `K·2^dp` steps. The overhead rule keeps `K·2^dp/√W`
+between half the term and the term, so with 0.01 the delay is 0.5 to 1 % of `√W`, 0.7 % on average over the position of `√W/K` between two
+powers of two. Measured, in units of `√W`:
+
+| | `W`, walkers | `dp` 2 | `dp` 3 | `dp` 4 | difference 3 − 2 | per `K·2^dp/√W` |
+|---|---|---|---|---|---|---|
+| `kwalk`, delay (cost − `t_coll`), 1500 trials each | 2^36, 1024 | 0.0149 ± 0.0011 | 0.0293 ± 0.0009 | 0.0599 ± 0.0015 | 0.0144 | 0.92 to 0.96 |
+| `kwalk`, delay, 1000 trials each | 2^40, 4096 | 0.0133 ± 0.0004 | 0.0278 ± 0.0009 | | 0.0145 | 0.85 to 0.93 |
+| real curve, `kstat 36 6000 1 256 dp`, the same 6000 keys and seeds in both arms | 2^36, 1024 | 1.0660 ± 0.0073 | 1.0886 ± 0.0075 | | 0.0226 ± 0.0043 (paired, correlation 0.83) | 1.45 ± 0.27 |
+| real curve, `kstat 40 2500 1 256 dp`, the same 2500 keys and seeds | 2^40, 4096 | 1.0589 ± 0.0116 | 1.0702 ± 0.0114 | | 0.0112 ± 0.0065 (paired, correlation 0.84) | 0.72 ± 0.42 |
+
+The two curve measurements together give 1.16 ± 0.22 steps per `K·2^dp` (the model 0.95, 8.12 had 1.0 to 1.2 with `dp` 2 to 8): halving the
+term saves 0.0036·1.16 ≈ **0.4 % of `√W`** on average (0.3 to 0.55 % by the position of `√W/K`), with a standard error of 0.08 %. The price is
+twice the entries in the table and twice the records in `dp.bin`, and only where the overhead term decides; where memory decides nothing
+changes. At the scale of puzzle 140 (`√W = 2^69.5`, `--mem` 40 % of the RAM, 16 bytes per entry, 32 per record):
+
+| walkers | RAM | `dp_bits` 0.01 → 0.005 | table | `dp.bin` | delay |
+|---|---|---|---|---|---|
+| 2^14 (CPU herd) | any | 48 → 47 | 0.1 → 0.3 GB | 0.1 → 0.2 GB | 0.52 → 0.26 % |
+| 2^20 | 16 GB | 42 (memory) | 4.3 GB | 6.3 GB | 0.52 % |
+| 2^20 | 32 GB and more | 42 → 41 | 8.6 → 17 GB (8.6 at 32 GB, within the limit) | 6.3 → 12.6 GB | 0.52 → 0.26 % |
+| 2^22 | up to 64 GB | 40 to 42 (memory) | 4.3 to 17 GB | 6.3 to 25 GB | 0.5 to 2.1 % |
+| 2^22 | 128 GB | 40 → 39 | 34 GB | 25 → 51 GB | 0.52 → 0.26 % |
+
+0.0025 (four times the files of 1.15.1) would save 0.6 %: not taken, `dp.bin` is what the computers of a shared campaign carry to each other
+(USAGE.md 8.1). The 8-byte entries of 8.12 remain the lever for GPU herds on machines with little RAM (−1.5 % at 16 GB with 2^22 walkers).
+
+**B. The layout.** Three claims of 8.12 were tested as a candidate schema 4.
+* *The shares of the species at the optimum of the ideal model* (0.991 against 0.999, "−0.8 %"). The ideal optimum has no tame walkers of
+  residues 0 and 6 and 40 % of the herd on `3Q`; with those group totals and the bands of schema 3 inside each group the layout costs
+  **1.0553** instead of 1.0342 (`kcover.py` on 1536 points): +2 %. Optimizing the totals for the layout itself gives back 1.0342 with the totals of
+  schema 3 (±0.01): the 0.008 between 0.991 and 0.999 is the price of the geometry, already paid at its minimum, not a gain left on the table.
+* *Bands re-optimized on a fine grid.* `kbands.py` with the specification of schema 3 (bands of 0.02, 0.1 and 0.2 `W`) on 1536 and on 3072
+  points, and with bands half as wide (16, 28 and 38 bands, 186 combinations with the residues) on 1536 points, every result evaluated again
+  on 3072 and on 6144 points (`kcover.py`; the layout optimized on 384 points in 8.10 fitted its grid, 8.12):
+
+| layout | optimized on | cost on its grid | on 3072 | on 6144 | pairs outside `[0, W)` (`uniform`) |
+|---|---|---|---|---|---|
+| schema 3 (in use) | 384 | 1.0304 | 1.0343 | 1.0343 | 1.0208 |
+| the same bands | 1536 | 1.0341 | 1.0341 | 1.0341 | 1.0207 |
+| the same bands | 3072 | 1.0341 | | 1.0341 | 1.0207 |
+| bands half as wide | 1536 | 1.0318 | 1.0319 | 1.0319 | 1.0170 |
+
+  The finer bands hold on the fine grids this time (the optimizer had four times the points per band of the 8.10 run) and give **−0.23 %**,
+  almost all from fewer pairs certifying keys outside the interval (mean `λ·W` 0.7594 against 0.7537); the unevenness over `x` stays.
+* *Zones and the placement of the tame walkers.* The optimizer of 8.10 could place tame walkers up to `±0.08·W` and wild ones beyond the
+  interval (`[−1.2, 0.2]` and `[−3.4, 0.4]`) and gave those bands no share; with wider zones (tame `±0.12·W` in 12 bands, wild `[−1.4, 0.4]`
+  in 18 and `[−3.6, 0.6]` in 21, optimized on 1536 points) the optimum is 1.0341 again, with nothing outside the zones of schema 3.
+
+**The finer bands in the walk model and on the curve.** `kwalk`, `W = 2^36`, 4096 walkers, `dp = 0` (steps by whole rounds; the 4096 starts
+are 1.6 % of `√W` and free): schema 3 **1.0389 ± 0.0025** (50,000 trials over three seeds: 1.0433, 1.0369, 1.0352), the finer bands
+**1.0286 ± 0.0025** (50,000 over two seeds), −1.0 ± 0.35 %; with independent points instead of walks (`iid=1`, 12,000 trials each, what the
+exact model describes) 1.0245 ± 0.0050 against 1.0189 ± 0.0050, −0.5 ± 0.7 %. The three estimates (exact −0.23 %, independent points
+−0.5 ± 0.7 %, walks −1.0 ± 0.35 %) are compatible with one another at two standard errors; the walks may add a little to the gain of the
+exact model (a walk of 66 steps with jumps of `W/2^13` smears a start over about `W/1000`, less than a band), but the puzzles run walks of
+`2^49` steps and `2^20` walkers, where that smear is `W/2^14` and the exact model is the better guide. On the real curve (`pzsolve kstat 36 N 1`
+and `kstat 40 N 1`, the same keys and seeds for both layouts, one thread, a build with the finer table in place of `kang_spec3.inc`):
+
+| `W`, walkers, `dp` | trials per layout | schema 3 | finer bands | difference |
+|---|---|---|---|---|
+| 2^36, 1024, 2 | 60,000 | 1.067 ± 0.0024 | 1.059 ± 0.0023 | −0.8 ± 0.3 % |
+| 2^40, 4096, 2 | 10,000 | 1.051 ± 0.0056 | 1.045 ± 0.0056 | −0.6 ± 0.75 % |
+
+Together −0.8 ± 0.3 % on the test intervals (the walks of two layouts share nothing, so the same keys pair the arms only weakly and the error
+is that of independent arms). The gain of the finer bands is therefore between 0.2 % (exact model, the regime of the puzzles) and 1 % (walk
+model and curve on the test intervals, 2.5 standard errors from zero and 1.8 from the exact model): the bar of the question, 1 % at three
+standard errors, is not reached, and seeing 0.8 % at three would take six times the trials above (a day of four cores). A second table of species in the program
+would mean either a schema of its own with its own log format (campaigns of the two schemas could no longer be merged) or a silent change of
+the coverage of every campaign resumed, for a gain that the exact model puts at a quarter of a percent. The walk is not changed, schema 3
+stays, and the log format with it. The layout is kept as `tools/research/kang_schema3f.txt` for whoever wants to measure
+it further (`kbands.py` with 16, 28 and 38 bands on 1536 points; `kspec_table.py` turns it into a species table).
+
+**C. Walkers per thread, restarts.** Not touched: 8.12 found no excess of the walks from 4096 walkers on, every campaign runs at least 2^14, and
+4096 per CPU thread is the speed optimum of the batch inversion (8.4). A walker whose distinguished point is already in the table with the same
+kind is restarted; letting it walk on would add nothing (its trail is somebody else's from there), and a start costs one scalar multiplication,
+about 1.6 % of `√W` for a herd of 4096 on 2^36 and nothing at the scale of the puzzles.
 
 ## 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
