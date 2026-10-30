@@ -3,6 +3,17 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- CUDA linear search: the additions of SHA-256 and RIPEMD-160, the carries out of the field chains and the normalization of x are `IMAD`
+  with a multiplier of 1 read from the constant bank, so they run on the FMA pipe, which was idle three quarters of the time, and the
+  ALU pipe that bounds the kernel keeps only the rotations, the logic and the carry chains: per key on sm_86 2249 to 1741 ALU-pipe
+  instructions and 515 to 1382 FMA-pipe ones (3150 in all, was 2791), modelled time per key -20 to -23 % (RESEARCH.md section 5 has
+  the model, checked against the 793 M keys/s of the A2000, and the budget per phase). Counted with ptxas, not yet measured on a card:
+  `pzsolve bench --gpu-only` gives the keys/s. The register-capped variants no longer spill; the kangaroo kernels change by a few
+  instructions through the shared field routines; the OpenCL kernels compile to the same code as before.
+
 ## [1.17.0] — 2026-10-30
 
 ### Changed

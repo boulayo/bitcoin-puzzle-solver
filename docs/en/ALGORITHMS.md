@@ -260,7 +260,10 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   add-with-carry builtins on AMD GPUs (and pocl), a branch-free C equivalent elsewhere; on AMD GPUs from gfx9 to gfx12 the product is
   in inline assembly, `v_mad_u64_u32` with its carry out counted by one add-with-carry, on pairs at even and odd positions as on CUDA
   (without it, `-DPZ_NO_ASM`, when the driver refuses it or the device fails the self-test with it). Subtractions of a normalized value
-  (the walker's x and y, the jump points, the centre and the table of the linear search) skip the second correction. **Inversion**: Bernstein–Yang divsteps, 30 per
+  (the walker's x and y, the jump points, the centre and the table of the linear search) skip the second correction. On CUDA the additions
+  of SHA-256 and RIPEMD-160, the carries out of the field chains and, in the linear kernel, the normalization of x are `IMAD` with a
+  multiplier of 1 read from the constant bank: they run on the FMA pipe and leave the ALU pipe, which bounds the linear kernel, to the
+  rotations, the logic and the carry chains (RESEARCH.md section 5, after 1.17.0). **Inversion**: Bernstein–Yang divsteps, 30 per
   round, done in variable time (runs of zero bits at once, up to three bits cancelled per swap). The instruction counts and
   the measurements, made on the sm_86 (Ampere) code and on the reference laptop GPU (20 SM, 4 GB, 192 GB/s, 2 MiB of L2; the card on which the GPU speeds
   in this document were measured): RESEARCH.md section 5.

@@ -348,6 +348,80 @@ with mutations of the new routines, the self-test and the planted-key hunts on t
 * **Need a GPU:** the time of the AMD product (and of the assembly on the drivers that compile OpenCL on Windows), the jump table in
   shared memory.
 
+**After 1.17.0: the two integer pipes of the linear kernel.** Same tools as above (NVRTC 12.0 and `ptxas` for sm_86, the executed path
+of the loops counted on the `nvdisasm` output; sm_75 and sm_89 within a few instructions; AMD ISA from clang 18) and the same checks (the
+self-test and planted-key hunts on the simulated CUDA driver at windows 128, 256 and 512 and with the tuner measuring all six variants,
+on pocl at windows 128 and 512 and for the kangaroo; `tests/t_gpufe.c`; `make test`, the end-to-end tests, clang, MinGW-w64 under Wine).
+The arithmetic on the device itself is still to be timed on a card.
+
+* **The model, checked against the 793 M keys/s of 10.5.** On GA10x an SM partition issues one warp instruction per cycle, to pipes 16
+  lanes wide: the ALU pipe runs `IADD3`, `LOP3`, `SHF`, `LEA`, `SEL`, `PRMT`, `ISETP`, the FMA pipe `IMAD` in all its forms (`IMAD.WIDE`,
+  `IMAD.X`, `IMAD.MOV`, `IMAD.IADD`), and a warp instruction holds its pipe for two cycles. With A and F the instructions per key on the two
+  pipes and O the rest (loads, stores, calls, branches), the 32 keys of a warp take at least **T = max(2A, 2F, A + F + O)** cycles of their
+  partition. 1.17.0 (`linear512m4`, the variant the tuner chose on the A2000): A = 2249, F = 515 (301 of them `IMAD.WIDE`), O = 27, so T =
+  4499 cycles with 62 % of the issue slots in use, and the FMA pipe busy a quarter of the time. The measured 793 M keys/s are 6100 cycles
+  per 32 keys per partition at the 1.89 GHz of the probes (80 partitions), 74 % of T: the ALU pipe is the bound, with the rest in
+  dependency stalls, or in a clock below the probes' under a sustained load. The probes of `bench` fix the two rates (`mad.lo` 2.42 T/s,
+  three-input add 2.52 T/s: the same 16 lanes) but not what an `IMAD.WIDE` costs: `mad.hi` runs at 1.00 T/s, 2.4 slots of the pipe, so the
+  budget below is given with `IMAD.WIDE` at 1, 2 and 2.4 slots. 10.5 counted this idea in instructions (+14.5 % for all the adds of both
+  hashes) and dropped it; in the time of the two pipes the same move is -8 %, and the forms below reach -20 to -23 %.
+* **Additions on the FMA pipe.** `mad.lo.u32 d, a, one, b` with `one` a `__constant__` variable (`pz_one`, pz_cuda.h): neither NVRTC nor
+  `ptxas` folds it (the host could overwrite the constant bank), so the add is an `IMAD` whose multiplier is read from c[3][0] as an operand,
+  while `mad.lo` by the immediate 1, or by a `const` variable, goes back to `IADD3` (the finding of 10.5). A three-input sum costs two `IMAD`
+  where one `IADD3` did, so every sum was placed by hand (PZ_ADDF, h_sum and rmd_sum in pz_common.cl):
+  * SHA-256: h + K + w (off the chain of the state), + Ch, + Σ1: four `IMAD`; e = d + t1 one (`ptxas` already had it on `IMAD.IADD`); a = t1 +
+    (Σ0 + Maj) two; the schedule word three. The constant words 9 to 15 and the IV of the first rounds must keep folding: the sums take
+    compile-time flags that say which terms vary, and the constant ones are added as one immediate (without the flags the compiler could not
+    see through the asm: 87 `ISETP` and 140 instructions more per key).
+  * RIPEMD-160: the round constant goes into the message word ahead of the step (one `IMAD` with the constant as immediate, 125 per key: the
+    word is used once per round, so it is the same number of additions as before, off the chain of the state), a + f + (m + K) two `IMAD`;
+    the rotate-and-add stays the `LEA.HI` of `ptxas` (a `SHF` and an `IMAD` would not lower the ALU count); the five output sums `IMAD`.
+  * Field: the carry or borrow out of a chain as `madc.lo.u32 d, x, zero, 0` (= CF, `IMAD.X` with a second constant `pz_zero` as operand), where
+    `addc.u32 d, 0, 0` was a `SEL` and the borrow of `subc.u32` plus its `AND` two instructions: 14 per product, one or two per addition and
+    subtraction (ADDC_CF). The normalization of x3 (`fe_normalize_fma`, the linear kernel only): the eight selects as `mad.lo` under the carry
+    predicate, in one asm block. The parity of y: the carry chain of the normalization and one `LOP3` (`fe_parity`), no select.
+* **Budget per key** (sm_86, `linear512m4`; F counts `IMAD.WIDE` once; the pair loop is C ± i·G for one i, the forward loop one denominator):
+
+  | phase                           | 1.17.0: n / A / F / O     | now: n / A / F / O        |
+  |---------------------------------|---------------------------|---------------------------|
+  | `hash160_w2`, per key           | 2030 / 1911 / 110 / 9     | 2393 / 1453 / 931 / 9     |
+  | pair loop, per 2 keys           | 1338 / 610 / 701 / 27     | 1330 / 517 / 786 / 27     |
+  | forward loop, per 2 keys        | 183 / 66 / 109 / 8        | 182 / 58 / 116 / 8        |
+  | `fe_inv`, per 1024 keys         | 587 / 266 / 282 / 39      | 592 / 288 / 268 / 36      |
+  | **per key**                     | **2791 / 2249 / 515 / 27** | **3150 / 1741 / 1382 / 27** |
+
+  T goes from 4499 to **3482** cycles per 32 keys per partition with `IMAD.WIDE` at one or two slots (2F = 2765 and 3366 against 2A = 3482:
+  the two pipes are nearly even at two slots) and to 3607 at 2.4 slots (then the FMA pipe is the bound): **-20 to -23 %**, the issue slots
+  at 90 % of T (99 % at two slots), which is why the conversion stops here. In the hash 927 `IMAD` replace 457 `IADD3` and 108 `IMAD.IADD`; what
+  stays on the ALU pipe is the floor of the expression on this ISA: 788 `SHF` (the rotations, the three
+  shifts of each sigma), 492 `LOP3`, 154 `LEA.HI`, 8 `PRMT`. The field part keeps 288 ALU instructions per key, 200 of them `IADD3.X`: the
+  E + O sum and the two chains of the reduction (35 per product) and the carry chains of the additions; the products are 263 `IMAD.WIDE`
+  per key (three multiplications and one square) plus 37 in the forward pass; the inversion is 0.6 instructions per key at window 512.
+  Registers: 172 for the free variants (162 on sm_75), 128 for the capped ones with **no spill** on sm_86 and sm_89 (4 bytes before), 12 bytes
+  on sm_75 (8 before), stored once per group outside the loop over the keys; the kangaroo modules change only through the shared field
+  routines: `kang64` 1191 to 1190 per step, `kang128` 1191 to 1189, `kang256` 1193 to 1198, the `b` variants within 10 per two steps, and
+  `kang128b` spills 4 bytes on sm_86 and sm_89 (one slot written per round and read once per two steps; on sm_75 its spill goes from 104 to 52 bytes). OpenCL: PZ_ADDF
+  is a plain addition, and clang produces the same code as before for the linear kernel (4321 instructions on gfx1030, 4540 on gfx1100,
+  4444 on gfx906).
+* **Expected on the A2000.** If the 1600 cycles per warp between T and the measurement stay what they are, 952 M keys/s (+20 %); if they grow
+  with the instruction count, 915 M (+15 %); if the kernel keeps 74 % of T, 1030 M (+30 %). `pzsolve bench --gpu-only` prints the keys/s
+  of the linear kernel (the line `linear search`); the tuner picks the window again on the first run of the new version.
+* **Tried and left out, or left for a card:**
+  * the two shifts of the sigmas (87 `SHF.R` per key) as `mul.hi` by 2^29 and 2^22 from the constant bank (`IMAD.HI`): -87 on the ALU pipe, but
+    at 2.4 slots each the FMA pipe becomes the bound and T does not move (3607); -5 % if `IMAD.HI` took one slot. A card decides;
+  * a rotation as `IMAD.WIDE` by 2^n (the two halves of the product are the two parts of the rotation) and an `IMAD` to join them: 3 to 4
+    FMA slots for one `SHF`; about 40 of the 788 rotations would balance the pipes again, for a gain under 2 %, with 64-bit pairs in a
+    kernel at 128 registers. Not done;
+  * the asm normalization in the kangaroo step: around the arrays in local memory the asm block costs 8 scalar `LDL` and `STL` per step
+    (1199 against 1191), so the kangaroo keeps the selects;
+  * `w[8]` of the SHA message as a multiply-add (`x·2^24 + 0x800000`): `ptxas` emits the same `LEA` either way;
+  * the carry-out with `pz_one` as the multiplicand instead of a live limb: no spill in `kang128b`, but an extra `MOV` of the constant per use
+    (`kang64` 1197, the linear pair loop +5);
+  * the ALU floor of the field part: `x3 = λ² − xs` is an `fe_sub` and a normalization (51 ALU instructions per point); the subtrahend added
+    into the product before its reduction, as the IFMA lanes do since 1.17.0, would need a three-input carry chain, which PTX cannot
+    express (`IADD3.X` has two carries in SASS, `ptxas` never fuses two chains into it); the E + O sum of the product (15 `IADD3.X`) is the
+    price of the aligned `IMAD.WIDE` pairs, and reducing E and O separately costs more chains (27 against 24).
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts
