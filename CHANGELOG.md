@@ -3,6 +3,26 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.17.0] — 2026-10-30
+
+### Changed
+- AVX-512 IFMA lanes (linear search and kangaroo): the subtractions that follow a product (`x3 = λ² − x − x'`, `y3 = λ·t − y`) go into the
+  product as a term added before its reduction, so their carry pass, a stage of the dependency chain of every point, is gone. Measured on
+  one thread: linear search avx512i +2 % (the curve part alone +7 %), kangaroo avx512i +3 to +4 %, avx512i2 unchanged; 280 to 275
+  instructions per key (kangaroo lane step 143.2 to 141.1). The 29-bit engines are unchanged.
+- Kangaroo: where RAM does not set `dp-bits`, the automatic value is one bit lower (the overhead term goes from 0.01 to 0.005 of `√W`):
+  the delay of the last distinguished point, about `0.95·K·2^dp-bits` steps (measured in the walk model and on the real curve, RESEARCH.md
+  8.13), falls from 0.7 % to 0.35 % of the expected steps on average, for twice the table and twice the `dp.bin`. CPU herds and GPU herds
+  up to 2^20 walkers on machines with 32 GB and more are affected; with 2^22 walkers memory sets `dp-bits` below 128 GB and nothing changes.
+  The jumps, the walks and the format of `dp.bin` are unchanged: campaigns resume as they are, and the points already recorded stay valid.
+- `pzsolve kstat` prints the standard error of the mean.
+- The build refuses an incompatible pointer type (`-Werror=incompatible-pointer-types`): GCC only warns about it by default, and a call
+  with the address of a pointer instead of the pointer reads the wrong memory.
+- Documentation: RESEARCH.md 10.6 has the cycle model of the lane engines (ports, the AVX-512 clock, where the cycles of a key go) and the
+  changes that were measured and dropped; 8.13 records the last percent of the kangaroo constant: finer start bands gave 0.8 ± 0.3 % on the
+  real curve and 0.23 % in the exact model of the puzzles, below the bar for a change of the walk, and the finding that a resume draws new
+  starts, so the bands and shares are not part of what a resume needs (`tools/research/kang_schema3f.txt` keeps the layout).
+
 ## [1.16.0] — 2026-10-30
 
 ### Changed
