@@ -518,6 +518,12 @@ int gpu_selftest(void)
             ok = gpu_test_linear(s);
             gpu_linear_release_program(s);
         }
+        const int nf = gpu_form_variants_of(&devs[i], &vs);
+        for (int k = 0; k < nf && ok; k++) {          /* and its one-pipe form */
+            s->variant = vs[k];
+            ok = gpu_test_linear(s);
+            gpu_linear_release_program(s);
+        }
         if (ok) { gpu_session_release(s); memset(s, 0, sizeof *s); ok = gpu_session_open(s, &devs[i]); }
         int ks[32];
         const int nk = gpu_kvariants_of(&devs[i], ks);

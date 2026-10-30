@@ -50,6 +50,10 @@ typedef unsigned short ushort;
  * section 5). The multiplier is read from c[3][0] as an operand, or held in one register where the addend is an immediate. */
 __constant__ uint pz_one = 1;
 __constant__ uint pz_zero = 0;
+#ifdef PZ_ONE_PIPE              /* the one-pipe form (modules.txt): plain additions, the form of 1.17.0, for cards whose lanes do both
+                                 * integer multiplies and additions, where only the number of instructions counts; the tuner measures both */
+#define PZ_ADDF(a, b) ((a) + (b))
+#else
 inline uint pz_addf(uint a, uint b)
 {
     uint d;
@@ -57,6 +61,7 @@ inline uint pz_addf(uint a, uint b)
     return d;
 }
 #define PZ_ADDF(a, b) pz_addf((a), (b))
+#endif
 /* The carry out of an ADDITION chain as a 0/1 value: x*0 + 0 + CF on the FMA pipe, where addc.u32 d, 0, 0 is a SEL on the ALU pipe;
  * x is any register already at hand (its value does not matter: the zero comes from the constant bank as an operand, so the
  * instruction needs no other register). Never after sub.cc/subc: ptxas implements a subtraction as the addition of the complement

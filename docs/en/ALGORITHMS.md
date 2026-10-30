@@ -276,10 +276,17 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
-  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
-  (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
-  run on a device the program measures them all (a few seconds each) and keeps the default (256 with CUDA, 128 with OpenCL) unless another one
-  is more than 3% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are ten variants: window 128, 256 or 512 with free registers
+  (≈ 190) or limited to 128 (`__launch_bounds__(128, 4)`: 16 resident warps per SM, and a grid of 4 blocks per SM to fill them), window 256 or
+  512 limited to 96 registers (`__launch_bounds__(128, 5)`: 20 warps, 5 blocks per SM) and window 1024 with either cap; with OpenCL four:
+  window 64, 128, 256 or 512. On the first run on a device the program measures them all (a few seconds each) and keeps the default (256 with
+  CUDA, 128 with OpenCL) unless another one is more than 3% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name,
+  driver version, compute units, program version). The CUDA kernel also exists in two arithmetic forms, chosen per card: the two-pipe form
+  puts the additions of the hash and the carries of the field on the FMA pipe (`IMAD`), which pays on Ampere and Ada, whose SM partitions
+  have separate 16-lane pipes for `IMAD` and for the other integer instructions (RESEARCH.md section 5), and the one-pipe form keeps every
+  addition on the ALU pipe, 12 % fewer instructions in all, for cards whose lanes do both (unified datapaths). The windows 256, 512 and 1024
+  with either register cap exist in both forms (`linear512m4` and `linear512p4` in `modules.txt`); after the ten two-pipe variants the tuner
+  measures the one-pipe twins of the two fastest and keeps the fastest of all, with the same bit-exact check before the choice is saved.
   `PZ_GPU_HALF=N` forces it, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
 * **Kangaroo**: `NK` walkers per work-item, so that one inversion (by divstep) serves `NK` steps, with the same "fused" scheme as the linear
   kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. The state of the walkers is in

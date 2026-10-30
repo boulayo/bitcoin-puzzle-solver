@@ -232,8 +232,8 @@ three attempts with a short pause, as a transient error such as a display reset 
 
 ### 7.4 First run and kernel tuning
 
-The driver compiles the kernels for your card (with CUDA about 10 s per module; with the tuning of the variants
-of the linear kernel about one minute, then the kangaroo variants the first time you use it) and keeps the result in its cache:
+The driver compiles the kernels for your card (with CUDA about 10 s per module; with the tuning of the ten variants
+of the linear kernel (ten, then the one-pipe form of the two fastest) one to two minutes, then the kangaroo variants the first time you use it) and keeps the result in its cache:
 from the next runs on, the startup is immediate. With several cards the tuning of the devices runs at the same time, and cards of one type are
 measured once (the others read the result: `from earlier tuning`). The tuning is stored in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` on Windows,
 `~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes. The default variant stays unless another one is

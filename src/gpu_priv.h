@@ -9,10 +9,14 @@
 #include "kangaroo_priv.h"
 
 /* Compile-time variants of the linear kernel: half-window (group = 2*half keys) | minimum resident blocks per SM << 16
- * (CUDA only: 4 caps the kernel at 128 registers, trading a few spills for more resident warps). The autotuner measures
- * them on the device and keeps the fastest. */
+ * (CUDA only: 4 caps the kernel at 128 registers, 5 at 96, trading a few spills outside the loops for more resident warps)
+ * | the arithmetic form << 20 (CUDA only: 0 the additions of the hash and the carries on the FMA pipe, for the separate integer
+ * pipes of Ampere and Ada; 1 every addition on the ALU pipe, fewer instructions in all, for cards whose lanes do both: the
+ * one-pipe form). The autotuner measures them on the device and keeps the fastest. */
 #define VAR_HALF(v) ((v) & 0xFFFF)
-#define VAR_MINB(v) ((v) >> 16)
+#define VAR_MINB(v) (((v) >> 16) & 0xF)
+#define VAR_FORM(v) (((v) >> 20) & 1)
+#define VAR_FORMFLAG (1 << 20)
 
 /* Kangaroo kernel variants: kangaroos per work-item (NK: one field inversion is shared by NK steps, so larger is cheaper
  * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion
@@ -147,6 +151,7 @@ void gpu_health_ok(gpu_health *h, double now);          /* a launch succeeded (n
 
 /* gpu_tune.c: the variants of the kernels, their choice for a device (remembered on disk) and the herd size */
 int gpu_variants_of(const rt_dev *d, const int **v);
+int gpu_form_variants_of(const rt_dev *d, const int **v);   /* the one-pipe twins (CUDA), measured after the others */
 int gpu_default_variant(const rt_dev *d);
 int gpu_kvariants_of(const rt_dev *d, int *out);
 size_t gpu_kang_threads(const gpu_session *s);

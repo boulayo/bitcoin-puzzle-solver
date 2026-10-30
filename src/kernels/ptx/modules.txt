@@ -7,8 +7,9 @@
 #
 # name      the module, and the name of its file in this folder
 # kind      linear (src/kernels/pz_linear.cl), kang (pz_kang.cl) or test (pz_test.cl); all three come after pz_common.cl
-# cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel, the
-#           configuration of the batch products of a kangaroo kernel (0 at every walker, 1 at every other, 2 at every fourth)
+# cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel, plus
+#           16 for its one-pipe form (PZ_ONE_PIPE, bit 20 of the parameter); the configuration of the batch products of a kangaroo kernel
+#           (0 at every walker, 1 at every other, 2 at every fourth)
 # base      an earlier module whose text is the dictionary of this one in the compressed embedding (src/lz.c), or - for none; the modules of
 #           a family differ in few lines, so all the PTX takes about 1 MB instead of 12. A base comes before the modules that use it
 # defines   the -D options of the NVRTC build, or - for none. The size of the parameter of rt_build (HALF, or NK) is the value of -DHALF / -DNK
@@ -46,3 +47,17 @@ kang32         kang    0    kang64     -DNK=32 -DPZ_MINB=4
 kang16b        kang    1    kang64b    -DNK=16 -DMC=2 -DPZ_MINB=4
 kang32b        kang    1    kang64b    -DNK=32 -DMC=2 -DPZ_MINB=4
 test           test    0    linear128  -DPZ_FMA_CARRY
+# at least 5 resident blocks per SM: 96 registers, 20 warps per SM; the spills (about 240 bytes) are outside the loops over the keys
+linear256m5    linear  5    linear256m4 -DHALF=256 -DPZ_MINB=5 -DPZ_FMA_CARRY
+linear512m5    linear  5    linear512m4 -DHALF=512 -DPZ_MINB=5 -DPZ_FMA_CARRY
+# a window of 1024 (32 KiB of private memory per work-item): half the inversions, for the tuner to measure
+linear1024m4   linear  4    linear128m4 -DHALF=1024 -DPZ_MINB=4 -DPZ_FMA_CARRY
+linear1024m5   linear  5    linear1024m4 -DHALF=1024 -DPZ_MINB=5 -DPZ_FMA_CARRY
+# the one-pipe form (PZ_ONE_PIPE, no PZ_FMA_CARRY): every addition on the ALU pipe, the form of 1.17.0 with fewer instructions in all, for
+# cards whose lanes do both integer multiplies and additions (the tuner measures it against the two-pipe form of the best windows)
+linear256p4    linear  20   linear256m4 -DHALF=256 -DPZ_MINB=4 -DPZ_ONE_PIPE
+linear512p4    linear  20   linear256p4 -DHALF=512 -DPZ_MINB=4 -DPZ_ONE_PIPE
+linear1024p4   linear  20   linear256p4 -DHALF=1024 -DPZ_MINB=4 -DPZ_ONE_PIPE
+linear256p5    linear  21   linear256p4 -DHALF=256 -DPZ_MINB=5 -DPZ_ONE_PIPE
+linear512p5    linear  21   linear512p4 -DHALF=512 -DPZ_MINB=5 -DPZ_ONE_PIPE
+linear1024p5   linear  21   linear1024p4 -DHALF=1024 -DPZ_MINB=5 -DPZ_ONE_PIPE

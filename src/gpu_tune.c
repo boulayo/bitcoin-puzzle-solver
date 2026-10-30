@@ -9,7 +9,12 @@
 #include <math.h>
 
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
-static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
+/* CUDA: the window, and above bit 16 the resident blocks per SM the kernel is compiled for (modules.txt): 4 caps the registers at 128,
+ * 5 at 96 (the spills of both are outside the loops over the keys) */
+static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16, 256 | 5 << 16, 512 | 5 << 16, 1024 | 4 << 16, 1024 | 5 << 16};
+/* the same windows and caps in the one-pipe form (VAR_FORMFLAG, modules.txt): measured after the variants above, for the two best of them */
+static const int CU_FORM_VARIANTS[] = {256 | 4 << 16 | VAR_FORMFLAG, 512 | 4 << 16 | VAR_FORMFLAG, 1024 | 4 << 16 | VAR_FORMFLAG,
+                                       256 | 5 << 16 | VAR_FORMFLAG, 512 | 5 << 16 | VAR_FORMFLAG, 1024 | 5 << 16 | VAR_FORMFLAG};
 static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16};
 static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16};
 
@@ -18,6 +23,18 @@ int gpu_variants_of(const rt_dev *d, const int **v)
     if (d->api == RT_CUDA) { *v = CU_VARIANTS; return (int)(sizeof CU_VARIANTS / sizeof *CU_VARIANTS); }
     *v = CL_VARIANTS;
     return (int)(sizeof CL_VARIANTS / sizeof *CL_VARIANTS);
+}
+int gpu_form_variants_of(const rt_dev *d, const int **v)
+{
+    if (d->api != RT_CUDA) return 0;
+    *v = CU_FORM_VARIANTS;
+    return (int)(sizeof CU_FORM_VARIANTS / sizeof *CU_FORM_VARIANTS);
+}
+/* the one-pipe twin of a two-pipe variant (same window and cap), or 0 when there is none */
+static int one_pipe_twin(int v)
+{
+    for (size_t i = 0; i < sizeof CU_FORM_VARIANTS / sizeof *CU_FORM_VARIANTS; i++) if (CU_FORM_VARIANTS[i] == (v | VAR_FORMFLAG)) return CU_FORM_VARIANTS[i];
+    return 0;
 }
 int gpu_default_variant(const rt_dev *d) { return d->api == RT_CUDA ? 256 : 128; }
 /* Work-items of a herd sized to take half the L2 cache with `nk` walkers each, in blocks of 128; 0 when the device has no
@@ -105,7 +122,14 @@ static bool valid_variant(const rt_dev *d, int v)
     const int *vs;
     int n = gpu_variants_of(d, &vs);
     for (int i = 0; i < n; i++) if (vs[i] == v) return true;
+    n = gpu_form_variants_of(d, &vs);
+    for (int i = 0; i < n; i++) if (vs[i] == v) return true;
     return false;
+}
+/* the variant PZ_GPU_HALF=h names: the plain window, or the register-capped one where the window exists only capped (1024); 0 if none */
+static int env_variant(const rt_dev *d, int h)
+{
+    return valid_variant(d, h) ? h : valid_variant(d, h | 4 << 16) ? h | 4 << 16 : 0;
 }
 static char *kvariant_name(int v, char *b, size_t n)
 {
@@ -116,8 +140,10 @@ static char *kvariant_name(int v, char *b, size_t n)
 }
 static char *variant_name(int v, char *b, size_t n)
 {
-    if (VAR_MINB(v)) snprintf(b, n, "%d, register cap", VAR_HALF(v));
-    else snprintf(b, n, "%d", VAR_HALF(v));
+    const char *form = VAR_FORM(v) ? ", one pipe" : "";
+    if (VAR_MINB(v) > 4) snprintf(b, n, "%d, register cap, %d blocks%s", VAR_HALF(v), VAR_MINB(v), form);
+    else if (VAR_MINB(v)) snprintf(b, n, "%d, register cap%s", VAR_HALF(v), form);
+    else snprintf(b, n, "%d%s", VAR_HALF(v), form);
     return b;
 }
 
@@ -263,6 +289,23 @@ static double linear_measure_variant(gpu_session *s, int v)
     return rate;
 }
 static void linear_set_variant(gpu_session *s, int v) { s->variant = v; }
+/* After the two-pipe variants: the one-pipe twins (same window and cap) of the two fastest that have one. The form that wins depends on the
+ * card: separate integer pipes (Ampere, Ada) favour the two-pipe form, lanes that do both the one with fewer instructions. */
+static int linear_more_variants(const int *vs, const double *rate, int n, int *out, int max)
+{
+    int no = 0;
+    for (int pass = 0; pass < 2 && no < max; pass++) {
+        int b = -1;
+        for (int i = 0; i < n; i++) {
+            bool taken = false;
+            for (int j = 0; j < no; j++) taken = taken || out[j] == one_pipe_twin(vs[i]);
+            if (rate[i] > 0 && one_pipe_twin(vs[i]) && !taken && (b < 0 || rate[i] > rate[b])) b = i;
+        }
+        if (b < 0) break;
+        out[no++] = one_pipe_twin(vs[b]);
+    }
+    return no;
+}
 static int linear_code(const gpu_session *s) { return s->variant; }
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
@@ -342,6 +385,8 @@ typedef struct {
     void (*finish)(gpu_session *s);                     /* what the check leaves behind to release (may be NULL) */
     int (*code)(const gpu_session *s);                  /* the variant that is set, as it is saved */
     char *(*name)(int variant, char *buf, size_t n);
+    /* the variants to measure after the first pass, from its rates (NULL: none): the one-pipe twins of the two best linear variants */
+    int (*more)(const int *vs, const double *rate, int n, int *out, int max);
     /* the log lines: GPU[%d] and the name of the variant that was saved; GPU[%d] and the number of variants; the title of the table of rates
      * (and of the line of the choice) and the unit of the rates; the word before each variant in them and after "picking"; what the table says
      * of a variant that cannot run (NULL: its rate, 0 included) */
@@ -359,21 +404,27 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
     char nb[64];
     rt_log(PZ_LOG_INFO, op->intro_fmt, idx, op->nv);
     double rate[32] = {0};
-    int best = 0;
-    for (int i = 0; i < op->nv; i++) {
-        rate[i] = op->measure(s, op->vs[i]);
-        if (op->vs[i] == op->def) best = i;
+    int best = 0, nv = op->nv, vs[32];
+    memcpy(vs, op->vs, (size_t)nv * sizeof *vs);
+    for (int i = 0; i < nv; i++) {
+        rate[i] = op->measure(s, vs[i]);
+        if (vs[i] == op->def) best = i;
+    }
+    if (op->more) {
+        int extra[32];
+        const int ne = op->more(vs, rate, nv, extra, 32 - nv);
+        for (int i = 0; i < ne; i++) { vs[nv] = extra[i]; rate[nv] = op->measure(s, extra[i]); nv++; }
     }
     {
         int fastest = 0;
-        for (int i = 1; i < op->nv; i++) if (rate[i] > rate[fastest]) fastest = i;
+        for (int i = 1; i < nv; i++) if (rate[i] > rate[fastest]) fastest = i;
         if (rate[fastest] > rate[best] * 1.03) best = fastest;
     }
     char line[1000];
     size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: %s (%s):", idx, op->head, op->unit);
-    for (int i = 0; i < op->nv && o < sizeof line; i++) {
+    for (int i = 0; i < nv && o < sizeof line; i++) {
         char r[32];
-        o += (size_t)snprintf(line + o, sizeof line - o, "%s %s%s %s", i ? ";" : "", op->entry, op->name(op->vs[i], nb, sizeof nb),
+        o += (size_t)snprintf(line + o, sizeof line - o, "%s %s%s %s", i ? ";" : "", op->entry, op->name(vs[i], nb, sizeof nb),
                               rate[i] > 0 || !op->no_rate ? pz_fmt_si(rate[i], r, sizeof r) : op->no_rate);
     }
     if (rate[best] <= 0) {
@@ -381,26 +432,26 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
         if (op->no_data_fmt) rt_log(PZ_LOG_WARN, op->no_data_fmt, line, op->name(op->code(s), nb, sizeof nb));
         return;
     }
-    rt_log(PZ_LOG_DEBUG, "%s; picking %s%s%s", line, op->entry, op->name(op->vs[best], nb, sizeof nb),
-           op->vs[best] == op->def ? " (default; none >3% faster)" : "");
+    rt_log(PZ_LOG_DEBUG, "%s; picking %s%s%s", line, op->entry, op->name(vs[best], nb, sizeof nb),
+           vs[best] == op->def ? " (default; none >3% faster)" : "");
     {
         char r[32], why[160], db[64];
         int di = 0;
-        for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) di = i;
+        for (int i = 0; i < nv; i++) if (vs[i] == op->def) di = i;
         const char *dname = op->name(op->def, db, sizeof db);
         if (best == di) snprintf(why, sizeof why, "the default: no other variant >3%% faster");
         else if (rate[di] > 0) snprintf(why, sizeof why, "+%.1f%% over %s%s", 100.0 * (rate[best] / rate[di] - 1), op->entry, dname);
         else snprintf(why, sizeof why, "the default %s%s cannot run", op->entry, dname);
-        rt_log(PZ_LOG_INFO, "GPU[%d]: %s: %s%s (%s %s, %s)", idx, op->head, op->entry, op->name(op->vs[best], nb, sizeof nb), pz_fmt_si(rate[best], r, sizeof r),
+        rt_log(PZ_LOG_INFO, "GPU[%d]: %s: %s%s (%s %s, %s)", idx, op->head, op->entry, op->name(vs[best], nb, sizeof nb), pz_fmt_si(rate[best], r, sizeof r),
                op->unit, why);
     }
-    op->set(s, op->vs[best]);
+    op->set(s, vs[best]);
     const bool ok = op->check(s);
     if (op->finish) op->finish(s);
     if (ok) {
         tune_cache_put(&s->info, op->kang, op->code(s));
     } else {
-        rt_log(PZ_LOG_WARN, op->bad_check_fmt, idx, op->name(op->vs[best], nb, sizeof nb));
+        rt_log(PZ_LOG_WARN, op->bad_check_fmt, idx, op->name(vs[best], nb, sizeof nb));
         op->set(s, op->def);
     }
 }
@@ -439,17 +490,17 @@ void gpu_linear_autotune(gpu_session *s, int idx)
     const rt_dev *d = &s->info;
     s->variant = gpu_default_variant(d);
     if (g_env.gpu_half) {
-        const int h = g_env.gpu_half;
-        if (valid_variant(d, h)) { s->variant = h; rt_log(PZ_LOG_INFO, "GPU[%d]: kernel window set by PZ_GPU_HALF: %d", idx, h); }
+        const int h = g_env.gpu_half, v = env_variant(d, h);
+        if (v) { s->variant = v; rt_log(PZ_LOG_INFO, "GPU[%d]: kernel window set by PZ_GPU_HALF: %d", idx, h); }
         else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_HALF=%d ignored (allowed values with %s: %s)", idx, h, rt_api_name(d->api),
-                    d->api == RT_CUDA ? "128, 256, 512" : "64, 128, 256, 512");
+                    d->api == RT_CUDA ? "128, 256, 512, 1024" : "64, 128, 256, 512");
         return;
     }
     if (tune_off(d)) return;
     tune_ops op = {.kang = false, .def = gpu_default_variant(d), .measure = linear_measure_variant, .set = linear_set_variant,
-                   .check = gpu_test_linear, .finish = gpu_linear_release_program, .code = linear_code, .name = variant_name,
+                   .check = gpu_test_linear, .finish = gpu_linear_release_program, .code = linear_code, .name = variant_name, .more = linear_more_variants,
                    .cached_fmt = "GPU[%d]: kernel with window %s (from earlier tuning)",
-                   .intro_fmt = "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...",
+                   .intro_fmt = "GPU[%d]: tuning the kernel (one time only: %d variants and the one-pipe form of the two fastest, the driver compiles them the first time)...",
                    .head = "linear kernel tuning", .unit = "keys/s", .entry = "window ",
                    .bad_check_fmt = "GPU[%d]: variant %s failed the correctness check: using the default and not saving the choice"};
     const int *vs;
