@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.19.0] — 2026-10-30
 
 ### Changed
 - CPU linear search, lane engines: the hash filter has fewer operations on the two vector ports. The majority function of SHA-256 is one
