@@ -12,6 +12,10 @@ typedef long s64;
 /* Every kernel takes the number of work-items as its last argument: CUDA launches whole blocks, so the threads past
  * the end must return at once (with OpenCL the global size is exact and the test never fires). */
 #define PZ_GUARD(gid) if ((gid) >= pz_n) return
+/* an addition the CUDA build puts on the FMA pipe (pz_cuda.h); a plain addition elsewhere */
+#ifndef PZ_ADDF
+#define PZ_ADDF(a, b) ((a) + (b))
+#endif
 
 typedef uint u32;
 typedef ulong u64;
@@ -972,7 +976,27 @@ PZ_NOINLINE int ge_add_mul_small(ge *r, const ge *a, const ge *D, uint t)
 #define ROTR(x, n) rotate((uint)(x), (uint)(32 - (n)))
 #define ROTL(x, n) rotate((uint)(x), (uint)(n))
 
-/* digest words (big-endian SHA-256 state) of the 33-byte message pfx||x ; xw = big-endian words of x */
+/* Sum of up to four terms and a constant for the hash, t0 + t1 + t2 + t3 + k, where the flags say which terms vary from key to key:
+ * the others are constants of the message or of the first rounds, folded with k by the compiler into one constant, so that only
+ * the variable terms and that constant go through PZ_ADDF, the addition the CUDA build puts on the FMA pipe (a constant operand
+ * it cannot see through would cost an instruction). All the flags are compile-time constants once the rounds are unrolled. */
+inline uint h_sum(uint t0, bool v0, uint t1, bool v1, uint t2, bool v2, uint t3, bool v3, uint k)
+{
+    const uint kc = k + (v0 ? 0u : t0) + (v1 ? 0u : t1) + (v2 ? 0u : t2) + (v3 ? 0u : t3);
+    uint s = 0;
+    int n = 0;
+    if (v0) { s = t0; n++; }
+    if (v1) { s = n ? PZ_ADDF(s, t1) : t1; n++; }
+    if (v2) { s = n ? PZ_ADDF(s, t2) : t2; n++; }
+    if (v3) { s = n ? PZ_ADDF(s, t3) : t3; n++; }
+    if (kc) s = n ? PZ_ADDF(s, kc) : kc;
+    return s;
+}
+
+/* digest words (big-endian SHA-256 state) of the 33-byte message pfx||x ; xw = big-endian words of x.
+ * Words 9 to 15 of the message are constants (padding and length), the state of the first rounds is the IV: those terms fold.
+ * On CUDA every addition of a round is an IMAD on the FMA pipe (h_sum and PZ_ADDF); the rotations and the logic stay on the ALU
+ * pipe, which bounds the kernel: RESEARCH.md section 5. (h_sum and PZ_ADDF are plain additions on OpenCL.) */
 inline void sha256_33(uint pfx, const uint xw[8], uint out[8])
 {
     uint w[16];
@@ -989,22 +1013,28 @@ inline void sha256_33(uint pfx, const uint xw[8], uint out[8])
         uint wi;
         if (i < 16) wi = w[i];
         else {
+            /* w[i-16] + s0(w[i-15]) + w[i-7] + s1(w[i-2]): a term is a constant when its word is one of 9..15 */
             uint w15 = w[(i + 1) & 15], w2 = w[(i + 14) & 15];
             uint s0 = ROTR(w15, 7) ^ ROTR(w15, 18) ^ (w15 >> 3);
             uint s1 = ROTR(w2, 17) ^ ROTR(w2, 19) ^ (w2 >> 10);
-            wi = w[i & 15] + s0 + w[(i + 9) & 15] + s1;
+            wi = h_sum(w[i & 15], i < 25 || i > 31, s0, i < 24 || i > 30, w[(i + 9) & 15], i > 22, s1, i > 17, 0u);
             w[i & 15] = wi;
         }
         uint S1 = ROTR(e, 6) ^ ROTR(e, 11) ^ ROTR(e, 25);
         uint ch = (e & f) ^ (~e & g);
-        uint t1 = h + S1 + ch + SHA_K[i] + wi;
         uint S0 = ROTR(a, 2) ^ ROTR(a, 13) ^ ROTR(a, 22);
         uint mj = (a & b) ^ (a & c) ^ (b & c);
-        uint t2 = S0 + mj;
-        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+        uint t1, t2;
+        if (i == 0) { t1 = h + S1 + ch + SHA_K[0] + wi; t2 = S0 + mj; }   /* only w[0] varies */
+        else {
+            /* h and d are the IV up to i = 3, the word is a constant for i = 9..15 */
+            t1 = h_sum(h, i >= 4, ch, true, S1, true, wi, i < 9 || i > 15, SHA_K[i]);
+            t2 = PZ_ADDF(S0, mj);
+        }
+        h = g; g = f; f = e; e = PZ_ADDF(d, t1); d = c; c = b; b = a; a = PZ_ADDF(t1, t2);
     }
-    out[0] = a + SHA_H0[0]; out[1] = b + SHA_H0[1]; out[2] = c + SHA_H0[2]; out[3] = d + SHA_H0[3];
-    out[4] = e + SHA_H0[4]; out[5] = f + SHA_H0[5]; out[6] = g + SHA_H0[6]; out[7] = h + SHA_H0[7];
+    out[0] = PZ_ADDF(a, SHA_H0[0]); out[1] = PZ_ADDF(b, SHA_H0[1]); out[2] = PZ_ADDF(c, SHA_H0[2]); out[3] = PZ_ADDF(d, SHA_H0[3]);
+    out[4] = PZ_ADDF(e, SHA_H0[4]); out[5] = PZ_ADDF(f, SHA_H0[5]); out[6] = PZ_ADDF(g, SHA_H0[6]); out[7] = PZ_ADDF(h, SHA_H0[7]);
 }
 
 inline uint rmd_f(int rd, uint x, uint y, uint z)
@@ -1024,6 +1054,17 @@ inline uint bswap32(uint x) { return PZ_BSWAP(x); }   /* CUDA: one PRMT, where t
 inline uint bswap32(uint x) { return (x >> 24) | ((x >> 8) & 0xff00u) | ((x << 8) & 0xff0000u) | (x << 24); }
 #endif
 
+/* a + f + m + K of a RIPEMD-160 step: f (the last value) added last. Words 8 to 15 of the message are constants (padding, length),
+ * and so is their sum with the round constant; a variable word takes the round constant ahead of the step (the word is used once
+ * per round, so it is the same number of additions, off the chain of the state). On CUDA the additions are IMAD on the FMA pipe
+ * (RESEARCH.md section 5); elsewhere plain additions. */
+inline uint rmd_sum(uint a, uint f, uint m, bool mvar, uint k)
+{
+    if (mvar) return PZ_ADDF(f, PZ_ADDF(a, k ? PZ_ADDF(m, k) : m));
+    const uint kc = m + k;
+    return kc ? PZ_ADDF(f, PZ_ADDF(a, kc)) : PZ_ADDF(f, a);
+}
+
 /* RIPEMD-160 of the 32-byte SHA-256 digest; out = five little-endian words */
 inline void ripemd160_32(const uint dig[8], uint out[5])
 {
@@ -1039,17 +1080,19 @@ inline void ripemd160_32(const uint dig[8], uint out[5])
     uint a2 = a, b2 = b, c2 = c, d2 = d, e2 = e;
 #pragma unroll
     for (int j = 0; j < 80; j++) {
-        const int rd = j / 16;
-        uint t = ROTL(a + rmd_f(rd, b, c, d) + m[RMD_RL[j]] + RMD_KL[rd], RMD_SL[j]) + e;
+        const int rd = j / 16, il = RMD_RL[j], ir = RMD_RR[j];
+        uint t = rmd_sum(a, rmd_f(rd, b, c, d), m[il], il < 8, RMD_KL[rd]);
+        t = ROTL(t, RMD_SL[j]) + e;
         a = e; e = d; d = ROTL(c, 10); c = b; b = t;
-        t = ROTL(a2 + rmd_f(4 - rd, b2, c2, d2) + m[RMD_RR[j]] + RMD_KR[rd], RMD_SR[j]) + e2;
+        t = rmd_sum(a2, rmd_f(4 - rd, b2, c2, d2), m[ir], ir < 8, RMD_KR[rd]);
+        t = ROTL(t, RMD_SR[j]) + e2;
         a2 = e2; e2 = d2; d2 = ROTL(c2, 10); c2 = b2; b2 = t;
     }
-    out[0] = 0xEFCDAB89u + c + d2;
-    out[1] = 0x98BADCFEu + d + e2;
-    out[2] = 0x10325476u + e + a2;
-    out[3] = 0xC3D2E1F0u + a + b2;
-    out[4] = 0x67452301u + b + c2;
+    out[0] = PZ_ADDF(PZ_ADDF(c, d2), 0xEFCDAB89u);
+    out[1] = PZ_ADDF(PZ_ADDF(d, e2), 0x98BADCFEu);
+    out[2] = PZ_ADDF(PZ_ADDF(e, a2), 0x10325476u);
+    out[3] = PZ_ADDF(PZ_ADDF(a, b2), 0xC3D2E1F0u);
+    out[4] = PZ_ADDF(PZ_ADDF(b, c2), 0x67452301u);
 }
 
 /* Word 2 of the hash160, the filter of the linear search (the few keys that pass are hashed again in full): h3 + e + a2 is
