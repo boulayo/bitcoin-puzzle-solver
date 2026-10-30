@@ -1471,3 +1471,67 @@ of the step knocked out.
   it is the curve arithmetic interleaved with the hash of the previous batch at the instruction level (the hash saturates the ports the curve
   leaves idle), which needs the hash rounds and the products in one basic block with 32 registers between them: not tried in this round.
   Expected on the laptop of 10.5 from the models: about −2 % on the linear search and −2 to −3 % on the kangaroo step.
+
+### 10.7 The hash and the step in one instruction stream, and the ports of the hash (after 1.18.0)
+
+The question of this round: the last lever that 10.6 left, the curve arithmetic of the next points interleaved with the hash of the
+previous batch at the instruction level (software pipelining of the two phases of the lane engines), and whatever else the `avx512i`
+engine still had. Same test machine (Cascade Lake Xeon, 4 cores, no SMT; its CPUID hides IFMA but the processor executes it,
+`PZ_ASSUME_IFMA=1`), one thread pinned, alternating pairs of a harness that calls the engines directly (9 to 11 pairs, median and
+interquartile range; the machine was shared, load 1 to 2), the hash alone timed in TSC ticks per batch (best of 3000), exact instruction
+counts by single-stepping a round of 4096 keys, and `llvm-mca` (LLVM 18, `-mcpu=tigerlake`) for the relative figure of two loop bodies.
+
+* **Kept: the hash with fewer operations on the two vector ports** (`hash_lanes.inc`, `hash_tables.h`). Two things the compiler did not
+  do on its own. GCC 13 compiles the majority function of SHA-256, written as `(a & b) ^ (a & c) ^ (b & c)`, to **two** `vpternlogd` where
+  one does (it fuses three-input logic only when the expression matches one of its patterns; `ch` and the RIPEMD-160 functions already
+  came out as one): with 16 lanes it is now the intrinsic with immediate `0xE8`, with 8 and 4 lanes the four-operation form
+  `((a ^ b) & c) ^ (a & b)`. And the round constants of RIPEMD-160 were immediates moved to a general register and broadcast with
+  `vpbroadcastd`, one micro-operation on port 5, the port the shuffles need and one of the two the whole hash runs on; with 32 registers
+  GCC rematerialized them 57 times per batch (56 `mov` and 57 broadcasts in the filter). They are now a table per step (the round constant
+  plus the padding word a step reads when it reads one, so that nothing the compiler used to fold is lost) read through a pointer it
+  cannot see through, as the SHA-256 constants were since 10.2: a broadcast operand of the addition, a load on ports 2 and 3. Per batch of
+  16 keys (filter): **3009 to 2904 instructions, 550 to 489 `vpternlogd`, 57 to 30 `vpbroadcastd`, 56 to 27 scalar moves**; what is left
+  are the initial state words of both hashes, which the first rounds fold on. The hash alone 1239 to 1209 TSC ticks per batch (−2.4 %);
+  the engine **avx512i +2.0 % (IQR +0.8..+2.1, 11 pairs, ten of them positive), 275.2 to 268.6 instructions per key**; avx512v +1.2 %
+  (IQR +0.4..+3.5). The AVX2 filter goes from 5432 to 5427 instructions per 8 keys, the SSE2 one from 7640 to 7648 (the four-operation
+  `maj` in GCC's SSE2 code): both within 0.1 %, and their timings were inside the noise of the shared machine. The hash was at 98 % of
+  its port floor (10.6); it still is, the floor is lower.
+* **Tried and dropped: the step of the next pair interleaved with the hash of the last batch.** The prototype (kept as a patch outside the
+  tree, with the notes of this round): the lane hash rewritten in stages, SHA-256 in blocks of 16 rounds and RIPEMD-160 in blocks of 20
+  steps with the state in a struct the compiler keeps in registers (the plain functions are the stages in a row and compile to the same
+  code within two instructions); the loop of the step hashes the batch completed two passes earlier, one block between each of its six
+  products and the emission of its candidates, the ring of batches holding three. Correct (`t_engine`, the planted keys); the loop body
+  goes from 937 + 3008 instructions (step, hash) to **4185**, with the stack traffic of the step from 20 stores and 65 loads to 91 and
+  194 per 16 keys (the state of the hash, 24 vectors, and a product, 20, do not share 32 registers), 275.2 to 290.4 instructions per key.
+  Time: **−0.5 % (IQR −1.1..+2.7, 11 pairs) and −0.2 % (9 pairs)**: no gain. `llvm-mca` for Tiger Lake agrees: the serial bodies 1486
+  cycles per 16 keys, the interleaved one 1550 (+4 %). Why nothing came of it: the hash is bound by the two vector ports (98 %), so it has
+  no idle slots to fill, and the step, whose latency the merge was to hide, costs its slots and its bytes in the merged stream too; what
+  the merge could recover is the latency slack of the step (about 140 cycles per 16 keys here) and what it pays is 240 more instructions.
+  A probe of the front end settles the other half: a 28 KB block of independent 7-byte instructions decodes at **2.31 per cycle** on this
+  machine (3.95 from the micro-operation cache for the same block at 64 instructions), and the hash, the step loop and the merged body all
+  run at 2.2 to 2.25 instructions per cycle: they sit on the legacy decoder's 16 bytes per cycle as much as on the ports, and a loop body
+  of 27 KB does not fit any micro-operation cache (1.5 K entries here, 2.25 K on Tiger Lake). On Tiger Lake the merge is worth even less by
+  the port table: IFMA and the rotations are port 0 only there, so the step is port-0-bound (440 cycles per 16 keys against 372 here) and
+  the merged floor (1704) is within 4 % of the separate ones (1332 + 440). The cheaper variants of the same idea: `-funroll-loops` on the
+  engine object +0.06 % (IQR −1.1..+0.5; 4026 to 3947 instructions in the scan function, the loop of the step not unrolled); `#pragma GCC
+  unroll 2` on that loop is ignored by GCC 13 (object unchanged); clang 18 for the engine object **−28 %** (it keeps the hash and the
+  products out of line and spills the columns). The register copies of the hash (272 per batch: a `vpternlogd` overwrites its first
+  operand, and `ch`, `maj` and the RIPEMD-160 functions need all three inputs afterwards) cost nothing but bytes: they are eliminated at
+  rename on Skylake-X and Cascade Lake and on Ice Lake, Tiger Lake and Rocket Lake alike (uops.info: 0 executed micro-operations); reordering
+  the RIPEMD-160 step so that the rotation of `c` comes first and the function could overwrite it changed nothing (284 copies either way:
+  GCC's register allocation does not follow the source order).
+* **SMT on the laptop of 10.5** (16 threads give 9 % more than 8 on the i7-11850H). Nothing in the engine makes the second thread of a core
+  hurt the first: the window of multiples of `G` (20 KiB with IFMA) is one static table per process, read in order as broadcast operands
+  (loads on ports 2 and 3; a miss to L2 costs no slot on the ports the engine is bound by); the denominators and their products (164 KiB per
+  thread) live in L2 (1.25 MiB per core on Tiger Lake, twice 164 fits); the batches are 5 KiB per thread; the comb table of `k·G` (264 KB)
+  is read once per claim, for the centres. The engine on one thread is at 90 to 95 % of the floor of ports 0 and 5, so the sibling can only
+  take what the step's latency leaves idle: **+9 to +12 % is what the port table predicts**, and 16 threads stay right. The test that would
+  show otherwise, on the laptop: `start /affinity 0x1 pzsolve hunt 71 --no-gpu -t 1` against `start /affinity 0x3 ... -t 2` (Windows numbers
+  the two threads of a core next to each other, so this runs both threads on core 0; the program's own placement is a hint the mask
+  overrides) and `start /affinity 0x5 ... -t 2` (two cores), Speed rows after a minute each; on Linux `taskset -c 0,8` and `-c 0,1`. The
+  second over the first is the gain of one core from SMT (expected 1.09 to 1.12; 1.0 or less would mean the sibling costs the first thread
+  something, and a profile with 8 threads would be the answer), the third over the first should be 2.
+* **What is left.** The lane hash has 2578 operations on the two vector ports per 16 keys and runs at 96 to 98 % of that; the compiler now
+  emits one instruction per operation of the algorithm, so only a change of algorithm (none known for one block of SHA-256 and RIPEMD-160
+  with 32-bit rotations) would lower it. The step is within 10 % of its port floor on Tiger Lake. The engine as a whole is close to what
+  these ports allow per core; more keys per second on that machine come from the clock (10.5) and the GPU (section 5).

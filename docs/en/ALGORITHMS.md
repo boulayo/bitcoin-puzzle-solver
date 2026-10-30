@@ -70,7 +70,9 @@ SHA-256 (a single block: 33 bytes + padding) and RIPEMD-160 (a single block: 32 
 chosen at runtime with a 0.25 s micro-benchmark (`--isa` forces it). For each batch only **one word** of the digest is
 compared with the target: the third, which depends on the fewest steps of RIPEMD-160 (the compiler drops the last three steps
 of the left line and the last four of the right one); the rare candidates are verified in full with the scalar hash and then
-verified again by recomputing `k·G` from scratch.
+verified again by recomputing `k·G` from scratch. The round constants of both hashes are read as broadcast operands from tables (those of
+RIPEMD-160 folded with the padding words of the 32-byte message) rather than moved through a general register, and the three-input
+functions (`ch`, `maj`, the five of RIPEMD-160) are one ternary-logic instruction each with AVX-512 (RESEARCH.md 10.2, 10.7).
 
 ### 2.3 Edge cases
 

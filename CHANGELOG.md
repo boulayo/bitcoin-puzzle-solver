@@ -6,6 +6,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [Unreleased]
 
 ### Changed
+## [Unreleased]
+
+### Changed
 - CUDA linear search: the first denominator and the centre of a group are handled after the loop over the pairs of keys, so the compiler
   no longer copies the inverse and the centre ahead of the tests on the index (24 moves per pair on sm_86): 3155 to 3141 instructions per
   key, the same arithmetic. Four more variants for the tuner to measure: windows 256 and 512 capped at 96 registers (5 blocks of 128 per
@@ -20,6 +23,15 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   modelled time per key is 3760 cycles per 32 keys against the 5485 the A2000 measured, a gap that is the same (1.3 to 1.45) for 1.17.0 and
   1.18.0 and that only a clock below the probes' 1.89 GHz under sustained load explains; the section lists the changes measured and dropped
   (the SHA state sums back on the ALU pipe, the hash inlined in the pair loop, 80 registers) and what the owner can check on the card.
+- CPU linear search, lane engines: the hash filter has fewer operations on the two vector ports. The majority function of SHA-256 is one
+  `vpternlogd` with AVX-512 (GCC made two of it) and four operations instead of five elsewhere; the RIPEMD-160 round constants, folded with
+  the padding words, are read as broadcast operands from a table instead of being moved to a general register and broadcast on port 5 (57
+  times per batch). Per batch of 16 keys 3009 to 2904 instructions; measured on one thread avx512i +2.0 % (275 to 269 instructions per
+  key), avx512v +1.2 %; the AVX2 and SSE2 engines change by less than 0.1 % in instructions. Same digests, same candidates.
+- Documentation: RESEARCH.md 10.7 records what was measured and dropped: the step of the next points interleaved with the hash of the last
+  batch at the instruction level (no gain: the hash is bound by the vector ports and the decoder alike, and the merge costs spills), the
+  compiler variants for the engine object, and why the second thread of a core adds 9 to 12 % on the laptop of 10.5, with the test that
+  would show otherwise.
 
 ## [1.18.0] — 2026-10-30
 
