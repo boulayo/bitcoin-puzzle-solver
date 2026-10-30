@@ -6,9 +6,6 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [Unreleased]
 
 ### Changed
-## [Unreleased]
-
-### Changed
 - CUDA linear search: the first denominator and the centre of a group are handled after the loop over the pairs of keys, so the compiler
   no longer copies the inverse and the centre ahead of the tests on the index (24 moves per pair on sm_86): 3155 to 3141 instructions per
   key, the same arithmetic. Four more variants for the tuner to measure: windows 256 and 512 capped at 96 registers (5 blocks of 128 per
