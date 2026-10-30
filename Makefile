@@ -29,7 +29,7 @@ BUILDINFO := git-$(GITREV)/$(shell $(CC) -dumpmachine)
 
 HOSTCC  ?= cc
 OPT     ?= -O3
-WARN    := -Wall -Wextra -Wshadow -Wno-unused-parameter
+WARN    := -Wall -Wextra -Wshadow -Wno-unused-parameter -Werror=incompatible-pointer-types
 COMMON  := -std=gnu11 $(OPT) -g $(WARN) -D_GNU_SOURCE -fno-strict-aliasing \
            -DPZ_VERSION=\"$(VERSION)\" -DPZ_BUILD_INFO=\"$(BUILDINFO)\" -Isrc -Ilib/pzcore/include
 LDLIBS  := -lpthread -lm -ldl
