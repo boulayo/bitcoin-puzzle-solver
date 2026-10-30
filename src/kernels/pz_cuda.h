@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* pz_cuda.h - lets the OpenCL C kernels (pz_*.cl) compile as CUDA C++ with NVRTC.
  * Prepended by tools/gen_ptx.py; the PTX it produces is embedded in the program and JIT-compiled by the NVIDIA
- * driver for the GPU at hand, so neither the CUDA toolkit nor NVRTC is needed at run time. */
+ * driver for the GPU at hand, so neither the CUDA toolkit nor NVRTC is needed at run time.
+ * The PTX inline assembly below runs only on a real device: the simulated driver (tests/mock_cuda) compiles the same
+ * kernel sources as C with pz_host.h, so a wrong assumption about PTX or ptxas semantics passes every test here and
+ * fails the start-up self-test on the card. New asm forms are checked on the SASS (ptxas, nvdisasm) and then on a GPU. */
 #define PZ_CUDA 1
 
 typedef unsigned int uint;
@@ -46,6 +49,7 @@ typedef unsigned short ushort;
  * IADD3, LOP3 and SHF run, while the FMA pipe, where IMAD runs, is mostly idle: the hash moves part of its additions there (RESEARCH.md
  * section 5). The multiplier is read from c[3][0] as an operand, or held in one register where the addend is an immediate. */
 __constant__ uint pz_one = 1;
+__constant__ uint pz_zero = 0;
 inline uint pz_addf(uint a, uint b)
 {
     uint d;
@@ -53,6 +57,20 @@ inline uint pz_addf(uint a, uint b)
     return d;
 }
 #define PZ_ADDF(a, b) pz_addf((a), (b))
+/* The carry out of an ADDITION chain as a 0/1 value: x*0 + 0 + CF on the FMA pipe, where addc.u32 d, 0, 0 is a SEL on the ALU pipe;
+ * x is any register already at hand (its value does not matter: the zero comes from the constant bank as an operand, so the
+ * instruction needs no other register). Never after sub.cc/subc: ptxas implements a subtraction as the addition of the complement
+ * and carries the inverse of the PTX borrow in its predicate, which subc consumers know and madc does not (the SASS reads
+ * IADD3.X R, P0, a, ~b, RZ, P0 then IMAD.X d, x, c[3][4], RZ, P0: d = 1 - borrow). A card showed it: the simulated CUDA driver of
+ * tests/mock_cuda compiles the kernel source as C and never executes PTX, so the PTX asm of this file is checked by reading the
+ * SASS and by the start-up self-test on a device, not by the mock. */
+#ifdef PZ_FMA_CARRY           /* the linear modules and the test module (modules.txt): the kernel the ALU pipe bounds */
+#define ADDC_CF(d, x)         asm volatile("madc.lo.u32 %0, %1, %2, 0;" : "=r"(d) : "r"(x), "r"(pz_zero))
+#define PZ_NORMALIZE_FMA 1    /* fe_normalize_fma: the selects of the normalization as predicated mad.lo (pz_common.cl) */
+#else                         /* the kangaroo modules keep the forms of 1.17.0: with the IMAD.X carries ptxas spilled kang64b (48 bytes) and
+                               * the step grew by 7 to 12 instructions, in a kernel that memory bounds */
+#define ADDC_CF(d, x)         ADDC(d, (x) & 0u, 0u)
+#endif
 
 /* trailing zeros of a non-zero x: bit reversal and bfind.shiftamt (the leading zeros in one instruction, where __clz takes two) */
 inline int pz_ctz(uint x)

@@ -18,13 +18,15 @@
 # A new module goes at the end.
 #
 # name         kind    cfg  base       defines
-linear128      linear  0    -          -DHALF=128
-linear256      linear  0    linear128  -DHALF=256
-linear512      linear  0    linear128  -DHALF=512
-# at least 4 resident blocks per SM: the compiler caps the kernel at 128 registers (a few spills, more warps)
-linear128m4    linear  4    linear128  -DHALF=128 -DPZ_MINB=4
-linear256m4    linear  4    linear128m4 -DHALF=256 -DPZ_MINB=4
-linear512m4    linear  4    linear128m4 -DHALF=512 -DPZ_MINB=4
+linear128      linear  0    -          -DHALF=128 -DPZ_FMA_CARRY
+linear256      linear  0    linear128  -DHALF=256 -DPZ_FMA_CARRY
+linear512      linear  0    linear128  -DHALF=512 -DPZ_FMA_CARRY
+# at least 4 resident blocks per SM: the compiler caps the kernel at 128 registers (a few spills, more warps).
+# PZ_FMA_CARRY (linear and test modules): the carries out of the addition chains and the normalization of x on the FMA pipe
+# (pz_cuda.h); the kangaroo modules keep the forms of 1.17.0
+linear128m4    linear  4    linear128  -DHALF=128 -DPZ_MINB=4 -DPZ_FMA_CARRY
+linear256m4    linear  4    linear128m4 -DHALF=256 -DPZ_MINB=4 -DPZ_FMA_CARRY
+linear512m4    linear  4    linear128m4 -DHALF=512 -DPZ_MINB=4 -DPZ_FMA_CARRY
 # kangaroos per work-item (one field inversion per NK steps); capped at 128 registers (four blocks per SM: 512 threads;
 # without the cap ptxas uses 150-220 registers and only two blocks fit)
 kang64         kang    0    -          -DNK=64 -DPZ_MINB=4
@@ -43,4 +45,4 @@ kang16         kang    0    kang64     -DNK=16 -DPZ_MINB=4
 kang32         kang    0    kang64     -DNK=32 -DPZ_MINB=4
 kang16b        kang    1    kang64b    -DNK=16 -DMC=2 -DPZ_MINB=4
 kang32b        kang    1    kang64b    -DNK=32 -DMC=2 -DPZ_MINB=4
-test           test    0    linear128  -
+test           test    0    linear128  -DPZ_FMA_CARRY

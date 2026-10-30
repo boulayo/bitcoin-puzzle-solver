@@ -24,9 +24,7 @@ inline void load_ge_c(ge *p, __constant const uint *q)
 /* the key at offset ko with public point (xn, y), xn normalized: compared with the target on word 2 of its hash160, then in full */
 inline void check_key(const fe *xn, const fe *y, ulong ko, const uint tw[5], __global uint *hits, const uint max_hits)
 {
-    fe yn = *y;
-    fe_normalize(&yn);                             /* only bit 0 of yn is used: the compiler keeps just the carry chain */
-    const uint par = yn.v[0] & 1u;
+    const uint par = fe_parity(y);
     const fe xv = *xn;
     if (hash160_w2(&xv, par) != tw[2]) return;
     uint h[5];
@@ -118,7 +116,7 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
                 fe_mul(&lam, &t, &im);
                 fe_sqr(&x3, &lam);
                 fe_sub(&x3, &x3, &xs);
-                fe_normalize(&x3);
+                fe_normalize_fma(&x3);
                 fe_sub_norm(&t, &xc, &x3);
                 fe_mul(&y3, &lam, &t);
                 fe_sub_norm(&y3, &y3, &yc);
@@ -129,7 +127,7 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             fe_mul(&lam, &t, &im);
             fe_sqr(&x3, &lam);
             fe_sub(&x3, &x3, &xs);
-            fe_normalize(&x3);
+            fe_normalize_fma(&x3);
             fe_sub_norm(&t, &x3, &xc);
             fe_mul(&y3, &lam, &t);
             fe_sub_norm(&y3, &y3, &yc);
