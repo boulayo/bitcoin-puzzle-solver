@@ -44,8 +44,10 @@ static inline pz_vu pz_v_set(uint32_t x)
     return r;
 }
 
-#if PZ_VBYTES == 32 && defined(__AVX2__) && !defined(PZ_HASH_SHA256_EXTERNAL)
+#if PZ_VBYTES == 64 || (PZ_VBYTES == 32 && defined(__AVX2__))
 #include <immintrin.h>
+#endif
+#if PZ_VBYTES == 32 && defined(__AVX2__) && !defined(PZ_HASH_SHA256_EXTERNAL)
 /* AVX2 byte shuffles with the mask read from memory through a pointer the compiler cannot see through: one vpshufb with a memory
  * operand, so no register is held for the mask (the RIPEMD-160 lines need all sixteen). Not with the SHA-NI stage, where they
  * made the compiler spill more than they saved. */
@@ -91,6 +93,17 @@ static inline pz_vu pz_v_bswap(pz_vu x)
 #endif
 }
 
+/* maj(a, b, c), the majority of the three: on AVX-512 one vpternlogd (GCC 13 compiles the three-term form to two), elsewhere four
+ * operations instead of the five of (a & b) ^ (a & c) ^ (b & c) */
+static inline pz_vu pz_v_maj(pz_vu a, pz_vu b, pz_vu c)
+{
+#if PZ_VBYTES == 64
+    return (pz_vu)_mm512_ternarylogic_epi32((__m512i)a, (__m512i)b, (__m512i)c, 0xE8);
+#else
+    return ((a ^ b) & c) ^ (a & b);
+#endif
+}
+
 static inline pz_vu pz_v_load(const uint32_t *p)
 {
     pz_vu r;
@@ -121,8 +134,8 @@ static inline void pz_sha256_lanes_33(const uint32_t *X, const uint32_t *pfx, pz
     /* With AVX2 and AVX-512 the round constants, and the initial state added at the end, are read through pointers the compiler
      * cannot see through: each is then one broadcast from memory (on AVX-512 an operand of the addition) instead of an immediate
      * moved to a general register and broadcast from there. The initial state of the rounds stays visible, as the first rounds
-     * fold on it. Not with 16-byte vectors, where the constants are full vectors in memory already, nor for RIPEMD-160, whose
-     * constants fold with the padding words and its two zero constants vanish: both counted more instructions. */
+     * fold on it. Not with 16-byte vectors, where the constants are full vectors in memory already (more instructions). RIPEMD-160
+     * does the same with 16 lanes, with its constants folded with the padding words (pz_rmd_kcl, pz_rmd_kcr below). */
     const uint32_t *kt = pz_sha256_k, *hv = pz_sha256_h0;
 #if PZ_VBYTES > 16
     __asm__("" : "+r"(kt), "+r"(hv));
@@ -145,7 +158,7 @@ static inline void pz_sha256_lanes_33(const uint32_t *X, const uint32_t *pfx, pz
         pz_vu ch = (e & f) ^ (~e & g);
         pz_vu t1 = h + S1 + ch + wi + kt[i];
         pz_vu S0 = PZ_V_ROTR(a, 2) ^ PZ_V_ROTR(a, 13) ^ PZ_V_ROTR(a, 22);
-        pz_vu mj = (a & b) ^ (a & c) ^ (b & c);
+        pz_vu mj = pz_v_maj(a, b, c);
         pz_vu t2 = S0 + mj;
         h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
     }
@@ -182,14 +195,27 @@ static inline __attribute__((always_inline)) void pz_ripemd160_lanes_32(const pz
     const uint32_t h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
     pz_vu a = pz_v_set(h0), b = pz_v_set(h1), c = pz_v_set(h2), d = pz_v_set(h3), e = pz_v_set(h4);
     pz_vu a2 = a, b2 = b, c2 = c, d2 = d, e2 = e;
+    /* The constant of a step is the round constant plus the padding word the step reads when it reads one (both fold at compile
+     * time). With 16 lanes it is read from the tables of hash_tables.h through pointers the compiler cannot see through: one
+     * broadcast operand of the addition, as the SHA-256 round constants above, instead of an immediate moved to a general register
+     * and broadcast from there on the port the rotations and shuffles need (57 such broadcasts per batch before). With 8 lanes
+     * (16 registers) the immediates are kept: a broadcast from memory there is a separate load. */
+#if PZ_VBYTES == 64
+    const uint32_t *kcl = pz_rmd_kcl, *kcr = pz_rmd_kcr;
+    __asm__("" : "+r"(kcl), "+r"(kcr));
+#define PZ_RMD_MK(mw, idx, kc, k) ((k) == 0 ? (mw)[idx] : (idx) < 8 ? (mw)[idx] + (kc) : pz_v_set(0) + (kc))   /* k: no constant to add */
+#else
+#define PZ_RMD_MK(mw, idx, kc, k) ((mw)[idx] + (k))
+#endif
 #pragma GCC unroll 80
     for (int j = 0; j < 80; j++) {
         const int rd = j / 16;
-        pz_vu t = pz_v_rotl(a + pz_rmd_fv(rd, b, c, d) + m[pz_rmd_rl[j]] + pz_rmd_kl[rd], pz_rmd_sl[j]) + e;
+        pz_vu t = pz_v_rotl(a + pz_rmd_fv(rd, b, c, d) + PZ_RMD_MK(m, pz_rmd_rl[j], kcl[j], pz_rmd_kl[rd]), pz_rmd_sl[j]) + e;
         a = e; e = d; d = PZ_V_ROTL(c, 10); c = b; b = t;
-        t = pz_v_rotl(a2 + pz_rmd_fv(4 - rd, b2, c2, d2) + m[pz_rmd_rr[j]] + pz_rmd_kr[rd], pz_rmd_sr[j]) + e2;
+        t = pz_v_rotl(a2 + pz_rmd_fv(4 - rd, b2, c2, d2) + PZ_RMD_MK(m, pz_rmd_rr[j], kcr[j], pz_rmd_kr[rd]), pz_rmd_sr[j]) + e2;
         a2 = e2; e2 = d2; d2 = PZ_V_ROTL(c2, 10); c2 = b2; b2 = t;
     }
+#undef PZ_RMD_MK
     out[0] = pz_v_set(h1) + c + d2;
     out[1] = pz_v_set(h2) + d + e2;
     out[2] = pz_v_set(h3) + e + a2;
