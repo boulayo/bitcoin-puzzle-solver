@@ -3518,7 +3518,7 @@ $L__BB3_12:
 	@%p13 bra 	$L__BB3_41;
 
 	mov.u32 	%r5859, 0;
-	{ // callseq 48, 0
+	{ // callseq 84, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd82;
@@ -3530,7 +3530,7 @@ $L__BB3_12:
 	param0, 
 	param1
 	);
-	} // callseq 48
+	} // callseq 84
 	add.s64 	%rd32, %rd28, 1;
 	ld.local.u32 	%r5867, [%rd17];
 	ld.local.u32 	%r5866, [%rd17+8];
@@ -6905,7 +6905,7 @@ $L__BB3_32:
 	shl.b64 	%rd170, %rd169, 2;
 	add.s64 	%rd171, %rd66, %rd170;
 	add.s64 	%rd172, %rd37, %rd26;
-	{ // callseq 49, 0
+	{ // callseq 85, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd171;
@@ -6951,7 +6951,7 @@ $L__BB3_32:
 	param11, 
 	param12
 	);
-	} // callseq 49
+	} // callseq 85
 	st.local.u64 	[%rd39], %rd32;
 
 $L__BB3_33:
@@ -7941,7 +7941,7 @@ $L__BB3_80:
 	mov.u32 	%r5907, %r5747;
 
 $L__BB3_81:
-	{ // callseq 50, 0
+	{ // callseq 86, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd270;
@@ -7965,7 +7965,7 @@ $L__BB3_81:
 	param4, 
 	param5
 	);
-	} // callseq 50
+	} // callseq 86
 	ld.local.v4.u32 	{%r5749, %r5750, %r5751, %r5752}, [%rd263];
 	st.global.u32 	[%rd269+-88], %r5749;
 	ld.local.v4.u32 	{%r5757, %r5758, %r5759, %r5760}, [%rd267];

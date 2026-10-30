@@ -3518,7 +3518,7 @@ $L__BB3_12:
 	@%p13 bra 	$L__BB3_41;
 
 	mov.u32 	%r5845, 0;
-	{ // callseq 42, 0
+	{ // callseq 78, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd82;
@@ -3530,7 +3530,7 @@ $L__BB3_12:
 	param0, 
 	param1
 	);
-	} // callseq 42
+	} // callseq 78
 	add.s32 	%r66, %r5828, 1;
 	and.b32  	%r67, %r5828, 1;
 	setp.eq.s32 	%p14, %r67, 0;
@@ -6901,7 +6901,7 @@ $L__BB3_32:
 	shl.b64 	%rd171, %rd170, 2;
 	add.s64 	%rd172, %rd66, %rd171;
 	add.s64 	%rd173, %rd37, %rd26;
-	{ // callseq 43, 0
+	{ // callseq 79, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd172;
@@ -6947,7 +6947,7 @@ $L__BB3_32:
 	param11, 
 	param12
 	);
-	} // callseq 43
+	} // callseq 79
 	st.local.u64 	[%rd39], %rd32;
 
 $L__BB3_33:
@@ -7992,7 +7992,7 @@ $L__BB3_79:
 $L__BB3_80:
 	ld.param.u64 	%rd305, [pz_kang_step_param_1];
 	ld.param.u64 	%rd304, [pz_kang_step_param_6];
-	{ // callseq 44, 0
+	{ // callseq 80, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd316;
@@ -8016,7 +8016,7 @@ $L__BB3_80:
 	param4, 
 	param5
 	);
-	} // callseq 44
+	} // callseq 80
 	ld.local.v4.u32 	{%r5743, %r5744, %r5745, %r5746}, [%rd309];
 	st.global.u32 	[%rd315+-88], %r5743;
 	ld.local.v4.u32 	{%r5751, %r5752, %r5753, %r5754}, [%rd313];
