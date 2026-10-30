@@ -42,12 +42,12 @@
 | `selftest.h`, `selftest.c`, `outfmt.h`, `main.c` | self-test, benchmark, command-line interface; `outfmt.h` is the look of the check lists and tables |
 
 **Embedded kernels.** The kernels are compiled into the executable by `tools/embed.c`, which the `Makefile` builds and runs on the build
-machine. The OpenCL sources (53 KB) become plain arrays (`build/kernels_gen.c`). The 19 PTX modules (12 MB of text in `src/kernels/ptx/`,
+machine. The OpenCL sources (53 KB) become plain arrays (`build/kernels_gen.c`). The 29 PTX modules (31 MB of text in `src/kernels/ptx/`,
 committed) are embedded compressed (`build/ptx_gen.c`, `embed -z`) in the format described at the top of `src/lz.c`; the encoder is in
 `embed.c`, which checks each stream it writes with the real decoder, so the build stops if a stream does not unpack to its file. The
 modules of a family differ in few lines (`linear128` and `linear256` in 148 of 38,000), so each module is stored against another one
 (the `base` column of `src/kernels/ptx/modules.txt`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
-the modules take about 1 MB instead of 12 MB, and the stripped Linux executable is under 3 MB instead of 14 MB. `rtcu_build` unpacks the
+the modules take about 1.1 MB instead of 31 MB, and the stripped Linux executable is under 3 MB instead of over 30 MB. `rtcu_build` unpacks the
 module it is about to load (a few milliseconds, once per module load; no hot path touches this), hands the NUL-terminated text to the
 driver and frees it. `tools/gen_ptx.py` and the `.ptx` files are unchanged. The simulated CUDA driver embeds the same files plain
 (`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves;

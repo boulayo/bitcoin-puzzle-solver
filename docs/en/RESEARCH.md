@@ -436,6 +436,82 @@ The arithmetic on the device itself is still to be timed on a card.
     express (`IADD3.X` has two carries in SASS, `ptxas` never fuses two chains into it); the E + O sum of the product (15 `IADD3.X`) is the
     price of the aligned `IMAD.WIDE` pairs, and reducing E and O separately costs more chains (27 against 24).
 
+**After 1.18.0: where the other half of the modelled gain went.** The A2000 measured 793 to 882 M keys/s for the two-pipe kernel (+11 %)
+where the model T = max(2A, 2F, A + F + O) said -20 to -23 %. The tools are the same (NVRTC 12.0, `ptxas` and `nvdisasm` for sm_86), plus
+the scheduling control words that `ptxas` writes into every SASS instruction, read by `tools/research/sass_sched.py`: the *stall count*
+(the cycles before the same warp may issue again, which is how the fixed latencies of the dependencies reach the hardware: a wrong count
+would give wrong results, not a slow kernel, so the counts are the latencies `ptxas` knows), the yield bit and the scoreboard barriers of
+the loads and stores. The script rebuilds the executed trace of a pair of keys (the forward loop, the pair loop with its two calls of
+`hash160_w2` expanded, the rare blocks skipped) and runs N warps of it on one SM partition: one instruction issued per cycle, each pipe held
+two cycles per warp instruction, the private arrays at 500 cycles (they are in video memory on the reference card, 160 MiB for 10240
+work-items at window 512), the table and constant loads at 35.
+
+* **Latency, by the numbers of `ptxas`.** One warp alone runs `hash160_w2` in 3888 cycles in 1.17.0 (2030 instructions, 1790 of them with a
+  stall of 2: the ALU pipe itself, floor 2 × 1911 = 3822) and in 3762 cycles in 1.18.0 (2393 instructions, 1397 at stall 1, 742 at 2, 144 at
+  3, 101 at 4: the two pipes let consecutive instructions issue every cycle, but the chains are longer, and the floor of the ALU pipe is now
+  2 × 1453 = 2906). So the hash of one warp got no faster, and it is 29 % above its own pipe floor; the field part of the pair loop is 1338
+  instructions with 3861 stall cycles (2.9 per instruction: the carry chains). With four warps per partition (the register cap) the model gives
+  **4558 cycles per 32 keys per partition for 1.17.0 (T = 4499) and 3786 for 1.18.0 (T = 3487), -17 %**; with `IMAD.WIDE` at two slots 4672 and
+  4142 (-11 %). The idle issue cycles of 1.18.0 are 16.7 %, of which **0.5 % with no warp ready** (that is the latency) and 16 % with a
+  warp ready but its pipe busy: the four warps run the same code and stay in phase, so during the hash the ALU pipe is the bound (2906
+  against 1862 cycles of `IMAD`) and during the field part the FMA pipe is (1582 against 1044), and the phase by phase bound, 2 × 2906 + 1582
+  + 234 = 7628 per two keys, is 3814 per 32 keys, 9 % above T. Hypothesis 1 of this round (the longer chains starve the scheduler) is not
+  what the control words say, and the levers built on it were measured and dropped: the `e = d + t1` and `a = t1 + t2` sums of the SHA
+  rounds back on `IADD3` (hash 2400 instructions, A 1470, F 921, one warp 3782 cycles, model 3825: +1 %); the hash inlined in the pair loop
+  so `ptxas` could overlap it with the field products (loop of 6169 instructions = 98 KB of code, 28 bytes of spill, the stall sum of the
+  trace 11189 against 11950: it interleaves little, model 3751, -0.9 %, for an instruction footprint that no longer fits an L1 instruction
+  cache of the size of Turing's); two keys hashed in lockstep in one thread (not built: +30 registers for a latency that is 0.5 % of the
+  issue cycles). Register bank conflicts are not the difference either: same-bank source pairs without a reuse flag in the hash 1257 in
+  1.17.0, 1111 in 1.18.0.
+* **What the card measured against the model.** 793 M keys/s is 6100 cycles per 32 keys per partition at the 1.89 GHz of the probes, 882 M
+  is 5485: **1.34 and 1.45 times the model**. Nothing in the SASS grew by that factor, and the ratio grew with the share of the issue slots in
+  use (61 to 83 %). A sustained clock below the probes' explains both at once: the model matches at **1.41 GHz for 1.17.0 and 1.30 GHz for
+  1.18.0**, which is what a laptop GA106 does under its power limit when the pipes get busier (the probes of `bench` run 0.2 s each, after
+  the kernels, and the campaign numbers of 10.5 already showed the card losing 10 % to the CPU threads through the shared budget). This is
+  the first thing to check on the card: `nvidia-smi --query-gpu=clocks.sm,clocks.max.sm,power.draw,power.limit,temperature.gpu,clocks_throttle_reasons.active --format=csv -l 1`
+  while `pzsolve bench --gpu-only` runs its linear search (4 s) and then during a hunt. If `clocks.sm` sits at 1.3 to 1.4 GHz with a power
+  throttle reason, the kernel is power-bound and the remaining gains are in the work per key, not in the cycles; if it holds 1.8 GHz, the
+  1700 cycles between model and card are in something this machine cannot see (the instruction caches, the operand collector), and the
+  variants below say which.
+* **Kept.** The first denominator (i = 1, whose inverse is what is left of the batch product) and the centre (i = 0) were cases inside the
+  loop over the pairs, and `ptxas` copied `inv` into `im` and the centre into x3 and y3 ahead of the tests on i on every iteration: 24
+  moves per pair. Peeled out of the loop: the field part of the pair loop 1338 → 1302 instructions, the forward loop 183 → 191 (moves the
+  compiler placed differently), **3155 → 3141 per key**, model 3786 → 3761; the capped variant spills 88 bytes outside the loops over the
+  keys (none in them), the free one takes 188 registers instead of 172 (still two blocks per SM). Same arithmetic, same results.
+* **More warps.** With blocks of 128 threads the occupancy moves in steps of a block: 5 blocks need 102 registers, which `ptxas` rounds to
+  **96**, 6 blocks 85 → 80, so caps of 112 or 104 buy nothing. At 96 registers (`__launch_bounds__(128, 5)`) the kernel spills 240 bytes, all
+  outside the loops over the keys (the executed counts of the pair loop, the forward loop and the hash are unchanged); at 80 it spills 332
+  bytes into the pair loop (1338 → 1398) and the inversion (590 → 607): not offered. The model gives 3717 cycles with five warps (-1.8 %) and
+  3664 with six; on a card whose warps drift out of phase it is worth more, on one that is power-bound nothing, so the 96-register cap is a
+  tuner variant for windows 256 and 512 (`linear256m5`, `linear512m5`), together with a window of 1024 with either cap (half the inversions,
+  about 0.6 instructions per key, 32 KiB of private memory per work-item; the model cannot tell them apart). The tuner measures all ten and
+  keeps the default unless one is more than 3 % faster; `bench --retune` shows the table. Expected on the A2000, from the model: window 512
+  with the 128-register cap 890 to 900 M keys/s (the peel), the 96-register cap 905 to 920 if the card is not power-bound, 1024 within 1 %
+  of 512.
+* **The form as a variant.** The two pipes of 1.18.0 are a fact of GA10x and AD10x: a partition issues `IMAD` to one 16-lane datapath and
+  the other integer instructions to another. A card whose lanes all do both (unified datapaths, as Blackwell's are described) is bound by
+  A + F + O, and there the one-pipe form of 1.17.0 (every addition an `IADD3` or a `LEA.HI`, the carries as `SEL`) is 12 % fewer
+  instructions per key. Both forms are therefore compiled (`PZ_ONE_PIPE`, the `p4` and `p5` modules of modules.txt, for the windows 256,
+  512 and 1024 with either cap) and the tuner measures the one-pipe twins of the two fastest two-pipe variants, so a card picks its form
+  without anyone reading its ISA. On the A2000 the expectation is the two-pipe form by about 10 %, as measured; on a unified card the
+  one-pipe form by up to 12 %.
+* **The campaign loss** (882 in `bench`, 775 with 16 CPU threads). The thread that serves the card does, per launch of about 0.35 s (300
+  M keys at this speed): a claim from the scheduler, three `k·G` on the host, a 264-byte write, the launch, a blocking wait on the context
+  and an 8-byte read; under a millisecond of host time and one wake-up of a sleeping thread, so even a scheduler quantum of 15 ms on a
+  saturated Windows machine is 4 % at the very most, and with the high priority the first-run measurement chose on this machine far less. The
+  first-run measurement tries 16, 15 (one thread fewer per CUDA device), 12, 8, 4 and 0 threads, each after 2 s of settling over an 8 s
+  window: power sharing acts over longer times (10.5), which is why `-t 14` and `-t 8` were a wash at two minutes but the UHD cost 90 M.
+  What to measure on the laptop, with `--gpu 0`: `-t 16`, `-t 15` and `-t 14` for ten minutes each, reading `clocks.sm` of the card and
+  the package power of the CPU at the same time; the configuration whose GPU clock is highest at equal total is the one to keep. Double
+  buffering the launches (a second hit buffer, the next launch enqueued before the results of the previous one are read) would remove the
+  host turnaround entirely; it is worth doing only if the measurement above shows the card idle between launches rather than slow.
+* **What is left in the SASS.** The hash is at the floor of its expression on this ISA (the part after 1.17.0 above); per pair of keys the field part
+  keeps 48 `IMAD.MOV` and 6 `MOV` (half of them zero the odd register of an addend pair whose high half is empty: the price of the aligned
+  `IMAD.WIDE` pairs, 2 instructions either way), 2 `SEL`, 12 `LOP3` (the borrow masks), 71 `IADD3` and 398 `IADD3.X` (the carry chains). The
+  products are 3.5 multiplications and one square per key (7M + 2S per pair: 3 for the batch inversion, which is Montgomery's minimum, 2M + 1S
+  per point); sharing work between λ₊² and λ₋² (their difference is 4·sy·yc·im²) costs a multiplication to save a square. The window of 1024
+  removes 0.6 instructions per key of the inversion; nothing else in the per-key count depends on the window.
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts

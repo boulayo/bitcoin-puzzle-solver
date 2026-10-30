@@ -3,6 +3,24 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- CUDA linear search: the first denominator and the centre of a group are handled after the loop over the pairs of keys, so the compiler
+  no longer copies the inverse and the centre ahead of the tests on the index (24 moves per pair on sm_86): 3155 to 3141 instructions per
+  key, the same arithmetic. Four more variants for the tuner to measure: windows 256 and 512 capped at 96 registers (5 blocks of 128 per
+  SM, 20 warps; the spills are outside the loops over the keys) and a window of 1024 with either cap. The arithmetic form is chosen per card
+  too: the additions on the FMA pipe (1.18.0) pay on Ampere and Ada, whose SM partitions have separate integer pipes, while a card whose
+  lanes do both multiplies and additions (unified datapaths) is bound by the total count, where the form of 1.17.0 has 12 % fewer
+  instructions; both forms are embedded for windows 256, 512 and 1024 with either register cap (six one-pipe modules), and after the ten
+  two-pipe variants the tuner measures the one-pipe twins of the two fastest and keeps the fastest, bit-exact check included. The
+  stripped executable grows by 0.26 MB of compressed PTX (2.43 to 2.69 MB) and the first-run tuning takes about half as long again (twelve measurements instead
+  of six). RESEARCH.md section 5 reads the scheduling control words of the SASS (`tools/research/sass_sched.py`):
+  by the latencies `ptxas` itself schedules with, the kernel of 1.18.0 is not latency-bound with four warps per partition, and the
+  modelled time per key is 3760 cycles per 32 keys against the 5485 the A2000 measured, a gap that is the same (1.3 to 1.45) for 1.17.0 and
+  1.18.0 and that only a clock below the probes' 1.89 GHz under sustained load explains; the section lists the changes measured and dropped
+  (the SHA state sums back on the ALU pipe, the hash inlined in the pair loop, 80 registers) and what the owner can check on the card.
+
 ## [1.18.0] — 2026-10-30
 
 ### Changed
