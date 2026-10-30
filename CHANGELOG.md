@@ -3,6 +3,17 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.19.1] — 2026-10-30
+
+### Changed
+- Linear search: the default size of the blocks is as large as the range allows, with at least 16 blocks for each share of `--part` and at
+  most 2^36 keys (a range of 2^36 keys now gets blocks of 2^32, was 2^24). A launch of a GPU cannot cross a block, and its controller aims at
+  launches of about a third of a second: with blocks of 2^24 keys the launches lasted 20 ms and the card ran about a fifth slower than on a
+  large range (measured on an RTX A2000 Laptop: 647 against 827 M keys/s; `--chunk-bits 32` gave the speed of the large ranges). Ranges from
+  2^48 keys up keep 2^36 as before. The value depends on the range and the number of shares only, never on the machine. Campaigns that
+  exist keep the value stored in `campaign.conf`; BSGS and the kangaroo are not changed. **Upgrade note.** The computers of a `--part` split
+  must have the same block size: if one of them runs a version before 1.19.1, give `--chunk-bits` explicitly on all of them.
+
 ## [1.19.0] — 2026-10-30
 
 ### Changed

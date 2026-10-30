@@ -51,7 +51,9 @@ stops at `n − 1` (the group order), because keys beyond it do not exist. Prove
 * `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random.
 * `--mem` is in GiB (`--mem 0.25` is 256 MiB). Without it the kangaroo takes 40 % of the free RAM for the table of distinguished points
   (at least 256 MiB, at most 64 GiB) and BSGS chooses a table that fits in 70 % of it.
-* A `--chunk-bits` below the default slows down the CPU and above all the GPUs, since every launch receives a single block.
+* The default `--chunk-bits` makes the blocks as large as the range allows while each share keeps 16 of them, at most 2^36 keys (a range of
+  2^36 keys gets blocks of 2^32). A smaller value slows down the CPU and above all the GPUs, since a launch cannot cross a block: with blocks
+  of 2^24 keys a GPU loses about a fifth of its speed.
 
 A value that cannot be used stops the command with a message such as `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`.
@@ -393,7 +395,8 @@ computer A:  pzsolve hunt -p 71 -s 5f3a…(64 digits) --part 0/2
 computer B:  pzsolve hunt -p 71 -s 5f3a…(same)      --part 1/2
 ```
 * **The same on all**: puzzle or range, seed (`-s`: you find it in the "Seed" line of `report.txt`, and with `--part` in the log at startup) and
-  `--chunk-bits` (if you do not give it, it depends only on the range, so it is already the same). **Different**: the shares.
+  `--chunk-bits` (if you do not give it, it depends only on the range and on the number of shares, so it is already the same, but not between
+  versions before and after 1.19.1: then give it). **Different**: the shares.
 * **Computers of different speeds**: give more shares to the faster one. With `pzsolve split 800M 120M` you get the proportional division
   (here `0-86/100` and `87-99/100`); `--part 0-86/100` is the same as `0,1,2,…,86/100`. One share per computer is enough if they are equal.
 * **The part belongs to the campaign**: it is decided at creation and does not change (a different `--part` on an existing campaign is refused, use `-c` for

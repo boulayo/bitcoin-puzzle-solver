@@ -54,7 +54,8 @@ const char *mode_name(search_mode m);
 /* Range size = end - start + 1 (pz_u256). */
 pz_u256 cfg_range_size(const campaign_cfg *c);
 /* Derives the default chunk size for a range. */
-unsigned cfg_default_chunk_bits(const pz_u256 *range_size);
+unsigned cfg_default_chunk_bits(const pz_u256 *range_size);   /* BSGS and the other modes; the stored value of an existing campaign wins */
+unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares);   /* new linear campaigns */
 /* Generates a fresh 256-bit seed from OS entropy mixed with time/pid/host. */
 void seed_generate(u8 seed[32]);
 /* Parses a user seed: 64 hex digits are used verbatim, anything else is hashed. */

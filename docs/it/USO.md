@@ -51,7 +51,9 @@ ferma a `n − 1` (l'ordine del gruppo), perché le chiavi oltre non esistono. P
 * `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale.
 * `--mem` è in GiB (`--mem 0.25` sono 256 MiB). Senza, il canguro prende il 40 % della RAM libera per la tabella dei punti distinti
   (almeno 256 MiB, al massimo 64 GiB) e il BSGS sceglie una tabella che stia nel 70 % della RAM libera.
-* Un `--chunk-bits` sotto il predefinito rallenta la CPU e soprattutto le GPU, perché ogni lancio riceve un solo blocco.
+* Il `--chunk-bits` predefinito fa i blocchi grandi quanto l'intervallo permette, con almeno 16 blocchi per quota e al massimo 2^36 chiavi
+  (un intervallo di 2^36 chiavi ha blocchi da 2^32). Un valore più piccolo rallenta la CPU e soprattutto le GPU, perché un lancio non può
+  attraversare un blocco: con blocchi da 2^24 chiavi una GPU perde circa un quinto della velocità.
 
 Un valore che non si può usare ferma il comando con un messaggio come `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 e un'opzione sconosciuta con `unrecognized option '--foo' (see 'pzsolve help hunt')`.
@@ -394,7 +396,8 @@ computer A:  pzsolve hunt -p 71 -s 5f3a…(64 cifre) --part 0/2
 computer B:  pzsolve hunt -p 71 -s 5f3a…(stesso)   --part 1/2
 ```
 * **Uguali su tutti**: puzzle o intervallo, seed (`-s`: lo trovi nella riga «Seed» di `report.txt`, e con `--part` nel log all'avvio) e
-  `--chunk-bits` (se non lo indichi dipende solo dall'intervallo, quindi è già uguale). **Diverse**: le quote.
+  `--chunk-bits` (se non lo indichi dipende solo dall'intervallo e dal numero di quote, quindi è già uguale, ma non tra versioni precedenti
+  e successive alla 1.19.1: in quel caso indicalo). **Diverse**: le quote.
 * **Computer di velocità diverse**: dai più quote al più veloce. Con `pzsolve split 800M 120M` ottieni la divisione in proporzione
   (qui `0-86/100` e `87-99/100`); `--part 0-86/100` è lo stesso di `0,1,2,…,86/100`. Una quota per computer basta se sono uguali.
 * **La parte è della campagna**: si decide alla creazione, non si cambia (`--part` diverso su una campagna esistente è rifiutato, usa `-c` per

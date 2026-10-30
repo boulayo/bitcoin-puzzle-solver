@@ -107,8 +107,9 @@ static const char *hunt_text(void)
 "      --mem GIB           kangaroo and bsgs: maximum RAM for the table, in GiB (1 GiB = 1073741824 bytes; 0.001 at least)\n"
 "                          [kangaroo: 40%% of the free RAM, at least 256 MiB and at most 64 GiB; bsgs: the table is chosen to\n"
 "                          fit in 70%% of the free RAM]\n"
-"      --chunk-bits B      linear: size of the permuted blocks, 2^B keys (20..40) [36, reduced for small ranges]; smaller\n"
-"                          blocks slow down the CPU and above all the GPUs, which receive one block per launch\n"
+"      --chunk-bits B      linear: size of the permuted blocks, 2^B keys (20..40) [as large as the range allows with 16 blocks\n"
+"                          per share, at most 36]; smaller blocks slow down the CPU and above all the GPUs, which receive\n"
+"                          one block per launch\n"
 "\n"
 "RESOURCES\n"
 "  -t, --threads N         CPU threads [all available cores; without -t the linear search leaves one core to drive each\n"
@@ -593,15 +594,19 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
 /* The block size (bits) of a campaign over rsz keys: the one asked for with --chunk-bits or the default of the range, and never more than
  * the range holds. A new campaign takes this value and a resumed command is compared through it, so that the command that created a
  * campaign can resume it also when its --chunk-bits was cut down. */
-static unsigned effective_chunk_bits(const pz_u256 *rsz, int requested)
+static unsigned clamp_chunk_bits(const pz_u256 *rsz, unsigned cb)
 {
-    unsigned cb = requested > 0 ? (unsigned)requested : cfg_default_chunk_bits(rsz);
     pz_u256 chunk = pz_u256_pow2(cb);
     if (pz_u256_cmp(&chunk, rsz) > 0) {   /* chunk larger than the range: shrink */
         unsigned b = pz_u256_bits(rsz) - 1;
         cb = b < 1 ? 1 : b;
     }
     return cb;
+}
+
+static unsigned effective_chunk_bits(const pz_u256 *rsz, int requested)
+{
+    return clamp_chunk_bits(rsz, requested > 0 ? (unsigned)requested : cfg_default_chunk_bits(rsz));
 }
 
 /* -m kangaroo or -m bsgs without a public key: what can be done instead. */
@@ -776,6 +781,11 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     }
     if (c->mode == MODE_LINEAR) {                 /* before anything is created on disk: the order of visit must exist and every share must hold a block */
         char perr[300];
+        if (o->chunk_bits <= 0) {                 /* the default block of the linear search depends on the number of shares too (campaign.c) */
+            part_spec ps;
+            unsigned shares = c->part[0] && part_parse(c->part, &ps, perr, sizeof perr) && ps.total ? ps.total : 1;
+            c->chunk_bits = clamp_chunk_bits(&rsz, cfg_linear_chunk_bits(&rsz, shares));
+        }
         if (!sched_check_part(c, perr, sizeof perr)) pz_die("%s", perr);
     }
 

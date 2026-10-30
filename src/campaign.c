@@ -38,6 +38,22 @@ unsigned cfg_default_chunk_bits(const pz_u256 *range_size)
     return (unsigned)b;
 }
 
+/* The default block size (bits) of a linear search over range_size keys split in `shares` parts (1 without --part). A launch of a GPU
+ * cannot cross a block, and its controller aims at launches of about a third of a second (up to 2^33 keys on the fastest cards): blocks of
+ * 2^24 keys, which the default above gave to a range of 2^36, cost a GPU about a fifth of its speed in launches too short to amortize
+ * their fixed cost. So the blocks are as large as the range allows while each share keeps at least 16 of them, and never above 2^36.
+ * It depends on the range and the number of shares only, never on the machine: the computers of a --part split must agree on it. */
+unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares)
+{
+    pz_u256 m1, one = pz_u256_from_u64(1);
+    pz_u256_sub(&m1, range_size, &one);
+    int b = (int)pz_u256_bits(&m1) - 4;      /* 16 blocks */
+    for (unsigned s = 1; s < shares; s <<= 1) b--;   /* ... for each share: ceil(log2(shares)) more bits of blocks */
+    if (b < 12) b = 12;
+    if (b > 36) b = 36;
+    return (unsigned)b;
+}
+
 void seed_generate(u8 seed[32])
 {
     u8 pool[32 + 8 + 8 + 8 + 64];

@@ -300,9 +300,38 @@ static void t_parts(void)
     }
 }
 
+/* ---- the default block size of the linear search ---- */
+
+static unsigned lcb(int range_bits, unsigned shares)
+{
+    pz_u256 r = pz_u256_pow2((unsigned)range_bits);
+    return cfg_linear_chunk_bits(&r, shares);
+}
+
+static void t_linear_chunk_bits(void)
+{
+    CHECK(lcb(36, 1) == 32);            /* 16 blocks: a GPU launch (about 2^28 keys on a laptop card, 2^33 on the fastest) fits in a block */
+    CHECK(lcb(40, 1) == 36);
+    CHECK(lcb(37, 1) == 33);
+    CHECK(lcb(70, 1) == 36);            /* large ranges keep the maximum */
+    CHECK(lcb(255, 1) == 36);
+    CHECK(lcb(36, 2) == 31 && lcb(36, 3) == 30 && lcb(36, 4) == 30 && lcb(36, 5) == 29);   /* 16 blocks for each of the shares */
+    CHECK(lcb(36, 300) == 23);
+    CHECK(lcb(70, 300) == 36);
+    CHECK(lcb(10, 1) == 12 && lcb(16, 1) == 12);   /* never below 2^12 keys */
+    for (int rb = 12; rb <= 120; rb++)  /* never fewer than 16 blocks while the range allows it, and a block is never larger than the range */
+        for (unsigned sh = 1; sh <= 64; sh *= 2) {
+            unsigned b = lcb(rb, sh);
+            CHECK(b >= 12 && b <= 36);
+            if (rb - 4 - (int)(sh > 1 ? __builtin_ctz(sh) : 0) >= 12 && rb - 4 - (int)(sh > 1 ? __builtin_ctz(sh) : 0) <= 36)
+                CHECK((int)b == rb - 4 - (int)(sh > 1 ? __builtin_ctz(sh) : 0));
+        }
+}
+
 int main(void)
 {
     pz_env_init();
+    t_linear_chunk_bits();
     /* Full coverage, no overlap, custom (non power of two) range with a short last chunk. */
     for (int variant = 0; variant < 3; variant++) {
         u64 start = 1000 + (u64)variant * 77, end = start + 300000 + (u64)variant * 1234 - 1;
