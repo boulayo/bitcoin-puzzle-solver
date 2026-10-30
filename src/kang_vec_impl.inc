@@ -36,9 +36,25 @@ static __attribute__((noinline)) PZ_VABI void kv_normalize(pz_fev *r) { pz_fev_n
 #define kv_normalize pz_fev_normalize
 #endif
 
+/* y3 = lam * t - y. With IFMA the subtrahend goes into the product as the constant K1 - y (pz_fev_mul_add) and the result comes
+ * out tight: the subtraction and the carry pass of kv_canon on y3 are saved, a stage of the chain of the step. With 29-bit limbs
+ * the lazy difference (no carries) goes to kv_canon as before. */
+static inline PZ_VABI void kv_mul_sub(pz_fev *r, const pz_fev *lam, const pz_fev *t, const pz_fev *y)
+{
+#ifdef PZ_FEV_IFMA
+    pz_fev ny;
+#pragma GCC unroll 5
+    for (int i = 0; i < PZ_FEV_NLIMB; i++) ny.l[i] = pz_vl_set(pz_fev_k1[i]) - y->l[i];
+    pz_fev_mul_add(r, lam, t, &ny);
+#else
+    kv_mul(r, lam, t);
+    pz_fev_sub_lazy(r, r, y);
+#endif
+}
+
 /* x3 and y3 of the step to canonical form: the fast reduction of the header, and the full one only for a vector with a lane it cannot
  * settle (about 2^-24 per lane with 29-bit limbs, 2^-48 with IFMA, every value >= p among them). With IFMA the fast form wants tight
- * elements, so the carries go first. */
+ * elements, so the carries of x3 go first (y3 arrives tight from kv_mul_sub). */
 #if PZ_VBYTES == 32
 static __attribute__((noinline))
 #else
@@ -48,7 +64,6 @@ PZ_VABI void kv_canon(pz_fev *x3, pz_fev *y3)
 {
 #ifdef PZ_FEV_IFMA
     pz_fev_settle(x3->l);
-    pz_fev_settle(y3->l);
 #endif
     const pz_vl u = pz_fev_normalize_fast(x3) | pz_fev_normalize_fast(y3);
     u64 any = 0;
@@ -337,9 +352,7 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) kv_x3_t(&x[u].x3, &x[u].t, &x[u].l2, &E->vx[c - u], &E->vdx[c - u]);
 #pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) kv_mul(&x[u].y3, &x[u].lam, &x[u].t);
-#pragma GCC unroll 2
-    for (int u = 0; u < nu; u++) pz_fev_sub_lazy(&x[u].y3, &x[u].y3, &E->vy[c - u]);
+    for (int u = 0; u < nu; u++) kv_mul_sub(&x[u].y3, &x[u].lam, &x[u].t, &E->vy[c - u]);
 #pragma GCC unroll 2
     for (int u = 0; u < nu; u++) {
         kv_canon(&x[u].x3, &x[u].y3);
@@ -515,8 +528,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         kv_mul(&lam, &t, &ic);
         kv_sqr(&l2, &lam);
         kv_x3_t(&x3, &t, &l2, &vx[c], &vdx[c]);
-        kv_mul(&y3, &lam, &t);
-        pz_fev_sub_lazy(&y3, &y3, &vy[c]);
+        kv_mul_sub(&y3, &lam, &t, &vy[c]);
         kv_canon(&x3, &y3);
         /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
         const pz_vl sel = pz_vl_set(0) - (y3.l[0] & one);

@@ -1130,3 +1130,82 @@ puzzle 71 then came in and are the ground truth it is checked against.
   alone. GPU: fewer ALU-pipe instructions in the hash (1909 of 2230 per key); the SHA-256 message schedule is 48 × 11 operations of that pipe per
   key, the RIPEMD-160 lines 160 × 7, both at the minimum of their expressions. Neither is a table or a constant (10.4). What a laptop user can do
   today is in USAGE 8: `--gpu 0`, `-t`, `--prio-gpu`, `--limit`, `--retune`; the heat budget decides the rest.
+
+### 10.6 Cycles per key and per step: where the latency is (after 1.15.1)
+
+The question of this round: how much of the gap between the port floor and the measured cycles of the lane engines (10.5: about 25 %) can
+be closed, with latency, not instruction counts, as the target. Same test machine, one thread pinned, alternating pairs (9 to 11, median and
+interquartile range; the machine was shared, load 2 to 7), exact instruction counts by single-stepping, plus three things the earlier rounds did
+not have: the core clock and the ports measured with microbenchmarks that carry their own clock reference (a chain of `imul` on port 1, which
+512-bit code leaves alone, in the same loop as the block under test), the hash timed alone, and the engine with the hash removed and single parts
+of the step knocked out.
+
+* **The machine, measured.** The clock is 3.29 GHz on scalar code, 3.10 with 512-bit adds, **2.60 to 2.75 with a dense stream of IFMA or
+  `vpmuludq`**, and the licence outlasts the hash phases: the IFMA engines run at about 2.65 GHz throughout, so the 50.9 ns per key of avx512i
+  are **135 cycles**, not the 160 that 3.2 GHz would give (10.5 assumed 3.2 and so overstated the cycles of this machine; the laptop's clock
+  under AVX-512 is lower than its 4.8 GHz turbo in the same way). The ports: on this Xeon `vpmadd52luq`/`huq` and `vpmuludq` on 512 bits issue on
+  **two ports** (24 independent IFMA in 12.7 cycles, 8 IFMA beside 8 shifts in 8), shifts and rotates on port 0 only, shuffles on port 5 only,
+  register moves are eliminated, and the broadcast-operand forms run at full speed. uops.info gives Tiger Lake one port for IFMA and `vpmuludq`
+  (10.5), so the two machines share the hash floor but not the floor of the curve part: per 16 keys of avx512i, 440 port-0-only operations
+  (336 IFMA, 104 shifts) against 304 others, 27.5 cycles per key on Tiger Lake, about 24 here with the IFMA spread over two ports.
+* **The hash alone is at its floor.** 16-lane SHA-256 + RIPEMD-160 to the filter word, 3009 instructions (2663 on the two vector ports:
+  958 rotates and shifts on port 0, 66 shuffles on port 5, 1639 either), port bound 1332 cycles per batch of 16 keys. Measured alone: **1361
+  cycles (85 per key), the same whether the batches depend on each other or not**, and two batches interleaved round by round 1368. Inside
+  the engine a pass costs 91 (measured by hashing every batch twice and three times: +34.5 ns per key and pass at 2.65 GHz). So the hash is
+  port-bound at 93 to 98 % and has no latency to give; the 92 cycles and "92 % of the port bound" of 10.2 and 10.5 were this same figure
+  at the wrong clock. The AVX2 hash (8 lanes, 5432 instructions, three ports): 1677 cycles per batch, 210 per key.
+* **Where the 135 cycles of a key go (avx512i, before this round):** hash 91; curve part 44 (16.2 ns with the hash removed): products 16
+  (6.0 ns: with the products replaced by additions 10.1 ns), batch inversion 12 (4.6 ns), and **15 in the carry passes and the emission of the
+  candidates** (eight `pz_fev_sub`/`sub2` carry ripples per pair of points, 13 cycles each and on the chain of every point). A product in a
+  chain costs 72 TSC ticks here against 51 when independent (`vpmadd52` latency 4: a column waits for 9 multiply-adds, then the reduction tail
+  of about 29 cycles), two chains side by side already reach the independent figure (51.5), and the products of the step are 2 chains.
+  The curve part thus runs at about half its port floor here; on Tiger Lake, where the IFMA have one port, the model below puts it near that floor.
+* **Tools.** `llvm-mca` (LLVM 18, `-mcpu=tigerlake` and `skylake-avx512`, same model) assigns 512-bit adds to three ports and IFMA/`vpmuludq`
+  to two, with a 224-entry window: it gives 394 cycles per 16 keys for the curve loop (measured about 750 here) and 39 per kangaroo step (measured
+  about 75), so its absolute figures are of no use here; the relative change of a loop body is. A small simulator with the port table of uops.info
+  (IFMA, shifts, rotates on port 0; shuffles on port 5; the rest on both), 4-cycle IFMA, a 97-entry scheduler and 224-entry window (160/352 for
+  Tiger Lake) gives the hash at 1478 per batch (measured 1361) and the curve loop at 506 per 16 keys on the Tiger Lake ports; it is a scratch tool,
+  not in the repository. The single-stepped counts and the pairs decide.
+* **Kept: the subtrahends go into the products** (`pz_fev_mul_add`, `pz_fev_sqr_add`: `a·b + c` with `c = K1 − y` or `K2 − x − x'`, limbs below
+  2^55, added to the low columns before the reduction, whose own carry pass makes the result tight; the constants of a round are formed once).
+  The linear step loses the `sub2` after the square and the `sub` after the last product, the kangaroo step the `sub` after its last product and
+  the carry pass of `y3` in `kv_canon`: two of the four carry-pass stages of each chain. Instructions: linear 279.9 to 275.2 per key (loop body
+  979 to 903 per 16 keys), kangaroo lane step 143.2 to 141.1, pair step 159.3 to **161.4** (more: the two-vector pass spills the constants it
+  now forms, which is why the pair does not gain). Time: **linear avx512i +2.1 % (IQR +1.9..+2.2;
+  +2.0 % in a second series), the curve part alone +7.1 % (+7.0..+8.0); kangaroo avx512i +3.3 to +3.9 % (IQR +2.8..+4.0), avx512i2 within the
+  spread (−0.3, +1.2 and +0.4 % in three series, IQR −0.8..+1.1)**. Models: mca (Tiger Lake) curve loop 394 to 346 cycles per 16 keys
+  (−12 %), lane step 438 to 427, pair step 620 to 611; simulator on the Tiger Lake ports 506 to 464, 478 to 468, 763 to 726. The 29-bit engines
+  are unchanged (their products accept
+  loose factors but a lazy result cannot be subtracted from without a carry pass; the 29-bit code compiles as before, same counts). The helpers
+  that form the constants are inlined on AVX-512, and the hash of the batches is kept out of the loop of the step explicitly: with the helpers
+  inlined GCC had pulled `vctx_flush` into the loop body (1401 instructions with the hash call inside) and the gain fell to +1.5 %.
+* **Checked on the final form.** The three IFMA objects (engine, lane and pair kangaroo) built with gcc 13 and clang 18 at `-O1`, `-O2` and
+  `-O3`, each with real IFMA (`PZ_ASSUME_IFMA=1`: this CPU executes the instructions, its CPUID hides them) and with `tools/ifma_emul.h`: all
+  twelve selftests pass (612 checks), with no compiler warning; AddressSanitizer with UBSan, real and emulated, report nothing; the MinGW-w64
+  build passes the selftest and `t_engine` under wine with IFMA assumed (the plain `make wintest` skips the IFMA engine here). valgrind 3.22 cannot
+  run AVX-512 (SIGILL on the first instruction). The helpers are correct without the forced inlining too: the form with them out of line passes
+  the same selftest. One crash was seen on the way, and it was not the compiler: an object built from a half-edited source passed `&cx`, the address
+  of the pointer variable, where the pointer was expected (`const pz_fev **` for `const pz_fev *`), which GCC 13 only warns about
+  (`-Wincompatible-pointer-types`); the callee read 0x80 bytes past a stack slot that is 32-byte but not 64-byte aligned and `vmovdqa64` faulted.
+  Putting that one mistake back into the final source reproduces the fault at the same instruction. Worth knowing for the next change in this
+  code: a warning of that kind in the build log of a lane engine is a bug, and the engine files compile with it as an error in the checks above.
+* **Tried and dropped** (same pairs, numbers at 2.65 GHz):
+  * *the low and the high halves of the products in separate accumulators* (a column waits for 5 multiply-adds instead of 9): a product in a
+    chain 72 to 61 ticks, an independent one 51 to 53 (8 additions and 10 zeroing moves more), but the loop bodies grew 17 % (linear) and 9 %
+    (pairs) and the engines lost: linear −0.6 % (curve part alone −1.2 %), pairs −2.8 %, lanes +4.3 %. The chain was not what the engine
+    waited for;
+  * *four vectors at a time in the backward pass of the kangaroo* instead of two: −10 % (905 instructions per vector against 815, spills);
+  * *two batches hashed together, round by round* (the brief's "two batch halves interleaved"): the hash alone 1368 against 1361 per batch, in the
+    engine +0.8 % (IQR +0.5..+0.8, nine pairs all positive) for 44 KB of code and a second copy of the rounds; on AVX2 it is slower (2010 against
+    1677, spills). Not taken: the hash is port-bound already;
+  * *four chains in the forward pass of the batch inversion*: not measured, two chains already run the products at their independent throughput;
+  * *the front end*: the loop bodies are 6 to 44 KB, far beyond the uop cache, and the legacy decoder feeds 10-byte instructions at 1.1 per cycle
+    here; but 6-byte register forms, which these loops mostly are, still reach 2 per cycle in 24 KB blocks, and the hash alone runs at 98 % of
+    its port bound from the decoder: not a limit here;
+  * *the word extraction of the emission* (four 64-bit words and dword selects instead of eight masked words): 12 operations fewer per 8 keys,
+    about 1 % of the loop body, left for a later round.
+* **What is left.** The hash, two thirds of a key, is at its port floor: only fewer operations would help, and 10.2 found none. The curve part
+  runs at about half its port floor on this machine (20 of 135 cycles per key are latency), less on Tiger Lake by the model; what would recover
+  it is the curve arithmetic interleaved with the hash of the previous batch at the instruction level (the hash saturates the ports the curve
+  leaves idle), which needs the hash rounds and the products in one basic block with 32 registers between them: not tried in this round.
+  Expected on the laptop of 10.5 from the models: about −2 % on the linear search and −2 to −3 % on the kangaroo step.

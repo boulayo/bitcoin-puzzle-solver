@@ -195,6 +195,19 @@ int main(void)
         for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe t; pz_fe_sub(&t, &va[l], &vb[l]); pz_fe_sub(&want[l], &t, &vc[l]); pz_fe_normalize(&want[l]); }
         check_lanes(&r, want, "sub2");
 
+        /* the products with a term added before the reduction: a*b - c as a*b + (K1 - c), a^2 - b - c as a^2 + (K2 - b - c) */
+        {
+            pz_fev d;
+            for (int i = 0; i < 5; i++) d.l[i] = pz_vl_set(pz_fev_k1[i]) - c.l[i];
+            pz_fev_mul_add(&r, &a, &b, &d);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe_mul(&want[l], &va[l], &vb[l]); pz_fe_sub(&want[l], &want[l], &vc[l]); pz_fe_normalize(&want[l]); }
+            check_lanes(&r, want, "mul_add");
+            for (int i = 0; i < 5; i++) d.l[i] = pz_vl_set(pz_fev_k2[i]) - b.l[i] - c.l[i];
+            pz_fev_sqr_add(&r, &a, &d);
+            for (int l = 0; l < PZ_FEV_LANES; l++) { pz_fe_sqr(&want[l], &va[l]); pz_fe_sub(&want[l], &want[l], &vb[l]); pz_fe_sub(&want[l], &want[l], &vc[l]); pz_fe_normalize(&want[l]); }
+            check_lanes(&r, want, "sqr_add");
+        }
+
         r = a;
         pz_fev_normalize(&r);
         check_canonical(&r, va);

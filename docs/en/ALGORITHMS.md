@@ -56,7 +56,10 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
   Only `x` and that parity have to be canonical. In the lane engines a carry pass and one fold give both, and the full reduction runs
   only when the top limb ends all ones (about one lane in 2^24, every value ≥ p among them; with IFMA every element is canonical already
   below that). For `x3 = λ² − x(C) − x(i·G)` the scalar engines and the GPU subtract the sum `x(C) + x(i·G)`, formed once for both
-  points of a pair; the lane engines subtract both terms in one pass.
+  points of a pair; the 29-bit lane engines subtract both terms in one pass. With IFMA the subtrahends go into the products: `x3 = λ² +
+  (K2 − x(C) − x(i·G))` and `y3 = λ·t + (K1 − y(C))` add the term (a multiple of `p` less the subtrahends, formed once per round) to the
+  low columns before the reduction, whose carry pass leaves the result exact; the separate subtraction and its carry pass, a stage of the
+  dependency chain of every point, are gone (RESEARCH.md 10.6).
 * The lane engines hash the candidates eight batches at a time (8 × 8 or 8 × 16 keys), so that the curve arithmetic of consecutive
   points runs back to back and out-of-order execution overlaps their dependency chains.
 
@@ -636,8 +639,11 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 * With 29-bit limbs a difference `a − b + k·p` that only meets a tight factor in a product (or goes to the hash) skips its carry pass: its
   limbs stay below 2^31 + 2^23, and nine products of such a limb and a tight one still fit in 64 bits. With IFMA a product that waits for
   the previous one is latency-bound, so the forward pass of the batch inversion runs as two interleaved chains (even and odd
-  denominators). On AVX-512 (32 vector registers) the products are inlined in the loop of the engine. The column sums of a 29-bit product
-  pass through an empty `asm` after every addition: otherwise GCC reassociates them, computes the 81 products first and spills them.
+  denominators), and a product may take a term to add before its reduction (`pz_fev_mul_add`, `pz_fev_sqr_add`: `a·b + c` with the limbs
+  of `c` below 2^55, as `K1 − x` or `K2 − x − y` of tight elements are), which saves the subtraction and the carry pass that would
+  follow it; the linear step and the kangaroo step use it for `x3` and `y3`. On AVX-512 (32 vector registers) the products are inlined in
+  the loop of the engine. The column sums of a 29-bit product pass through an empty `asm` after every addition: otherwise GCC
+  reassociates them, computes the 81 products first and spills them.
 * **Lane kangaroo**: `x3` and `y3` of a step are made canonical as in the linear search (the full reduction only for a vector with a lane
   the fast form cannot settle), and the jump table keeps each coordinate `c` as `K1 − c`, so that `x − jx` and `y − jy` are an addition and
   its carries (`K1` is the multiple of `p` that a subtraction adds). The entries are read one row per lane and transposed in registers

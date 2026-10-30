@@ -21,8 +21,10 @@
 #if PZ_VBYTES == 64
 #define PZ_FEV_INLINE __attribute__((always_inline))
 #define VINLINE __attribute__((always_inline))
+#define VFLUSH __attribute__((noinline))    /* the hash of the batches stays out of the loop of the step: called once per 8 iterations */
 #else
 #define VINLINE
+#define VFLUSH
 #endif
 #ifdef PZ_FEV_IFMA
 #include <pzcore/fev52.h>
@@ -75,7 +77,7 @@ static PZ_VABI void vctx_verify(vctx_t *c, const vbatch_t *b, int lane)
     if (c->job->on_hit) c->job->on_hit(c->job->user, &key);
 }
 
-static inline PZ_VABI void vctx_flush(vctx_t *c)
+static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
 {
 #ifdef PZ_PROF_NOHASH
     c->n = 0;
@@ -182,6 +184,35 @@ static inline PZ_VABI void fev_bc_sub_nc(pz_fev *r, const u64 *a, const pz_fev *
 static inline PZ_VABI void fev_bc_add(pz_fev *r, const pz_fev *a, const u64 *b) { pz_fev t; fev_bcast(&t, b); pz_fev_add(r, a, &t); }
 static inline PZ_VABI void fev_sub2_bc(pz_fev *r, const pz_fev *a, const pz_fev *b, const u64 *c) { pz_fev t; fev_bcast(&t, c); pz_fev_sub2(r, a, b, &t); }
 
+/* x3 = l^2 - xc - Sx and y3 = l*t - yc of the step. With IFMA the subtrahends go into the products as the constants K2 - xc - Sx
+ * and K1 - yc (pz_fev_sqr_add, pz_fev_mul_add): the term is added to the low columns before the reduction, whose carry pass
+ * makes the result tight, and the separate subtraction with its own carry pass is saved, a stage of the chain of each point
+ * (measured: the carry passes between the products were a third of the time of the curve part). K2 - xc and K1 - yc are formed
+ * once per round (vcons_set). With 29-bit limbs the lazy result of a product cannot be subtracted from without a carry pass, so
+ * the plain forms stay and the "constants" are xc and yc themselves (the code of those engines is as before). Inlined like the
+ * products on AVX-512: thin wrappers, and a pointer to the constants of the round then never waits in a spill slot. */
+#ifdef PZ_FEV_IFMA
+static inline PZ_VABI void vcons_set(pz_fev *cx, pz_fev *ny, const pz_fev *xc, const pz_fev *yc)
+{
+#pragma GCC unroll 5
+    for (int i = 0; i < PZ_FEV_NLIMB; i++) {
+        cx->l[i] = pz_vl_set(pz_fev_k2[i]) - xc->l[i];
+        ny->l[i] = pz_vl_set(pz_fev_k1[i]) - yc->l[i];
+    }
+}
+static inline VINLINE PZ_VABI void fev_sqr_sub2_bc(pz_fev *r, const pz_fev *a, const pz_fev *cx, const u64 *Sx)
+{
+    pz_fev t;
+#pragma GCC unroll 5
+    for (int i = 0; i < PZ_FEV_NLIMB; i++) t.l[i] = cx->l[i] - pz_vl_set(Sx[i]);
+    pz_fev_sqr_add(r, a, &t);
+}
+static inline VINLINE PZ_VABI void fev_mul_sub(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *ny) { pz_fev_mul_add(r, a, b, ny); }
+#else
+static inline VINLINE PZ_VABI void fev_sqr_sub2_bc(pz_fev *r, const pz_fev *a, const pz_fev *xc, const u64 *Sx) { pz_fev_sqr(r, a); fev_sub2_bc(r, r, xc, Sx); }
+static inline VINLINE PZ_VABI void fev_mul_sub(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *yc) { pz_fev_mul(r, a, b); fev_sub_nc(r, r, yc); }
+#endif
+
 static inline PZ_VABI bool vec_any_zero(const pz_fev *a)
 {
     pz_vl z = a->l[0];
@@ -273,6 +304,13 @@ static inline VINLINE PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, con
     for (int i = 2; i < VHALF; i++) fev_bc_sub_nc(&dx[i], vtab_x[i], xc);
     fev_bc_sub_nc(&dx[VHALF], st->sx, xc);
     if (UNLIKELY(!vinv_batch(dx, tmp, VHALF + 1))) return false;
+#ifdef PZ_FEV_IFMA
+    pz_fev cxv, nyv;               /* K2 - xc and K1 - yc, the terms the products of the step add */
+    vcons_set(&cxv, &nyv, xc, yc);
+    const pz_fev *cx = &cxv, *ny = &nyv;
+#else
+    const pz_fev *cx = xc, *ny = yc;
+#endif
 
     {   /* the centre itself */
         pz_fev x = *xc, y = *yc;
@@ -288,16 +326,12 @@ static inline VINLINE PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, con
         fev_bc_add(&tm, yc, Sy);
         pz_fev_mul(&lp, &tp, inv);
         pz_fev_mul(&lm, &tm, inv);
-        pz_fev_sqr(&xp, &lp);
-        pz_fev_sqr(&xm, &lm);
-        fev_sub2_bc(&xp, &xp, xc, Sx);
-        fev_sub2_bc(&xm, &xm, xc, Sx);
+        fev_sqr_sub2_bc(&xp, &lp, cx, Sx);
+        fev_sqr_sub2_bc(&xm, &lm, cx, Sx);
         fev_sub_nc(&tp, xc, &xp);
         fev_sub_nc(&tm, &xm, xc);
-        pz_fev_mul(&yp, &lp, &tp);
-        pz_fev_mul(&ym, &lm, &tm);
-        fev_sub_nc(&yp, &yp, yc);
-        fev_sub_nc(&ym, &ym, yc);
+        fev_mul_sub(&yp, &lp, &tp, ny);
+        fev_mul_sub(&ym, &lm, &tm, ny);
         vctx_emit(c, &xp, &yp, kw + pz_vl_set(VHALF + i));
         vctx_emit(c, &xm, &ym, kw + pz_vl_set(VHALF - i));
     }
@@ -306,24 +340,25 @@ static inline VINLINE PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, con
         pz_fev lam, t, x3, y3;
         fev_bc_add(&t, yc, Sy);
         pz_fev_mul(&lam, &t, &dx[VHALF - 1]);
-        pz_fev_sqr(&x3, &lam);
-        fev_sub2_bc(&x3, &x3, xc, Sx);
+        fev_sqr_sub2_bc(&x3, &lam, cx, Sx);
         fev_sub_nc(&t, &x3, xc);
-        pz_fev_mul(&y3, &lam, &t);
-        fev_sub_nc(&y3, &y3, yc);
+        fev_mul_sub(&y3, &lam, &t, ny);
         vctx_emit(c, &x3, &y3, kw);
     }
-    /* next centres: C + (N*GRP)*G */
-    pz_fev lam, t, nx, ny;
+    /* next centres: C + (N*GRP)*G; the new yc must be tight, as the subtractions of the next round take it */
+    pz_fev lam, t, nx, nyc;
     fev_bc_sub_nc(&t, st->sy, yc);
     pz_fev_mul(&lam, &t, &dx[VHALF]);
-    pz_fev_sqr(&nx, &lam);
-    fev_sub2_bc(&nx, &nx, xc, st->sx);
+    fev_sqr_sub2_bc(&nx, &lam, cx, st->sx);
     fev_sub_nc(&t, xc, &nx);
-    pz_fev_mul(&ny, &lam, &t);
-    pz_fev_sub(&ny, &ny, yc);
+#ifdef PZ_FEV_IFMA
+    fev_mul_sub(&nyc, &lam, &t, ny);
+#else
+    pz_fev_mul(&nyc, &lam, &t);
+    pz_fev_sub(&nyc, &nyc, yc);
+#endif
     *xc = nx;
-    *yc = ny;
+    *yc = nyc;
     return true;
 }
 
