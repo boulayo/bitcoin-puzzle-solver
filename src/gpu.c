@@ -463,7 +463,7 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
         if (!gpu_session_open(s, &info)) continue;
         bool ok = gpu_test_fe(s) && (kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
         if (ok && !kangaroo) { gpu_linear_release_program(s); ok = gpu_linear_prepare_variant(s, keep.variant); }
-        s->T = keep.T;                                /* the kangaroo self-test works with 4 work-items */
+        s->T = keep.T;                                /* the kangaroo self-test works with a handful of work-items */
         if (ok) return true;
         pz_log(PZ_LOG_WARN, "GPU[%d] %s: the device came back but fails the start-up check (attempt %d)", info.index, info.name, attempt + 1);
     }
@@ -718,7 +718,7 @@ int gpu_kangaroo_start(run_ctx *r, gpu_session **out, int *k_total)
 static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, u64 stream)
 {
     const int K = s->T * s->NK;
-    if (!gpu_kang_prepare(s, &ks->P, s->T, gpu_kang_depth(&s->info, (size_t)K))) return false;
+    if (!gpu_kang_prepare(s, &ks->P, s->T, gpu_kang_depth(&s->info, (size_t)K, s->kvar))) return false;
     if (*mirror) kang_worker_free(*mirror);
     *mirror = kang_worker_new(ks, K, stream);
     kang_init_herd_parallel(ks, *mirror, s->r->sys.ncpu, stream);
@@ -759,6 +759,10 @@ static void *gpu_kang_thread(void *p)
     /* keep the expected number of DPs per launch well below the device buffer */
     double edp = (double)K / ldexp(1.0, (int)ks->P.dp_bits);
     double rm = (double)(s->dps_cap / 2) / (edp > 1e-9 ? edp : 1e-9);
+    /* and, past KANG_HIST_MAX rounds (the deep history of a block herd), at most 8 times the steps between two DPs of a walker: each DP replays
+     * the history of its walker since the start of the launch */
+    const double rdp = ldexp(8.0, (int)ks->P.dp_bits);
+    if (rm > KANG_HIST_MAX && rm > rdp) rm = rdp > KANG_HIST_MAX ? rdp : KANG_HIST_MAX;
     const uint32_t rmax = rm < 1 ? 1 : (rm > s->hist_rounds ? s->hist_rounds : (uint32_t)rm);
     uint32_t rounds = rmax < 4 ? rmax : 4;
     int boosted = 0;

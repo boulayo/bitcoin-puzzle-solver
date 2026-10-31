@@ -187,6 +187,7 @@ PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hi
             } \
 }
 
+#ifndef KANG_BLOCK
 /* One launch = `rounds` steps of the NK kangaroos of this work-item; the number of rounds is at most the depth of the
  * history buffer. Step number of the first round: step_hi:step_lo (the same for every kangaroo of the herd). */
 __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __global uint *dps, __global uint *dpcount,
@@ -347,3 +348,170 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
         s[31] = 0;
     }
 }
+#else
+/* The block herd (KANG_GROUP work-items per work-group, NK = a few walkers each): one field inversion (in the 32 lanes of one warp) per
+ * work-group and round, instead of one per work-item. Each work-item multiplies the denominators of its walkers (prefix products, as above); the
+ * products of the work-group go to local memory, where 32 work-items (one warp on NVIDIA, a different one each round, so that the
+ * inversions fall on the four schedulers of an SM in turn) multiply the KANG_GROUP / 32 products of a column, invert the 32 column products
+ * together (one fe_inv for the 32 lanes) and work back to the inverse of each product (Montgomery's trick on the column). The walkers stay in
+ * the registers of their work-item for the whole launch (the loops over them are unrolled): the device memory sees the history (2 bytes a
+ * step), the distinguished points and the state at the start and at the end of a launch. The walk, the history, the state and the events
+ * are those of the kernel above with NK walkers per work-item; the host code does not tell them apart. */
+#ifndef PZ_BARRIER                         /* tests/mock_cuda/pz_host.h has its own: there the work-items of a block take turns */
+#ifdef PZ_CUDA
+#if defined(PZ_BLOCK) && PZ_BLOCK != KANG_GROUP
+#error "the block herd is built for work-groups of KANG_GROUP work-items: the CUDA block must have the same size"
+#endif
+#define PZ_LOCAL __shared__
+#define PZ_LOCAL_PTR
+#define PZ_BARRIER() __syncthreads()
+#define PZ_LID() ((uint)threadIdx.x)
+#define PZ_GRP() ((uint)blockIdx.x)
+#define PZ_KANG_ATTR
+#else
+#define PZ_LOCAL __local
+#define PZ_LOCAL_PTR __local
+#define PZ_BARRIER() barrier(CLK_LOCAL_MEM_FENCE)
+#define PZ_LID() ((uint)get_local_id(0))
+#define PZ_GRP() ((uint)get_group_id(0))
+#define PZ_KANG_ATTR __attribute__((reqd_work_group_size(KANG_GROUP, 1, 1)))
+#endif
+#endif
+#define KANG_ROOTS 32                      /* inversions per work-group and round: the lanes of one warp */
+#define KANG_COL (KANG_GROUP / KANG_ROOTS) /* products of the work-items under one inversion */
+
+/* *r = a^-1 for every work-item of the work-group (a != 0). Work-item c of the set `set` (the work-items 32 set .. 32 set + 31) multiplies
+ * the products of the work-items c, c + 32, c + 64, ..., inverts the result and works back to the inverse of each factor. bt and bq are
+ * KANG_GROUP and KANG_GROUP - KANG_ROOTS elements of local memory. Every work-item of the group calls it, in the same round. */
+inline void kang_group_inv(fe *r, const fe *a, PZ_LOCAL_PTR fe *bt, PZ_LOCAL_PTR fe *bq, const uint lid, const uint set)
+{
+    bt[lid] = *a;
+    PZ_BARRIER();
+    if (lid / KANG_ROOTS == set) {
+        const uint c = lid % KANG_ROOTS;
+        fe q = bt[c];
+#pragma unroll
+        for (int j = 1; j < KANG_COL; j++) {
+            const fe p = bt[c + j * KANG_ROOTS];
+            bq[c + (j - 1) * KANG_ROOTS] = q;
+            fe_mul(&q, &q, &p);
+        }
+        fe inv;
+        fe_inv(&inv, &q);
+#pragma unroll
+        for (int j = KANG_COL - 1; j > 0; j--) {
+            const fe p = bt[c + j * KANG_ROOTS], b = bq[c + (j - 1) * KANG_ROOTS];
+            fe t;
+            fe_mul(&t, &inv, &b);
+            bt[c + j * KANG_ROOTS] = t;
+            fe_mul(&inv, &inv, &p);
+        }
+        bt[c] = inv;
+    }
+    PZ_BARRIER();
+    *r = bt[lid];
+}
+
+__kernel PZ_KANG_ATTR void pz_kang_step(__global uint *state, __global const uint *jump, __global uint *dps, __global uint *dpcount,
+                                        __global uint *rlist, __global uint *rcount, __global ushort *hist, const uint rounds,
+                                        const uint dp_mask_lo, const uint dp_mask_hi, const uint cap_lo, const uint cap_hi, const uint dps_cap,
+                                        const uint rlist_cap, const uint R, const uint step_lo, const uint step_hi, const uint pz_n)
+{
+    PZ_LOCAL fe BT[KANG_GROUP];
+    PZ_LOCAL fe BQ[KANG_GROUP - KANG_ROOTS];
+    const uint gid = (uint)get_global_id(0), lid = PZ_LID(), grp = PZ_GRP();
+    const int mine = gid < pz_n;                          /* a work-item past the end of the herd takes part in the inversions only */
+    int live = mine;                                      /* 0 once its walkers have been sent to restart */
+    const uint base = gid * NK;
+    const size_t HS = (size_t)NK * pz_n;                  /* history stride between rounds */
+    fe X[NK], Y[NK], TP[NK];
+    uint FL[NK], PP[NK][2], CM[NK][2];                    /* flags and jump index; prev, prev2; checkpoint, least tag */
+    ulong LD[NK];
+    const ulong cap = (ulong)cap_lo | ((ulong)cap_hi << 32);
+    const ulong step0 = (ulong)step_lo | ((ulong)step_hi << 32);
+    if (mine) {
+#pragma unroll
+        for (int k = 0; k < NK; k++) {
+            __global const uint *s = state + (size_t)(base + k) * KS;
+            for (int i = 0; i < 8; i++) { X[k].v[i] = s[i]; Y[k].v[i] = s[8 + i]; }
+            const uint prev = s[24], prev2 = s[25], ck = s[26], mn = s[27], esc = s[28];
+            PP[k][0] = prev; PP[k][1] = prev2;
+            CM[k][0] = ck; CM[k][1] = mn;
+            LD[k] = (ulong)s[29] | ((ulong)s[30] << 32);
+            FL[k] = (s[22] & 1u) | ((s[23] & 1u) << 1) | ((esc & 1u) << 2) | (kang_jidx(&X[k], prev2, ck, mn, esc, R) << FL_JSHIFT);
+        }
+    }
+    for (uint rd = 0; rd < rounds; rd++) {
+        const ulong n = step0 + rd;
+        const int bnd = (n & (KANG_CK_PERIOD - 1)) == 0;   /* checkpoint step: cycle detection, watchdog */
+        fe acc;
+        fe_set_u32(&acc, 1);
+        if (live) {
+            /* the denominators of this round and their prefix products */
+#pragma unroll
+            for (int k = 0; k < NK; k++) {
+                fe jx, d;
+                fe_load_g16(&jx, jump + (FL[k] >> FL_JSHIFT) * JS);
+                fe_sub_norm(&d, &X[k], &jx);
+                if (k == 0) TP[0] = d;
+                else fe_mul(&TP[k], &TP[k - 1], &d);
+            }
+            fe chk = TP[NK - 1];
+            fe_normalize(&chk);
+            if (fe_is_zero(&chk)) {
+                /* a kangaroo sits on its jump point (practically never): the walkers of the work-item restart, no more steps this launch */
+                for (int k = 0; k < NK; k++) {
+                    const uint slot = atomic_inc(rcount);
+                    if (slot < rlist_cap) rlist[slot] = base + k;
+                }
+                for (uint r2 = rd; r2 < rounds; r2++)
+                    for (int k = 0; k < NK; k++) hist[(size_t)r2 * HS + (size_t)k * pz_n + gid] = H_NOP;
+                live = 0;
+            } else {
+                acc = TP[NK - 1];
+            }
+        }
+        fe inv;
+        kang_group_inv(&inv, &acc, BT, BQ, lid, (rd + grp) % KANG_COL);
+        if (!live) continue;
+#pragma unroll
+        for (int k = NK - 1; k >= 0; k--) {
+            const uint f = FL[k];
+            const uint J = f >> FL_JSHIFT;
+            const fe xk = X[k], yk = Y[k];
+            fe jx, jy, ik, lam, t, x3, y3;
+            uint J2;
+            fe_load_g16(&jx, jump + J * JS);
+            fe_load_g16(&jy, jump + J * JS + 8);
+            if (k > 0) {
+                fe d;
+                fe_mul(&ik, &inv, &TP[k - 1]);
+                fe_sub_norm(&d, &xk, &jx);
+                fe_mul(&inv, &inv, &d);
+            } else {
+                ik = inv;
+            }
+            KANG_STEP
+        }
+    }
+    if (!mine) return;
+    /* write the herd back; d advances by the jumps of the whole launch */
+#pragma unroll
+    for (int k = 0; k < NK; k++) {
+        __global uint *s = state + (size_t)(base + k) * KS;
+        kang_replay_state(s, hist, (size_t)k * pz_n + gid, HS, rounds, jump);
+        for (int i = 0; i < 8; i++) { s[i] = X[k].v[i]; s[8 + i] = Y[k].v[i]; }
+        const uint f = FL[k];
+        s[22] = f & 1u;
+        s[23] = (f >> 1) & 1u;
+        s[24] = PP[k][0];
+        s[25] = PP[k][1];
+        s[26] = CM[k][0];
+        s[27] = CM[k][1];
+        s[28] = (f >> 2) & 1u;
+        s[29] = (uint)LD[k];
+        s[30] = (uint)(LD[k] >> 32);
+        s[31] = 0;
+    }
+}
+#endif

@@ -10,5 +10,6 @@
 #define KANG_NOTAG 0xFFFFFFFFu   /* "no tag yet" */
 #define KANG_STATE_WORDS 32      /* 32-bit words of the state of a kangaroo on the device */
 #define KANG_JUMP_WORDS 20       /* 32-bit words of an entry of the jump table: x[8] y[8] v[4] */
+#define KANG_GROUP 128           /* work-items of a work-group of the block-herd kernel (-DKANG_BLOCK): the CUDA block of every module */
 
 #endif

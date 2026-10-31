@@ -19,12 +19,14 @@
 /* Kangaroo kernel variants: kangaroos per work-item (NK: one field inversion is shared by NK steps, so larger is cheaper
  * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion
  * for every walker, 1 only for every other one (half the traffic for those products, half a field multiplication more per
- * step). Measured on the device like the linear variants. */
+ * step), 2 every fourth, 3 the block herd (KV_BLOCK: a few walkers per work-item in registers, one inversion per work-group of
+ * KANG_GROUP and round). Measured on the device like the linear variants. */
 #define KV_NK(v) ((v) & 0xFFFF)
 #define KV_CFG(v) (((v) >> 16) & 0xF)
 #define KV_L2(v) (((v) >> 24) & 1)            /* the herd is sized to fit the L2 cache (fewer work-items), see kang_l2_threads */
 #define KV_KERNEL(v) ((v) & 0xFFFFF)          /* NK | cfg << 16: what the kernel build takes */
 #define KV_L2FLAG (1 << 24)
+#define KV_BLOCK 3                            /* KV_CFG of the block herd */
 #define KV_WIDE(v) (((v) >> 25) & 3)          /* a herd wider than the default one (more work-items), see kang_wide_threads_for */
 #define KV_WIDEFLAG(w) ((w) << 25)
 enum { KV_WIDE_X4 = 1, KV_WIDE_X8 = 2, KV_WIDE_FULL = 3 };   /* OpenCL: 4 or 8 times the work-items; CUDA: 512 per SM past the cap */
@@ -37,6 +39,9 @@ enum { KV_WIDE_X4 = 1, KV_WIDE_X8 = 2, KV_WIDE_FULL = 3 };   /* OpenCL: 4 or 8 t
 static const int KV_L2_NK[] = {16, 32, 64};
 /* kernels built with products every fourth walker that the self-test checks on every device (the OpenCL tuner does not offer them) */
 static const int KV_MC4_NK[] = {64, 128};
+/* the block herd: offered by the CUDA tuner, checked by the self-test on the OpenCL devices too (it needs work-groups of KANG_GROUP) */
+static const int KV_BLOCK_NK[] = {4};
+#define KANG_BLOCK_ITEMS_CU 256    /* work-items per SM of a block herd: two blocks of 128 (the kernel takes 250 registers) */
 
 struct gpu_session {
     run_ctx *r;
@@ -106,6 +111,7 @@ static inline void pack_state(uint32_t *o, const kang_worker *w, int i)
 #define KSTRIDE KANG_STATE_WORDS   /* words of the state of a kangaroo on the device (pz_kang.h) */
 #define KANG_HIST_ROUNDS 64        /* the least depth of the jump history (rounds per launch) of a production herd: gpu_kang_threads sizes it for this */
 #define KANG_HIST_MAX 256          /* the most (gpu_kang_depth) */
+#define KANG_HIST_MAX_BLOCK 16384  /* the most for a block herd: a few walkers per work-item, so that a launch still lasts long enough */
 
 typedef struct {
     pz_u256 key_start;
@@ -152,7 +158,7 @@ int gpu_variants_of(const rt_dev *d, const int **v);
 int gpu_default_variant(const rt_dev *d);
 int gpu_kvariants_of(const rt_dev *d, int *out);
 size_t gpu_kang_threads(const gpu_session *s);
-uint32_t gpu_kang_depth(const rt_dev *d, size_t K);      /* the depth of the jump history of a herd of K walkers */
+uint32_t gpu_kang_depth(const rt_dev *d, size_t K, int kvar);   /* the depth of the jump history of a herd of K walkers of kernel kvar */
 void gpu_linear_autotune(gpu_session *s, int idx);
 void gpu_kang_autotune(gpu_session *s, int idx);
 /* The kernel variant in use, as the start-up line of a device names it: "window 256", "kangaroo NK 128". */

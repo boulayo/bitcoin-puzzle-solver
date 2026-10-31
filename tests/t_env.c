@@ -206,6 +206,7 @@ static void t_tune_and_nk(void)
     bool l2 = true;
     CHECK(!pz_env_parse_nk("", &nk, &cfg, &l2) && !pz_env_parse_nk("12k", &nk, &cfg, &l2) && nk == 7 && cfg == 7 && l2);
     CHECK(pz_env_parse_nk("256b", &nk, &cfg, &l2) && nk == 256 && cfg == 1 && !l2);
+    CHECK(pz_env_parse_nk("4g", &nk, &cfg, &l2) && nk == 4 && cfg == 3 && !l2);
 }
 
 static void t_places(void)

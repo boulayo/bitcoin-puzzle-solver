@@ -213,7 +213,9 @@ static bool test_kang_one(gpu_session *s, unsigned R, u64 dp_mask, int ROUNDS, u
     ks->P.R = R;
     ks->P.dp_mask = dp_mask;
     ks->P.cap_since = (1ULL << 32) + 5;   /* half the walkers have gone 2^32 - 4 steps without a DP (see kang_round_compare) */
-    const int T = 4, K = T * s->NK;
+    /* 4 work-items; for the block herd one whole work-group and two of the next, so that every row of the products under an inversion holds
+     * real walkers (with 4 the other rows would all be the 1 of the work-items past the end) */
+    const int T = KV_CFG(s->kvar) == KV_BLOCK ? KANG_GROUP + 2 : 4, K = T * s->NK;
     bool ok = gpu_kang_prepare(s, &ks->P, T, (uint32_t)ROUNDS);
     kang_worker *w1 = kang_worker_new(ks, K, 77), *w2 = kang_worker_new(ks, K, 77);
     kang_init_herd(ks, w1);
@@ -530,6 +532,11 @@ int gpu_selftest(void)
         for (size_t k = 0; k < sizeof KV_MC4_NK / sizeof *KV_MC4_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* CUDA tests them as list entries */
             s->kvar = KV_MC4_NK[k] | 2 << 16;
             s->NK = KV_MC4_NK[k];
+            ok = gpu_test_kang(s);
+        }
+        for (size_t k = 0; k < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* likewise the block herd */
+            s->kvar = KV_BLOCK_NK[k] | KV_BLOCK << 16;
+            s->NK = KV_BLOCK_NK[k];
             ok = gpu_test_kang(s);
         }
         for (size_t k = 0; k < sizeof KV_L2_NK / sizeof *KV_L2_NK && ok && devs[i].l2_bytes >= KANG_L2_MIN; k++)

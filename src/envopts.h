@@ -22,7 +22,7 @@ struct pz_env {
     bool opencl_all;                /* PZ_OPENCL_ALL: use the OpenCL CPU devices and the second view of a device too */
     int gpu_half;                   /* PZ_GPU_HALF=N: window of the linear kernel (the values a device accepts are checked per device), 0 unset */
     int gpu_nk;                     /* PZ_GPU_NK=N[b|c][l]: walkers per work-item of the kangaroo kernel, 0 unset */
-    int gpu_nk_cfg;                 /*   the suffix b (1) or c (2): products at every other (fourth) walker, 0 without */
+    int gpu_nk_cfg;                 /*   the suffix b (1) or c (2): products at every other (fourth) walker; g (3): block herd; 0 without */
     bool gpu_nk_l2;                 /*   the suffix l: herd sized to the L2 cache */
     char gpu_nk_text[16];           /*   the text as given, for the messages */
     int gpu_tune;                   /* PZ_GPU_TUNE=0|1: PZ_ENV_TUNE_OFF, PZ_ENV_TUNE_ALL (also the devices that are not GPUs), else PZ_ENV_TUNE_DEFAULT */
