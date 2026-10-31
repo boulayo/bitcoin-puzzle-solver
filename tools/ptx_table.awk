@@ -70,7 +70,7 @@ END {
         print "static const struct { const unsigned char *ptx; int kind; search_fn search; kang_fn kang; int group; } MODS[] = {"
         for (i = 1; i <= n; i++) {
             if (kind[i] == "linear") printf "    {mock_ptx_%s, M_LINEAR, mock_search%s, NULL, 0},\n", name[i], lt[i]
-            else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s, %d},\n", name[i], name[i], cfg[i] == 3
+            else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s, %d},\n", name[i], name[i], (cfg[i] == 3)
             else printf "    {mock_ptx_%s, M_TEST, NULL, NULL, 0},\n", name[i]
         }
         print "};"
