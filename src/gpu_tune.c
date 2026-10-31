@@ -7,6 +7,7 @@
 #include "outfmt.h"
 #include "doctor.h"
 #include <math.h>
+#include <stdarg.h>
 
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
 static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
@@ -144,17 +145,40 @@ static void tune_key(const rt_dev *d, bool kang, char *out, size_t n)
     for (char *c = out; *c; c++) if (*c == '\n' || *c == '\r' || *c == '=') *c = '_';
 }
 
-static int tune_cache_get(const rt_dev *d, bool kang)
+/* The value of a line of gpu_tune.txt: the variant, then (since the launch length is tuned) a blank and the length of a launch in seconds;
+ * a line without it, or with one out of range, keeps GPU_LAUNCH_S. The variant is 0 when the value is empty (pz_atoi skips a newline: an empty
+ * value must not read the next line). */
+static int tune_value(const char *e, double *launch_s)
+{
+    if (launch_s) *launch_s = GPU_LAUNCH_S;
+    if (!e || *e == '\n' || *e == '\r' || !*e) return 0;
+    const int v = pz_atoi(e);
+    const char *q = e;
+    while (*q >= '0' && *q <= '9') q++;
+    if (launch_s && *q == ' ' && q[1] >= '0' && q[1] <= '9') {
+        char *end;
+        const double x = strtod(q + 1, &end);
+        if (end > q + 1 && x >= 0.05 && x <= 5.0) *launch_s = x;
+    }
+    return v;
+}
+
+/* The saved variant of this device (0: none that it offers) and, when `launch_s` is given, the saved length of a launch. */
+static int tune_cache_get(const rt_dev *d, bool kang, double *launch_s)
 {
     char path[512], key[400];
+    if (launch_s) *launch_s = GPU_LAUNCH_S;
     if (!tune_cache_path(path, sizeof path)) return 0;
     char *t = pz_read_file(path, NULL);
     if (!t) return 0;
     tune_key(d, kang, key, sizeof key);
     const char *e = pz_kv_find(t, key, '=', PZ_KV_LAST);        /* the last line of the key wins */
-    const int v = e && *e != '\n' ? pz_atoi(e) : 0;             /* pz_atoi skips a newline: an empty value must not read the next line */
+    double ls;
+    const int v = tune_value(e, &ls);
     free(t);
-    return (kang ? valid_kvariant(d, v) : valid_variant(d, v)) ? v : 0;
+    if (!(kang ? valid_kvariant(d, v) : valid_variant(d, v))) return 0;
+    if (launch_s) *launch_s = ls;
+    return v;
 }
 
 /* Devices start at the same time, one thread each. g_tune_mu makes the update of the file one step (two devices that finish together would each
@@ -174,20 +198,20 @@ static int tune_busy(const char *key)
     return -1;
 }
 
-static void tune_cache_put(const rt_dev *d, bool kang, int variant)
+static void tune_cache_put(const rt_dev *d, bool kang, int variant, double launch_s)
 {
-    char path[512], key[400], val[16];
+    char path[512], key[400], val[32];
     if (!tune_cache_path(path, sizeof path)) return;
     tune_key(d, kang, key, sizeof key);
-    snprintf(val, sizeof val, "%d", variant);
+    snprintf(val, sizeof val, "%d %.2f", variant, launch_s > 0 ? launch_s : GPU_LAUNCH_S);
     pthread_mutex_lock(&g_tune_mu);
     pz_keyed_file_put(path, key, val);
     pthread_mutex_unlock(&g_tune_mu);
 }
 
-/* The saved choice for this device if there is one, waiting for another thread that is measuring the same model; 0 when this thread is to
- * measure (and then calls tune_end). */
-static int tune_begin(const rt_dev *d, bool kang, int idx)
+/* The saved choice for this device if there is one (with its launch length in *launch_s), waiting for another thread that is measuring the
+ * same model; 0 when this thread is to measure (and then calls tune_end). */
+static int tune_begin(const rt_dev *d, bool kang, int idx, double *launch_s)
 {
     char key[400];
     tune_key(d, kang, key, sizeof key);
@@ -195,7 +219,7 @@ static int tune_begin(const rt_dev *d, bool kang, int idx)
     bool told = false;
     pthread_mutex_lock(&g_tune_mu);
     for (;;) {
-        v = tune_cache_get(d, kang);
+        v = tune_cache_get(d, kang, launch_s);
         if (v) break;
         const int other = tune_busy(key);
         if (other < 0) {
@@ -272,6 +296,7 @@ static double linear_measure_variant(gpu_session *s, int v)
 }
 static void linear_set_variant(gpu_session *s, int v) { s->variant = v; }
 static int linear_code(const gpu_session *s) { return s->variant; }
+static char *variant_code(int v, char *b, size_t n) { snprintf(b, n, "%d", v); return b; }      /* what PZ_GPU_HALF takes */
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
  * OpenCL the historical 64 per compute unit, unless the tuner chose a herd sized to the L2 cache, a wide one or a block herd (kang_threads_for). */
@@ -288,41 +313,68 @@ uint32_t gpu_kang_depth(const rt_dev *d, size_t K, int kvar)
     return depth;
 }
 
-/* Kangaroo steps per second of the kernel for s->NK; 0 if it cannot be built or run (e.g. not enough memory for
- * its private arrays). The herd is random field elements: the cost of a step does not depend on the points. */
+/* A herd of random field elements on the device for timing the kernel of s->NK (the cost of a step does not depend on the points): no
+ * distinguished points, no restarts, pure stepping. kang_probe_begin builds the kernel and the buffers and writes the herd (false if it cannot
+ * be built or run, e.g. not enough memory for its private arrays), kang_probe_run times one launch, kang_probe_end releases everything. */
+typedef struct { kang_state *ks; size_t K; } kang_probe;
+
+static void kang_probe_end(gpu_session *s, kang_probe *p)
+{
+    gpu_kang_release(s);
+    if (p->ks) kang_free_test_state(p->ks);
+    p->ks = NULL;
+}
+
+static bool kang_probe_begin(gpu_session *s, kang_probe *p)
+{
+    p->ks = kang_make_test_state(40, 1);
+    p->K = 0;
+    if (!p->ks) return false;
+    p->ks->P.dp_mask = ~0ULL >> 4;
+    p->ks->P.cap_since = ~0ULL;
+    const int T = (int)gpu_kang_threads(s);
+    if (!gpu_kang_prepare(s, &p->ks->P, T, gpu_kang_depth(&s->info, (size_t)T * s->NK, s->kvar))) { kang_probe_end(s, p); return false; }
+    const size_t K = (size_t)T * s->NK;
+    uint32_t *st = pz_xcalloc(K * KSTRIDE, 4);
+    u64 x = 0x9E3779B97F4A7C15ULL;
+    for (size_t i = 0; i < K; i++)
+        for (int w = 0; w < 16; w++) {           /* x and y: random words, top word below 0xFFFFFFFF (so < p) */
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            st[i * KSTRIDE + w] = (w == 7 || w == 15) ? (uint32_t)(x % 0xFFFFFFFFu) : (uint32_t)x;
+        }
+    const bool ok = rt_write(s->c, s->b_state, 0, st, K * KSTRIDE * 4);
+    free(st);
+    if (!ok) { kang_probe_end(s, p); return false; }
+    p->K = K;
+    return true;
+}
+
+static bool kang_probe_run(gpu_session *s, kang_probe *p, uint32_t rounds, double *dt)
+{
+    uint32_t ndp, nrl;
+    const double a = pz_mono();
+    if (!gpu_kang_run(s, &p->ks->P, rounds, &ndp, &nrl)) return false;
+    *dt = pz_mono() - a;
+    return true;
+}
+
+/* Kangaroo steps per second of the kernel for s->NK; 0 if it cannot be built or run. */
 static double kang_measure(gpu_session *s)
 {
-    kang_state *ks = kang_make_test_state(40, 1);
-    if (!ks) return 0;
-    ks->P.dp_mask = ~0ULL >> 4;        /* no distinguished points, no restarts: pure stepping */
-    ks->P.cap_since = ~0ULL;
-    const int T = (int)gpu_kang_threads(s);
+    kang_probe p;
+    if (!kang_probe_begin(s, &p)) return 0;
+    uint32_t rounds = 1;
     double rate = 0;
-    if (gpu_kang_prepare(s, &ks->P, T, gpu_kang_depth(&s->info, (size_t)T * s->NK, s->kvar))) {
-        const size_t K = (size_t)T * s->NK;
-        uint32_t *st = pz_xcalloc(K * KSTRIDE, 4);
-        u64 x = 0x9E3779B97F4A7C15ULL;
-        for (size_t i = 0; i < K; i++)
-            for (int w = 0; w < 16; w++) {           /* x and y: random words, top word below 0xFFFFFFFF (so < p) */
-                x ^= x << 13; x ^= x >> 7; x ^= x << 17;
-                st[i * KSTRIDE + w] = (w == 7 || w == 15) ? (uint32_t)(x % 0xFFFFFFFFu) : (uint32_t)x;
-            }
-        bool ok = rt_write(s->c, s->b_state, 0, st, K * KSTRIDE * 4);
-        free(st);
-        uint32_t rounds = 1, ndp, nrl;
-        const double t_begin = pz_mono();
-        while (ok && pz_mono() - t_begin < 4.0) {
-            double a = pz_mono();
-            if (!gpu_kang_run(s, &ks->P, rounds, &ndp, &nrl)) { rate = 0; break; }
-            double dt = pz_mono() - a;
-            if (dt < 0.25 && rounds < s->hist_rounds) { rounds *= 2; continue; }
-            double r = (double)K * rounds / dt;
-            if (r > rate) rate = r;
-            if (pz_mono() - t_begin > 1.5) break;
-        }
+    const double t_begin = pz_mono();
+    while (pz_mono() - t_begin < 4.0) {
+        double dt;
+        if (!kang_probe_run(s, &p, rounds, &dt)) { rate = 0; break; }
+        if (dt < 0.25 && rounds < s->hist_rounds) { rounds *= 2; continue; }
+        const double r = (double)p.K * rounds / dt;
+        if (r > rate) rate = r;
+        if (pz_mono() - t_begin > 1.5) break;
     }
-    gpu_kang_release(s);
-    kang_free_test_state(ks);
+    kang_probe_end(s, &p);
     return rate;
 }
 
@@ -340,6 +392,98 @@ static double kang_measure_variant(gpu_session *s, int v)
     return kang_measure(s);
 }
 
+/* What PZ_GPU_NK takes for a variant ("128b", "64l", "4g"); "-" for a herd it cannot force (the wide herds have no suffix). */
+static char *kvariant_code(int v, char *b, size_t n)
+{
+    static const char *const cfg[] = {"", "b", "c", "g"};
+    if (KV_WIDE(v)) { pz_strlcpy(b, "-", n); return b; }
+    snprintf(b, n, "%d%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_L2(v) ? "l" : "");
+    return b;
+}
+
+/* ---------------- the length of a launch ---------------- */
+
+/* The rate of the kernel that is prepared with launches of about `target` seconds, as the controller of a campaign would size them (size:
+ * groups per work-item of the linear kernel, rounds of the kangaroo, 1 to `max`): from a launch long enough to time, scaled to the target and
+ * corrected once by the duration that gives (that launch is the warm-up of the size), then at least two launches and about a second of them,
+ * all counted: the fixed costs of a launch are what differs between the lengths. *size holds the size of the length tried before (0: none):
+ * when this length gets the same size (the bounds, or a device too slow for the shorter ones), -1 and nothing is measured. 0 on an error. */
+typedef bool (*launch_fn)(gpu_session *s, void *ctx, uint32_t size, double *dt, double *units);
+
+static double tune_at_length(gpu_session *s, launch_fn launch, void *ctx, uint32_t max, double target, double *got, uint32_t *size)
+{
+    uint32_t n = 1;
+    double dt, units;
+    for (;;) {
+        if (!launch(s, ctx, n, &dt, &units)) return 0;
+        if (dt >= 0.05 || n >= max) break;
+        n *= 2;
+    }
+    for (int k = 0; k < 2; k++) {
+        double want = (double)n * target / (dt > 1e-4 ? dt : 1e-4);
+        n = (uint32_t)(want < 1 ? 1 : want > max ? max : want + 0.5);
+        if (n == *size) return -1;
+        if (!launch(s, ctx, n, &dt, &units)) return 0;
+    }
+    *size = n;
+    double secs = 0, sum = 0;
+    for (int i = 0; i < 2 || secs < 1.0; i++) {
+        if (!launch(s, ctx, n, &dt, &units)) return 0;
+        secs += dt;
+        sum += units;
+        if (i >= 1) *got = secs / (i + 1);
+    }
+    return sum / secs;
+}
+
+typedef struct { pz_u256 start; } linear_len;
+static bool linear_len_launch(gpu_session *s, void *ctx, uint32_t size, double *dt, double *units)
+{
+    linear_len *c = ctx;
+    lin_launch L;
+    if (!linear_probe(s, &c->start, size, &L, dt) || L.err) return false;
+    *units = (double)L.nkeys;
+    return true;
+}
+/* the linear kernel of s->variant: the controller counts groups per work-item up to 4096 (gpu_linear_thread) */
+static double linear_at_length(gpu_session *s, double target, double *got, uint32_t *size)
+{
+    linear_len c = {pz_u256_pow2(100)};
+    const double r = gpu_linear_prepare_variant(s, s->variant) ? tune_at_length(s, linear_len_launch, &c, 4096, target, got, size) : 0;
+    gpu_linear_release_program(s);
+    return r;
+}
+
+static bool kang_len_launch(gpu_session *s, void *ctx, uint32_t size, double *dt, double *units)
+{
+    kang_probe *p = ctx;
+    if (!kang_probe_run(s, p, size, dt)) return false;
+    *units = (double)p->K * size;
+    return true;
+}
+/* the kangaroo kernel of s->kvar: rounds per launch, at most the depth of the history (what the device memory allows) */
+static double kang_at_length(gpu_session *s, double target, double *got, uint32_t *size)
+{
+    kang_probe p;
+    if (!kang_probe_begin(s, &p)) return 0;
+    const double r = tune_at_length(s, kang_len_launch, &p, s->hist_rounds, target, got, size);
+    kang_probe_end(s, &p);
+    return r;
+}
+
+/* The rule for the length: the shortest of the lengths tried whose rate is within GPU_LAUNCH_NEAR of the best (a rate of 0 or less: not
+ * measured); -1 when none was. */
+static int tune_launch_choose(const double *rate, int n)
+{
+    int best = -1;
+    for (int i = 0; i < n; i++) if (rate[i] > 0 && (best < 0 || rate[i] > rate[best])) best = i;
+    if (best < 0) return -1;
+    for (int i = 0; i < n; i++) if (rate[i] > 0 && rate[i] >= rate[best] * GPU_LAUNCH_NEAR) return i;
+    return best;
+}
+
+/* ---------------- the choice of a variant ---------------- */
+
 /* How the choice of a variant differs between the two kernels. tune_pick does the rest, which is the same for both. */
 typedef struct {
     bool kang;                    /* the kangaroo kernel (else the linear one): the key of the saved choice */
@@ -351,6 +495,10 @@ typedef struct {
     void (*finish)(gpu_session *s);                     /* what the check leaves behind to release (may be NULL) */
     int (*code)(const gpu_session *s);                  /* the variant that is set, as it is saved */
     char *(*name)(int variant, char *buf, size_t n);
+    char *(*code_text)(int variant, char *buf, size_t n);         /* the code as PZ_GPU_HALF or PZ_GPU_NK takes it ("-": none takes it) */
+    /* the length of a launch (tune_at_length) of the variant that is set; NULL: not tuned, GPU_LAUNCH_S */
+    double (*at_length)(gpu_session *s, double target, double *got, uint32_t *size);
+    const char *size_unit;                              /* what the size of a launch counts: "groups per work-item", "rounds" */
     /* the log lines: GPU[%d] and the name of the variant that was saved; GPU[%d] and the number of variants; the title of the table of rates
      * (and of the line of the choice) and the unit of the rates; the word before each variant in them and after "picking"; what the table says
      * of a variant that cannot run (NULL: its rate, 0 included) */
@@ -360,55 +508,113 @@ typedef struct {
 } tune_ops;
 
 /* The choice of a variant. Each one is measured for a second or so, which on a laptop GPU held back by its power limit or its temperature is
- * noisy by 2-3%, and the fastest of many noisy rates is lucky by about as much. So: the device is warmed up first (TUNE_WARM_S of the default
- * variant, not counted), the variants are measured in turns (all of them in order, again in the reverse order, then in order: a drift of the
- * clock weighs the same on every variant), only those within TUNE_NEAR of the fastest of the first turn (and the default) go through all
- * TUNE_ROUNDS, and each one gets the median of its rates. The default stays unless another is faster by more than TUNE_MARGIN. */
-#define TUNE_ROUNDS 3
+ * noisy by 2 to 3 % (the same variant measured twice), and the fastest of eight noisy rates is lucky by about as much: with one measurement
+ * each and a margin of 3 % (1.19.0 to 1.19.2) the choice between two variants 2.8 % apart, window 256 and window 512 with the register cap on
+ * the RTX A2000 Laptop, depended on the run. So: the device is warmed up first (TUNE_WARM_S of the default variant, not counted: the clocks of
+ * a card at rest rise during the first seconds), the variants are measured in TUNE_TURNS turns (all of them in order, again in the reverse
+ * order, then in order: a drift of the clock weighs the same on every variant), only those within TUNE_NEAR of the fastest of the first turn
+ * (and the default) go through all the turns (a variant 5 % behind does not come back when the noise is 3 %), and each one gets the median of
+ * its rates, which one lucky or unlucky turn does not move. The default stays unless another is faster by more than TUNE_MARGIN: the median
+ * of three is still off by about 1 %, so a smaller margin would pick by luck, and a larger one misses the 2.8 % above. More turns would narrow
+ * the margin by the square root of their number only, for a tuning that already takes about a minute per kernel on a laptop. */
+#define TUNE_TURNS 3
+#define TUNE_TURNS_MAX 9          /* 'bench --variants --turns N' at most */
 #define TUNE_NEAR 0.95
 #define TUNE_MARGIN 1.01
 #define TUNE_WARM_S 3.0
 
-static double median_of(double *v, int n)
+/* The median of n rates, 0 when any of them is 0 (a variant that failed once is not trusted) or there is none. */
+static double tune_median(const double *s, int n)
 {
-    for (int i = 1; i < n; i++)
+    double v[TUNE_TURNS_MAX];
+    if (n <= 0 || n > TUNE_TURNS_MAX) return 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i] <= 0) return 0;
+        v[i] = s[i];
         for (int j = i; j > 0 && v[j] < v[j - 1]; j--) { const double t = v[j]; v[j] = v[j - 1]; v[j - 1] = t; }
+    }
     return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
 }
 
-/* Measures the variants and leaves the fastest in s (above), and the choice is saved only once it has passed the bit-exact test against the
- * CPU, otherwise a bad choice would exclude the GPU for good. The terminal shows the choice in one line; the rates of all the variants go to
- * the log file (and to the terminal with -v). */
-static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
+/* The rule for a variant: the index of the one to keep from the medians, the default (index di) unless another is faster by more than
+ * TUNE_MARGIN; when the default cannot run (0), the fastest. */
+static int tune_choose(const double *rate, int nv, int di)
 {
-    char nb[64];
-    rt_log(PZ_LOG_INFO, op->intro_fmt, idx, op->nv);
-    double rate[32] = {0}, smp[32][TUNE_ROUNDS];
-    int nsmp[32] = {0}, best = 0;
-    for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) best = i;
+    int fastest = 0;
+    for (int i = 1; i < nv; i++) if (rate[i] > rate[fastest]) fastest = i;
+    return rate[fastest] > rate[di] * TUNE_MARGIN ? fastest : di;
+}
+
+/* The measurements of the variants in `turns` turns (in order, in the reverse order, in order, ...), after op->warm_s seconds of the default
+ * variant: smp[i][0..nsmp[i]-1] for variant i. A variant that could not run in the first turn is not tried again; with `cut`, after the first
+ * turn only those within TUNE_NEAR of its fastest and the default (index di) are measured again. */
+static void tune_turns(gpu_session *s, const tune_ops *op, int turns, bool cut, int di, double smp[][TUNE_TURNS_MAX], int *nsmp)
+{
+    for (int i = 0; i < op->nv; i++) nsmp[i] = 0;
     if (op->warm_s > 0) {
         const double t0 = pz_mono();
         while (op->measure(s, op->def) > 0 && pz_mono() - t0 < op->warm_s) {}
     }
-    for (int r = 0; r < TUNE_ROUNDS; r++) {
+    for (int r = 0; r < turns; r++) {
         double top = 0;
         for (int i = 0; i < op->nv; i++) if (nsmp[i] && smp[i][0] > top) top = smp[i][0];
         for (int k = 0; k < op->nv; k++) {
             const int i = r % 2 ? op->nv - 1 - k : k;
-            if (r > 0 && (smp[i][0] <= 0 || (i != best && smp[i][0] < top * TUNE_NEAR))) continue;
+            if (r > 0 && (smp[i][0] <= 0 || (cut && i != di && smp[i][0] < top * TUNE_NEAR))) continue;
             smp[i][nsmp[i]++] = op->measure(s, op->vs[i]);
         }
     }
-    for (int i = 0; i < op->nv; i++) {
-        bool dead = false;
-        for (int r = 0; r < nsmp[i]; r++) dead |= smp[i][r] <= 0;
-        rate[i] = dead || !nsmp[i] ? 0 : median_of(smp[i], nsmp[i]);
+}
+
+/* The length of a launch for the variant that is set (the rule of tune_launch_choose), measured at each of GPU_LAUNCH_TRY seconds and logged
+ * like the variants: the table in the log file, the choice on the terminal. GPU_LAUNCH_S when nothing could be measured. */
+static double tune_launch(gpu_session *s, int idx, const tune_ops *op)
+{
+    static const double try_s[] = GPU_LAUNCH_TRY;
+    const int n = (int)(sizeof try_s / sizeof *try_s);
+    double rate[8] = {0}, got[8] = {0};
+    uint32_t size[8] = {0}, prev = 0;
+    for (int i = 0; i < n; i++) {
+        size[i] = prev;
+        got[i] = try_s[i];
+        rate[i] = op->at_length(s, try_s[i], &got[i], &size[i]);
+        if (rate[i] > 0) prev = size[i];
     }
-    {
-        int fastest = 0;
-        for (int i = 1; i < op->nv; i++) if (rate[i] > rate[fastest]) fastest = i;
-        if (rate[fastest] > rate[best] * TUNE_MARGIN) best = fastest;
+    const int pick = tune_launch_choose(rate, n);
+    char line[600], r[32];
+    size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: launch length (%s; the size in %s):", idx, op->unit, op->size_unit);
+    for (int i = 0; i < n && o < sizeof line; i++) {
+        if (rate[i] < 0) o += (size_t)snprintf(line + o, sizeof line - o, "%s %.2f s not tried (the same size)", i ? ";" : "", try_s[i]);
+        else if (rate[i] == 0) o += (size_t)snprintf(line + o, sizeof line - o, "%s %.2f s cannot run", i ? ";" : "", try_s[i]);
+        else o += (size_t)snprintf(line + o, sizeof line - o, "%s %.2f s %s (size %u, %.2f s measured)", i ? ";" : "", try_s[i],
+                                   pz_fmt_si(rate[i], r, sizeof r), size[i], got[i]);
     }
+    if (pick < 0) {
+        rt_log(PZ_LOG_WARN, "%s: none could be measured, launches of %.2f s", line, GPU_LAUNCH_S);
+        return GPU_LAUNCH_S;
+    }
+    int best = pick;
+    for (int i = 0; i < n; i++) if (rate[i] > rate[best]) best = i;
+    rt_log(PZ_LOG_DEBUG, "%s; picking %.2f s", line, try_s[pick]);
+    rt_log(PZ_LOG_INFO, "GPU[%d]: launches of %.2f s (%s %s; %s)", idx, try_s[pick], pz_fmt_si(rate[pick], r, sizeof r), op->unit,
+           best == pick ? "the fastest" : "the shortest within 1% of the fastest");
+    return try_s[pick];
+}
+
+/* Measures the variants and leaves the chosen one in s (the rule above), and the choice is saved only once it has passed the bit-exact test
+ * against the CPU, otherwise a bad choice would exclude the GPU for good; then the length of a launch of that variant is measured and saved
+ * with it. The terminal shows the choice in one line; the rates of all the variants go to the log file (and to the terminal with -v). */
+static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
+{
+    char nb[64], cb[24];
+    rt_log(PZ_LOG_INFO, op->intro_fmt, idx, op->nv);
+    double rate[32] = {0}, smp[32][TUNE_TURNS_MAX];
+    int nsmp[32], di = 0;
+    for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) di = i;
+    tune_turns(s, op, TUNE_TURNS, true, di, smp, nsmp);
+    for (int i = 0; i < op->nv; i++) rate[i] = tune_median(smp[i], nsmp[i]);
+    const int best = tune_choose(rate, op->nv, di);
+    const double margin_pct = 100.0 * (TUNE_MARGIN - 1);
     char line[1000];
     size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: %s (%s):", idx, op->head, op->unit);
     for (int i = 0; i < op->nv && o < sizeof line; i++) {
@@ -421,37 +627,40 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
         if (op->no_data_fmt) rt_log(PZ_LOG_WARN, op->no_data_fmt, line, op->name(op->code(s), nb, sizeof nb));
         return;
     }
-    rt_log(PZ_LOG_DEBUG, "%s; picking %s%s%s", line, op->entry, op->name(op->vs[best], nb, sizeof nb),
-           op->vs[best] == op->def ? " (default; none >1% faster)" : "");
+    char why[160], db[64];
+    if (best == di) snprintf(why, sizeof why, " (default; none >%.0f%% faster)", margin_pct);
+    else why[0] = 0;
+    rt_log(PZ_LOG_DEBUG, "%s; picking %s%s%s", line, op->entry, op->name(op->vs[best], nb, sizeof nb), why);
     {
-        char r[32], why[160], db[64];
-        int di = 0;
-        for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) di = i;
+        char r[32];
         const char *dname = op->name(op->def, db, sizeof db);
-        if (best == di) snprintf(why, sizeof why, "the default: no other variant >1%% faster");
+        if (best == di) snprintf(why, sizeof why, "the default: no other variant >%.0f%% faster", margin_pct);
         else if (rate[di] > 0) snprintf(why, sizeof why, "+%.1f%% over %s%s", 100.0 * (rate[best] / rate[di] - 1), op->entry, dname);
         else snprintf(why, sizeof why, "the default %s%s cannot run", op->entry, dname);
-        rt_log(PZ_LOG_INFO, "GPU[%d]: %s: %s%s (%s %s, %s)", idx, op->head, op->entry, op->name(op->vs[best], nb, sizeof nb), pz_fmt_si(rate[best], r, sizeof r),
-               op->unit, why);
+        rt_log(PZ_LOG_INFO, "GPU[%d]: %s: %s%s, code %s (%s %s, %s; margin %.0f%%)", idx, op->head, op->entry, op->name(op->vs[best], nb, sizeof nb),
+               op->code_text(op->vs[best], cb, sizeof cb), pz_fmt_si(rate[best], r, sizeof r), op->unit, why, margin_pct);
     }
     op->set(s, op->vs[best]);
     const bool ok = op->check(s);
     if (op->finish) op->finish(s);
-    if (ok) {
-        tune_cache_put(&s->info, op->kang, op->code(s));
-    } else {
+    if (!ok) {
         rt_log(PZ_LOG_WARN, op->bad_check_fmt, idx, op->name(op->vs[best], nb, sizeof nb));
         op->set(s, op->def);
+        return;
     }
+    s->launch_s = op->at_length ? tune_launch(s, idx, op) : GPU_LAUNCH_S;
+    tune_cache_put(&s->info, op->kang, op->code(s), s->launch_s);
 }
 
 /* The saved choice if there is one (or the one that another device of the same model is measuring), else the measurement. */
 static void tune_pick(gpu_session *s, int idx, const tune_ops *op)
 {
     char nb[64];
-    const int cached = g_retune ? 0 : tune_begin(&s->info, op->kang, idx);
+    double launch_s = GPU_LAUNCH_S;
+    const int cached = g_retune ? 0 : tune_begin(&s->info, op->kang, idx, &launch_s);
     if (cached) {
         op->set(s, cached);
+        s->launch_s = launch_s;
         rt_log(PZ_LOG_DEBUG, op->cached_fmt, idx, op->name(cached, nb, sizeof nb));   /* the start-up line of the device names the variant */
         return;
     }
@@ -473,11 +682,39 @@ static bool tune_off(const rt_dev *d)
     return g_env.gpu_tune == PZ_ENV_TUNE_OFF || !(d->is_gpu || g_env.gpu_tune == PZ_ENV_TUNE_ALL);
 }
 
+/* The tuning of each kernel on device d: its variants and how they are measured, checked, named and logged. */
+static void linear_tune_ops(const rt_dev *d, tune_ops *op)
+{
+    *op = (tune_ops){.kang = false, .def = gpu_default_variant(d), .measure = linear_measure_variant, .warm_s = d->is_gpu ? TUNE_WARM_S : 0,
+                     .set = linear_set_variant, .check = gpu_test_linear, .finish = gpu_linear_release_program, .code = linear_code,
+                     .name = variant_name, .code_text = variant_code, .at_length = linear_at_length, .size_unit = "groups per work-item",
+                     .cached_fmt = "GPU[%d]: kernel with window %s (from earlier tuning)",
+                     .intro_fmt = "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...",
+                     .head = "linear kernel tuning", .unit = "keys/s", .entry = "window ",
+                     .bad_check_fmt = "GPU[%d]: variant %s failed the correctness check: using the default and not saving the choice"};
+    const int *vs;
+    op->nv = gpu_variants_of(d, &vs);
+    memcpy(op->vs, vs, (size_t)op->nv * sizeof *vs);
+}
+
+static void kang_tune_ops(const rt_dev *d, tune_ops *op)
+{
+    *op = (tune_ops){.kang = true, .def = default_kvariant(d), .measure = kang_measure_variant, .warm_s = d->is_gpu ? TUNE_WARM_S : 0,
+                     .set = kang_set_variant, .check = gpu_test_kang, .code = kang_code, .name = kvariant_name, .code_text = kvariant_code,
+                     .at_length = kang_at_length, .size_unit = "rounds",
+                     .cached_fmt = "GPU[%d]: kangaroo with %s (from earlier tuning)",
+                     .intro_fmt = "GPU[%d]: tuning the kangaroo kernel (one time only: %d variants)...",
+                     .head = "kangaroo tuning", .unit = "steps/s", .entry = "", .no_rate = "cannot run", .no_data_fmt = "%s: using the default %s",
+                     .bad_check_fmt = "GPU[%d]: variant %s failed the correctness check: using the default"};
+    op->nv = gpu_kvariants_of(d, op->vs);
+}
+
 /* Chooses the variant of the linear kernel for this device (cached on disk per device and program version). */
 void gpu_linear_autotune(gpu_session *s, int idx)
 {
     const rt_dev *d = &s->info;
     s->variant = gpu_default_variant(d);
+    s->launch_s = GPU_LAUNCH_S;
     if (g_env.gpu_half) {
         const int h = g_env.gpu_half;
         if (valid_variant(d, h)) { s->variant = h; rt_log(PZ_LOG_INFO, "GPU[%d]: kernel window set by PZ_GPU_HALF: %d", idx, h); }
@@ -486,15 +723,8 @@ void gpu_linear_autotune(gpu_session *s, int idx)
         return;
     }
     if (tune_off(d)) return;
-    tune_ops op = {.kang = false, .def = gpu_default_variant(d), .measure = linear_measure_variant, .warm_s = d->is_gpu ? TUNE_WARM_S : 0, .set = linear_set_variant,
-                   .check = gpu_test_linear, .finish = gpu_linear_release_program, .code = linear_code, .name = variant_name,
-                   .cached_fmt = "GPU[%d]: kernel with window %s (from earlier tuning)",
-                   .intro_fmt = "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...",
-                   .head = "linear kernel tuning", .unit = "keys/s", .entry = "window ",
-                   .bad_check_fmt = "GPU[%d]: variant %s failed the correctness check: using the default and not saving the choice"};
-    const int *vs;
-    op.nv = gpu_variants_of(d, &vs);
-    memcpy(op.vs, vs, (size_t)op.nv * sizeof *vs);
+    tune_ops op;
+    linear_tune_ops(d, &op);
     tune_pick(s, idx, &op);
 }
 
@@ -504,6 +734,7 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     const rt_dev *d = &s->info;
     char nb[64];
     kang_set_variant(s, default_kvariant(d));
+    s->launch_s = GPU_LAUNCH_S;
     if (g_env.gpu_nk) {
         const int v = g_env.gpu_nk | g_env.gpu_nk_cfg << 16 | (g_env.gpu_nk_l2 ? KV_L2FLAG : 0);
         if (forcible_kvariant(d, v)) { kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, kvariant_name(v, nb, sizeof nb)); }
@@ -512,13 +743,8 @@ void gpu_kang_autotune(gpu_session *s, int idx)
         return;
     }
     if (tune_off(d)) return;
-    tune_ops op = {.kang = true, .def = default_kvariant(d), .measure = kang_measure_variant, .warm_s = d->is_gpu ? TUNE_WARM_S : 0, .set = kang_set_variant,
-                   .check = gpu_test_kang, .code = kang_code, .name = kvariant_name,
-                   .cached_fmt = "GPU[%d]: kangaroo with %s (from earlier tuning)",
-                   .intro_fmt = "GPU[%d]: tuning the kangaroo kernel (one time only: %d variants)...",
-                   .head = "kangaroo tuning", .unit = "steps/s", .entry = "", .no_rate = "cannot run", .no_data_fmt = "%s: using the default %s",
-                   .bad_check_fmt = "GPU[%d]: variant %s failed the correctness check: using the default"};
-    op.nv = gpu_kvariants_of(d, op.vs);
+    tune_ops op;
+    kang_tune_ops(d, &op);
     tune_pick(s, idx, &op);
 }
 
@@ -664,15 +890,15 @@ void gpu_bench(void)
         char b[32];
         el = pz_mono() - t0;
         char nb[48];
-        pz_prop_line("linear search", "%s keys/s, window %s", pz_fmt_si((double)keys / el, b, sizeof b), variant_name(s->variant, nb, sizeof nb));
+        pz_prop_line("linear search", "%s keys/s, window %s, launches of %.2f s", pz_fmt_si((double)keys / el, b, sizeof b), variant_name(s->variant, nb, sizeof nb), s->launch_s);
         fflush(stdout);
         gpu_linear_release_program(s);
         gpu_kang_autotune(s, i);
         double kr = kang_measure(s);
         if (kr > 0) {
             char mu[80];
-            pz_prop_line("kangaroo", "%s steps/s, %s; memory used %s", pz_fmt_si(kr, b, sizeof b), kvariant_name(kang_code(s), nb, sizeof nb),
-                         gpu_fmt_devused(&devs[i], s->mem_used, mu, sizeof mu));
+            pz_prop_line("kangaroo", "%s steps/s, %s, launches of %.2f s; memory used %s", pz_fmt_si(kr, b, sizeof b), kvariant_name(kang_code(s), nb, sizeof nb),
+                         s->launch_s, gpu_fmt_devused(&devs[i], s->mem_used, mu, sizeof mu));
         }
         gpu_diag dg;
         if (gpu_diag_run(s, &dg)) {
@@ -704,7 +930,10 @@ void gpu_bench(void)
 /* ---------------- self-test of the choice of a variant ---------------- */
 
 /* tune_pick with invented rates: when the default stays, when another wins, what is saved and what is logged. No device is needed. */
-static struct { double rate[3]; int measured; bool check_ok; int set_to; const double (*seq)[3]; int nth[3]; } g_fake;
+static struct {
+    double rate[3]; int measured; bool check_ok; int set_to; const double (*seq)[3]; int nth[3];
+    double len_rate[4]; uint32_t len_size[4]; int len_calls;      /* the rates at the four lengths of a launch and the controller's sizes for them */
+} g_fake;
 static const int FAKE_V[3] = {128, 256, 512};
 
 static double fake_measure(gpu_session *s, int v)
@@ -715,6 +944,22 @@ static double fake_measure(gpu_session *s, int v)
     return 0;
 }
 static bool fake_check(gpu_session *s) { (void)s; return g_fake.check_ok; }
+/* tune_at_length with invented rates: a length whose size is that of the length before is not tried (-1), as the real one does */
+static double fake_at_length(gpu_session *s, double target, double *got, uint32_t *size)
+{
+    static const double try_s[] = GPU_LAUNCH_TRY;
+    (void)s;
+    g_fake.len_calls++;
+    for (int i = 0; i < 4; i++) {
+        if (fabs(try_s[i] - target) > 1e-9) continue;
+        if (g_fake.len_rate[i] <= 0) return 0;
+        if (g_fake.len_size[i] == *size) return -1;
+        *size = g_fake.len_size[i];
+        *got = target;
+        return g_fake.len_rate[i];
+    }
+    return 0;
+}
 
 typedef struct { char line[12][240]; int n; } fake_log;
 static void fake_sink(void *ctx, pz_loglevel lvl, const char *msg)
@@ -737,7 +982,7 @@ static gpu_session *fake_session(const char *name)
 static tune_ops fake_ops(void)
 {
     tune_ops op = {.kang = false, .nv = 3, .def = 256, .measure = fake_measure, .set = linear_set_variant, .check = fake_check, .code = linear_code,
-                   .name = variant_name, .cached_fmt = "GPU[%d]: cached %s", .intro_fmt = "GPU[%d]: tuning %d variants", .head = "table", .unit = "u/s", .entry = "window ",
+                   .name = variant_name, .code_text = variant_code, .size_unit = "groups", .cached_fmt = "GPU[%d]: cached %s", .intro_fmt = "GPU[%d]: tuning %d variants", .head = "table", .unit = "u/s", .entry = "window ",
                    .bad_check_fmt = "GPU[%d]: variant %s failed"};
     memcpy(op.vs, FAKE_V, sizeof FAKE_V);
     return op;
@@ -756,16 +1001,16 @@ int gpu_tune_selftest(void)
      * file, and the choice for the terminal) */
     static const struct { double rate[3]; int picked; const char *table, *choice; } cases[] = {
         {{100e6, 102e6, 90e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 90.00 M; picking window 256 (default; none >1% faster)",
-         "window 256 (102.00 M u/s, the default: no other variant >1% faster)"},                                  /* the default is the fastest */
+         "window 256, code 256 (102.00 M u/s, the default: no other variant >1% faster; margin 1%)"},             /* the default is the fastest */
         {{100e6, 102e6, 107e6}, 512, "window 128 100.00 M; window 256 102.00 M; window 512 107.00 M; picking window 512",
-         "window 512 (107.00 M u/s, +4.9% over window 256)"},                                                     /* 4.9% faster: it wins */
+         "window 512, code 512 (107.00 M u/s, +4.9% over window 256; margin 1%)"},                                /* 4.9% faster: it wins */
         {{100e6, 102e6, 103e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 103.00 M; picking window 256 (default; none >1% faster)",
-         "window 256 (102.00 M u/s, the default: no other variant >1% faster)"},                                  /* under 1% faster: the default stays */
+         "window 256, code 256 (102.00 M u/s, the default: no other variant >1% faster; margin 1%)"},             /* under 1% faster: the default stays */
         {{100e6, 102e6, 104e6}, 512, "window 128 100.00 M; window 256 102.00 M; window 512 104.00 M; picking window 512",
-         "window 512 (104.00 M u/s, +2.0% over window 256)"},                                                     /* 2% faster: it wins */
+         "window 512, code 512 (104.00 M u/s, +2.0% over window 256; margin 1%)"},                                /* 2% faster: it wins */
         {{0, 0, 0}, 256, NULL, NULL},                                                                             /* nothing runs: the default, no table */
         {{100e6, 0, 0}, 128, "window 128 100.00 M; window 256 0.00; window 512 0.00; picking window 128",
-         "window 128 (100.00 M u/s, the default window 256 cannot run)"},                                         /* the default cannot run */
+         "window 128, code 128 (100.00 M u/s, the default window 256 cannot run; margin 1%)"},                    /* the default cannot run */
     };
     for (int c = 0; c < (int)(sizeof cases / sizeof *cases); c++) {
         gpu_session *s = fake_session("Test GPU");
@@ -781,10 +1026,10 @@ int gpu_tune_selftest(void)
         rt_logseq *q = rt_logseq_new(1, fake_sink, &lg);
         rt_logseq_enter(q, 0);
         tune_pick(s, 3, &op);
-        TCHK(g_fake.measured >= 3 && g_fake.measured <= 3 * TUNE_ROUNDS && s->variant == cases[c].picked);
+        TCHK(g_fake.measured >= 3 && g_fake.measured <= 3 * TUNE_TURNS && s->variant == cases[c].picked);
         TCHK(lg.n >= 1 && !strcmp(lg.line[0], "GPU[3]: tuning 3 variants"));
         if (cases[c].table) {
-            char want[300], want2[200];
+            char want[300], want2[240];
             snprintf(want, sizeof want, "GPU[3]: table (u/s): %s", cases[c].table);
             snprintf(want2, sizeof want2, "GPU[3]: table: %s", cases[c].choice);
             const bool same = lg.n == 3 && !strcmp(lg.line[1], want) && !strcmp(lg.line[2], want2);
@@ -920,14 +1165,64 @@ int gpu_tune_selftest(void)
         TCHK(tune_cache_path(path, sizeof path));
         tune_key(&s->info, false, key, sizeof key);
         snprintf(text, sizeof text, "%sx=128\n%s=128\nother=64\n%s=512\n", key, key, key);
-        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 512);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, NULL) == 512);
         snprintf(text, sizeof text, "%s=512\n%s=\n128\n", key, key);           /* the last line has no value: the digits below it are another line */
-        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 0);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, NULL) == 0);
         snprintf(text, sizeof text, "%s=300\n", key);                            /* a window this device does not offer */
-        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 0);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, NULL) == 0);
         snprintf(text, sizeof text, "%s=256", key);                               /* no newline at the end */
-        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false) == 256);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, NULL) == 256);
+        /* the length of a launch after the variant; a line without it (the files of 1.19.x), or with one out of range, means 0.35 s */
+        double ls = 0;
+        snprintf(text, sizeof text, "%s=512 0.70\n", key);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, &ls) == 512 && fabs(ls - 0.7) < 1e-9);
+        snprintf(text, sizeof text, "%s=512\n", key);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, &ls) == 512 && fabs(ls - GPU_LAUNCH_S) < 1e-9);
+        snprintf(text, sizeof text, "%s=512 7\n%s=512 0.0\n", key, key);
+        TCHK(pz_write_file_atomic(path, text, strlen(text), 0644) == 0 && tune_cache_get(&s->info, false, &ls) == 512 && fabs(ls - GPU_LAUNCH_S) < 1e-9);
+        TCHK(tune_value("", &ls) == 0 && tune_value("\n512 0.7", &ls) == 0 && fabs(ls - GPU_LAUNCH_S) < 1e-9);
         free(s);
+    }
+    {   /* the length of a launch: the shortest within 1% of the best; a length the device cannot reach (the same size) is not tried; saved
+         * with the variant and read back by the next device of the model */
+        static const struct { double rate[4]; uint32_t size[4]; double picked; int calls; } lc[] = {
+            {{95e6, 100e6, 100.5e6, 101e6}, {1, 2, 4, 8}, 0.35, 4},            /* 0.35 s is within 1% of the best 1.4 s */
+            {{97e6, 99e6, 101e6, 101e6}, {1, 2, 4, 8}, 0.7, 4},                /* 0.7 s: the first within 1% */
+            {{100e6, 100e6, 100e6, 100e6}, {1, 1, 1, 1}, 0.15, 4},             /* a launch of one group lasts longer than every target: only the first is measured */
+            {{0, 0, 0, 0}, {1, 2, 4, 8}, GPU_LAUNCH_S, 4},                     /* nothing could be measured: the default */
+            {{90e6, 100e6, 100e6, 110e6}, {1, 2, 2, 8}, 1.4, 4},               /* 0.7 s gets the size of 0.35 s and is not tried; 1.4 s is 10% better */
+        };
+        for (size_t c = 0; c < sizeof lc / sizeof *lc; c++) {
+            gpu_session *s = fake_session("Test GPU length");
+            snprintf(s->info.name, sizeof s->info.name, "Test GPU length %zu", c);
+            g_fake.rate[0] = 100e6; g_fake.rate[1] = 100e6; g_fake.rate[2] = 120e6;
+            g_fake.check_ok = true;
+            g_fake.len_calls = 0;
+            for (int i = 0; i < 4; i++) { g_fake.len_rate[i] = lc[c].rate[i]; g_fake.len_size[i] = lc[c].size[i]; }
+            tune_ops op = fake_ops();
+            op.at_length = fake_at_length;
+            fake_log lg;
+            memset(&lg, 0, sizeof lg);
+            rt_logseq *q = rt_logseq_new(1, fake_sink, &lg);
+            rt_logseq_enter(q, 0);
+            tune_pick(s, 4, &op);
+            TCHK(s->variant == 512 && fabs(s->launch_s - lc[c].picked) < 1e-9 && g_fake.len_calls == lc[c].calls);
+            if (fabs(s->launch_s - lc[c].picked) >= 1e-9) printf("  GPU tuning: length case %zu picked %.2f s\n", c, s->launch_s);
+            char want[80];
+            snprintf(want, sizeof want, "GPU[4]: launches of %.2f s (", lc[c].picked);
+            TCHK(lc[c].rate[0] <= 0 || (lg.n == 5 && !strncmp(lg.line[4], want, strlen(want))));
+            if (lc[c].rate[0] <= 0) TCHK(lg.n == 4 && !strncmp(lg.line[3], "WARN GPU[4]: launch length (u/s; the size in groups): 0.15 s cannot run;", 72));
+            s->launch_s = 0;
+            s->variant = 0;
+            g_fake.measured = 0;
+            tune_pick(s, 4, &op);                                     /* the next device of the model: the saved variant and length */
+            TCHK(g_fake.measured == 0 && s->variant == 512 && fabs(s->launch_s - lc[c].picked) < 1e-9);
+            rt_logseq_done(q, 0);
+            rt_logseq_free(q);
+            free(s);
+        }
+        const double a[4] = {100, 100.5, 101, 101.5}, b[4] = {-1, 0, 100, 99.5}, z[4] = {0, 0, -1, 0};
+        TCHK(tune_launch_choose(a, 4) == 1 && tune_launch_choose(b, 4) == 2 && tune_launch_choose(z, 4) == -1);   /* 100.5 is within 1% of 101.5, 100 is not */
     }
     pz_strlcpy(g_env.xdg_cache_home, old, sizeof g_env.xdg_cache_home);
     pz_remove_tree(tmp);
@@ -953,10 +1248,11 @@ void gpu_doctor_cache(void)
                 char *bar = strchr(f[k - 1], '|');
                 if (bar) { *bar = 0; f[k] = bar + 1; }
             }
-            const int v = pz_atoi(eq + 1);
+            double ls;
+            const int v = tune_value(eq + 1, &ls);
             if (f[3]) {
-                doctor_line('i', "saved GPU tuning: %.80s (%s, %.40s): %s %s", f[1], f[0], f[2], kang ? "kangaroo" : "linear window",
-                            kang ? kvariant_name(v, nb, sizeof nb) : variant_name(v, nb, sizeof nb));
+                doctor_line('i', "saved GPU tuning: %.80s (%s, %.40s): %s %s, launches of %.2f s", f[1], f[0], f[2], kang ? "kangaroo" : "linear window",
+                            kang ? kvariant_name(v, nb, sizeof nb) : variant_name(v, nb, sizeof nb), ls);
             } else doctor_line('i', "saved GPU tuning: %.150s", line);
             cnt++;
         }

@@ -518,6 +518,8 @@ int run_clock_gap(double dm, double dw, double *gap)
     return 0;
 }
 
+#define RUN_LAUNCH_HOLD 4.0   /* seconds a GPU's rate holds without a launch ending (the longest tuned launch is 1.4 s, and it may double once) */
+
 void run_reporter_loop(run_ctx *r)
 {
     const ui_mode m0 = effective_ui(r);
@@ -552,14 +554,14 @@ void run_reporter_loop(run_ctx *r)
                     r->paused_total += gap;
                     rate_est_gap(&est, gap);
                 }
-                for (int i = 0; i < r->nws; i++) { r->ws[i].last_units = atomic_load(&r->ws[i].units); r->ws[i].rate = 0; }
+                for (int i = 0; i < r->nws; i++) { r->ws[i].last_units = atomic_load(&r->ws[i].units); r->ws[i].last_t_units = atomic_load(&r->ws[i].t_units); r->ws[i].rate = 0; }
                 t_last = now;
                 pz_log(PZ_LOG_WARN, "system suspension detected (about %s without computing): not counted in times and speeds; saving the state", pz_fmt_duration(gap, gb, sizeof gb));
                 next_ckpt = now;                       /* save at once: a hibernation may end in a power cut */
             }
         }
         if (atomic_exchange(&r->rate_restart, 0)) {        /* the unit changed (BSGS: the search begins after the table) */
-            for (int i = 0; i < r->nws; i++) { r->ws[i].last_units = atomic_load(&r->ws[i].units); r->ws[i].rate = 0; }
+            for (int i = 0; i < r->nws; i++) { r->ws[i].last_units = atomic_load(&r->ws[i].units); r->ws[i].last_t_units = atomic_load(&r->ws[i].t_units); r->ws[i].rate = 0; }
             r->rate_eta = 0;
             r->peak_rate = 0;
             r->t_base = run_session_elapsed(r);
@@ -570,11 +572,27 @@ void run_reporter_loop(run_ctx *r)
             double dt = now - t_last;
             double tot = 0;
             for (int i = 0; i < r->nws; i++) {
-                u64 u = atomic_load(&r->ws[i].units);
-                double inst = (double)(u - r->ws[i].last_units) / dt;
-                r->ws[i].rate = r->ws[i].rate == 0 ? inst : alpha * inst + (1 - alpha) * r->ws[i].rate;
-                r->ws[i].last_units = u;
-                tot += r->ws[i].rate;
+                worker_stat *w = &r->ws[i];
+                /* A GPU counts at the end of each launch (t_units: when), and a launch may last longer than this second: its rate is taken
+                 * between the ends of two launches and holds while none ended since the last time, for up to RUN_LAUNCH_HOLD seconds (longer
+                 * than any tuned launch: a device that stopped, or is being recovered, falls to zero as a CPU thread would). The stamp is read
+                 * before the count, so the count is at least as new as the stamp. */
+                const u64 tu = atomic_load(&w->t_units);
+                u64 u = atomic_load(&w->units);
+                double inst;
+                if (tu) {
+                    if (tu == w->last_t_units) {
+                        if ((double)(now * 1e6 - (double)tu) < RUN_LAUNCH_HOLD * 1e6) { tot += w->rate; continue; }
+                        inst = 0;
+                    } else {
+                        /* the first launch ended within this second: over the second, as a continuous count */
+                        inst = (double)(u - w->last_units) / (w->last_t_units ? (double)(tu - w->last_t_units) * 1e-6 : dt);
+                        w->last_t_units = tu;
+                    }
+                } else inst = (double)(u - w->last_units) / dt;
+                w->rate = w->rate == 0 ? inst : alpha * inst + (1 - alpha) * w->rate;
+                w->last_units = u;
+                tot += w->rate;
             }
             if (use_est) {
                 /* "started": every worker has produced something (a GPU is counted only when its first launch ends); a worker that

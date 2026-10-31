@@ -47,17 +47,18 @@ static void tg_sleep(run_ctx *r, double secs)
 }
 
 /* Rates (units/s) with `cap` CPU workers running and the GPUs whose bit is set in `off` idle. After `settle` seconds,
- * over `window` seconds: the GPU counts only change at the end of a launch (about every 0.35 s), so a long window keeps
- * that granularity near 2%. */
+ * over `window` seconds. The GPU counts only change at the end of a launch (a third of a second, up to 1.4 s when tuned so), so a GPU's
+ * rate is taken between the ends of the last launches before the window and before its end (the stamps of the counts), not over the window
+ * itself, which holds a fraction of a launch. */
 static tg_res tg_run(const tg_scan_cfg *c, int cap, unsigned off, double settle, double window)
 {
     run_ctx *r = c->r;
     c->set_cpu(c->ctx, cap);
     for (int j = 0; j < c->ngpu; j++) gpu_pause(gpu_session_at(c->g, j), (off >> j) & 1);
     tg_sleep(r, settle);
-    u64 a[MAX_WORKERS];
+    u64 a[MAX_WORKERS], ta[MAX_WORKERS];
     const int nws = r->nws;
-    for (int i = 0; i < nws; i++) a[i] = atomic_load(&r->ws[i].units);
+    for (int i = 0; i < nws; i++) { ta[i] = atomic_load(&r->ws[i].t_units); a[i] = atomic_load(&r->ws[i].units); }
     const double t0 = pz_mono();
     tg_sleep(r, window);
     const double dt = pz_mono() - t0;
@@ -67,7 +68,10 @@ static tg_res tg_run(const tg_scan_cfg *c, int cap, unsigned off, double settle,
         if (r->ws[i].kind == 'C') o.cpu += (double)(atomic_load(&r->ws[i].units) - a[i]) / dt;
     o.total = o.cpu;
     for (int j = 0; j < c->ngpu; j++) {
-        o.gpu[j] = (double)(atomic_load(&r->ws[c->gw[j]].units) - a[c->gw[j]]) / dt;
+        const int i = c->gw[j];
+        const u64 tb = atomic_load(&r->ws[i].t_units), b = atomic_load(&r->ws[i].units);
+        const double span = ta[i] && tb > ta[i] ? (double)(tb - ta[i]) * 1e-6 : dt;    /* between the ends of launches when both are known */
+        o.gpu[j] = (double)(b - a[i]) / span;
         o.total += o.gpu[j];
     }
     return o;

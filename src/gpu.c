@@ -415,7 +415,7 @@ static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
 /* ---------------- recovery after a device error ---------------- */
 
 /* The size (groups per work-item of the linear kernel, rounds of the kangaroo) of the launches that follow a failed one: a quarter, at
- * least 1. A GPU shared with a game or a desktop can slow down so much that a launch tuned to 0.35 s runs past the 2 s of the watchdog
+ * least 1. A GPU shared with a game or a desktop can slow down so much that a launch tuned to a third of a second runs past the 2 s of the watchdog
  * of the system; the same size after the recovery would fail again, four times, and the GPU would be given up. The size grows back
  * after the successful launches by the timing rule of the loops. */
 uint32_t gpu_launch_after_failure(uint32_t n) { return n >= 4 ? n / 4 : 1; }
@@ -449,13 +449,14 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
 {
     run_ctx *r = s->r;
     const rt_dev info = s->info;
-    const struct { int T, NK, kvar, variant, wide; bool l2fit; } keep = {s->T, s->NK, s->kvar, s->variant, s->wide, s->l2fit};
+    const struct { int T, NK, kvar, variant, wide; bool l2fit; double launch_s; } keep = {s->T, s->NK, s->kvar, s->variant, s->wide, s->l2fit, s->launch_s};
     const int paused = atomic_load(&s->paused);
     double wait = 1.0;
     for (int attempt = 0; attempt < 9 && !atomic_load(&r->stop); attempt++) {
         if (kangaroo) gpu_kang_release(s); else gpu_linear_release_program(s);
         gpu_session_release(s);                           /* clears everything after the context */
         s->T = keep.T; s->NK = keep.NK; s->kvar = keep.kvar; s->variant = keep.variant; s->wide = keep.wide; s->l2fit = keep.l2fit;
+        s->launch_s = keep.launch_s;
         atomic_store(&s->paused, paused);
         gpu_sleep_unless_stopped(r, wait);                /* Ctrl-C must not wait for up to 30 s */
         wait = wait < 30 ? wait * 2 : 30;
@@ -486,10 +487,10 @@ static bool gpu_device_error(gpu_session *s, gpu_health *health, bool kangaroo, 
     return true;
 }
 
-uint32_t gpu_launch_resize(uint32_t n, double dt, double min_dt, uint32_t max)
+uint32_t gpu_launch_resize(uint32_t n, double dt, double target, double min_dt, uint32_t max)
 {
     if (dt <= min_dt) return n;
-    const double f = 0.35 / dt;
+    const double f = (target > 0 ? target : GPU_LAUNCH_S) / dt;
     const double v = (double)n * (f < 0.5 ? 0.5 : (f > 2 ? 2 : f));
     return (uint32_t)(v < 1 ? 1 : (v > max ? max : v));
 }
@@ -545,8 +546,8 @@ static void *gpu_linear_thread(void *p)
             run_submit_scan_hit(r, &k, "GPU");
         }
         sched_complete(r->sched, &c, covered);
-        atomic_fetch_add(&r->ws[s->widx].units, c.nkeys);
-        if (c.nkeys == want) ngroups = gpu_launch_resize(ngroups, dt, 0.005, 4096);
+        GPU_UNITS_STAMP(&r->ws[s->widx], c.nkeys);
+        if (c.nkeys == want) ngroups = gpu_launch_resize(ngroups, dt, s->launch_s, 0.005, 4096);
     }
     if (atomic_fetch_sub(s->active, 1) == 1) atomic_store(&r->stop, 1);
     return NULL;
@@ -787,7 +788,7 @@ static void *gpu_kang_thread(void *p)
             for (int j = 0; j < 3; j++) recs[i].d.w[j] = (u64)o[2 + 2 * j] | (u64)o[3 + 2 * j] << 32;
             if (o[8] < (uint32_t)K) kang_dp_recode(mirror, &recs[i], (int)o[8]);
         }
-        atomic_fetch_add_explicit(&r->ws[s->widx].units, (u64)K * rounds, memory_order_relaxed);
+        GPU_UNITS_STAMP(&r->ws[s->widx], (u64)K * rounds);
         bool solved = nd && kang_insert_dps(ks, recs, (int)nd, dups);
         if (solved) break;
         uint32_t tmp[KSTRIDE];
@@ -808,7 +809,7 @@ static void *gpu_kang_thread(void *p)
             rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, tmp, KSTRIDE * 4);
             atomic_fetch_add(&ks->restarts, 1);
         }
-        rounds = gpu_launch_resize(rounds, dt, 0.002, rmax);
+        rounds = gpu_launch_resize(rounds, dt, s->launch_s, 0.002, rmax);
         continue;
     device_error:
         /* typically the driver reset the device while the machine slept: reopen it and start a fresh herd (the walkers' progress

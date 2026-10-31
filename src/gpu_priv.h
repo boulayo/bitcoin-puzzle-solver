@@ -73,6 +73,7 @@ struct gpu_session {
     uint32_t hist_rounds;        /* depth of the jump history: the most rounds a launch can run */
     u64 gstep;                   /* steps taken by every walker so far (the step number of the next round) */
     size_t mem_used;             /* bytes of device buffers of the last kangaroo preparation */
+    double launch_s;             /* the length of a launch the controller aims at, in seconds (tuned per device, GPU_LAUNCH_S unless saved) */
     _Atomic int paused;          /* the kangaroo thread idles ('bench --together' switches GPUs off to measure them) */
 };
 
@@ -136,9 +137,17 @@ void gpu_kang_release_buffers(gpu_session *s);
 bool gpu_kang_prepare(gpu_session *s, const kang_params_t *P, int T, uint32_t hist_rounds);
 bool gpu_kang_run(gpu_session *s, const kang_params_t *P, uint32_t rounds, uint32_t *ndp, uint32_t *nrl);
 uint32_t gpu_launch_after_failure(uint32_t n);          /* the size of the launches after a failed one */
-/* The size of the next launch (groups per work-item, rounds) from the duration `dt` of the last one: towards 0.35 s, at most halved or
- * doubled at a time, from 1 to `max`. A launch of `min_dt` seconds or less is too short to time and changes nothing. */
-uint32_t gpu_launch_resize(uint32_t n, double dt, double min_dt, uint32_t max);
+/* The size of the next launch (groups per work-item, rounds) from the duration `dt` of the last one: towards `target` seconds, at most
+ * halved or doubled at a time, from 1 to `max`. A launch of `min_dt` seconds or less is too short to time and changes nothing. */
+uint32_t gpu_launch_resize(uint32_t n, double dt, double target, double min_dt, uint32_t max);
+/* The length of a launch the controllers aim at when no tuned value is saved for the device (seconds): short launches pay the fixed costs of a
+ * launch more often (RESEARCH.md section 5, after 1.19.1), long ones delay the stop, the hit check and the dashboard. The tuner measures the
+ * chosen variant at GPU_LAUNCH_TRY seconds each and keeps the shortest within GPU_LAUNCH_NEAR of the best (gpu_tune.c). */
+#define GPU_LAUNCH_S 0.35
+#define GPU_LAUNCH_TRY {0.15, 0.35, 0.7, 1.4}
+#define GPU_LAUNCH_NEAR 0.99
+/* A GPU worker counts its units at the end of a launch: the time of the last count, in microseconds of pz_mono (run.h, worker_stat.t_units) */
+#define GPU_UNITS_STAMP(ws, n) do { atomic_fetch_add(&(ws)->units, (n)); atomic_store(&(ws)->t_units, (u64)(pz_mono() * 1e6)); } while (0)
 void gpu_sleep_unless_stopped(run_ctx *r, double secs); /* the wait of a recovery: returns at once when the campaign is stopped */
 
 /* How many failed launches a device is allowed: more than GPU_FAIL_STREAK in a row, or more than GPU_FAIL_TOTAL without GPU_FAIL_FORGET

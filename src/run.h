@@ -18,8 +18,11 @@ typedef struct {
     char name[40];
     char kind;                       /* 'C' CPU thread, 'G' GPU */
     _Atomic u64 units;               /* keys scanned (linear) / group steps (kangaroo) */
+    _Atomic u64 t_units;             /* a worker that counts by launches (a GPU): pz_mono in microseconds at its last count, so that its rate is
+                                      * taken between the ends of two launches and not over a window that holds a fraction of one; 0: counts
+                                      * continuously (a CPU thread) */
     double rate;                     /* smoothed units/s, maintained by the reporter */
-    u64 last_units;
+    u64 last_units, last_t_units;
 } worker_stat;
 
 typedef struct {
