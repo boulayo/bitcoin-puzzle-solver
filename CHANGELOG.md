@@ -25,6 +25,14 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   any of the products of the step. Bit-exact on the simulated CUDA driver and on pocl; not yet measured on a card.
 - `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
   and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
+### Added
+- GPU kangaroo: a *block herd* kernel variant for CUDA (`kang4g`, "NK 4 block herd", `PZ_GPU_NK=4g`): 4 walkers per work-item in registers
+  for the whole launch and one field inversion per block of 128 work-items and round (32 lanes of one warp invert the column products of
+  the block), so a step touches the device memory only for its 2-byte history (≈ 4 bytes per step instead of ≈ 215). Same walk, history and
+  host side; bit-exact against the CPU (self-test on the simulated CUDA driver and on pocl, planted keys found). The tuner measures it; the
+  model (RESEARCH.md section 5) expects it slower than `NK` 128 quads on the A2000 (0.44 to 0.49 G steps/s at 1.3 GHz against 0.91 G): one
+  inversion per round is a 32,000-cycle chain that 1,024 walkers per SM cannot hide. The OpenCL runtime launches kernels that require a
+  work-group size in groups of that size; the simulated CUDA driver runs kernels with barriers a block at a time.
 
 ## [1.19.1] — 2026-10-30
 

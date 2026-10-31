@@ -324,7 +324,7 @@ come se la variabile non ci fosse.
 | `PZ_GPU_API=cuda\|opencl` | come `--gpu-api` (che ha la precedenza) |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
 | `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
-| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `64l` |
+| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |
 | `PZ_OPENCL_ALL=1` | usa anche i dispositivi OpenCL su CPU (sezione 7.1) |
 | `PZ_NO_PROFILE=1` | come `--no-tune` |

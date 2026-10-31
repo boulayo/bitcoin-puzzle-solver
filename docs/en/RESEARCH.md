@@ -504,6 +504,77 @@ draw fits to the measured 793 → 882, for a voltage that follows the clock as V
   per-cycle reading above is confirmed; the three figures also bound how many issue slots an `IMAD.WIDE` takes (the 96-register cap gains
   more at two slots, the pairs at one).
 
+**After 1.19.1: the block herd, one inversion per block.** The idea (chosen by the owner): instead of one batch inversion per work-item over
+`NK` = 64 to 256 walkers kept in device memory, a few walkers per work-item kept in registers and one inversion shared by a whole block of 128
+work-items, so that a step reads and writes no walker state in device memory. Built as a kernel variant (`kang4g`, `NK` = 4, suffix `g` of
+`PZ_GPU_NK`, "NK 4 block herd"), offered to the CUDA tuner; the counts are SASS from NVRTC 12.0 and `ptxas` for sm_86 on the executed path (the
+scheduling control words that `ptxas` writes into every instruction give the latencies), the speed is a model: no GPU was at hand.
+
+* **The kernel.** Each work-item keeps x, y, flags and tags of its 4 walkers in registers for the whole launch (the loops over them are
+  unrolled, so the arrays have constant indices). A round: the 4 denominators and their prefix products; the product of the work-item into
+  shared memory; barrier; 32 work-items (one warp, a different one each round) multiply the 4 products of a column (work-items c, c + 32, c +
+  64, c + 96), invert the 32 column products together (one `fe_inv` for the 32 lanes) and work back to the inverse of each factor (Montgomery's
+  trick on the column: 3 products up, 6 down); barrier; each work-item reads its inverse and steps its walkers as before. Two barriers and 7
+  KiB of shared memory per block. The walk, the jump table, the history (16 bits per step, replayed at the end of a launch and at every
+  distinguished point), the state layout and the events are those of the other kernels with `NK` = 4: the host code is the same, and the
+  self-test compares the kernel with the CPU bit for bit. The one difference is inside a kernel launch: a work-item whose product is zero (a
+  walker on its jump point, never seen) restarts its 4 walkers and then only takes part in the inversions.
+* **Capacity.** `ptxas` gives 250 registers, no spill, for `NK` = 4 (241 on sm_75, 250 on sm_89): two blocks of 128 per SM, **1,024 walkers per
+  SM, 20,480 on the A2000**. `NK` = 2 and 3 take 194 and 216 registers (still two blocks), 5 spills 24 bytes at the 255 cap, 6 spills 256 and 8
+  spills 952. Shared memory would hold more walkers (124 bytes each with their prefix product: two more per work-item would be 31 KiB per
+  block), but the 48 KiB of static shared memory per block bound it, and the walkers held are not what limits the kernel (below).
+* **Device memory.** Per step the 2-byte history entry, written in the round and read back by the replay at the end of the launch, and the
+  128-byte state of a walker read and written once per launch: **≈ 4 bytes per step instead of ≈ 215**. The jump table (21 KiB) stays in L1.
+  Shared memory: 64 bytes per work-item and round (its product out, its inverse back) and ≈ 0.5 KiB per column for the inverting lane, ≈ 50
+  bytes per step, about 1 byte per cycle of an SM that moves 128; the `LDS.128`/`STS.128` at a 32-byte stride are 2-way bank conflicts, four
+  instructions per work-item and round. Launches: with 20,480 walkers a history of 256 rounds would be a 10 ms launch, so the block herd has up
+  to 16,384 rounds (`KANG_HIST_MAX_BLOCK`, within the eighth of the device memory: 8,192 on the A2000, 335 MiB, ≈ 0.4 s at the expected speed),
+  but at most 8 · 2^dp-bits of them past 256, because each distinguished point replays the history of its walker since the start of the launch.
+* **Instructions** (sm_86, executed path of a round, `NK` = 4): **3,766 per work-item for 4 steps, 941 per step** (1,812 ALU pipe, 1,868 FMA
+  pipe, 86 other, no `LDL`/`STL`; the loop of `kang64` is ≈ 1,130 with its arrays in device memory); the inverting warp adds 1,230 (the 9
+  products of the column, the shared loads and stores, the call) and `fe_inv`, ≈ 14,450 executed per warp (80 + 19 rounds × (20 + 12.6 turns ×
+  33 + 313) + 124, the counts of section 5 after 1.13.0). One block-round is 16 warp-steps: **941 + 15,680 / 16 ≈ 1,920 instructions per step,
+  against ≈ 1,300 for `NK` 128 quads**. The integer ceiling at the `mad.lo` rate of the probes drops from 1.86 to 1.26 G steps/s.
+* **Latency, which decides.** A block cannot start round r + 1 before its inverting warp has finished round r, and the inverse is a serial
+  chain: the stall counts of the round sum to 1,379 cycles before the first barrier, 35,203 for the inverting warp between the barriers (32,000
+  of them `fe_inv`: 170 + 19 × (45 + 12.6 × 83 + 571) + 226; a turn of the divstep loop is 33 instructions and 83 cycles) and 8,094 after the
+  second, **≈ 44,700 cycles per round for one warp alone**. The issue model of `tools/research/kang_block_sched.py` (one instruction issued per
+  cycle and partition, each pipe held two cycles per warp instruction, the stall counts and scoreboards of `ptxas`, the barriers of each block;
+  two blocks per SM, warp w of a block on partition w, IMAD.WIDE at one slot): **52,500 cycles per round for one block alone, 54,100 for two
+  blocks whose inverting warps fall on different partitions, 61,100 when they fall on the same one** (blocks b and b + 20, co-resident on a
+  card of 20 SMs, invert on the same partition in the same rounds with the rotation (round + block) mod 4); with IMAD.WIDE at two slots 57,900
+  and 69,300. The issue slots are 30 % busy: the kernel is bound by the latency of the inversion, not by its instructions or by memory. 1,024
+  steps per 54,000 to 61,000 cycles per SM: **0.44 to 0.49 G steps/s at the 1.3 GHz the A2000 sustains under load, 0.63 to 0.72 G at the 1.89
+  GHz of the probes, against 0.91 G measured for `NK` 128 quads.** To reach 0.91 G with a round of 54,000 cycles an SM would need ≈ 1,900
+  walkers on chip; registers and shared memory together hold at most ≈ 1,500, and the extra walkers lengthen the round (6 walkers per
+  work-item: ≈ 0.65 G, estimated from the same stall counts). A shorter round needs a faster single inversion (the divstep loop runs at 2.5
+  cycles per instruction for one warp) or more independent inversions in flight per SM, which is what the per-work-item batches of the present
+  kernels are.
+* **What differs from the analysis of 1.7.1** (section 8.4, "why keeping the herd in shared memory or in L2 does not pay"). It counted shared
+  memory only (≈ 800 walkers per SM at ≈ 130 bytes): the registers (256 KiB per SM) hold more, 1,024 walkers with no private array in device
+  memory. It had the inversion run by a single thread of the block, cost 153/W of the step for W walkers per block (10,500 instructions per
+  inversion, 2,200 per step); here 32 lanes invert 32 column products for the price of one warp-inversion, which is the same stream cost, so
+  the form of that estimate holds, but its numbers moved against the idea: the step is now 941 instructions without memory traffic and the
+  inversion 14,450 as executed, so with W = 512 the inversion adds 104 % of the step instead of 30 %. And it did not count the latency, which
+  bounds the block herd before the instructions do. What it gains is real: the device memory traffic of a step goes from ≈ 215 to ≈ 4 bytes, so
+  the block herd can pay only on a card whose bandwidth per SM-cycle is well below the A2000's (6.3 bytes at 1.3 GHz) and which has no L2 large
+  enough for the cache-sized herds of 1.7.1. The tuner measures it, so such a card picks it without a rule.
+* **Herd size, distinguished points and the constant.** 20,480 walkers instead of 1.3 million: `dp-bits` follows from `KANG_DP_OVERHEAD`
+  (puzzle 135 with the card alone: 45 instead of 39; the overhead K · 2^dp-bits is the same share of √W by construction), the table holds the
+  same number of points, and 8.12 found nothing lost to the walks from 2^14 walkers up (where memory sets `dp-bits`, a smaller herd loses
+  less).
+* **Checks.** The self-test runs the block herd with one whole block of 128 work-items and two of the next (with the 4 work-items of the other
+  variants every row of a column but the first would be the 1 of the work-items past the end, and a wrong product in the down pass went unseen:
+  found by mutation). The simulated CUDA driver runs a kernel with barriers a block at a time, its work-items in threads that hand control to
+  one another at each barrier (coroutines would make AddressSanitizer print a warning into the output of the ASan build that loads the driver),
+  and fails a launch whose barriers are not reached by every work-item; the OpenCL runtime launches a kernel built with `reqd_work_group_size`
+  in groups of that size. Mutations of the barrier and of the column products are caught on the simulated driver and on pocl; planted keys of
+  puzzles 44 and 50 are found with `PZ_GPU_NK=4g` on both.
+* **On the card**: `PZ_GPU_NK=4g pzsolve bench --gpu-only` (the line `kangaroo ... NK 4 block herd`), expected 0.44 to 0.49 G steps/s if the
+  clock stays near 1.3 GHz, up to 0.7 G if the lighter load lets it rise; `pzsolve bench --gpu-only --retune` should keep `NK` 128 quads. Not
+  done: choosing the inverting warp from `%warpid` so that co-resident blocks never invert on the same partition (61,100 → 54,100 cycles, +13 %
+  for this variant, with inline assembly).
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts

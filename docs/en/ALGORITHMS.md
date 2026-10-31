@@ -298,8 +298,12 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   64 SMs, where the default herd is capped at 32768 work-items, `NK` = 64 at 512 work-items per SM ("full herd"); with OpenCL `NK` = 32, 64
   or 128 (default 64), plain or `b`, and `NK` = 32 or 64, plain or `b`, with 4 or 8 times the 64 work-items per compute unit ("4x herd", "8x
   herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
-  work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its
-  measurements: RESEARCH.md sections 5 and 8.4.
+  work-items, `NK` 16, 32 or 64, plain or `b`). With CUDA the tuning also measures the *block herd* (`NK` = 4, suffix `g`): the four walkers
+  of a work-item stay in its registers for the whole launch, two blocks of 128 work-items per SM (20,480 walkers on 20 SMs), and one inversion
+  serves a whole block and round (each work-item multiplies its four denominators, 32 work-items of the block multiply the products of a column
+  of four and invert the 32 column products together, Montgomery's trick works back down), so a step touches the device memory only for its
+  history; the walk, the history and the host side are the same. The OpenCL tuning does not offer it (the self-test checks it there too).
+  `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its measurements: RESEARCH.md sections 5 and 8.4.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,
   with a bit-by-bit comparison of states, DPs and restarts** (with a low step limit, so that restarts really happen). A device
