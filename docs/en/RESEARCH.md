@@ -1459,3 +1459,66 @@ counts by single-stepping a round of 4096 keys, and `llvm-mca` (LLVM 18, `-mcpu=
   emits one instruction per operation of the algorithm, so only a change of algorithm (none known for one block of SHA-256 and RIPEMD-160
   with 32-bit rotations) would lower it. The step is within 10 % of its port floor on Tiger Lake. The engine as a whole is close to what
   these ports allow per core; more keys per second on that machine come from the clock (10.5) and the GPU (section 5).
+
+### 10.8 The order of the IFMA curve step, and two kinds of dead operations (after 1.19.1)
+
+The question of this round: 10.6 found the curve part of the IFMA engines latency-bound (a product that waits for the one before it), so
+can the step be scheduled by hand, intrinsics in a chosen order or inline assembly, so that independent chains of multiply-adds interleave
+and the critical path shrinks, without assuming the latencies of one processor (GCC and clang, Linux, macOS and MinGW, every CPU with
+AVX-512 IFMA)? The test machine of this round is another one: a Xeon of the Sapphire Rapids family (model 207, 4 virtual CPUs of a shared
+host; its CPUID reports IFMA). Measured on it: `vpmadd52luq` on 512 bits issues **two per cycle** with a latency of 4 (twelve independent
+accumulators 0.50 cycles each, a dependent chain 2.80 TSC ticks, so the core runs at 1.43 times the TSC under IFMA). The host was busy
+(load 1 to 4, from other jobs), and the time of one round varied by ±10 to ±17 % from one round to the next: the timings below come from a
+harness that links the two builds into one process and alternates them round by round (2000 to 4000 pairs, median of the per-pair gains;
+an A/A control of the same harness gave −1.8 to +0.6 %), with 11 whole-process pairs as a check, exact instruction counts by
+single-stepping, and `llvm-mca` (LLVM 18) on the loop bodies for `-mcpu=icelake-server`, `tigerlake`, `sapphirerapids` and `znver4`, a
+change being kept only if it is not worse on any of them.
+
+* **Where the latency is, on this machine.** A product in a chain costs 57 to 60 ticks (about 84 cycles), two chains side by side 35 to
+  38 ticks per product, against a port floor of about 46 cycles (62 multiply-adds and about 30 other operations on two ports). The curve
+  part of the linear search alone (hash removed) runs at 20.6 ticks per key, 29.4 cycles, and its port floor (the 696 two-port operations of
+  the loop per 16 keys plus three products per denominator) is about 30: **on a core with two IFMA ports the linear search has no latency
+  left to recover**, and the hash is at its floor too (10.6, 10.7); with one IFMA port (Ice Lake and Tiger Lake client; Zen 4 splits a
+  512-bit operation in two halves) the step is port-bound (10.6). The kangaroo is different: its forward pass (8 to 11 ticks per step, about a fifth of the
+  round) is at its port floor (155 vector operations per vector of 8 walkers, 24 of them the shuffles of the transposes), its backward
+  pass runs at 67 to 76 % of its floor: that is where the latency is.
+* **Kept: two kinds of dead operations in the products** (`fev52.h`). The carry pass of the high half of a product cleared the carried
+  bits from limbs 5 to 8, which only go to the multiply-adds of the fold, and those read the low 52 bits of their operands: four masks per
+  product and square that did nothing. And the columns of `pz_fev_mul_add` start from the limbs of the added term instead of zero, five
+  additions fewer (the square doubles its columns, so `pz_fev_sqr_add` adds after). Instructions per step: lane kangaroo 141.0 to 137.0,
+  pairs 161.3 to 152.6 (their products are out of line, and calls are counted); the product bodies (gcc and clang) 128 to 125 instructions,
+  `llvm-mca` equal or better on all four targets (Ice Lake and Tiger Lake −4.6 %, Sapphire Rapids and Zen 4 equal); on the whole loops of
+  the kangaroo the Sapphire Rapids model gives +0.7 % (backward) and +1.8 % (forward) with the same block throughput: three more register
+  copies from GCC's allocation, which that model executes and the hardware eliminates (the Zen 4 model eliminates them). Measured: lanes
+  **+1.8 %**, pairs **+1.3 %** (medians of 2000 pairs; whole-process pairs +1.7 % and +3.9 %).
+* **Kept: the `x` of a candidate as four 64-bit words** (`vctx_emit`, IFMA only, as 10.6 had proposed): each 64-bit word of `x` is split into
+  its 32-bit halves by one `vpermd`, the low halves of the eight lanes in the low 256 bits and the high halves above, stored with
+  `vextracti64x4` (a store, no shuffle port): the eight words formed apart cost 12 more operations per 8 keys. Loop body 874 to 837
+  instructions per 16 keys; `llvm-mca` −0.3 % (Ice Lake, Tiger Lake), −2.3 % (Sapphire Rapids), −1.0 % (Zen 4). Measured: curve part alone
+  +2.1 %, engine +0.4 to +0.8 %.
+* **Together**: linear search **268.6 to 263.5 instructions per key**, measured +0.9 % (2000 pairs; whole-process pairs +1.9 %); kangaroo
+  as above. Same digests, candidates, steps and distinguished points.
+* **Tried and dropped** (the patches stay outside the tree):
+  * *two products interleaved operation by operation* (`pz_fev_mul2`, `sqr_add2`, `mul_add2`, the pairs of the linear step and of the
+    pair kangaroo): in a microbenchmark two chains 79 to 72 ticks per pair of products with GCC (clang: no gain), but in the linear step the
+    loop body grew from 908 to 962 instructions (stack accesses 78 to 113: two products in flight need 20 accumulators), `llvm-mca` +2.6 %
+    on all four targets, the curve part −4.9 % (minima); in the pair kangaroo +10.4 instructions per step and −8.5 %;
+  * *two chains in the batch inversion of the kangaroo* (as the linear search has since 10.2): the forward pass alone unchanged (−0.3 %), it
+    is port-bound, not latency-bound; +2.9 instructions per step;
+  * *the lane kangaroo skewed by one vector* (the inverse, the jump entry and the slope of vector `c − 1` computed before the rest of the
+    step of vector `c`, the same arithmetic): 137.0 to 145.1 instructions per step (GCC rematerializes 29 constants per vector with
+    `movabs` and `vpbroadcastq`), 142.0 unrolled by two with the products inlined; measured +2 to +7 % over the lanes, but only level with
+    the pairs, which the program picks here; `llvm-mca` Ice Lake and Tiger Lake −5.7 to −8 %, Sapphire Rapids −0.5 to −1.8 %, **Zen 4 +0.2
+    to +0.4 %**;
+  * *the columns 5 and 6 of a product in two accumulators each* (the low halves apart, one addition to join them): a product in a chain 59 to
+    52 ticks, but +2.6 instructions per kangaroo step and +2.3 per key of the linear search; measured lanes +3.4 to +3.9 %, pairs +0.9 to
+    +1.2 %, inside the spread of the A/A control for the pairs; `llvm-mca` Sapphire Rapids +2.3 % (pairs) and +2.5 % (forward pass), Zen 4
+    +0.5 %;
+  * *the products of the pair kangaroo inlined* (`PZ_FEV_INLINE`): 152.6 to 151.6 instructions per step, +2.2 to +3.1 %, inside the spread.
+* **No assembly was needed.** GCC emits the intrinsics of the products in source order (it has no scheduling pass before register
+  allocation on x86), so the order of the source is the order of the stream, and every variant above was intrinsics; the kept changes
+  remove operations and do not depend on an order. They build and pass with gcc 13 and clang 18, the MinGW-w64 build under wine with IFMA
+  assumed, and with `tools/ifma_emul.h` (which masks the operands to 52 bits as the instructions do).
+* **What is left.** On a core with two IFMA ports the linear search is at the floor of its ports in both phases; on one with one port the
+  step is port-0-bound. Only the kangaroo keeps latency, a quarter of its backward pass; the pairs take most of it, and a third chain costs
+  more registers than it saves (the skewed lanes and the four-vector form of 10.6 alike).

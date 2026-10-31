@@ -646,8 +646,10 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
   the previous one is latency-bound, so the forward pass of the batch inversion runs as two interleaved chains (even and odd
   denominators), and a product may take a term to add before its reduction (`pz_fev_mul_add`, `pz_fev_sqr_add`: `a·b + c` with the limbs
   of `c` below 2^55, as `K1 − x` or `K2 − x − y` of tight elements are), which saves the subtraction and the carry pass that would
-  follow it; the linear step and the kangaroo step use it for `x3` and `y3`. On AVX-512 (32 vector registers) the products are inlined in
-  the loop of the engine. The column sums of a 29-bit product pass through an empty `asm` after every addition: otherwise GCC
+  follow it; the linear step and the kangaroo step use it for `x3` and `y3`. The multiply-adds read only the low 52 bits of their
+  operands, so the carry pass of the high half of a product leaves the carried bits in the limbs it folds; with IFMA the `x` of a
+  candidate goes to the hash as four 64-bit words, each split into its 32-bit halves by one permutation. On AVX-512 (32 vector
+  registers) the products are inlined in the loop of the engine. The column sums of a 29-bit product pass through an empty `asm` after every addition: otherwise GCC
   reassociates them, computes the 81 products first and spills them.
 * **Lane kangaroo**: `x3` and `y3` of a step are made canonical as in the linear search (the full reduction only for a vector with a lane
   the fast form cannot settle), and the jump table keeps each coordinate `c` as `K1 − c`, so that `x − jx` and `y − jy` are an addition and

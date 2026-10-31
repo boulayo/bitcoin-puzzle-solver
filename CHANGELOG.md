@@ -3,6 +3,18 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- CPU, AVX-512 IFMA lanes: the products skip four masks that did nothing (the multiply-adds read only the low 52 bits of their
+  operands) and a product with an added term starts its columns from that term; the linear search forms the x of a candidate as four
+  64-bit words split by one permutation instead of eight words apart. Instructions: kangaroo lane step 141.0 to 137.0, pair step 161.3 to
+  152.6, linear search 268.6 to 263.5 per key. Measured on one thread (Sapphire Rapids class Xeon): kangaroo lanes +1.8 %, pairs +1.3 %,
+  linear search +0.9 %. Same results bit for bit.
+- Documentation: RESEARCH.md 10.8 records the attempt to schedule the IFMA curve step by hand (two products interleaved, two chains in
+  the kangaroo inversion, a skewed lane loop, split columns): none was faster on every processor model, and on a core with two IFMA ports
+  the linear search turns out to be at its port floor.
+
 ## [1.19.1] — 2026-10-30
 
 ### Changed
