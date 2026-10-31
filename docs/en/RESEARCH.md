@@ -503,11 +503,20 @@ draw fits to the measured 793 → 882, for a voltage that follows the clock as V
   `pzsolve bench --gpu-only --retune` to let the tuner choose. If the clock under the variant that wins is higher at the same power, the
   per-cycle reading above is confirmed; the three figures also bound how many issue slots an `IMAD.WIDE` takes (the 96-register cap gains
   more at two slots, the pairs at one).
+* **Measured on the A2000, and dropped.** Each variant forced in turn, `bench --gpu-only`, keys/s: 1.19.0 `linear512m4` 870 to 881 (four
+  runs); with the peeled loop `linear512m4` 857, `linear512m5` 862, `linear512m4p` 857, `linear256` 844 to 852. The peel alone cost
+  `linear512m4` 2.8 % on the card, although it saves 14 instructions per key in the SASS, and neither energy variant won it back
+  (+0.6 % and 0 % over the peeled `linear512m4`). The tuner then took window 256 (the 512 variants were within 1 % of it), and a campaign of
+  puzzle 71 with the same 15 threads and GPU ran at 785 M keys/s on the GPU against 814 M with 1.19.0. The model above weighs instructions
+  and register traffic; what the peel moved is the shape of the loop (the tests on the index leave it, the body grows by one copy of the
+  pair), and on this card that matters more than 14 instructions. The kernel source and the six modules are back to those of 1.19.0
+  (identical PTX but for the numbers in the callseq comments), and the two variants are removed. The energy model stays as a tool; its
+  ranking of variants this close is not reliable.
 
 **After 1.19.1: the block herd, one inversion per block.** The idea (chosen by the owner): instead of one batch inversion per work-item over
 `NK` = 64 to 256 walkers kept in device memory, a few walkers per work-item kept in registers and one inversion shared by a whole block of 128
 work-items, so that a step reads and writes no walker state in device memory. Built as a kernel variant (`kang4g`, `NK` = 4, suffix `g` of
-`PZ_GPU_NK`, "NK 4 block herd"), offered to the CUDA tuner; the counts are SASS from NVRTC 12.0 and `ptxas` for sm_86 on the executed path (the
+`PZ_GPU_NK`, "NK 4 block herd"), forced with `PZ_GPU_NK=4g` (the CUDA tuner measured it in the test builds and never took it); the counts are SASS from NVRTC 12.0 and `ptxas` for sm_86 on the executed path (the
 scheduling control words that `ptxas` writes into every instruction give the latencies), the speed is a model: no GPU was at hand.
 
 * **The kernel.** Each work-item keeps x, y, flags and tags of its 4 walkers in registers for the whole launch (the loops over them are
@@ -571,7 +580,8 @@ scheduling control words that `ptxas` writes into every instruction give the lat
   in groups of that size. Mutations of the barrier and of the column products are caught on the simulated driver and on pocl; planted keys of
   puzzles 44 and 50 are found with `PZ_GPU_NK=4g` on both.
 * **On the card**: `PZ_GPU_NK=4g pzsolve bench --gpu-only` (the line `kangaroo ... NK 4 block herd`), expected 0.44 to 0.49 G steps/s if the
-  clock stays near 1.3 GHz, up to 0.7 G if the lighter load lets it rise; `pzsolve bench --gpu-only --retune` should keep `NK` 128 quads. Not
+  clock stays near 1.3 GHz, up to 0.7 G if the lighter load lets it rise; `pzsolve bench --gpu-only --retune` should keep `NK` 128 quads. It
+  did (910 to 916 M steps/s with `NK` 128 quads), so the tuners no longer measure the block herd: it stays a forced variant. Not
   done: choosing the inverting warp from `%warpid` so that co-resident blocks never invert on the same partition (61,100 → 54,100 cycles, +13 %
   for this variant, with inline assembly).
 

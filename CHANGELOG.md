@@ -14,15 +14,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - Documentation: RESEARCH.md 10.8 records the attempt to schedule the IFMA curve step by hand (two products interleaved, two chains in
   the kangaroo inversion, a skewed lane loop, split columns): none was faster on every processor model, and on a core with two IFMA ports
   the linear search turns out to be at its port floor.
-- CUDA linear search, for cards held back by their power limit: the first denominator and the centre of a group are handled after the
-  loop over the pairs of keys (`ptxas` no longer copies the inverse and the centre ahead of the tests on the index: 3154 to 3140
-  instructions per key on sm_86, same arithmetic), and the tuner measures two more variants of window 512: 96 registers (5 blocks per SM),
-  and the prefix products of the batch inversion kept for every other denominator (half the private memory and its traffic to the video
-  memory, a quarter of a multiplication more per key). RESEARCH.md section 5 has an energy model per key from the SASS (instruction
-  classes, register and reuse-cache reads, writes, cycles, DRAM bytes; weights as ranges from the literature): the two-pipe form of 1.18.0
-  costs 11 % more energy in its instructions than 1.17.0, so its +11 % on the A2000 means that most of the energy goes with the cycles;
-  the variants gain 1 to 3 % by the model (expected about 900 M keys/s instead of 882 in `bench`), and the int8 tensor cores cannot take
-  any of the products of the step. Bit-exact on the simulated CUDA driver and on pocl; not yet measured on a card.
+- Documentation: RESEARCH.md section 5 has an energy model per key of the CUDA linear kernel from the SASS (instruction classes, register
+  and reuse-cache reads, writes, cycles, DRAM bytes; `tools/research/sass_energy.py`) and the measurement on an RTX A2000 Laptop of the
+  changes it suggested: a loop over the pairs of keys with the first denominator and the centre taken out, 96 registers, and the prefix
+  products kept for every other denominator. The first cost 2.8 % on the card and the other two did not win it back, so none of them is in
+  this version: the CUDA linear kernels are those of 1.19.0.
 - GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
   order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
   5% of the fastest, and the default), each gets the median of its rates, and the default stays unless another is more than 1% faster
@@ -31,13 +27,13 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
   and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
 ### Added
-- GPU kangaroo: a *block herd* kernel variant for CUDA (`kang4g`, "NK 4 block herd", `PZ_GPU_NK=4g`): 4 walkers per work-item in registers
-  for the whole launch and one field inversion per block of 128 work-items and round (32 lanes of one warp invert the column products of
-  the block), so a step touches the device memory only for its 2-byte history (≈ 4 bytes per step instead of ≈ 215). Same walk, history and
-  host side; bit-exact against the CPU (self-test on the simulated CUDA driver and on pocl, planted keys found). The tuner measures it; the
-  model (RESEARCH.md section 5) expects it slower than `NK` 128 quads on the A2000 (0.44 to 0.49 G steps/s at 1.3 GHz against 0.91 G): one
-  inversion per round is a 32,000-cycle chain that 1,024 walkers per SM cannot hide. The OpenCL runtime launches kernels that require a
-  work-group size in groups of that size; the simulated CUDA driver runs kernels with barriers a block at a time.
+- GPU kangaroo: a *block herd* kernel variant (`kang4g`, "NK 4 block herd"), forced with `PZ_GPU_NK=4g`: 4 walkers per work-item in
+  registers for the whole launch and one field inversion per block of 128 work-items and round (32 lanes of one warp invert the column
+  products of the block), so a step touches the device memory only for its 2-byte history (≈ 4 bytes per step instead of ≈ 215). Same walk,
+  history and host side; bit-exact against the CPU (self-test on the simulated CUDA driver and on pocl, planted keys found). As the model
+  of RESEARCH.md section 5 expected, it is slower than `NK` 128 quads on the A2000 (one inversion per round is a 32,000-cycle chain that
+  1,024 walkers per SM cannot hide), so no tuner measures it. The OpenCL runtime launches kernels that require a work-group size in groups
+  of that size; the simulated CUDA driver runs kernels with barriers a block at a time.
 
 ## [1.19.1] — 2026-10-30
 

@@ -9,9 +9,9 @@
 #include <math.h>
 
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
-static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16, 512 | 5 << 16, 512 | 4 << 16 | VAR_PAIRS};
+static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
 static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16};
-static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16, 4 | KV_BLOCK << 16};
+static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16};
 
 int gpu_variants_of(const rt_dev *d, const int **v)
 {
@@ -102,7 +102,7 @@ static bool valid_kvariant(const rt_dev *d, int v)
     for (int i = 0; i < n; i++) if (vs[i] == v) return true;
     return false;
 }
-/* what PZ_GPU_NK may force: a variant the tuner measures, or the block herd, which the OpenCL tuner does not offer (self-tested there all the same) */
+/* what PZ_GPU_NK may force: a variant the tuner measures, or the block herd, which no tuner offers (self-tested all the same) */
 static bool forcible_kvariant(const rt_dev *d, int v)
 {
     for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) if (v == (KV_BLOCK_NK[i] | KV_BLOCK << 16)) return true;
@@ -124,7 +124,8 @@ static char *kvariant_name(int v, char *b, size_t n)
 }
 static char *variant_name(int v, char *b, size_t n)
 {
-    snprintf(b, n, "%d%s%s", VAR_HALF(v), VAR_MINB(v) == 5 ? ", 96 registers" : VAR_MINB(v) ? ", register cap" : "", v & VAR_PAIRS ? ", pairs" : "");
+    if (VAR_MINB(v)) snprintf(b, n, "%d, register cap", VAR_HALF(v));
+    else snprintf(b, n, "%d", VAR_HALF(v));
     return b;
 }
 
@@ -897,7 +898,7 @@ int gpu_tune_selftest(void)
         TCHK(!strcmp(kvariant_name(64 | 1 << 16 | KV_WIDEFLAG(KV_WIDE_X4), nb, sizeof nb), "NK 64 pairs, 4x herd"));
         TCHK(!strcmp(kvariant_name(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "NK 64, full herd"));
         TCHK(!strcmp(kvariant_name(4 | KV_BLOCK << 16, nb, sizeof nb), "NK 4 block herd"));
-        /* the block herd: offered by the CUDA tuner only, with two blocks of 128 work-items per SM */
+        /* the block herd: never tuned; two blocks of 128 work-items per SM with CUDA */
         for (int api = 0; api < 2; api++) {
             rt_dev d;
             memset(&d, 0, sizeof d);
@@ -909,7 +910,7 @@ int gpu_tune_selftest(void)
             int vs[32], nblock = 0;
             const int n = gpu_kvariants_of(&d, vs);
             for (int i = 0; i < n; i++) nblock += KV_CFG(vs[i]) == KV_BLOCK;
-            TCHK(nblock == (api ? 0 : 1));
+            TCHK(nblock == 0);                   /* the block herd is not tuned (slower on the A2000), only forced */
             TCHK(kang_threads_for(&d, 4, false, 0, true) == (api ? 20u * KANG_GROUP : 20u * KANG_BLOCK_ITEMS_CU));
         }
     }

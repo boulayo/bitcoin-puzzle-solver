@@ -9,12 +9,10 @@
 #include "kangaroo_priv.h"
 
 /* Compile-time variants of the linear kernel: half-window (group = 2*half keys) | minimum resident blocks per SM << 16
- * (CUDA only: 4 caps the kernel at 128 registers, 5 at 96, trading a few spills for more resident warps) | VAR_PAIRS: the
- * prefix products of the batch inversion kept for every other denominator (CUDA only: half the private memory and its
- * traffic, half a field multiplication more per pair of keys). The autotuner measures them on the device and keeps the fastest. */
+ * (CUDA only: 4 caps the kernel at 128 registers, trading a few spills for more resident warps). The autotuner measures
+ * them on the device and keeps the fastest. */
 #define VAR_HALF(v) ((v) & 0xFFFF)
-#define VAR_MINB(v) (((v) >> 16) & 7)
-#define VAR_PAIRS (1 << 19)
+#define VAR_MINB(v) ((v) >> 16)
 
 /* Kangaroo kernel variants: kangaroos per work-item (NK: one field inversion is shared by NK steps, so larger is cheaper
  * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion
@@ -39,7 +37,7 @@ enum { KV_WIDE_X4 = 1, KV_WIDE_X8 = 2, KV_WIDE_FULL = 3 };   /* OpenCL: 4 or 8 t
 static const int KV_L2_NK[] = {16, 32, 64};
 /* kernels built with products every fourth walker that the self-test checks on every device (the OpenCL tuner does not offer them) */
 static const int KV_MC4_NK[] = {64, 128};
-/* the block herd: offered by the CUDA tuner, checked by the self-test on the OpenCL devices too (it needs work-groups of KANG_GROUP) */
+/* the block herd: forced with PZ_GPU_NK=4g, never tuned (slower than NK 128 quads on the A2000), checked by the self-test on every device */
 static const int KV_BLOCK_NK[] = {4};
 #define KANG_BLOCK_ITEMS_CU 256    /* work-items per SM of a block herd: two blocks of 128 (the kernel takes 250 registers) */
 

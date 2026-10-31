@@ -278,11 +278,8 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
-  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are eight variants: window 128, 256 or 512 × free registers
-  (≈ 190) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them), and two of window
-  512 for cards held back by their power limit: 96 registers (5 blocks per SM), and 128 registers with the prefix products of the batch
-  inversion kept for every other denominator (half the private memory and its traffic, half a multiplication more per pair of keys;
-  RESEARCH.md section 5); with OpenCL four: window 64, 128, 256 or 512. On the first
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
+  (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
   run on a device the program warms the GPU up for 3 s, measures them all in turns (in order, in the reverse order, in order again; after
   the first turn only the variants within 5% of the fastest and the default), takes the median of each, and keeps the default (256 with
   CUDA, 128 with OpenCL) unless another one is more than 1% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
@@ -299,11 +296,12 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   64 SMs, where the default herd is capped at 32768 work-items, `NK` = 64 at 512 work-items per SM ("full herd"); with OpenCL `NK` = 32, 64
   or 128 (default 64), plain or `b`, and `NK` = 32 or 64, plain or `b`, with 4 or 8 times the 64 work-items per compute unit ("4x herd", "8x
   herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
-  work-items, `NK` 16, 32 or 64, plain or `b`). With CUDA the tuning also measures the *block herd* (`NK` = 4, suffix `g`): the four walkers
+  work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK=4g` forces the *block herd* (`NK` = 4), which no tuning offers: the four walkers
   of a work-item stay in its registers for the whole launch, two blocks of 128 work-items per SM (20,480 walkers on 20 SMs), and one inversion
   serves a whole block and round (each work-item multiplies its four denominators, 32 work-items of the block multiply the products of a column
   of four and invert the 32 column products together, Montgomery's trick works back down), so a step touches the device memory only for its
-  history; the walk, the history and the host side are the same. The OpenCL tuning does not offer it (the self-test checks it there too).
+  history; the walk, the history and the host side are the same. On the RTX A2000 it is slower than `NK` 128 quads, as the model of
+  RESEARCH.md section 5 expects; the self-test checks it on every device.
   `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its measurements: RESEARCH.md sections 5 and 8.4.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,
