@@ -19,11 +19,6 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   changes it suggested: a loop over the pairs of keys with the first denominator and the centre taken out, 96 registers, and the prefix
   products kept for every other denominator. The first cost 2.8 % on the card and the other two did not win it back, so none of them is in
   this version: the CUDA linear kernels are those of 1.19.0.
-- GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
-  order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
-  5% of the fastest, and the default), each gets the median of its rates, and the default stays unless another is more than 1% faster
-  (it was 3%: one short measurement each, whose noise and the luck of the fastest of many were both about that size). The tuning takes
-  longer once (about half a minute per kernel on a laptop) and then stays saved.
 - `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
   and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
 ### Added
