@@ -585,6 +585,95 @@ scheduling control words that `ptxas` writes into every instruction give the lat
   done: choosing the inverting warp from `%warpid` so that co-resident blocks never invert on the same partition (61,100 → 54,100 cycles, +13 %
   for this variant, with inline assembly).
 
+**After 1.19.2: the hash160 of the linear kernel.** Two thirds of the instructions of a key are the hash filter `hash160_w2` (SHA-256 of the
+33-byte key, RIPEMD-160 of the digest, word 2 only). This part accounts for every one of them against the floor of the expression on this
+ISA, then measures the forms that move part of the hash onto the FMA pipe. Tools: NVRTC 12.0 and `ptxas` 12.9 for sm_75, sm_80, sm_86,
+sm_89 and sm_90 (the counts of the 1.19.1 baseline above are reproduced exactly), `nvdisasm` 12.0, the issue model of
+`tools/research/sass_sched.py` extended with an `IMAD.HI` at 1, 2 or 2.4 issue slots (the probes of `bench` measured 2.4 on the A2000) and an
+`IMAD.WIDE` at 1 or 2, two staggered starts of the warps per figure (they differ by up to 1 %); clang 18 for the AMD targets. No card: every
+speed below is the model, every count is SASS. Correctness: `make test`, the self-test and the planted-key hunts of `tests/e2e.sh` on the
+simulated CUDA driver and on pocl, which run the plain code (the new forms are PTX inline assembly, read on the SASS).
+
+* **Where the 2393 instructions of `hash160_w2` go** (sm_86; sm_75, sm_80 and sm_89 have the same counts, sm_90 within 3), and the floor of
+  each class in the expression of the two hashes as written, with one `SHF` per rotation or shift, one `LOP3` per three-input logic function,
+  one `LEA.HI` per rotate-and-add and one `IMAD` per addition:
+
+  | class                      | count | floor | what                                                                                        |
+  |----------------------------|-------|-------|---------------------------------------------------------------------------------------------|
+  | `SHF.L.W` (rotations)      | 701   | 703   | SHA rounds 6 × 64 − 6 (round 0: the state is the IV), schedule 2 × (41 σ0 + 46 σ1) of variable words, RIPEMD 151 (153 steps, two rotated words dead) |
+  | `SHF.R` (shifts)           | 87    | 87    | the shift of each σ0 and σ1 of a variable word                                               |
+  | `LOP3`                     | 492   | 494   | Σ1, Ch, Σ0, Maj of rounds 1 to 63 (Ch and Maj of round 1 take two, their other inputs being two constants), the xor of 87 sigmas, f of 153 steps |
+  | `LEA.HI`                   | 154   | 154   | rotate-and-add of 153 steps, word 0 of the message                                           |
+  | `PRMT`                     | 8     | 8     | the byte swaps of the digest                                                                 |
+  | other ALU                  | 11    | 9     | 7 funnel shifts of the message words (the prefix byte misaligns x), 2 `LEA` (words 0 and 8), 2 `IADD3` (round 0, the stack address of x) |
+  | **ALU pipe**               | **1453** | **1455** |                                                                                           |
+  | `IMAD`                     | 931   | ≈ 957 | SHA 7 per round and 3 per schedule word less the folds of the constant words, 8 digest sums; RIPEMD 2 per step, 64 word + K sums, 2 output sums |
+  | loads, return              | 9     |       | x through the stack (8 `LDL`)                                                                |
+
+  The compiler is at the floor (two short of it on the ALU pipe: it folds two of the constant logic operations the count keeps). The seven
+  RIPEMD-160 steps that word 2 does not need (the last three of the left line, the last four of the right) are dropped, as the count of
+  `LEA.HI` and of rotations shows; word 2 is the cheapest of the five (words 0, 1, 3 and 4 need 158, 155, 156 and 159 steps). The message
+  words cannot be read from the limbs of x in any other order: the one-byte prefix shifts every word by eight bits, one funnel shift each. The
+  schedule words that depend on nothing (σ1 of the length word, the zero words) are folded; the first rounds have no constant left to fold,
+  since word 0 varies with x and with the parity. There is no two-rotation instruction on this ISA (`SHF` takes one source for a rotation,
+  `PRMT` only moves bytes, `LOP3` has three inputs), so the ALU count of the hash cannot fall without putting shifts or rotations on the FMA
+  pipe: a right shift is `mul.hi` by a power of two (one `IMAD.HI`, 2.4 issue slots by the probes), a rotation by n the high half of x · 2^n
+  plus its low half (an `IMAD.HI` or `IMAD.WIDE` and an `IMAD`), a left shift one `IMAD`. The multipliers come from the constant bank
+  (`pz_pow2` in pz_cuda.h), which neither compiler folds back into a shift; the shift of a constant word must stay a plain shift, or the
+  compiler loses its fold and adds a test per word (`ISETP`).
+* **What the model says of the two pipes**, per phase (`linear512m4`, 4 warps per partition, sm_86, the cycles of the model split by the
+  phase the warps are in): in the hash the ALU pipe is busy **99.8 %** of the cycles and the FMA pipe 64 %; in the field phase the FMA pipe is
+  the one at its limit. The four warps stay in step (an ALU-bound phase moves them all at the same rate), so the 16 % of idle issue cycles are
+  the sum of the two imbalances, and the time of a pair of keys is close to 2 × (2 × 1453) cycles of hash plus the FMA slots of the field
+  phase: 7572 against 7394. What follows: in the hash only the ALU count buys time, up to the point where 2A = A + F + O (2906 → 2393 per
+  key, −18 % of the hash phase, if the moved work cost one slot each); an instruction that holds the FMA pipe for several slots blocks the
+  in-order issue of its warp, and the warps being in step, of the others too, so the gain shrinks with the slot count faster than the pipe
+  budget T = max(2A, 2F, A + F + O) says. The two phases do not overlap, which is where the rest is (below).
+* **Measured in the model** (all five targets; cycles per 32 keys per partition for `linear512m4` with 4 warps, sm_86, two starts; the other
+  targets within ±15 cycles of these, sm_90 20 to 30 below; per key of `hash160_w2`: n / ALU / FMA):
+
+  | form                                                        | n / A / F           | wide 1: hi 1 / 2 / 2.4 | wide 2: hi 1 / 2 / 2.4 |
+  |-------------------------------------------------------------|---------------------|------------------------|------------------------|
+  | 1.19.2                                                      | 2393 / 1453 / 931   | 3800 / 3803 / 3793     | 4165 / 4181 / 4204     |
+  | folds alone (words 0 and 8, round 0, Maj of round 1 as `IMAD`) | 2395 / 1450 / 936 | 3809 / – / 3804       | –                      |
+  | σ shifts as `mul.hi` (88 `IMAD.HI`)                          | 2401 / 1371 / 1021  | 3700 / 3746 / 3808     | 4148 / 4218 / 4292     |
+  | **h1** = σ shifts as `mul.hi` + folds                        | 2395 / 1364 / 1022  | 3698 / 3733 / 3803     | 4133 / 4211 / 4306     |
+  | RIPEMD rotation by 10 as `mul.hi` + `mad.lo` (151 `IMAD.HI`) | 2547 / 1307 / 1231  | 3941 / 4312 / 4438     | 4315 / 4613 / 4688     |
+  | **h2** = RIPEMD rotation as `mul.wide` + `mad.lo` (151 `IMAD.WIDE`) + folds | 2549 / 1304 / 1236 | 3957 / 3957 / 3969 | 4554 / 4544 / 4544 |
+  | σ shifts + RIPEMD rotation as `mul.hi` (240 `IMAD.HI`)       | 2555 / 1226 / 1320  | 3950 / 4333 / 4560     | 4379 / 4782 / 4986     |
+
+  `linear256` (free registers, 2 warps per partition: 162 to 168 registers, no spill): 1.19.2 4202 / 4610 (wide 1 / 2), h1 4165, 4222, 4295
+  / 4604, 4665, 4729 at hi 1, 2, 2.4, h2 4430 / 4970. Registers and spills do not move with any form (128 for the capped modules; 12 bytes
+  of spill on sm_75 and sm_80, 16 on sm_90, 0 on sm_86 and sm_89, all outside the loops over the keys, as in 1.19.2; the h1 module spills 8
+  on sm_90). The folds take 3 instructions off the ALU pipe for 5 on the FMA pipe: within the noise of the model. The σ shifts gain 2.5 % if
+  an `IMAD.HI` takes one slot, 1.8 % at two, and lose 0.3 % at the 2.4 the probes measured (as the energy model found after 1.19.1). The
+  RIPEMD rotation adds an instruction per step (the rotation is one `SHF` but two FMA-pipe instructions) in a phase that is also near its
+  issue limit, and its `IMAD.HI` form puts a long-latency instruction on the dependency chain of the step (the stall counts of the hash go from
+  3762 to 4316 cycles): a loss at every slot count, 4 % with an `IMAD.WIDE` at one slot and 9 % at two. By the rules of this project (a form
+  is kept only if it wins on every target in the model with the measured costs) none of them replaces the hash: the three modules are
+  **forceable probes** of the two unknown costs, which one `bench` each on a card would settle: `PZ_GPU_HALF=786944` (h1, window 512 with the
+  cap) against `262656`, and `1311232` (h2) against the same, `pzsolve bench --gpu-only` twice each in alternation. h1 at −2.5 % means an
+  `IMAD.HI` costs one slot in this kernel (then the σ shifts should go in), at 0 % the 2.4 of the probes; h2 at −4 % means an `IMAD.WIDE`
+  costs one slot, at −9 % two, which is the number the field phase (601 `IMAD.WIDE` per pair) and the energy model after 1.19.1 need and
+  could not fix. The modules take 39 to 46 KB each compressed (their hash differs from the base in every line; `linear512m4h1` is stored
+  against `linear256h1`, the cap costing less than the hash); the executable grows by 129 KB.
+* **Tried and left out:** the rotations of Σ0 and Σ1 as `IMAD.WIDE` plus `IMAD` (the same 2-for-1 as the RIPEMD rotation, in the same
+  issue-bound phase: not built after the RIPEMD result); x passed to the hash as a 16-byte aligned object (two `LDL.128` instead of eight
+  `LDL`: 6 issue slots per key in a phase bound by the ALU pipe, nothing in the model); the round constant of the final word-2 sum folded
+  into the target word (one `IMAD` per key, likewise); Ch of round 1 with its two constants in one `LOP3` (needs one of them in a register:
+  a move for a move). On AMD the options change nothing (the kernels compile to the same code with and without them on gfx1030, gfx1100 and
+  gfx906: 4234, 4572 and 4301 instructions for the linear kernel at window 256, byte for byte those of 1.19.2; `v_alignbit_b32` is one
+  instruction per rotation there and `v_mul_hi_u32` runs at a quarter rate).
+* **What is left, and needs the kernel rather than the hash.** The hash phase leaves the FMA pipe idle 1044 cycles per key (2906 − 1862 at
+  one slot per `IMAD.WIDE`) and the field phase leaves the ALU pipe idle; the field work of a pair (1582 FMA-pipe cycles at one slot, 2784
+  at two) would fit in the hash's gap if the two ran in the same instruction stream. Bound: max(ALU 5812 + 1044, FMA 3724 + 1582 or 2784)
+  = 6856 cycles per pair, 3428 per 32 keys against 3786 (**−9.5 %**) with an `IMAD.WIDE` at one slot and against 4165 (**−18 %**) at two.
+  It needs the hash inlined into the loop over the pairs (it is a call today, which `ptxas` does not schedule across; two copies of 2400
+  instructions, 77 KB of SASS on top of the 43 of the loop, against an L0 instruction cache of a few tens of KB per partition) and the point
+  of pair i + 1 computed in the basic block of the hashes of pair i, under 128 registers for the capped variants (the hash state is about 30,
+  the point about 60). Not done here: it is a change of the kernel's shape, which the card judged against the model once already (the peeled
+  loop of 1.19.1).
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts
