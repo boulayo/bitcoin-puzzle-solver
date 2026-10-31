@@ -7,8 +7,9 @@
 #
 # name      the module, and the name of its file in this folder
 # kind      linear (src/kernels/pz_linear.cl), kang (pz_kang.cl) or test (pz_test.cl); all three come after pz_common.cl
-# cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel, the
-#           configuration of the batch products of a kangaroo kernel (0 at every walker, 1 at every other, 2 at every fourth, 3 one inversion per block: the block herd)
+# cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel plus 8 times
+#           its hash variant (PZ_HASH_*, see the end of the file), the configuration of the batch products of a kangaroo kernel (0 at every
+#           walker, 1 at every other, 2 at every fourth, 3 one inversion per block: the block herd)
 # base      an earlier module whose text is the dictionary of this one in the compressed embedding (src/lz.c), or - for none; the modules of
 #           a family differ in few lines, so all the PTX takes about 1 MB instead of 12. A base comes before the modules that use it
 # defines   the -D options of the NVRTC build, or - for none. The size of the parameter of rt_build (HALF, or NK) is the value of -DHALF / -DNK
@@ -48,3 +49,12 @@ test           test    0    linear128  -DPZ_FMA_CARRY
 # the block herd: 4 walkers per work-item, all in registers (250 of them: two blocks of 128 threads per SM), and one inversion per block and
 # round for the 32 columns of products of the block (pz_kang.cl, KANG_BLOCK; docs/en/RESEARCH.md section 5)
 kang4g         kang    3    kang64     -DNK=4 -DKANG_BLOCK=1 -DPZ_MINB=2
+# the hash variants of the linear kernel (pz_cuda.h, RESEARCH.md section 5 after 1.19.2), for the default window and for 512 with the register cap:
+# h1 (cfg + 8) computes the two shifts of each sigma of the SHA-256 schedule as mul.hi by a power of two from the constant bank (88 IMAD.HI per key
+# off the ALU pipe, which bounds the hash) and folds four small sums of the first rounds onto the FMA pipe (PZ_HASH_FOLD); h2 (cfg + 16) folds the
+# same sums and computes the rotation by 10 of every RIPEMD-160 step as the two halves of a product by 2^10 (151 IMAD.WIDE and IMAD per key).
+# Neither wins in the issue model at the cost of an IMAD.HI measured on the A2000: they are forceable probes of what an IMAD.HI and an IMAD.WIDE
+# cost in the hash, for a card to time once (PZ_GPU_HALF=524544, 786944 and 1311232). The tuner measures them with the six others.
+linear256h1    linear  8    linear256  -DHALF=256 -DPZ_FMA_CARRY -DPZ_HASH_SIG -DPZ_HASH_FOLD
+linear512m4h1  linear  12   linear256h1 -DHALF=512 -DPZ_MINB=4 -DPZ_FMA_CARRY -DPZ_HASH_SIG -DPZ_HASH_FOLD
+linear512m4h2  linear  20   linear512m4h1 -DHALF=512 -DPZ_MINB=4 -DPZ_FMA_CARRY -DPZ_HASH_RMD=2 -DPZ_HASH_FOLD

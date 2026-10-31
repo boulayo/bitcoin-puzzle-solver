@@ -57,6 +57,47 @@ inline uint pz_addf(uint a, uint b)
     return d;
 }
 #define PZ_ADDF(a, b) pz_addf((a), (b))
+/* The hash variants (PZ_HASH_*, modules.txt): a right shift or a rotation of the hash on the FMA pipe, as a product by a power of two
+ * read from the constant bank (which neither compiler folds back into a shift). x >> n is mul.hi by 2^(32 - n), one IMAD.HI; a rotation
+ * by n is the high half of x * 2^n plus its low half, an IMAD.HI and an IMAD (PZ_ROTL_W: the product as mul.wide, an IMAD.WIDE on a
+ * register pair). The hash is bound by the ALU pipe (the rotations, the shifts and the logic) with the FMA pipe at two thirds of it, and
+ * these forms move part of its work over for a price in issue slots the model of RESEARCH.md section 5 weighs. Elsewhere plain
+ * shifts and rotations (pz_common.cl). Declared only for the modules built with an option, so that the PTX of the others does not change. */
+#if defined(PZ_HASH_SIG) || defined(PZ_HASH_RMD) || defined(PZ_HASH_FOLD)
+__constant__ uint pz_pow2[32] = {1u, 1u << 1, 1u << 2, 1u << 3, 1u << 4, 1u << 5, 1u << 6, 1u << 7, 1u << 8, 1u << 9, 1u << 10, 1u << 11,
+                                 1u << 12, 1u << 13, 1u << 14, 1u << 15, 1u << 16, 1u << 17, 1u << 18, 1u << 19, 1u << 20, 1u << 21,
+                                 1u << 22, 1u << 23, 1u << 24, 1u << 25, 1u << 26, 1u << 27, 1u << 28, 1u << 29, 1u << 30, 1u << 31};
+inline uint pz_shr_f(uint x, int n)
+{
+    uint d;
+    asm("mul.hi.u32 %0, %1, %2;" : "=r"(d) : "r"(x), "r"(pz_pow2[32 - n]));
+    return d;
+}
+inline uint pz_rotl_f(uint x, int n)
+{
+    uint hi, d;
+    const uint k = pz_pow2[n];
+    asm("mul.hi.u32 %0, %1, %2;" : "=r"(hi) : "r"(x), "r"(k));
+    asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(d) : "r"(x), "r"(k), "r"(hi));
+    return d;
+}
+inline uint pz_rotl_w(uint x, int n)
+{
+    uint lo, hi;
+    asm("{\n\t.reg .b64 p;\n\tmul.wide.u32 p, %2, %3;\n\tmov.b64 {%0, %1}, p;\n\t}" : "=r"(lo), "=r"(hi) : "r"(x), "r"(pz_pow2[n]));
+    return pz_addf(lo, hi);
+}
+inline uint pz_muladd_f(uint x, int n, uint b)   /* x 2^n + b (the shift-and-or of a b below 2^n), one IMAD */
+{
+    uint d;
+    asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(d) : "r"(x), "r"(pz_pow2[n]), "r"(b));
+    return d;
+}
+#define PZ_SHR_F(x, n) pz_shr_f((x), (n))
+#define PZ_ROTL_F(x, n) pz_rotl_f((x), (n))
+#define PZ_ROTL_W(x, n) pz_rotl_w((x), (n))
+#define PZ_MULADD_F(x, n, b) pz_muladd_f((x), (n), (b))
+#endif
 /* The carry out of an ADDITION chain as a 0/1 value: x*0 + 0 + CF on the FMA pipe, where addc.u32 d, 0, 0 is a SEL on the ALU pipe;
  * x is any register already at hand (its value does not matter: the zero comes from the constant bank as an operand, so the
  * instruction needs no other register). Never after sub.cc/subc: ptxas implements a subtraction as the addition of the complement

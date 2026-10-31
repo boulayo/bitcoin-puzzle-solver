@@ -39,6 +39,22 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - Documentation: RESEARCH.md section 5 has the byte audit of the kangaroo step (every load and store of a round by purpose, before and after,
   on sm_75, sm_86 and sm_89), the launch-level traffic, what the L2 can serve, and the candidates counted and dropped (walkers kept in shared
   memory across the pass boundary, products every eighth walker, longer launches).
+- CUDA linear search: three forceable *hash variants* of the kernel, for window 256 and for 512 with the register cap, measured by the
+  tuner with the six others and checked by the self-test (`PZ_GPU_HALF=524544`, `786944`, `1311232`; `bench` names them "hash h1" and
+  "hash h2"). h1 computes the two shifts of each sigma of the SHA-256 message schedule as `mul.hi` by a power of two read from the constant
+  bank (88 `IMAD.HI` per key off the ALU pipe, which bounds the hash) and puts four small sums of the first rounds on the FMA pipe; h2 does
+  the same folds and computes the rotation by 10 of every RIPEMD-160 step as the two halves of a product by 2^10 (151 `IMAD.WIDE` and 151
+  `IMAD` per key). Counts from the SASS of ptxas for sm_75, sm_80, sm_86, sm_89 and sm_90: the filter goes from 1453 ALU-pipe and 931
+  FMA-pipe instructions per key to 1364 and 1022 (h1) and to 1304 and 1236 (h2), with the same registers and spills. In the issue model of
+  RESEARCH.md section 5 h1 is 2.5 % faster if an `IMAD.HI` takes one issue slot and 0.3 % slower at the 2.4 slots the probes of `bench`
+  measured on the A2000; h2 is 4 % slower with an `IMAD.WIDE` at one slot and 9 % at two, so neither is expected to win: they are probes
+  of what those two instructions cost in the hash, to be timed once on a card. Not yet measured on a card. The default kernels, the
+  kangaroo kernels and the OpenCL kernels are unchanged (their PTX and AMD code are byte for byte those of 1.19.2).
+- Documentation: RESEARCH.md section 5 accounts for every instruction of the hash160 filter against the floor of its expression on the
+  SASS of Turing to Hopper (the rotations, shifts, logic and rotate-and-add are at that floor: 1453 against 1451 ALU-pipe instructions per
+  key, the seven RIPEMD-160 steps that word 2 does not need are already dropped), and models what is left: the hash phase runs the ALU
+  pipe at 99.8 % and the field phase the FMA pipe, with the warps in step, so only an interleaving of the two phases could pay (about
+  -9 % to -18 % in the bound, not done).
 
 ## [1.19.2] — 2026-10-31
 

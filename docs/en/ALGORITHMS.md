@@ -279,8 +279,15 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated towards a length tuned per device (below;
   0.35 s until it is).
-  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
-  (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are nine variants: window 128, 256 or 512 × free registers
+  (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them), plus three *hash
+  variants* of the hash160, for window 256 and for 512 with the register cap: "hash h1" computes the two shifts of each sigma of the SHA-256
+  message schedule as `mul.hi` by a power of two read from the constant bank (88 `IMAD.HI` per key taken off the ALU pipe, which bounds the
+  hash), "hash h2" the rotation by 10 of every RIPEMD-160 step as the two halves of a product by 2^10 (151 `IMAD.WIDE` and 151 `IMAD` per
+  key); both also put four small sums of the first SHA-256 rounds on the FMA pipe. They are probes of what an `IMAD.HI` and an `IMAD.WIDE`
+  cost on a card, to be timed once: in the issue model of RESEARCH.md section 5 (after 1.19.2) h1 gains 2.5 % if an `IMAD.HI` takes one issue
+  slot and loses 0.5 % at the 2.4 slots the probes of `bench` measured on the A2000, and h2 loses 4 to 9 %, so neither is expected to be
+  picked. With OpenCL four variants: window 64, 128, 256 or 512. On the first
   run on a device the program warms the GPU up for 3 s, measures them all in turns (in order, in the reverse order, in order again; after
   the first turn only the variants within 5% of the fastest and the default), takes the median of each, and keeps the default (256 with
   CUDA, 128 with OpenCL) unless another one is more than 1% faster (one measurement is off by 2 to 3 % on a laptop GPU, the fastest of eight
@@ -291,7 +298,9 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   check of a hit and the dashboard; a shorter one pays the fixed costs of a launch more often). The choice and the length are stored in
   `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version; value `VARIANT LENGTH`, a value without the
   length, from 1.19.x, means 0.35 s). `pzsolve bench --variants` measures every variant of both kernels in turns and prints the tables.
-  `PZ_GPU_HALF=N` forces the variant, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
+  `PZ_GPU_HALF=N` forces the variant (`N` = window | minimum blocks per SM << 16 | hash variant << 19: 256 is window 256, 262656 window 512
+  with the register cap, 524544 and 786944 the same two with hash h1, 1311232 window 512 with the cap and hash h2), `PZ_GPU_TUNE=0` disables
+  tuning; `pzsolve selftest` verifies all the variants.
 * **Kangaroo**: `NK` walkers per work-item, so that one inversion (by divstep) serves `NK` steps, with the same "fused" scheme as the linear
   kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. The state of the walkers is in
   global memory (x, y, the running products of the batch, 32-bit tags and flags: ≈ 130 bytes per walker). The distance does not travel from step
