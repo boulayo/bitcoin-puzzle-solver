@@ -23,6 +23,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   costs 11 % more energy in its instructions than 1.17.0, so its +11 % on the A2000 means that most of the energy goes with the cycles;
   the variants gain 1 to 3 % by the model (expected about 900 M keys/s instead of 882 in `bench`), and the int8 tensor cores cannot take
   any of the products of the step. Bit-exact on the simulated CUDA driver and on pocl; not yet measured on a card.
+- GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
+  order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
+  5% of the fastest, and the default), each gets the median of its rates, and the default stays unless another is more than 1% faster
+  (it was 3%: one short measurement each, whose noise and the luck of the fastest of many were both about that size). The tuning takes
+  longer once (about half a minute per kernel on a laptop) and then stays saved.
 - `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
   and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
 ### Added
