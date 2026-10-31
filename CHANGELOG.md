@@ -5,12 +5,28 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ## [Unreleased]
 
+### Added
+- `bench --variants`: every variant of the linear and kangaroo kernels of each GPU, measured fairly in one run (3 s of warm-up with the
+  default variant, then every variant in three turns: in order, reversed, in order; `--turns N`), one table per kernel with the code that
+  `PZ_GPU_HALF` or `PZ_GPU_NK` takes, the name, the rate of each turn, the median, the spread and the median against the default's, the
+  tuner's saved choice and the fastest marked, the variants that cannot run listed and the block herd measured as "forced only"; then what
+  the tuner's rule would pick, and a second table with the rate of the variant in use at launches of 0.15, 0.35, 0.7 and 1.4 s. Nothing is
+  saved unless `--retune` is given too. `bench` also prints the length of the launches of each kernel. Run on simulated devices only (the
+  simulated CUDA driver with two devices, pocl); not yet on a card.
 ### Changed
 - GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
   order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
   5% of the fastest, and the default), each gets the median of its rates, and the default stays unless another is more than 1% faster
-  (it was 3%: one short measurement each, whose noise and the luck of the fastest of many were both about that size). The tuning takes
-  longer once (about half a minute per kernel on a laptop) and then stays saved.
+  (it was 3%: one short measurement each, whose noise and the luck of the fastest of many were both about that size, so that on the A2000
+  the choice between window 256 and window 512 with the register cap, 2.8 % apart, depended on the run). The log line of the choice gives the
+  code to force it and the margin. The tuning takes longer once (about a minute per kernel on a laptop) and then stays saved.
+- GPU launches: their length is tuned per device instead of the fixed 0.35 s of 1.19.x. After the variant is chosen the tuner measures it
+  with launches of 0.15, 0.35, 0.7 and 1.4 s, sized as the controller sizes them (groups per work-item of the linear kernel, rounds of the
+  kangaroo within the depth of its history), and keeps the shortest within 1 % of the best (a longer launch delays the stop, the hit check
+  and the dashboard); the controllers of both kernels aim at that length, which is saved in `gpu_tune.txt` next to the variant (a line of
+  1.19.x without it means 0.35 s). The speed of a GPU on the dashboard and in `bench --together` is taken between the ends of its launches
+  instead of over a window of the clock, so that launches longer than a second do not make it swing. Measured on simulated devices only,
+  where the lengths tried are reached when the device is fast enough for them.
 
 ## [1.19.2] — 2026-10-31
 

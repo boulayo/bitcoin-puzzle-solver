@@ -277,13 +277,21 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   on the CPU anyway). Both points of a pair share `x(C) + x(i·G)`, so `x3 = λ² − (x(C) + x(i·G))` costs one subtraction.
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
-  160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
+  160 on the device, hits collected with an atomic counter. The duration of a launch is regulated towards a length tuned per device (below;
+  0.35 s until it is).
   `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
   (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
   run on a device the program warms the GPU up for 3 s, measures them all in turns (in order, in the reverse order, in order again; after
   the first turn only the variants within 5% of the fastest and the default), takes the median of each, and keeps the default (256 with
-  CUDA, 128 with OpenCL) unless another one is more than 1% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
-  `PZ_GPU_HALF=N` forces it, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
+  CUDA, 128 with OpenCL) unless another one is more than 1% faster (one measurement is off by 2 to 3 % on a laptop GPU, the fastest of eight
+  by as much, a median of three by about 1 %: a smaller margin would pick by luck, a larger one missed the 2.8 % between window 256 and window
+  512 with the register cap on the RTX A2000). Then the **length of a launch** is tuned for the chosen variant: it is measured with launches
+  of 0.15, 0.35, 0.7 and 1.4 s, sized as the controller sizes them (groups per work-item here, rounds for the kangaroo, at most the depth of
+  its history), and the shortest length within 1 % of the best is kept (a launch cannot be interrupted: a longer one delays the stop, the
+  check of a hit and the dashboard; a shorter one pays the fixed costs of a launch more often). The choice and the length are stored in
+  `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version; value `VARIANT LENGTH`, a value without the
+  length, from 1.19.x, means 0.35 s). `pzsolve bench --variants` measures every variant of both kernels in turns and prints the tables.
+  `PZ_GPU_HALF=N` forces the variant, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
 * **Kangaroo**: `NK` walkers per work-item, so that one inversion (by divstep) serves `NK` steps, with the same "fused" scheme as the linear
   kernel (no array of denominators), **128 registers without spill** and therefore 512 resident work-items per SM. The state of the walkers is in
   global memory (x, y, the running products of the batch, 32-bit tags and flags: ≈ 130 bytes per walker). The distance does not travel from step

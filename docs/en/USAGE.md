@@ -15,7 +15,7 @@
 | `pzsolve doctor [-d DIR] [--full]` | checks program, system, CPU, GPU, the saved tuning and profile, campaigns, disk, clock and `PZ_*` variables, and says what is wrong; paste its output when asking for help |
 | `pzsolve devices`   | detected CPU, instruction sets, RAM and GPUs (CUDA and OpenCL) |
 | `pzsolve selftest`  | built-in correctness checks (primitives, database, SIMD engines, kangaroo, BSGS, GPU) |
-| `pzsolve bench [--together [--linear] [-t N] [--gpu L] [--prio-gpu P]] [--gpu-only] [--retune]` | speed of every CPU engine (1…N threads), of the kangaroo, of BSGS and of the GPUs (with bandwidth and whole-integer throughput); `--together`: section 7.9 |
+| `pzsolve bench [--together [--linear] [-t N] [--gpu L] [--prio-gpu P]] [--gpu-only] [--variants [--turns N]] [--retune]` | speed of every CPU engine (1…N threads), of the kangaroo, of BSGS and of the GPUs (with bandwidth and whole-integer throughput); `--together`: section 7.9; `--variants`: every GPU kernel variant in one table, section 7.5 |
 | `pzsolve kstat BITS TRIALS [THREADS [R [DP]]]` | statistics of the kangaroo cost on ranges of 2^BITS keys (R jumps instead of 256 and fixed dp-bits, no restarts: for studying cycles) |
 | `pzsolve version`   | version and build commit |
 
@@ -238,8 +238,20 @@ The driver compiles the kernels for your card (with CUDA about 10 s per module; 
 of the linear kernel about one minute, then the kangaroo variants the first time you use it) and keeps the result in its cache:
 from the next runs on, the startup is immediate. With several cards the tuning of the devices runs at the same time, and cards of one type are
 measured once (the others read the result: `from earlier tuning`). The tuning is stored in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` on Windows,
-`~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes. The default variant stays unless another one is
-more than 3 % faster.
+`~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes. The device is warmed up for 3 s first, the
+variants are measured in three turns (in order, in the reverse order, in order again, so that a clock that drifts weighs the same on all of
+them), each gets the median of its rates, and the default variant stays unless another one is more than 1 % faster (one short measurement is
+off by 2 to 3 % on a laptop GPU, and so is the fastest of eight; the median of three is off by about 1 %). The log says what was chosen, with
+the code that `PZ_GPU_HALF` or `PZ_GPU_NK` takes to force it, for example `linear kernel tuning: window 512, register cap, code 262656
+(850.00 M keys/s, +2.8% over window 256; margin 1%)`.
+
+The tuning also measures how long a launch of the chosen kernel should be. A launch cannot be interrupted: a short one pays its fixed costs
+(the transfers, the wait, the first products) more often, a long one delays the stop, the check of a hit and the dashboard (RESEARCH.md
+section 5 and the changelog of 1.19.1 for the fifth of the speed that 20 ms launches cost on the A2000). The chosen variant is measured with launches
+of 0.15, 0.35, 0.7 and 1.4 s, sized as the controller of a campaign would size them (groups per work-item for the linear search, rounds for
+the kangaroo, within what the history of the jumps allows), and the shortest length within 1 % of the best is kept, saved in `gpu_tune.txt`
+next to the variant (`...=262656 0.35`; a file of 1.19.x without the length means 0.35 s, the fixed value of those versions) and shown by
+`bench`. With launches of 1.4 s the dashboard still updates every second: the speed of a GPU is taken between the ends of its launches.
 
 The variants (window, walkers per thread, L2-sized herds) are listed in [`ALGORITHMS.md`](ALGORITHMS.md) section 5. `bench` shows,
 for every GPU, the variant chosen and its speed. On a **laptop** CPU and GPU share power and cooling: `bench --together` (section 7.9)
@@ -251,7 +263,37 @@ For every GPU `bench` prints, besides the linear search and the kangaroo (with t
 integer instructions and the L2 cache, and for NVIDIA the two ceilings of the kangaroo they give: how to read them is in [`RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) section 8.4.
 
 `bench --gpu-only` skips the CPU tests. `bench --retune` ignores the saved choice of the kernel variants
-(`gpu_tune.txt`) and measures it again: useful after a driver update or to see the numbers of all the variants.
+(`gpu_tune.txt`) and measures it again: useful after a driver update.
+
+`bench --variants` measures every variant of both kernels of each GPU, fairly, and prints one table per kernel. The device is warmed up for
+3 s with the default variant (not counted), then every variant is measured in three turns, in order, in the reverse order and in order
+again (`--turns N` for another number, 1 to 9), with the measurement the tuning uses (a second or two each). The table gives, per variant,
+the code that `PZ_GPU_HALF` or `PZ_GPU_NK` takes to force it (`-` for the wide kangaroo herds, which no variable forces), its name, the rate
+of each turn (beyond 3 turns the least and the greatest), the median, the spread (the greatest over the least, in %) and the median against
+the default's; the default, the choice saved by the tuning, the fastest, the variants that cannot run on the device and those that no tuning
+offers (`4g`, the block herd: "forced only") are marked. Under each table the rule of the tuning says what it would pick from these
+medians, and a second small table gives the rate of the variant in use with launches of 0.15, 0.35, 0.7 and 1.4 s and the length the rule
+picks. Nothing is saved unless `--retune` is given too: then the picks of the tables, once the variant has passed the bit-exact check,
+replace the saved tuning. About two to three minutes per GPU. On the machines of this project it has only run on simulated devices (the
+CUDA driver simulated on the CPU, and pocl); their rates say nothing about a card.
+
+```
+GPU[0] NVIDIA RTX A2000 Laptop GPU via CUDA
+  linear kernel, keys/s: 6 variants in 3 turns (in order, reversed, in order, ...), after 3 s of the default variant not counted
+  code   variant                       turn 1     turn 2     turn 3     median  spread  vs default
+  128    128                         ...
+  256    256                         ...                                                 +0.0%  default, saved
+  512    512                         ...
+  262272 128, register cap           ...
+  262400 256, register cap           ...
+  262656 512, register cap           ...                                                 +2.8%  fastest
+  -> the rule (the median of the turns, the default unless another is >1% faster) picks window 512, register cap, code 262656 (...)
+  launch length, window 256: the rate with launches of each length, sized as the controller would (groups per work-item)
+  target      measured     size     keys/s     vs best
+  0.15 s      ...
+  0.35 s      ...                                        saved, chosen: the shortest within 1% of the fastest
+  ...
+```
 
 ### 7.6 Automatic machine profile
 
