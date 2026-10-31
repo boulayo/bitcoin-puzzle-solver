@@ -21,6 +21,18 @@ typedef struct { uint x, y, z, w; } uint4;   /* the vector type the kernels load
 #endif
 extern PZ_MOCK_TLS unsigned pz_mock_gid;
 
+/* Work-groups (the block herd of pz_kang.cl): the driver runs the work-items of a block one at a time, in order, each in a thread of its own,
+ * and a barrier passes control to the next one; local memory is a static array of the kernel, shared by the threads of the block (the driver
+ * runs one such launch at a time). */
+extern PZ_MOCK_TLS unsigned pz_mock_lid, pz_mock_grp;
+void pz_mock_barrier(void);
+#define PZ_LOCAL static
+#define PZ_LOCAL_PTR
+#define PZ_BARRIER() pz_mock_barrier()
+#define PZ_LID() pz_mock_lid
+#define PZ_GRP() pz_mock_grp
+#define PZ_KANG_ATTR
+
 #define PZ_CUDA 1                         /* take the CUDA branches of the kernels (same as the PTX build) */
 #define __kernel
 #define __global

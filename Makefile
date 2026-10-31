@@ -347,10 +347,10 @@ tsan:
 MOCK    := $(BUILD)/mockcuda
 ifeq ($(WIN),1)
 MOCKLIB := $(MOCK)/nvcuda.dll
-MOCKLD  := -shared -static
+MOCKLD  := -shared -static -pthread
 else
 MOCKLIB := $(MOCK)/libcuda.so.1
-MOCKLD  := -shared -fPIC
+MOCKLD  := -shared -fPIC -pthread
 endif
 MOCKCC  := $(CC) -std=gnu11 -O2 -fPIC -w -Itests/mock_cuda -DPZ_FAST_FE
 MOCKSRC := tests/mock_cuda/mock_cuda.c tests/mock_cuda/kern.c tests/mock_cuda/pz_host.h $(KERNELS)

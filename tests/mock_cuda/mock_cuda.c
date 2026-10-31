@@ -3,7 +3,7 @@
  *
  * It implements the driver-API entry points pzsolve uses. Modules are recognised by comparing the PTX image with
  * the embedded copies of src/kernels/ptx/*.ptx; launches run the very same kernel sources compiled as C (kern.c), one
- * work-item after the other. Every call is checked: unknown pointers, copies outside an allocation, launch shapes the
+ * work-item after the other (a kernel with barriers a block at a time: run_groups). Every call is checked: unknown pointers, copies outside an allocation, launch shapes the
  * kernels were not compiled for, wrong argument lists - any misuse by the host code fails the call and is printed.
  * What it cannot check is the PTX itself (that is the NVIDIA driver's JIT) - the GPU self-test covers it at start-up.
  *
@@ -11,6 +11,7 @@
  * PZ_MOCK_COUNT=1 reports the modules loaded and the kernels launched at exit, PZ_MOCK_FAIL_FILE=path fails one launch while that file
  * exists, PZ_MOCK_SMS=n and PZ_MOCK_MEM=GiB make the devices report n SMs (default 2) and that much memory (default 1), like a large card. The two-state variables are on with any value except empty and 0, as in pzsolve. This library is not linked with pzsolve, so it
  * has its own small reader. */
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@ typedef unsigned long long CUdeviceptr;
 typedef int CUresult;
 
 PZ_MOCK_TLS unsigned pz_mock_gid;
+PZ_MOCK_TLS unsigned pz_mock_lid, pz_mock_grp;
 
 /* The driver is used by several threads at once when PZ_MOCK_DEVICES asks for more than one device (the start-up of the GPUs runs one thread
  * for each). The tables below are guarded by a small lock; on Windows, where the work-item index of the kernels is not thread-local, a second
@@ -311,6 +313,160 @@ EXPORT CUresult cuMemsetD8_v2(CUdeviceptr d, unsigned char v, size_t n)
     return E_OK;
 }
 
+/* ---- work-groups (the block herd of the kangaroo): the work-items of a block run in threads of their own that hand control to one another,
+ * so that exactly one runs at any time, in order, each until it reaches a barrier or its end; a barrier that some work-items of the block
+ * never reach is a misuse, as on a GPU. Threads rather than coroutines: makecontext/swapcontext under AddressSanitizer (the ASan build of
+ * the program loads this driver) print a warning into the output and may report false errors. One such launch at a time (g_group_lock): the
+ * local memory of the kernels is a plain static array that the threads of a block share (pz_host.h). ---- */
+typedef struct group_run group_run;
+typedef struct {
+    group_run *g;
+    unsigned lid;
+    pthread_t th;
+    pthread_cond_t cv;                  /* the work-item waits here for its turn */
+    int state;                          /* 0 runs, 1 waits at a barrier, 2 has returned */
+    unsigned barriers;                  /* barriers passed in this block */
+} item_t;
+struct group_run {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;                  /* the scheduler waits here */
+    int turn;                           /* the work-item that runs, -1: the scheduler */
+    int quit;
+    unsigned grp, bx;
+    item_t it[128];
+    void (*fn)(void *);                 /* one work-item of the kernel */
+    void *arg;
+};
+static pthread_key_t g_item_key;        /* the item_t of the calling thread */
+static pthread_once_t g_item_once = PTHREAD_ONCE_INIT;
+static void item_key_init(void) { pthread_key_create(&g_item_key, NULL); }
+static pthread_mutex_t g_group_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* with g->mu held: wait for the turn of t; a work-item left waiting at a barrier when the launch fails ends here */
+static void item_wait(item_t *t)
+{
+    group_run *g = t->g;
+    while (g->turn != (int)t->lid && !g->quit) pthread_cond_wait(&t->cv, &g->mu);
+    if (g->quit) { pthread_mutex_unlock(&g->mu); pthread_exit(NULL); }
+}
+
+static void item_ids(const item_t *t)
+{
+    pz_mock_gid = t->g->grp * t->g->bx + t->lid;
+    pz_mock_lid = t->lid;
+    pz_mock_grp = t->g->grp;
+}
+
+/* control back to the scheduler (with g->mu held) */
+static void item_yield(item_t *t, int state)
+{
+    t->state = state;
+    t->g->turn = -1;
+    pthread_cond_signal(&t->g->cv);
+}
+
+void pz_mock_barrier(void)
+{
+    item_t *t = pthread_getspecific(g_item_key);
+    pthread_mutex_lock(&t->g->mu);
+    t->barriers++;
+    item_yield(t, 1);
+    item_wait(t);
+    pthread_mutex_unlock(&t->g->mu);
+    item_ids(t);
+}
+
+static void *item_main(void *p)
+{
+    item_t *t = p;
+    group_run *g = t->g;
+    pthread_setspecific(g_item_key, t);
+    for (;;) {                          /* one block after the other */
+        pthread_mutex_lock(&g->mu);
+        item_wait(t);
+        pthread_mutex_unlock(&g->mu);
+        item_ids(t);
+        g->fn(g->arg);
+        pthread_mutex_lock(&g->mu);
+        item_yield(t, 2);
+        pthread_mutex_unlock(&g->mu);
+    }
+    return NULL;
+}
+
+/* with g->mu held: runs work-item i until it waits at a barrier or returns */
+static void give_turn(group_run *g, unsigned i)
+{
+    g->it[i].state = 0;
+    g->turn = (int)i;
+    pthread_cond_signal(&g->it[i].cv);
+    while (g->turn != -1) pthread_cond_wait(&g->cv, &g->mu);
+}
+
+/* Runs the gx blocks of bx work-items of fn(arg); 0, or an error after printing the misuse. */
+static int run_groups(void (*fn)(void *), void *arg, unsigned gx, unsigned bx)
+{
+    pthread_once(&g_item_once, item_key_init);
+    group_run *g = calloc(1, sizeof *g);
+    if (!g) return E_OUT_OF_MEMORY;
+    pthread_mutex_lock(&g_group_lock);
+    pthread_mutex_init(&g->mu, NULL);
+    pthread_cond_init(&g->cv, NULL);
+    g->fn = fn;
+    g->arg = arg;
+    g->bx = bx;
+    g->turn = -1;
+    int rc = E_OK;
+    unsigned started = 0;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, (size_t)1 << 20);
+    for (; started < bx; started++) {
+        item_t *t = &g->it[started];
+        t->g = g;
+        t->lid = started;
+        pthread_cond_init(&t->cv, NULL);
+        if (pthread_create(&t->th, &at, item_main, t) != 0) { rc = fail(E_OUT_OF_MEMORY, "work-item thread"); break; }
+    }
+    pthread_attr_destroy(&at);
+    pthread_mutex_lock(&g->mu);
+    for (unsigned grp = 0; grp < gx && rc == E_OK; grp++) {
+        g->grp = grp;
+        for (unsigned i = 0; i < bx; i++) g->it[i].barriers = 0, g->it[i].state = 0;
+        for (;;) {
+            unsigned waiting = 0, finished = 0;
+            for (unsigned i = 0; i < bx; i++) {
+                if (g->it[i].state == 2) { finished++; continue; }
+                give_turn(g, i);
+                if (g->it[i].state == 1) waiting++;
+                else finished++;
+            }
+            if (!waiting) break;
+            int even = !finished;
+            for (unsigned i = 1; i < bx && even; i++) even = g->it[i].barriers == g->it[0].barriers;
+            if (!even) { rc = fail(E_LAUNCH, "a barrier not reached by every work-item of the block"); break; }
+        }
+    }
+    g->quit = 1;
+    for (unsigned i = 0; i < started; i++) pthread_cond_signal(&g->it[i].cv);
+    pthread_mutex_unlock(&g->mu);
+    for (unsigned i = 0; i < started; i++) { pthread_join(g->it[i].th, NULL); pthread_cond_destroy(&g->it[i].cv); }
+    pthread_cond_destroy(&g->cv);
+    pthread_mutex_destroy(&g->mu);
+    pthread_mutex_unlock(&g_group_lock);
+    free(g);
+    return rc;
+}
+
+/* the arguments of a kangaroo kernel, for the work-items run in threads */
+typedef struct { kang_fn k; uint *a[7]; uint u[11]; } kang_args;
+static void kang_item(void *p)
+{
+    kang_args *g = p;
+    g->k(g->a[0], g->a[1], g->a[2], g->a[3], g->a[4], g->a[5], (unsigned short *)g->a[6], g->u[0], g->u[1], g->u[2], g->u[3], g->u[4], g->u[5], g->u[6],
+         g->u[7], g->u[8], g->u[9], g->u[10]);
+}
+
 static void *ptr_arg(void **params, int i, int *bad)
 {
     CUdeviceptr d = *(CUdeviceptr *)params[i];
@@ -357,6 +513,12 @@ static CUresult launch_kernel(void *fv, unsigned gx, unsigned gy, unsigned gz, u
         if (bad) return fail(E_INVALID_VALUE, "invalid pointer argument (pz_kang_step)");
         if (u[10] > total || total - u[10] >= bx) return fail(E_INVALID_VALUE, "grid inconsistent with the number of work-items");
         /* the history must hold rounds * NK * work-items entries of 16 bits: a launch with more rounds would write past it */
+        if (MODS[f->kind].group) {      /* the block herd: work-groups with barriers */
+            kang_args g = {MODS[f->kind].kang, {0}, {0}};
+            memcpy(g.a, a, sizeof g.a);
+            memcpy(g.u, u, sizeof g.u);
+            return run_groups(kang_item, &g, gx, bx);
+        }
         for (unsigned long long g = 0; g < total; g++) {
             pz_mock_gid = (unsigned)g;
             MODS[f->kind].kang(a[0], a[1], a[2], a[3], a[4], a[5], (unsigned short *)a[6], u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10]);

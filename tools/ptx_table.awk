@@ -5,7 +5,8 @@
 #   names     the names of the modules, in the order of the file
 #   bases     name:base for each module that has a base
 #   rtcu      the C source of build/ptx_mods.c: which module an rt_build(program, parameter) call of the CUDA runtime loads (src/rt_priv.h)
-#   mockhdr   tests/mock_cuda: the header with the modules the simulated driver knows and the kernel it runs for each
+#   mockhdr   tests/mock_cuda: the header with the modules the simulated driver knows, the kernel it runs for each and whether that kernel
+#             works in work-groups (cfg 3 of a kangaroo module: the block herd)
 #   mockcc    tests/mock_cuda: the commands (with COMPILER, objects in DIR) that compile the kernels the simulated driver runs
 #   mockobjs  tests/mock_cuda: the objects those commands make
 # Only POSIX awk is used. A line of the file: name kind cfg base defines...
@@ -18,11 +19,11 @@ function param_of(    s) {
     s = size_of()
     return $3 + 0 ? s " | " $3 " << 16" : s
 }
-# the -D options the kernel emulation takes: the size and the batch products (not the register cap, which is for the compiler of the GPU)
+# the -D options the kernel emulation takes: the size, the batch products and the block herd (not the register cap, which is for the compiler of the GPU)
 function emul_defines(    i, d) {
     d = ""
     for (i = 5; i <= NF; i++)
-        if ($i ~ /^-D(HALF|NK|MC)=[0-9]+$/) d = d " " $i
+        if ($i ~ /^-D(HALF|NK|MC|KANG_BLOCK)=[0-9]+$/) d = d " " $i
     return d
 }
 # the linear kernels the simulated driver runs differ by the size and by the batch products (a "p" when they are kept every other denominator)
@@ -34,7 +35,7 @@ function linear_tag(    i) {
 /^[ \t]*(#|$)/ { next }
 {
     n++
-    name[n] = $1; kind[n] = $2; base[n] = $4
+    name[n] = $1; kind[n] = $2; base[n] = $4; cfg[n] = $3 + 0
     p[n] = $2 == "test" ? "0" : param_of()
     sz[n] = size_of()
     lt[n] = linear_tag()
@@ -66,11 +67,14 @@ END {
             if (kind[i] == "linear" && !(("L" lt[i]) in seen)) { seen["L" lt[i]] = 1; printf "DECL_SEARCH(%s)\n", lt[i] }
             if (kind[i] == "kang") printf "DECL_KANG(%s)\n", name[i]
         }
-        print "static const struct { const unsigned char *ptx; int kind; search_fn search; kang_fn kang; } MODS[] = {"
+        print "static const struct { const unsigned char *ptx; int kind; search_fn search; kang_fn kang; int group; } MODS[] = {"
         for (i = 1; i <= n; i++) {
-            if (kind[i] == "linear") printf "    {mock_ptx_%s, M_LINEAR, mock_search%s, NULL},\n", name[i], lt[i]
-            else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s},\n", name[i], name[i]
-            else printf "    {mock_ptx_%s, M_TEST, NULL, NULL},\n", name[i]
+            if (kind[i] == "linear") printf "    {mock_ptx_%s, M_LINEAR, mock_search%s, NULL, 0},
+", name[i], lt[i]
+            else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s, %d},
+", name[i], name[i], cfg[i] == 3
+            else printf "    {mock_ptx_%s, M_TEST, NULL, NULL, 0},
+", name[i]
         }
         print "};"
     } else if (mode == "mockcc" || mode == "mockobjs") {
