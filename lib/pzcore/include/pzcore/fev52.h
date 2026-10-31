@@ -131,12 +131,10 @@ static inline PZ_VABI void pz_fev_sub2_lazy(pz_fev *r, const pz_fev *a, const pz
 static inline __attribute__((always_inline)) PZ_VABI void pz_fev_reduce_cols(pz_fev *r, pz_vl *t)
 {
     const pz_vl M = pz_vl_set(PZ_FEV_MASK), R = pz_vl_set(PZ_FEV_R);
-    /* the high half (weight 2^260) as exact 52-bit limbs: its value is at most a*b / 2^260 < 2^254, so t[9] ends < 2^46 */
+    /* the high half (weight 2^260) as 52-bit limbs: its value is at most a*b / 2^260 < 2^254, so t[9] ends < 2^46. The carried bits
+     * are not cleared from t[5..8]: these limbs only go to the multiply-adds below, which read the low 52 bits of their operands. */
 #pragma GCC unroll 4
-    for (int k = 5; k < 9; k++) {
-        t[k + 1] += t[k] >> PZ_FEV_BITS;
-        t[k] &= M;
-    }
+    for (int k = 5; k < 9; k++) t[k + 1] += t[k] >> PZ_FEV_BITS;
     /* h_k * 2^(52 k) * 2^260 = h_k * R * 2^(52 k); h_4 * R < 2^83, so the last high half (weight 2^260) is < 2^31 */
     pz_vl top = pz_vl_set(0);
 #pragma GCC unroll 4
@@ -163,11 +161,9 @@ static inline __attribute__((always_inline)) PZ_VABI void pz_fev_reduce_cols(pz_
  * through memory and the inlining of the products themselves is one decision (the engines make it with PZ_FEV_INLINE). */
 #define PZ_FEV_PART __attribute__((always_inline))
 
-/* the 10 columns of a*b */
-static inline PZ_FEV_PART PZ_VABI void pz_fev_mul_cols(pz_vl *t, const pz_fev *a, const pz_fev *b)
+/* the 10 columns of a*b, added to t[0..9] */
+static inline PZ_FEV_PART PZ_VABI void pz_fev_mul_cols_acc(pz_vl *t, const pz_fev *a, const pz_fev *b)
 {
-#pragma GCC unroll 10
-    for (int k = 0; k < 10; k++) t[k] = pz_vl_set(0);
 #pragma GCC unroll 5
     for (int i = 0; i < 5; i++)
 #pragma GCC unroll 5
@@ -175,6 +171,14 @@ static inline PZ_FEV_PART PZ_VABI void pz_fev_mul_cols(pz_vl *t, const pz_fev *a
             t[i + j] = pz_vl_mlo(t[i + j], a->l[i], b->l[j]);
             t[i + j + 1] = pz_vl_mhi(t[i + j + 1], a->l[i], b->l[j]);
         }
+}
+
+/* the 10 columns of a*b */
+static inline PZ_FEV_PART PZ_VABI void pz_fev_mul_cols(pz_vl *t, const pz_fev *a, const pz_fev *b)
+{
+#pragma GCC unroll 10
+    for (int k = 0; k < 10; k++) t[k] = pz_vl_set(0);
+    pz_fev_mul_cols_acc(t, a, b);
 }
 
 /* the 10 columns of a^2 */
@@ -216,13 +220,16 @@ static inline PZ_FEV_INLINE PZ_VABI void pz_fev_sqr(pz_fev *r, const pz_fev *a)
 /* r = a*b + c and r = a^2 + c for a c whose limbs are below 2^55: K1 - x or K2 - x - y with x, y tight, so that a*b - x costs
  * no subtraction of its own. The limbs of c join the low columns before the reduction (they stay below 2^57 + 2^55 and the
  * value below 2^514 + 2^261, which pz_fev_reduce_cols takes), whose carry pass leaves the result tight: the separate
- * subtraction and its carry pass, a stage of the dependency chain, are saved. */
+ * subtraction and its carry pass, a stage of the dependency chain, are saved. In the product the low columns start from the
+ * limbs of c instead of zero (the same sums, five additions fewer); the square doubles its columns, so there c is added after. */
 static inline PZ_FEV_INLINE PZ_VABI void pz_fev_mul_add(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *c)
 {
     pz_vl t[10];
-    pz_fev_mul_cols(t, a, b);
 #pragma GCC unroll 5
-    for (int k = 0; k < 5; k++) t[k] += c->l[k];
+    for (int k = 0; k < 5; k++) t[k] = c->l[k];
+#pragma GCC unroll 5
+    for (int k = 5; k < 10; k++) t[k] = pz_vl_set(0);
+    pz_fev_mul_cols_acc(t, a, b);
     pz_fev_reduce_cols(r, t);
 }
 
