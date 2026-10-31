@@ -14,6 +14,17 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - Documentation: RESEARCH.md 10.8 records the attempt to schedule the IFMA curve step by hand (two products interleaved, two chains in
   the kangaroo inversion, a skewed lane loop, split columns): none was faster on every processor model, and on a core with two IFMA ports
   the linear search turns out to be at its port floor.
+- CUDA linear search, for cards held back by their power limit: the first denominator and the centre of a group are handled after the
+  loop over the pairs of keys (`ptxas` no longer copies the inverse and the centre ahead of the tests on the index: 3154 to 3140
+  instructions per key on sm_86, same arithmetic), and the tuner measures two more variants of window 512: 96 registers (5 blocks per SM),
+  and the prefix products of the batch inversion kept for every other denominator (half the private memory and its traffic to the video
+  memory, a quarter of a multiplication more per key). RESEARCH.md section 5 has an energy model per key from the SASS (instruction
+  classes, register and reuse-cache reads, writes, cycles, DRAM bytes; weights as ranges from the literature): the two-pipe form of 1.18.0
+  costs 11 % more energy in its instructions than 1.17.0, so its +11 % on the A2000 means that most of the energy goes with the cycles;
+  the variants gain 1 to 3 % by the model (expected about 900 M keys/s instead of 882 in `bench`), and the int8 tensor cores cannot take
+  any of the products of the step. Bit-exact on the simulated CUDA driver and on pocl; not yet measured on a card.
+- `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
+  and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
 
 ## [1.19.1] — 2026-10-30
 

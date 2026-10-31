@@ -436,6 +436,74 @@ The arithmetic on the device itself is still to be timed on a card.
     express (`IADD3.X` has two carries in SASS, `ptxas` never fuses two chains into it); the E + O sum of the product (15 `IADD3.X`) is the
     price of the aligned `IMAD.WIDE` pairs, and reducing E and O separately costs more chains (27 against 24).
 
+**After 1.19.1: energy per key on a card held back by its power limit.** On the A2000 the two-pipe kernel of 1.18.0 gained 11 % (793 to
+882 M keys/s) where the issue model said 20 %, and by the issue model the card ran at about 1.3 GHz sustained against the 1.89 GHz of the
+probes: it is held by its power limit, so what bounds the speed is the energy of a key, not its cycles alone. The model is
+`tools/research/sass_energy.py`: the executed path of the loops over the keys, from the SASS of `ptxas` (sm_86, NVRTC 12.0), counted by
+class and by operand traffic (register reads, reads served by the operand reuse cache, which `nvdisasm` marks `.reuse` from the control
+bits described by Jia et al., *Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking*, 2018; constant-bank and uniform
+operands; register writes), the cycles of the issue model above (the mean of 16 staggered starts of the warps: one start alone moves the
+result by up to 2 %; an `IMAD.HI` at the 2.4 issue slots of the probes, an `IMAD.WIDE` at 1, 2 or 2.4), and the 32 bytes per key of the
+prefix products that go to the video memory. Energy per key = Σ (issue + reads + writes + datapath + L1) + cycles × a per-cycle term +
+bytes × a per-byte term, in units of one warp-wide 32-bit register read. The weights are not published for this chip, so each is a range
+and the results are over 2000 random draws: issue 0.3 to 1; a write 1 to 1.5; a reuse-cache read 0.1 to 0.25; a constant operand 0.05 to
+0.2; the datapath of an add, logic op or shift 0.02 to 0.1 and of a 32×32-bit multiply 0.3 to 1 (Horowitz, *Computing's energy problem*,
+ISSCC 2014, 45 nm: a 32-bit add 0.1 pJ, a 32-bit multiply 3.1 pJ, a 64-bit read of an 8 KB SRAM 10 pJ, so on 32 lanes the add is a few
+hundredths of a 1024-bit register read and the multiply about half of one), an `IMAD` by one 0.05 to 0.3 (one row of partial products
+toggles), an `IMAD.WIDE` 0.5 to 1.6, a load or store through L1 2 to 8, a byte of GDDR6 0.7 to 3 (5 to 8 pJ per bit; O'Connor et al.,
+*Fine-Grained DRAM*, MICRO 2017, give about 14 for GDDR5 and 4 for HBM2). With them a multiply-add costs 1.4 times an add per instruction, as
+Arafa et al. measured on Volta and Turing (*Verified instruction-level energy consumption measurement for NVIDIA GPUs*, CF 2020: mul/mad
+against add 0.8 to 1.5 by their two methods). The per-cycle term (clock tree, leakage, the parts of an SM that run whatever is issued) is the unknown that each
+draw fits to the measured 793 → 882, for a voltage that follows the clock as V² ~ f^ε, ε from 0 to 1.
+
+* **What it says of 1.17.0 and 1.18.0.** Per key the two-pipe form has 3154 instructions against 2790, 6487 register reads against 5816,
+  3435 writes against 3071 and 769 constant operands against 8: the energy of its instructions and DRAM is **11 % higher** (8 to 14 % over
+  all the draws), whatever the weights (the classes move together: 927 `IMAD` by one replace 457 `IADD3` and 108 `IMAD.IADD`, each with
+  about the same operands). A card bound by that energy alone would have lost 10 %; it gained 11 %. The model reproduces the measurement
+  only if most of the energy goes with the cycles: **41 to 70 % of it with `IMAD.WIDE` at one issue slot, 94 to 97 % at two**, and with
+  `IMAD.WIDE` at 2.4 slots (as slow as `IMAD.HI`) no draw can (the cycles alone give 4880 → 4466, +9.3 %, less than measured), so it takes
+  fewer. The DRAM is 1 to 13 % of the energy. So on this card the part that goes with the cycles is 0.7 to 30 times the energy of the
+  instructions themselves, and the ranking of variants is the ranking of their cycles, corrected by their instruction energy; the class weights decide
+  nothing below.
+* **Kept** (the issue model, cycles per 32 keys per partition with `IMAD.WIDE` at one and two slots; keys/s at the same power against
+  `linear512m4` of 1.19.1, 3782 and 4175 cycles):
+  * the first denominator and the centre out of the loop over the pairs, so that `ptxas` no longer copies the inverse and the centre
+    ahead of the tests on the index: 3154 → 3140 instructions per key (moves 56 → 47), 3770 and 4145 cycles, **+0.3 to +0.7 %**; the
+    capped variants spill 88 bytes outside the loops over the keys, the free ones take 188 registers (two blocks per SM, as before);
+  * `linear512m5`: the same kernel capped at 96 registers, 5 blocks of 128 per SM (5 warps per partition, where the four of the 128-register
+    cap stay in phase and leave 16 to 25 % of the issue cycles idle with a pipe busy): 240 bytes of spill, outside the loops but for 2
+    stores per key, 3710 and 4061 cycles, **+1.5 to +2.7 %**;
+  * `linear512m4p`: the prefix products of the batch inversion kept for every other denominator (`-DMC=2`): the backward pass takes two
+    denominators per turn, r = inv · p with p the kept prefix, and the inverses are r · d(m−1) and r · d(m), five products where four did
+    (+0.25 of a multiplication per key), while the private array halves (8.7 KiB per work-item at window 512) and so does its traffic (16
+    bytes per key). 3158 instructions per key, 3735 and 4137 cycles, energy of the instructions and DRAM -4 % (-9 to -1), **+1.0 to +2.2 %**
+    (+0.9 to +3.9 % over the draws and both slot counts). It and the 96-register cap do not combine: 740 bytes of spill loads, inside the loop.
+  The tuner measures the two new variants with the six others; the self-test checks all eight. OpenCL keeps its four (the kernel source
+  takes `-DMC=2` too; pocl runs it bit-exact).
+* **Measured in the model and dropped.** The carries and the normalization back on the ALU pipe (the field phase is the one bound by the
+  FMA pipe): +0.0 to +1.1 %, -0.3 to +0.4 % against the kept form, not a variant. The 87 shifts of the SHA sigmas per key as `IMAD.HI` by
+  2^29 and 2^22 from the constant bank: the ALU pipe loses 87 instructions, the FMA pipe gains 209 slots, -0.2 to -2.0 %. The window table
+  in constant memory: its loads are 3 of the 15 loads and stores per key, under 1 % of the instruction energy at any weight. A window of
+  1024: 0.6 instructions per key. The sums of the hash back on `IADD3` where only the balance of the pipes put them on `IMAD` (one
+  instruction and its operands fewer per sum): the cycles they add cost more than the energy they save as soon as the per-cycle term is
+  above about 40 % of the energy, which the measurement says it is.
+* **Tensor cores** (int8 `IMMA`, `mma.sync.m16n8k32.u8`). A product maps to a matrix product only when one operand is shared by the
+  32 keys of a warp. In the step none is: the table points (shared by the warp) enter only through additions and subtractions (`d = x(i·G)
+  − x(C)`, `y(i·G) ∓ y(C)`), the centre is per work-item, and λ, λ², λ·(x(C) − x3), the inverse and the prefix products all depend on the
+  key. Rewriting λ = y(i·G)·im ∓ y(C)·im gives one product per key a shared operand for one product more. Even then, 32 field products of
+  32 byte-limbs by a shared one are 16 `mma.m16n8k32` (about 128 cycles of the tensor pipe of a partition), and the 63 columns of 32-bit
+  sums per key then need the carries and the reduction (about the 121 instructions of the `IMAD.WIDE` product itself) and the moves
+  between the fragment layout and the lanes. The share of the work that could map is 0 today and one product in five or six with the
+  rewrite, at a loss: not done.
+* **Expected on the A2000** (882 M keys/s with `linear512m4` in 1.19.1): `linear512m4` 885 to 888, `linear512m4p` 890 to 900,
+  `linear512m5` 895 to 905, so about **900 M keys/s** once the tuner has picked. The gains are of the order of the scatter between two
+  runs of `bench` on a laptop, so the variants are worth timing in alternation, each forced with `PZ_GPU_HALF` (262656 = 512 with the
+  128-register cap, 328192 = 96 registers, 786944 = pairs) and `pzsolve bench --gpu-only`, twice in turn, with
+  `nvidia-smi --query-gpu=clocks.sm,power.draw,power.limit,clocks_throttle_reasons.active --format=csv -l 1` alongside; then
+  `pzsolve bench --gpu-only --retune` to let the tuner choose. If the clock under the variant that wins is higher at the same power, the
+  per-cycle reading above is confirmed; the three figures also bound how many issue slots an `IMAD.WIDE` takes (the 96-register cap gains
+  more at two slots, the pairs at one).
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts

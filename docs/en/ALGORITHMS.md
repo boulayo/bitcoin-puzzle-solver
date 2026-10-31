@@ -278,8 +278,11 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated to ~0.35 s.
-  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
-  (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); with OpenCL four: window 64, 128, 256 or 512. On the first
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are eight variants: window 128, 256 or 512 × free registers
+  (≈ 190) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them), and two of window
+  512 for cards held back by their power limit: 96 registers (5 blocks per SM), and 128 registers with the prefix products of the batch
+  inversion kept for every other denominator (half the private memory and its traffic, half a multiplication more per pair of keys;
+  RESEARCH.md section 5); with OpenCL four: window 64, 128, 256 or 512. On the first
   run on a device the program measures them all (a few seconds each) and keeps the default (256 with CUDA, 128 with OpenCL) unless another one
   is more than 3% faster; the choice is stored in `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version).
   `PZ_GPU_HALF=N` forces it, `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
