@@ -160,7 +160,7 @@ static const char bench_text[] =
 "pzsolve bench - measure the speed of the CPU and GPU engines\n"
 "\n"
 "USAGE\n"
-"  pzsolve bench [--together [--linear] [-t N] [--gpu LIST] [--prio-gpu P]] [--gpu-only] [--retune]\n"
+"  pzsolve bench [--together [--linear] [-t N] [--gpu LIST] [--prio-gpu P]] [--gpu-only] [--variants [--turns N]] [--retune]\n"
 "\n"
 "Without options: every CPU engine, the kangaroo, BSGS, and the GPUs.\n"
 "\n"
@@ -172,7 +172,12 @@ static const char bench_text[] =
 "      --gpu LIST          with --together: use only the listed GPUs (as in hunt)\n"
 "      --prio-gpu P        with --together: auto | yes | no, as in hunt\n"
 "      --gpu-only          skip the CPU tests and run only the GPU ones (bandwidth, integer instructions, linear search, kangaroo)\n"
-"      --retune            ignore the saved choice of the GPU kernel variant and measure it again\n";
+"      --variants          GPUs only: every variant of the linear and kangaroo kernels of each GPU, measured in turns (in order,\n"
+"                          reversed, in order), one table per kernel with the median, the spread and the tuner's choice, then the\n"
+"                          length of a launch; nothing is saved unless --retune is given too\n"
+"      --turns N           with --variants: N turns instead of 3 (1 to 9)\n"
+"      --retune            ignore the saved choice of the GPU kernel variant and measure it again (with --variants: save what the\n"
+"                          tables decide)\n";
 
 /* The short help of the other commands: usage line, then one line per option. */
 static const struct { const char *cmd, *text; } short_help[] = {

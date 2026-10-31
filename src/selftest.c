@@ -631,8 +631,8 @@ static void bsgs_bench(int nthreads)
 
 int bench_run(int argc, char **argv)
 {
-    bool together = false, gpu_only = false, linear = false;
-    int threads = 0;
+    bool together = false, gpu_only = false, linear = false, variants = false;
+    int threads = 0, turns = 3;
     const char *gpus = NULL;
     prio_mode prio = PRIO_AUTO;
     bool prio_given = false;
@@ -641,6 +641,8 @@ int bench_run(int argc, char **argv)
         if (!strcmp(a, "--help") || !strcmp(a, "-h")) { pz_help("bench", stdout); return 0; }
         else if (!strcmp(a, "--together")) together = true;
         else if (!strcmp(a, "--gpu-only")) gpu_only = true;
+        else if (!strcmp(a, "--variants")) variants = true;
+        else if (!strcmp(a, "--turns") && i + 1 < argc) { turns = (int)pz_arg_int(a, argv[i + 1], 1, 9); i++; }
         else if (!strcmp(a, "--linear")) linear = true;
         else if (!strcmp(a, "--retune")) gpu_set_retune(true);
         else if ((!strcmp(a, "-t") || !strcmp(a, "--threads")) && i + 1 < argc) { threads = (int)pz_arg_int(a, argv[i + 1], 1, RUN_MAX_THREADS); i++; }
@@ -652,11 +654,17 @@ int bench_run(int argc, char **argv)
             prio = run_prio_arg(argv[++i]);
             prio_given = true;
         }
-        else if (!strcmp(a, "-t") || !strcmp(a, "--threads") || !strcmp(a, "--gpu") || !strcmp(a, "--prio-gpu")) pz_usage_error("bench", "the option '%s' needs a value", a);
+        else if (!strcmp(a, "-t") || !strcmp(a, "--threads") || !strcmp(a, "--gpu") || !strcmp(a, "--prio-gpu") || !strcmp(a, "--turns")) pz_usage_error("bench", "the option '%s' needs a value", a);
         else pz_usage_error("bench", "unrecognized option '%s'", a);
     }
     if ((threads || gpus || linear || prio_given) && !together) pz_usage_error("bench", "-t, --gpu, --prio-gpu and --linear are used together with --together");
+    if (variants && together) pz_usage_error("bench", "--variants and --together are two different measurements: one at a time");
+    if (turns != 3 && !variants) pz_usage_error("bench", "--turns is used together with --variants");
     if (gpus) gpu_check_filter(gpus);
+    if (variants) {
+        gpu_bench_variants(turns);
+        return 0;
+    }
     if (together) {
         tg_choice ch;
         memset(&ch, 0, sizeof ch);

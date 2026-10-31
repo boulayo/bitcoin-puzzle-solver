@@ -32,6 +32,9 @@ int gpu_cores_needed(const gpu_session *s, int n);
 /* Self-test of every usable GPU (0 = ok or no GPU). */
 int gpu_selftest(void);
 void gpu_bench(void);
+/* 'bench --variants': every variant of the linear and kangaroo kernels of each GPU measured in `turns` turns, one table per kernel, then the
+ * length of a launch; saved only with --retune (gpu_set_retune). */
+void gpu_bench_variants(int turns);
 /* 'doctor': the GPUs a campaign would use (what they are, whether they compute correctly), and the saved kernel choices. */
 void gpu_doctor(bool deep);
 void gpu_doctor_cache(void);
