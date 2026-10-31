@@ -144,6 +144,22 @@ static inline VINLINE PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev 
     }
     vbatch_t *b = &c->b[c->n / PZ_LANES];
     const int n = c->n % PZ_LANES;
+#ifdef PZ_FEV_IFMA
+    /* four 64-bit words of x, each split into its two 32-bit halves by one permutation: the low halves of the lanes in the low 256
+     * bits, the high halves in the high 256 bits, one store each (fewer shifts than the eight words formed apart, and no masks) */
+    const __m512i halves = _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15);
+#pragma GCC unroll 4
+    for (int k = 0; k < 4; k++) {            /* bits [64k, 64k+64): words 2k and 2k + 1 counted from the least significant end */
+        const int bit = 64 * k, a = bit / PZ_FEV_BITS, sh = bit % PZ_FEV_BITS;
+        pz_vl w = x->l[a] >> sh;
+#pragma GCC unroll 2
+        for (int m = 1; m <= 2; m++)
+            if (m * PZ_FEV_BITS - sh < 64 && a + m < PZ_FEV_NLIMB) w |= x->l[a + m] << (m * PZ_FEV_BITS - sh);
+        const __m512i d = _mm512_permutexvar_epi32(halves, (__m512i)w);
+        _mm256_storeu_si256((__m256i *)&b->X[7 - 2 * k][n], _mm512_castsi512_si256(d));
+        _mm256_storeu_si256((__m256i *)&b->X[6 - 2 * k][n], _mm512_extracti64x4_epi64(d, 1));
+    }
+#else
 #pragma GCC unroll 8
     for (int j = 0; j < 8; j++) {            /* word j counted from the least significant end: bits [32j, 32j+32) */
         const int bit = 32 * j, a = bit / PZ_FEV_BITS, sh = bit % PZ_FEV_BITS;
@@ -155,6 +171,7 @@ static inline VINLINE PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev 
         vw w32 = __builtin_convertvector(w, vw);
         memcpy(&b->X[7 - j][n], &w32, sizeof w32);
     }
+#endif
     vw p32 = __builtin_convertvector(par + pz_vl_set(2), vw);
     memcpy(&b->pfx[n], &p32, sizeof p32);
     memcpy(&b->koff[n], &koff, sizeof koff);
