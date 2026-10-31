@@ -35,6 +35,36 @@ inline void check_key(const fe *xn, const fe *y, ulong ko, const uint tw[5], __g
     }
 }
 
+/* the two keys of a pair, C + i*G (when `both`) and C - i*G, from the centre (xc, yc), the table point (sx, sy) and the inverse im of
+ * sx - xc; koff is the key offset of the centre */
+inline void pair_keys(const fe *xc, const fe *yc, const fe *sx, const fe *sy, const fe *im, const bool both, const ulong koff, const ulong i,
+                      const uint tw[5], __global uint *hits, const uint max_hits)
+{
+    fe lam, t, x3, y3, xs;                              /* x3 = lam^2 - (xc + sx) for both points */
+    fe_add_norm(&xs, xc, sx);
+    if (both) {
+        fe_sub_norm(&t, sy, yc);
+        fe_mul(&lam, &t, im);
+        fe_sqr(&x3, &lam);
+        fe_sub(&x3, &x3, &xs);
+        fe_normalize_fma(&x3);
+        fe_sub_norm(&t, xc, &x3);
+        fe_mul(&y3, &lam, &t);
+        fe_sub_norm(&y3, &y3, yc);
+        check_key(&x3, &y3, koff + i, tw, hits, max_hits);
+    }
+    /* C - i*G */
+    fe_add_norm(&t, sy, yc);
+    fe_mul(&lam, &t, im);
+    fe_sqr(&x3, &lam);
+    fe_sub(&x3, &x3, &xs);
+    fe_normalize_fma(&x3);
+    fe_sub_norm(&t, &x3, xc);
+    fe_mul(&y3, &lam, &t);
+    fe_sub_norm(&y3, &y3, yc);
+    check_key(&x3, &y3, koff - i, tw, hits, max_hits);
+}
+
 __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab, __global uint *hits, const uint max_hits, const uint pz_n)
 {
     const uint gid = (uint)get_global_id(0);
@@ -91,50 +121,25 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             fe_normalize(&ncx);
             fe_normalize(&ncy);
         }
-        /* i = m + 1 from HALF down to 1: C + i*G (i < HALF) and C - i*G, then i = 0: the centre itself */
-        for (int i = HALF; i >= 0; i--) {
-            fe sx, sy, lam, t, x3, y3, im;
-            ulong ko;
-            if (i == 0) {
-                x3 = xc; y3 = yc; ko = koff;
-                goto check;
-            }
+        /* i = m + 1 from HALF down to 2: C + i*G (i < HALF) and C - i*G. The first denominator (i = 1, whose inverse is what is left of
+         * the product) and the centre (i = 0) come after the loop: inside it the compiler copied inv into im and the centre into x3 and y3
+         * ahead of the tests on i, 24 moves per pair of keys on sm_86 */
+        for (int i = HALF; i >= 2; i--) {
+            fe sx, sy, im, d;
             fe_load_c16(&sx, gtab + (i - 1) * 16);
             fe_load_c16(&sy, gtab + (i - 1) * 16 + 8);
-            if (i > 1) {
-                fe d;
-                fe_mul(&im, &inv, &tmp[i - 2]);
-                fe_sub_norm(&d, &sx, &xc);
-                fe_mul(&inv, &inv, &d);
-            } else {
-                im = inv;
-            }
-            fe xs;                                       /* x3 = lam^2 - (xc + sx) for both points */
-            fe_add_norm(&xs, &xc, &sx);
-            if (i < HALF) {
-                fe_sub_norm(&t, &sy, &yc);
-                fe_mul(&lam, &t, &im);
-                fe_sqr(&x3, &lam);
-                fe_sub(&x3, &x3, &xs);
-                fe_normalize_fma(&x3);
-                fe_sub_norm(&t, &xc, &x3);
-                fe_mul(&y3, &lam, &t);
-                fe_sub_norm(&y3, &y3, &yc);
-                check_key(&x3, &y3, koff + (ulong)i, tw, hits, max_hits);
-            }
-            /* C - i*G */
-            fe_add_norm(&t, &sy, &yc);
-            fe_mul(&lam, &t, &im);
-            fe_sqr(&x3, &lam);
-            fe_sub(&x3, &x3, &xs);
-            fe_normalize_fma(&x3);
-            fe_sub_norm(&t, &x3, &xc);
-            fe_mul(&y3, &lam, &t);
-            fe_sub_norm(&y3, &y3, &yc);
-            ko = koff - (ulong)i;
-        check:;
-            check_key(&x3, &y3, ko, tw, hits, max_hits);
+            fe_mul(&im, &inv, &tmp[i - 2]);
+            fe_sub_norm(&d, &sx, &xc);
+            fe_mul(&inv, &inv, &d);
+            pair_keys(&xc, &yc, &sx, &sy, &im, i < HALF, koff, (ulong)i, tw, hits, max_hits);
         }
+        {
+            fe sx, sy;
+            fe_load_c16(&sx, gtab);
+            fe_load_c16(&sy, gtab + 8);
+            pair_keys(&xc, &yc, &sx, &sy, &inv, true, koff, 1, tw, hits, max_hits);
+        }
+        check_key(&xc, &yc, koff, tw, hits, max_hits);
         C.x = ncx; C.y = ncy;
         koff += GRP;
     }
