@@ -989,7 +989,7 @@ static int bench_variants_table(const tune_ops *op, const bool *forced, int turn
         if (rate[i] > 0 && (fastest < 0 || rate[i] > rate[fastest])) fastest = i;
     }
     const bool per_turn = turns <= 3;
-    size_t o = (size_t)snprintf(line, sizeof line, "  %-7s%-25s", "code", "variant");
+    size_t o = (size_t)snprintf(line, sizeof line, "  %-9s%-25s", "code", "variant");
     if (per_turn)
         for (int t = 0; t < turns; t++) {
             char h[16];
@@ -1000,7 +1000,7 @@ static int bench_variants_table(const tune_ops *op, const bool *forced, int turn
     snprintf(line + o, sizeof line - o, "%11s%8s%12s", "median", "spread", "vs default");
     bench_row(line);
     for (int i = 0; i < op->nv; i++) {
-        o = (size_t)snprintf(line, sizeof line, "  %-7s%-25s", op->code_text(op->vs[i], cb, sizeof cb), op->name(op->vs[i], nb, sizeof nb));
+        o = (size_t)snprintf(line, sizeof line, "  %-9s%-25s", op->code_text(op->vs[i], cb, sizeof cb), op->name(op->vs[i], nb, sizeof nb));
         double lo = 0, hi = 0;
         for (int t = 0; t < nsmp[i]; t++) {
             if (smp[i][t] <= 0) continue;
