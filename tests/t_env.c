@@ -139,10 +139,10 @@ static void t_numbers(void)
     CHECK(try_value("PZ_GPU_HALF", "128", last, sizeof last) == 0 && g_env.gpu_half == 128);
     CHECK(try_value("PZ_GPU_HALF", "+64", last, sizeof last) == 0 && g_env.gpu_half == 64);
     CHECK(try_value("PZ_GPU_HALF", "", last, sizeof last) == 0 && g_env.gpu_half == 0);
-    static const char *const bad_half[] = {"0", "-5", "12x", "x", " 128", "128 ", "1.5", "99999999999", "0x80", "1048577"};
+    static const char *const bad_half[] = {"0", "-5", "12x", "x", " 128", "128 ", "1.5", "99999999999", "0x80", "4194305"};
     for (size_t k = 0; k < sizeof bad_half / sizeof *bad_half; k++) {
         CHECK(try_value("PZ_GPU_HALF", bad_half[k], last, sizeof last) == 1 && g_env.gpu_half == 0);
-        CHECK(strstr(last, "PZ_GPU_HALF=") && strstr(last, " ignored (expected an integer between 1 and 1048576)"));
+        CHECK(strstr(last, "PZ_GPU_HALF=") && strstr(last, " ignored (expected an integer between 1 and 4194304)"));
     }
     /* PZ_TEST_KTHREAD: 16 or more */
     CHECK(try_value("PZ_TEST_KTHREAD", "16", last, sizeof last) == 0 && g_env.test_kthread == 16);

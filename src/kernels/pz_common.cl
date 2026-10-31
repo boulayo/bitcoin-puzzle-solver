@@ -1016,6 +1016,28 @@ PZ_NOINLINE int ge_add_mul_small(ge *r, const ge *a, const ge *D, uint t)
 #define ROTR(x, n) rotate((uint)(x), (uint)(32 - (n)))
 #define ROTL(x, n) rotate((uint)(x), (uint)(n))
 
+/* The hash variants of the CUDA linear modules (modules.txt): a shift or a rotation computed on the FMA pipe (pz_cuda.h, PZ_HASH_SIG
+ * and PZ_HASH_RMD) where the ALU pipe bounds the hash; elsewhere, and without the options, the plain shift and rotation, so the
+ * OpenCL kernels and the simulated CUDA driver compute what they always did. */
+#ifndef PZ_SHR_F
+#define PZ_SHR_F(x, n) ((x) >> (n))
+#define PZ_ROTL_F(x, n) ROTL(x, n)
+#define PZ_ROTL_W(x, n) ROTL(x, n)
+#define PZ_MULADD_F(x, n, b) (((x) << (n)) | (b))   /* x 2^n + b for a b below 2^n */
+#endif
+#ifdef PZ_HASH_SIG                   /* the two shifts of the sigma functions of the SHA-256 message schedule (87 per key) */
+#define SHA_SHR(x, n) PZ_SHR_F(x, n)
+#else
+#define SHA_SHR(x, n) ((x) >> (n))
+#endif
+#if defined(PZ_HASH_RMD) && PZ_HASH_RMD == 2   /* the rotation by 10 of a RIPEMD-160 step (151 per key of the filter) */
+#define RMD_ROTL10(x) PZ_ROTL_W(x, 10)
+#elif defined(PZ_HASH_RMD)
+#define RMD_ROTL10(x) PZ_ROTL_F(x, 10)
+#else
+#define RMD_ROTL10(x) ROTL(x, 10)
+#endif
+
 /* Sum of up to four terms and a constant for the hash, t0 + t1 + t2 + t3 + k, where the flags say which terms vary from key to key:
  * the others are constants of the message or of the first rounds, folded with k by the compiler into one constant, so that only
  * the variable terms and that constant go through PZ_ADDF, the addition the CUDA build puts on the FMA pipe (a constant operand
@@ -1040,10 +1062,20 @@ inline uint h_sum(uint t0, bool v0, uint t1, bool v1, uint t2, bool v2, uint t3,
 inline void sha256_33(uint pfx, const uint xw[8], uint out[8])
 {
     uint w[16];
+#ifdef PZ_HASH_FOLD
+    /* the byte shifts of words 0 and 8 as products by 2^24 from the constant bank (an IMAD each, where the compilers make a LEA on the
+     * ALU pipe of the shift-and-or), and the few sums of the first rounds that stayed on the ALU pipe below */
+    w[0] = PZ_MULADD_F(pfx, 24, xw[0] >> 8);
+#else
     w[0] = (pfx << 24) | (xw[0] >> 8);
+#endif
 #pragma unroll
     for (int i = 1; i < 8; i++) w[i] = (xw[i - 1] << 24) | (xw[i] >> 8);
+#ifdef PZ_HASH_FOLD
+    w[8] = PZ_MULADD_F(xw[7], 24, 0x00800000u);
+#else
     w[8] = (xw[7] << 24) | 0x00800000u;
+#endif
 #pragma unroll
     for (int i = 9; i < 15; i++) w[i] = 0;
     w[15] = 264;
@@ -1055,9 +1087,10 @@ inline void sha256_33(uint pfx, const uint xw[8], uint out[8])
         else {
             /* w[i-16] + s0(w[i-15]) + w[i-7] + s1(w[i-2]): a term is a constant when its word is one of 9..15 */
             uint w15 = w[(i + 1) & 15], w2 = w[(i + 14) & 15];
-            uint s0 = ROTR(w15, 7) ^ ROTR(w15, 18) ^ (w15 >> 3);
-            uint s1 = ROTR(w2, 17) ^ ROTR(w2, 19) ^ (w2 >> 10);
-            wi = h_sum(w[i & 15], i < 25 || i > 31, s0, i < 24 || i > 30, w[(i + 9) & 15], i > 22, s1, i > 17, 0u);
+            const bool v0 = i < 24 || i > 30, v1 = i > 17;   /* s0, s1 of a variable word (the plain shift of a constant one must keep folding) */
+            uint s0 = ROTR(w15, 7) ^ ROTR(w15, 18) ^ (v0 ? SHA_SHR(w15, 3) : (w15 >> 3));
+            uint s1 = ROTR(w2, 17) ^ ROTR(w2, 19) ^ (v1 ? SHA_SHR(w2, 10) : (w2 >> 10));
+            wi = h_sum(w[i & 15], i < 25 || i > 31, s0, v0, w[(i + 9) & 15], i > 22, s1, v1, 0u);
             w[i & 15] = wi;
         }
         uint S1 = ROTR(e, 6) ^ ROTR(e, 11) ^ ROTR(e, 25);
@@ -1065,7 +1098,14 @@ inline void sha256_33(uint pfx, const uint xw[8], uint out[8])
         uint S0 = ROTR(a, 2) ^ ROTR(a, 13) ^ ROTR(a, 22);
         uint mj = (a & b) ^ (a & c) ^ (b & c);
         uint t1, t2;
+#ifdef PZ_HASH_FOLD
+        /* round 1: b and c are the IV, so Maj is (a & (b ^ c)) | (b & c) with two constants, two LOP3 (one immediate each) unless the
+         * disjoint halves are summed on the FMA pipe; round 0: the one variable term of t1 on the FMA pipe too */
+        if (i == 1) mj = PZ_ADDF(a & (b ^ c), b & c);
+        if (i == 0) { t1 = PZ_ADDF(wi, h + S1 + ch + SHA_K[0]); t2 = S0 + mj; }
+#else
         if (i == 0) { t1 = h + S1 + ch + SHA_K[0] + wi; t2 = S0 + mj; }   /* only w[0] varies */
+#endif
         else {
             /* h and d are the IV up to i = 3, the word is a constant for i = 9..15 */
             t1 = h_sum(h, i >= 4, ch, true, S1, true, wi, i < 9 || i > 15, SHA_K[i]);
@@ -1123,10 +1163,10 @@ inline void ripemd160_32(const uint dig[8], uint out[5])
         const int rd = j / 16, il = RMD_RL[j], ir = RMD_RR[j];
         uint t = rmd_sum(a, rmd_f(rd, b, c, d), m[il], il < 8, RMD_KL[rd]);
         t = ROTL(t, RMD_SL[j]) + e;
-        a = e; e = d; d = ROTL(c, 10); c = b; b = t;
+        a = e; e = d; d = RMD_ROTL10(c); c = b; b = t;
         t = rmd_sum(a2, rmd_f(4 - rd, b2, c2, d2), m[ir], ir < 8, RMD_KR[rd]);
         t = ROTL(t, RMD_SR[j]) + e2;
-        a2 = e2; e2 = d2; d2 = ROTL(c2, 10); c2 = b2; b2 = t;
+        a2 = e2; e2 = d2; d2 = RMD_ROTL10(c2); c2 = b2; b2 = t;
     }
     out[0] = PZ_ADDF(PZ_ADDF(c, d2), 0xEFCDAB89u);
     out[1] = PZ_ADDF(PZ_ADDF(d, e2), 0x98BADCFEu);

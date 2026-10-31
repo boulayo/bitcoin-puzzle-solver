@@ -9,7 +9,9 @@
 #include <math.h>
 
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
-static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
+/* the hash variants (VAR_HASHFLAG) only for the default window and for 512 with the register cap, the two the tuner has picked on cards */
+static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16,
+                                  256 | VAR_HASHFLAG(1), 512 | 4 << 16 | VAR_HASHFLAG(1), 512 | 4 << 16 | VAR_HASHFLAG(2)};
 static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16};
 static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16};
 
@@ -124,8 +126,8 @@ static char *kvariant_name(int v, char *b, size_t n)
 }
 static char *variant_name(int v, char *b, size_t n)
 {
-    if (VAR_MINB(v)) snprintf(b, n, "%d, register cap", VAR_HALF(v));
-    else snprintf(b, n, "%d", VAR_HALF(v));
+    static const char *const hash[] = {"", ", hash h1", ", hash h2", ", hash h3"};
+    snprintf(b, n, "%d%s%s", VAR_HALF(v), VAR_MINB(v) ? ", register cap" : "", hash[VAR_HASH(v)]);
     return b;
 }
 
