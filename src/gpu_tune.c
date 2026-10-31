@@ -754,9 +754,10 @@ void gpu_kang_autotune(gpu_session *s, int idx)
 
 typedef struct { double copy_gbs, lo_gops, hi_gops, add3_gops; } gpu_diag;
 
-/* per step of the CUDA kangaroo kernel (the default NK 128): device memory traffic and integer instructions (SASS counts for sm_86, the step and
- * its share of the inversion: docs/en/RESEARCH.md 5 and 8.4) */
-#define KANG_MODEL_BYTES 215
+/* per step of the CUDA kangaroo kernel (NK 128 quads, the variant the tuner picks on the cards measured): device memory traffic counted on the
+ * executed path of the SASS for sm_86 with the per-launch share at 128 rounds, and integer instructions, the step and its share of the
+ * inversion (docs/en/RESEARCH.md 5 "After 1.19.2: the bytes of a kangaroo step" and 8.4) */
+#define KANG_MODEL_BYTES 174
 #define KANG_MODEL_INSNS 1300
 /* the block herd (NK 4): the walkers stay in registers; per step the history (written, then read by the replay at the end of the launch) and
  * 941 instructions of the step, plus the 15,680 that the inverting warp adds (the column products and fe_inv) shared by the 16 warp-steps of a
