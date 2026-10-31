@@ -18,7 +18,10 @@
  *   ./kwalk bits=36 K=1024 dp=0 iid=1 runs=2000           the same layout as independent points
  * Options: design=FILE (default tools/research/kang_schema3.txt), jm34=D (mean jump W^(3/4)/D, default 16) or jabs=A
  * (A sqrt(W)), spread=S (jumps uniform in [1-S, 1+S] of the mean), pow2=1 (jumps of 8 powers of two, same mean), R=256,
- * seed=N, out=FILE (appends one line per trial: cost, t_coll, distinct, redundant, in units of sqrt(W)). */
+ * seed=N, out=FILE (appends one line per trial: cost, t_coll, distinct, redundant, in units of sqrt(W)); cheap=1 also
+ * looks at the other point of every step, P - S_j (the same inversion gives it for 1M + 1S, RESEARCH.md 8.9 and 8.14):
+ * when it is distinguished it goes into the table with the walker's kind and its distance, the walk itself is unchanged
+ * (the cost counts the steps only; the final line gives the distinguished points it added per trial). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -78,12 +81,12 @@ static void load_design(const char *f)
 
 typedef struct { i64 E, d; int coef, grp, esc; u64 prev, prev2, ck, mn, since; } kang;
 
-static int bits = 36, runs = 1000, K = 1024, dpbits = 2, R = 256, iid = 0, shadow = 1, pow2 = 0;
+static int bits = 36, runs = 1000, K = 1024, dpbits = 2, R = 256, iid = 0, shadow = 1, pow2 = 0, cheap = 0;
 static double jm34 = 16, jabs = 0, spread = 1.0 / 3, capm = 24;
 #define CK_PERIOD 64
 #define N_ESC 16
 static i64 jumps[4096 + N_ESC], W, X;
-static double n_esc, n_merge, n_cap;
+static double n_esc, n_merge, n_cap, n_cheap;
 
 static void new_start(kang *k)
 {
@@ -176,6 +179,8 @@ static double one_run(track *t)
                 else if (tg < k->mn) k->mn = tg;
                 if (out) { j = (unsigned)R + (unsigned)(mixh(a, 6) % N_ESC); k->esc = 0; k->ck = k->mn = ~0ULL; n_esc++; }
             }
+            const i64 E0 = k->E, d0 = k->d;
+            const int c0 = k->coef;
             i64 e = k->E + jumps[j];
             k->d += jumps[j];
             const u64 na = (u64)llabs(e);
@@ -185,6 +190,26 @@ static double one_run(track *t)
             k->prev2 = k->prev; k->prev = a;
             t->ops++; k->since++;
             visit(t, na, k->coef, k->d);
+            if (cheap) {   /* the other point of the step, E0 - S_j: on nobody's trail, so it counts only when it is distinguished */
+                const i64 E2 = E0 - jumps[j];
+                const u64 na2 = (u64)llabs(E2);
+                if ((mixh(na2, 3) & dpmask) == 0) {
+                    const int flip = ((mixh(na2, 1) & 1) ? -(i64)na2 : (i64)na2) != E2;
+                    const int c2 = flip ? -c0 : c0;
+                    const i64 d2 = flip ? -(d0 - jumps[j]) : d0 - jumps[j];
+                    n_cheap++;
+                    visit(t, na2, c2, d2);
+                    ent *f = find(tab, tmask, na2 + 1);
+                    if (!f->key) *f = (ent){na2 + 1, d2, c2, gen};
+                    else if (f->kind != c2) {
+                        const i64 dc = f->kind - c2, dd = d2 - f->d;
+                        if (dd % dc != 0 || dd / dc != X) { fprintf(stderr, "wrong solution (cheap point)\n"); exit(1); }
+                        if (!t->tcoll) t->tcoll = t->ops, t->nred_at = t->nred;
+                        free(ks);
+                        return (double)(rd + 1) * K;
+                    }
+                }
+            }
             if ((mixh(na, 3) & dpmask) == 0) {
                 ent *f = find(tab, tmask, na + 1);
                 if (!f->key) *f = (ent){na + 1, k->d, k->coef, gen};
@@ -213,7 +238,7 @@ int main(int argc, char **argv)
 #define OPT(n, fmt, var) if (!strncmp(a, n "=", sizeof n)) { sscanf(a + sizeof n, fmt, &var); continue; }
         OPT("bits", "%d", bits) OPT("runs", "%d", runs) OPT("K", "%d", K) OPT("dp", "%d", dpbits) OPT("R", "%d", R) OPT("iid", "%d", iid)
         OPT("shadow", "%d", shadow) OPT("jm34", "%lf", jm34) OPT("jabs", "%lf", jabs) OPT("spread", "%lf", spread) OPT("pow2", "%d", pow2)
-        OPT("cap", "%lf", capm) OPT("seed", "%lu", seed) OPT("shm", "%lf", shm)
+        OPT("cap", "%lf", capm) OPT("seed", "%lu", seed) OPT("shm", "%lf", shm) OPT("cheap", "%d", cheap)
         if (!strncmp(a, "design=", 7)) { dfile = a + 7; continue; }
         if (!strncmp(a, "out=", 4)) { outf = a + 4; continue; }
         fprintf(stderr, "unknown option %s\n", a);
@@ -245,6 +270,8 @@ int main(int argc, char **argv)
     for (int k = 0; k < 5; k++) { m[k] = s[k] / n; se[k] = n > 1 ? sqrt((q[k] / n - m[k] * m[k]) / (n - 1)) : 0; }
     printf("bits=%d K=%d dp=%d R=%d iid=%d trials=%d failed=%d: cost %.4f +- %.4f", bits, K, dpbits, R, iid, n, fail, m[0], se[0]);
     if (shadow) printf(" | t_coll %.4f, distinct %.4f, redundant %.4f, delay %.4f +- %.4f", m[1], m[2], m[3], m[4], se[4]);
-    printf(" | per trial: merges %.1f, cycle exits %.1f, restarts without DP %.1f\n", n_merge / runs, n_esc / runs, n_cap / runs);
+    printf(" | per trial: merges %.1f, cycle exits %.1f, restarts without DP %.1f", n_merge / runs, n_esc / runs, n_cap / runs);
+    if (cheap) printf(", distinguished second points %.1f", n_cheap / runs);
+    printf("\n");
     return 0;
 }
