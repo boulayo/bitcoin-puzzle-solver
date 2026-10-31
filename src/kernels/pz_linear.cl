@@ -15,6 +15,16 @@
 #define HALF 128
 #endif
 #define GRP (2 * HALF)
+/* MC = 2: the prefix products of the batch inversion are kept for every other denominator only, and the backward pass forms the
+ * missing ones (half a field multiplication more per pair of keys, half the private memory and its traffic) */
+#ifndef MC
+#define MC 1
+#endif
+#if MC == 2
+#define NTMP (HALF / 2 + 1)           /* the prefixes of the even m, then the product of d_0 .. d_HALF-1 (the one of an odd m that is used) */
+#else
+#define NTMP HALF
+#endif
 
 inline void load_ge_c(ge *p, __constant const uint *q)
 {
@@ -84,11 +94,31 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
 
     /* only the prefix products are kept: the backward pass of the batched inversion recomputes each denominator from
      * the table and uses its inverse at once, which divides the private-memory traffic per key by three */
-    fe tmp[HALF];
+    fe tmp[NTMP];
     for (uint g = 0; g < ngroups; g++) {
         const fe xc = C.x, yc = C.y;
         /* denominators d_m = x((m+1)*G) - xc for m < HALF, d_HALF = x(GRP*G) - xc */
         fe acc;
+#if MC == 2
+        for (int m = 0; m < HALF; m += 2) {
+            fe sx, d;
+            fe_load_c16(&sx, gtab + m * 16);
+            fe_sub_norm(&d, &sx, &xc);
+            if (m == 0) acc = d;
+            else fe_mul(&acc, &acc, &d);
+            tmp[m / 2] = acc;
+            fe_load_c16(&sx, gtab + (m + 1) * 16);
+            fe_sub_norm(&d, &sx, &xc);
+            fe_mul(&acc, &acc, &d);
+        }
+        tmp[HALF / 2] = acc;
+#define LAST_PREFIX tmp[HALF / 2]
+        {
+            fe d;
+            fe_sub_norm(&d, &GS.x, &xc);
+            fe_mul(&acc, &acc, &d);
+        }
+#else
         for (int m = 0; m <= HALF; m++) {
             fe sx, d;
             if (m < HALF) fe_load_c16(&sx, gtab + m * 16);
@@ -98,6 +128,8 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             else fe_mul(&acc, &acc, &d);
             if (m < HALF) tmp[m] = acc;
         }
+#define LAST_PREFIX tmp[HALF - 1]
+#endif
         fe chk = acc;
         fe_normalize(&chk);
         if (fe_is_zero(&chk)) { atomic_or(&hits[1], 1u); return; }
@@ -107,7 +139,7 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
         /* m = HALF: the next centre C + GRP*G */
         {
             fe im, d, lam, t;
-            fe_mul(&im, &inv, &tmp[HALF - 1]);
+            fe_mul(&im, &inv, &LAST_PREFIX);
             fe_sub_norm(&d, &GS.x, &xc);
             fe_mul(&inv, &inv, &d);
             fe_sub_norm(&t, &GS.y, &yc);
@@ -124,6 +156,37 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
         /* i = m + 1 from HALF down to 2: C + i*G (i < HALF) and C - i*G. The first denominator (i = 1, whose inverse is what is left of
          * the product) and the centre (i = 0) come after the loop: inside it the compiler copied inv into im and the centre into x3 and y3
          * ahead of the tests on i, 24 moves per pair of keys on sm_86 */
+#if MC == 2
+        {                                               /* i = HALF: its prefix (m = HALF - 2) is kept */
+            fe sx, sy, im, d;
+            fe_load_c16(&sx, gtab + (HALF - 1) * 16);
+            fe_load_c16(&sy, gtab + (HALF - 1) * 16 + 8);
+            fe_mul(&im, &inv, &tmp[(HALF - 2) / 2]);
+            fe_sub_norm(&d, &sx, &xc);
+            fe_mul(&inv, &inv, &d);
+            pair_keys(&xc, &yc, &sx, &sy, &im, false, koff, (ulong)HALF, tw, hits, max_hits);
+        }
+        /* then i and i - 1 (m = i - 1 even): with p the kept prefix of m - 2 and r = inv * p, the inverse of d_m is r * d_m-1 and the
+         * inverse of d_m-1 is r * d_m (five products for two denominators, four when every prefix is kept) */
+        for (int i = HALF - 1; i >= 3; i -= 2) {
+            fe sx, sy, im, im1, r, d, d1;
+            fe_load_c16(&sx, gtab + (i - 1) * 16);
+            fe_sub_norm(&d, &sx, &xc);
+            fe_load_c16(&sx, gtab + (i - 2) * 16);
+            fe_sub_norm(&d1, &sx, &xc);
+            fe_mul(&r, &inv, &tmp[(i - 3) / 2]);
+            fe_mul(&im, &r, &d1);
+            fe_mul(&im1, &r, &d);
+            fe_mul(&inv, &inv, &d);
+            fe_mul(&inv, &inv, &d1);
+            fe_load_c16(&sx, gtab + (i - 1) * 16);
+            fe_load_c16(&sy, gtab + (i - 1) * 16 + 8);
+            pair_keys(&xc, &yc, &sx, &sy, &im, true, koff, (ulong)i, tw, hits, max_hits);
+            fe_load_c16(&sx, gtab + (i - 2) * 16);
+            fe_load_c16(&sy, gtab + (i - 2) * 16 + 8);
+            pair_keys(&xc, &yc, &sx, &sy, &im1, true, koff, (ulong)(i - 1), tw, hits, max_hits);
+        }
+#else
         for (int i = HALF; i >= 2; i--) {
             fe sx, sy, im, d;
             fe_load_c16(&sx, gtab + (i - 1) * 16);
@@ -133,6 +196,8 @@ __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab,
             fe_mul(&inv, &inv, &d);
             pair_keys(&xc, &yc, &sx, &sy, &im, i < HALF, koff, (ulong)i, tw, hits, max_hits);
         }
+#endif
+#undef LAST_PREFIX
         {
             fe sx, sy;
             fe_load_c16(&sx, gtab);

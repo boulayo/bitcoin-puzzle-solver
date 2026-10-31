@@ -25,13 +25,19 @@ function emul_defines(    i, d) {
         if ($i ~ /^-D(HALF|NK|MC)=[0-9]+$/) d = d " " $i
     return d
 }
-function linear_obj() { return dir "/linear" size_of() ".o" }
+# the linear kernels the simulated driver runs differ by the size and by the batch products (a "p" when they are kept every other denominator)
+function linear_tag(    i) {
+    for (i = 5; i <= NF; i++)
+        if ($i == "-DMC=2") return size_of() "p"
+    return size_of()
+}
 /^[ \t]*(#|$)/ { next }
 {
     n++
     name[n] = $1; kind[n] = $2; base[n] = $4
     p[n] = $2 == "test" ? "0" : param_of()
     sz[n] = size_of()
+    lt[n] = linear_tag()
     ed[n] = emul_defines()
 }
 END {
@@ -57,12 +63,12 @@ END {
         print "/* Generated from src/kernels/ptx/modules.txt by tools/ptx_table.awk: do not edit. */"
         for (i = 1; i <= n; i++) printf "extern const unsigned char mock_ptx_%s[];\n", name[i]
         for (i = 1; i <= n; i++) {
-            if (kind[i] == "linear" && !(("L" sz[i]) in seen)) { seen["L" sz[i]] = 1; printf "DECL_SEARCH(%s)\n", sz[i] }
+            if (kind[i] == "linear" && !(("L" lt[i]) in seen)) { seen["L" lt[i]] = 1; printf "DECL_SEARCH(%s)\n", lt[i] }
             if (kind[i] == "kang") printf "DECL_KANG(%s)\n", name[i]
         }
         print "static const struct { const unsigned char *ptx; int kind; search_fn search; kang_fn kang; } MODS[] = {"
         for (i = 1; i <= n; i++) {
-            if (kind[i] == "linear") printf "    {mock_ptx_%s, M_LINEAR, mock_search%s, NULL},\n", name[i], sz[i]
+            if (kind[i] == "linear") printf "    {mock_ptx_%s, M_LINEAR, mock_search%s, NULL},\n", name[i], lt[i]
             else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s},\n", name[i], name[i]
             else printf "    {mock_ptx_%s, M_TEST, NULL, NULL},\n", name[i]
         }
@@ -70,10 +76,10 @@ END {
     } else if (mode == "mockcc" || mode == "mockobjs") {
         for (i = 1; i <= n; i++) {
             if (kind[i] == "linear") {
-                if (("L" sz[i]) in done) continue
-                done["L" sz[i]] = 1
-                o = dir "/linear" sz[i] ".o"
-                cmd = cc " -c tests/mock_cuda/kern.c -DMOCK_LINEAR" ed[i] " -Dpz_search=mock_search" sz[i] " -o " o ";"
+                if (("L" lt[i]) in done) continue
+                done["L" lt[i]] = 1
+                o = dir "/linear" lt[i] ".o"
+                cmd = cc " -c tests/mock_cuda/kern.c -DMOCK_LINEAR" ed[i] " -Dpz_search=mock_search" lt[i] " -o " o ";"
             } else if (kind[i] == "kang") {
                 o = dir "/" name[i] ".o"
                 cmd = cc " -c tests/mock_cuda/kern.c -DMOCK_KANG" ed[i] " -Dpz_kang_step=mock_" name[i] " -o " o ";"
