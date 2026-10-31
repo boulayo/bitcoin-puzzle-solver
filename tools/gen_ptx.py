@@ -14,7 +14,7 @@ NVRTC comes from the 'nvidia-cuda-nvrtc-cu12' wheel (pip download), ptxas (optio
 on sm_86) from 'nvidia-cuda-nvcc-cu12'. The NVRTC version fixes the PTX ISA version and therefore the oldest driver
 that can load the modules: NVRTC 12.0 -> PTX 8.0 -> driver >= 525.
 """
-import ctypes, os, subprocess, sys, tempfile
+import ctypes, multiprocessing, os, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -68,6 +68,15 @@ def compile_one(lib, name, files, defines):
     return ptx.value.decode()
 
 
+def compile_alone(job):
+    """compile_one in a process of its own (see main): the PTX text, or the message of a failure"""
+    nvrtc, name, files, defines = job
+    try:
+        return True, compile_one(ctypes.CDLL(nvrtc), name, files, defines)
+    except SystemExit as e:
+        return False, str(e)
+
+
 def ptxas_report(ptxas, name, ptx):
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, name + '.ptx')
@@ -91,8 +100,14 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     stale = []
     modules = read_modules()
-    for name, files, defines in modules:
-        ptx = compile_one(lib, name, files, defines)
+    # Every module is compiled by a fresh process: within one process NVRTC numbers the "callseq" comments over all the programs it has
+    # compiled, and its output for the largest modules was seen to change from run to run after the others (register numbering, the order
+    # of a few loads), which made --check fail at random. Alone, a module's text depends only on its sources and options.
+    with multiprocessing.get_context('spawn').Pool(min(4, os.cpu_count() or 1), maxtasksperchild=1) as pool:
+        out = pool.map(compile_alone, [(nvrtc, name, files, defines) for name, files, defines in modules], chunksize=1)
+    for (name, files, defines), (ok, ptx) in zip(modules, out):
+        if not ok:
+            raise SystemExit(ptx)
         if ptxas:
             ptxas_report(ptxas, name, ptx)
         path = os.path.join(OUT, name + '.ptx')
