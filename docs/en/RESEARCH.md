@@ -585,6 +585,79 @@ scheduling control words that `ptxas` writes into every instruction give the lat
   done: choosing the inverting warp from `%warpid` so that co-resident blocks never invert on the same partition (61,100 → 54,100 cycles, +13 %
   for this variant, with inline assembly).
 
+**After 1.19.2: the bytes of a kangaroo step.** The kernels with the walkers in private arrays (`NK` 16 to 256, plain, pairs and quads) are
+bound by the traffic of those arrays to the device memory (8.4), and the figure the model used for it, ≈ 215 bytes per step, was a count by
+construction from 1.7.0. This is the count from the SASS: `tools/research/kang_bytes.py` rebuilds the executed path of one turn of the loop
+over the walkers (as `kang_block_sched.py` does for the block herd: the branches that skip a block with an atomic, a restart or a distinguished
+point, are taken; the rest is the common path) and sums its `LDL` and `STL` by width and by the array they address (from the offsets in the
+stack frame), the `STG.U16` of the history and the `LDG.128` of the jump table. NVRTC 12.0 and `ptxas` for sm_75, sm_86 and sm_89; no GPU was
+at hand, the one measurement below is the 911 M steps/s of 1.19.2 on the A2000. The arrays are local memory, which the hardware interleaves so
+that one `LDL.128` of a warp is 512 contiguous bytes: every access is coalesced, and none of it can stay in a cache (the private arrays of the
+A2000's herd are 160 MiB per round against 2 MiB of L2).
+
+* **One step of `NK` 128 quads in 1.19.2, sm_86** (per walker and round, the executed path; the same on sm_75 and sm_89): x read and written
+  32 + 32, y 32 + 32, the stored products 8 + 8 (one of 32 bytes per block of four), the flags 7 read (4 in the prologue of the block, for the
+  jump index of the denominator, and 4 again in the step by three walkers in four, since the quads kernel let `ptxas` reload them) and 4
+  written, the tag of the point left 4 read and the two tags 8 written, the checkpoint tag and least tag 8 read (written only when they change:
+  on checkpoint steps and while the least tag falls, under 1 byte per step), the history entry 2: **177 bytes**, of which 91 read and 86
+  written. Plain `NK` 128: 222 (the products 32 + 32, the flags read once); pairs 192. Per launch, not per round: the state of a walker is
+  read and written once (128 + 128 bytes; the records are 128 bytes apart per walker and `NK` · 128 apart between the lanes of a warp, so
+  each `LDG.32` touches 32 lines, but the 32 words of a record are read in sequence and the lines are used whole), the replay reads the
+  history again (2 bytes per round) with the jump distances from L1, and the product and inverse pass through local memory around the
+  `fe_inv` call (128 bytes per round per work-item). With the 128 rounds a launch runs on the A2000 (the history of 1.3 million walkers
+  takes the eighth of its 4 GB at that depth) this is 4 more bytes per step: **181 for the quads**, and 911 M steps/s × 181 bytes = 165 GB/s,
+  the copy bandwidth `bench` measured on that card. The kernel runs at the bandwidth of the card; the "ceiling" of 769 M steps/s that 8.4
+  computed with 215 bytes was the plain kernel's, and nothing had to come from the L2. What the L2 does serve: the first walkers of a round
+  read the x, y and product the previous round wrote moments earlier (the pass turns around), and at 160 GB/s a line stays in 2 MiB about 12
+  µs, which is two steps of one work-item: about 1 % of the reads. The jump table (21 KiB) is 120 bytes of `LDG.128` per step from L1.
+* **Kept: the metadata written and read once.** The two tags one and two steps back were both written at every step (an 8-byte store); the
+  tag two back is used only by the next jump choice, which the step that computes it knows (it is the tag the step itself reads), so it
+  travels no further than the registers, and the last round of a launch stores it for the host alone (a launch that stops early because a
+  product was zero leaves the value the launch began with, for walkers the host restarts anyway: the self-test compares the end state bit
+  for bit and passes on the simulated driver and on pocl). The quads kernel keeps the flags of its block of four in registers between the
+  prologue and the steps (`BF`, 4 registers; the pairs kernels at the 128-register cap would spill them: there the step reads its word
+  again, as before). The checkpoint tag and least tag are one 8-byte word, read where they are compared. Per step, executed path, sm_86:
+
+  | kernel          | bytes 1.19.2 → now | instructions per step (loop) | registers, spill bytes |
+  |-----------------|--------------------|------------------------------|------------------------|
+  | `NK` 128 quads  | 177 → **170**      | 1161 → 1159                  | 216 → 230, none        |
+  | `NK` 64 quads   | 177 → **170**      | 1163 → 1164                  | 216 → 222, none        |
+  | `NK` 128 plain  | 222 → **218**      | 1082 → 1079                  | 128 → 126, none        |
+  | `NK` 64 pairs   | 192 → **188**      | 1158 → 1157                  | 128, none              |
+  | `NK` 128 pairs  | 192 → **188**      | 1161 → 1164                  | 128, none              |
+  | `NK` 256 pairs  | 192 → **188**      | 1162 → 1161                  | 128, 48 outside the loop |
+
+  sm_89 is the same to the instruction. On sm_75 the plain and quads kernels give the same bytes and registers as sm_86, and the pairs
+  kernels at the 128-register cap, which spilled inside the loop before and after (an amount `ptxas` does not report: the values go to local
+  memory before its allocation), move either way: `NK` 64 pairs 216 → 188 and `NK` 128 pairs 222 → 204 (fewer spills), `NK` 256 pairs
+  212 → 222 (more). The `NK` 16 and 32 kernels of the cache-sized herds behave like their larger siblings (16: 222 → 218 with the 4 spill
+  bytes gone; 32 pairs on sm_75 212 → 222). The block herd is untouched (its words are registers: 250 registers, no spill, as before). Round
+  overhead per step unchanged: ≈ 65 instructions plus `fe_inv` (14,540 executed per warp) over `NK`. OpenCL: pocl runs every variant bit-exact;
+  for gfx1030 clang 18 gives the same VGPR counts within 4 (the quads 250 → 254, no spill) and the same private loads and stores by count.
+  **Expected on the A2000**, a model: at 181 → 174 bytes per step and the bandwidth it already reaches, 911 → ≈ 948 M steps/s (+4 %) with `NK`
+  128 quads; the instructions per step do not move, so the energy of a step falls with its bytes. `pzsolve bench --gpu-only --retune`
+  measures it (the tuning is saved per version); `PZ_GPU_NK=128c` forces the variant.
+* **Counted and dropped.**
+  * *x kept across the turn of the pass.* The kernel has one pass per round since 1.7.0 (no second read of x), and the walkers whose state
+    could stay on chip from the end of one pass to the start of the next are the few the L2 already serves (above). Shared memory would hold
+    390 bytes per work-item at the 256 of the quads kernel, six walkers' x and y of 128: 3 bytes per step at best, for `LDS`/`STS` in the
+    loop. Not done.
+  * *Fewer metadata bytes than 24.* The tag one step back (4 read, 4 written), the flags with the jump index (4 + 4: the index is chosen in
+    round r for the denominator of round r + 1 and read back in r + 1; choosing it again in r + 1 needs the tag two back, the same 4 bytes
+    either way), the checkpoint tag and least tag (8 read, compared at every step; a shorter tag would change the walk, which the CPU shares).
+    The kind could be derived from the walker's index, but it is one bit of a word that is needed anyway.
+  * *Products every eighth walker* (an octets kernel, −8 bytes per step for 0.5 of a product more). Two forms: the one of the pairs and
+    quads, with the x, denominator and suffix product of every walker of the block kept (192 registers of block state: spills); and a form in
+    two halves, keeping x and the flags only, forming a denominator again from x and its jump point where it is used, the product of the
+    second half first, then the suffix products of each half (10 products per 8 walkers against 6 for two quads, 104 registers of block state
+    against the quads' 96): `ptxas` reaches the 255 cap and spills through the frame on sm_86, 223 bytes per step against 170. The register
+    budget of a block is its `MC` x's plus its `MC` suffix products plus the step, and a step needs about 90: 8 walkers do not fit in 255.
+  * *Longer launches.* The fixed cost of a launch is 256 bytes of state per walker and the first products; at 128 rounds (the A2000) it is 2
+    bytes per step, 1 at 256, for 335 MiB more of history (an eighth of the card's memory is the rule in `gpu_kang_depth`). Not done.
+  * *The history* is written as 64 contiguous bytes per warp and step and read the same way by the replay: 4 bytes per step, as designed.
+  * *The sentinel product* (`TP[0] = 1`, 32 bytes written and read per round per work-item) and the product and inverse around the `fe_inv`
+    call: 1.25 bytes per step at `NK` 128, a branch per block or a change of the call for them. Not done.
+
 ## 8. Theoretical limits: how much can still be improved?
 
 ### 8.1 The constant: the figures of the earlier layouts
@@ -683,6 +756,8 @@ still be bandwidth-limited, but close to the crossover point**. These are estima
   32 B out of ≈ 230 are removed at the price of 0.5 multiplications per step (≈ +6 % of instructions) and the kernel stays at 128 registers
   without spills: **implemented as a variant** ("paired products", `PZ_GPU_NK=128b`) and left to tuning. With blocks of 4
   (−48 B, +0.75 multiplications) `ptxas` spills 344 bytes: discarded. Without a card to measure on, it is not known whether it gains.
+  *The bytes of a step counted from the SASS, and what the 911 M steps/s of the A2000 mean (the quads kernel at 181 bytes per step runs at
+  the copy bandwidth of the card, not above it): section 5, after 1.19.2.*
 
 **BSGS.** After the vectorization of the windows (ALGORITHMS.md section 9.2) a giant step costs ≈ 25 ns of arithmetic and ≈ 55 ns of random
 read of the table (single thread, 64 MB table). For large tables the RAM latency decides: huge pages (TLB) and

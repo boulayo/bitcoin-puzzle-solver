@@ -27,6 +27,18 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   1.19.x without it means 0.35 s). The speed of a GPU on the dashboard and in `bench --together` is taken between the ends of its launches
   instead of over a window of the clock, so that launches longer than a second do not make it swing. Measured on simulated devices only,
   where the lengths tried are reached when the device is fast enough for them.
+- GPU kangaroo (CUDA and OpenCL kernels with the walkers in private arrays, `NK` 16 to 256, plain, pairs and quads): the tag of the point two
+  steps back is no longer written at every step (the next jump choice, which is the only thing that uses it, is made by the step that knows
+  it; the last round of a launch stores it for the host), and the quads kernel reads the flags of a block of walkers once instead of twice.
+  Device memory traffic per step, counted on the executed path of the SASS for sm_86 (`tools/research/kang_bytes.py`): `NK` 128 quads 177 to
+  170 bytes, plain 222 to 218, pairs 192 to 188, with 1 to 3 instructions fewer per step and no new spill on sm_86 and sm_89 (the pairs
+  kernels on sm_75 spill inside the loop before and after, by amounts that move either way: RESEARCH.md section 5). The RTX A2000 ran `NK`
+  128 quads at 911 M steps/s in 1.19.2, which is 165 GB/s at the 181 bytes per step the audit finds for that kernel, so the model expects
+  about 948 M steps/s (+4 %) if it stays at the bandwidth of the card; not yet measured. Same walk, history and host side; bit-exact against
+  the CPU on the simulated CUDA driver and on pocl, planted keys found with every variant on both. The PTX modules are regenerated.
+- Documentation: RESEARCH.md section 5 has the byte audit of the kangaroo step (every load and store of a round by purpose, before and after,
+  on sm_75, sm_86 and sm_89), the launch-level traffic, what the L2 can serve, and the candidates counted and dropped (walkers kept in shared
+  memory across the pass boundary, products every eighth walker, longer launches).
 
 ## [1.19.2] — 2026-10-31
 
