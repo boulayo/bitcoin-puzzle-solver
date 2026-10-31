@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.19.2] — 2026-10-31
 
 ### Changed
 - CPU, AVX-512 IFMA lanes: the products skip four masks that did nothing (the multiply-adds read only the low 52 bits of their
@@ -21,6 +21,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   this version: the CUDA linear kernels are those of 1.19.0.
 - `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
   and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
+GPU kernels, GPU tuning and the choice of CPU threads and GPUs are those of 1.19.1; the tuning is saved per version, so the first run of
+this version measures the GPU variants again.
+
 ### Added
 - GPU kangaroo: a *block herd* kernel variant (`kang4g`, "NK 4 block herd"), forced with `PZ_GPU_NK=4g`: 4 walkers per work-item in
   registers for the whole launch and one field inversion per block of 128 work-items and round (32 lanes of one warp invert the column
