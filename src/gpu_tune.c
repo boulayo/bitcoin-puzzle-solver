@@ -345,6 +345,7 @@ typedef struct {
     bool kang;                    /* the kangaroo kernel (else the linear one): the key of the saved choice */
     int nv, vs[32], def;          /* the variants to try, and the default one */
     double (*measure)(gpu_session *s, int variant);     /* sets the variant, measures it: units per second, 0 when it cannot run */
+    double warm_s;                                      /* seconds of the default variant before the measurements (0: none) */
     void (*set)(gpu_session *s, int variant);
     bool (*check)(gpu_session *s);                      /* the bit-exact test of the variant that is set */
     void (*finish)(gpu_session *s);                     /* what the check leaves behind to release (may be NULL) */
@@ -358,24 +359,55 @@ typedef struct {
     const char *bad_check_fmt;    /* when the choice fails the check: GPU[%d] and its name */
 } tune_ops;
 
-/* Measures the variants and leaves the fastest in s: the default stays unless another is clearly (> 3%) faster (a chain of 3% steps would
- * stop short of the best), and the choice is saved only once it has passed the bit-exact test against the CPU, otherwise a bad choice would
- * exclude the GPU for good. The terminal shows the choice in one line; the rates of all the variants go to the log file (and to the terminal
- * with -v). */
+/* The choice of a variant. Each one is measured for a second or so, which on a laptop GPU held back by its power limit or its temperature is
+ * noisy by 2-3%, and the fastest of many noisy rates is lucky by about as much. So: the device is warmed up first (TUNE_WARM_S of the default
+ * variant, not counted), the variants are measured in turns (all of them in order, again in the reverse order, then in order: a drift of the
+ * clock weighs the same on every variant), only those within TUNE_NEAR of the fastest of the first turn (and the default) go through all
+ * TUNE_ROUNDS, and each one gets the median of its rates. The default stays unless another is faster by more than TUNE_MARGIN. */
+#define TUNE_ROUNDS 3
+#define TUNE_NEAR 0.95
+#define TUNE_MARGIN 1.01
+#define TUNE_WARM_S 3.0
+
+static double median_of(double *v, int n)
+{
+    for (int i = 1; i < n; i++)
+        for (int j = i; j > 0 && v[j] < v[j - 1]; j--) { const double t = v[j]; v[j] = v[j - 1]; v[j - 1] = t; }
+    return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
+}
+
+/* Measures the variants and leaves the fastest in s (above), and the choice is saved only once it has passed the bit-exact test against the
+ * CPU, otherwise a bad choice would exclude the GPU for good. The terminal shows the choice in one line; the rates of all the variants go to
+ * the log file (and to the terminal with -v). */
 static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
 {
     char nb[64];
     rt_log(PZ_LOG_INFO, op->intro_fmt, idx, op->nv);
-    double rate[32] = {0};
-    int best = 0;
+    double rate[32] = {0}, smp[32][TUNE_ROUNDS];
+    int nsmp[32] = {0}, best = 0;
+    for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) best = i;
+    if (op->warm_s > 0) {
+        const double t0 = pz_mono();
+        while (op->measure(s, op->def) > 0 && pz_mono() - t0 < op->warm_s) {}
+    }
+    for (int r = 0; r < TUNE_ROUNDS; r++) {
+        double top = 0;
+        for (int i = 0; i < op->nv; i++) if (nsmp[i] && smp[i][0] > top) top = smp[i][0];
+        for (int k = 0; k < op->nv; k++) {
+            const int i = r % 2 ? op->nv - 1 - k : k;
+            if (r > 0 && (smp[i][0] <= 0 || (i != best && smp[i][0] < top * TUNE_NEAR))) continue;
+            smp[i][nsmp[i]++] = op->measure(s, op->vs[i]);
+        }
+    }
     for (int i = 0; i < op->nv; i++) {
-        rate[i] = op->measure(s, op->vs[i]);
-        if (op->vs[i] == op->def) best = i;
+        bool dead = false;
+        for (int r = 0; r < nsmp[i]; r++) dead |= smp[i][r] <= 0;
+        rate[i] = dead || !nsmp[i] ? 0 : median_of(smp[i], nsmp[i]);
     }
     {
         int fastest = 0;
         for (int i = 1; i < op->nv; i++) if (rate[i] > rate[fastest]) fastest = i;
-        if (rate[fastest] > rate[best] * 1.03) best = fastest;
+        if (rate[fastest] > rate[best] * TUNE_MARGIN) best = fastest;
     }
     char line[1000];
     size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: %s (%s):", idx, op->head, op->unit);
@@ -390,13 +422,13 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
         return;
     }
     rt_log(PZ_LOG_DEBUG, "%s; picking %s%s%s", line, op->entry, op->name(op->vs[best], nb, sizeof nb),
-           op->vs[best] == op->def ? " (default; none >3% faster)" : "");
+           op->vs[best] == op->def ? " (default; none >1% faster)" : "");
     {
         char r[32], why[160], db[64];
         int di = 0;
         for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) di = i;
         const char *dname = op->name(op->def, db, sizeof db);
-        if (best == di) snprintf(why, sizeof why, "the default: no other variant >3%% faster");
+        if (best == di) snprintf(why, sizeof why, "the default: no other variant >1%% faster");
         else if (rate[di] > 0) snprintf(why, sizeof why, "+%.1f%% over %s%s", 100.0 * (rate[best] / rate[di] - 1), op->entry, dname);
         else snprintf(why, sizeof why, "the default %s%s cannot run", op->entry, dname);
         rt_log(PZ_LOG_INFO, "GPU[%d]: %s: %s%s (%s %s, %s)", idx, op->head, op->entry, op->name(op->vs[best], nb, sizeof nb), pz_fmt_si(rate[best], r, sizeof r),
@@ -454,7 +486,7 @@ void gpu_linear_autotune(gpu_session *s, int idx)
         return;
     }
     if (tune_off(d)) return;
-    tune_ops op = {.kang = false, .def = gpu_default_variant(d), .measure = linear_measure_variant, .set = linear_set_variant,
+    tune_ops op = {.kang = false, .def = gpu_default_variant(d), .measure = linear_measure_variant, .warm_s = d->is_gpu ? TUNE_WARM_S : 0, .set = linear_set_variant,
                    .check = gpu_test_linear, .finish = gpu_linear_release_program, .code = linear_code, .name = variant_name,
                    .cached_fmt = "GPU[%d]: kernel with window %s (from earlier tuning)",
                    .intro_fmt = "GPU[%d]: tuning the kernel (one time only: %d variants, the driver compiles them the first time)...",
@@ -480,7 +512,7 @@ void gpu_kang_autotune(gpu_session *s, int idx)
         return;
     }
     if (tune_off(d)) return;
-    tune_ops op = {.kang = true, .def = default_kvariant(d), .measure = kang_measure_variant, .set = kang_set_variant,
+    tune_ops op = {.kang = true, .def = default_kvariant(d), .measure = kang_measure_variant, .warm_s = d->is_gpu ? TUNE_WARM_S : 0, .set = kang_set_variant,
                    .check = gpu_test_kang, .code = kang_code, .name = kvariant_name,
                    .cached_fmt = "GPU[%d]: kangaroo with %s (from earlier tuning)",
                    .intro_fmt = "GPU[%d]: tuning the kangaroo kernel (one time only: %d variants)...",
@@ -672,14 +704,14 @@ void gpu_bench(void)
 /* ---------------- self-test of the choice of a variant ---------------- */
 
 /* tune_pick with invented rates: when the default stays, when another wins, what is saved and what is logged. No device is needed. */
-static struct { double rate[3]; int measured; bool check_ok; int set_to; } g_fake;
+static struct { double rate[3]; int measured; bool check_ok; int set_to; const double (*seq)[3]; int nth[3]; } g_fake;
 static const int FAKE_V[3] = {128, 256, 512};
 
 static double fake_measure(gpu_session *s, int v)
 {
     g_fake.measured++;
     linear_set_variant(s, v);
-    for (int i = 0; i < 3; i++) if (FAKE_V[i] == v) return g_fake.rate[i];
+    for (int i = 0; i < 3; i++) if (FAKE_V[i] == v) return g_fake.seq ? g_fake.seq[i][g_fake.nth[i]++ % 3] : g_fake.rate[i];
     return 0;
 }
 static bool fake_check(gpu_session *s) { (void)s; return g_fake.check_ok; }
@@ -723,17 +755,19 @@ int gpu_tune_selftest(void)
     /* rates of the windows 128, 256 (the default) and 512; the window that is picked; the lines logged (the table, when one is made, for the log
      * file, and the choice for the terminal) */
     static const struct { double rate[3]; int picked; const char *table, *choice; } cases[] = {
-        {{100e6, 102e6, 90e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 90.00 M; picking window 256 (default; none >3% faster)",
-         "window 256 (102.00 M u/s, the default: no other variant >3% faster)"},                                  /* the default is the fastest */
+        {{100e6, 102e6, 90e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 90.00 M; picking window 256 (default; none >1% faster)",
+         "window 256 (102.00 M u/s, the default: no other variant >1% faster)"},                                  /* the default is the fastest */
         {{100e6, 102e6, 107e6}, 512, "window 128 100.00 M; window 256 102.00 M; window 512 107.00 M; picking window 512",
          "window 512 (107.00 M u/s, +4.9% over window 256)"},                                                     /* 4.9% faster: it wins */
-        {{100e6, 102e6, 103e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 103.00 M; picking window 256 (default; none >3% faster)",
-         "window 256 (102.00 M u/s, the default: no other variant >3% faster)"},                                  /* 1% faster: the default stays */
+        {{100e6, 102e6, 103e6}, 256, "window 128 100.00 M; window 256 102.00 M; window 512 103.00 M; picking window 256 (default; none >1% faster)",
+         "window 256 (102.00 M u/s, the default: no other variant >1% faster)"},                                  /* under 1% faster: the default stays */
+        {{100e6, 102e6, 104e6}, 512, "window 128 100.00 M; window 256 102.00 M; window 512 104.00 M; picking window 512",
+         "window 512 (104.00 M u/s, +2.0% over window 256)"},                                                     /* 2% faster: it wins */
         {{0, 0, 0}, 256, NULL, NULL},                                                                             /* nothing runs: the default, no table */
         {{100e6, 0, 0}, 128, "window 128 100.00 M; window 256 0.00; window 512 0.00; picking window 128",
          "window 128 (100.00 M u/s, the default window 256 cannot run)"},                                         /* the default cannot run */
     };
-    for (int c = 0; c < 5; c++) {
+    for (int c = 0; c < (int)(sizeof cases / sizeof *cases); c++) {
         gpu_session *s = fake_session("Test GPU");
         char nm[24];
         snprintf(nm, sizeof nm, "Test GPU %d", c);
@@ -747,7 +781,7 @@ int gpu_tune_selftest(void)
         rt_logseq *q = rt_logseq_new(1, fake_sink, &lg);
         rt_logseq_enter(q, 0);
         tune_pick(s, 3, &op);
-        TCHK(g_fake.measured == 3 && s->variant == cases[c].picked);
+        TCHK(g_fake.measured >= 3 && g_fake.measured <= 3 * TUNE_ROUNDS && s->variant == cases[c].picked);
         TCHK(lg.n >= 1 && !strcmp(lg.line[0], "GPU[3]: tuning 3 variants"));
         if (cases[c].table) {
             char want[300], want2[200];
@@ -769,7 +803,7 @@ int gpu_tune_selftest(void)
             snprintf(want, sizeof want, "GPU[3]: cached %d", cases[c].picked);
             TCHK(g_fake.measured == 0 && s->variant == cases[c].picked && lg.n == 1 && !strcmp(lg.line[0], want));
         } else {
-            TCHK(g_fake.measured == 3 && s->variant == 256);
+            TCHK(g_fake.measured == 3 && s->variant == 256);     /* nothing runs: one turn only */
         }
         rt_logseq_done(q, 0);
         rt_logseq_free(q);
@@ -789,7 +823,28 @@ int gpu_tune_selftest(void)
         TCHK(s->variant == 256 && lg.n == 4 && !strcmp(lg.line[3], "WARN GPU[0]: variant 512 failed"));
         g_fake.measured = 0;
         tune_pick(s, 0, &op);
-        TCHK(g_fake.measured == 3);
+        TCHK(g_fake.measured >= 3);
+        rt_logseq_done(q, 0);
+        rt_logseq_free(q);
+        free(s);
+    }
+    {   /* the turns and the median: window 512 is lucky in the first turn only and loses, window 128 is far behind and is measured once,
+         * the default and window 512 three times each */
+        static const double seq[3][3] = {{80e6, 80e6, 80e6}, {100e6, 101e6, 99e6}, {110e6, 99e6, 100e6}};
+        gpu_session *s = fake_session("Test GPU turns");
+        g_fake.seq = seq;
+        memset(g_fake.nth, 0, sizeof g_fake.nth);
+        g_fake.check_ok = true;
+        g_fake.measured = 0;
+        tune_ops op = fake_ops();
+        fake_log lg;
+        memset(&lg, 0, sizeof lg);
+        rt_logseq *q = rt_logseq_new(1, fake_sink, &lg);
+        rt_logseq_enter(q, 0);
+        tune_pick(s, 2, &op);
+        TCHK(s->variant == 256 && g_fake.measured == 7 && g_fake.nth[0] == 1 && g_fake.nth[1] == 3 && g_fake.nth[2] == 3);
+        TCHK(lg.n == 3 && !strcmp(lg.line[1], "GPU[2]: table (u/s): window 128 80.00 M; window 256 100.00 M; window 512 100.00 M; picking window 256 (default; none >1% faster)"));
+        g_fake.seq = NULL;
         rt_logseq_done(q, 0);
         rt_logseq_free(q);
         free(s);
