@@ -7016,7 +7016,7 @@ $L__BB3_34:
 	st.local.u32 	[%rd200+20], %r5374;
 	st.local.u32 	[%rd200+24], %r5377;
 	st.local.u32 	[%rd200+28], %r5380;
-	{ // callseq 123, 0
+	{ // callseq 0, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd197;
@@ -7028,7 +7028,7 @@ $L__BB3_34:
 	param0, 
 	param1
 	);
-	} // callseq 123
+	} // callseq 0
 	ld.shared.u32 	%r6108, [%rd12+3072];
 	ld.shared.u32 	%r6172, [%rd12+3076];
 	ld.shared.u32 	%r6239, [%rd12+3080];
@@ -13944,7 +13944,7 @@ $L__BB3_50:
 	selp.b32 	%r13449, 0, %r13448, %p67;
 	mul.wide.u32 	%rd317, %r736, 4;
 	add.s32 	%r13450, %r23574, 1;
-	{ // callseq 124, 0
+	{ // callseq 1, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd16;
@@ -13989,7 +13989,7 @@ $L__BB3_50:
 	param11, 
 	param12
 	);
-	} // callseq 124
+	} // callseq 1
 	add.s64 	%rd486, %rd31, 1;
 
 $L__BB3_51:
@@ -17294,7 +17294,7 @@ $L__BB3_64:
 	selp.b32 	%r17230, 0, %r17229, %p93;
 	mul.wide.u32 	%rd364, %r736, 4;
 	add.s32 	%r17231, %r23574, 1;
-	{ // callseq 125, 0
+	{ // callseq 2, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd19;
@@ -17339,7 +17339,7 @@ $L__BB3_64:
 	param11, 
 	param12
 	);
-	} // callseq 125
+	} // callseq 2
 	add.s64 	%rd487, %rd31, 1;
 
 $L__BB3_65:
@@ -20645,7 +20645,7 @@ $L__BB3_78:
 	selp.b32 	%r21011, 0, %r21010, %p119;
 	mul.wide.u32 	%rd411, %r736, 4;
 	add.s32 	%r21012, %r23574, 1;
-	{ // callseq 126, 0
+	{ // callseq 3, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd21;
@@ -20690,7 +20690,7 @@ $L__BB3_78:
 	param11, 
 	param12
 	);
-	} // callseq 126
+	} // callseq 3
 	add.s64 	%rd488, %rd31, 1;
 
 $L__BB3_79:
@@ -22926,7 +22926,7 @@ $L__BB3_92:
 	selp.b32 	%r23322, 0, %r23321, %p145;
 	mul.wide.u32 	%rd445, %r736, 4;
 	add.s32 	%r23328, %r23574, 1;
-	{ // callseq 127, 0
+	{ // callseq 4, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd23;
@@ -22971,7 +22971,7 @@ $L__BB3_92:
 	param11, 
 	param12
 	);
-	} // callseq 127
+	} // callseq 4
 	add.s64 	%rd489, %rd31, 1;
 	mov.u32 	%r23627, %r12523;
 	mov.u32 	%r23628, %r12520;
@@ -23036,7 +23036,7 @@ $L__BB3_94:
 	cvt.u64.u32 	%rd450, %r736;
 	mul.wide.u32 	%rd451, %r736, 4;
 	mov.u32 	%r23338, 0;
-	{ // callseq 128, 0
+	{ // callseq 5, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd449;
@@ -23060,7 +23060,7 @@ $L__BB3_94:
 	param4, 
 	param5
 	);
-	} // callseq 128
+	} // callseq 5
 	cvta.to.global.u64 	%rd452, %rd471;
 	add.s64 	%rd453, %rd452, %rd448;
 	st.global.u32 	[%rd453], %r23658;
@@ -23098,7 +23098,7 @@ $L__BB3_94:
 	shl.b64 	%rd456, %rd455, 2;
 	add.s64 	%rd457, %rd471, %rd456;
 	add.s64 	%rd458, %rd446, %rd450;
-	{ // callseq 129, 0
+	{ // callseq 6, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd457;
@@ -23122,7 +23122,7 @@ $L__BB3_94:
 	param4, 
 	param5
 	);
-	} // callseq 129
+	} // callseq 6
 	st.global.u32 	[%rd453+128], %r23650;
 	st.global.u32 	[%rd453+160], %r23682;
 	st.global.u32 	[%rd453+132], %r23649;
@@ -23158,7 +23158,7 @@ $L__BB3_94:
 	shl.b64 	%rd461, %rd460, 2;
 	add.s64 	%rd462, %rd471, %rd461;
 	add.s64 	%rd463, %rd450, %rd458;
-	{ // callseq 130, 0
+	{ // callseq 7, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd462;
@@ -23182,7 +23182,7 @@ $L__BB3_94:
 	param4, 
 	param5
 	);
-	} // callseq 130
+	} // callseq 7
 	st.global.u32 	[%rd453+256], %r23642;
 	st.global.u32 	[%rd453+288], %r23674;
 	st.global.u32 	[%rd453+260], %r23641;
@@ -23218,7 +23218,7 @@ $L__BB3_94:
 	shl.b64 	%rd466, %rd465, 2;
 	add.s64 	%rd467, %rd471, %rd466;
 	add.s64 	%rd468, %rd450, %rd463;
-	{ // callseq 131, 0
+	{ // callseq 8, 0
 	.reg .b32 temp_param_reg;
 	.param .b64 param0;
 	st.param.b64 	[param0+0], %rd467;
@@ -23242,7 +23242,7 @@ $L__BB3_94:
 	param4, 
 	param5
 	);
-	} // callseq 131
+	} // callseq 8
 	st.global.u32 	[%rd453+384], %r23634;
 	st.global.u32 	[%rd453+416], %r23666;
 	st.global.u32 	[%rd453+388], %r23633;
