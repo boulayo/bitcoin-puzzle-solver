@@ -120,7 +120,8 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
         src[1] = (const char *)pz_kang_h; len[1] = pz_kang_h_len;
         src[2] = (const char *)pz_kang_cl; len[2] = pz_kang_cl_len;
         nsrc = 3;
-        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", param & 0xFFFF, (param >> 16) == 1 ? " -DMC=2" : (param >> 16) == 2 ? " -DMC=4" : ""); break;
+        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", param & 0xFFFF,
+                 (param >> 16) == 1 ? " -DMC=2" : (param >> 16) == 2 ? " -DMC=4" : (param >> 16) == 3 ? " -DKANG_BLOCK=1" : ""); break;
     default: src[1] = (const char *)pz_test_cl; len[1] = pz_test_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2"); break;
     }
     if (m->c->dev.no_asm) strcat(opts, " -DPZ_NO_ASM");
@@ -159,6 +160,12 @@ bool rtcl_kernel(rt_kern *k, const char *name)
     cl_kernel h = cl_load()->CreateKernel((cl_program)k->m->h, name, &rc);
     if (!h || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: kernel %s not found (%d)", name, rc); return false; }
     k->h = h;
+    /* a kernel built for work-groups of a given size (the block herd of the kangaroo) is launched with that size */
+    size_t wg[3] = {0, 0, 0};
+    const cl_api *cl = cl_load();
+    if (cl->GetKernelWorkGroupInfo &&
+        cl->GetKernelWorkGroupInfo(h, (cl_device_id)k->m->c->dev.cl_dev, CL_KERNEL_COMPILE_WORK_GROUP_SIZE, sizeof wg, wg, NULL) == CL_SUCCESS)
+        k->block = (int)wg[0];
     return true;
 }
 
@@ -218,7 +225,8 @@ bool rtcl_run(rt_ctx *c, rt_kern *k, size_t n)
     }
     uint32_t nn = (uint32_t)n;
     if (!clok(cl->SetKernelArg(h, (cl_uint)k->nargs, sizeof nn, &nn), "setting kernel arguments")) return false;
-    size_t g = n;
-    return clok(cl->EnqueueNDRangeKernel((cl_command_queue)c->b, h, 1, NULL, &g, NULL, 0, NULL, NULL), "kernel execution") &&
+    size_t g = n, l = (size_t)k->block;
+    if (l) g = (n + l - 1) / l * l;                       /* whole work-groups: the work-items past n take part in them and do nothing else */
+    return clok(cl->EnqueueNDRangeKernel((cl_command_queue)c->b, h, 1, NULL, &g, l ? &l : NULL, 0, NULL, NULL), "kernel execution") &&
            clok(cl->Finish((cl_command_queue)c->b), "clFinish");
 }

@@ -29,7 +29,7 @@ struct rt_kern {
     bool is_buf[RT_MAX_ARGS];
     rt_buf *buf[RT_MAX_ARGS];
     uint32_t u32[RT_MAX_ARGS];
-    int block;                     /* CUDA threads per block */
+    int block;                     /* CUDA threads per block; OpenCL: the work-group size the kernel requires, 0 for none */
 };
 
 /* OpenCL */

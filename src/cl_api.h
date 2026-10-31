@@ -45,6 +45,7 @@ typedef struct _cl_event *cl_event;
 #define CL_BUFFER_CREATE_TYPE_REGION 0x1220
 #define CL_PLATFORM_NAME 0x0902
 #define CL_PROGRAM_BUILD_LOG 0x1183
+#define CL_KERNEL_COMPILE_WORK_GROUP_SIZE 0x11B1
 #define CL_MEM_READ_WRITE (1u << 0)
 #define CL_MEM_COPY_HOST_PTR (1u << 5)
 
@@ -72,6 +73,7 @@ typedef struct {
     cl_int (*EnqueueReadBuffer)(cl_command_queue, cl_mem, cl_bool, size_t, size_t, void *, cl_uint, const cl_event *, cl_event *);
     cl_int (*EnqueueWriteBuffer)(cl_command_queue, cl_mem, cl_bool, size_t, size_t, const void *, cl_uint, const cl_event *, cl_event *);
     cl_int (*Finish)(cl_command_queue);
+    cl_int (*GetKernelWorkGroupInfo)(cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *);   /* NULL if missing */
 } cl_api;
 
 /* Loads the OpenCL ICD loader. Returns NULL if unavailable. */

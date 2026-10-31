@@ -46,6 +46,7 @@ const cl_api *cl_load(void)
     LOAD(EnqueueReadBuffer, "EnqueueReadBuffer");
     LOAD(EnqueueWriteBuffer, "EnqueueWriteBuffer");
     LOAD(Finish, "Finish");
+    *(void **)&g_api.GetKernelWorkGroupInfo = pz_lib_sym(g_api.lib, "clGetKernelWorkGroupInfo");   /* optional: the kernels that need it then fail to run */
     g_state = 1;
     return &g_api;
 fail:
