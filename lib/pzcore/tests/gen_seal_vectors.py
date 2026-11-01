@@ -97,12 +97,12 @@ def hkdf(salt, ikm, info, length):
         okm += t
     return okm[:length]
 
-def seal(qpoint, plain, aad, r):
+def seal(qpoint, plain, r):
     rp = mul(r)
     s = mul(r, qpoint)
-    okm = hkdf(SALT, s[0].to_bytes(32, 'big'), pub33(rp) + pub33(qpoint) + aad, 64)
+    okm = hkdf(SALT, s[0].to_bytes(32, 'big'), pub33(rp) + pub33(qpoint), 64)
     ct = bytes(a ^ b for a, b in zip(plain, okm[:32]))
-    tag = hmac.new(okm[32:], pub33(rp) + ct + aad, hashlib.sha256).digest()[:16]
+    tag = hmac.new(okm[32:], pub33(rp) + ct, hashlib.sha256).digest()[:16]
     return bytes([1]) + hash160(pub33(qpoint))[:4] + pub33(rp) + ct + tag
 
 def key_from_password(pw, log2n):
@@ -128,18 +128,18 @@ for m, k in pts:
     emit('    {"%s", "%x", "%s"},' % (pub33(p).hex(), k, pub33(r).hex() if r else ''))
 emit('};')
 
-# seal vectors: private key d (so Q = dG), plaintext, aad, r, expected payload and text
-emit('SVEC struct { const char *d_hex, *plain_hex, *aad_hex, *r_hex, *payload_hex, *text; } SEAL_VEC[] = {')
+# seal vectors: private key d (so Q = dG), plaintext, r, expected payload and text
+emit('SVEC struct { const char *d_hex, *plain_hex, *r_hex, *payload_hex, *text; } SEAL_VEC[] = {')
 cases = [
-    (0x1, '00' * 31 + '01', b'1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH\x0071', 0x2),
-    (0x4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192 % N, 'ab' * 32, b'1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH\x000', 0x7777777777777777777777777777777777777777777777777777777777777777),
-    (N - 1, '7f' * 32, b'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq\x00160', N - 2),
-    (0xabcdef0123456789, 'c0' * 16 + '3d' * 16, b'', 0x10000),
+    (0x1, '00' * 31 + '01', 0x2),
+    (0x4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192 % N, 'ab' * 32, 0x7777777777777777777777777777777777777777777777777777777777777777),
+    (N - 1, '7f' * 32, N - 2),
+    (0xabcdef0123456789, 'c0' * 16 + '3d' * 16, 0x10000),
 ]
-for d, plain, aad, r in cases:
+for d, plain, r in cases:
     pl = bytes.fromhex(plain)
-    pay = seal(mul(d), pl, aad, r)
-    emit('    {"%x", "%s", "%s", "%x", "%s", "PZENC1:%s"},' % (d, plain, aad.hex(), r, pay.hex(), b58check(pay)))
+    pay = seal(mul(d), pl, r)
+    emit('    {"%x", "%s", "%x", "%s", "PZENC1:%s"},' % (d, plain, r, pay.hex(), b58check(pay)))
 emit('};')
 
 # keys from passwords: the real cost (N = 2^18) once, and a reduced one for the tests that run often

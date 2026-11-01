@@ -13,7 +13,7 @@
 | `pzsolve split V1 V2 …` | divides the `--part` shares among several computers in proportion to their speeds (for example `split 800M 120M`; see section 8.2) |
 | `pzsolve merge (-c NAME \| -p N) -f FILE_OR_FOLDER … [-d DIR] [--mem GiB] [--encrypt-pubkey HEX \| --encrypt-password] [--on-found COMMAND]` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
 | `pzsolve encrypt-keygen [--random]` | makes the public key (from a password you type, or random) to which a campaign encrypts the key it finds: for rented computers (section 11) |
-| `pzsolve decrypt-key [--raw-key] [--address A] [--puzzle N] [FILE \| -]` | decrypts the key that a campaign found and encrypted (section 11) |
+| `pzsolve decrypt-key [--raw-key] [--address A] [FILE \| -]` | decrypts the key that a campaign found and encrypted (section 11) |
 | `pzsolve doctor [-d DIR] [--full]` | checks program, system, CPU, GPU, the saved tuning and profile, campaigns, disk, clock and `PZ_*` variables, and says what is wrong; paste its output when asking for help |
 | `pzsolve devices`   | detected CPU, instruction sets, RAM and GPUs (CUDA and OpenCL) |
 | `pzsolve selftest`  | built-in correctness checks (primitives, database, SIMD engines, kangaroo, BSGS, GPU) |
@@ -582,12 +582,15 @@ someone who controls the machine while it runs.
    ```
 
    It shows the key id that the line was encrypted to, asks for the password (nothing is shown while you type), checks that it is the right one **before**
-   it tries anything ("encrypted to the public key with id A, but this password gives id B: wrong password"), decrypts, and checks that the key belongs to
-   the address. It prints the key in hexadecimal and as a WIF, the address and the puzzle. The exit status is 0 only when the key was recovered and
-   checked; 1 when the secret does not open the line; 2 when the input is not usable (no line, a damaged copy, no address). A line cut or mistyped when it was
-   copied is recognized from the four check characters inside it, before any password is asked. If you only have the line (the mail), the address and the puzzle
-   are part of what was encrypted: give them with `--address ADDRESS --puzzle N`; with `FOUND.txt` they are read from its lines `address:` and `puzzle:`. A text
-   pasted on the standard input (end it with Ctrl-D) works too, and then the password is asked on the terminal.
+   it tries anything ("encrypted to the public key with id A, but this password gives id B: wrong password"), and decrypts. A line is self-contained: it opens with
+   the secret alone, so a line copied out of a mail is enough, with no address or puzzle next to it. The command always prints the key in hexadecimal and as a WIF, and
+   the two addresses of that key (P2PKH and P2WPKH). Then, if the text has an `address:` line (`FOUND.txt` does) or you give `--address ADDRESS`, it compares the
+   key with that address and prints `OK` or `MISMATCH` (and exits with 1); with no address it says `address not checked: no address: line in the text and no --address`
+   and exits with 0. Check by eye, or with `--address`, that the address is the one you were hunting: a line can be made by anyone who knows the public key, so only
+   the address check proves that the key is the right one. The exit status is 0 when the key was recovered (and matches the address, if there was one); 1 when the secret
+   does not open the line or the address does not match; 2 when the input is not usable (no line, a damaged copy). A line cut or mistyped when it was copied is
+   recognized from the four check characters inside it, before any password is asked. A text pasted on the standard input (end it with Ctrl-D) works too, and then
+   the password is asked on the terminal.
 
    The line stays valid for ever: keep it, with the password, until the funds are moved. **If the password or the private key is lost, the key is lost**: there is no
    other way to open it.
@@ -622,7 +625,8 @@ reached you (`log.txt` says how it ended); `decrypt-key` gives the key of the pu
 * `--on-found "COMMAND"`: after `FOUND.txt` is written, the command is run once with `/bin/sh -c` (on Windows `cmd.exe /c`), in a thread of its own: it does not
   delay the stop of the search or the box, and the program ends when the command has (at most 120 seconds, then it is stopped). Its exit status, or the timeout, is
   written to the log. Its environment has `PZ_FOUND_SEALED` (the `PZENC1:` line, empty when the campaign does not encrypt), `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`
-  (0 for none), `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` (the path of `FOUND.txt`); **never the key**. Without encryption the command can read `FOUND.txt`, which
+  (0 for none), `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` (the path of `FOUND.txt`); **never the key**. The address and the puzzle are useful in the text of a mail, but the
+  line alone is enough to open the key. Without encryption the command can read `FOUND.txt`, which
   holds the key in plain. The command is not stored in `campaign.conf` and never read from a file: give it again when you resume. The line is safe to send
   anywhere, so on a rented computer this is the way to be sure to receive the result, even if the computer is reclaimed at the moment the key is found. Do not
   put a secret (a password, a token) in the command: the command line of a process can be read by other users of the computer.

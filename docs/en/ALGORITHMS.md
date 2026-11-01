@@ -717,14 +717,14 @@ secp256k1 with HKDF-SHA256 and an HMAC-SHA256 tag. How to use it, and what it do
 
 ### 12.1 The construction
 
-Let `Q` be the public key, `G` the generator, `n` the order of the group, `P` the 32-byte private key to protect, and `AAD` the associated data (12.3).
+Let `Q` be the public key, `G` the generator, `n` the order of the group, and `P` the 32-byte private key to protect.
 
 1. Draw `r` in `[1, n - 1]` from the operating system's random numbers (the one source the program already uses for the seed of a campaign; a draw outside the
    range is rejected and redrawn).
 2. `R = r*G` (compressed, 33 bytes), `S = r*Q`, `ikm = x(S)` (32 bytes, big-endian).
-3. `okm = HKDF-SHA256(salt = "pzsolve-found-v1", ikm, info = R || Q || AAD)`, 64 bytes: the first 32 are the key stream, the last 32 the key of the MAC.
+3. `okm = HKDF-SHA256(salt = "pzsolve-found-v1", ikm, info = R || Q)`, 64 bytes: the first 32 are the key stream, the last 32 the key of the MAC.
 4. `ct = P xor okm[0..32)`.
-5. `tag = HMAC-SHA256(okm[32..64), R || ct || AAD)`, the first 16 bytes.
+5. `tag = HMAC-SHA256(okm[32..64), R || ct)`, the first 16 bytes.
 
 Opening with the private scalar `d` (`Q = d*G`): check the version byte; parse `R` (it must be a valid compressed point: strictly validated, on the curve, a
 coordinate below the field prime, prefix 02 or 03); check that `d` is in range and that the key id of `d*G` is the one in the payload (the usual way to be wrong is a wrong
@@ -737,8 +737,8 @@ point at infinity (`R` is a valid point and `d` is in `[1, n - 1]`).
 * **ECIES rather than a hybrid with a new primitive.** The curve arithmetic, SHA-256 and Base58Check were already in pzcore and tested; HMAC, HKDF, PBKDF2 and scrypt were
   added, each checked against the vectors of its RFC (4231, 5869, 7914) and against an independent implementation (`lib/pzcore/tests/gen_seal_vectors.py`, Python's
   `hashlib`). No dependency was added; the program stays libc only.
-* **The payload is 32 bytes, so a stream cipher is exact.** `ct = P xor keystream` needs no padding and no mode. The 16-byte tag authenticates the ciphertext, `R`
-  and the associated data, so a modified line is refused and a line cannot be moved to another address or puzzle unnoticed.
+* **The payload is 32 bytes, so a stream cipher is exact.** `ct = P xor keystream` needs no padding and no mode. The 16-byte tag authenticates the ciphertext and `R`, so a damaged
+  line is refused.
 * **`Q` and `R` are in the `info` of the HKDF**, so the keys are bound to both public keys and to the context (the usual precaution against key-substitution and
   reflection arguments); `x(S)` alone would be the same for `R` and `-R`.
 * **A tag of 16 bytes** is enough here: it gives 2^-128 against a forgery, and every attempt costs an elliptic-curve multiplication.
@@ -761,10 +761,11 @@ The text form is the single line `PZENC1:` followed by the Base58Check of the pa
 prints a line longer than 128 columns, because it must stay one token). The four check bytes of Base58Check catch a cut or mistyped copy before any password is asked
 (`decrypt-key` says so with its own message). Version and format are independent: `PZENC1` names the family and the Base58Check wrapping, the version byte the construction.
 
-The associated data is the address of the campaign as it was given (the string, for example `1BgGZ...` or `bc1q...`), a zero byte, and the number of the puzzle in decimal
-(`0` when the campaign has none). `decrypt-key` reads them from the lines `address:` and `puzzle:` of `FOUND.txt` or from `--address` and `--puzzle`. After opening it
-checks that the HASH160 of the compressed public key of the recovered private key equals the HASH160 that the address decodes to (the same check for a P2PKH and a P2WPKH
-address), and says so; a mismatch shows nothing.
+There is no associated data: a line is self-contained and opens with the secret alone, so the owner keeps nothing next to it (an earlier draft bound the line to the address and the
+puzzle number; it was dropped because anyone who knows the public key can make a valid line holding any key, so the binding stopped nothing). The check that matters is made after
+opening: `decrypt-key` derives the P2PKH and P2WPKH addresses of the recovered private key and prints them with the key; when the text has an `address:` line (`FOUND.txt` does) or
+`--address` is given it compares the HASH160 that the address decodes to with that of the compressed public key of the key and prints `OK` or `MISMATCH` (exit status 1); with no
+address it says `address not checked` and exits 0.
 
 ### 12.4 The key of a password
 
@@ -781,7 +782,8 @@ The key is encrypted first, then `FOUND.txt` is written with the line, the plain
 puzzle known only by its address, the public key and the range would let anyone solve the key by a kangaroo in about 2^35 steps for puzzle 71); then the copy of the key in
 the run is wiped (`pz_secure_zero`) and the box is printed from the line. If the encryption fails (the system gives no random numbers; this is tested at the start, so it
 is not expected) the key is written nowhere and the file and the box say so: the program never falls back to the plain form. The plain key still exists in the stack of
-the search code that found it until it is overwritten, and in memory during the encryption: that window is not removable, and USAGE.md 11.5 says so.
+the search code that found it until it is overwritten, and in memory during the encryption: that window is not removable, and USAGE.md 11.5 says so. The address, the puzzle and the campaign are written next to the line in `FOUND.txt` and handed to `--on-found`
+as information (they are public); the line does not depend on them.
 
 The public key to encrypt to is stored in `campaign.conf` as `encrypt_pubkey=HEX`, a line that is added only when it is used: a campaign without it has a file that older versions
 and this one read as before; an older version that resumes a campaign that has the line ignores it and would write the key in plain, so a campaign that encrypts must not

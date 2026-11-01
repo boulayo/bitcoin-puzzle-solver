@@ -10,8 +10,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   `--encrypt-pubkey HEX` (66 digits compressed, 130 uncompressed), or `--encrypt-password` to type a password (hidden, twice) from which the public key is made,
   and `--on-found COMMAND`. When the key is found it is encrypted to that public key first (ECIES on secp256k1: ephemeral key, HKDF-SHA256, XOR with the key stream,
   a 16-byte HMAC-SHA256 tag), and the box on the screen, `FOUND.txt` and `log.txt` carry only the line `PZENC1:` plus the Base58Check of an 86-byte payload (version,
-  key id, `R`, ciphertext, tag), which is safe to send anywhere; the associated data is the address and the puzzle number, so a line cannot be moved to another
-  target. The public key is stored in `campaign.conf` (`encrypt_pubkey`, written only when it is used, so the files of campaigns without it and older versions are
+  key id, `R`, ciphertext, tag), which is safe to send anywhere and opens with the secret alone (no associated data: the check that the key belongs to the address is made
+  after opening). The public key is stored in `campaign.conf` (`encrypt_pubkey`, written only when it is used, so the files of campaigns without it and older versions are
   unaffected); a resumed campaign uses it, a different key is refused, a campaign started without one can be given one on resume. An invalid key stops the command
   before anything is created and the program never falls back to showing the key. Core dumps are turned off (Linux, macOS; Windows has no way from user code) and on
   Linux the process becomes non-dumpable, the copy of the key kept by the run is wiped as soon as the line is made, and the password buffers and the scrypt memory are
@@ -20,9 +20,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`, `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` (never the key); at most 120 seconds, its exit status is logged, and the search
   and the box do not wait for it. It is not stored in the campaign.
 - New commands `encrypt-keygen [--random]` (the public key from a password, or a random key pair; warns about passwords of fewer than 12 characters) and
-  `decrypt-key [--raw-key] [--address A] [--puzzle N] [FILE | -]` (finds every `PZENC1:` token in a file or a pasted text, shows the key id, says "wrong password" by
-  key id before trying, reports a damaged copy, an unknown version or a failed authentication each with its own message, verifies that the key belongs to the address,
-  exit status 0 only when the key was recovered and checked). The password is read with the echo off (terminal restored on every exit, signals included; Windows
+  `decrypt-key [--raw-key] [--address A] [FILE | -]` (finds every `PZENC1:` token in a file or a pasted text, shows the key id, says "wrong password" by
+  key id before trying, reports a damaged copy, an unknown version or a failed authentication each with its own message, prints the key, its WIF and its P2PKH and P2WPKH addresses, and compares the key with the
+  `address:` line of the text or with `--address`: OK, or MISMATCH with exit status 1, or "address not checked" with exit status 0 when there is none). The password is read with the echo off (terminal restored on every exit, signals included; Windows
   console mode), never from an argument, and as one line of standard input when there is no terminal.
 - pzcore: `seal.h` with HMAC-SHA256, HKDF-SHA256, PBKDF2-HMAC-SHA256, scrypt (the caller passes the work buffer), a constant-time comparison, a wipe that the compiler
   cannot remove, the seal and its opening, the text form and the key of a password; `pz_ec_mul` (`k*P` for any point). Tests with the vectors of RFC 4231, 5869 and 7914

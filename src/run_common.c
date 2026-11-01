@@ -269,7 +269,7 @@ static bool write_found_encrypted(run_ctx *r)
     if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
     else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
     pz_u256_to_be(&r->found_key, kb);
-    r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, addr, r->cfg.puzzle, r->found_sealed, sizeof r->found_sealed);
+    r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, r->found_sealed, sizeof r->found_sealed);
     pz_secure_zero(kb, sizeof kb);
     enc_key_id(&r->cfg.encrypt_pubkey, id);
     pz_hex_encode(r->cfg.seed, 32, seed);
@@ -300,7 +300,7 @@ static bool write_found_encrypted(run_ctx *r)
             "version:         %s\n"
             "encrypted to:    key id %s\n\n"
             "The private key is encrypted: only the owner of the secret that matches the public key given with --encrypt-pubkey (or made from the\n"
-            "password of --encrypt-password) can read it. The line below is safe to copy anywhere. At home, with this file as it is:\n"
+            "password of --encrypt-password) can read it. The line below is safe to copy anywhere, and it opens with the secret alone. At home:\n"
             "    pzsolve decrypt-key FOUND.txt\n\n"
             "%s\n",
             ts, r->cfg.name, pz, addr, seed, PZ_VERSION, id, r->found_sealed);

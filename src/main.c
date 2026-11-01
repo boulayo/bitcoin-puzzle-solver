@@ -266,19 +266,20 @@ static const struct { const char *cmd, *text; } short_help[] = {
                        "\nOPTIONS\n"
                        "      --random            no password: make a random private key and print it too (64 hex digits, with the public key).\n"
                        "                          Store it like a secret; 'decrypt-key --raw-key' reads it. Lost, the encrypted key is lost\n"},
-    {"decrypt-key", "pzsolve decrypt-key - decrypt the key that a campaign found and encrypted\n\nUSAGE\n  pzsolve decrypt-key [--raw-key] [--address ADDRESS] [--puzzle N] [FILE | -]\n\n"
+    {"decrypt-key", "pzsolve decrypt-key - decrypt the key that a campaign found and encrypted\n\nUSAGE\n  pzsolve decrypt-key [--raw-key] [--address ADDRESS] [FILE | -]\n\n"
                        "Reads FILE (default: FOUND.txt in the current folder if there is one, otherwise standard input; - is standard input)\n"
                        "or a pasted text, finds every token 'PZENC1:...' in it and shows the key id it was encrypted to; the other lines are\n"
-                       "ignored. Asks for the password (hidden), checks that it is the right one, decrypts, and checks that the key belongs to\n"
-                       "the address; prints the key (hex and WIF), the address and the puzzle. Exit status 0 only when the key was recovered\n"
-                       "and checked. The address and the puzzle are part of what was encrypted: they are taken from the lines 'address:' and\n"
-                       "'puzzle:' of the text (FOUND.txt has them), or from the options. Without a terminal the password is one line of\n"
-                       "standard input (the text then comes from FILE).\n"
+                       "ignored. Asks for the password (hidden), checks that it is the right one before it tries to decrypt, decrypts, and\n"
+                       "prints the key (hex and WIF) and the addresses of the key (P2PKH and P2WPKH). A line opens with the secret alone. If\n"
+                       "the text has an 'address:' line (FOUND.txt has one) or --address is given, it also checks that the key belongs to that\n"
+                       "address and prints OK or MISMATCH; otherwise it says that the address was not checked. Exit status 0 when the key was\n"
+                       "recovered (and, if there was an address, matches it); 1 when the secret does not open the line or the address does not\n"
+                       "match; 2 when the input is not usable. Without a terminal the password is one line of standard input (the text then\n"
+                       "comes from FILE).\n"
                        "\nOPTIONS\n"
                        "      --raw-key           read the private key (64 hex digits, hidden) instead of a password: for a key made with\n"
                        "                          'encrypt-keygen --random'\n"
-                       "      --address ADDRESS   the address of the campaign, when the text has no 'address:' line\n"
-                       "      --puzzle N          the puzzle of the campaign (0 or absent: none), when the text has no 'puzzle:' line\n"},
+                       "      --address ADDRESS   check the key against this address, when the text has no 'address:' line (or instead of it)\n"},
     {"version", "pzsolve version - print the version, the copyright and the license\n\nUSAGE\n  pzsolve version\n"},
 };
 

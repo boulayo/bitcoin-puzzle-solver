@@ -13,7 +13,7 @@
 | `pzsolve split V1 V2 …` | divide le quote di `--part` fra più computer in proporzione alle loro velocità (per esempio `split 800M 120M`; vedi sezione 8.2) |
 | `pzsolve merge (-c NOME \| -p N) -f FILE_O_CARTELLA … [-d DIR] [--mem GiB] [--encrypt-pubkey HEX \| --encrypt-password] [--on-found COMANDO]` | unisce i punti distinti di altri computer a una campagna canguro (vedi sezione 8.1) |
 | `pzsolve encrypt-keygen [--random]` | crea la chiave pubblica (da una password che scrivi, o casuale) a cui una campagna cifra la chiave che trova: per i computer in affitto (sezione 11) |
-| `pzsolve decrypt-key [--raw-key] [--address A] [--puzzle N] [FILE \| -]` | decifra la chiave che una campagna ha trovato e cifrato (sezione 11) |
+| `pzsolve decrypt-key [--raw-key] [--address A] [FILE \| -]` | decifra la chiave che una campagna ha trovato e cifrato (sezione 11) |
 | `pzsolve doctor [-d DIR] [--full]` | controlla programma, sistema, CPU, GPU, taratura e profilo salvati, campagne, disco, orologio e variabili `PZ_*`, e dice cosa non va; da incollare quando si chiede aiuto |
 | `pzsolve devices`   | CPU, set di istruzioni, RAM e GPU (CUDA e OpenCL) rilevate |
 | `pzsolve selftest`  | controlli di correttezza integrati (primitive, database, motori SIMD, canguro, BSGS, GPU) |
@@ -536,12 +536,15 @@ chi controlla la macchina mentre il programma gira.
    ```
 
    Mostra l'identificativo della chiave a cui la riga è stata cifrata, chiede la password (mentre scrivi non si vede nulla), controlla che sia quella giusta **prima**
-   di provare a decifrare («encrypted to the public key with id A, but this password gives id B: wrong password»), decifra e verifica che la chiave appartenga
-   all'indirizzo. Stampa la chiave in esadecimale e in WIF, l'indirizzo e il puzzle. Lo stato di uscita è 0 solo se la chiave è stata recuperata e verificata; 1 se il
-   segreto non apre la riga; 2 se l'input non è utilizzabile (nessuna riga, una copia rovinata, nessun indirizzo). Una riga tagliata o ricopiata male si riconosce dai
-   quattro caratteri di controllo che contiene, prima che venga chiesta una password. Se hai solo la riga (la mail), l'indirizzo e il puzzle fanno parte di ciò che è
-   stato cifrato: indicali con `--address INDIRIZZO --puzzle N`; con `FOUND.txt` si leggono dalle sue righe `address:` e `puzzle:`. Funziona anche un testo incollato
-   sullo standard input (chiudilo con Ctrl-D), e allora la password si chiede sul terminale.
+   di provare a decifrare («encrypted to the public key with id A, but this password gives id B: wrong password») e decifra. La riga è autosufficiente: si apre
+   con il solo segreto, quindi basta una riga copiata da una mail, senza indirizzo né puzzle accanto. Il comando stampa sempre la chiave in esadecimale e in WIF e i
+   due indirizzi di quella chiave (P2PKH e P2WPKH). Poi, se il testo ha una riga `address:` (`FOUND.txt` ce l'ha) oppure dai `--address INDIRIZZO`, confronta la chiave con
+   quell'indirizzo e stampa `OK` oppure `MISMATCH` (con stato di uscita 1); senza indirizzo dice `address not checked: no address: line in the text and no --address`
+   ed esce con 0. Controlla a occhio, o con `--address`, che l'indirizzo sia quello che cercavi: una riga la può fare chiunque conosca la chiave pubblica, quindi solo il
+   controllo dell'indirizzo prova che la chiave è quella giusta. Lo stato di uscita è 0 se la chiave è stata recuperata (e corrisponde all'indirizzo, se c'era); 1 se il
+   segreto non apre la riga o l'indirizzo non corrisponde; 2 se l'input non è utilizzabile (nessuna riga, una copia rovinata). Una riga tagliata o ricopiata male si
+   riconosce dai quattro caratteri di controllo che contiene, prima che venga chiesta una password. Funziona anche un testo incollato sullo standard input (chiudilo con
+   Ctrl-D), e allora la password si chiede sul terminale.
 
    La riga resta valida per sempre: conservala, con la password, finché i fondi non sono stati spostati. **Se la password o la chiave privata si perde, la chiave è
    persa**: non c'è altro modo di aprirla.
@@ -578,7 +581,8 @@ prova e avvia quella vera.
 * `--on-found "COMANDO"`: dopo la scrittura di `FOUND.txt` il comando viene eseguito una volta con `/bin/sh -c` (su Windows `cmd.exe /c`), in un thread a parte: non
   ritarda l'arresto della ricerca né il riquadro, e il programma termina quando termina il comando (al massimo 120 secondi, poi viene fermato). Il suo stato di
   uscita, o il superamento del tempo, va nel log. Nel suo ambiente ci sono `PZ_FOUND_SEALED` (la riga `PZENC1:`, vuota se la campagna non cifra),
-  `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE` (0 se non c'è), `PZ_FOUND_CAMPAIGN` e `PZ_FOUND_FILE` (il percorso di `FOUND.txt`); **mai la chiave**. Senza cifratura il
+  `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE` (0 se non c'è), `PZ_FOUND_CAMPAIGN` e `PZ_FOUND_FILE` (il percorso di `FOUND.txt`); **mai la chiave**. L'indirizzo e il puzzle sono utili nel testo di una mail, ma la
+  riga da sola basta per aprire la chiave. Senza cifratura il
   comando può leggere `FOUND.txt`, che contiene la chiave in chiaro. Il comando non è salvato in `campaign.conf` e non si legge mai da un file: ridaglielo quando
   riprendi. La riga si può spedire ovunque senza rischi, quindi su un computer in affitto questo è il modo per essere sicuri di ricevere il risultato, anche se il
   computer viene ripreso nel momento in cui la chiave è trovata. Non mettere un segreto (una password, un token) nel comando: la riga di comando di un processo può

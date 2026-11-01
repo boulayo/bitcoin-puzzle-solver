@@ -112,10 +112,9 @@ typedef struct { char text[PZ_SEAL_TEXT_BUF + 8]; int line; u8 payload[PZ_SEAL_P
 
 int decrypt_key_main(int argc, char **argv)
 {
-    static const struct option lo[] = {{"raw-key", 0, 0, 'r'}, {"address", 1, 0, 'a'}, {"puzzle", 1, 0, 'p'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
+    static const struct option lo[] = {{"raw-key", 0, 0, 'r'}, {"address", 1, 0, 'a'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
     bool raw = false;
     char opt_addr[80] = "";
-    int opt_puzzle = -1;
     optind = 1;
     opterr = 0;
     int c;
@@ -126,7 +125,6 @@ int decrypt_key_main(int argc, char **argv)
             if (strlen(optarg) >= sizeof opt_addr) pz_die("--address: the value is too long");
             memcpy(opt_addr, optarg, strlen(optarg) + 1);
             break;
-        case 'p': opt_puzzle = (int)pz_arg_int("--puzzle", optarg, 0, 256); break;
         case 'h': pz_help("decrypt-key", stdout); return 0;
         case ':': pz_usage_error("decrypt-key", "the option '%s' needs a value", argv[optind - 1]);
         default: pz_usage_error("decrypt-key", "unrecognized option '%s'", optind > 0 && optind <= argc ? argv[optind - 1] : "?");
@@ -139,7 +137,7 @@ int decrypt_key_main(int argc, char **argv)
     const bool from_stdin = !file || !strcmp(file, "-");
     if (from_stdin) {
         if (pz_stdin_is_terminal())
-            fputs("Paste the line 'PZENC1:...' (and the lines 'address:' and 'puzzle:' of FOUND.txt if you have them), then end the input with Ctrl-D\n"
+            fputs("Paste the line 'PZENC1:...' (with the line 'address:' of FOUND.txt if you want the key checked against it), then end the input with Ctrl-D\n"
                   "(Ctrl-Z and Enter on Windows):\n", stderr);
         text = read_all_stdin();
     } else {
@@ -195,33 +193,24 @@ int decrypt_key_main(int argc, char **argv)
             usable++;
         }
     }
-    /* the address and the puzzle: part of what was encrypted */
+    /* the address to check the key against, if the text or the options give one; the puzzle is only shown */
     char address[96] = "", pzs[16] = "";
     if (opt_addr[0]) memcpy(address, opt_addr, strlen(opt_addr) + 1);
     else line_value(text, "address", address, sizeof address);
     int puzzle = 0;
-    if (opt_puzzle >= 0) puzzle = opt_puzzle;
-    else if (line_value(text, "puzzle", pzs, sizeof pzs)) puzzle = pz_atoi(pzs);
+    if (line_value(text, "puzzle", pzs, sizeof pzs)) puzzle = pz_atoi(pzs);
     free(text);
     if (!usable) {
         free(tok);
         return EC_EXIT_ERROR;
     }
     u8 h160[20];
-    if (!address[0]) {
-        free(tok);
-        fprintf(stderr, "the address (and the puzzle) the key was found for are needed: they were encrypted with the key. They are in FOUND.txt on the lines 'address:' and 'puzzle:'; "
-                        "give the whole file, or give them with --address and --puzzle\n");
-        return EC_EXIT_ERROR;
-    }
-    if (!pz_address_to_hash160(address, h160)) {
+    const bool have_addr = address[0] != 0;
+    if (have_addr && !pz_address_to_hash160(address, h160)) {
         free(tok);
         fprintf(stderr, "'%s' is not a main-network address (a \"1...\" or \"bc1q...\" address)\n", address);
         return EC_EXIT_ERROR;
     }
-    u8 aad[PZ_SEAL_AAD_MAX];
-    const int al = enc_aad(aad, sizeof aad, address, puzzle);
-    if (al < 0) { free(tok); fprintf(stderr, "the address is too long\n"); return EC_EXIT_ERROR; }
 
     /* the secret */
     char sec[ENC_PASSWORD_MAX + 1];
@@ -265,10 +254,9 @@ int decrypt_key_main(int argc, char **argv)
             continue;
         }
         u8 key[32];
-        const pz_seal_status st = pz_seal_open(key, tok[i].payload, &d, aad, (size_t)al);
+        const pz_seal_status st = pz_seal_open(key, tok[i].payload, &d);
         if (st == PZ_SEAL_E_TAG) {
-            fprintf(stderr, "line %d: the key id is right but the authentication failed: the encrypted key was altered, or it was found for another address or puzzle than %s / %d\n",
-                    tok[i].line, address, puzzle);
+            fprintf(stderr, "line %d: the key id is right but the authentication failed: the encrypted key was altered\n", tok[i].line);
             failed++;
             continue;
         }
@@ -281,17 +269,28 @@ int decrypt_key_main(int argc, char **argv)
         pz_ge kp;
         u8 pub[33], hk[20];
         pz_u256_from_be(&k, key);
-        const bool good = pz_ec_mul_g(&kp, &k) && (pz_ge_to_pub33(pub, &kp), pz_hash160(pub, 33, hk), memcmp(hk, h160, 20) == 0);
-        if (!good) {
-            fprintf(stderr, "line %d: CHECK FAILED: the key that came out does not belong to the address %s (nothing is shown)\n", tok[i].line, address);
+        if (!pz_ec_mul_g(&kp, &k)) {
+            fprintf(stderr, "line %d: the key that came out is not a valid private key (nothing is shown)\n", tok[i].line);
             failed++;
         } else {
-            char hx[PZ_U256_HEX_BUF], wif[PZ_WIF_BUF];
+            char hx[PZ_U256_HEX_BUF], wif[PZ_WIF_BUF], a1[PZ_P2PKH_ADDRESS_BUF], a2[96];
+            pz_ge_to_pub33(pub, &kp);
+            pz_hash160(pub, 33, hk);
             pz_u256_to_hex(&k, hx);
             pz_privkey_to_wif(key, true, wif, sizeof wif);
-            printf("\nKey recovered and checked (line %d)\n  key (hex):      0x%s\n  WIF compressed: %s\n  address:        %s\n", tok[i].line, hx, wif, address);
-            if (puzzle) printf("  puzzle:         #%d\n", puzzle);
-            printf("  check:          OK, the key belongs to the address\n");
+            pz_hash160_to_address(hk, a1, sizeof a1);
+            if (pz_hash160_to_segwit_address("bc", hk, a2, sizeof a2) < 0) a2[0] = 0;
+            printf("\nKey recovered (line %d)\n  key (hex):         0x%s\n  WIF compressed:    %s\n  address (P2PKH):   %s\n  address (P2WPKH):  %s\n", tok[i].line, hx, wif, a1, a2);
+            if (puzzle) printf("  puzzle:            #%d\n", puzzle);
+            if (!have_addr) {
+                printf("address not checked: no address: line in the text and no --address\n");
+            } else if (memcmp(hk, h160, 20) == 0) {
+                printf("  check:             OK, the key belongs to the address %s\n", address);
+            } else {
+                printf("  check:             MISMATCH, the key does not belong to the address %s\n", address);
+                fprintf(stderr, "line %d: MISMATCH: the key that came out does not belong to the address %s\n", tok[i].line, address);
+                failed++;
+            }
             pz_secure_zero(hx, sizeof hx);
             pz_secure_zero(wif, sizeof wif);
             recovered++;

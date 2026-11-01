@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* encrypt.h - encrypting the key that a campaign finds to a public key, on top of pzcore/seal.h: the public key given by the user or derived from
- * a password that is typed, the randomness of the encryption, the associated data, the line that is written. The commands encrypt-keygen and
+ * a password that is typed, the randomness of the encryption, the line that is written. The commands encrypt-keygen and
  * decrypt-key are in encrypt_cmd.c. The format and the reasons are in docs/en/ALGORITHMS.md; the use, in docs/en/USAGE.md. */
 #ifndef PZ_ENCRYPT_H
 #define PZ_ENCRYPT_H
@@ -19,16 +19,13 @@ void enc_key_id(const pz_ge *q, char id[9]);
 /* The scrypt cost of the key from a password: 18 (N = 2^18, 256 MiB, about a second). Only PZ_TEST_SEAL_LOG2N changes it, and then a warning is
  * printed, once, on the error output. */
 unsigned enc_log2n(void);
-/* The associated data of the encryption: the address, a zero byte and the puzzle number in decimal (0 when there is none). Returns its length,
- * or -1 when it does not fit in cap. */
-int enc_aad(u8 *out, size_t cap, const char *address, int puzzle);
 /* A random scalar in [1, n - 1] from the operating system. False when the system gives no randomness. */
 bool enc_random_scalar(pz_u256 *r);
 /* Whether a key can be encrypted to q here: the system's random numbers work and a test encryption is produced and opened again. */
 bool enc_check(const pz_ge *q, char *err, size_t errn);
-/* Encrypts the 32 bytes of key to q for the address and puzzle; text (cap bytes, PZ_SEAL_TEXT_BUF is enough) gets the "PZENC1:..." line.
+/* Encrypts the 32 bytes of key to q; text (cap bytes, PZ_SEAL_TEXT_BUF is enough) gets the "PZENC1:..." line.
  * False when it could not be done (the system gave no randomness): then text is empty. */
-bool enc_seal_key(const pz_ge *q, const u8 key[32], const char *address, int puzzle, char *text, size_t cap);
+bool enc_seal_key(const pz_ge *q, const u8 key[32], char *text, size_t cap);
 
 /* Derives the secret scalar of a password: allocates and locks the 256 MiB of scrypt, wipes and frees them. False if the memory cannot be had. */
 bool enc_key_from_password(pz_u256 *d, const char *pw, size_t pwlen);

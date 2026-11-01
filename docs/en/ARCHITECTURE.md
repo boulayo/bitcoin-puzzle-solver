@@ -15,7 +15,7 @@
 | `cpu_engine.h`, `cpu_common.c` | engine interface (`scan_job`, `cpu_engine`); shared tables (`i·G`, `cpu_gmultiples` for tables of any size), engine registry, ISA detection, quick check of every engine (known key), autotune |
 | `jobq.h/.c` | interval scheduler (work requests, completion, checkpoint, resume) |
 | `campaign.h/.c` | immutable campaign configuration (with the public key to encrypt the found key to), seed generation |
-| `encrypt.h/.c`, `encrypt_cmd.h/.c`, `onfound.h/.c` | the encryption of the found key on top of `pzcore/seal.h`: the public key of the options, the random scalar, the associated data, the key of a password (scrypt in a locked and wiped buffer); the commands `encrypt-keygen` and `decrypt-key`; the command of `--on-found` (a thread, at most 120 s, started when `FOUND.txt` is written, joined when the box is out) |
+| `encrypt.h/.c`, `encrypt_cmd.h/.c`, `onfound.h/.c` | the encryption of the found key on top of `pzcore/seal.h`: the public key of the options, the random scalar, the key of a password (scrypt in a locked and wiped buffer); the commands `encrypt-keygen` and `decrypt-key`; the command of `--on-found` (a thread, at most 120 s, started when `FOUND.txt` is written, joined when the box is out) |
 | `puzzles.h/.c`, `puzzles_data.c` | database of the 160 puzzles (generated from `data/puzzles.csv`) plus the addresses of the emptied puzzles 161-256 (`data/puzzles_withdrawn.csv`) and its verification |
 | `campaigns.h/.c` | campaign lock (via `platform.h`), `list` command |
 | `eta.h/.c`, `ui.h/.c` | time / probability estimation models and the speed estimator (`rate_est`); rendering of the panel and the status line (pure formatting, no I/O) |
