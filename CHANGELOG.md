@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.20.1] — 2026-11-01
 
 ### Added
 - Legal notice: `pzsolve version` also prints the copyright, the license and the warranty disclaimer, and the main help ends with them;
