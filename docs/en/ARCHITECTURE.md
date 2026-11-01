@@ -150,7 +150,7 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 |----------|------------------|---------|
 | `PZ_NO_CUDA`, `PZ_NO_OPENCL` | `no_cuda`, `no_opencl` | `rt.c`: which runtimes are loaded |
 | `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices (`--gpu-api` comes first) |
-| `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off |
+| `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_meta`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off |
 | `PZ_NO_PROFILE` | `no_profile` | `main.c`, `profile.c` |
 | `PZ_NO_LARGE_PAGES` | `no_large_pages` | `platform.c`: `pz_map_zeroed` on Windows |
 | `PZ_BENCH_SCALE` | `bench_scale` | `bench_tg.c`: duration of the measurements |
