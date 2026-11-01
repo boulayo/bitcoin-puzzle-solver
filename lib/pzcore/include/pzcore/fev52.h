@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* fev52.h - lane-parallel arithmetic in GF(p), p = 2^256 - 2^32 - 977 (secp256k1), with AVX-512 IFMA.
  *
  * Same interface as pz_fev.h (the engine in engine_vec_impl.inc is written against either), for 8 lanes of 64 bits.

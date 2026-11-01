@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* keyaddr.c - from a private key (hex, default 1) to the compressed public key, its HASH160 and the addresses and WIF that go with it.
  *   usage: keyaddr [private-key-hex] */
 #include <pzcore/pzcore.h>

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_hash.c - SHA-256, double SHA-256, RIPEMD-160 and HASH160: the published test vectors, the messages of every length from 0 to 520
  * bytes against Python's hashlib (as one digest of all the digests), unaligned data, the compression functions on their own. */
 #include <pzcore/hash.h>

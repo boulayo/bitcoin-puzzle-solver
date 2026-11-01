@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* fe.h - arithmetic in GF(p), p = 2^256 - 2^32 - 977 (the secp256k1 field).
  *
  * Field elements are four 64-bit limbs (least significant first). Values are "lazy": any 256-bit pattern is a valid

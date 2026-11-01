@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash.c - SHA-256, RIPEMD-160 and HASH160 (portable scalar code). */
 #include <pzcore/hash.h>
 #include <pzcore/cpu.h>

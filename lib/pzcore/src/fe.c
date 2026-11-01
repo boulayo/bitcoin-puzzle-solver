@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* fe.c - the field operations that are not inline: the square root and the inversion. */
 #include <pzcore/fe.h>
 

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* u256.h - 256-bit unsigned integers: four 64-bit limbs, least significant first, plus the arithmetic modulo the order of
  * the secp256k1 group.
  *

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash160_batch.h - HASH160 (RIPEMD-160 of SHA-256) of many compressed public keys at once, with the SIMD instructions of the CPU.
  *
  * A compressed public key is 33 bytes: 02 or 03 (the parity of y) and the 32-byte x. Hashing one with pz_hash160 costs about 0.7 us;

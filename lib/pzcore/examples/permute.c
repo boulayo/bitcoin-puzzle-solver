@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* permute.c - the keyed permutation: visit the numbers 0..m-1 in an order that depends on a seed, and go back from a position to the
  * number. usage: permute [m] [seed-byte]   (default m = 20, seed-byte = 1) */
 #include <pzcore/pzcore.h>

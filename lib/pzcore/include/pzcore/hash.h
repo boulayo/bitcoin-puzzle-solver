@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash.h - SHA-256, double SHA-256, RIPEMD-160 and HASH160 (RIPEMD-160 of SHA-256, the hash of a Bitcoin public key) of byte strings.
  *
  * One-shot functions: the whole message is given at once. data may be NULL only when len is 0, and the message may be of any length

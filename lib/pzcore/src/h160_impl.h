@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* h160_impl.h - the lane kernels of the batch hash160, one translation unit per instruction set (private to the library). */
 #ifndef PZCORE_H160_IMPL_H
 #define PZCORE_H160_IMPL_H

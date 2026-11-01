@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* perm.h - a keyed pseudo-random permutation of [0, M): a bijection of the integers below M onto themselves that depends only on a
  * 256-bit seed and on M, can be evaluated in either direction in expected constant time per call (no table, no walk over the domain).
  *

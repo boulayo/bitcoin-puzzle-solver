@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* Outputs of the permutation (apply of x gives y) produced by the implementation of pzsolve 1.8.1 before the library was split out; do not edit. */
 static const struct perm_pin { int seed; const char *m, *x, *y; } PERM_PINS[] = {
     {0, "1", "0", "0"},

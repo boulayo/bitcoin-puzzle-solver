@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_perm.c - the keyed permutation: bijection, inverse, edge cases of the domain, refusal of bad arguments, and the fixed outputs that
  * every version of the library must reproduce (a stored order stays valid only if they never change). */
 #include <pzcore/perm.h>

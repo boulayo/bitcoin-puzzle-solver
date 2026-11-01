@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_u256.c - 256-bit integers: text conversion against Python's integers, arithmetic against the compiler's 128-bit integers where the
  * values fit and by identities where they do not, the edges of the shifts, and the refusal of hostile text. */
 #include <pzcore/u256.h>

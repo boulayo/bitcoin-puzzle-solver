@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* sha256_arm.c - SHA-256 of whole blocks with the ARMv8 SHA-256 instructions (built with -march=armv8-a+crypto; used by hash.c only
  * when the CPU reports them). */
 #include "h160_impl.h"

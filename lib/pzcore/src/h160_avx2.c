@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* h160_avx2.c - lane kernel of the batch hash160 for avx2 (built with its own instruction-set flags, see the Makefile). */
 #include "h160_impl.h"
 

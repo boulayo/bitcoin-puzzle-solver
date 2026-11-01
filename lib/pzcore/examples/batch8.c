@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* batch8.c - the HASH160 of the public keys of consecutive private keys, many at once with the SIMD code of the CPU. */
 #include <pzcore/pzcore.h>
 #include <stdio.h>

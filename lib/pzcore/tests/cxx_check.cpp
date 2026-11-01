@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Leonardo Boulay
 // cxx_check.cpp - the public headers compile as C++ and the functions link with C linkage (make lib-cxx).
 #include <pzcore/pzcore.h>
 #include <cstdio>

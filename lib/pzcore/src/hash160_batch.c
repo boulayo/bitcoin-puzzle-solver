@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash160_batch.c - run-time choice of the lane kernel and the conversion between byte strings and lanes. */
 #include <pzcore/hash160_batch.h>
 #include <pzcore/cpu.h>

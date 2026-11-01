@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* address.h - the text formats of Bitcoin: Base58Check (P2PKH addresses, WIF private keys), bech32 and bech32m (BIP173, BIP350) and
  * the SegWit addresses built on them.
  *

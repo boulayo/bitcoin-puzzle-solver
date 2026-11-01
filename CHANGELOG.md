@@ -3,6 +3,16 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- pzcore carries the copyright and the license of the project in its own files: every source, header and test has the
+  `SPDX-FileCopyrightText: 2026 Leonardo Boulay` line next to its `SPDX-License-Identifier`, the generated test files and the generator
+  of `vectors.h` write both, and `lib/pzcore/LICENSE` holds the license text so that the folder can be taken on its own.
+- Documentation: the README (English and Italian) mentions `bench --variants` and says that compiling on the machine that runs the
+  program (`make ARCH_NATIVE=1`) does not make it faster: the engine is chosen at run time and the GPU kernels are compiled by the
+  driver; measured on an AVX-512 IFMA machine, `-march=native` gave the same speed within the noise of `bench`.
+
 ## [1.20.0] — 2026-11-01
 
 ### Added

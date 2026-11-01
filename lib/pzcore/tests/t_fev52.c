@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_fev52.c - lane-parallel field arithmetic with AVX-512 IFMA (fev52.h) against the scalar implementation, with limbs
  * at the bounds of the "tight" form every operation accepts and returns. Skipped on CPUs without IFMA (PZ_ASSUME_IFMA=1
  * forces it, the PZ_ASSUME_IFMA environment variable). */

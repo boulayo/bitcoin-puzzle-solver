@@ -47,8 +47,8 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
 * **Usare solo una parte della macchina.** `--limit X` usa il X % dei thread CPU e dei work-item GPU a pieno ritmo, senza pause.
 * **Campagne persistenti.** Checkpoint atomici, ripresa dopo Ctrl-C, crash, riavvio o sospensione, blocco contro due processi sulla
   stessa campagna. `--keep-awake` impedisce la sospensione su Windows e macOS.
-* **Taratura automatica.** `--retune` misura di nuovo la macchina, `--no-tune` la salta; `bench --together` e `doctor`: vedi
-  [USO](USO.md) 7.6.
+* **Taratura automatica.** `--retune` misura di nuovo la macchina, `--no-tune` la salta; `bench --together`, `bench --variants` (ogni
+  variante dei kernel GPU, misurata a turni) e `doctor`: vedi [USO](USO.md) 7.4-7.6.
 * **Pannello e file.** Un pannello aggiornato ogni secondo mostra velocità per dispositivo, tempo residuo e probabilità di successo. La
   cartella della campagna contiene `report.txt`, `status.json`, `stats.csv`, `log.txt` e, a chiave trovata, `FOUND.txt` (permessi 0600).
 
@@ -143,6 +143,10 @@ make test       # test unitari + autotest integrato
 make e2e        # test end-to-end su puzzle piccoli (circa 5 minuti)
 make windows    # build/win/pzsolve.exe, cross-compilato con MinGW-w64
 ```
+
+Il binario è portabile e sceglie il motore a run time (AVX2, AVX-512, IFMA, NEON), e i kernel GPU li compila il driver per la scheda: compilare
+sulla propria macchina non lo rende più veloce. `make ARCH_NATIVE=1` (`-march=native`) ha dato la stessa velocità, entro il rumore di
+`bench`, su una macchina AVX-512 IFMA, e il risultato può non funzionare su altre CPU.
 
 Le build per macOS e arm64 sono compilate e provate dalla CI a ogni push; la verifica completa è descritta in
 [CONTRIBUTING.md](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/CONTRIBUTING.md) (in inglese).

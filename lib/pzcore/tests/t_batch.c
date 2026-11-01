@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_batch.c - the batch HASH160: every implementation the CPU can run against the scalar code and against values computed by Python,
  * batches of every awkward size, unaligned buffers, the choice of the implementation, and use from several threads while it changes.
  * With PZ_EXPECT_SHANI set (to 1) in the environment the test fails if the "shani" implementation (the SHA extensions of x86-64) is not available,

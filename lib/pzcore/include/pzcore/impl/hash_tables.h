@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash_tables.h - constant tables for SHA-256 and RIPEMD-160 (static so that SIMD
  * translation units can constant-fold them after unrolling). */
 #ifndef PZ_HASH_TABLES_H

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* roundtrip.c - Base58Check and bech32 in both directions, and what happens with damaged text. */
 #include <pzcore/pzcore.h>
 #include <stdio.h>

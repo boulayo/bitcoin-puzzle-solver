@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* cpu.h - run-time detection of the instruction-set extensions that the fast paths of pzcore need. Every function is safe to
  * call from any thread at any time, needs no initialisation and returns false on architectures where the extension does not exist. */
 #ifndef PZCORE_CPU_H

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash_lanes.inc - multi-lane hash160 of compressed public keys with GCC vector extensions: a template, not a header.
  *
  * Included once per translation unit and instruction-set variant, so that the hash is compiled for the instruction set of the

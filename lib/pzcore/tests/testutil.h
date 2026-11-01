@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* testutil.h - the few helpers shared by the unit tests of pzcore (nothing but libc). */
 #ifndef PZCORE_TESTUTIL_H
 #define PZCORE_TESTUTIL_H

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_address.c - Base58Check, bech32 and bech32m, SegWit addresses, WIF and the address helpers: the vectors of BIP173 and BIP350, values
  * computed by an independent Python implementation, round trips, and a good deal of hostile input. */
 #include <pzcore/address.h>

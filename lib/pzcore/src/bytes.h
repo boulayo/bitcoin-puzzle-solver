@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* bytes.h - words from and to byte strings at any alignment (private to the library). They compile to a load or store and, where the
  * byte order differs, a byte swap; on a machine with another byte order they fall back to shifts. */
 #ifndef PZCORE_BYTES_H

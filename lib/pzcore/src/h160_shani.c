@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* h160_shani.c - lane kernel of the batch hash160 for x86-64 with the SHA extensions: SHA-256 with sha256rnds2 and friends, RIPEMD-160 on
  * the 8 AVX2 lanes (built with -msha -mavx2 -mssse3 -msse4.1, see the Makefile). */
 #include "h160_impl.h"

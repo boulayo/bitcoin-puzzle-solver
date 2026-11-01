@@ -5,8 +5,9 @@ Base58Check, bech32 / bech32m and SegWit addresses, a keyed permutation of `[0, 
 code of the CPU. It depends on the C library only (no pthread, no allocation, no I/O) and on GCC or Clang (it uses `unsigned __int128`, GNU
 vector types and, on x86-64, inline assembly), so it builds with MinGW-w64 but not with MSVC.
 
-**License:** part of pzsolve, so the same terms: `AGPL-3.0-or-later` (see `../../LICENSE`), with the same paid commercial license
-(see the main README). Every file carries the SPDX line.
+**License and copyright:** part of pzsolve, so the same terms and the same holder: Copyright (C) 2026 Leonardo Boulay,
+`AGPL-3.0-or-later` (the text is in `LICENSE`, next to this file, so that the folder can be taken on its own), with the same paid
+commercial license (see the main README). Every file carries the `SPDX-License-Identifier` and `SPDX-FileCopyrightText` lines.
 
 ## Interface
 

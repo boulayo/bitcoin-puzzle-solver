@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* u256.c - parsing and printing of 256-bit integers, and the group-order arithmetic. */
 #include <pzcore/u256.h>
 

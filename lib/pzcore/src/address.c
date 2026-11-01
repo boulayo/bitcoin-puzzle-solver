@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* address.c - Base58Check, bech32/bech32m, SegWit addresses and the Bitcoin address helpers built on them. */
 #include <pzcore/address.h>
 #include <pzcore/hash.h>

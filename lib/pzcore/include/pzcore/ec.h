@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* ec.h - the secp256k1 curve y^2 = x^3 + 7: points in affine (pz_ge) and Jacobian (pz_gej) form, their sums, and the
  * multiplication of the generator G by a scalar.
  *

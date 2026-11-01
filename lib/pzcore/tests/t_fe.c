@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_fe.c - the (possibly assembly) pz_fe_mul/pz_fe_sqr must agree with the portable C versions and with Python-checked identities. */
 #include <pzcore/fe.h>
 #include <pzcore/cpu.h>

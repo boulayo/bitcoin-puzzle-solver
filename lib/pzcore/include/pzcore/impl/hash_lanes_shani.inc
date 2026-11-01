@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash_lanes_shani.inc - SHA-256 stage of the hash160 of 8 compressed public keys on x86-64 with the SHA extensions, included from
  * hash_lanes.inc (PZ_HASH_SHA256_EXTERNAL) with PZ_VBYTES 32 in a translation unit built with -msha -mavx2 -mssse3 -msse4.1.
  * The 33-byte key is one SHA-256 block with fixed padding. Its words come from the lane layout of the template (word i of all keys in one

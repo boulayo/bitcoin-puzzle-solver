@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_ec.c - the curve: k*G against values computed by Python, the group law, the point at infinity, batch conversion, public-key parsing
  * (valid and hostile), the square root, and the first use of the multiplication table by several threads at once. */
 #include <pzcore/ec.h>

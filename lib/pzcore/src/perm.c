@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* perm.c - keyed bijection on [0, M). See perm.h. */
 #include <pzcore/hash.h>
 #include <pzcore/perm.h>

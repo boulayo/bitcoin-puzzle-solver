@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* defs.h - what every pzcore header needs: fixed-width types, the 128-bit integer type, a few attribute macros and the
  * extern "C" brackets. pzcore is written for GCC and Clang on 64-bit targets (it uses unsigned __int128, GNU vector types
  * and, on x86-64, inline assembly), so it builds with MinGW-w64 but not with MSVC. */

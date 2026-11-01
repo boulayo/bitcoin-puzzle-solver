@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* hash_lanes_neon.inc - hash160 of PZ_LANES compressed public keys on aarch64, included from hash_lanes.inc (PZ_HASH_EXTERNAL).
  * SHA-256 uses the ARMv8 SHA2 instructions (sha256h, sha256h2, sha256su0, sha256su1), four keys at a time in lock step. RIPEMD-160
  * runs on NEON vectors of four lanes; PZ_NEON_NV such vectors (PZ_LANES = 4 * PZ_NEON_NV) are advanced together inside every step, which gives
