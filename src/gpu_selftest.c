@@ -530,9 +530,9 @@ int gpu_selftest(void)
             s->NK = KV_NK(ks[k]);
             ok = gpu_test_kang(s);
         }
-        for (size_t k = 0; k < sizeof KV_MC4_NK / sizeof *KV_MC4_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* CUDA tests them as list entries */
-            s->kvar = KV_MC4_NK[k] | 2 << 16;
-            s->NK = KV_MC4_NK[k];
+        for (size_t k = 0; k < 2 * sizeof KV_MC4_NK / sizeof *KV_MC4_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* CUDA tests them as list entries */
+            s->kvar = KV_MC4_NK[k / 2] | 2 << 16 | (k % 2 ? KV_METAFLAG : 0);   /* both forms of the tags */
+            s->NK = KV_MC4_NK[k / 2];
             ok = gpu_test_kang(s);
         }
         for (size_t k = 0; k < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* likewise the block herd */

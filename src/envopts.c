@@ -61,7 +61,7 @@ static void env_text(const char *name, char *out, size_t cap)
     memcpy(out, v, strlen(v) + 1);
 }
 
-bool pz_env_parse_nk(const char *t, int *nk, int *cfg, bool *l2)
+bool pz_env_parse_nk(const char *t, int *nk, int *cfg, bool *meta, bool *l2)
 {
     long n = 0;
     const char *e = t;
@@ -71,11 +71,13 @@ bool pz_env_parse_nk(const char *t, int *nk, int *cfg, bool *l2)
     if (*e == 'b') { c = 1; e++; }
     else if (*e == 'c') { c = 2; e++; }                         /* products every fourth walker */
     else if (*e == 'g') { c = 3; e++; }                         /* the block herd: one inversion per work-group */
-    bool l = false;
+    bool m = false, l = false;
+    if (*e == 'm') { m = true; e++; }                           /* the tags written once (KANG_META=1) */
     if (*e == 'l') { l = true; e++; }                           /* herd sized to the L2 cache */
     if (*e) return false;
     *nk = (int)n;
     *cfg = c;
+    *meta = m;
     *l2 = l;
     return true;
 }
@@ -102,8 +104,8 @@ static void env_gpu_nk(void)
 {
     const char *v = env_get("PZ_GPU_NK");
     if (!v) return;
-    if (strlen(v) >= sizeof g_env.gpu_nk_text || !pz_env_parse_nk(v, &g_env.gpu_nk, &g_env.gpu_nk_cfg, &g_env.gpu_nk_l2)) {
-        env_ignored("PZ_GPU_NK", v, "expected a number of walkers, with the suffix b, c or g and then l if wanted, as in 128b");
+    if (strlen(v) >= sizeof g_env.gpu_nk_text || !pz_env_parse_nk(v, &g_env.gpu_nk, &g_env.gpu_nk_cfg, &g_env.gpu_nk_meta, &g_env.gpu_nk_l2)) {
+        env_ignored("PZ_GPU_NK", v, "expected a number of walkers, with the suffix b, c or g, then m and then l if wanted, as in 128b");
         return;
     }
     memcpy(g_env.gpu_nk_text, v, strlen(v) + 1);

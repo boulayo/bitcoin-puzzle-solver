@@ -9,7 +9,8 @@
 # kind      linear (src/kernels/pz_linear.cl), kang (pz_kang.cl) or test (pz_test.cl); all three come after pz_common.cl
 # cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel plus 8 times
 #           the configuration of the batch products of a kangaroo kernel (0 at every
-#           walker, 1 at every other, 2 at every fourth, 3 one inversion per block: the block herd)
+#           walker, 1 at every other, 2 at every fourth, 3 one inversion per block: the block herd), plus 16 for the metadata written
+#           once (bit 20 of the parameter, -DKANG_META=1: the tag two steps back stored in the last round only, pz_kang.cl)
 # base      an earlier module whose text is the dictionary of this one in the compressed embedding (src/lz.c), or - for none; the modules of
 #           a family differ in few lines, so all the PTX takes about 1 MB instead of 12. A base comes before the modules that use it
 # defines   the -D options of the NVRTC build, or - for none. The size of the parameter of rt_build (HALF, or NK) is the value of -DHALF / -DNK
@@ -49,3 +50,13 @@ test           test    0    linear128  -DPZ_FMA_CARRY
 # the block herd: 4 walkers per work-item, all in registers (250 of them: two blocks of 128 threads per SM), and one inversion per block and
 # round for the 32 columns of products of the block (pz_kang.cl, KANG_BLOCK; docs/en/RESEARCH.md section 5)
 kang4g         kang    3    kang64     -DNK=4 -DKANG_BLOCK=1 -DPZ_MINB=2
+# the tags written once (KANG_META=1, pz_kang.cl): 7 bytes less per step on the SASS, slower on the RTX A2000 as measured (RESEARCH.md
+# section 5, after 1.19.2): the variants the tuner measures against the forms above, forced with the suffix m of PZ_GPU_NK (64m, 128cm, ...).
+# The bases are the smallest found: a module compresses to 2 to 36 KB against its sibling of the other NK (the virtual registers of the PTX
+# are numbered the same way) but the quads to about 85 KB against anything (as kang128c against kang64c above)
+kang64m        kang    16   kang64     -DNK=64 -DPZ_MINB=4 -DKANG_META=1
+kang128m       kang    16   kang64m    -DNK=128 -DPZ_MINB=4 -DKANG_META=1
+kang64bm       kang    17   kang64b    -DNK=64 -DMC=2 -DPZ_MINB=4 -DKANG_META=1
+kang128bm      kang    17   kang64bm   -DNK=128 -DMC=2 -DPZ_MINB=4 -DKANG_META=1
+kang64cm       kang    18   kang64c    -DNK=64 -DMC=4 -DPZ_MINB=2 -DKANG_META=1
+kang128cm      kang    18   kang64cm   -DNK=128 -DMC=4 -DPZ_MINB=2 -DKANG_META=1

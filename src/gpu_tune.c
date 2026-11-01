@@ -11,8 +11,12 @@
 
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
 static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
-static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16};
-static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16};
+/* the kangaroo variants: NK plain, pairs and quads, each in the form of 1.19.2 and with the tags written once (KV_METAFLAG, pz_kang.cl KANG_META:
+ * measured side by side, RESEARCH.md section 5 after 1.19.2) */
+static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16,
+                                   32 | KV_METAFLAG, 64 | KV_METAFLAG, 128 | KV_METAFLAG, 32 | 1 << 16 | KV_METAFLAG, 64 | 1 << 16 | KV_METAFLAG, 128 | 1 << 16 | KV_METAFLAG};
+static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16,
+                                   64 | KV_METAFLAG, 128 | KV_METAFLAG, 64 | 1 << 16 | KV_METAFLAG, 128 | 1 << 16 | KV_METAFLAG, 64 | 2 << 16 | KV_METAFLAG, 128 | 2 << 16 | KV_METAFLAG};
 
 int gpu_variants_of(const rt_dev *d, const int **v)
 {
@@ -120,7 +124,8 @@ static char *kvariant_name(int v, char *b, size_t n)
 {
     static const char *const wide[] = {"", ", 4x herd", ", 8x herd", ", full herd"};
     static const char *const cfg[] = {"", " pairs", " quads", " block herd"};
-    snprintf(b, n, "NK %d%s%s%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_L2(v) && KV_CFG(v) ? "," : "", KV_L2(v) ? " L2 herd" : "", wide[KV_WIDE(v)]);
+    snprintf(b, n, "NK %d%s%s%s%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_META(v) ? ", tags once" : "", KV_L2(v) && (KV_CFG(v) || KV_META(v)) ? "," : "",
+             KV_L2(v) ? " L2 herd" : "", wide[KV_WIDE(v)]);
     return b;
 }
 static char *variant_name(int v, char *b, size_t n)
@@ -392,12 +397,12 @@ static double kang_measure_variant(gpu_session *s, int v)
     return kang_measure(s);
 }
 
-/* What PZ_GPU_NK takes for a variant ("128b", "64l", "4g"); "-" for a herd it cannot force (the wide herds have no suffix). */
+/* What PZ_GPU_NK takes for a variant ("128b", "128cm", "64l", "4g"); "-" for a herd it cannot force (the wide herds have no suffix). */
 static char *kvariant_code(int v, char *b, size_t n)
 {
     static const char *const cfg[] = {"", "b", "c", "g"};
     if (KV_WIDE(v)) { pz_strlcpy(b, "-", n); return b; }
-    snprintf(b, n, "%d%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_L2(v) ? "l" : "");
+    snprintf(b, n, "%d%s%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_META(v) ? "m" : "", KV_L2(v) ? "l" : "");
     return b;
 }
 
@@ -736,10 +741,11 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     kang_set_variant(s, default_kvariant(d));
     s->launch_s = GPU_LAUNCH_S;
     if (g_env.gpu_nk) {
-        const int v = g_env.gpu_nk | g_env.gpu_nk_cfg << 16 | (g_env.gpu_nk_l2 ? KV_L2FLAG : 0);
+        const int v = g_env.gpu_nk | g_env.gpu_nk_cfg << 16 | (g_env.gpu_nk_meta ? KV_METAFLAG : 0) | (g_env.gpu_nk_l2 ? KV_L2FLAG : 0);
         if (forcible_kvariant(d, v)) { kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, kvariant_name(v, nb, sizeof nb)); }
         else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, g_env.gpu_nk_text, rt_api_name(d->api),
-                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c; 4g (block herd)" : "32, 64, 128, with suffix b; with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2); 4g (block herd)");
+                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c; 64 and 128, plain, b or c, with m after it (tags once); 4g (block herd)"
+                                      : "32, 64, 128, with suffix b, then m if wanted (tags once); with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2); 4g (block herd)");
         return;
     }
     if (tune_off(d)) return;
@@ -752,10 +758,10 @@ void gpu_kang_autotune(gpu_session *s, int idx)
 
 typedef struct { double copy_gbs, lo_gops, hi_gops, add3_gops; } gpu_diag;
 
-/* per step of the CUDA kangaroo kernel (NK 128 quads, the variant the tuner picks on the cards measured): device memory traffic counted on the
- * executed path of the SASS for sm_86 with the per-launch share at 128 rounds, and integer instructions, the step and its share of the
- * inversion (docs/en/RESEARCH.md 5 "After 1.19.2: the bytes of a kangaroo step" and 8.4) */
-#define KANG_MODEL_BYTES 174
+/* per step of the CUDA kangaroo kernel (NK 128 quads in the form of 1.19.2, the default; the variant the tuner picked on the card measured):
+ * device memory traffic counted on the executed path of the SASS for sm_86 with the per-launch share at 128 rounds, and integer instructions,
+ * the step and its share of the inversion (docs/en/RESEARCH.md 5 "After 1.19.2: the bytes of a kangaroo step" and 8.4) */
+#define KANG_MODEL_BYTES 181
 #define KANG_MODEL_INSNS 1300
 /* the block herd (NK 4): the walkers stay in registers; per step the history (written, then read by the replay at the end of the launch) and
  * 941 instructions of the step, plus the 15,680 that the inverting warp adds (the column products and fe_inv) shared by the 16 warp-steps of a
@@ -1372,6 +1378,10 @@ int gpu_tune_selftest(void)
         TCHK(!strcmp(kvariant_name(64 | 1 << 16 | KV_WIDEFLAG(KV_WIDE_X4), nb, sizeof nb), "NK 64 pairs, 4x herd"));
         TCHK(!strcmp(kvariant_name(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "NK 64, full herd"));
         TCHK(!strcmp(kvariant_name(4 | KV_BLOCK << 16, nb, sizeof nb), "NK 4 block herd"));
+        TCHK(!strcmp(kvariant_name(128 | 2 << 16 | KV_METAFLAG, nb, sizeof nb), "NK 128 quads, tags once"));
+        TCHK(!strcmp(kvariant_name(64 | KV_METAFLAG | KV_L2FLAG, nb, sizeof nb), "NK 64, tags once, L2 herd"));
+        TCHK(!strcmp(kvariant_code(128 | 2 << 16 | KV_METAFLAG, nb, sizeof nb), "128cm") && !strcmp(kvariant_code(64 | 1 << 16 | KV_L2FLAG, nb, sizeof nb), "64bl"));
+        TCHK(!strcmp(kvariant_code(64 | KV_METAFLAG | KV_L2FLAG, nb, sizeof nb), "64ml") && !strcmp(kvariant_code(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "-"));
         /* the block herd: never tuned; two blocks of 128 work-items per SM with CUDA */
         for (int api = 0; api < 2; api++) {
             rt_dev d;
