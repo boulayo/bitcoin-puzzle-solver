@@ -48,6 +48,10 @@ bool pz_ge_sub(pz_ge *r, const pz_ge *a, const pz_ge *b);
 /* r = k*G for any 256-bit k (taken modulo n). Returns false when k is a multiple of n, i.e. the result is the point at infinity. */
 bool pz_ec_mul_g(pz_ge *r, const pz_u256 *k);
 void pz_ec_mul_g_j(pz_gej *r, const pz_u256 *k);
+/* r = k*P for any point P on the curve and any 256-bit k (taken modulo n): plain double-and-add, about 100 microseconds, no table. Returns
+ * false when the result is the point at infinity (k a multiple of n). P must be on the curve (pz_ge_on_curve, or parsed by
+ * pz_ge_from_pubkey); the result is not defined for a point that is not. Not constant-time, like the rest of the library. */
+bool pz_ec_mul(pz_ge *r, const pz_ge *p, const pz_u256 *k);
 
 /* Serialization (SEC1). The compressed form is 02/03 (parity of y) and x; the uncompressed form is 04, x and y. */
 void pz_ge_to_pub33(uint8_t out[33], const pz_ge *p);

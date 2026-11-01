@@ -133,7 +133,7 @@ endif
 # are compiled for their own instruction sets, as before. The per-ISA objects follow the same X86 / ARM64 switches as the engines.
 LIBFLAGS  = $(filter-out -fno-strict-aliasing -Isrc,$(COMMON))
 LIBLDLIBS = $(filter-out -ldl -lbcrypt,$(LDLIBS))
-PZC_SRC   := u256 fe ec hash address perm cpu hash160_batch h160_portable
+PZC_SRC   := u256 fe ec hash address kdf seal perm cpu hash160_batch h160_portable
 ifeq ($(X86),1)
 PZC_SRC   += h160_avx2 h160_avx512 h160_shani
 endif
@@ -162,7 +162,7 @@ $(LIB): $(LIBOBJ)
 lib: $(LIB)
 
 # the unit tests and the examples of the library link nothing but the archive
-LIBTESTS := t_u256 t_fe t_ec t_hash t_address t_perm t_batch
+LIBTESTS := t_u256 t_fe t_ec t_hash t_address t_kdf t_seal t_perm t_batch
 ifeq ($(X86),1)
 LIBTESTS += t_fe_asm t_fev2 t_fev5 t_fev52
 endif
@@ -178,6 +178,7 @@ $(BUILD)/pzcore/t_fev52$(EXE): lib/pzcore/tests/t_fev52.c $(LIB) | $(BUILD)/pzco
 	$(CC) $(LIBFLAGS) $(IFMA_FLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
 $(BUILD)/pzcore/t_%$(EXE): lib/pzcore/tests/t_%.c lib/pzcore/tests/testutil.h $(LIB) | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
+$(BUILD)/pzcore/t_seal$(EXE): lib/pzcore/tests/seal_vectors.h
 $(BUILD)/pzcore/ex_%$(EXE): lib/pzcore/examples/%.c $(LIB) | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
 

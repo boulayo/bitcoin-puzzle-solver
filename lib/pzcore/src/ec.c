@@ -285,6 +285,17 @@ void pz_ec_mul_g_j(pz_gej *r, const pz_u256 *k)
     *r = acc;
 }
 
+bool pz_ec_mul(pz_ge *r, const pz_ge *p, const pz_u256 *k)
+{
+    pz_gej acc;
+    gej_set_inf(&acc);
+    for (int i = (int)pz_u256_bits(k) - 1; i >= 0; i--) {
+        pz_gej_double(&acc, &acc);
+        if (pz_u256_bit(k, (unsigned)i)) pz_gej_add_ge(&acc, &acc, p);
+    }
+    return pz_gej_to_ge(r, &acc);
+}
+
 bool pz_ec_mul_g(pz_ge *r, const pz_u256 *k)
 {
     pz_gej j;

@@ -34,6 +34,12 @@ int main()
     pz_fe one;
     pz_fe_set_u64(&one, 1);
     if (!pz_fe_equiv(&b, &one)) return 5;
+
+    uint8_t mac[32], wiped[4] = {1, 2, 3, 4};
+    pz_hmac_sha256_oneshot(seed, sizeof seed, NULL, 0, mac);
+    pz_secure_zero(wiped, sizeof wiped);
+    pz_ge r2;
+    if (!pz_ec_mul(&r2, &p, &three) || wiped[2] != 0 || !pz_ct_equal(mac, mac, sizeof mac) || PZ_SEAL_PAYLOAD_LEN != 86) return 6;
     std::puts("cxx_check: OK");
     return 0;
 }

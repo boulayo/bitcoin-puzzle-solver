@@ -11,6 +11,7 @@
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
 #include <pzcore/address.h>
+#include <pzcore/seal.h>
 #include <pzcore/hash160_batch.h>
 #include <pzcore/perm.h>
 #include <pzcore/cpu.h>
