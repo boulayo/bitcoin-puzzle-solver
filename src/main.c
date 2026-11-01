@@ -14,6 +14,9 @@
 #include "platform.h"
 #include "envopts.h"
 #include "outfmt.h"
+#include "encrypt.h"
+#include "encrypt_cmd.h"
+#include "onfound.h"
 #include <getopt.h>
 #include <math.h>
 #include <unistd.h>
@@ -64,6 +67,8 @@ static const char *main_text(void)
 "  devices    the CPU, SIMD instructions, RAM and GPUs\n"
 "  selftest   the built-in correctness checks\n"
 "  merge      add the distinguished points of other computers (kangaroo)\n"
+"  encrypt-keygen   make the public key to which a campaign encrypts the key it finds (rented computers)\n"
+"  decrypt-key      decrypt the key that a campaign found and encrypted\n"
 "  doctor     check program, machine, GPUs, cache and campaigns\n"
 "  bench      the speed of the CPU and GPU engines\n"
 "  kstat      statistics of the kangaroo cost (cycle study)\n"
@@ -75,6 +80,7 @@ static const char *main_text(void)
 "  pzsolve hunt -p 71 -r 400000000000000000:5fffffffffffffffff   a part only\n"
 "  pzsolve hunt -r 8000:ffff -a ADDRESS -c mine   a custom range and target\n"
 "  pzsolve info -c p71\n"
+"  pzsolve encrypt-keygen            then:  pzsolve hunt -p 71 --encrypt-pubkey PUBKEY   (the key is never shown in plain)\n"
 "\n"
 "Copyright (C) 2026 Leonardo Boulay. Free software under the GNU AGPL version 3 or later, with no warranty: 'pzsolve version'.\n", PZ_VERSION);
     return text;
@@ -150,6 +156,19 @@ static const char *hunt_text(void)
 "      --node N            kangaroo: number of this computer (0..65535, 0 if there is only one): the kangaroos start from\n"
 "                          different points (see 'merge')\n"
 "\n"
+"ENCRYPTING THE KEY (for rented computers; see 'pzsolve help encrypt-keygen' and 'pzsolve help decrypt-key')\n"
+"      --encrypt-pubkey HEX\n"
+"                          when the key is found, encrypt it to this public key (66 hex digits, or 130 uncompressed; made by 'encrypt-keygen' on\n"
+"                          a computer you trust): the screen, FOUND.txt and the log then carry only a line 'PZENC1:...', safe to copy anywhere, and\n"
+"                          neither the key nor its public key. Stored in the campaign: a resumed campaign uses it, another one is refused. Core\n"
+"                          dumps are turned off. Invalid: the program does not start (it never falls back to showing the key)\n"
+"      --encrypt-password  instead of --encrypt-pubkey: type a password now (hidden, asked twice) and the public key is made from it, as\n"
+"                          'encrypt-keygen' does; the password is not stored. Only on a computer you trust while you type: what sees the\n"
+"                          keyboard or the memory now can capture it. Not asked again when the campaign already has its key\n"
+"      --on-found COMMAND  run COMMAND once with the shell after FOUND.txt is written (at most 120 s; the search does not wait for it), with\n"
+"                          PZ_FOUND_SEALED (the PZENC1 line, empty without encryption), PZ_FOUND_ADDRESS, PZ_FOUND_PUZZLE, PZ_FOUND_CAMPAIGN\n"
+"                          and PZ_FOUND_FILE set, never the key. Not stored: give it again at every start\n"
+"\n"
 "DISPLAY AND FILES\n"
 "      --ui U              auto | full (multi-line panel updated in place) | line (one line) | log (one line per minute, suited\n"
 "                          to files)   [auto: full on a terminal]\n"
@@ -203,11 +222,13 @@ static const struct { const char *cmd, *text; } short_help[] = {
               "  -c, --campaign NAME     the campaign\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
               "      --key HEX           the private key, in hexadecimal\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"},
     {"merge", "pzsolve merge - merge the distinguished points of other computers into a kangaroo campaign\n\nUSAGE\n"
-              "  pzsolve merge (-c NAME | -p N) -f FILE_OR_FOLDER [-f ...] [-d DIR] [--mem GIB]\n\nOPTIONS\n"
+              "  pzsolve merge (-c NAME | -p N) -f FILE_OR_FOLDER [-f ...] [-d DIR] [--mem GIB] [--encrypt-pubkey HEX | --encrypt-password] [--on-found COMMAND]\n\nOPTIONS\n"
               "  -c, --campaign NAME     the campaign (it must not be running)\n  -p, --puzzle N          the campaign of puzzle N (named pN)\n"
               "  -f, --file PATH         the dp.bin of another computer, or its campaign folder (up to 16)\n"
               "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
               "      --mem GIB           maximum RAM for the table of distinguished points, in GiB [auto]\n  -q, --quiet             fewer messages\n"
+              "      --encrypt-pubkey HEX, --encrypt-password, --on-found COMMAND\n"
+              "                          as in hunt (for a campaign that has no public key to encrypt to yet)\n"
               "\nEXIT STATUS\n  0                       the files were merged (or the key was found)\n"
               "  2                       a file could not be merged, or another error\n"},
     {"split", "pzsolve split - divide the --part shares among several computers in proportion to their speeds\n\nUSAGE\n"
@@ -229,6 +250,26 @@ static const struct { const char *cmd, *text; } short_help[] = {
               "  TRIALS                  number of keys to find\n  THREADS                 CPU threads [1]\n"
               "  R, DP                   number of jumps and bits of the distinguished points (then the kangaroos without\n"
               "                          distinguished points are not restarted)\n"},
+    {"encrypt-keygen", "pzsolve encrypt-keygen - make the public key to which the key found by a campaign is encrypted\n\nUSAGE\n"
+                       "  pzsolve encrypt-keygen [--random]\n\n"
+                       "Run it on a computer you trust, not on the rented one. It asks for a password (hidden, twice), makes the secret key from it (scrypt, about\n"
+                       "a second and 256 MiB) and prints the public key (66 hex digits) and its key id. Give the public key to 'hunt --encrypt-pubkey'; keep the\n"
+                       "password: with it 'decrypt-key' recovers the key at home. Nothing is written to disk. Without a terminal the password is one line of the\n"
+                       "input. The password is the only thing that protects the key: 7 or more random words or 20 or more random characters, never a word or a\n"
+                       "name, because anyone who sees the public key can try passwords offline. A password lost is a key lost.\n\nOPTIONS\n"
+                       "      --random            no password: make a random private key and print it too (64 hex digits, with the public key). Store it\n"
+                       "                          like a secret; 'decrypt-key --raw-key' reads it. Lost, the encrypted key is lost\n"},
+    {"decrypt-key", "pzsolve decrypt-key - decrypt the key that a campaign found and encrypted\n\nUSAGE\n"
+                    "  pzsolve decrypt-key [--raw-key] [--address ADDRESS] [--puzzle N] [FILE | -]\n\n"
+                    "Reads FILE (default: FOUND.txt in the current folder if there is one, otherwise standard input; - is standard input) or a pasted\n"
+                    "text, finds every token 'PZENC1:...' in it and shows the key id it was encrypted to; the other lines are ignored. Asks for the\n"
+                    "password (hidden), checks that it is the right one, decrypts, and checks that the key belongs to the address; prints the key\n"
+                    "(hex and WIF), the address and the puzzle. Exit status 0 only when the key was recovered and checked. The address and the puzzle\n"
+                    "are part of what was encrypted: they are taken from the lines 'address:' and 'puzzle:' of the text (FOUND.txt has them), or from\n"
+                    "the options. Without a terminal the password is one line of standard input (the text then comes from FILE).\n\nOPTIONS\n"
+                    "      --raw-key           read the private key (64 hex digits, hidden) instead of a password: for a key made with 'encrypt-keygen --random'\n"
+                    "      --address ADDRESS   the address of the campaign, when the text has no 'address:' line\n"
+                    "      --puzzle N          the puzzle of the campaign (0 or absent: none), when the text has no 'puzzle:' line\n"},
     {"version", "pzsolve version - print the version, the copyright and the license\n\nUSAGE\n  pzsolve version\n"},
 };
 
@@ -286,12 +327,15 @@ typedef struct {
     int limit;                    /* --limit: percentage of the machine to use (1..99; 0 = no limit) */
     char files[16][600];
     char key[100];
+    char encrypt_pubkey[200];     /* --encrypt-pubkey */
+    bool encrypt_password;        /* --encrypt-password */
+    char on_found[1024];          /* --on-found */
     char table[600];
     u64 bsgs_entries;
     ui_mode ui;
 } opts_t;
 
-enum { O_GPUAPI = 996, O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_ISA, O_CHUNK, O_DP, O_MEM, O_REPORT, O_CKPT, O_NEW, O_RESUME, O_KEY, O_RETUNE, O_NOTUNE, O_AWAKE, O_NODE, O_PRIO, O_PART, O_LIMIT };
+enum { O_GPUAPI = 996, O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_ISA, O_CHUNK, O_DP, O_MEM, O_REPORT, O_CKPT, O_NEW, O_RESUME, O_KEY, O_RETUNE, O_NOTUNE, O_AWAKE, O_NODE, O_PRIO, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"hash160", 1, 0, 'H'}, {"pubkey", 1, 0, 'k'},
@@ -301,7 +345,8 @@ static const struct option long_opts[] = {
     {"checkpoint-interval", 1, 0, O_CKPT}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
     {"new", 0, 0, O_NEW}, {"resume", 0, 0, O_RESUME}, {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN}, {"gpu-api", 1, 0, O_GPUAPI},
     {"retune", 0, 0, O_RETUNE}, {"no-tune", 0, 0, O_NOTUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE}, {"prio-gpu", 1, 0, O_PRIO},
-    {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
+    {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
+    {"on-found", 1, 0, O_ONFOUND}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
 
 /* Strict numeric option parsing: the whole string must be a number in range (atoi() would silently accept "12abc").
  * pz_parse_* rather than strtoll: on glibc >= 2.38 strtoll resolves to __isoc23_strtoll and the binary would refuse
@@ -389,7 +434,7 @@ static const struct { const char *cmd, *only, *not; } cmd_opts[] = {
     {"info", " campaign puzzle dir ", NULL},
     {"list", " dir ", NULL},
     {"where", " campaign puzzle dir key ", NULL},
-    {"merge", " campaign puzzle dir file mem quiet ", NULL},
+    {"merge", " campaign puzzle dir file mem quiet encrypt-pubkey encrypt-password on-found ", NULL},
 };
 
 /* Refuses the option `c` (as getopt_long returned it) when the command does not use it. */
@@ -487,6 +532,9 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         case 'v': o->verbose = true; break;
         case O_NEW: o->want_new = true; break;
         case O_RESUME: o->want_resume = true; break;
+        case O_ENCPUB: opt_copy("--encrypt-pubkey", o->encrypt_pubkey, sizeof o->encrypt_pubkey, optarg); break;
+        case O_ENCPW: o->encrypt_password = true; break;
+        case O_ONFOUND: opt_copy("--on-found", o->on_found, sizeof o->on_found, optarg); break;
         case O_KEY: opt_copy("--key", o->key, sizeof o->key, optarg); break;
         case O_TABLE: opt_copy("--table", o->table, sizeof o->table, optarg); break;
         case O_BSGSN: o->bsgs_entries = opt_u64("--bsgs-entries", optarg, 1, BS_MAX_T); break;
@@ -512,6 +560,13 @@ static void parse_opts(int argc, char **argv, opts_t *o)
         pz_usage_error(g_cmd, "unexpected argument '%s' (options start with - or --)", a);
     }
     if (o->want_new && o->want_resume) pz_die("--new and --resume are mutually exclusive: --new requires a new campaign, --resume an existing one");
+    if (o->encrypt_pubkey[0] && o->encrypt_password) pz_die("--encrypt-pubkey and --encrypt-password cannot be used together: give the public key, or type a password");
+    if (o->encrypt_pubkey[0]) {                   /* before anything is created: a key that does not parse is a refusal, never a run that shows the key */
+        pz_ge q;
+        u8 q33[33];
+        char err[240];
+        if (!enc_parse_pubkey(o->encrypt_pubkey, &q, q33, err, sizeof err)) pz_die("--encrypt-pubkey: %s (nothing was started)", err);
+    }
 }
 
 static bool file_exists(const char *p) { struct stat st; return stat(p, &st) == 0; }
@@ -809,6 +864,8 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     pz_strlcpy(c->name, o->campaign, sizeof c->name);   /* always set by cmd_hunt (explicit or derived) */
 }
 
+static void check_encrypt_resume(const opts_t *o, const campaign_cfg *c);   /* with the rest of the encryption, below */
+
 /* Options that describe the campaign itself must agree with the stored configuration: a silent mismatch would make the
  * user believe a different search is running than the one that resumes. */
 static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
@@ -838,6 +895,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (!parse_pubkey(o->pubkey, &tmp)) pz_die("invalid public key (expected 33 or 65 bytes in hex, a point on the curve)");
         if (!c->has_pubkey || memcmp(tmp.pubkey33, c->pubkey33, 33) != 0) pz_die("the given public key does not match the one of the existing campaign");
     }
+    check_encrypt_resume(o, c);
     if (o->seed[0] && strcmp(o->seed, "auto") != 0) {
         u8 s[32];
         seed_from_text(o->seed, s);
@@ -894,18 +952,107 @@ static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
     else snprintf(out, n, "about %c.%c%ce%zu keys", dec[0], dec[1], dec[2], len - 1);
 }
 
+/* ---- encrypting the key that is found (docs/en/USAGE.md, "Encrypting the key") ---- */
+
+/* Core dumps and same-user ptrace off, once: the plain key is in memory for a moment when it is found, and the password while it is typed. */
+static void harden_process(void)
+{
+    static bool done;
+    char why[200];
+    if (done) return;
+    done = true;
+    if (!pz_harden_process(why, sizeof why)) pz_log(PZ_LOG_WARN, "%s", why);
+}
+
+/* The public key to encrypt to, from --encrypt-pubkey or from the password typed (--encrypt-password), into the campaign c. */
+static void encrypt_from_options(const opts_t *o, campaign_cfg *c)
+{
+    pz_ge q;
+    u8 q33[33];
+    char err[240];
+    if (o->encrypt_pubkey[0]) {
+        if (!enc_parse_pubkey(o->encrypt_pubkey, &q, q33, err, sizeof err)) pz_die("--encrypt-pubkey: %s (nothing was started)", err);
+    } else if (o->encrypt_password) {
+        harden_process();
+        enc_password_to_pubkey(true, &q, q33);
+        char id[9], hx[67];
+        enc_key_id(&q, id);
+        pz_hex_encode(q33, 33, hx);
+        printf("Public key made from the password (key id %s):\n  %s\nCompare them with the output of 'pzsolve encrypt-keygen' on a computer you trust.\n", id, hx);
+    } else return;
+    if (!enc_check(&q, err, sizeof err)) pz_die("%s (nothing was started)", err);
+    c->encrypt_pubkey = q;
+    memcpy(c->encrypt_pubkey33, q33, 33);
+    c->has_encrypt = true;
+}
+
+/* A campaign that has its public key stored cannot be switched to another one by an option. */
+static void check_encrypt_resume(const opts_t *o, const campaign_cfg *c)
+{
+    if (!o->encrypt_pubkey[0] || !c->has_encrypt) return;
+    pz_ge q;
+    u8 q33[33];
+    char err[240], have[9], want[9];
+    if (!enc_parse_pubkey(o->encrypt_pubkey, &q, q33, err, sizeof err)) pz_die("--encrypt-pubkey: %s", err);
+    if (memcmp(q33, c->encrypt_pubkey33, 33) == 0) return;
+    enc_key_id(&c->encrypt_pubkey, have);
+    enc_key_id(&q, want);
+    pz_die("campaign '%s' already encrypts its key to the public key with id %s, not to %s: a campaign cannot be switched to another key. "
+           "Resume it without --encrypt-pubkey to keep the stored key, or start a new campaign with another name (-c) for the new key", c->name, have, want);
+}
+
+/* A campaign that is resumed or merged, with its lock taken: one that has no public key yet gets the one of the options (stored in campaign.conf: the key
+ * was not found yet, so nothing has been shown in plain); one that has it keeps it and no password is asked. */
+static void encrypt_on_resume(const opts_t *o, run_ctx *r)
+{
+    if (r->cfg.has_encrypt) {
+        if (o->encrypt_password) pz_log(PZ_LOG_INFO, "the campaign already has its public key to encrypt to: no password is asked");
+        return;
+    }
+    if (!o->encrypt_pubkey[0] && !o->encrypt_password) return;
+    encrypt_from_options(o, &r->cfg);
+    char conf[700];
+    snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
+    if (cfg_add_encrypt_pubkey(&r->cfg, conf) != 0) pz_die("cannot add the public key to %s: %s", conf, strerror(errno));
+    pz_log(PZ_LOG_INFO, "the campaign now encrypts the key it finds (the public key is stored in campaign.conf)");
+}
+
+/* What a campaign that encrypts the key says at the start of a session. */
+static void announce_encrypt(const run_ctx *r)
+{
+    if (!r->cfg.has_encrypt) return;
+    harden_process();
+    char id[9];
+    enc_key_id(&r->cfg.encrypt_pubkey, id);
+    pz_log(PZ_LOG_INFO, "the key will be encrypted to the public key with id %s when found: the screen, FOUND.txt and the log will carry only the encrypted line", id);
+}
+
 /* The banner printed when the key is found (by 'hunt' or by 'merge'). */
 static void print_found_banner(const run_ctx *r)
 {
-    char hx[80], wif[80], addr[80];
-    u8 kb[32];
-    pz_u256_to_hex(&r->found_key, hx);
-    pz_u256_to_be(&r->found_key, kb);
-    pz_privkey_to_wif(kb, true, wif, sizeof wif);
+    char addr[80];
     if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
     else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
     printf("\a\n======================= KEY FOUND =======================\n");
     if (r->cfg.puzzle) printf("  puzzle:         #%d\n", r->cfg.puzzle);
+    if (r->cfg.has_encrypt) {                       /* only the ciphertext: the key is not on the screen, and neither is its public key */
+        printf("  address:        %s\n", addr);
+        if (r->found_seal_failed) {
+            printf("  The key was found but could NOT be encrypted (the system gave no random numbers): it was written nowhere. Search again.\n");
+        } else {
+            char id[9];
+            enc_key_id(&r->cfg.encrypt_pubkey, id);
+            printf("  The key is encrypted to the public key with id %s: only the owner of the matching secret can read it.\n", id);
+            printf("  saved in:       %s\n  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->path_found, r->found_sealed);
+        }
+        printf("=========================================================\n");
+        return;
+    }
+    char hx[80], wif[80];
+    u8 kb[32];
+    pz_u256_to_hex(&r->found_key, hx);
+    pz_u256_to_be(&r->found_key, kb);
+    pz_privkey_to_wif(kb, true, wif, sizeof wif);
     printf("  address:        %s\n  key (hex):      0x%s\n  WIF compressed: %s\n", addr, hx, wif);
     printf("  saved in:       %s\n=========================================================\n", r->path_found);
 }
@@ -956,6 +1103,7 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
         build_new_cfg(o, &r->cfg);
         check_options_for_campaign(o, &r->cfg, r, true);
         warn_solved(o, &r->cfg);
+        encrypt_from_options(o, &r->cfg);              /* last of the checks: it may ask for a password, and nothing is created yet */
         snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o->dir, r->cfg.name);
         if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
         /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the
@@ -1108,9 +1256,11 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
     pz_log(PZ_LOG_INFO, "session ended after %s", pz_fmt_duration(el, ds, sizeof ds));
     if (atomic_load(&r->found)) {
         print_found_banner(r);
+        onfound_wait();                               /* the box is out; the program ends when the command has (at most 120 s) */
+        const int st = r->found_seal_failed ? PZ_EXIT_ERROR : PZ_EXIT_FOUND;
         pz_log_set_file(NULL);
         free(r);
-        return PZ_EXIT_FOUND;
+        return st;
     }
     int status = PZ_EXIT_NOT_FOUND;
     if (finished) {
@@ -1143,8 +1293,10 @@ static int cmd_hunt(int argc, char **argv)
     if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
     if (o.retune && o.limit) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
     if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */
+    if (o.encrypt_pubkey[0] || o.encrypt_password) harden_process();   /* before the password is typed or the key can be found */
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
+    pz_strlcpy(r->on_found, o.on_found, sizeof r->on_found);
     bool locked;
     const bool resuming = open_or_create_campaign(&o, r, &locked);
     run_paths(r);
@@ -1158,6 +1310,7 @@ static int cmd_hunt(int argc, char **argv)
         return PZ_EXIT_NOT_FOUND;
     }
     if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
+    if (resuming) encrypt_on_resume(&o, r);
     pz_log_set_file(r->path_log);
     run_install_signals(r);   /* before the measurement of the machine, which takes minutes: a Ctrl-C ends it and cleans up instead of killing the program */
     int thr_full;
@@ -1170,6 +1323,7 @@ static int cmd_hunt(int argc, char **argv)
         return PZ_EXIT_INTERRUPTED;
     }
     log_session_header(&o, r, resuming, thr_full);
+    announce_encrypt(r);
 
     run_session_load(r);
     r->sessions++;
@@ -1238,15 +1392,22 @@ static int cmd_merge(int argc, char **argv)
         free(r);
         return 0;
     }
+    check_encrypt_resume(&o, &r->cfg);
     campaign_lock(cdir);   /* a campaign that is running must be stopped first: both would write the same log */
+    pz_strlcpy(r->on_found, o.on_found, sizeof r->on_found);
+    if (o.encrypt_pubkey[0] || o.encrypt_password) harden_process();
+    encrypt_on_resume(&o, r);
+    announce_encrypt(r);
     r->mem_limit = mem_bytes(o.mem_gb);
     const char *fl[16];
     for (int i = 0; i < o.nfiles; i++) fl[i] = o.files[i];
     int rc = kangaroo_merge(r, fl, o.nfiles);
     if (atomic_load(&r->found)) {
         print_found_banner(r);
+        onfound_wait();
+        const int st = r->found_seal_failed ? PZ_EXIT_ERROR : 0;
         free(r);
-        return 0;
+        return st;
     }
     if (rc == 0) pz_fputs_wrap(stdout, "\nNo collision between the points yet: continue with 'hunt' on this campaign.\n", PZ_LINE_MAX, 2);
     else pz_fputs_wrap(stdout, "\nSome of the files could not be merged (see above).\n", PZ_LINE_MAX, 2);
@@ -1565,6 +1726,8 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "doctor")) return doctor_run(argc - 1, argv + 1);
     if (!strcmp(cmd, "merge")) return cmd_merge(argc - 1, argv + 1);
     if (!strcmp(cmd, "kstat")) return kangaroo_stats(argc, argv);
+    if (!strcmp(cmd, "encrypt-keygen")) return encrypt_keygen_main(argc - 1, argv + 1);
+    if (!strcmp(cmd, "decrypt-key")) return decrypt_key_main(argc - 1, argv + 1);
     if (!strcmp(cmd, "version") || !strcmp(cmd, "--version") || !strcmp(cmd, "-V")) {
         printf("pzsolve %s (%s)\n", PZ_VERSION, PZ_BUILD_INFO);
         print_legal_notice(stdout);

@@ -188,13 +188,14 @@ bool part_split(const u64 *speed, unsigned n, unsigned total, unsigned *counts)
 
 int cfg_save(const campaign_cfg *c, const char *path)
 {
-    char buf[4096], t1[80], t2[80], h[130], sd[65], pk[80];
+    char buf[4096], t1[80], t2[80], h[130], sd[65], pk[80], ep[67] = "";
     pz_u256_to_hex(&c->range_start, t1);
     pz_u256_to_hex(&c->range_end, t2);
     pz_hex_encode(c->target_h160, 20, h);
     pz_hex_encode(c->seed, 32, sd);
     pk[0] = 0;
     if (c->has_pubkey) pz_hex_encode(c->pubkey33, 33, pk);
+    if (c->has_encrypt) pz_hex_encode(c->encrypt_pubkey33, 33, ep);
     int n = snprintf(buf, sizeof buf,
         "# pzsolve campaign (do not edit by hand)\n"
         "format=%u\n"
@@ -212,10 +213,27 @@ int cfg_save(const campaign_cfg *c, const char *path)
         "chunk_bits=%u\n"
         "dp_bits=%u\n"
         "bsgs_entries=%llu\n"
-        "part=%s\n",
+        "part=%s\n"
+        "%s%s%s",
         c->format_version, c->created_with, c->created_at, c->name, c->puzzle, t1, t2,
-        c->address, h, pk, mode_name(c->mode), sd, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part);
+        c->address, h, pk, mode_name(c->mode), sd, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part,
+        c->has_encrypt ? "encrypt_pubkey=" : "", ep, c->has_encrypt ? "\n" : "");   /* the line is there only when it is used: the file of a campaign without it is as before */
     return pz_write_file_atomic(path, buf, (size_t)n, 0644);
+}
+
+int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path)
+{
+    char *text = pz_read_file(path, NULL);
+    if (!text) return -1;
+    char hx[67];
+    pz_hex_encode(c->encrypt_pubkey33, 33, hx);
+    const size_t l = strlen(text), cap = l + 100;
+    char *out = pz_xmalloc(cap);
+    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\n", text, l && text[l - 1] != '\n' ? "\n" : "", hx);
+    const int rc = pz_write_file_atomic(path, out, (size_t)n, 0644);
+    free(out);
+    free(text);
+    return rc;
 }
 
 static const char *cfg_val(char *text, const char *key, char *out, size_t outlen)
@@ -278,6 +296,17 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
             part_spec ps;
             if (!part_parse(pv, &ps, v, sizeof v)) { snprintf(err, errlen, "invalid part in %s: %s", path, v); free(text); return -1; }
             part_format(&ps, c->part, sizeof c->part);
+        }
+    }
+    {
+        char ev[80];                                                                  /* absent in the campaigns of earlier versions and in one that does not encrypt the key */
+        if (cfg_val(text, "encrypt_pubkey", ev, sizeof ev) && ev[0]) {
+            if (pz_hex_decode(ev, c->encrypt_pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->encrypt_pubkey, c->encrypt_pubkey33, 33)) {
+                snprintf(err, errlen, "invalid encrypt_pubkey in %s (the key would not be encrypted: the campaign is not started)", path);
+                free(text);
+                return -1;
+            }
+            c->has_encrypt = true;
         }
     }
 #undef GET

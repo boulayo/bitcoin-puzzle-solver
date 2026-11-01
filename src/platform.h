@@ -92,6 +92,30 @@ int pz_fd_terminal_cols(int fd);                           /* columns of the ter
  * close as soon as the program ends. Always false elsewhere. */
 bool pz_console_is_own(void);
 
+/* ---- secrets and the hardening of the process ---- */
+/* Whether standard input is a terminal (a console on Windows). */
+bool pz_stdin_is_terminal(void);
+/* Reads one line (without its end of line) into buf, which holds cap bytes. Standard input a terminal: prompt (on the terminal, not on stdout)
+ * and the line is read with the echo off; the terminal is put back on every way out, a stop signal (Ctrl-C, SIGTERM, SIGHUP; Windows: a console
+ * event) included. Standard input not a terminal (a script, a test): the next line of it, no prompt. allow_tty: when standard input is not
+ * a terminal but the process has a terminal of its own (/dev/tty, CONIN$), prompt and read there instead (for a command that reads a text from
+ * the input first and then wants a secret). The bytes are read one at a time with no stdio buffer, so that no second copy of the secret stays in
+ * the program and a following call sees the next line. Returns the length, or -1 at the end of the input or on an error and -2 when the line does
+ * not fit (the rest of it is read and dropped); on a failure buf is zero. The caller wipes buf (pz_secure_zero) when it is done. */
+int pz_read_secret(const char *prompt, char *buf, size_t cap, bool allow_tty);
+/* Asks that n bytes at p stay in RAM (mlock, VirtualLock) and out of core dumps (Linux: MADV_DONTDUMP). False when the system refused (a limit
+ * on locked memory is common): the caller goes on. pz_mem_unlock before the memory is freed. */
+bool pz_mem_lock(void *p, size_t n);
+void pz_mem_unlock(void *p, size_t n);
+/* Core dumps off for this process (setrlimit, and on Linux no ptrace by the same user and no dump through PR_SET_DUMPABLE). The text of what could
+ * not be done, or an empty string, goes to why. On Windows nothing is done from here and false is returned. */
+bool pz_harden_process(char *why, size_t n);
+/* Runs a command with the shell of the platform (/bin/sh -c; cmd.exe /c), with the variables env ("NAME=VALUE", NULL at the end) added to the
+ * environment, standard input on the null device, and waits for it at most timeout seconds (then it is killed, with its process group where
+ * there is one). Returns 0 and the exit status in *code; 1 when it was killed after the time; -1 when it could not be started (errno / text in
+ * why). */
+int pz_run_shell(const char *cmd, const char *const *env, double timeout, int *code, char *why, size_t whyn);
+
 /* ---- interruption ---- */
 /* fn runs (possibly on another thread, or in a signal handler: it must only touch atomics / call _exit) on Ctrl-C,
  * SIGTERM, SIGHUP (unless ignored, e.g. under nohup) and, on Windows, when the console window is closed or the

@@ -20,8 +20,12 @@
 #include <sys/resource.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
+#include <spawn.h>
+#include <termios.h>
 #ifdef __linux__
 #include <sys/syscall.h>
+#include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
 #include <spawn.h>
@@ -377,6 +381,189 @@ void *pz_lib_open(const char *const *names)
     void *h = NULL;
     for (int i = 0; names[i] && !h; i++) h = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
     return h;
+}
+
+/* ---- secrets and the hardening of the process ---- */
+
+bool pz_stdin_is_terminal(void) { return isatty(0); }
+
+/* The terminal that pz_read_secret has put in no-echo mode, for the handler of the stop signals: tcsetattr is among the functions a signal handler may call. */
+static struct termios g_tio_saved;
+static volatile sig_atomic_t g_tio_fd = -1;
+
+static void secret_signal(int sig)
+{
+    if (g_tio_fd >= 0) tcsetattr(g_tio_fd, TCSANOW, &g_tio_saved);
+    const char nl = '\n';
+    const ssize_t w = write(2, &nl, 1);
+    (void)w;
+    raise(sig);                    /* SA_RESETHAND: the signal is pending and takes its default action when this handler returns */
+}
+
+int pz_read_secret(const char *prompt, char *buf, size_t cap, bool allow_tty)
+{
+    if (cap < 2) return -1;
+    int fd = 0;
+    bool own = false, tty = isatty(0);
+    if (!tty && allow_tty) {
+        const int t = open("/dev/tty", O_RDWR | O_CLOEXEC | O_NOCTTY);
+        if (t >= 0) { fd = t; own = true; tty = true; }
+    }
+    static const int sigs[] = {SIGINT, SIGTERM, SIGHUP, SIGQUIT};
+    struct sigaction old[4], oldtstp, sa;
+    bool inst[4] = {false, false, false, false}, ign_tstp = false, echo_off = false;
+    if (tty) {
+        struct termios nt;
+        if (tcgetattr(fd, &g_tio_saved) != 0) {              /* a terminal whose echo cannot be turned off: no secret is read from it */
+            if (own) close(fd);
+            buf[0] = 0;
+            return -1;
+        }
+        nt = g_tio_saved;
+        nt.c_lflag &= ~(tcflag_t)(ECHO | ECHONL);
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = secret_signal;
+        sa.sa_flags = SA_RESETHAND;
+        sigemptyset(&sa.sa_mask);
+        g_tio_fd = fd;
+        for (int i = 0; i < 4; i++) {
+            struct sigaction cur;
+            if (sigaction(sigs[i], NULL, &cur) == 0 && cur.sa_handler == SIG_IGN && sigs[i] == SIGHUP) continue;   /* nohup */
+            inst[i] = sigaction(sigs[i], &sa, &old[i]) == 0;
+        }
+        struct sigaction ig;
+        memset(&ig, 0, sizeof ig);
+        ig.sa_handler = SIG_IGN;
+        sigemptyset(&ig.sa_mask);
+        ign_tstp = sigaction(SIGTSTP, &ig, &oldtstp) == 0;   /* a stop with the echo off would leave the shell without echo */
+        echo_off = tcsetattr(fd, TCSANOW, &nt) == 0;
+        if (prompt) { fputs(prompt, stderr); fflush(stderr); }
+    }
+    size_t n = 0;
+    int rc = 0;
+    bool over = false;
+    for (;;) {
+        char c;
+        const ssize_t k = read(fd, &c, 1);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0) { rc = -1; break; }
+        if (k == 0) { if (n == 0 && !over) rc = -1; break; }
+        if (c == '\n') break;
+        if (n + 1 < cap) buf[n++] = c;
+        else over = true;
+    }
+    if (n && buf[n - 1] == '\r' && rc == 0) n--;
+    if (rc == 0) buf[n] = 0;
+    if (tty) {
+        if (echo_off) tcsetattr(fd, TCSANOW, &g_tio_saved);
+        g_tio_fd = -1;
+        const ssize_t w = write(2, "\n", 1);
+        (void)w;
+        for (int i = 0; i < 4; i++) if (inst[i]) sigaction(sigs[i], &old[i], NULL);
+        if (ign_tstp) sigaction(SIGTSTP, &oldtstp, NULL);
+        if (own) close(fd);
+    }
+    if (over && rc == 0) rc = -2;
+    if (rc != 0) { memset(buf, 0, cap); __asm__ __volatile__("" : : "r"(buf) : "memory"); return rc; }
+    return (int)n;
+}
+
+bool pz_mem_lock(void *p, size_t n)
+{
+    if (!p || !n) return true;
+    const uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE), a = (uintptr_t)p & ~(pg - 1), e = ((uintptr_t)p + n + pg - 1) & ~(pg - 1);
+#if defined(__linux__) && defined(MADV_DONTDUMP)
+    madvise((void *)a, e - a, MADV_DONTDUMP);
+#endif
+    return mlock((void *)a, e - a) == 0;
+}
+
+void pz_mem_unlock(void *p, size_t n)
+{
+    if (!p || !n) return;
+    const uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE), a = (uintptr_t)p & ~(pg - 1), e = ((uintptr_t)p + n + pg - 1) & ~(pg - 1);
+    munlock((void *)a, e - a);
+}
+
+bool pz_harden_process(char *why, size_t n)
+{
+    bool ok = true;
+    if (n) why[0] = 0;
+    struct rlimit rl = {0, 0};
+    if (setrlimit(RLIMIT_CORE, &rl) != 0) {
+        if (n) snprintf(why, n, "core dumps could not be disabled (%s)", strerror(errno));
+        ok = false;
+    }
+#ifdef __linux__
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+        if (n && ok) snprintf(why, n, "the process could not be made non-dumpable (%s)", strerror(errno));
+        ok = false;
+    }
+#endif
+    return ok;
+}
+
+extern char **environ;
+
+int pz_run_shell(const char *cmd, const char *const *env, double timeout, int *code, char *why, size_t whyn)
+{
+    size_t ne = 0, na = 0, k = 0;
+    for (char **e = environ; e && *e; e++) ne++;
+    while (env && env[na]) na++;
+    char **envp = pz_xmalloc((ne + na + 1) * sizeof *envp);
+    for (char **e = environ; e && *e; e++) {
+        bool over = false;                                  /* a variable of the same name is replaced by the added one */
+        for (size_t i = 0; i < na && !over; i++) {
+            const size_t l = strcspn(env[i], "=");
+            over = !strncmp(*e, env[i], l) && (*e)[l] == '=';
+        }
+        if (!over) envp[k++] = *e;
+    }
+    for (size_t i = 0; i < na; i++) envp[k++] = (char *)env[i];
+    envp[k] = NULL;
+    posix_spawn_file_actions_t fa;
+    posix_spawnattr_t at;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+    posix_spawnattr_init(&at);
+    sigset_t none, dfl;
+    sigemptyset(&none);
+    sigemptyset(&dfl);
+    sigaddset(&dfl, SIGPIPE);                               /* this program ignores SIGPIPE; the command should not inherit that */
+    posix_spawnattr_setsigmask(&at, &none);
+    posix_spawnattr_setsigdefault(&at, &dfl);
+    posix_spawnattr_setpgroup(&at, 0);                      /* a group of its own: the whole of it can be stopped after the time */
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP);
+    char *argv[] = {"sh", "-c", (char *)cmd, NULL};
+    pid_t pid = 0;
+    const int rc = posix_spawn(&pid, "/bin/sh", &fa, &at, argv, envp);
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&at);
+    free(envp);
+    if (rc != 0) {
+        if (whyn) snprintf(why, whyn, "cannot start /bin/sh: %s", strerror(rc));
+        return -1;
+    }
+    const double t0 = pz_mono();
+    for (;;) {
+        int st;
+        const pid_t w = waitpid(pid, &st, WNOHANG);
+        if (w == pid) {
+            *code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0);
+            return 0;
+        }
+        if (w < 0 && errno != EINTR) {
+            if (whyn) snprintf(why, whyn, "waitpid: %s", strerror(errno));
+            return -1;
+        }
+        if (pz_mono() - t0 > timeout) {
+            kill(-pid, SIGKILL);
+            kill(pid, SIGKILL);
+            waitpid(pid, &st, 0);
+            return 1;
+        }
+        pz_sleep(0.05);
+    }
 }
 
 #else
@@ -766,6 +953,160 @@ void *pz_lib_open(const char *const *names)
 }
 
 void *pz_lib_sym(void *lib, const char *name) { return lib ? (void *)GetProcAddress((HMODULE)lib, name) : NULL; }
+
+/* ---- secrets and the hardening of the process ---- */
+
+bool pz_stdin_is_terminal(void)
+{
+    DWORD m;
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    return h != INVALID_HANDLE_VALUE && h != NULL && GetConsoleMode(h, &m);
+}
+
+static HANDLE volatile g_con_in;
+static volatile DWORD g_con_mode;
+
+static BOOL WINAPI secret_ctrl(DWORD type)
+{
+    (void)type;
+    if (g_con_in) SetConsoleMode(g_con_in, g_con_mode);      /* then the next handler: the process ends as it would have */
+    return FALSE;
+}
+
+int pz_read_secret(const char *prompt, char *buf, size_t cap, bool allow_tty)
+{
+    if (cap < 2) return -1;
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    bool con = h != INVALID_HANDLE_VALUE && h != NULL && GetConsoleMode(h, &mode), own = false;
+    if (!con && allow_tty) {
+        HANDLE t = CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        if (t != INVALID_HANDLE_VALUE && GetConsoleMode(t, &mode)) { h = t; con = true; own = true; }
+        else if (t != INVALID_HANDLE_VALUE) CloseHandle(t);
+    }
+    bool echo_off = false;
+    if (con) {
+        g_con_mode = mode;
+        g_con_in = h;
+        SetConsoleCtrlHandler(secret_ctrl, TRUE);
+        echo_off = SetConsoleMode(h, mode & ~(DWORD)ENABLE_ECHO_INPUT) != 0;
+        if (!echo_off) {                                      /* a console whose echo cannot be turned off: no secret is read from it */
+            SetConsoleCtrlHandler(secret_ctrl, FALSE);
+            g_con_in = NULL;
+            if (own) CloseHandle(h);
+            buf[0] = 0;
+            return -1;
+        }
+        if (prompt) { fputs(prompt, stderr); fflush(stderr); }
+    }
+    size_t n = 0;
+    int rc = 0;
+    bool over = false, eol = false;
+    while (!eol) {
+        if (con) {
+            WCHAR w[256];
+            DWORD got = 0;
+            if (!ReadConsoleW(h, w, 256, &got, NULL) || got == 0) { if (n == 0 && !over) rc = -1; break; }
+            for (DWORD i = 0; i < got; i++) {
+                if (w[i] == L'\n') { eol = true; break; }
+                if (w[i] == L'\r') continue;
+                char u[8];
+                const int ul = WideCharToMultiByte(CP_UTF8, 0, &w[i], 1, u, sizeof u, NULL, NULL);
+                if (ul > 0 && n + (size_t)ul < cap) { memcpy(buf + n, u, (size_t)ul); n += (size_t)ul; }
+                else over = true;
+            }
+            memset(w, 0, sizeof w);
+        } else {
+            char c;
+            DWORD got = 0;
+            if (!ReadFile(h, &c, 1, &got, NULL) || got == 0) { if (n == 0 && !over) rc = -1; break; }
+            if (c == '\n') break;
+            if (c == '\r') continue;
+            if (n + 1 < cap) buf[n++] = c;
+            else over = true;
+        }
+    }
+    if (rc == 0) buf[n] = 0;
+    if (con) {
+        if (echo_off) SetConsoleMode(h, mode);
+        SetConsoleCtrlHandler(secret_ctrl, FALSE);
+        g_con_in = NULL;
+        fputs("\n", stderr);
+        if (own) CloseHandle(h);
+    }
+    if (over && rc == 0) rc = -2;
+    if (rc != 0) { memset(buf, 0, cap); __asm__ __volatile__("" : : "r"(buf) : "memory"); return rc; }
+    return (int)n;
+}
+
+bool pz_mem_lock(void *p, size_t n) { return !p || !n || VirtualLock(p, n) != 0; }
+void pz_mem_unlock(void *p, size_t n) { if (p && n) VirtualUnlock(p, n); }
+
+bool pz_harden_process(char *why, size_t n)
+{
+    if (n) snprintf(why, n, "Windows has no way to forbid a dump of the process from here");
+    return false;
+}
+
+int pz_run_shell(const char *cmd, const char *const *env, double timeout, int *code, char *why, size_t whyn)
+{
+    size_t na = 0, total = 2;
+    while (env && env[na]) { total += strlen(env[na]) + 1; na++; }
+    char *base = GetEnvironmentStringsA();
+    if (!base) { if (whyn) snprintf(why, whyn, "cannot read the environment"); return -1; }
+    size_t bl = 0;
+    while (base[bl]) bl += strlen(base + bl) + 1;
+    char *blk = pz_xmalloc(total + bl), *o = blk;
+    for (const char *e = base; *e; e += strlen(e) + 1) {
+        bool over = false;
+        for (size_t i = 0; i < na && !over; i++) {
+            const size_t l = strcspn(env[i], "=");
+            over = !_strnicmp(e, env[i], l) && e[l] == '=';
+        }
+        if (!over) { const size_t l = strlen(e) + 1; memcpy(o, e, l); o += l; }
+    }
+    FreeEnvironmentStringsA(base);
+    for (size_t i = 0; i < na; i++) { const size_t l = strlen(env[i]) + 1; memcpy(o, env[i], l); o += l; }
+    *o = 0;
+    char comspec[MAX_PATH];
+    if (!GetEnvironmentVariableA("COMSPEC", comspec, sizeof comspec)) pz_strlcpy(comspec, "cmd.exe", sizeof comspec);
+    const size_t cl = strlen(comspec) + strlen(cmd) + 32;
+    char *line = pz_xmalloc(cl);
+    snprintf(line, cl, "\"%s\" /d /s /c \"%s\"", comspec, cmd);
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE nul = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nul;
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    const BOOL ok = CreateProcessA(NULL, line, NULL, NULL, TRUE, 0, blk, NULL, &si, &pi);
+    const DWORD err = GetLastError();
+    free(line);
+    free(blk);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+    if (!ok) {
+        if (whyn) snprintf(why, whyn, "cannot start the command interpreter (error %lu)", (unsigned long)err);
+        return -1;
+    }
+    int rc = 0;
+    const DWORD w = WaitForSingleObject(pi.hProcess, (DWORD)(timeout * 1000.0));
+    if (w == WAIT_TIMEOUT) {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 5000);
+        rc = 1;
+    } else {
+        DWORD ec = 0;
+        GetExitCodeProcess(pi.hProcess, &ec);
+        *code = (int)ec;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return rc;
+}
 
 #endif
 

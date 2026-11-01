@@ -48,6 +48,7 @@ struct pz_env {
     int test_kthread;               /* PZ_TEST_KTHREAD=N (16 to 2^20): walkers per CPU thread, 0 unset */
     int test_jump;                  /* PZ_TEST_JUMP=N (1 to 2^31-1): mean jump in units of sqrt(W), 0 unset */
     long long test_dp_cap;          /* PZ_TEST_DP_CAP=N: entries of the table of distinguished points to start with, -1 unset */
+    int test_seal_log2n;            /* PZ_TEST_SEAL_LOG2N=N (1 to 17): scrypt cost 2^N for the key of a password, in place of 2^18 (tests only, with a warning), 0 unset */
 };
 
 /* The one instance. It holds the values of a clean environment until pz_env_init is called (the programs call it first thing in main), and

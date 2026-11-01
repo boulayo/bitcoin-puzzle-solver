@@ -14,6 +14,7 @@
 #include "puzzles.h"
 #include "bsgs.h"
 #include "outfmt.h"
+#include "encrypt.h"
 #include <unistd.h>
 
 int pz_sections_printed;
@@ -446,6 +447,67 @@ static void t_scan_hits(void)
     pz_result_line("hits beyond the end of the range", "%s", g_fail == f0 ? "OK" : "FAILED");
 }
 
+/* The encrypted key: the key of a password at the full scrypt cost (N = 2^18, once: 256 MiB, about a second) against a public key computed by the independent
+ * Python generator of lib/pzcore/tests, then a key found by a campaign that encrypts it: FOUND.txt and the line carry neither the key, its WIF
+ * nor its public key, the copy in the run is wiped, and the line opens with the secret and gives the key back. */
+static void t_encrypt_key(void)
+{
+    char dir[600];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzenc")) { pz_result_line("encrypted key (password, seal, open)", "not tested: no temporary folder"); return; }
+    const int f0 = g_fail;
+    const size_t ws = pz_scrypt_work_size(1ULL << PZ_SEAL_SCRYPT_LOG2N, PZ_SEAL_SCRYPT_R, PZ_SEAL_SCRYPT_P);
+    void *work = malloc(ws);
+    pz_u256 d;
+    pz_ge q;
+    u8 pub[33];
+    char hx[67];
+    const char pw[] = "correct horse battery staple";
+    CHECK(work && pz_seal_key_from_password(&d, (const u8 *)pw, strlen(pw), PZ_SEAL_SCRYPT_LOG2N, work, ws));
+    if (work) pz_secure_zero(work, ws);
+    free(work);
+    CHECK(pz_ec_mul_g(&q, &d));
+    pz_ge_to_pub33(pub, &q);
+    pz_hex_encode(pub, 33, hx);
+    CHECK(!strcmp(hx, "023190d36e9f8c0b368a95b607675efc69e8176851de1a4aa0e56cbe751ef9e9a6"));
+
+    run_ctx *r = pz_xcalloc(1, sizeof *r);
+    run_init(r);
+    pz_strlcpy(r->cfg.dir, dir, sizeof r->cfg.dir);
+    run_paths(r);
+    pz_strlcpy(r->cfg.name, "enc", sizeof r->cfg.name);
+    r->cfg.puzzle = 64;
+    r->cfg.range_start = pz_u256_from_u64(1);
+    pz_u256 key = {{0x1f2e3d4c5b6a7988ULL, 0, 0, 0}};
+    r->cfg.range_end = pz_u256_from_u64(~0ULL);
+    pz_ge kp;
+    u8 kpub[33], kb[32];
+    CHECK(pz_ec_mul_g(&kp, &key));
+    pz_ge_to_pub33(kpub, &kp);
+    pz_hash160(kpub, 33, r->cfg.target_h160);
+    pz_hash160_to_address(r->cfg.target_h160, r->cfg.address, sizeof r->cfg.address);
+    r->cfg.has_encrypt = true;
+    r->cfg.encrypt_pubkey = q;
+    memcpy(r->cfg.encrypt_pubkey33, pub, 33);
+    CHECK(run_submit_key(r, &key, "test") && atomic_load(&r->found) && !r->found_seal_failed);
+    char *file = pz_read_file(r->path_found, NULL);
+    char keyhex[65], wif[PZ_WIF_BUF], pubhex[67];
+    pz_u256_to_be(&key, kb);
+    pz_hex_encode(kb, 32, keyhex);
+    pz_privkey_to_wif(kb, true, wif, sizeof wif);
+    pz_hex_encode(kpub, 33, pubhex);
+    CHECK(file && strstr(file, "PZENC1:") && strstr(file, r->cfg.address) && strstr(file, "1f2e3d4c5b6a7988") == NULL && strstr(file, wif) == NULL && strstr(file, pubhex) == NULL);
+    CHECK(strstr(r->found_sealed, "PZENC1:") == r->found_sealed && pz_u256_is_zero(&r->found_key));
+    u8 pay[PZ_SEAL_PAYLOAD_LEN], back[32], aad[PZ_SEAL_AAD_MAX];
+    const int al = enc_aad(aad, sizeof aad, r->cfg.address, 64);
+    CHECK(al > 0 && pz_seal_decode(pay, r->found_sealed) == PZ_SEAL_OK && pz_seal_open(back, pay, &d, aad, (size_t)al) == PZ_SEAL_OK && !memcmp(back, kb, 32));
+    CHECK(pz_seal_open(back, pay, &d, aad, (size_t)al - 1) == PZ_SEAL_E_TAG);          /* another puzzle: refused */
+    pz_secure_zero(&d, sizeof d);
+    free(file);
+    free(r);
+    pz_remove_tree(dir);
+    pz_result_line("encrypted key (password at full cost, seal, open)", "%s", g_fail == f0 ? "OK" : "FAILED");
+}
+
 /* --limit: the share of threads / work-items, and the order that puts the threads on distinct physical cores first. */
 static void t_limit(void)
 {
@@ -535,6 +597,7 @@ int selftest_checks(bool banner)
     t_limit();
     pz_result_line("--limit shares and thread order", "%s", g_fail == f0 ? "OK" : "FAILED");
     t_scan_hits();
+    t_encrypt_key();
     {
         int rc = gpu_selftest();
         CHECK(rc == 0);

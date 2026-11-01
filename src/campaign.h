@@ -48,6 +48,9 @@ typedef struct {
     unsigned dp_bits;            /* kangaroo: distinguished point bits (0 = auto) */
     u64 bsgs_t;                  /* bsgs: baby steps in the table (fixed when the campaign is created) */
     char part[PART_TEXT];        /* linear: this computer's shares of the search order (canonical part_format text, "" = all) */
+    bool has_encrypt;            /* the key is encrypted to encrypt_pubkey when it is found (hunt --encrypt-pubkey / --encrypt-password); public data */
+    u8 encrypt_pubkey33[33];
+    pz_ge encrypt_pubkey;
 } campaign_cfg;
 
 const char *mode_name(search_mode m);
@@ -64,6 +67,9 @@ void seed_to_id(const u8 seed[32], char id[17]);   /* short fingerprint */
 
 int cfg_save(const campaign_cfg *c, const char *path);
 int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen);
+/* Adds the line encrypt_pubkey=HEX to the campaign.conf at path, which has none (a campaign resumed with --encrypt-pubkey that was started without), keeping
+ * every other line as it is. 0 on success. */
+int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path);
 
 /* Puzzle n covers keys [2^(n-1), 2^n - 1]. */
 bool puzzle_range(int n, pz_u256 *start, pz_u256 *end);

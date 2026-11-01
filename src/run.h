@@ -9,6 +9,7 @@
 #include "cpu_engine.h"
 #include "sysinfo.h"
 #include "eta.h"
+#include <pzcore/seal.h>
 #include <stdatomic.h>
 #include <pthread.h>
 
@@ -54,6 +55,9 @@ typedef struct run_ctx {
     pz_u256 found_key;
     bool found_valid;
     double found_time;
+    char found_sealed[PZ_SEAL_TEXT_BUF];   /* the PZENC1 line of the found key when the campaign encrypts it (cfg.has_encrypt); the key itself is wiped then */
+    bool found_seal_failed;          /* the key was found but could not be encrypted: it was not written anywhere */
+    char on_found[1024];             /* hunt --on-found: the command to run once when the key is found (given on the command line each time, never stored) */
 
     worker_stat ws[MAX_WORKERS];
     int nws;
@@ -139,6 +143,8 @@ bool run_key_in_range(const run_ctx *r, const pz_u256 *key);
  * right key, but this campaign was not asked for it and whether its scan gets there depends on how the end of the range falls on the lanes. It
  * is ignored (false) with a line in the debug log, which does not show the key. Any other hit goes to run_submit_key. */
 bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source);
+/* Writes FOUND.txt (and, with --on-found, starts the command). With cfg.has_encrypt the file carries the PZENC1 line (found_sealed) and neither the key nor its
+ * public key. */
 void run_write_found(run_ctx *r);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */

@@ -163,4 +163,5 @@ void pz_env_init(void)
     if (env_int("PZ_TEST_KTHREAD", 16, 1 << 20, &n)) g_env.test_kthread = (int)n;
     if (env_int("PZ_TEST_JUMP", 1, 2147483647, &n)) g_env.test_jump = (int)n;
     if (env_int("PZ_TEST_DP_CAP", 0, (long long)1 << 62, &n)) g_env.test_dp_cap = n;
+    if (env_int("PZ_TEST_SEAL_LOG2N", 1, 17, &n)) g_env.test_seal_log2n = (int)n;
 }

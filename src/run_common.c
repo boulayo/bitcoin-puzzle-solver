@@ -7,6 +7,8 @@
 #include "ui.h"
 #include "platform.h"
 #include "envopts.h"
+#include "encrypt.h"
+#include "onfound.h"
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
@@ -186,7 +188,15 @@ bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
         atomic_store(&r->found, 1);
         atomic_store(&r->stop, 1);
         run_write_found(r);
-        pz_log(PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log)", source);   /* the box at the end gives the file */
+        if (r->cfg.has_encrypt) {
+            pz_secure_zero(&r->found_key, sizeof r->found_key);   /* the plain key stays only in the copies that the callers of the search hold */
+            char id[9];
+            enc_key_id(&r->cfg.encrypt_pubkey, id);
+            pz_log(r->found_seal_failed ? PZ_LOG_ERR : PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log; %s)", source,
+                   r->found_seal_failed ? "it could NOT be encrypted and was not saved anywhere" : "it is encrypted to the key id");
+            if (!r->found_seal_failed) pz_log(PZ_LOG_INFO, "encrypted to the key id %s: %s", id, r->found_sealed);
+        } else
+            pz_log(PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log)", source);   /* the box at the end gives the file */
     }
     pthread_mutex_unlock(&r->found_mu);
     return true;
@@ -206,7 +216,8 @@ bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
     return run_submit_key(r, key, source);
 }
 
-void run_write_found(run_ctx *r)
+/* the file of a campaign that does not encrypt the key; false if it could not be written */
+static bool write_found_plain(run_ctx *r)
 {
     char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80], pz[48] = "";
     u8 kb[32], h[20], pub[33];
@@ -239,8 +250,73 @@ void run_write_found(run_ctx *r)
         "version:         %s\n\n"
         "KEEP THIS FILE IN A SAFE PLACE and move the funds as soon as possible.\n",
         ts, r->cfg.name, pz, addr, hx, wif, pk, seed, PZ_VERSION);
-    if (pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) != 0)
-        pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
+    const bool ok = pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) == 0;
+    if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
+    pz_secure_zero(hx, sizeof hx);
+    pz_secure_zero(wif, sizeof wif);
+    pz_secure_zero(kb, sizeof kb);
+    pz_secure_zero(buf, sizeof buf);
+    return ok;
+}
+
+/* The same when the key is encrypted: the file carries the PZENC1 line and the plain data of the campaign, and neither the key nor its public key
+ * (for a puzzle known by address only, the public key and the range would let anyone find the key). The key is encrypted first; if that cannot be
+ * done the key is written nowhere, which the file and the box say. */
+static bool write_found_encrypted(run_ctx *r)
+{
+    char addr[64], buf[2048], seed[65], pz[48] = "", id[9], ts[40];
+    u8 kb[32];
+    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
+    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
+    pz_u256_to_be(&r->found_key, kb);
+    r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, addr, r->cfg.puzzle, r->found_sealed, sizeof r->found_sealed);
+    pz_secure_zero(kb, sizeof kb);
+    enc_key_id(&r->cfg.encrypt_pubkey, id);
+    pz_hex_encode(r->cfg.seed, 32, seed);
+    struct tm tmv;
+    pz_localtime((time_t)r->found_time, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
+    if (r->cfg.puzzle) snprintf(pz, sizeof pz, "puzzle:          %d\n", r->cfg.puzzle);
+    int n;
+    if (r->found_seal_failed)
+        n = snprintf(buf, sizeof buf,
+            "*** PRIVATE KEY FOUND, BUT NOT SAVED ***\n\n"
+            "date:            %s\n"
+            "campaign:        %s\n"
+            "%s"
+            "address:         %s\n"
+            "campaign seed:   %s\n"
+            "version:         %s\n\n"
+            "The key could not be encrypted (the system gave no random numbers), so it was written nowhere and is lost: search again.\n",
+            ts, r->cfg.name, pz, addr, seed, PZ_VERSION);
+    else
+        n = snprintf(buf, sizeof buf,
+            "*** PRIVATE KEY FOUND (ENCRYPTED) ***\n\n"
+            "date:            %s\n"
+            "campaign:        %s\n"
+            "%s"
+            "address:         %s\n"
+            "campaign seed:   %s\n"
+            "version:         %s\n"
+            "encrypted to:    key id %s\n\n"
+            "The private key is encrypted: only the owner of the secret that matches the public key given with --encrypt-pubkey (or made from the\n"
+            "password of --encrypt-password) can read it. The line below is safe to copy anywhere. At home, with this file as it is:\n"
+            "    pzsolve decrypt-key FOUND.txt\n\n"
+            "%s\n",
+            ts, r->cfg.name, pz, addr, seed, PZ_VERSION, id, r->found_sealed);
+    const bool ok = pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) == 0;
+    if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
+    return ok && !r->found_seal_failed;
+}
+
+void run_write_found(run_ctx *r)
+{
+    const bool ok = r->cfg.has_encrypt ? write_found_encrypted(r) : write_found_plain(r);
+    if (!ok || !r->on_found[0]) return;
+    char addr[64];
+    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
+    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
+    onfound_start(r->on_found, r->cfg.has_encrypt ? r->found_sealed : "", addr, r->cfg.puzzle, r->cfg.name, r->path_found);
 }
 
 /* ---- reporting ---- */
@@ -348,6 +424,12 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     if (r->limit_pct) {
         const size_t pl = strlen(partline);
         snprintf(partline + pl, sizeof partline - pl, "Limit:          %d%% of the machine (fewer CPU threads and GPU work-items, always at full speed)\n", r->limit_pct);
+    }
+    if (r->cfg.has_encrypt) {
+        char id[9];
+        const size_t pl = strlen(partline);
+        enc_key_id(&r->cfg.encrypt_pubkey, id);
+        snprintf(partline + pl, sizeof partline - pl, "Key:            encrypted to the public key with id %s when found\n", id);
     }
     pz_u256 rsz = cfg_range_size(&r->cfg);
     char rbits[32];
