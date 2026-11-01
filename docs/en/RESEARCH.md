@@ -34,6 +34,7 @@ same number in ALGORITHMS.md. A reference without a file name is to a section of
    * 8.11 BSGS: the cells of the table and the cost of a lookup
    * 8.12 Where the constant of schema 3 goes, and what is left
    * 8.13 The last percent: the delay of the distinguished points, and what the layout could still give
+   * 8.14 The constant, once more (after 1.19.2)
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
 ## 4. The interval kangaroo (public key known)
@@ -1334,6 +1335,184 @@ it further (`kbands.py` with 16, 28 and 38 bands on 1536 points; `kspec_table.py
 4096 per CPU thread is the speed optimum of the batch inversion (8.4). A walker whose distinguished point is already in the table with the same
 kind is restarted; letting it walk on would add nothing (its trail is somebody else's from there), and a start costs one scalar multiplication,
 about 1.6 % of `√W` for a herd of 4096 on 2^36 and nothing at the scale of the puzzles.
+
+### 8.14 The constant, once more (after 1.19.2)
+
+The owner asked not to dismiss the question with a no but to search for a more efficient algorithm: a pass over the literature up to 2026 and
+over the methods of the puzzle community, each result put in this project's normalization (operations per `√W`, memory, whether it applies
+to one target in an interval of the integers with the negation map), and every idea not yet in 8.7 to 8.13 priced in the exact pair model
+(`kcover.py`), the walk model (`kwalk.c`, `ksim.c`) or a formula. The constraints are those of the campaigns: one key, `W` from 2^134 to
+2^139, at most 64 GB for the table (`--mem`), 128 GB of RAM in the machine. The bar is the one of 8.13: 1 % in the exact model, and no new log
+format unless the gain pays for it (what a schema change means for a resumed campaign is in 8.13 and ALGORITHMS.md 4.7). Nothing reached
+it. Each figure below says what it is: a published constant, a value of a model, or a count; nothing in this section was measured on a card.
+New scripts: `tools/research/ksched.py`, `kprecomp.py`, `klambda.py`, `kideal.py`, and the option `cheap=1` of `kwalk.c`.
+
+**A. The literature.** Costs in units of `√W` for one target in an interval of width `W`; "±" says whether the method uses the negation map.
+The value to beat is 1.04 (model, 8.12; 1.06 measured from 2^32 to 2^44).
+
+| work | result as published | here: operations / `√W`, memory, one target with ± |
+|---|---|---|
+| J. Pollard, *Kangaroos, Monopoly and Discrete Logarithms*, J. Cryptology 13, 2000 | two kangaroos, jumps powers of two, `2·√W` | 2.0, the table of distinguished points; no ±. With ± and random pairs the same two species give `√(π/2)` = 1.2533 (8.7) |
+| P. van Oorschot, M. Wiener, *Parallel collision search with cryptanalytic applications*, J. Cryptology 12, 1999 | distinguished points, `(2 + o(1))·√W`, linear speed-up over the processors | 2.0; the memory is the table of distinguished points, as here. The general lower bound is `Ω(√W)` with no constant: V. Shoup (Eurocrypt 1997) and V. Nechaev (1994) for a group, C. Schnorr, *Small generic hardcore subsets for the discrete logarithm*, Inf. Process. Lett. 2001, for a set of `m` exponents (`≈ √m` generic steps) |
+| R. Montenegro, P. Tetali, *How long does it take to catch a wild kangaroo?*, STOC 2009 | the first rigorous proof of `(2 + o(1))·√W` for Pollard's method, jumps powers of any base | 2.0, proven; nothing new to use |
+| P. Gaudry, É. Schost, *A low-memory parallel version of Matsuo, Chao and Tsujii's algorithm*, ANTS 2004 | tame and wild random walks on two sets, distinguished points; one dimension `≈ 2.43·√W` | 2.43; the framework that admits equivalence classes, and the one the pair model of 8.7 generalizes |
+| S. Galbraith, R. Ruprai, *An improvement to the Gaudry-Schost algorithm for multidimensional DLP*, IMACC 2009 | `≈ 2.36·√W` in one dimension, and the two-dimensional case | 2.36; no ±; the multidimensional results (also Wu, Zhuang, Des. Codes Cryptogr. 2021: an asymptotically optimal variant, heuristic) concern several unknowns, which the interval problem has not (C.9) |
+| S. Galbraith, R. Ruprai, *Using equivalence classes to accelerate solving the DLP in a short interval*, PKC 2010 | Gaudry-Schost on the classes `{P, −P}`: `≈ 1.36·√W` heuristic, "not quite this fast in practice" (walks leaving the region, fruitless cycles) | 1.36 with ±; the layout of 1.6.0 (schema 1) came out of the same idea with a better arrangement (8.5, 8.7) |
+| S. Galbraith, J. Pollard, R. Ruprai, *Computing discrete logarithms in an interval*, Math. Comp. 82, 2013 | three kangaroos `1.818·√W`, four `1.714·√W`, Gaudry-Schost variant `1.661·√W`; no ± (the kangaroo walk does not admit it) | 1.66 to 1.82; superseded by the ± methods |
+| A. Fowler, S. Galbraith, *Kangaroo methods for solving the interval DLP*, arXiv:1501.07019, 2015 | five kangaroos `1.737·√W`, seven `1.7195·√W`, "very close to the optimal kangaroo method" | 1.72; no ± |
+| M. Nikolaev, *On the complexity of the DLP in an interval in a cyclic group with efficient inversion*, Prikl. Diskr. Mat. 2015 | Gaudry-Schost with ±: `(1 + ε)·√(πW/2)` | 1.2533: exactly the random tame-wild line of 8.7 |
+| Zhu, Zhuang, Yi, Lv, Lin, *A variant of the Galbraith-Ruprai algorithm with improved complexity*, Des. Codes Cryptogr. 87, 2019 | `≈ 1.253·√W` for large `W` | 1.253, the same line; the species with residues of 8.8 start below it (0.999 ideal, 1.034 with the geometry) |
+| J. Bos, T. Kleinjung, A. Lenstra, *On the use of the negation map in the Pollard rho method*, ANTS 2010; D. Bernstein, T. Lange, P. Schwabe, *On the correct use of the negation map*, PKC 2011 | fruitless cycles cost most of the `√2`: 1.29 measured by the first, the full `√2` with the handling of the second | the cycle handling of 4.3 (checkpoint and escape jump) is what keeps the ± gain whole here; not a question of the constant |
+| J. Liu, K. Lv, *Solving the DLP in an interval using periodic iterates*, ICICS 2017; B. Qi, J. Ma, K. Lv, *Computing the interval DLP with the restricted jump method*, Fund. Inform. 2020 | iterations of the kangaroo made cheaper in `F_p^*` by reusing earlier values (the second abstract claims a factor of at least 10 per iteration); the number of jumps is not lowered | cost per step, not per `√W`; a curve addition needs both points in full and reuses nothing (8.4): not applicable |
+| D. Bernstein, T. Lange, *Two grumpy giants and a baby*, ANTS 2012; S. Galbraith, P. Wang, F. Zhang, *Computing elliptic curve discrete logarithms with improved baby-step giant-step*, Adv. Math. Commun. 11, 2017 (ePrint 2015/605) | for an interval: BSGS with ± 1.0, interleaved BSGS with ± `0.943·√W`, grumpy giants with ± `≈ 0.9·√W` (conjectural) | 0.9 to 1.0 with memory `∝ √W`: 2^66 to 2^69 entries for the open puzzles. `bounds.py` finds the same 0.9428 for the interleaved form (8.7) |
+| D. Bernstein, T. Lange, *Computing small discrete logarithms faster*, Indocrypt 2012 | precomputation for an interval of order `l`: table `l^⅓`, precomputation `1.21·l^⅔`, online `1.93·l^⅓` multiplications | `1.21·√(W·T)` once, `1.93·√(W/T)` per key: priced in 8.9 and again in C.3 |
+| H. Corrigan-Gibbs, D. Kogan, *The discrete-logarithm problem with preprocessing*, Eurocrypt 2018 | generic bound `S·T² ≳ N` for `S` bits of advice and `T` online operations | the precomputations above are at that bound: no cheaper table exists in the generic model |
+| M. Ekerå, J. Håstad, *Quantum algorithms for computing short discrete logarithms*, PQCrypto 2017 | polynomial quantum circuits for short exponents | needs a fault-tolerant quantum computer (ALGORITHMS.md 8.2). The "quantum-inspired" classical algorithms dequantize linear-algebra sampling; a generic group search has no such structure |
+
+Nothing from 2020 to 2026 in the venues searched (IACR ePrint, arXiv, Springer, dblp) lowers the constant of a low-memory method below the
+1.253 of 2015 and 2019, which is the two-species random line this program left in 1.7.8. All the published low-memory methods sit on the
+birthday line of 8.12 (×1.329 over structured coverage) and none has more useful pairs than the species with residues.
+
+**B. The puzzle community.** JeanLucPons' Kangaroo (GitHub, 2020) states `2.08·√W` without symmetry and a 125-bit limit; its two public solves
+are consistent with it (puzzle 110: 2^55.55 operations for `√W` = 2^54.5, 2.07; puzzle 115: 2^58.36 for 2^57, 2.57 with the delay of the
+distinguished points). RCKangaroo (RetiredCoder, GitHub and bitcointalk topic 5517607, from November 2024) gives, in `K·√W`: classic 2.10,
+"3-way" 1.60, "mirror" (two groups and the symmetry) 1.30, "SOTA" 1.15 (three groups and the symmetry; v2 with two groups, the same 1.15), and
+"SOTA+" 1.02 with a *cheap second point*, or 0.99 and 1.05 by what that point is charged. The evidence is the author's own measurements
+("thousands of points", no trial counts, bit sizes or error published); the 1.15 was reproduced in the abstract model as 1.10 to 1.17 by the
+number of walkers (`ksim rck=1`, 8.7), and schema 3 is below it because of the residues and the bands, not of the arrangement. No public
+artifact was found under the name "Kangaroo-3"; the three-kangaroo methods are the 1.818 of Galbraith-Pollard-Ruprai and RCKangaroo's
+"3-way" 1.60. The cheap second point is tested in C.5.
+
+**C. The attempts.** Every figure is the exact pair model (`kcover.py`, grid of 1536 points unless stated) or the walk model (`kwalk.c`), with
+one standard error where there is one; the walk model's cost counts steps, the exact model points.
+
+* **C.1 The endomorphism, and a fourth equivalence.** `φ(x, y) = (β·x, y)` multiplies the exponent by `λ`, a cube root of 1 mod `n`, for one
+  field product; the automorphism group of a curve with `j = 0` has six elements, generated by `−1` and `φ`, so there is no fourth symmetry to
+  look for on secp256k1. `tools/research/klambda.py`: the lattice `{(x, λ·x mod n)}` has determinant `n` and a reduced basis of lengths 2^128.0
+  and 2^128.5, so a window of width `W` on both coordinates holds about `2·W²/n` of its points: of the exponents of puzzle 135 (`W` = 2^134)
+  8·10^3 have an image in `(−W, W)`, one in 2^121, and 8·10^6 for puzzle 140 (one in 2^116); the image of every other exponent is a 256-bit
+  number, and a collision with it certifies no key of the interval. An interval `[b, b + W)` has the images `λ·b + ` those, a translation: the
+  count does not depend on where the interval sits, so there is no sub-case of intervals around a multiple that `λ` maps near itself. The
+  first `W` for which some `x < W` has an image below `W` is the shortest vector, 2^128, four orders of magnitude below the open puzzles in
+  the exponent and already `√n`. The GLV decomposition of a key of 134 or 139 bits gives two parts of 125 and 126 bits: two unknowns of 2^128
+  for one of 2^134. Refuted, as 4.6 and 8.12 said; now with the count.
+* **C.2 Shares that follow the progress of the search.** The only information a running search gains is that the key has not been found yet,
+  so an "adaptive" herd (shares re-balanced from what the run observes) can at most follow a schedule `w(n)` of the shares by the points laid
+  so far, and the same-kind merges it could observe tell it only the density it already knows. `tools/research/ksched.py` optimizes a
+  piecewise-constant schedule of the shares of the 70 bands in the exact pair model (the pairs between the points of all the epochs count,
+  with the analytic gradient of `∫ exp(−Λ(x, n)) dn`); the static layout computed by the same integral gives 1.0343, as `kcover.py`. Eight
+  epochs (seven of `0.2·√W`, then the rest): **1.0305, −0.36 %** on the grid of 768 points and on 1536; sixteen epochs of `0.1·√W`:
+  **1.0304, −0.37 %** (500 iterations: the gain converges there). The schedule starts with fewer tame walkers (20 % against 28 %) and more on `3Q'` (40 %), and ends with a third of each: the
+  wild-wild pairs come first, the tame-wild pairs later, the opposite of a tame herd laid in advance (C.3). The bound of the idea is the
+  `uniform` line of 8.12 (1.0209, −1.3 %), which a schedule cannot reach because the pairs of the early points stay. The shares can change
+  without a new log format (8.13), but a third of a percent in the model is below the bar; a schedule also moves the shares with the
+  progress of a campaign, which its resumes would have to track. Model confirmed at −0.4 %, not adopted.
+* **C.3 Tame herds in advance, tables of tame trails, and the precomputation again** (`tools/research/kprecomp.py`). Three questions in one.
+  *One key, tame points first*: with `P·√W` tame points laid before the wild herd starts and the pair values of schema 3's species (tame-wild
+  two keys, wild-wild one), the wild steps until the key are `∫ exp(−(2Pn + n²/2)) dn`, and the total `P + ` that integral is 1.176 at
+  `P = 0.1`, **1.123 at 0.3** (the minimum), 1.156 at 0.5, 1.421 at 1.0, against 1.0854 for the same pair values with the herds together
+  (8.7) and 1.04 for schema 3: laying the tame points first loses 4 to 8 %, because the wild-wild pairs grow as `n²` from the start only when
+  the wild walkers walk from the start (C.2 found the same sign). *A baby table serving the walks*: 8.9 priced a table of `M` points at
+  `M/√W`, nothing at 64 GB (2^−36). A table of `T` distinguished points of tame trails of length `L` is worth `T·L` tame points, the pairs are
+  `2·T·L·n_W` as if those points were the tame herd's own, and the trail length appears only in the delay `K·L` (a wild walker on a tame
+  trail walks to its end before the match is seen, while the whole herd walks): the table size sets `L` for a given number of tame points,
+  as `dp_bits` does today, and buys nothing by itself. Confirmed: the formula differs from `M/√W` only in that a trail costs its `L` steps,
+  which is the kangaroo itself. *The precomputation of Bernstein-Lange*, re-priced with 128 GB (table at most 64 GiB, 16 bytes per entry,
+  `T` = 2^32; 2^33 at 128 GiB changes the figures by `√2`) and 2^20 wild walkers:
+
+  | puzzle | `√W` | Bernstein-Lange: precomputation `1.21·√(W·T)` | online `1.93·√(W/T)` | keys of the width to pay | floor of any table of tame trails, `P` tame points in `√W` (trail `L`, online with the delay) |
+  |---|---|---|---|---|---|
+  | 135 | 2^67 | 76,000 kangaroo searches (2^83.3 steps) | `2.9·10^−5·√W` = 2^52 steps | 76,000 | `P` = 1: `L` = 2^35, online 0.42; `P` = 4: 2^37, 0.12; `P` = 16: 2^39, 0.035 |
+  | 140 | 2^69.5 | 76,000 searches (2^85.8) | 2^54.5 | 76,000 | `P` = 1: `L` = 2^37.5, 0.42; `P` = 4: 2^39.5, 0.12; `P` = 16: 2^41.5, 0.035 |
+
+  The online search would take an hour on one GPU; the precomputation 76,000 campaigns, the same ratio as in 8.9 (the product
+  precomputation × search stays `≈ 2.3·W`, the generic bound of Corrigan-Gibbs and Kogan). The floor of any table of tame trails is the
+  pairs model above: a table of `P·√W` tame points makes a key cost `0.42·√W` for `P` = 1, and pays from 1.6 keys **of the same width**, the
+  idealization of 8.9's "9 keys" (its 2.3·W product includes the merges and the cut trails of real walks). The open puzzles have five widths
+  (136 to 140, 2^135 to 2^139); a tame set near zero serves them all, so the exact question is a shared tame herd for the five, counting pairs
+  deterministically (tame-wild of one target two keys, wild-wild of one target one, wild-wild of two targets nothing: one equation, two
+  unknowns): separate searches 3.44·√W₁₄₀, shared 1.88 (**55 %** of the separate total, tame herd 0.86, wild herds 0.036 to 0.51). It is the
+  multi-target gain of ALGORITHMS.md 8.2, and it is a gain on the total for whoever wants all five keys; the first key (136) comes after 6.2
+  times its own search in wall time, since its wild walkers are 4 % of the herd while the tame herd takes 46 %. The `dp.bin` of a finished
+  campaign as the tame table of the next width: the jump table depends on `W` (ALGORITHMS.md 4.1), so the trails of one puzzle cannot be
+  followed in the next and only their distinguished points would count, `M/√W` again; with one jump table for all the widths (a change of
+  the format and of the jump length of 8.10) the deterministic count gives the next puzzle at most about 10 % (the `P` = 0.3 line above
+  for tame points already paid). Open, a format change, and a gain for the second key of a pair of puzzles, not for the first.
+* **C.4 The cost of the geometry and the start densities beyond 8.13.** The exact model splits 1.034 into 0.999 (pair values), ×1.022 (pairs
+  certifying keys outside `[0, W)`) and ×1.013 (unevenness over `x`, 8.12). 8.13 halved the bands (16, 28 and 38) and found −0.23 %, holding
+  on finer grids. Bands halved again (32, 56 and 76; 372 combinations with the residues, optimized on 768 points with `kbands.py`): the
+  optimizer (4000 steps of exponentiated gradient over a tensor of 372 × 372 × 768) had not converged after two hours of CPU on the
+  shared machine of this pass and was stopped; the number is left to whoever runs it (the command of 8.13 with 32, 56 and 76 bands,
+  about three hours alone on four cores). The first halving gave −0.23 % and held on finer grids, so the second is expected below that.
+  The limit of a continuous start density is bounded by the `uniform` line (1.021, the pairs lost outside the interval cannot all be
+  recovered: the `+` equations of the pairs `(1, 3)` and `(3, 3)` are trapezoids over `x`, 4.1 and 8.8) and by the floor 0.999. Model
+  confirmed: a few tenths of a percent, the same verdict as 8.13 (a second table of species or a silent change of every resumed campaign).
+* **C.5 The cheap second point.** With one inversion a step gives `P + S_j` and `P − S_j` for `1M + 1S` more (8.9: about a third of a step).
+  The second point is on nobody's trail (a walker that lands on it jumps elsewhere), so it counts only when it is itself distinguished and
+  goes into the table with its kind and distance. `kwalk cheap=1` does that (`W` = 2^32, 256 walkers, 2000 trials, the same keys and seeds,
+  steps in `√W`): `dp` 0: 1.094 → **0.549**; `dp` 2: 1.102 → 0.851; `dp` 4: 1.190 → 1.096. The distinct points at the collision do not move
+  (1.093 to 1.13): the second points are worth a full point each when distinguished and nothing otherwise, so the steps fall by the factor
+  `1/(1 + 2^−dp)`, and the extra points cost `2^−dp` of them against a third of a step for each one computed. It wins in steps at `dp ≤ 1`,
+  which no campaign has (`dp_bits` 35 to 48 on the open puzzles, 4.4): the gain is `2^−35`. RCKangaroo's 1.02 for "SOTA+" is not reproduced
+  by this reading at its own `dp` of 14 to 32 (1.15/(1 + 2^−14) = 1.1499); whatever its code does with the point is not in the public
+  description, and no reading in which a non-distinguished point on no trail certifies a key is known to the author. Refuted at the scale of
+  the puzzles, confirmed as a curiosity at `dp` 0 to 2.
+* **C.6 A fourth species, all residue families.** 8.10 found no share for a fourth coefficient in `{0, 1, 2, 3}` mod 60 and `{0, 1, 3, 5}`
+  mod 120 and quoted 0.957 as "the theoretical calculation with four species". The calculation: with every cross pair worth its two keys and
+  every wild pair of one coefficient worth one (what the residues buy when `d | M` and `d` divides the difference or the sum of the
+  residues), the pair coefficient is `c = 1 − α₀² − ½·Σ α_b²` over the shares; two wild coefficients give `c` = 0.8 at (0.2, 0.4, 0.4), cost
+  `(√π/2)/√0.8` = **0.9908**, the floor of 8.8; three give 42/49 = 0.857 and 0.957; infinitely many tend to the 0.886 of all pairs worth two.
+  Whether a residue family lets the pairs of a fourth coefficient reach their value evenly over `x` is a finite question;
+  `tools/research/kideal.py` optimizes the shares of every (coefficient, residue) pair in the ideal model (no zones, `x` mod `M`), from random
+  starts, with the Fourier view that the pairs of difference `d` cover the residues of `x` in progressions of step `M/d` and can only be
+  evened out by enough classes per species. `{0, 1, 3}` mod 12: 0.9908, flat over `x` (0.7999 to 0.8001), in 1 start of 6 (the others stop at
+  1.051 and 1.085: the problem is not convex). `{0, 1, 2, 3}` mod 60: 0.9908 in 2 of 12 starts, the coefficient 2 at zero share in every start (the other starts stop at 1.014 to
+  1.085, among them layouts with 42 % on `2Q'` and none on `3Q'`); at the optimum the best class of coefficient 2 has the gradient
+  −0.907 against −0.991 for the active classes, so a trace of it raises the cost at first order. `{0, 1, 3, 5}` mod 120: 0.9908 in 5 of 8
+  starts, the coefficient 5 at zero in every start, and at the optimum (one start seeded from the solution of schema 3's family) its best
+  class has the gradient −0.751 against −0.991 for the active classes: a trace of it costs at first order. The conditions for the
+  fourth coefficient 5 to be worth two against every other (`5 | r₀`, `5 | r₅`, `3 | r₀`, `4 | r₅ − r₁`, `6 | r₅ + r₁`, `2 | r₅ − r₃`,
+  `8 | r₅ + r₃`, with `3 | r₃`, `2 | r₃ − r₁`, `4 | r₁ + r₃`) leave the tame species 8 classes mod 120 where the pair `(0, 5)` needs 24 to cover
+  every residue of `x`: the pairs of the fourth coefficient cannot be both whole and even, which is why the optimizer leaves it out. And a
+  coefficient 5 has a zone `5·W` wide, so its `−` equations against 1 and 3 run at 80 % and 40 % of their ideal density before the residues
+  (the same trapezoid count as in C.4). Refuted in the ideal model, where it had its best chance.
+* **C.7 Walks with memory.** A walker that avoided its own recent zone would save the redundant steps only: 0.002·`√W` at 4096 walkers (8.12;
+  0.0024 to 0.0068 at 256 walkers and `W` = 2^32, C.5's runs), a fifth of a percent, below the delay of the distinguished points. The long
+  jumps of 8.10 already make the self-overlap of a walk negligible, and a rule that depends on the walker's history would break the merging
+  of two walkers on one trail (4.3). Refuted by the count.
+* **C.8 Restarts and start densities in time** are C.2 and 8.12 ("restarts help below 4096 walkers"); nothing to add.
+* **C.9 The multidimensional Gaudry-Schost view.** The two-species problem has one unknown; its "dimensions" are the coefficients, and the
+  Gaudry-Schost analysis (the overlap of the tame and wild sets, the birthday on the overlap) is what `kspecies.py` computes exactly by the
+  correlation of the zones (the `G1`, `G2` of its geometry) for every pair of species and both equations. The multidimensional results
+  (Galbraith-Ruprai 2009, Wu-Zhuang 2021) concern a point with several unknown coordinates and cost more, not less, per unknown. Nothing.
+* **C.10 Other species shapes.** Non-integer coefficients do not exist (the exponent of `c·Q'` is `c·x` for an integer `c`); negative ones are
+  the same species seen from the other side; coefficient 2 was refused by the ideal model (C.6, 8.10) and by the measurement of 4.6.
+
+**D. Verdict.**
+
+| attempt | factor against 1.034 (exact model) or 1.04 | memory | status |
+|---|---|---|---|
+| endomorphism `λ`, a fourth symmetry (C.1) | none: one exponent in 2^116 to 2^121 has a usable image; `Aut` has six elements | | refuted, counted |
+| shares that follow the progress (C.2) | −0.36 % (8 epochs), −0.37 % (16); bound −1.3 % | none | model confirmed, below the bar |
+| tame herd first, one key (C.3) | +8 % at best (1.123 against 1.040) | the table | refuted |
+| table of tame trails as a baby table (C.3) | `T·L` points for `T·L` steps: the kangaroo itself; `T` sets the delay only | 64 GB | confirmed 8.9 |
+| Bernstein-Lange table, 64 GiB (C.3) | online 2^−15 of a search; precomputation 76,000 searches; pays from 76,000 keys of one width | 64 GB | refuted for one key, re-priced |
+| one tame herd for puzzles 136 to 140 (C.3) | 55 % of the five separate totals; the first key 6.2 times later | the table | open: a gain on the total only, nobody's goal |
+| tame table of a finished puzzle for the next (C.3) | ≤ 10 % on the second key, needs one jump table for all widths | `dp.bin` of the first | open, a format change |
+| start densities, bands halved twice (C.4) | run not finished in the time box (8.13: −0.23 % at half width); floor −1.3 % | none | open, bounded below the bar |
+| cheap second point (C.5) | `1/(1 + 2^−dp)`: 2^−35 on the puzzles, −50 % at `dp` 0 | none | refuted at scale, confirmed at `dp` 0 to 2 |
+| fourth species, residue families (C.6) | 0.957 ideal if the pairs were whole and even; they cannot be: 0.9908 stands | none | refuted in the ideal model |
+| walks with memory (C.7) | ≤ −0.2 % (the redundant steps) | none | refuted by the count |
+| multidimensional view (C.9), other coefficients (C.10) | nothing | | refuted |
+| literature 2000 to 2026 (A) | best low-memory constant 1.253; 0.9 to 1.0 with `∝ √W` memory (2^66 entries) | | nothing below 1.04 under the constraints |
+
+Recommendation: **nothing to implement**. No attempt reaches 1 % in the exact model under the constraints; the two that reach it in the
+abstract (a shared tame herd for five puzzles, a table carried from one puzzle to the next) are gains on the total of several keys, not on
+the key a campaign is after, and need a jump table common to all widths. What a future reader would need to move the constant: memory of
+order `√W` (2^66 entries for puzzle 135: BSGS gives 1.0, interleaving 0.943, 8.7 and A), or a second key of the same width to share a tame
+herd with (C.3), or a theorem that the random birthday line is not the floor of low-memory methods (8.12: every published method meets it;
+the structured 0.8165 of 8.7 needs the memory above), or structure in secp256k1 beyond `±` (C.1: there is none that preserves an interval).
+ALGORITHMS.md 8.3 points here for the best published constant.
 
 ## 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 
