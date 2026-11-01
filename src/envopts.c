@@ -139,7 +139,7 @@ void pz_env_init(void)
     g_env.no_cuda = env_flag("PZ_NO_CUDA");
     g_env.no_opencl = env_flag("PZ_NO_OPENCL");
     g_env.opencl_all = env_flag("PZ_OPENCL_ALL");
-    if (env_int("PZ_GPU_HALF", 1, 1 << 22, &n)) g_env.gpu_half = (int)n;   /* a code with a hash variant reaches bit 20 (gpu_priv.h) */
+    if (env_int("PZ_GPU_HALF", 1, 1 << 22, &n)) g_env.gpu_half = (int)n;   /* room above the window for the flags of a variant code (gpu_priv.h) */
     env_gpu_nk();
     env_gpu_tune();
     g_env.no_profile = env_flag("PZ_NO_PROFILE");

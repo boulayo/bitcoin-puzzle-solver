@@ -53,6 +53,14 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   with `bench --variants`: 863.6 against 875.0 M keys/s for window 512 with the register cap (-1.3 %) and 808.2 (-7.7 %), as the issue
   model of RESEARCH.md section 5 predicts when an `IMAD.HI` takes the 2.4 issue slots the probes of `bench` measure on that card. They
   are not in this version; the counts and the measurement are in RESEARCH.md. The CUDA linear kernels are those of 1.19.2.
+- CUDA linear search: the form with the hash160 of a pair of keys and the curve arithmetic of the next pair in one instruction stream (the
+  loop over the pairs pipelined by one pair, the hash filter inlined, which RESEARCH.md section 5 left as the one thing that could still pay
+  in the hash phase) was built, checked bit-exact against the CPU on the simulated CUDA driver, compiled for sm_75 to sm_90 and run through
+  the issue model: `ptxas` keeps the two phases apart (one hash, the field work, the other hash), the model gives −0.7 to −2.8 % with an
+  `IMAD.WIDE` at one issue slot and −0.0 to +2.4 % at two where the bound of the two pipes said −9.5 and −18 %, and a hand-made interleave
+  of the two streams reaches at most −4.5 and −6.4 % in the same model. Not built as a module, not measured on a card: the kernels are
+  those of 1.19.2. The form stays in the kernel source under `PZ_INTERLEAVE` (no module uses it; `tools/research/sass_sched.py` reads it
+  for the model, and the simulated driver runs it for a module built with that option).
 - Documentation: RESEARCH.md section 5 accounts for every instruction of the hash160 filter against the floor of its expression on the
   SASS of Turing to Hopper (the rotations, shifts, logic and rotate-and-add are at that floor: 1453 against 1451 ALU-pipe instructions per
   key, the seven RIPEMD-160 steps that word 2 does not need are already dropped), and models what is left: the hash phase runs the ALU

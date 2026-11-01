@@ -19,19 +19,23 @@ function param_of(    s) {
     s = size_of()
     return $3 + 0 ? s " | " $3 " << 16" : s
 }
-# the -D options the kernel emulation takes: the size, the batch products, the block herd and the form of the metadata (not the register cap,
-# which is for the compiler of the GPU)
+# the -D options the kernel emulation takes: the size, the batch products, the block herd, the form of the metadata and the interleaved form of
+# the linear kernel (not the register cap, which is for the compiler of the GPU)
 function emul_defines(    i, d) {
     d = ""
     for (i = 5; i <= NF; i++)
-        if ($i ~ /^-D(HALF|NK|MC|KANG_BLOCK|KANG_META)=[0-9]+$/) d = d " " $i
+        if ($i ~ /^-D(HALF|NK|MC|KANG_BLOCK|KANG_META|PZ_INTERLEAVE)=[0-9]+$/) d = d " " $i
     return d
 }
-# the linear kernels the simulated driver runs differ by the size and by the batch products (a "p" when they are kept every other denominator)
-function linear_tag(    i) {
-    for (i = 5; i <= NF; i++)
-        if ($i == "-DMC=2") return size_of() "p"
-    return size_of()
+# the linear kernels the simulated driver runs differ by the size, by the batch products (a "p" when they are kept every other denominator) and by
+# the form of the loop over the pairs (an "i" for the interleaved one)
+function linear_tag(    i, t) {
+    t = size_of()
+    for (i = 5; i <= NF; i++) {
+        if ($i == "-DMC=2") t = t "p"
+        if ($i == "-DPZ_INTERLEAVE=1") t = t "i"
+    }
+    return t
 }
 /^[ \t]*(#|$)/ { next }
 {
