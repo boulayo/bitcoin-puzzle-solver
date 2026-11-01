@@ -461,6 +461,140 @@ PYEOF
 OUT=$($BIN doctor -d "$DIR/dr" 2>&1)
 echo "$OUT" | grep -q "system suspensions detected during the campaign: 3 " && ok "doctor: 3 suspensions in a log of $(stat -c %s "$DIR/dr/p71/log.txt") bytes" || bad "doctor suspensions: $(echo "$OUT" | grep suspensions)"
 
+echo "== encrypting the key that is found (--encrypt-pubkey, --on-found, encrypt-keygen, decrypt-key)"
+BINABS=$(readlink -f "$BIN")
+export PZ_TEST_SEAL_LOG2N=4   # the cost of the key of a password, so that the tests of the password take milliseconds (the program says so on stderr)
+EKEYS=$($BIN encrypt-keygen --random 2>/dev/null)
+EPRIV=$(echo "$EKEYS" | awk '/^private key/{print $3}'); EPUB=$(echo "$EKEYS" | awk '/^public key/{print $3}'); EID=$(echo "$EKEYS" | awk '/^key id/{print $3}')
+[ ${#EPRIV} = 64 ] && [ ${#EPUB} = 66 ] && ok "encrypt-keygen --random: private key (64 hex digits), public key (66), key id" || bad "encrypt-keygen --random: '$EKEYS'"
+OTHERPRIV=$($BIN encrypt-keygen --random 2>/dev/null | awk '/^private key/{print $3}')
+EPW="correct horse battery staple, 7 words"
+EPWPUB=$(printf '%s\n' "$EPW" | $BIN encrypt-keygen 2>/dev/null | awk '/^public key/{print $3}')
+EPWPUB2=$(printf '%s\n' "$EPW" | $BIN encrypt-keygen 2>/dev/null | awk '/^public key/{print $3}')
+[ ${#EPWPUB} = 66 ] && [ "$EPWPUB" = "$EPWPUB2" ] && ok "encrypt-keygen: the same password gives the same public key" || bad "encrypt-keygen with a password: '$EPWPUB' '$EPWPUB2'"
+[ "$(printf 'another password\n' | $BIN encrypt-keygen 2>/dev/null | awk '/^public key/{print $3}')" != "$EPWPUB" ] && ok "encrypt-keygen: another password, another public key" || bad "two passwords gave the same key"
+printf 'short\n' | $BIN encrypt-keygen 2>&1 >/dev/null | grep -q "only 5 characters" && ok "encrypt-keygen: a short password is warned about" || bad "no warning for a short password"
+printf '\n' | $BIN encrypt-keygen >/dev/null 2>&1; [ $? -eq 2 ] && ok "encrypt-keygen: an empty password is refused" || bad "empty password accepted"
+
+# one search to the end for each method; the arguments after the public key select the mode
+enc_case() {   # enc_case NAME N KEY SECRET RAWOPT PUBKEY HUNTARGS...
+  local name=$1 n=$2 K=$3 secret=$4 rawopt=$5 pubarg=$6; shift 6
+  local A PUBK WIF X HEX CD="$DIR/${name:?}" pubgiven=""
+  case " $* " in *" -k "*) pubgiven=1 ;; esac
+  A=$(field $K addr); PUBK=$(field $K pub); WIF=$(field $K wif); X=$(field $K x); HEX=${K#0x}
+  rm -rf "$CD" "$CD.hook"
+  $BIN hunt -p $n -a "$A" -c $name -d "$DIR" --ui log --no-gpu --encrypt-pubkey "$pubarg" --on-found "printf '%s|%s|%s|%s|%s\n' \"\$PZ_FOUND_SEALED\" \"\$PZ_FOUND_ADDRESS\" \"\$PZ_FOUND_PUZZLE\" \"\$PZ_FOUND_CAMPAIGN\" \"\$PZ_FOUND_FILE\" >> '$CD.hook'; env > '$CD.env'" "$@" >"$CD.out" 2>"$CD.err"; local RC=$?
+  [ $RC -eq 0 ] && grep -q '^PZENC1:' "$CD/FOUND.txt" && ok "$name: found, FOUND.txt carries the encrypted line (exit status 0)" || bad "$name: exit status $RC, FOUND.txt: $(head -c 200 "$CD/FOUND.txt" 2>&1)"
+  local leaks
+  leaks=$(grep -r -i -l -F -e "$HEX" -e "$WIF" "$CD" "$CD.out" "$CD.err" 2>/dev/null; grep -i -l -F -e "$PUBK" -e "$X" "$CD/FOUND.txt" "$CD.out" "$CD.err" 2>/dev/null)
+  [ -z "$leaks" ] && ok "$name: neither the key, nor its WIF is anywhere in the campaign folder, stdout or stderr, nor its public key in FOUND.txt, stdout or stderr" || bad "$name: the key appears in: $leaks"
+  if [ -z "$pubgiven" ]; then   # the public key was not given to the program (-k): it is nowhere in the folder either
+    leaks=$(grep -r -i -l -F -e "$PUBK" -e "$X" "$CD" 2>/dev/null)
+    [ -z "$leaks" ] && ok "$name: the public key of the found key is nowhere in the campaign folder" || bad "$name: the public key appears in: $leaks"
+  fi
+  grep -q "^PZENC1:" "$CD.out" && grep -q "pzsolve decrypt-key" "$CD.out" && ok "$name: the box shows the encrypted line and how to read it" || bad "$name: the box: $(cat "$CD.out")"
+  local LINE; LINE=$(grep '^PZENC1:' "$CD/FOUND.txt")
+  [ "$(wc -l < "$CD.hook")" = 1 ] && [ "$(cat "$CD.hook")" = "$LINE|$A|$n|$name|$CD/FOUND.txt" ] && ok "$name: --on-found ran once and received the line, address, puzzle, campaign and file" || bad "$name: --on-found: $(cat "$CD.hook" 2>&1)"
+  grep -q -i -F -e "$HEX" -e "$WIF" "$CD.env" && bad "$name: the key is in the environment of --on-found" || ok "$name: the environment of --on-found does not carry the key"
+  grep -q "PZENC1:" "$CD/log.txt" && ok "$name: the log has the encrypted line" || bad "$name: log.txt"
+  grep -q "^Key: .*encrypted to the public key with id" "$CD/report.txt" 2>/dev/null && ok "$name: report.txt says that the key is encrypted" || bad "$name: report.txt"
+  local OUT; OUT=$(printf '%s\n' "$secret" | $BIN decrypt-key $rawopt "$CD/FOUND.txt" 2>&1); RC=$?
+  [ $RC -eq 0 ] && echo "$OUT" | grep -q "key (hex): *0x$HEX\$" && echo "$OUT" | grep -q "check: *OK" && echo "$OUT" | grep -q "WIF compressed: *$WIF" && ok "$name: decrypt-key gives the key, the WIF and the check" || bad "$name: decrypt-key: rc=$RC $OUT"
+}
+KK=$(rndkey 38 77); KB=$(rndkey 30 78)
+enc_case encl 26 0x2a3f5c1 "$EPRIV" --raw-key "$EPUB"
+enc_case enck 38 "$KK" "$EPRIV" --raw-key "$EPUB" -k "$(field "$KK" pub)" -m kangaroo
+enc_case encb 30 "$KB" "$EPRIV" --raw-key "$EPUB" -k "$(field "$KB" pub)" -m bsgs
+enc_case encp 27 "$(rndkey 27 79)" "$EPW" "" "$EPWPUB"
+# the checks of decrypt-key on the first campaign
+EL="$DIR/encl/FOUND.txt"; HEXL=2a3f5c1; AL=$(field 0x2a3f5c1 addr)
+OUT=$(printf '%s\n' "$OTHERPRIV" | $BIN decrypt-key --raw-key "$EL" 2>&1); RC=$?
+[ $RC -eq 1 ] && echo "$OUT" | grep -q "encrypted to the public key with id $EID, but this private key gives id" && echo "$OUT" | grep -q "wrong key" && ok "decrypt-key: a wrong private key is said to be wrong, by key id" || bad "wrong key: rc=$RC $OUT"
+OUT=$(printf 'not the password\n' | $BIN decrypt-key "$DIR/encp/FOUND.txt" 2>&1); RC=$?
+[ $RC -eq 1 ] && echo "$OUT" | grep -q "but this password gives id" && echo "$OUT" | grep -q "wrong password" && ok "decrypt-key: a wrong password is said to be wrong, by key id" || bad "wrong password: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPW" | $BIN decrypt-key "$DIR/encp/FOUND.txt" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "check: *OK" && ok "decrypt-key: the password opens it" || bad "password: rc=$RC $OUT"
+LINE=$(grep '^PZENC1:' "$EL")
+printf 'address: x\n%s\n' "${LINE%???}" > "$DIR/cut.txt"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/cut.txt" 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "damaged or incomplete" && ok "decrypt-key: a truncated copy fails on the check characters before any secret is asked" || bad "truncated copy: rc=$RC $OUT"
+CH=${LINE:40:1}; NC=2; [ "$CH" = 2 ] && NC=3
+printf '%s\n' "${LINE:0:40}$NC${LINE:41}" > "$DIR/typo.txt"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" --puzzle 26 "$DIR/typo.txt" 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "damaged or incomplete" && ok "decrypt-key: a mistyped character is caught by the check characters" || bad "typo: rc=$RC $OUT"
+echo "$LINE" > "$DIR/line.txt"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "address" && ok "decrypt-key: the line alone is not enough, it says that the address and the puzzle are needed" || bad "line alone: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" --puzzle 26 "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: the line with --address and --puzzle opens" || bad "line with the options: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" --puzzle 27 "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 1 ] && echo "$OUT" | grep -q "authentication failed" && ok "decrypt-key: another puzzle number is refused (it is part of what was encrypted)" || bad "another puzzle: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$(field 0x2a3f5c2 addr)" --puzzle 26 "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 1 ] && ! echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: another address is refused and the key is not shown" || bad "another address: rc=$RC $OUT"
+OUT=$(cd "$DIR/encl" && printf '%s\n' "$EPRIV" | "$BINABS" decrypt-key --raw-key 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: without a file it reads FOUND.txt of the current folder" || bad "default file: rc=$RC $OUT"
+echo "nothing here" > "$DIR/none.txt"
+$BIN decrypt-key "$DIR/none.txt" >/dev/null 2>&1 </dev/null; [ $? -eq 2 ] && ok "decrypt-key: a text without an encrypted key is refused (exit status 2)" || bad "decrypt-key of a text without a line"
+$BIN hunt -c encl -d "$DIR" --ui log -q --no-gpu 2>&1 | grep -q "PZENC1:" && ok "an encrypted campaign that had found the key shows its FOUND.txt, which is the encrypted one" || bad "already found, encrypted"
+
+# a key that is refused: the program does not start and nothing is created
+for badkey in "zz" "02" "$(echo "$EPUB" | sed 's/^../05/')" "0200000000000000000000000000000000000000000000000000000000000000fe" "${EPUB}00"; do
+  rm -rf "$DIR/badk"
+  $BIN hunt -p 20 -a "$(field 0x80001 addr)" -c badk -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$badkey" >"$DIR/badk.out" 2>&1; RC=$?
+  [ $RC -eq 2 ] && [ ! -e "$DIR/badk" ] && ! grep -q "KEY FOUND" "$DIR/badk.out" && grep -q "encrypt-pubkey" "$DIR/badk.out" && ok "--encrypt-pubkey '${badkey:0:12}...': refused, nothing started, no plain fallback" || bad "invalid key '$badkey': rc=$RC $(head -c 200 "$DIR/badk.out")"
+done
+$BIN hunt -p 20 -a "$(field 0x80001 addr)" -c badk -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" --encrypt-password </dev/null >"$DIR/badk.out" 2>&1; RC=$?
+[ $RC -eq 2 ] && [ ! -e "$DIR/badk" ] && grep -q "cannot be used together" "$DIR/badk.out" && ok "--encrypt-pubkey with --encrypt-password: refused" || bad "both options: rc=$RC"
+$BIN hunt -p 20 -a "$(field 0x80001 addr)" -c badk -d "$DIR" --ui log -q --no-gpu --encrypt-password </dev/null >"$DIR/badk.out" 2>&1; RC=$?
+[ $RC -eq 2 ] && [ ! -e "$DIR/badk" ] && ok "--encrypt-password without a password on standard input: refused, nothing created" || bad "no password: rc=$RC"
+
+# --encrypt-password with the password on standard input: the public key is the one of encrypt-keygen, and the password is stored nowhere
+K=$(rndkey 25 31); A=$(field $K addr); rm -rf "$DIR/encw"
+printf '%s\n' "$EPW" | $BIN hunt -p 25 -a "$A" -c encw -d "$DIR" --ui log -q --no-gpu --encrypt-password >"$DIR/encw.out" 2>"$DIR/encw.err"; RC=$?
+[ $RC -eq 0 ] && grep -q "^encrypt_pubkey=$EPWPUB\$" "$DIR/encw/campaign.conf" && grep -q "$EPWPUB" "$DIR/encw.out" && ok "--encrypt-password: the public key printed and stored is the one of encrypt-keygen for the same password" || bad "--encrypt-password: rc=$RC $(cat "$DIR/encw.err")"
+grep -r -l -F "$EPW" "$DIR/encw" "$DIR/encw.out" "$DIR/encw.err" >/dev/null 2>&1 && bad "the password appears in the campaign folder or in the output" || ok "--encrypt-password: the password appears nowhere in the campaign folder, stdout or stderr"
+printf '%s\n' "$EPW" | $BIN decrypt-key "$DIR/encw/FOUND.txt" 2>/dev/null | grep -q "0x${K#0x}" && ok "--encrypt-password: decrypt-key with the same password gives the key" || bad "--encrypt-password then decrypt-key"
+
+# resuming: the key of the campaign is used; another one is refused; a campaign without one can be given one (the key was not found yet)
+K=$(rndkey 31 41); A=$(field $K addr); rm -rf "$DIR/encr"
+timeout -s INT 2 $BIN hunt -p 31 -a "$A" -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+grep -q "encrypt" "$DIR/encr/campaign.conf" && bad "a campaign without encryption has the field" || ok "a campaign started without encryption has no encrypt_pubkey line (the file is as before)"
+$BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" -t 1 >"$DIR/encr.out" 2>&1 & EPID=$!
+for _ in $(seq 1 100); do grep -q "^encrypt_pubkey=" "$DIR/encr/campaign.conf" && break; sleep 0.1; done
+grep -q "^encrypt_pubkey=$EPUB\$" "$DIR/encr/campaign.conf" && ok "resumed with --encrypt-pubkey: the campaign that had none now has it in campaign.conf" || bad "the key was not stored on resume"
+if [ -r /proc/$EPID/limits ]; then
+  grep -q "Max core file size *0 *0" /proc/$EPID/limits && ok "with a public key to encrypt to, the process has core dumps off (/proc/$EPID/limits)" || bad "core dump limit: $(grep core /proc/$EPID/limits)"
+fi
+kill -INT $EPID 2>/dev/null; wait $EPID 2>/dev/null
+$BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERPRIV" >/dev/null 2>&1; RC=$?
+[ $RC -eq 2 ] && ok "a private key given as the public key is refused" || bad "private key as public key: rc=$RC"
+OTHERPUB=$($BIN encrypt-keygen --random 2>/dev/null | awk '/^public key/{print $3}')
+OUT=$($BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERPUB" 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "cannot be switched" && echo "$OUT" | grep -q "Resume it without --encrypt-pubkey" && ok "resumed with another public key: refused, with the way to proceed" || bad "other key on resume: rc=$RC $OUT"
+$BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+grep -q '^PZENC1:' "$DIR/encr/FOUND.txt" && printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/encr/FOUND.txt" 2>/dev/null | grep -q "0x${K#0x}" && ok "resumed without the option: the stored key is used, and the result opens with the secret" || bad "resume without the option: $(head -c 300 "$DIR/encr/FOUND.txt")"
+# merge gives the key to a kangaroo campaign that has none
+rm -rf "$DIR/xmm"; cp -r "$DIR/xm" "$DIR/xmm" 2>/dev/null
+if [ -d "$DIR/xmm/xk" ]; then
+  $BIN merge -c xk -d "$DIR/xmm" -f "$DIR/xm2/xk" --encrypt-pubkey "$EPUB" >/dev/null 2>&1
+  grep -q "^encrypt_pubkey=$EPUB\$" "$DIR/xmm/xk/campaign.conf" && ok "merge --encrypt-pubkey: the campaign gets the key" || bad "merge --encrypt-pubkey"
+fi
+# without encryption: --on-found gets the line empty, the address, the puzzle, the campaign and the file, and never the key
+K=$(rndkey 22 5); A=$(field $K addr); rm -rf "$DIR/encn" "$DIR/encn.env"
+$BIN hunt -p 22 -a "$A" -c encn -d "$DIR" --ui log -q --no-gpu --on-found "env > '$DIR/encn.env'" >/dev/null 2>&1
+grep -q "^PZ_FOUND_SEALED=\$" "$DIR/encn.env" && grep -q "^PZ_FOUND_ADDRESS=$A\$" "$DIR/encn.env" && grep -q "^PZ_FOUND_FILE=$DIR/encn/FOUND.txt\$" "$DIR/encn.env" && ! grep -q -i -e "${K#0x}" -e "$(field $K wif)" "$DIR/encn.env" \
+  && ok "--on-found without encryption: the line is empty, the file is given, the key is not in the environment" || bad "--on-found without encryption: $(grep PZ_FOUND "$DIR/encn.env")"
+grep -q "private key hex: 0x${K#0x}" "$DIR/encn/FOUND.txt" && grep -q "public key:" "$DIR/encn/FOUND.txt" && ok "without encryption FOUND.txt is as before (key, WIF, public key)" || bad "plain FOUND.txt changed"
+# a command that fails: logged, never in the way
+K=$(rndkey 21 6); A=$(field $K addr); rm -rf "$DIR/enchk"
+$BIN hunt -p 21 -a "$A" -c enchk -d "$DIR" --ui log -q --no-gpu --on-found "exit 3" >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && grep -q "ended with exit status 3" "$DIR/enchk/log.txt" && ok "--on-found: a command that fails is logged and does not change the exit status" || bad "--on-found exit 3: rc=$RC"
+echo "== the hidden password prompt on a terminal"
+python3 -I tests/pty_seal.py "$BIN" "$DIR" > "$DIR/pty.out" 2>&1; PRC=$?
+grep -E "^  (OK|FAIL)" "$DIR/pty.out"
+[ $PRC -eq 0 ] || fail=$((fail+1))
+unset PZ_TEST_SEAL_LOG2N
+
 echo "== line width: nothing printed is longer than 128 columns"
 chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr; log records ("[12:00:00] INFO ...") are one line each in a pipe
   local label=$1 out w; shift
@@ -470,6 +604,9 @@ chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and std
 }
 chk_width "help" $BIN help
 chk_width "hunt --help" $BIN hunt --help
+chk_width "help encrypt-keygen" $BIN help encrypt-keygen
+chk_width "help decrypt-key" $BIN help decrypt-key
+chk_width "help merge" $BIN help merge
 chk_width "puzzles" $BIN puzzles
 chk_width "puzzle 71" $BIN puzzle 71
 chk_width "puzzle 140" $BIN puzzle 140

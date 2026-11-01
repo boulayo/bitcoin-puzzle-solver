@@ -45,6 +45,10 @@ linear scan. The algorithms are explained in [`docs/en/ALGORITHMS.md`](docs/en/A
   same campaign. `--keep-awake` prevents sleep on Windows and macOS.
 * **Self-tuning.** `--retune` measures the machine again, `--no-tune` skips it; `bench --together`, `bench --variants` (every GPU kernel
   variant, measured in turns) and `doctor`: see [USAGE](docs/en/USAGE.md) 7.4 to 7.6.
+* **Rented computers.** `--encrypt-pubkey` (or `--encrypt-password`) encrypts the key to a public key the moment it is found: the screen, `FOUND.txt` and the log
+  carry only a line `PZENC1:...`, safe to send anywhere (`--on-found` runs your command with it), and `pzsolve decrypt-key` opens it at home with the password
+  that `pzsolve encrypt-keygen` was given. It protects what is left behind, not a machine whose administrator reads the memory while it runs:
+  [USAGE](docs/en/USAGE.md) section 11.
 * **Live panel and files.** A panel updated once per second shows speed per device, time left and success probability. The campaign
   folder holds `report.txt`, `status.json`, `stats.csv`, `log.txt` and, when the key is found, `FOUND.txt` (permissions 0600).
 
@@ -60,6 +64,7 @@ to be installed; for NVIDIA GPUs the normal graphics driver is enough (version 5
 ./pzsolve hunt -p 71       # start; Ctrl-C stops, the same command resumes
 ./pzsolve list             # progress of all campaigns
 ./pzsolve hunt -p 40       # test run on a solved puzzle: finds the key within seconds
+./pzsolve encrypt-keygen   # rented computer: the public key to give to hunt --encrypt-pubkey; decrypt-key opens the result
 ```
 
 On Windows use `.\pzsolve.exe` in PowerShell. Campaigns are stored in a `campaigns` folder where you run the command. The first

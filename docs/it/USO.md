@@ -11,7 +11,9 @@
 | `pzsolve info (-c NOME \| -p N)` | stampa il report di una campagna (la riga `State` è quella che mostra `list`: `FOUND` se esiste `FOUND.txt`, `RUNNING` solo mentre un processo tiene il blocco della campagna, quindi una campagna uccisa risulta `STOPPED`) |
 | `pzsolve where (-c NOME \| -p N) --key HEX` | dice in che punto dell'ordine di visita di una campagna lineare o BSGS arriva una chiave, e se è già stata scandita |
 | `pzsolve split V1 V2 …` | divide le quote di `--part` fra più computer in proporzione alle loro velocità (per esempio `split 800M 120M`; vedi sezione 8.2) |
-| `pzsolve merge (-c NOME \| -p N) -f FILE_O_CARTELLA … [-d DIR] [--mem GiB]` | unisce i punti distinti di altri computer a una campagna canguro (vedi sezione 8.1) |
+| `pzsolve merge (-c NOME \| -p N) -f FILE_O_CARTELLA … [-d DIR] [--mem GiB] [--encrypt-pubkey HEX \| --encrypt-password] [--on-found COMANDO]` | unisce i punti distinti di altri computer a una campagna canguro (vedi sezione 8.1) |
+| `pzsolve encrypt-keygen [--random]` | crea la chiave pubblica (da una password che scrivi, o casuale) a cui una campagna cifra la chiave che trova: per i computer in affitto (sezione 11) |
+| `pzsolve decrypt-key [--raw-key] [--address A] [--puzzle N] [FILE \| -]` | decifra la chiave che una campagna ha trovato e cifrato (sezione 11) |
 | `pzsolve doctor [-d DIR] [--full]` | controlla programma, sistema, CPU, GPU, taratura e profilo salvati, campagne, disco, orologio e variabili `PZ_*`, e dice cosa non va; da incollare quando si chiede aiuto |
 | `pzsolve devices`   | CPU, set di istruzioni, RAM e GPU (CUDA e OpenCL) rilevate |
 | `pzsolve selftest`  | controlli di correttezza integrati (primitive, database, motori SIMD, canguro, BSGS, GPU) |
@@ -54,6 +56,8 @@ ferma a `n − 1` (l'ordine del gruppo), perché le chiavi oltre non esistono. P
 * Il `--chunk-bits` predefinito fa i blocchi grandi quanto l'intervallo permette, con almeno 16 blocchi per quota e al massimo 2^36 chiavi
   (un intervallo di 2^36 chiavi ha blocchi da 2^32). Un valore più piccolo rallenta la CPU e soprattutto le GPU, perché un lancio non può
   attraversare un blocco: con blocchi da 2^24 chiavi una GPU perde circa un quinto della velocità.
+
+* `--encrypt-pubkey`, `--encrypt-password` e `--on-found` cifrano la chiave trovata ed eseguono un comando quando viene trovata: sezione 11.
 
 Un valore che non si può usare ferma il comando con un messaggio come `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 e un'opzione sconosciuta con `unrecognized option '--foo' (see 'pzsolve help hunt')`.
@@ -107,7 +111,7 @@ Tabelle di altre versioni: [`RELEASING.md`](https://github.com/boulayo/bitcoin-p
 
 ```
 campaigns/NOME/
-  campaign.conf   parametri immutabili (intervallo, bersaglio, modalità, seed, chunk-bits, baby step)
+  campaign.conf   parametri immutabili (intervallo, bersaglio, modalità, seed, chunk-bits, baby step, la chiave pubblica a cui cifrare la chiave trovata)
   lock            blocco (flock) che impedisce due processi sulla stessa campagna
   state.dat       checkpoint della ricerca (insieme di intervalli completati, con checksum; .bak = precedente)
   dp.bin          canguro: log append-only dei punti distinti (per riprendere)
@@ -116,13 +120,13 @@ campaigns/NOME/
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto ogni 5 s
   stats.csv       serie storica (una riga al minuto)
   log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
-  FOUND.txt       solo a chiave trovata (permessi 0600)
+  FOUND.txt       solo a chiave trovata (permessi 0600); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
 ```
 
 * **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato. Un secondo
   Ctrl-C dopo mezzo secondo esce subito (e perde al massimo l'ultimo minuto di lavoro).
 * **Riprendere**: lo stesso comando (`hunt -p N`, oppure `hunt -c NOME`). Il seed e i parametri che definiscono la ricerca non
-  possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits` o `--bsgs-entries` diversi da quelli della campagna
+  possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits`, `--bsgs-entries` o `--encrypt-pubkey` diversi da quelli della campagna
   esistente il programma **rifiuta** con un errore (non li ignora in silenzio); puoi invece cambiare thread, GPU, ISA, memoria e
   aspetto del pannello. **`pzsolve list`** mostra tutte le campagne e il loro stato.
 * **Nome della campagna** (senza `-c`): `pN` per un puzzle intero; per un sotto-intervallo (`-r`) o un bersaglio personalizzato
@@ -485,3 +489,147 @@ Con un doppio clic mostra l'aiuto e attende Invio.
   per la cartella.
 * **Compilarlo da sé**: da Linux con MinGW-w64, `make windows` (risultato in `build/win/pzsolve.exe`); `make wintest` esegue i test
   dell'exe sotto Wine.
+
+## 11. Cifrare la chiave (computer in affitto)
+
+Se esegui pzsolve su un computer controllato da altri, la chiave non deve poter essere letta da chi usa quel computer dopo di te, né da chi ne legge i dischi, i
+backup, i log, lo schermo o lo scorrimento del terminale. Con `--encrypt-pubkey` (o `--encrypt-password`) il programma **cifra la chiave a una chiave pubblica nel
+momento in cui la trova**, e mostra e salva solo il testo cifrato: una sola riga `PZENC1:...`, che si può copiare, spedire o pubblicare ovunque. A casa la decifri
+con il segreto che corrisponde alla chiave pubblica. Leggi il modello di minaccia qui sotto prima di fidartene: protegge la chiave da ciò che resta dopo di te, non da
+chi controlla la macchina mentre il programma gira.
+
+### 11.1 Il procedimento
+
+1. **A casa, su un computer di cui ti fidi**: crea la chiave pubblica.
+
+   ```
+   pzsolve encrypt-keygen
+   ```
+
+   Chiede due volte una password (mentre scrivi non si vede nulla), ne ricava la chiave segreta e stampa la **chiave pubblica** (66 cifre esadecimali) e il suo
+   identificativo (8 cifre). Non scrive nulla su disco. Scrivi la password su carta, in un posto che non sia il computer in affitto. Con
+   `pzsolve encrypt-keygen --random` non c'è password: stampa anche una chiave privata casuale (64 cifre), che devi custodire come un segreto (un gestore di
+   password, un foglio stampato): la legge `decrypt-key --raw-key`.
+
+2. **Sul computer in affitto**: avvia la campagna con la chiave pubblica e con un comando che ti spedisce il risultato.
+
+   ```
+   pzsolve hunt -p 71 --encrypt-pubkey 03a1...e9 --on-found 'printf "puzzle %s indirizzo %s\n%s\n" "$PZ_FOUND_PUZZLE" "$PZ_FOUND_ADDRESS" "$PZ_FOUND_SEALED" | mail -s "pzsolve ha trovato una chiave" me@example.com'
+   ```
+
+   La chiave pubblica è salvata in `campaign.conf`: riprendendo la campagna (`hunt -p 71`) si cifra alla stessa chiave senza ripetere l'opzione, e una chiave
+   diversa è rifiutata (una campagna non si cambia di nascosto). Una campagna avviata senza chiave può riceverne una alla ripresa: la chiave non era ancora stata
+   trovata. `merge` accetta le stesse opzioni. Il programma disattiva i core dump (Linux, macOS), verifica di saper cifrare e scrive all'inizio della sessione, nel
+   log, `the key will be encrypted to the public key with id XXXXXXXX`: confronta quell'identificativo con quello stampato da `encrypt-keygen`.
+
+3. **Quando la chiave è trovata**, il riquadro sullo schermo, `FOUND.txt` e `log.txt` contengono la riga `PZENC1:...` e i dati comunque pubblici (indirizzo,
+   puzzle, campagna, seed, versione, identificativo della chiave), e **né la chiave privata né la sua chiave pubblica** (per un puzzle noto solo per indirizzo, la
+   chiave pubblica e l'intervallo permetterebbero a chiunque di trovare la chiave con un canguro in pochi minuti). `--on-found` ha eseguito il tuo comando una
+   volta, senza ritardare la ricerca: vedi 11.3.
+
+4. **Porta il risultato a casa**: copia `FOUND.txt`, oppure la mail ricevuta.
+
+5. **A casa**:
+
+   ```
+   pzsolve decrypt-key FOUND.txt
+   ```
+
+   Mostra l'identificativo della chiave a cui la riga è stata cifrata, chiede la password (mentre scrivi non si vede nulla), controlla che sia quella giusta **prima**
+   di provare a decifrare («encrypted to the public key with id A, but this password gives id B: wrong password»), decifra e verifica che la chiave appartenga
+   all'indirizzo. Stampa la chiave in esadecimale e in WIF, l'indirizzo e il puzzle. Lo stato di uscita è 0 solo se la chiave è stata recuperata e verificata; 1 se il
+   segreto non apre la riga; 2 se l'input non è utilizzabile (nessuna riga, una copia rovinata, nessun indirizzo). Una riga tagliata o ricopiata male si riconosce dai
+   quattro caratteri di controllo che contiene, prima che venga chiesta una password. Se hai solo la riga (la mail), l'indirizzo e il puzzle fanno parte di ciò che è
+   stato cifrato: indicali con `--address INDIRIZZO --puzzle N`; con `FOUND.txt` si leggono dalle sue righe `address:` e `puzzle:`. Funziona anche un testo incollato
+   sullo standard input (chiudilo con Ctrl-D), e allora la password si chiede sul terminale.
+
+   La riga resta valida per sempre: conservala, con la password, finché i fondi non sono stati spostati. **Se la password o la chiave privata si perde, la chiave è
+   persa**: non c'è altro modo di aprirla.
+
+### 11.2 Provalo prima di ogni affitto
+
+Un errore nella chiave pubblica, nella riga di comando o nel comando di posta si scopre solo quando la chiave viene trovata, e allora è tardi. Su un puzzle **già
+risolto** la ricerca finisce in pochi secondi, quindi l'intero percorso si può provare. Fallo a casa e di nuovo sul computer in affitto, con lo stesso eseguibile e
+la stessa riga di comando, tranne il puzzle:
+
+```
+pzsolve hunt -p 30 --encrypt-pubkey CHIAVE_PUBBLICA -c prova --on-found "IL TUO COMANDO DI POSTA O DI CARICAMENTO"
+pzsolve decrypt-key campaigns/prova/FOUND.txt
+pzsolve puzzle 30                       # la sua chiave è pubblica: deve essere quella stampata da decrypt-key
+```
+
+Controlla che: il riquadro e `FOUND.txt` mostrino una riga `PZENC1:` e nessuna chiave (cercaci dentro la chiave mostrata da `pzsolve puzzle 30`); il tuo comando sia
+stato eseguito e ciò che ha spedito ti sia arrivato (`log.txt` dice come è finito); `decrypt-key` dia la chiave del puzzle e `check: OK`. Poi cancella la campagna di
+prova e avvia quella vera.
+
+### 11.3 Le opzioni
+
+* `--encrypt-pubkey HEX`: la chiave pubblica, 66 cifre (compressa) o 130 (non compressa). Viene controllata all'avvio; una non valida ferma il comando prima che
+  venga creato qualsiasi cosa: il programma **non** ripiega mai sul mostrare la chiave. Vale per tutte le modalità (lineare, canguro, BSGS) e per `merge`. Una chiave
+  privata data per errore non è un punto della curva e viene rifiutata.
+* `--encrypt-password`: al posto della chiave pubblica, scrivi la password su questo computer (nascosta, due volte) e la chiave pubblica ne viene ricavata, esattamente
+  come fa `encrypt-keygen`; il programma stampa l'identificativo e la chiave pubblica perché tu possa confrontarli con l'output di `encrypt-keygen` eseguito su un
+  computer di cui ti fidi. Si salva solo la chiave pubblica. Una campagna ripresa che ha già la sua chiave non la chiede più. **Usalo solo su una macchina di cui ti fidi
+  mentre scrivi:** ciò che vede la tastiera, il terminale o la memoria del programma in quel momento può catturare la password e poi aprire la chiave cifrata.
+  Protegge ciò che accade dopo il primo passo (la macchina lasciata sola, i suoi file, i suoi backup, il suo disco quando viene restituito), non una macchina ostile
+  fin dall'inizio. La via più sicura resta `encrypt-keygen` a casa e `--encrypt-pubkey`. I buffer della password sono bloccati in memoria quando il sistema lo
+  consente e azzerati appena la chiave pubblica è pronta. Senza un terminale (uno script) la password è una riga dello standard input. Dare entrambe le opzioni è
+  un errore.
+* `--on-found "COMANDO"`: dopo la scrittura di `FOUND.txt` il comando viene eseguito una volta con `/bin/sh -c` (su Windows `cmd.exe /c`), in un thread a parte: non
+  ritarda l'arresto della ricerca né il riquadro, e il programma termina quando termina il comando (al massimo 120 secondi, poi viene fermato). Il suo stato di
+  uscita, o il superamento del tempo, va nel log. Nel suo ambiente ci sono `PZ_FOUND_SEALED` (la riga `PZENC1:`, vuota se la campagna non cifra),
+  `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE` (0 se non c'è), `PZ_FOUND_CAMPAIGN` e `PZ_FOUND_FILE` (il percorso di `FOUND.txt`); **mai la chiave**. Senza cifratura il
+  comando può leggere `FOUND.txt`, che contiene la chiave in chiaro. Il comando non è salvato in `campaign.conf` e non si legge mai da un file: ridaglielo quando
+  riprendi. La riga si può spedire ovunque senza rischi, quindi su un computer in affitto questo è il modo per essere sicuri di ricevere il risultato, anche se il
+  computer viene ripreso nel momento in cui la chiave è trovata. Non mettere un segreto (una password, un token) nel comando: la riga di comando di un processo può
+  essere letta dagli altri utenti del computer.
+* La password non è mai accettata come argomento (finirebbe nella cronologia della shell e nell'elenco dei processi): si legge con l'eco spenta, dal terminale (il
+  terminale viene rimesso a posto in ogni modo di uscire, Ctrl-C compreso); se lo standard input non è un terminale è una riga di esso.
+
+### 11.4 La password
+
+Tutto poggia sulla password: la costruzione è pubblica e chiunque veda la chiave pubblica (il proprietario del computer in affitto la vede nella riga di comando e in
+`campaign.conf`) può provare password contro di essa **offline**, senza limiti, sui propri computer, per quanto tempo vuole. Ogni prova gli costa circa un secondo e
+256 MiB di memoria su una normale CPU (scrypt con N = 2^18, r = 8, p = 1): questo lo rallenta, ma non abbastanza da salvare una password debole. Il programma avvisa
+quando la password ha meno di 12 caratteri.
+
+| Password | Bit di entropia | Tempo per provarle tutte a un milione di prove al secondo |
+|----------|-----------------|-----------------------------------------------------------|
+| una parola, un nome, una data | meno di 30 | da secondi a minuti |
+| 8 caratteri scelti da te | da 30 a 40 | da minuti a giorni |
+| 8 caratteri casuali (lettere, cifre, simboli) | 52 | 140 anni |
+| 12 caratteri casuali | 79 | 2 per 10^10 anni |
+| **7 parole casuali** (Diceware, lista di 7776 parole) | 90 | 4 per 10^13 anni |
+| **20 caratteri casuali** | 130 | molto più dell'età dell'universo |
+
+«Casuale» vuol dire estratto con i dadi o da un programma, non inventato. Un milione di prove al secondo è più di quanto ottenga un grande cluster contro questo costo:
+la tabella è una scala, non una promessa. Usa 7 o più parole casuali oppure 20 o più caratteri casuali. La password si usa come digitata (i byte del tuo terminale,
+UTF-8 per le lettere accentate): scrivila sempre allo stesso modo e prova la decifratura a casa con la password vera subito dopo `encrypt-keygen`.
+
+### 11.5 Modello di minaccia: cosa protegge e cosa no
+
+**Protetti**: chiunque, dopo la tua sessione, legga i file della campagna, lo schermo o il suo scorrimento, il log, un backup, un disco condiviso o di rete, un'immagine
+del disco, o un disco restituito al proprietario della macchina o venduto. E chi legge `FOUND.txt` o `log.txt` mentre la campagna gira. Su Linux e macOS il programma
+disattiva i core dump (`setrlimit`) e, su Linux, si rende non scaricabile (`PR_SET_DUMPABLE`), così un arresto anomalo non scrive la memoria in un file e un altro
+processo dello stesso utente non può collegarsi a esso.
+
+**Non protetti**:
+
+* **L'amministratore della macchina (root), o il fornitore di una macchina virtuale, mentre il programma gira.** La chiave in chiaro esiste nella memoria del
+  programma per il momento fra la scoperta e la fine della cifratura (da microsecondi a millisecondi; la copia tenuta dalla campagna viene azzerata subito, ma il
+  codice di ricerca che l'ha trovata ne ha di proprie, nello stack, finché non vengono sovrascritte), e chi può leggere la memoria del processo, o fare uno snapshot di
+  una macchina virtuale, può leggere la chiave in quel momento. Chi può farlo può anche leggere la password che digiti per `--encrypt-password`.
+* **Un eseguibile sostituito.** Chi controlla la macchina può sostituire `pzsolve` con un programma che gli spedisce la chiave, o cambiare nella riga di comando la
+  chiave pubblica con la propria: allora la riga che ricevi si apre per lui, non per te (`decrypt-key` ti dice che l'identificativo è diverso, ma la chiave è già sua).
+  Carica tu l'eseguibile, controlla il suo `SHA256SUMS` con quello pubblicato prima di avviarlo, confronta l'identificativo nelle prime righe del log con quello di
+  `encrypt-keygen`, e sappi che non puoi dimostrare che ciò che gira sia ciò che hai caricato. Affitta da chi puoi chiamare a rispondere.
+* **Windows**: il programma non può vietare da codice utente un dump di arresto anomalo, quindi la memoria del processo può finire in un dump se il sistema è
+  impostato per scriverli (Windows Error Reporting); il messaggio all'avvio lo dice. I buffer della password e di scrypt sono bloccati in memoria (`VirtualLock`)
+  quando il sistema lo consente.
+* **Lo swap**: la memoria del programma può essere scritta dal sistema in un file di swap o di ibernazione. I buffer della password e la memoria della derivazione
+  sono bloccati in RAM quando i limiti del sistema lo consentono (di solito non per i 256 MiB di scrypt senza privilegi); la chiave in chiaro vive troppo poco per
+  finire probabilmente nello swap, ma nulla qui lo garantisce. Usa uno swap cifrato, o nessuno.
+* **Una password debole**, come in 11.4; un keylogger o un terminale modificato, che vedono la password mentre la digiti.
+* **I metadati**: indirizzo, puzzle, ora e nome della campagna restano in chiaro (sono pubblici per natura).
+
+Se della macchina non ti fidi affatto, non eseguirci la ricerca con una chiave che conta; se puoi, preferisci un puzzle per cui il costo di una fuga è accettabile.

@@ -26,6 +26,7 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
 9. Symmetric BSGS with a RAM table (`--mode bsgs`): 9.1 Algorithm, 9.2 How it is implemented, 9.3 When it pays off
 10. SIMD lane arithmetic (`avx2v`, `avx512v`, `avx512i`)
 11. Time-estimation model (`src/eta.c`)
+12. Encrypting the found key to a public key (`PZENC1`)
 
 ## 1. The problem
 
@@ -707,3 +708,81 @@ success in the next 1 h / 24 h / 7 d / 30 d / 365 d:
 
 These probabilities are *conditional* on the key being in the interval and on the program being correct; they say nothing
 about whether the funds are still there (check the address with a blockchain explorer).
+
+## 12. Encrypting the found key to a public key (`PZENC1`)
+
+The key of a puzzle is the one thing the program must never show to whoever uses the machine it runs on. With `--encrypt-pubkey` the key is encrypted to a public key
+at the moment it is found, with a construction that needs nothing but the primitives of pzcore (`lib/pzcore/include/pzcore/seal.h`, `kdf.c`, `seal.c`): ECIES on
+secp256k1 with HKDF-SHA256 and an HMAC-SHA256 tag. How to use it, and what it does and does not protect, is in USAGE.md section 11.
+
+### 12.1 The construction
+
+Let `Q` be the public key, `G` the generator, `n` the order of the group, `P` the 32-byte private key to protect, and `AAD` the associated data (12.3).
+
+1. Draw `r` in `[1, n - 1]` from the operating system's random numbers (the one source the program already uses for the seed of a campaign; a draw outside the
+   range is rejected and redrawn).
+2. `R = r*G` (compressed, 33 bytes), `S = r*Q`, `ikm = x(S)` (32 bytes, big-endian).
+3. `okm = HKDF-SHA256(salt = "pzsolve-found-v1", ikm, info = R || Q || AAD)`, 64 bytes: the first 32 are the key stream, the last 32 the key of the MAC.
+4. `ct = P xor okm[0..32)`.
+5. `tag = HMAC-SHA256(okm[32..64), R || ct || AAD)`, the first 16 bytes.
+
+Opening with the private scalar `d` (`Q = d*G`): check the version byte; parse `R` (it must be a valid compressed point: strictly validated, on the curve, a
+coordinate below the field prime, prefix 02 or 03); check that `d` is in range and that the key id of `d*G` is the one in the payload (the usual way to be wrong is a wrong
+password, and that is said before anything is tried); `S = d*R`; derive the same `okm`; compare the tag in constant time; only then compute `P`. `S` cannot be the
+point at infinity (`R` is a valid point and `d` is in `[1, n - 1]`).
+
+### 12.2 Why this construction
+
+* **A public key is enough to encrypt.** The machine that runs the search never holds anything that opens the result. The ephemeral key `r` is used once and wiped.
+* **ECIES rather than a hybrid with a new primitive.** The curve arithmetic, SHA-256 and Base58Check were already in pzcore and tested; HMAC, HKDF, PBKDF2 and scrypt were
+  added, each checked against the vectors of its RFC (4231, 5869, 7914) and against an independent implementation (`lib/pzcore/tests/gen_seal_vectors.py`, Python's
+  `hashlib`). No dependency was added; the program stays libc only.
+* **The payload is 32 bytes, so a stream cipher is exact.** `ct = P xor keystream` needs no padding and no mode. The 16-byte tag authenticates the ciphertext, `R`
+  and the associated data, so a modified line is refused and a line cannot be moved to another address or puzzle unnoticed.
+* **`Q` and `R` are in the `info` of the HKDF**, so the keys are bound to both public keys and to the context (the usual precaution against key-substitution and
+  reflection arguments); `x(S)` alone would be the same for `R` and `-R`.
+* **A tag of 16 bytes** is enough here: it gives 2^-128 against a forgery, and every attempt costs an elliptic-curve multiplication.
+* **Not constant-time.** The scalar multiplications of pzcore are not (its README says so). `r` is secret only for the milliseconds of an encryption on a machine that
+  is not trusted in any case; opening is done at home. This is stated in `seal.h`.
+
+### 12.3 The format
+
+A payload is 86 bytes:
+
+| Bytes | Field |
+|-------|-------|
+| 0 | version, `0x01` (any other value is refused with its own message) |
+| 1-4 | key id: the first four bytes of the HASH160 of the compressed `Q` |
+| 5-37 | `R`, compressed |
+| 38-69 | `ct` |
+| 70-85 | `tag` |
+
+The text form is the single line `PZENC1:` followed by the Base58Check of the payload (122 characters; the line is 129 characters long, the one place where the program
+prints a line longer than 128 columns, because it must stay one token). The four check bytes of Base58Check catch a cut or mistyped copy before any password is asked
+(`decrypt-key` says so with its own message). Version and format are independent: `PZENC1` names the family and the Base58Check wrapping, the version byte the construction.
+
+The associated data is the address of the campaign as it was given (the string, for example `1BgGZ...` or `bc1q...`), a zero byte, and the number of the puzzle in decimal
+(`0` when the campaign has none). `decrypt-key` reads them from the lines `address:` and `puzzle:` of `FOUND.txt` or from `--address` and `--puzzle`. After opening it
+checks that the HASH160 of the compressed public key of the recovered private key equals the HASH160 that the address decodes to (the same check for a P2PKH and a P2WPKH
+address), and says so; a mismatch shows nothing.
+
+### 12.4 The key of a password
+
+`encrypt-keygen`, `hunt --encrypt-password` and `decrypt-key` make the key pair from a password in one way: `d = (scrypt(password, salt = "pzsolve-found-v1", N = 2^18,
+r = 8, p = 1, dkLen = 32) read as a big-endian integer) mod (n - 1), plus 1`, and `Q = d*G`. The reduction modulo `n - 1` and the `+1` give a uniform scalar in `[1, n - 1]`
+(`n - 1` is within 2^-128 of 2^256). scrypt needs 256 MiB, which the caller allocates (pzcore allocates nothing), and takes about a second: a cost for whoever guesses
+passwords against `Q`, small for the owner who types it once. The salt is the same for everyone: there is no label and the security rests on the password alone (USAGE.md
+11.4 has the numbers). A pinned test derives a key from a fixed password with the real parameters and compares its public key with the one computed by Python's
+`hashlib.scrypt` (`lib/pzcore/tests/t_seal.c`, and once more in `pzsolve selftest`).
+
+### 12.5 What the program does around it
+
+The key is encrypted first, then `FOUND.txt` is written with the line, the plain data of the campaign and no private key and **no public key** of the key found (for a
+puzzle known only by its address, the public key and the range would let anyone solve the key by a kangaroo in about 2^35 steps for puzzle 71); then the copy of the key in
+the run is wiped (`pz_secure_zero`) and the box is printed from the line. If the encryption fails (the system gives no random numbers; this is tested at the start, so it
+is not expected) the key is written nowhere and the file and the box say so: the program never falls back to the plain form. The plain key still exists in the stack of
+the search code that found it until it is overwritten, and in memory during the encryption: that window is not removable, and USAGE.md 11.5 says so.
+
+The public key to encrypt to is stored in `campaign.conf` as `encrypt_pubkey=HEX`, a line that is added only when it is used: a campaign without it has a file that older versions
+and this one read as before; an older version that resumes a campaign that has the line ignores it and would write the key in plain, so a campaign that encrypts must not
+be resumed with an older program.

@@ -14,6 +14,7 @@ vec() { python3 tools/ref.py "$1"; }
 field() { vec "$1" | awk -v k="$2" '$1==k{print $2}'; }
 
 K=$(python3 -c "import random; random.seed(5); print(hex(random.randrange(2**25, 2**26)))"); A=$(field "$K" addr)
+EPUB=$(build/pzsolve encrypt-keygen --random 2>/dev/null | awk '/^public key/{print $3}')   # a public key to encrypt to, for the runs of the sanitizers and Valgrind
 KK=$(python3 -c "import random; random.seed(15); print(hex(random.randrange(2**43, 2**44)))"); KP=$(field "$KK" pub); KA=$(field "$KK" addr)
 # outhas PATTERN COMMAND...: the whole output is captured first (grep -q exiting early would kill the command with SIGPIPE, and pipefail turns that into a failure)
 outhas() { local pat=$1 o; shift; o=$("$@" 2>&1); grep -q -- "$pat" <<<"$o"; }
@@ -251,7 +252,7 @@ step "AddressSanitizer + UndefinedBehaviorSanitizer"
 run make asan -j"$(nproc)" >/dev/null
 export ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
 run build/asan/pzsolve selftest
-ASAN_TESTS="t_core t_env t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_lz t_kernels"
+ASAN_TESTS="t_core t_env t_encrypt t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_lz t_kernels"
 run make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer" $(for t in $ASAN_TESTS; do echo build/asan/$t; done) >/dev/null
 for t in $ASAN_TESTS; do run env "$IFMA_ENV" build/asan/$t >/dev/null && echo "  OK $t (ASan/UBSan)"; done
 # the library on its own (its tests and examples link nothing but libpzcore.a)
@@ -259,6 +260,8 @@ run env "$IFMA_ENV" make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined,
   && echo "  OK pzcore tests and examples (ASan/UBSan)" || tail -20 "$T/asan-lib.log"
 rm -rf "$T/a1"; run build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a1" --ui log -q --no-gpu
 check_found "$T/a1/a" "$K" && echo "  OK linear (ASan)" || { echo "  FAIL linear (ASan)"; fail=$((fail+1)); }
+rm -rf "$T/a9"; run build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a9" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" --on-found "true"
+grep -q '^PZENC1:' "$T/a9/a/FOUND.txt" && ! grep -q -i "${K#0x}" "$T/a9/a/FOUND.txt" && echo "  OK encrypted key (ASan)" || { echo "  FAIL encrypted key (ASan)"; fail=$((fail+1)); }
 rm -rf "$T/a2"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c a -d "$T/a2" --ui log -q --no-gpu
 check_found "$T/a2/a" "$KK" && echo "  OK kangaroo (ASan)" || { echo "  FAIL kangaroo (ASan)"; fail=$((fail+1)); }
 rm -rf "$T/a5"; run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs -c a -d "$T/a5" --ui log -q --no-gpu
@@ -281,6 +284,8 @@ run make tsan -j"$(nproc)" >/dev/null
 export TSAN_OPTIONS=halt_on_error=1
 rm -rf "$T/t1"; run build/tsan/pzsolve hunt -p 26 -a "$A" -c t -d "$T/t1" --ui log -q --no-gpu -t 4
 check_found "$T/t1/t" "$K" && echo "  OK linear (TSan)" || { echo "  FAIL linear (TSan)"; fail=$((fail+1)); }
+rm -rf "$T/t5"; run build/tsan/pzsolve hunt -p 26 -a "$A" -c t -d "$T/t5" --ui log -q --no-gpu -t 4 --encrypt-pubkey "$EPUB" --on-found "true"
+grep -q '^PZENC1:' "$T/t5/t/FOUND.txt" && echo "  OK encrypted key and --on-found (TSan)" || { echo "  FAIL encrypted key (TSan)"; fail=$((fail+1)); }
 rm -rf "$T/t2"; run build/tsan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c t -d "$T/t2" --ui log -q --no-gpu
 check_found "$T/t2/t" "$KK" && echo "  OK kangaroo (TSan)" || { echo "  FAIL kangaroo (TSan)"; fail=$((fail+1)); }
 rm -rf "$T/t4"; run build/tsan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m bsgs -c t -d "$T/t4" --ui log -q --no-gpu -t 4
@@ -302,9 +307,12 @@ if command -v valgrind >/dev/null; then
   check_found "$T/v2/v" "$K3" && echo "  OK kangaroo (Valgrind)" || { echo "  FAIL kangaroo (Valgrind)"; fail=$((fail+1)); }
   rm -rf "$T/v3"; run $VG build/pzsolve hunt -p 31 -a "$A3" -k "$P3" -m bsgs -c v -d "$T/v3" -t 2 --no-gpu --ui log -q
   check_found "$T/v3/v" "$K3" && echo "  OK bsgs (Valgrind)" || { echo "  FAIL bsgs (Valgrind)"; fail=$((fail+1)); }
-  for t in t_u256 t_address t_hash t_batch; do
+  rm -rf "$T/v4"; run $VG build/pzsolve hunt -p 22 -a "$A2" -c v -d "$T/v4" --isa baseline -t 2 --no-gpu --ui log -q --encrypt-pubkey "$EPUB" --on-found "true"
+  grep -q '^PZENC1:' "$T/v4/v/FOUND.txt" && echo "  OK encrypted key (Valgrind)" || { echo "  FAIL encrypted key (Valgrind)"; fail=$((fail+1)); }
+  for t in t_u256 t_address t_hash t_batch t_kdf; do
     run $VG build/pzcore/$t >/dev/null && echo "  OK pzcore $t (Valgrind)"
   done
+  PZ_TEST_SEAL_FAST=1 run $VG build/pzcore/t_seal >/dev/null && echo "  OK pzcore t_seal (Valgrind, the key of a password at the real cost left to the other runs)"
 else
   echo "  valgrind not installed: skipped"
 fi

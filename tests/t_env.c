@@ -14,7 +14,7 @@ static int fails;
 static const char *const ALL[] = {
     "PZ_GPU_API", "PZ_NO_CUDA", "PZ_NO_OPENCL", "PZ_OPENCL_ALL", "PZ_GPU_HALF", "PZ_GPU_NK", "PZ_GPU_TUNE", "PZ_NO_PROFILE", "PZ_NO_LARGE_PAGES",
     "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_VERBOSE", "PZ_KANG_MIX", "PZ_KANG_ROUND",
-    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_EXPECT_SHANI", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP"};
+    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_EXPECT_SHANI", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N"};
 
 static void setv(const char *name, const char *value)
 {
@@ -78,7 +78,7 @@ static void t_defaults(void)
     CHECK(g_env.bench_scale == 1.0);
     CHECK(!g_env.xdg_cache_home[0] && !g_env.home[0] && !g_env.local_app_data[0] && !g_env.tmpdir[0] && !g_env.term_dumb && !g_env.no_color);
     CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma && !g_env.expect_shani);
-    CHECK(g_env.test_kthread == 0 && g_env.test_jump == 0 && g_env.test_dp_cap == -1);
+    CHECK(g_env.test_kthread == 0 && g_env.test_jump == 0 && g_env.test_dp_cap == -1 && g_env.test_seal_log2n == 0);
 }
 
 /* The two-state variables: on with any value except "" and "0"; each one alone, and nothing else changes. */
@@ -164,6 +164,13 @@ static void t_numbers(void)
     static const char *const bad_cap[] = {"-1", "x", "64k", "4611686018427387905", "18446744073709551616"};
     for (size_t k = 0; k < sizeof bad_cap / sizeof *bad_cap; k++)
         CHECK(try_value("PZ_TEST_DP_CAP", bad_cap[k], last, sizeof last) == 1 && g_env.test_dp_cap == -1);
+    /* PZ_TEST_SEAL_LOG2N: the cost of the key of a password, 2^1 to 2^17 (the real cost, 2^18, is not reachable through it) */
+    CHECK(try_value("PZ_TEST_SEAL_LOG2N", "4", last, sizeof last) == 0 && g_env.test_seal_log2n == 4);
+    CHECK(try_value("PZ_TEST_SEAL_LOG2N", "17", last, sizeof last) == 0 && g_env.test_seal_log2n == 17);
+    CHECK(try_value("PZ_TEST_SEAL_LOG2N", "", last, sizeof last) == 0 && g_env.test_seal_log2n == 0);
+    static const char *const bad_sl[] = {"0", "18", "-4", "x", "4k", "99999999999999999999"};
+    for (size_t k = 0; k < sizeof bad_sl / sizeof *bad_sl; k++)
+        CHECK(try_value("PZ_TEST_SEAL_LOG2N", bad_sl[k], last, sizeof last) == 1 && g_env.test_seal_log2n == 0);
     /* PZ_BENCH_SCALE: a number from 0.01 to 100 */
     CHECK(try_value("PZ_BENCH_SCALE", "0.2", last, sizeof last) == 0 && g_env.bench_scale == 0.2);
     CHECK(try_value("PZ_BENCH_SCALE", "100", last, sizeof last) == 0 && g_env.bench_scale == 100);

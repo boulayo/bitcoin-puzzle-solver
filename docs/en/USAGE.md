@@ -11,7 +11,9 @@
 | `pzsolve info (-c NAME \| -p N)` | prints the report of a campaign (its `State` line is the one `list` shows: `FOUND` if `FOUND.txt` exists, `RUNNING` only while a process holds the campaign lock, so a campaign that was killed is `STOPPED`) |
 | `pzsolve where (-c NAME \| -p N) --key HEX` | tells at which point of the visiting order of a linear or BSGS campaign a key comes, and whether it was already scanned |
 | `pzsolve split V1 V2 …` | divides the `--part` shares among several computers in proportion to their speeds (for example `split 800M 120M`; see section 8.2) |
-| `pzsolve merge (-c NAME \| -p N) -f FILE_OR_FOLDER … [-d DIR] [--mem GiB]` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
+| `pzsolve merge (-c NAME \| -p N) -f FILE_OR_FOLDER … [-d DIR] [--mem GiB] [--encrypt-pubkey HEX \| --encrypt-password] [--on-found COMMAND]` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
+| `pzsolve encrypt-keygen [--random]` | makes the public key (from a password you type, or random) to which a campaign encrypts the key it finds: for rented computers (section 11) |
+| `pzsolve decrypt-key [--raw-key] [--address A] [--puzzle N] [FILE \| -]` | decrypts the key that a campaign found and encrypted (section 11) |
 | `pzsolve doctor [-d DIR] [--full]` | checks program, system, CPU, GPU, the saved tuning and profile, campaigns, disk, clock and `PZ_*` variables, and says what is wrong; paste its output when asking for help |
 | `pzsolve devices`   | detected CPU, instruction sets, RAM and GPUs (CUDA and OpenCL) |
 | `pzsolve selftest`  | built-in correctness checks (primitives, database, SIMD engines, kangaroo, BSGS, GPU) |
@@ -54,6 +56,8 @@ stops at `n − 1` (the group order), because keys beyond it do not exist. Prove
 * The default `--chunk-bits` makes the blocks as large as the range allows while each share keeps 16 of them, at most 2^36 keys (a range of
   2^36 keys gets blocks of 2^32). A smaller value slows down the CPU and above all the GPUs, since a launch cannot cross a block: with blocks
   of 2^24 keys a GPU loses about a fifth of its speed.
+
+* `--encrypt-pubkey`, `--encrypt-password` and `--on-found` encrypt the key that is found and run a command when it is: section 11.
 
 A value that cannot be used stops the command with a message such as `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`.
@@ -107,7 +111,7 @@ bytes. Tables of other versions: [`RELEASING.md`](https://github.com/boulayo/bit
 
 ```
 campaigns/NAME/
-  campaign.conf   immutable parameters (range, target, mode, seed, chunk-bits, baby steps)
+  campaign.conf   immutable parameters (range, target, mode, seed, chunk-bits, baby steps, the public key to encrypt the found key to)
   lock            lock (flock) that prevents two processes on the same campaign
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
@@ -116,13 +120,13 @@ campaigns/NAME/
   status.json     state for external programs (includes time left and probabilities), rewritten every 5 s
   stats.csv       time series (one row per minute)
   log.txt         timestamped events (also the error that ended a run)
-  FOUND.txt       only when the key is found (permissions 0600)
+  FOUND.txt       only when the key is found (permissions 0600); with --encrypt-pubkey it holds the encrypted line, not the key (section 11)
 ```
 
 * **Stopping**: Ctrl-C, `kill` or closing the terminal (SIGHUP; under `nohup` it is ignored). The state is saved. A second
   Ctrl-C after half a second exits at once (and loses at most the last minute of work).
 * **Resuming**: the same command (`hunt -p N`, or `hunt -c NAME`). The seed and the parameters that define the search
-  cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits` or `--bsgs-entries` different from those of the
+  cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits`, `--bsgs-entries` or `--encrypt-pubkey` different from those of the
   existing campaign, the program **refuses** with an error (it does not silently ignore them); you can however change threads, GPUs,
   ISA, memory and the look of the panel. **`pzsolve list`** shows all the campaigns and their state.
 * **Campaign name** (without `-c`): `pN` for a whole puzzle; for a sub-range (`-r`) or a custom target
@@ -531,3 +535,143 @@ shows the help and waits for Enter.
   for the folder.
 * **Building it yourself**: from Linux with MinGW-w64, `make windows` (result in `build/win/pzsolve.exe`); `make wintest` runs the
   tests of the exe under Wine.
+
+## 11. Encrypting the key (rented computers)
+
+If you run pzsolve on a computer that someone else controls, the key must not be readable by whoever uses that computer after you, or reads its disks, its
+backups, its logs, the screen or the scrollback. With `--encrypt-pubkey` (or `--encrypt-password`) the program **encrypts the key to a public key at the
+moment it finds it**, and only the ciphertext is shown and saved: a single line `PZENC1:...` that is safe to copy, mail or post anywhere. At home you decrypt
+it with the secret that matches the public key. Read the threat model below before you rely on it: it protects the key from what is left behind, not from
+someone who controls the machine while it runs.
+
+### 11.1 The workflow
+
+1. **At home, on a computer you trust**: make the public key.
+
+   ```
+   pzsolve encrypt-keygen
+   ```
+
+   It asks for a password twice (nothing is shown while you type), makes the secret key from it and prints the **public key** (66 hexadecimal digits) and its
+   key id (8 digits). Nothing is written to disk. Write the password down on paper, in a place that is not the rented computer. With
+   `pzsolve encrypt-keygen --random` there is no password: it prints a random private key (64 digits) as well, which you must store like a secret
+   (a password manager, a printed sheet): `decrypt-key --raw-key` reads it.
+
+2. **On the rented computer**: start the campaign with the public key, and with a command that sends you the result.
+
+   ```
+   pzsolve hunt -p 71 --encrypt-pubkey 03a1...e9 --on-found 'printf "puzzle %s address %s\n%s\n" "$PZ_FOUND_PUZZLE" "$PZ_FOUND_ADDRESS" "$PZ_FOUND_SEALED" | mail -s "pzsolve found a key" me@example.com'
+
+   ```
+
+   The public key is stored in `campaign.conf`, so resuming the campaign (`hunt -p 71`) encrypts to the same key without repeating the option; a different key is
+   refused (the campaign cannot be switched silently). A campaign started without a key can be given one when it is resumed: the key was not found yet.
+   `merge` takes the same options. The program turns core dumps off (Linux, macOS), checks that it can encrypt, and says at the start of the session, in the
+   log, `the key will be encrypted to the public key with id XXXXXXXX`: compare that id with the one `encrypt-keygen` printed.
+
+3. **When the key is found**, the box on the screen, `FOUND.txt` and `log.txt` carry the line `PZENC1:...` and the data that is public anyway (address,
+   puzzle, campaign, seed, version, the key id), and **neither the private key nor its public key** (for a puzzle known by its address only, the public key and the
+   range would let anyone find the key with a kangaroo in minutes). `--on-found` has run your command once, without waiting for it to delay the search: see 11.3.
+
+4. **Bring the result home**: copy `FOUND.txt`, or the mail you got.
+
+5. **At home**:
+
+   ```
+   pzsolve decrypt-key FOUND.txt
+   ```
+
+   It shows the key id that the line was encrypted to, asks for the password (nothing is shown while you type), checks that it is the right one **before**
+   it tries anything ("encrypted to the public key with id A, but this password gives id B: wrong password"), decrypts, and checks that the key belongs to
+   the address. It prints the key in hexadecimal and as a WIF, the address and the puzzle. The exit status is 0 only when the key was recovered and
+   checked; 1 when the secret does not open the line; 2 when the input is not usable (no line, a damaged copy, no address). A line cut or mistyped when it was
+   copied is recognized from the four check characters inside it, before any password is asked. If you only have the line (the mail), the address and the puzzle
+   are part of what was encrypted: give them with `--address ADDRESS --puzzle N`; with `FOUND.txt` they are read from its lines `address:` and `puzzle:`. A text
+   pasted on the standard input (end it with Ctrl-D) works too, and then the password is asked on the terminal.
+
+   The line stays valid for ever: keep it, with the password, until the funds are moved. **If the password or the private key is lost, the key is lost**: there is no
+   other way to open it.
+
+### 11.2 Test it before every rental
+
+A mistake in the public key, the command line or the mail command is found only when the key is found, and then it is too late. On a **solved** puzzle the search
+ends in seconds, so the whole path can be rehearsed. Do it at home and again on the rented computer, with the same binary and the same command line apart from
+the puzzle:
+
+```
+pzsolve hunt -p 30 --encrypt-pubkey PUBKEY -c rehearsal --on-found "YOUR MAIL OR UPLOAD COMMAND"
+pzsolve decrypt-key campaigns/rehearsal/FOUND.txt
+pzsolve puzzle 30                       # its key is public: it must be the one decrypt-key printed
+```
+
+Check that: the box and `FOUND.txt` show a `PZENC1:` line and no key (search them for the key shown by `pzsolve puzzle 30`); your command ran and what it sent
+reached you (`log.txt` says how it ended); `decrypt-key` gives the key of the puzzle and `check: OK`. Then delete the rehearsal campaign and start the real one.
+
+### 11.3 The options
+
+* `--encrypt-pubkey HEX`: the public key, 66 digits (compressed) or 130 (uncompressed). It is checked at the start; an invalid one stops the command before
+  anything is created: the program **never** falls back to showing the key. It applies to every mode (linear, kangaroo, BSGS) and to `merge`. A private key given by
+  mistake is not a point and is refused.
+* `--encrypt-password`: instead of the public key, type the password on this computer (hidden, twice) and the public key is made from it, exactly as
+  `encrypt-keygen` does; the program prints the key id and the public key so that you can compare them with the output of `encrypt-keygen` run on a computer you
+  trust. Only the public key is stored. A resumed campaign that already has its key does not ask again. **Use this only on a machine you trust while you
+  type:** whatever sees the keyboard, the terminal or the memory of the program at that moment can capture the password and then open the encrypted key. It
+  protects what happens after the first step (the machine left alone, its files, its backups, its disk when it is returned), not a hostile machine from the
+  start. The safer way is `encrypt-keygen` at home and `--encrypt-pubkey`. The password buffers are locked in memory when the system allows it and wiped as soon
+  as the public key is made. Without a terminal (a script) the password is one line of the standard input. Giving both options is an error.
+* `--on-found "COMMAND"`: after `FOUND.txt` is written, the command is run once with `/bin/sh -c` (on Windows `cmd.exe /c`), in a thread of its own: it does not
+  delay the stop of the search or the box, and the program ends when the command has (at most 120 seconds, then it is stopped). Its exit status, or the timeout, is
+  written to the log. Its environment has `PZ_FOUND_SEALED` (the `PZENC1:` line, empty when the campaign does not encrypt), `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`
+  (0 for none), `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` (the path of `FOUND.txt`); **never the key**. Without encryption the command can read `FOUND.txt`, which
+  holds the key in plain. The command is not stored in `campaign.conf` and never read from a file: give it again when you resume. The line is safe to send
+  anywhere, so on a rented computer this is the way to be sure to receive the result, even if the computer is reclaimed at the moment the key is found. Do not
+  put a secret (a password, a token) in the command: the command line of a process can be read by other users of the computer.
+* The password is never accepted as an argument (it would reach the shell history and the list of processes): it is read with the echo off, from the terminal
+  (the terminal is put back on every way out, Ctrl-C included); when the standard input is not a terminal it is one line of it.
+
+### 11.4 The password
+
+Everything rests on the password: the construction is public, and anyone who sees the public key (the owner of the rented computer sees it on the command line
+and in `campaign.conf`) can test passwords against it **offline**, with no limit, on their own computers, for as long as they like. Each test costs them
+about a second and 256 MiB of memory on an ordinary CPU (scrypt with N = 2^18, r = 8, p = 1), which slows them down, but not enough to save a weak password.
+The program warns when the password has fewer than 12 characters.
+
+| Password | Bits of entropy | Time to try them all at a million tests per second |
+|----------|-----------------|-----------------------------------------------------|
+| a word, a name, a date | under 30 | seconds to minutes |
+| 8 characters, chosen by you | 30 to 40 | minutes to days |
+| 8 random characters (letters, digits, symbols) | 52 | 140 years |
+| 12 random characters | 79 | 2 times 10^10 years |
+| **7 random words** (Diceware, list of 7776 words) | 90 | 4 times 10^13 years |
+| **20 random characters** | 130 | much more than the age of the universe |
+
+"Random" means drawn by dice or by a program, not thought up. A million tests per second is more than a large cluster achieves against this cost; the table
+is a scale, not a promise. Use 7 or more random words or 20 or more random characters. The password is used as typed (the bytes of your terminal, UTF-8 for
+accented letters): type it the same way each time, and test the decryption at home with the real password right after `encrypt-keygen`.
+
+### 11.5 Threat model: what this protects and what it does not
+
+**Protected**: anyone who, after your session, reads the files of the campaign, the screen or its scrollback, the log, a backup, a shared or network disk, an image
+of the disk, or a disk that is returned to the owner of the machine or sold. Also the people who read `FOUND.txt` or `log.txt` while the campaign runs.
+On Linux and macOS the program turns core dumps off (`setrlimit`) and, on Linux, makes itself non-dumpable (`PR_SET_DUMPABLE`), so that a crash does not write
+the memory to a file and another process of the same user cannot attach to it.
+
+**Not protected**:
+
+* **The administrator of the machine (root), or the provider of a virtual machine, while the program runs.** The plain key exists in the memory of the program for the
+  moment between the discovery and the end of the encryption (microseconds to milliseconds; the copy kept by the run is wiped at once, but the search code
+  that found it holds copies of its own, on its stack, until they are overwritten), and whoever can read the memory of the process, or take a snapshot of a virtual
+  machine, can read the key then. The same person can read the password you type for `--encrypt-password`.
+* **A replaced binary.** Whoever controls the machine can replace `pzsolve` with a program that sends them the key, or change the public key on the command
+  line to their own: then the line you receive opens for them, not for you (`decrypt-key` tells you the key id differs, but the key is already theirs). Upload the
+  binary yourself, check its `SHA256SUMS` against the published one before you start it, compare the key id in the first lines of the log with the one of
+  `encrypt-keygen`, and understand that you cannot prove that what runs is what you uploaded. Rent from someone you can hold to account.
+* **Windows**: the program cannot forbid a crash dump from user code, so the memory of the process may end up in a dump if the system is set to write
+  dumps (Windows Error Reporting); the message at the start says so. The password and scrypt buffers are locked in memory (`VirtualLock`) when the system allows it.
+* **Swap**: the memory of the program can be written to a swap file or a hibernation file by the system. The password buffers and the key-derivation memory are locked
+  in RAM when the limits of the system allow it (usually not for the 256 MiB of scrypt without privileges); the plain key is too short-lived to be likely to reach
+  swap, but nothing here guarantees it. Use encrypted swap, or none.
+* **A weak password**, as in 11.4; a keylogger or a modified terminal, which see the password as you type.
+* **The metadata**: the address, the puzzle, the time and the campaign name stay in the clear (they are public by nature).
+
+If you do not trust the machine at all, do not run the search on it with a key that matters; if you can, prefer a puzzle where the cost of a leak is acceptable.

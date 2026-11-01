@@ -49,6 +49,10 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
   stessa campagna. `--keep-awake` impedisce la sospensione su Windows e macOS.
 * **Taratura automatica.** `--retune` misura di nuovo la macchina, `--no-tune` la salta; `bench --together`, `bench --variants` (ogni
   variante dei kernel GPU, misurata a turni) e `doctor`: vedi [USO](USO.md) 7.4-7.6.
+* **Computer in affitto.** `--encrypt-pubkey` (o `--encrypt-password`) cifra la chiave a una chiave pubblica nel momento in cui viene trovata: lo schermo, `FOUND.txt` e il log
+  contengono solo una riga `PZENC1:...`, che si può spedire ovunque (`--on-found` esegue un tuo comando con essa), e `pzsolve decrypt-key` la apre a casa con la password
+  data a `pzsolve encrypt-keygen`. Protegge ciò che resta dopo di te, non una macchina il cui amministratore legge la memoria mentre il programma gira:
+  [USO](USO.md) sezione 11.
 * **Pannello e file.** Un pannello aggiornato ogni secondo mostra velocità per dispositivo, tempo residuo e probabilità di successo. La
   cartella della campagna contiene `report.txt`, `status.json`, `stats.csv`, `log.txt` e, a chiave trovata, `FOUND.txt` (permessi 0600).
 
@@ -64,6 +68,7 @@ serve installare nulla; per le GPU NVIDIA basta il normale driver grafico (versi
 ./pzsolve hunt -p 71       # avvia; Ctrl-C ferma, lo stesso comando riprende
 ./pzsolve list             # avanzamento di tutte le campagne
 ./pzsolve hunt -p 40       # prova su un puzzle risolto: trova la chiave in pochi secondi
+./pzsolve encrypt-keygen   # computer in affitto: la chiave pubblica per hunt --encrypt-pubkey; decrypt-key apre il risultato
 ```
 
 Su Windows usa `.\pzsolve.exe` in PowerShell. Le campagne stanno in una cartella `campaigns` dove lanci il comando. Il primo avvio con
