@@ -5,6 +5,13 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ## [Unreleased]
 
+### Added
+- Legal notice: `pzsolve version` also prints the copyright, the license and the warranty disclaimer, and the main help ends with them;
+  the new `NOTICE` file adds two terms under section 7 of the AGPL, that whoever conveys pzsolve, modified or not, keeps the notices
+  (the copyright line, the license, `NOTICE`, the output of `version`) and marks a modified version as different from the original
+  without presenting it as the original. The README (English and Italian) states the terms; the pzcore folder has its own copy of
+  `NOTICE` and `LICENSE`.
+
 ### Changed
 - pzcore carries the copyright and the license of the project in its own files: every source, header and test has the
   `SPDX-FileCopyrightText: 2026 Leonardo Boulay` line next to its `SPDX-License-Identifier`, the generated test files and the generator

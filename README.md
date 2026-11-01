@@ -176,6 +176,10 @@ pzsolve is free software, licensed under the **GNU Affero General Public License
 [LICENSE](LICENSE)). You may use, study, modify and share it. If you distribute a modified version, or let users interact with one over
 a network, you must offer them the complete corresponding source code under the same license.
 
+**Additional terms (AGPL section 7).** In addition to the AGPL, whoever distributes pzsolve, modified or not, must keep the copyright
+notice, the license and the [NOTICE](NOTICE) file, keep the notice that `pzsolve version` prints, mark a modified version as different from
+the original and not present it as the original. The terms are in [NOTICE](NOTICE).
+
 **Commercial license.** If you want to use pzsolve in a proprietary product or service without the obligations of the AGPL, a paid
 commercial license is available. Open an issue titled "Commercial license" (without confidential details) or write to leonardo@boulayo.it. Contributions are welcome under [CONTRIBUTING.md](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/CONTRIBUTING.md).
 

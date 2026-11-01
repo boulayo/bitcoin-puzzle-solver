@@ -1,0 +1,27 @@
+pzsolve
+Copyright (C) 2026 Leonardo Boulay
+
+pzsolve is free software, licensed under the GNU Affero General Public License, version 3 or later (see LICENSE), and also offered
+under a paid commercial license (see the README).
+
+Additional terms under section 7 of the GNU AGPL version 3
+----------------------------------------------------------
+
+As the copyright holder, and as section 7 of the license allows, I add these terms to the AGPL for every work based on pzsolve that
+you convey, in source or in binary form, modified or not:
+
+1. Preservation of notices (section 7(b)). You must keep the copyright notice "Copyright (C) 2026 Leonardo Boulay", the reference to the
+   license and this NOTICE file in the source files, in the README or the documentation that goes with the work, and in the output of the
+   program itself: the command `version` (or the equivalent that your work offers) must still print the copyright notice, the license and
+   the warranty disclaimer that `pzsolve version` prints. You may add your own copyright notice for your modifications next to mine.
+
+2. No misrepresentation of the origin (section 7(c)). A modified version must be marked in reasonable ways as different from the
+   original, as section 5(a) already asks for the source (a prominent notice of the change and its date), and in the output of
+   `version` too, and it must not be presented as the original pzsolve or as made or endorsed by me. You may state truthfully that it
+   is based on pzsolve by Leonardo Boulay.
+
+Nothing here limits the other rights that the AGPL gives you: to use, study, modify and share the program, and to receive and give the
+corresponding source code. If these terms and the AGPL conflict, the AGPL's own text prevails for what it covers, and section 7 allows
+you to remove any further restriction that is not one of those listed in it.
+
+The commercial license is a separate agreement with me and replaces the terms above only for the parties to it.

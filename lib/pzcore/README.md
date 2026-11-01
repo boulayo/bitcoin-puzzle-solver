@@ -7,7 +7,8 @@ vector types and, on x86-64, inline assembly), so it builds with MinGW-w64 but n
 
 **License and copyright:** part of pzsolve, so the same terms and the same holder: Copyright (C) 2026 Leonardo Boulay,
 `AGPL-3.0-or-later` (the text is in `LICENSE`, next to this file, so that the folder can be taken on its own), with the same paid
-commercial license (see the main README). Every file carries the `SPDX-License-Identifier` and `SPDX-FileCopyrightText` lines.
+commercial license (see the main README), and the additional terms of the `NOTICE` file next to this one (preservation of the notices, no
+misrepresentation of the origin). Every file carries the `SPDX-License-Identifier` and `SPDX-FileCopyrightText` lines.
 
 ## Interface
 

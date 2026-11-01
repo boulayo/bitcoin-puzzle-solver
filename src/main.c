@@ -31,6 +31,16 @@
 #define PZ_ISA_HELP "auto | baseline | avx2 | shani | avx512 | avx2v | avx512v | avx512i\n                          [auto: chosen with a micro-benchmark; 'v' = curve arithmetic in\n                          parallel on the SIMD lanes; 'i' = like avx512v but with AVX-512 IFMA;\n                          'shani' = avx2 with the SHA-256 instructions of the CPU (AMD Zen 2 and later, Intel Ice Lake\n                          and later)]. On arm64: auto, baseline, neon, neon2 (the hardware SHA-256 of the CPU, 4 or 8 keys at\n                          a time)"
 #endif
 
+/* The legal notice that `pzsolve version` prints and that a version derived from this one has to keep (NOTICE, additional terms under
+ * section 7 of the AGPL). */
+static void print_legal_notice(FILE *f)
+{
+    fputs("Copyright (C) 2026 Leonardo Boulay\n"
+          "License: GNU AGPL version 3 or later, with the additional terms of the NOTICE file (section 7 of the AGPL).\n"
+          "This is free software: you may use, study, change and share it under those terms. There is NO WARRANTY.\n"
+          "Source code and NOTICE: https://github.com/boulayo/bitcoin-puzzle-solver\n", f);
+}
+
 static void help_print(FILE *f, const char *text) { pz_fputs_wrap(f, text, PZ_LINE_MAX, -1); }
 
 static const char *main_text(void)
@@ -64,7 +74,9 @@ static const char *main_text(void)
 "  pzsolve hunt -p 71                start or resume puzzle 71\n"
 "  pzsolve hunt -p 71 -r 400000000000000000:5fffffffffffffffff   a part only\n"
 "  pzsolve hunt -r 8000:ffff -a ADDRESS -c mine   a custom range and target\n"
-"  pzsolve info -c p71\n", PZ_VERSION);
+"  pzsolve info -c p71\n"
+"\n"
+"Copyright (C) 2026 Leonardo Boulay. Free software under the GNU AGPL version 3 or later, with no warranty: 'pzsolve version'.\n", PZ_VERSION);
     return text;
 }
 
@@ -217,7 +229,7 @@ static const struct { const char *cmd, *text; } short_help[] = {
               "  TRIALS                  number of keys to find\n  THREADS                 CPU threads [1]\n"
               "  R, DP                   number of jumps and bits of the distinguished points (then the kangaroos without\n"
               "                          distinguished points are not restarted)\n"},
-    {"version", "pzsolve version - print the version\n\nUSAGE\n  pzsolve version\n"},
+    {"version", "pzsolve version - print the version, the copyright and the license\n\nUSAGE\n  pzsolve version\n"},
 };
 
 /* The help text of a command (NULL: the general one); NULL when there is no such command. */
@@ -1555,6 +1567,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "kstat")) return kangaroo_stats(argc, argv);
     if (!strcmp(cmd, "version") || !strcmp(cmd, "--version") || !strcmp(cmd, "-V")) {
         printf("pzsolve %s (%s)\n", PZ_VERSION, PZ_BUILD_INFO);
+        print_legal_notice(stdout);
         return 0;
     }
     if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") || !strcmp(cmd, "-h")) {
