@@ -287,7 +287,8 @@ GPU[0] NVIDIA RTX A2000 Laptop GPU via CUDA
   262272 128, register cap           ...
   262400 256, register cap           ...
   262656 512, register cap           ...                                                 +2.8%  fastest
-  -> the rule (the median of the turns, the default unless another is >1% faster) picks window 512, register cap, code 262656 (...)
+  -> the rule (the median of the turns, the default unless another is >1% faster, the largest of those within 1% of the
+     fastest) picks window 512, register cap, code 262656 (...)
   launch length, window 256: the rate with launches of each length, sized as the controller would (groups per work-item)
   target      measured     size     keys/s     vs best
   0.15 s      ...

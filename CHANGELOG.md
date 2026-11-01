@@ -16,7 +16,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ### Changed
 - GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
   order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
-  5% of the fastest, and the default), each gets the median of its rates, and the default stays unless another is more than 1% faster
+  5% of the fastest, and the default), each gets the median of its rates, the default stays unless another is more than 1% faster, and
+  among the variants within 1% of the fastest the largest window (the most walkers per work-item for the kangaroo) is taken, since on the
+  RTX A2000 windows 256 and 512 with the register cap measure the same in `bench` and 512 is faster in a campaign
   (it was 3%: one short measurement each, whose noise and the luck of the fastest of many were both about that size, so that on the A2000
   the choice between window 256 and window 512 with the register cap, 2.8 % apart, depended on the run). The log line of the choice gives the
   code to force it and the margin. The tuning takes longer once (about a minute per kernel on a laptop) and then stays saved.

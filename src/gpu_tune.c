@@ -538,11 +538,21 @@ static double tune_median(const double *s, int n)
 
 /* The rule for a variant: the index of the one to keep from the medians, the default (index di) unless another is faster by more than
  * TUNE_MARGIN; when the default cannot run (0), the fastest. */
-static int tune_choose(const double *rate, int nv, int di)
+/* The size of a variant that decides a tie: the window of the linear kernel, the walkers per work-item of the kangaroo. A larger one does the
+ * same keys or steps with fewer inversions and fewer launches, so when two variants are within the margin of each other the larger wins
+ * (on the RTX A2000 window 256 and 512 with the register cap measured 875.4 and 875.1 M keys/s: the card prefers 512 in a campaign). */
+static int tune_size(const tune_ops *op, int v) { return op->kang ? KV_NK(v) : VAR_HALF(v); }
+
+static int tune_choose(const tune_ops *op, const double *rate, int nv, int di)
 {
     int fastest = 0;
     for (int i = 1; i < nv; i++) if (rate[i] > rate[fastest]) fastest = i;
-    return rate[fastest] > rate[di] * TUNE_MARGIN ? fastest : di;
+    if (!(rate[fastest] > rate[di] * TUNE_MARGIN)) return di;
+    int pick = fastest;                /* the largest of the variants within the margin of the fastest; the fastest among equal sizes */
+    for (int i = 0; i < nv; i++)
+        if (rate[i] * TUNE_MARGIN >= rate[fastest] && (tune_size(op, op->vs[i]) > tune_size(op, op->vs[pick]) ||
+                                                        (tune_size(op, op->vs[i]) == tune_size(op, op->vs[pick]) && rate[i] > rate[pick]))) pick = i;
+    return pick;
 }
 
 /* The measurements of the variants in `turns` turns (in order, in the reverse order, in order, ...), after op->warm_s seconds of the default
@@ -613,7 +623,7 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
     for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) di = i;
     tune_turns(s, op, TUNE_TURNS, true, di, smp, nsmp);
     for (int i = 0; i < op->nv; i++) rate[i] = tune_median(smp[i], nsmp[i]);
-    const int best = tune_choose(rate, op->nv, di);
+    const int best = tune_choose(op, rate, op->nv, di);
     const double margin_pct = 100.0 * (TUNE_MARGIN - 1);
     char line[1000];
     size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: %s (%s):", idx, op->head, op->unit);
@@ -1084,15 +1094,16 @@ static void bench_variants_kernel(gpu_session *s, int idx, const tune_ops *base,
     /* the rule of the tuner on these medians: only the variants it measures (not those only forced) */
     double rate[32] = {0};
     for (int i = 0; i < op.nv; i++) rate[i] = forced[i] ? 0 : tune_median(smp[i], nsmp[i]);
-    const int pick = tune_choose(rate, op.nv, di);
+    const int pick = tune_choose(&op, rate, op.nv, di);
     char nb[64], cb[24], r[32], db[64];
     if (rate[pick] <= 0) {
         bench_say("  -> no variant the tuner measures could run: the default %s%s stays", op.entry, op.name(op.def, nb, sizeof nb));
         op.set(s, op.def);
         return;
     }
-    bench_say("  -> the rule (the median of the turns, the default unless another is >%.0f%% faster) picks %s%s, code %s (%s %s%s%+.1f%%)",
-           100.0 * (TUNE_MARGIN - 1), op.entry, op.name(op.vs[pick], nb, sizeof nb), op.code_text(op.vs[pick], cb, sizeof cb),
+    bench_say("  -> the rule (the median of the turns, the default unless another is >%.0f%% faster, the largest of those within %.0f%% of the"
+              " fastest) picks %s%s, code %s (%s %s%s%+.1f%%)",
+           100.0 * (TUNE_MARGIN - 1), 100.0 * (TUNE_MARGIN - 1), op.entry, op.name(op.vs[pick], nb, sizeof nb), op.code_text(op.vs[pick], cb, sizeof cb),
            pz_fmt_si(rate[pick], r, sizeof r), op.unit, rate[di] > 0 ? ", vs the default " : ", the default cannot run ",
            rate[di] > 0 ? 100.0 * (rate[pick] / rate[di] - 1) : 0.0);
     int use = saved ? saved : op.def;
@@ -1237,6 +1248,8 @@ int gpu_tune_selftest(void)
          "window 256, code 256 (102.00 M u/s, the default: no other variant >1% faster; margin 1%)"},             /* under 1% faster: the default stays */
         {{100e6, 102e6, 104e6}, 512, "window 128 100.00 M; window 256 102.00 M; window 512 104.00 M; picking window 512",
          "window 512, code 512 (104.00 M u/s, +2.0% over window 256; margin 1%)"},                                /* 2% faster: it wins */
+        {{108e6, 102e6, 107.5e6}, 512, "window 128 108.00 M; window 256 102.00 M; window 512 107.50 M; picking window 512",
+         "window 512, code 512 (107.50 M u/s, +5.4% over window 256; margin 1%)"},                                /* 128 and 512 within 1%: the larger window */
         {{0, 0, 0}, 256, NULL, NULL},                                                                             /* nothing runs: the default, no table */
         {{100e6, 0, 0}, 128, "window 128 100.00 M; window 256 0.00; window 512 0.00; picking window 128",
          "window 128, code 128 (100.00 M u/s, the default window 256 cannot run; margin 1%)"},                    /* the default cannot run */

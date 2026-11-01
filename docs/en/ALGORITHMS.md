@@ -285,7 +285,10 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   Laptop and lost 1.3 % and 7.7 %, so they are not built. With OpenCL four variants: window 64, 128, 256 or 512. On the first
   run on a device the program warms the GPU up for 3 s, measures them all in turns (in order, in the reverse order, in order again; after
   the first turn only the variants within 5% of the fastest and the default), takes the median of each, and keeps the default (256 with
-  CUDA, 128 with OpenCL) unless another one is more than 1% faster (one measurement is off by 2 to 3 % on a laptop GPU, the fastest of eight
+  CUDA, 128 with OpenCL) unless another one is more than 1% faster, and among the variants within 1% of the fastest it takes the largest
+  window (fewer inversions and launches for the same keys: on the RTX A2000 windows 256 and 512 with the register cap measured 875.4 and
+  875.1 M keys/s, and the card prefers 512 in a campaign); the kangaroo's rule takes the most walkers per work-item among those within 1%
+  (one measurement is off by 2 to 3 % on a laptop GPU, the fastest of eight
   by as much, a median of three by about 1 %: a smaller margin would pick by luck, a larger one missed the 2.8 % between window 256 and window
   512 with the register cap on the RTX A2000). Then the **length of a launch** is tuned for the chosen variant: it is measured with launches
   of 0.15, 0.35, 0.7 and 1.4 s, sized as the controller sizes them (groups per work-item here, rounds for the kangaroo, at most the depth of
