@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* t_encrypt.c - what pzsolve adds to pzcore's seal: the public key of the options, the associated data, the line of an encrypted key, the field of
+/* t_encrypt.c - what pzsolve adds to pzcore's seal: the public key of the options, the line of an encrypted key, the field of
  * campaign.conf (and the files without it), the secret read from standard input, the command of --on-found, the hardening of the process. */
 #include "../src/encrypt.h"
 #include "../src/campaign.h"
@@ -64,19 +64,8 @@ static void test_pubkey(void)
     CHECK(!enc_parse_pubkey(bad, &q, q33, err, sizeof err));
 }
 
-static void test_aad_and_seal(void)
+static void test_seal(void)
 {
-    u8 aad[PZ_SEAL_AAD_MAX];
-    int n = enc_aad(aad, sizeof aad, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 71);
-    CHECK(n == 34 + 1 + 2 && aad[34] == 0 && !memcmp(aad + 35, "71", 2));
-    n = enc_aad(aad, sizeof aad, "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", 0);
-    CHECK(n == 42 + 1 + 1 && !memcmp(aad + 43, "0", 1));
-    char longaddr[200];
-    memset(longaddr, 'a', 199);
-    longaddr[199] = 0;
-    CHECK(enc_aad(aad, sizeof aad, longaddr, 0) == -1);
-    CHECK(enc_aad(aad, 10, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 0) == -1);
-
     pz_u256 d = {{0x1122334455667788ULL, 99, 0, 0}}, r;
     pz_ge q;
     CHECK(pz_ec_mul_g(&q, &d));
@@ -85,15 +74,12 @@ static void test_aad_and_seal(void)
     CHECK(enc_check(&q, err, sizeof err));
     u8 key[32], back[32], pay[PZ_SEAL_PAYLOAD_LEN];
     for (int i = 0; i < 32; i++) key[i] = (u8)(i * 9 + 1);
-    CHECK(enc_seal_key(&q, key, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 71, t1, sizeof t1));
-    CHECK(enc_seal_key(&q, key, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 71, t2, sizeof t2));
+    CHECK(enc_seal_key(&q, key, t1, sizeof t1));
+    CHECK(enc_seal_key(&q, key, t2, sizeof t2));
     CHECK(strcmp(t1, t2) != 0);                                                    /* a new random scalar each time */
-    n = enc_aad(aad, sizeof aad, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 71);
-    CHECK(pz_seal_decode(pay, t1) == PZ_SEAL_OK && pz_seal_open(back, pay, &d, aad, (size_t)n) == PZ_SEAL_OK && !memcmp(back, key, 32));
-    CHECK(pz_seal_decode(pay, t2) == PZ_SEAL_OK && pz_seal_open(back, pay, &d, aad, (size_t)n) == PZ_SEAL_OK && !memcmp(back, key, 32));
-    n = enc_aad(aad, sizeof aad, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 72);
-    CHECK(pz_seal_open(back, pay, &d, aad, (size_t)n) == PZ_SEAL_E_TAG);          /* another puzzle: refused */
-    CHECK(!enc_seal_key(&q, key, "x", 1, t1, 20) && t1[0] == 0);                   /* a buffer that is too small: nothing */
+    CHECK(pz_seal_decode(pay, t1) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, key, 32));     /* the line and the secret: nothing else */
+    CHECK(pz_seal_decode(pay, t2) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, key, 32));
+    CHECK(!enc_seal_key(&q, key, t1, 20) && t1[0] == 0);                   /* a buffer that is too small: nothing */
 }
 
 static const char *const OLD_CONF =
@@ -285,7 +271,7 @@ int main(void)
     pz_log_set_quiet(1);
     if (!pz_make_temp_dir(g_dir, sizeof g_dir, "pzenct")) { puts("t_encrypt: no temporary folder"); return 2; }
     test_pubkey();
-    test_aad_and_seal();
+    test_seal();
     test_conf();
     test_secret_from_stdin();
     test_run_shell();

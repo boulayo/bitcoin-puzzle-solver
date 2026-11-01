@@ -48,18 +48,6 @@ unsigned enc_log2n(void)
     return (unsigned)g_env.test_seal_log2n;
 }
 
-int enc_aad(u8 *out, size_t cap, const char *address, int puzzle)
-{
-    char num[16];
-    const int nl = snprintf(num, sizeof num, "%d", puzzle);
-    const size_t al = strlen(address);
-    if (al + 1 + (size_t)nl > cap || al + 1 + (size_t)nl > PZ_SEAL_AAD_MAX) return -1;
-    memcpy(out, address, al);
-    out[al] = 0;
-    memcpy(out + al + 1, num, (size_t)nl);
-    return (int)(al + 1 + (size_t)nl);
-}
-
 bool enc_random_scalar(pz_u256 *r)
 {
     for (int i = 0; i < 64; i++) {
@@ -72,14 +60,13 @@ bool enc_random_scalar(pz_u256 *r)
     return false;
 }
 
-bool enc_seal_key(const pz_ge *q, const u8 key[32], const char *address, int puzzle, char *text, size_t cap)
+bool enc_seal_key(const pz_ge *q, const u8 key[32], char *text, size_t cap)
 {
-    u8 aad[PZ_SEAL_AAD_MAX], pay[PZ_SEAL_PAYLOAD_LEN];
+    u8 pay[PZ_SEAL_PAYLOAD_LEN];
     if (cap) text[0] = 0;
-    const int al = enc_aad(aad, sizeof aad, address, puzzle);
     pz_u256 r;
-    if (al < 0 || !enc_random_scalar(&r)) return false;
-    const pz_seal_status st = pz_seal(pay, q, key, aad, (size_t)al, &r);
+    if (!enc_random_scalar(&r)) return false;
+    const pz_seal_status st = pz_seal(pay, q, key, &r);
     pz_secure_zero(&r, sizeof r);
     if (st != PZ_SEAL_OK) return false;
     return pz_seal_encode(pay, text, cap) > 0;
@@ -94,8 +81,7 @@ bool enc_check(const pz_ge *q, char *err, size_t errn)
         return false;
     }
     memset(dummy, 0x5a, sizeof dummy);
-    const u8 aad[] = "test";
-    if (pz_seal(pay, q, dummy, aad, sizeof aad - 1, &r) != PZ_SEAL_OK) {
+    if (pz_seal(pay, q, dummy, &r) != PZ_SEAL_OK) {
         snprintf(err, errn, "the public key cannot be used to encrypt");
         return false;
     }

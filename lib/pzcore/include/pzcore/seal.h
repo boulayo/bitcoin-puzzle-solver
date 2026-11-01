@@ -74,19 +74,18 @@ bool pz_scrypt(const uint8_t *pw, size_t pwlen, const uint8_t *salt, size_t salt
 #define PZ_SEAL_TEXT_PREFIX "PZENC1:"
 #define PZ_SEAL_TEXT_PREFIX_LEN 7
 #define PZ_SEAL_TEXT_BUF 160            /* holds the prefix, the Base58Check text of a payload and the NUL */
-#define PZ_SEAL_AAD_MAX 160             /* the longest associated data */
 #define PZ_SEAL_SCRYPT_LOG2N 18         /* the cost of the key from a password: N = 2^18, r = 8, p = 1 (256 MiB, about a second) */
 #define PZ_SEAL_SCRYPT_R 8
 #define PZ_SEAL_SCRYPT_P 1
 
 typedef enum {
     PZ_SEAL_OK = 0,
-    PZ_SEAL_E_ARG,                      /* an argument out of range: scalar 0 or not below n, a point off the curve, associated data too long */
+    PZ_SEAL_E_ARG,                      /* an argument out of range: scalar 0 or not below n, a point off the curve */
     PZ_SEAL_E_FORMAT,                   /* the text is not a seal: no prefix, a character outside the Base58 alphabet, a bad checksum, a wrong length */
     PZ_SEAL_E_VERSION,                  /* a version byte this library does not know */
     PZ_SEAL_E_POINT,                    /* R is not a valid compressed point */
     PZ_SEAL_E_KEYID,                    /* the key id is not that of d*G: sealed to another key (wrong password) */
-    PZ_SEAL_E_TAG                       /* the authentication failed: wrong associated data, or the payload was changed */
+    PZ_SEAL_E_TAG                       /* the authentication failed: the payload was changed */
 } pz_seal_status;
 
 /* d = (b mod (n - 1)) + 1, with b read as a big-endian integer: a uniform scalar in [1, n - 1] from 32 uniform bytes (no bias worth the name:
@@ -100,16 +99,16 @@ bool pz_seal_key_from_password(pz_u256 *d, const uint8_t *pw, size_t pwlen, unsi
 /* The four bytes that name a public key in a payload: the first four of the HASH160 of its compressed form. */
 void pz_seal_key_id(const pz_ge *q, uint8_t id[4]);
 
-/* Encrypts the 32 bytes of plain to the public key q. aad (aadlen <= PZ_SEAL_AAD_MAX) is authenticated with the payload and mixed into the
- * key, so that the payload opens only with the same data. r is the scalar of this encryption, in [1, n - 1], from a good random source and used
- * once: the caller draws it. Returns PZ_SEAL_OK, or PZ_SEAL_E_ARG with out untouched. */
-pz_seal_status pz_seal(uint8_t out[PZ_SEAL_PAYLOAD_LEN], const pz_ge *q, const uint8_t plain[32], const uint8_t *aad, size_t aadlen, const pz_u256 *r);
+/* Encrypts the 32 bytes of plain to the public key q. r is the scalar of this encryption, in [1, n - 1], from a good random source and used
+ * once: the caller draws it. The payload needs nothing but the secret to be opened: there is no associated data. Returns PZ_SEAL_OK, or
+ * PZ_SEAL_E_ARG with out untouched. */
+pz_seal_status pz_seal(uint8_t out[PZ_SEAL_PAYLOAD_LEN], const pz_ge *q, const uint8_t plain[32], const pz_u256 *r);
 
 /* What can be read of a payload without the secret: its version and key id. PZ_SEAL_OK, PZ_SEAL_E_VERSION or PZ_SEAL_E_POINT (R is checked). */
 pz_seal_status pz_seal_peek(const uint8_t payload[PZ_SEAL_PAYLOAD_LEN], uint8_t keyid[4]);
 /* Opens a payload with the private scalar d. The order of the checks is the order of the statuses: version, R on the curve, d in range,
  * key id of d*G, tag (compared in constant time). plain is written only on PZ_SEAL_OK. */
-pz_seal_status pz_seal_open(uint8_t plain[32], const uint8_t payload[PZ_SEAL_PAYLOAD_LEN], const pz_u256 *d, const uint8_t *aad, size_t aadlen);
+pz_seal_status pz_seal_open(uint8_t plain[32], const uint8_t payload[PZ_SEAL_PAYLOAD_LEN], const pz_u256 *d);
 
 /* The text form. pz_seal_encode writes "PZENC1:..." and the NUL into out (outcap bytes, PZ_SEAL_TEXT_BUF is enough) and returns the length, or
  * -1. pz_seal_decode reads one such token (the string must be exactly the token, no blank around it) and gives PZ_SEAL_OK or PZ_SEAL_E_FORMAT;

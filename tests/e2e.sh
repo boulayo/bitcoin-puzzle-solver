@@ -520,17 +520,22 @@ OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/cut.txt" 2>&1); 
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "damaged or incomplete" && ok "decrypt-key: a truncated copy fails on the check characters before any secret is asked" || bad "truncated copy: rc=$RC $OUT"
 CH=${LINE:40:1}; NC=2; [ "$CH" = 2 ] && NC=3
 printf '%s\n' "${LINE:0:40}$NC${LINE:41}" > "$DIR/typo.txt"
-OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" --puzzle 26 "$DIR/typo.txt" 2>&1); RC=$?
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/typo.txt" 2>&1); RC=$?
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "damaged or incomplete" && ok "decrypt-key: a mistyped character is caught by the check characters" || bad "typo: rc=$RC $OUT"
 echo "$LINE" > "$DIR/line.txt"
 OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/line.txt" 2>&1); RC=$?
-[ $RC -eq 2 ] && echo "$OUT" | grep -q "address" && ok "decrypt-key: the line alone is not enough, it says that the address and the puzzle are needed" || bad "line alone: rc=$RC $OUT"
-OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" --puzzle 26 "$DIR/line.txt" 2>&1); RC=$?
-[ $RC -eq 0 ] && echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: the line with --address and --puzzle opens" || bad "line with the options: rc=$RC $OUT"
-OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" --puzzle 27 "$DIR/line.txt" 2>&1); RC=$?
-[ $RC -eq 1 ] && echo "$OUT" | grep -q "authentication failed" && ok "decrypt-key: another puzzle number is refused (it is part of what was encrypted)" || bad "another puzzle: rc=$RC $OUT"
-OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$(field 0x2a3f5c2 addr)" --puzzle 26 "$DIR/line.txt" 2>&1); RC=$?
-[ $RC -eq 1 ] && ! echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: another address is refused and the key is not shown" || bad "another address: rc=$RC $OUT"
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "key (hex): *0x$HEXL\$" && echo "$OUT" | grep -q "address not checked: no address: line in the text and no --address" && echo "$OUT" | grep -q "address (P2PKH): *$AL" && echo "$OUT" | grep -q "address (P2WPKH): *bc1q" && ok "decrypt-key: the line alone opens with the secret alone; it shows the key and its addresses and says that the address was not checked (exit status 0)" || bad "line alone: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "0x$HEXL" && echo "$OUT" | grep -q "check: *OK" && ok "decrypt-key: the line with --address opens and the address is checked" || bad "line with --address: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$(field 0x2a3f5c2 addr)" "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 1 ] && echo "$OUT" | grep -q "check: *MISMATCH" && echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: another address is a MISMATCH (exit status 1; the key is shown, it is the key of the line)" || bad "another address: rc=$RC $OUT"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "not an address" "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 2 ] && ! echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: an address that is not one is refused" || bad "bad address: rc=$RC"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --puzzle 26 "$DIR/line.txt" 2>&1); RC=$?
+[ $RC -eq 2 ] && ok "decrypt-key: --puzzle no longer exists" || bad "--puzzle accepted"
+printf 'puzzle: 99\naddress: %s\n%s\n' "$(field 0x2a3f5c2 addr)" "$LINE" > "$DIR/ctx.txt"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/ctx.txt" 2>&1); RC=$?
+[ $RC -eq 1 ] && echo "$OUT" | grep -q "MISMATCH" && echo "$OUT" | grep -q "puzzle: *#99" && ok "decrypt-key: the address: line of the text is the one checked (and a puzzle: line is shown)" || bad "address line of the text: rc=$RC $OUT"
 OUT=$(cd "$DIR/encl" && printf '%s\n' "$EPRIV" | "$BINABS" decrypt-key --raw-key 2>&1); RC=$?
 [ $RC -eq 0 ] && echo "$OUT" | grep -q "0x$HEXL" && ok "decrypt-key: without a file it reads FOUND.txt of the current folder" || bad "default file: rc=$RC $OUT"
 echo "nothing here" > "$DIR/none.txt"

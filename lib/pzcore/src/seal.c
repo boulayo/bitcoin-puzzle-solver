@@ -36,25 +36,23 @@ void pz_seal_key_id(const pz_ge *q, uint8_t id[4])
 }
 
 /* The key stream (32 bytes) and the MAC key (32 bytes) of a payload, from the shared point's x coordinate. */
-static void derive(uint8_t okm[64], const pz_ge *shared, const uint8_t r33[33], const uint8_t q33[33], const uint8_t *aad, size_t aadlen)
+static void derive(uint8_t okm[64], const pz_ge *shared, const uint8_t r33[33], const uint8_t q33[33])
 {
-    uint8_t ikm[32], info[33 + 33 + PZ_SEAL_AAD_MAX];
+    uint8_t ikm[32], info[33 + 33];
     pz_fe_to_be(ikm, &shared->x);
     memcpy(info, r33, 33);
     memcpy(info + 33, q33, 33);
-    if (aadlen) memcpy(info + 66, aad, aadlen);
-    pz_hkdf_sha256(kSalt, sizeof kSalt, ikm, 32, info, 66 + aadlen, okm, 64);
+    pz_hkdf_sha256(kSalt, sizeof kSalt, ikm, 32, info, sizeof info, okm, 64);
     pz_secure_zero(ikm, sizeof ikm);
 }
 
-static void make_tag(uint8_t tag[16], const uint8_t mackey[32], const uint8_t r33[33], const uint8_t ct[32], const uint8_t *aad, size_t aadlen)
+static void make_tag(uint8_t tag[16], const uint8_t mackey[32], const uint8_t r33[33], const uint8_t ct[32])
 {
     uint8_t full[32];
     pz_hmac_sha256 c;
     pz_hmac_sha256_init(&c, mackey, 32);
     pz_hmac_sha256_update(&c, r33, 33);
     pz_hmac_sha256_update(&c, ct, 32);
-    pz_hmac_sha256_update(&c, aad, aadlen);
     pz_hmac_sha256_final(&c, full);
     memcpy(tag, full, 16);
     pz_secure_zero(full, sizeof full);
@@ -65,20 +63,20 @@ static bool scalar_ok(const pz_u256 *k)
     return !pz_u256_is_zero(k) && pz_u256_cmp(k, &pz_secp256k1_n) < 0;
 }
 
-pz_seal_status pz_seal(uint8_t out[PZ_SEAL_PAYLOAD_LEN], const pz_ge *q, const uint8_t plain[32], const uint8_t *aad, size_t aadlen, const pz_u256 *r)
+pz_seal_status pz_seal(uint8_t out[PZ_SEAL_PAYLOAD_LEN], const pz_ge *q, const uint8_t plain[32], const pz_u256 *r)
 {
-    if (!q || !plain || !r || aadlen > PZ_SEAL_AAD_MAX || (aadlen && !aad) || !scalar_ok(r) || !pz_ge_on_curve(q)) return PZ_SEAL_E_ARG;
+    if (!q || !plain || !r || !scalar_ok(r) || !pz_ge_on_curve(q)) return PZ_SEAL_E_ARG;
     pz_ge rp, shared;
     if (!pz_ec_mul_g(&rp, r) || !pz_ec_mul(&shared, q, r)) return PZ_SEAL_E_ARG;
     uint8_t r33[33], q33[33], okm[64], payload[PZ_SEAL_PAYLOAD_LEN];
     pz_ge_to_pub33(r33, &rp);
     pz_ge_to_pub33(q33, q);
-    derive(okm, &shared, r33, q33, aad, aadlen);
+    derive(okm, &shared, r33, q33);
     payload[0] = PZ_SEAL_VERSION;
     pz_seal_key_id(q, payload + 1);
     memcpy(payload + 5, r33, 33);
     for (int i = 0; i < 32; i++) payload[38 + i] = (uint8_t)(plain[i] ^ okm[i]);
-    make_tag(payload + 70, okm + 32, r33, payload + 38, aad, aadlen);
+    make_tag(payload + 70, okm + 32, r33, payload + 38);
     memcpy(out, payload, sizeof payload);
     pz_secure_zero(okm, sizeof okm);
     pz_secure_zero(&shared, sizeof shared);
@@ -94,11 +92,11 @@ pz_seal_status pz_seal_peek(const uint8_t payload[PZ_SEAL_PAYLOAD_LEN], uint8_t 
     return PZ_SEAL_OK;
 }
 
-pz_seal_status pz_seal_open(uint8_t plain[32], const uint8_t payload[PZ_SEAL_PAYLOAD_LEN], const pz_u256 *d, const uint8_t *aad, size_t aadlen)
+pz_seal_status pz_seal_open(uint8_t plain[32], const uint8_t payload[PZ_SEAL_PAYLOAD_LEN], const pz_u256 *d)
 {
     pz_seal_status st = pz_seal_peek(payload, NULL);
     if (st != PZ_SEAL_OK) return st;
-    if (!d || !scalar_ok(d) || aadlen > PZ_SEAL_AAD_MAX || (aadlen && !aad)) return PZ_SEAL_E_ARG;
+    if (!d || !scalar_ok(d)) return PZ_SEAL_E_ARG;
     pz_ge rp, q, shared;
     pz_ge_from_pubkey(&rp, payload + 5, 33);
     if (!pz_ec_mul_g(&q, d)) return PZ_SEAL_E_ARG;
@@ -108,8 +106,8 @@ pz_seal_status pz_seal_open(uint8_t plain[32], const uint8_t payload[PZ_SEAL_PAY
     if (!pz_ec_mul(&shared, &rp, d)) return PZ_SEAL_E_POINT;
     uint8_t q33[33], okm[64], tag[16];
     pz_ge_to_pub33(q33, &q);
-    derive(okm, &shared, payload + 5, q33, aad, aadlen);
-    make_tag(tag, okm + 32, payload + 5, payload + 38, aad, aadlen);
+    derive(okm, &shared, payload + 5, q33);
+    make_tag(tag, okm + 32, payload + 5, payload + 38);
     if (pz_ct_equal(tag, payload + 70, 16)) {
         for (int i = 0; i < 32; i++) plain[i] = (uint8_t)(payload[38 + i] ^ okm[i]);
         st = PZ_SEAL_OK;

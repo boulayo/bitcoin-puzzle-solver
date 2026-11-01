@@ -497,10 +497,8 @@ static void t_encrypt_key(void)
     pz_hex_encode(kpub, 33, pubhex);
     CHECK(file && strstr(file, "PZENC1:") && strstr(file, r->cfg.address) && strstr(file, "1f2e3d4c5b6a7988") == NULL && strstr(file, wif) == NULL && strstr(file, pubhex) == NULL);
     CHECK(strstr(r->found_sealed, "PZENC1:") == r->found_sealed && pz_u256_is_zero(&r->found_key));
-    u8 pay[PZ_SEAL_PAYLOAD_LEN], back[32], aad[PZ_SEAL_AAD_MAX];
-    const int al = enc_aad(aad, sizeof aad, r->cfg.address, 64);
-    CHECK(al > 0 && pz_seal_decode(pay, r->found_sealed) == PZ_SEAL_OK && pz_seal_open(back, pay, &d, aad, (size_t)al) == PZ_SEAL_OK && !memcmp(back, kb, 32));
-    CHECK(pz_seal_open(back, pay, &d, aad, (size_t)al - 1) == PZ_SEAL_E_TAG);          /* another puzzle: refused */
+    u8 pay[PZ_SEAL_PAYLOAD_LEN], back[32];
+    CHECK(pz_seal_decode(pay, r->found_sealed) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, kb, 32));
     pz_secure_zero(&d, sizeof d);
     free(file);
     free(r);
