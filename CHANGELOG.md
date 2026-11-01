@@ -3,6 +3,18 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- Documentation: RESEARCH.md 8.14 searches once more for a lower constant of the kangaroo: the literature from Pollard 2000 to 2026 and
+  the puzzle community's methods in this project's normalization (the best published low-memory constant is 1.253, the two-species
+  line this program left in 1.7.8; 0.9 to 1.0 needs memory of order the square root of the range), and ten ideas priced in the exact
+  pair model and the walk model (the endomorphism and the automorphisms of the curve, shares that follow the progress of the search,
+  tame herds laid in advance, tables of tame trails and the Bernstein-Lange precomputation at 64 GiB, a tame herd shared by puzzles 136
+  to 140, finer start densities, the cheap second point of a step, a fourth species over all residue families, walks with memory).
+  None reaches 1 % under the constraints of a campaign; the program is unchanged. New scripts in `tools/research` (`ksched.py`,
+  `kprecomp.py`, `klambda.py`, `kideal.py`, the option `cheap=1` of `kwalk.c`).
+
 ## [1.19.2] — 2026-10-31
 
 ### Changed

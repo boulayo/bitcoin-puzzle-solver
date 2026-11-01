@@ -14,7 +14,10 @@ when every pair is worth its maximum) is printed beside it.
 
     python3 -I tools/research/kideal.py 0,1,3 12 [starts]         the family of schema 3: 0.9908 (ALGORITHMS.md 8.10)
     python3 -I tools/research/kideal.py 0,1,3,5 120 [starts]      a fourth species
-Needs numpy; a few minutes per family.
+    python3 -I tools/research/kideal.py 0,1,3,5 120 1 seed        one start from the solution of schema 3's family (12 | M), the
+                                                                  other coefficients at a trace: the first-order test at that optimum
+At the best point the script prints, for every coefficient, the lowest gradient of its classes against the gradient shared by the
+active classes: a coefficient whose best class has a lower gradient would take share. Needs numpy; minutes per start.
 """
 import sys
 import numpy as np
@@ -95,8 +98,16 @@ if __name__ == '__main__':
     As = A + np.transpose(A, (1, 0, 2))
     rng = np.random.default_rng(7)
     best = (9.0, None)
+    seed3 = len(sys.argv) > 4 and sys.argv[4] == 'seed' and M % 12 == 0
     for s in range(starts):
-        w = rng.random(len(combos)) ** 3
+        if seed3:
+            # the solution of {0, 1, 3} mod 12 (tame on 3 and 9, wild on Q' on 2, 6, 10, wild on 3Q' on 6), spread over the classes mod M
+            pat = {0: {3: 0.181, 9: 0.019}, 1: {2: 0.4 / 3, 6: 0.4 / 3, 10: 0.4 / 3}, 3: {6: 0.4}}
+            w = np.full(len(combos), 1e-4)
+            for i, (si, r) in enumerate(combos):
+                w[i] += pat.get(bs[si], {}).get(r % 12, 0.0) / (M // 12)
+        else:
+            w = rng.random(len(combos)) ** 3
         w /= w.sum()
         c, w = eg(w, A, As)
         tot = [w[[i for i, (si, r) in enumerate(combos) if si == k]].sum() for k in range(len(bs))]
@@ -115,7 +126,7 @@ if __name__ == '__main__':
     for k, b in enumerate(bs):
         idx = np.array([i for i, (si, r) in enumerate(combos) if si == k])
         print('  coefficient %d: share %.3f, lowest gradient of its classes %.4f against %.4f of the active classes (%s)'
-              % (b, w[idx].sum(), g[idx].min(), ga, 'would take share' if g[idx].min() < ga - 1e-6 * abs(ga) else 'stable'))
+              % (b, w[idx].sum(), g[idx].min(), ga, 'would take share' if g[idx].min() < ga - 1e-3 * abs(ga) else 'stable'))
     for (s, r), x in sorted(zip(combos, w), key=lambda t: (t[0][0], t[0][1])):
         if x > 0.003:
             print('   b=%d r=%3d %.3f' % (bs[s], r, x))

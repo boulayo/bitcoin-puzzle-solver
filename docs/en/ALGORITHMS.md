@@ -423,7 +423,7 @@ implemented (section 9). With little memory the best known minimum remains ≈ 1
 
 | Goal | Possible? |
 |------|-----------|
-| `q < 1` with little memory | not known; the best known is ≈ 1.15–1.36 (here 1.06 measured, ≈ 1.04 at the scale of the open puzzles in the model, RESEARCH.md 8.12) |
+| `q < 1` with little memory | not known; the best published is ≈ 1.25 (RESEARCH.md 8.14, the literature up to 2026 and the attempts after 1.19.2; here 1.06 measured, ≈ 1.04 at the scale of the open puzzles in the model, RESEARCH.md 8.12) |
 | `q ≈ 1.0` with a lot of RAM | yes (BSGS with `±`, section 9): `W ≲ 2^70` with 128 GB; better than the kangaroo up to `W ≈ 2^71` |
 | exponent `< 1/2` for a single instance, classical | no in the generic model; no specific attack on secp256k1 is known |
 | exponent `1/3` per instance | yes with a `W^{2/3}` precomputation and many instances of the same width |
