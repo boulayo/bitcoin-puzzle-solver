@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.20.0] — 2026-11-01
 
 ### Added
 - `bench --variants`: every variant of the linear and kangaroo kernels of each GPU, measured fairly in one run (3 s of warm-up with the
@@ -14,6 +14,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   saved unless `--retune` is given too. `bench` also prints the length of the launches of each kernel. Run on simulated devices only (the
   simulated CUDA driver with two devices, pocl); not yet on a card.
 ### Changed
+- Panel: with more than four GPUs, or when their names do not fit the terminal, the speed line gives their sum with the least and the
+  greatest (`GPU x8: 7.21 G (870.12 M to 912.33 M each)`) instead of a rate per card; `report.txt` and `status.json` list every worker.
 - GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
   order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
   5% of the fastest, and the default), each gets the median of its rates, the default stays unless another is more than 1% faster, and
@@ -41,7 +43,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   of the two forms is the same in every proxy that can be counted here (bytes, instructions per pipe, the stall counts and the loads in
   flight of the loop, registers and spills, the rare paths), so the loss has no cause in the kernel text that the analysis can name; the
   kernels of 1.19.2 are therefore the default again (every module byte for byte the PTX of 1.19.2) and the new form is the variant the
-  tuner measures next to them, so that one `bench --variants` shows both forms on every `NK`. Same walk, history and host side; bit-exact
+  tuner measures next to them. Measured side by side on the same card: `NK` 128 quads 908 (the kernel of 1.19.2, back to its figure) and
+  743 with the tags once; `NK` 64 quads 896 and **922** with the tags once, the fastest kernel of the card and the tuner's pick (+1.5 % over
+  1.19.2's); the plain and pairs kernels lose 6 to 15 % with the tags once. The cause is in the card, not in the counts: the same change
+  helps one herd size and hurts the next. Same walk, history and host side; bit-exact
   against the CPU on the simulated CUDA driver and on pocl, planted keys found with every variant on both. Six more PTX modules (`kang64m`
   to `kang128cm`), 243 KB more in the executable (the quads modules compress to about 85 KB each against any base).
 - Documentation: RESEARCH.md section 5 has the byte audit of the kangaroo step (every load and store of a round by purpose, before and after,
@@ -58,9 +63,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   in the hash phase) was built, checked bit-exact against the CPU on the simulated CUDA driver, compiled for sm_75 to sm_90 and run through
   the issue model: `ptxas` keeps the two phases apart (one hash, the field work, the other hash), the model gives −0.7 to −2.8 % with an
   `IMAD.WIDE` at one issue slot and −0.0 to +2.4 % at two where the bound of the two pipes said −9.5 and −18 %, and a hand-made interleave
-  of the two streams reaches at most −4.5 and −6.4 % in the same model. The kernels of 1.19.2 stay; the form is built for the two capped
-  windows as the variants "interleaved" (`PZ_GPU_HALF=786688` and `786944`, 230 KB more in the executable), which the tuner measures
-  and `bench --variants` shows next to the others, so that a card can time it once. Not yet measured on a card.
+  of the two streams reaches at most −4.5 and −6.4 % in the same model. Built for the two capped windows and
+  timed once on the RTX A2000 Laptop with `bench --variants`: 851 against 888 M keys/s for window 512 with the register cap (-4.2 %), 845
+  against 886 for 256 (-4.7 %). Not kept: the kernels are those of 1.19.2. The form stays in the kernel source under `PZ_INTERLEAVE` (no
+  module uses it; `tools/research/sass_sched.py` reads it for the model).
 - Documentation: RESEARCH.md section 5 accounts for every instruction of the hash160 filter against the floor of its expression on the
   SASS of Turing to Hopper (the rotations, shifts, logic and rotate-and-add are at that floor: 1453 against 1451 ALU-pipe instructions per
   key, the seven RIPEMD-160 steps that word 2 does not need are already dropped), and models what is left: the hash phase runs the ALU

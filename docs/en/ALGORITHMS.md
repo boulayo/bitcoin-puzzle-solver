@@ -279,12 +279,12 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated towards a length tuned per device (below;
   0.35 s until it is).
-  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are eight variants: window 128, 256 or 512 × free registers
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
   (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); two further
   forms of the hash160 that moved shifts or rotations onto the FMA pipe (RESEARCH.md section 5, after 1.19.2) were timed on an RTX A2000
   Laptop and lost 1.3 % and 7.7 %, so they are not built; a form with the hash of one pair of keys and the curve arithmetic of the next in
-  one instruction stream gains 0 to 3 % in the issue model (same section) and is built for the two capped windows as the "interleaved"
-  variants (codes 786688 and 786944), a probe for a card to time once. With OpenCL four variants: window 64, 128, 256 or 512. On the first
+  one instruction stream gains 0 to 3 % in the issue model (same section) and lost 4 % on the same card, so it is not built either. With
+  OpenCL four variants: window 64, 128, 256 or 512. On the first
   run on a device the program warms the GPU up for 3 s, measures them all in turns (in order, in the reverse order, in order again; after
   the first turn only the variants within 5% of the fastest and the default), takes the median of each, and keeps the default (256 with
   CUDA, 128 with OpenCL) unless another one is more than 1% faster, and among the variants within 1% of the fastest it takes the largest
@@ -314,8 +314,9 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). Each of these except `NK` 256 and the wide herds also
   comes with the *tags written once* (`m` after the letter: `128m`, `128cm`, "tags once"): the tag of the point two steps back is stored in
   the last round of a launch instead of at every step, and the quads kernel reads the flags of its four walkers once, 7 bytes less per step
-  on the SASS; on the RTX A2000 the form of 1.19.2, which is the default, measured faster (RESEARCH.md section 5, after 1.19.2), so the two
-  are measured side by side. On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
+  on the SASS; on the RTX A2000 the two forms measured side by side (RESEARCH.md section 5, after 1.19.2) go opposite ways: `NK` 64 quads with the
+  tags once 922 M steps/s against 896 (+2.9 %), `NK` 128 quads 743 against 908 (-18 %), so the form of 1.19.2 is the default and the tuner
+  picks between them (on that card `NK` 64 quads, tags once: +1.5 % over the `NK` 128 quads of 1.19.2). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
   work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK=4g` forces the *block herd* (`NK` = 4), which no tuning offers: the four walkers
   of a work-item stay in its registers for the whole launch, two blocks of 128 work-items per SM (20,480 walkers on 20 SMs), and one inversion
   serves a whole block and round (each work-item multiplies its four denominators, 32 work-items of the block multiply the products of a column

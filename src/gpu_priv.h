@@ -9,12 +9,11 @@
 #include "kangaroo_priv.h"
 
 /* Compile-time variants of the linear kernel: half-window (group = 2*half keys) | minimum resident blocks per SM << 16
- * (CUDA only: 4 caps the kernel at 128 registers, trading a few spills for more resident warps) | VAR_ILV: the loop over
- * the pairs with the hash of a pair and the curve of the next in one stream (CUDA only: a probe for a card, RESEARCH.md
- * section 5 after 1.19.2). The autotuner measures them on the device and keeps the fastest. */
+ * (CUDA only: 4 caps the kernel at 128 registers, trading a few spills for more resident warps). The autotuner measures
+ * them on the device and keeps the fastest. Bits 19 and up are free for a form of the kernel (the hash variants and the
+ * interleaved loop of RESEARCH.md section 5, after 1.19.2, used them while a card timed them). */
 #define VAR_HALF(v) ((v) & 0xFFFF)
 #define VAR_MINB(v) (((v) >> 16) & 7)
-#define VAR_ILV (1 << 19)
 
 /* Kangaroo kernel variants: kangaroos per work-item (NK: one field inversion is shared by NK steps, so larger is cheaper
  * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion

@@ -10,8 +10,7 @@
 #include <stdarg.h>
 
 static const int CL_VARIANTS[] = {64, 128, 256, 512};
-/* the interleaved form (VAR_ILV) for the two windows the tuner has picked on cards: probes, to be timed once */
-static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16, 256 | 4 << 16 | VAR_ILV, 512 | 4 << 16 | VAR_ILV};
+static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
 /* the kangaroo variants: NK plain, pairs and quads, each in the form of 1.19.2 and with the tags written once (KV_METAFLAG, pz_kang.cl KANG_META:
  * measured side by side, RESEARCH.md section 5 after 1.19.2) */
 static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16,
@@ -131,7 +130,7 @@ static char *kvariant_name(int v, char *b, size_t n)
 }
 static char *variant_name(int v, char *b, size_t n)
 {
-    snprintf(b, n, "%d%s%s", VAR_HALF(v), VAR_MINB(v) ? ", register cap" : "", v & VAR_ILV ? ", interleaved" : "");
+    snprintf(b, n, "%d%s", VAR_HALF(v), VAR_MINB(v) ? ", register cap" : "");
     return b;
 }
 

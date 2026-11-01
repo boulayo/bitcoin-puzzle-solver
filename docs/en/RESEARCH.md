@@ -725,13 +725,28 @@ A2000's herd are 160 MiB per round against 2 MiB of L2).
   `NK` 64 and 128, plain, pairs and quads with CUDA and `NK` 32 to 128 plain and pairs with OpenCL, so that one `bench --variants` shows
   both forms side by side. Both forms are bit-exact against the CPU on the simulated CUDA driver and on pocl; planted keys are found with
   every new code forced on the simulated driver.
-* **Prediction for the final measurement**, a model. If the 21 % is in the kernel text after all, through something the SASS does not show,
-  `NK` 128 quads will measure again what 1.19.2 did, 910 to 916 M steps/s, and "`NK` 128 quads, tags once" about 716 next to it; the rule then
-  keeps the default. If it is not, the two forms will measure within the noise of each other at every `NK` (the tags-once form at most +4 %
-  by the bytes), `NK` 128 quads near 716 and `NK` 64 quads near 904 in both forms, and the question moves to the card: why `NK` 128, in
-  every form, falls 15 to 25 % short of the bandwidth that `NK` 256 and `NK` 64 quads reach (a test: `PZ_GPU_NK=128c pzsolve bench --gpu-only`
-  on a cold card against the same after `bench --variants`, and the two forms on the same herd size, which the depth of the history couples
-  to `NK`).
+* **Prediction for the final measurement**, a model, and the measurement. The prediction was: if the 21 % is in the kernel text after
+  all, `NK` 128 quads measures again what 1.19.2 did and the tags-once form about 716 next to it; if not, the two forms measure within
+  the noise of each other. The card (bench --variants, three turns, medians, M steps/s, the two forms side by side):
+
+  | kernel          | 1.19.2 form | tags once | difference |
+  |-----------------|-------------|-----------|------------|
+  | `NK` 64 plain   | 763         | 642       | −15.9 %    |
+  | `NK` 128 plain  | 755         | 641       | −15.1 %    |
+  | `NK` 64 pairs   | 873         | 710       | −18.7 %    |
+  | `NK` 128 pairs  | 864         | 709       | −17.9 %    |
+  | `NK` 64 quads   | 896         | **922**   | **+2.9 %** |
+  | `NK` 128 quads  | 908         | 743       | −18.2 %    |
+
+  So the first case: the loss is in the kernel text, in something the proxies do not count, and it is not confined to `NK` 128: every
+  kernel but one loses 15 to 19 % with the tags once, and the one exception, `NK` 64 quads, gains 2.9 % and is the fastest kernel of the
+  card, 922 against the 908 of 1.19.2's `NK` 128 quads (+1.5 %), which the tuner now picks. The one thing that separates `NK` 64 quads
+  from the others in the counts is its register budget (222 at `PZ_MINB=2`, the only kernel where the block flags `BF` live in registers
+  without pushing anything out), and the plain and pairs kernels, which the change touches only through the one store and the `uint2`
+  load, lose as much as `NK` 128 quads: the regularity points at the store of `PV` alone where `PP` was stored as a pair (the one change
+  all the losers share) and at how the card's memory system treats a 4-byte store per lane where an 8-byte one was, which the local-memory
+  interleaving model of candidate 2 says is harmless and the card says is not. Both forms stay, the 1.19.2 one as the default and the other
+  as the variant the tuner measures; a card with another memory system may rank them differently, which is what the tuner is for.
 
 **After 1.19.2: the hash160 of the linear kernel.** Two thirds of the instructions of a key are the hash filter `hash160_w2` (SHA-256 of the
 33-byte key, RIPEMD-160 of the digest, word 2 only). This part accounts for every one of them against the floor of the expression on this
@@ -891,10 +906,14 @@ below is the model, every count is SASS.
 * **On AMD** (clang 18, `-O3`, window 256, the instruction lines of `pz_search`, counted the same way for both forms): gfx1030 4443 → 50146,
   gfx1100 4661 → 47682, gfx906 4530 → 51342, at 256 VGPRs with more scratch (8544 → 9056 bytes): clang unrolls the pipelined loop and copies
   the hash many times. The OpenCL kernels keep the plain loop.
-* **Not built as a module, not measured on a card.** The rule of this project sends a form to a card as a forceable variant when the model
-  gains on every target at both slot costs; this one loses at two slots on three targets of five, and the card has already judged a change
-  of the kernel's shape more harshly than the model (the peeled loop of 1.19.1: −2.8 % for 14 instructions saved). The two modules that
-  were built for the checks (windows 256 and 512 with the cap) would add 230 KB to the executable (2.4 MB of PTX each against 1.5, about
+* **Measured on the A2000, and dropped.** The owner asked for the card's verdict, so the two capped windows went into a test build as
+  the variants "interleaved": `bench --variants`, three turns, medians, keys/s: window 512 with the register cap 888.3, interleaved 851.2
+  (**−4.2 %**); window 256 with the cap 886.1, interleaved 844.5 (**−4.7 %**). The loss is larger than the model's worst case (+2.4 % at
+  two slots on sm_90, +0.6 % on sm_86): what the model does not price, the instruction cache of a loop grown from 81 to 98 KB and the
+  longer dependency chains of the pipelined pair, costs more than the pipes' gap gives back. Not kept. The rule of this project sends a
+  form to a card as a forceable variant when the model gains on every target at both slot costs; this one lost at two slots on three
+  targets of five, and the card has now judged a change of the kernel's shape more harshly than the model twice (the peeled loop of
+  1.19.1: −2.8 % for 14 instructions saved). The two modules (windows 256 and 512 with the cap) added 230 KB to the executable (2.4 MB of PTX each against 1.5, about
   115 KB each compressed, the first against `linear256m4`, the second against the first: the inlined hash shares little with the called one). The source form stays, and
   `python3 -I tools/research/sass_sched.py --nvrtc ... --ptxas ... --nvdisasm ... --module linear512m4 --warps 4 -DPZ_INTERLEAVE=1`
   reproduces the figures. What is left of the idea is what the model says of the ideal order: about 5 %, which no scheduler we can

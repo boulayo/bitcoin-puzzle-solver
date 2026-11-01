@@ -163,6 +163,10 @@ Chance        1h: 7.2e-09% | 24h: 1.7e-07% | 7d: 1.2e-06% | 30d: 5.2e-06% | 365d
 Ctrl-C: stop and save progress; run the same command again to resume.
 ```
 
+The second line of `Speed` names every GPU with its rate while they are at most four and fit the terminal; with more cards it gives
+their sum, the least and the greatest (`GPU x8: 7.21 G (870.12 M to 912.33 M each)`); `report.txt` and `status.json` in the campaign
+folder list every worker one by one at all times.
+
 * **Progress**: fraction covered (linear, BSGS). In the kangaroo the line is `Success prob.`: the **estimated probability of having already
   found the key**, with the steps done and the steps expected on average.
 * **Time left**: time still needed, at constant speed, to reach the probability 50 % / 90 % / 100 % (in the kangaroo 99 %

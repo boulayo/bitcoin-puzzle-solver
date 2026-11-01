@@ -5,6 +5,7 @@
 #include <pzcore/hash.h>
 #include <math.h>
 #include <string.h>
+#define PANEL_GPUS_NAMED 4    /* GPUs named one by one on the speed line of the panel; more are summed */
 
 double ui_rates(const run_ctx *r, double *cpu, double *gpu, int *ncpu)
 {
@@ -179,12 +180,33 @@ static void panel_speed(panel_t *p, const run_ctx *r, const progress_info *pi, b
             pz_fmt_si(cpur, a, sizeof a);
             o += (size_t)snprintf(ln + o, sizeof ln - o, "CPU x%d: %s", ncpu, a);
         }
+        /* every GPU by name while they fit on the line (and at most PANEL_GPUS_NAMED of them); past that, their sum with the least and the
+         * greatest, since a machine with many cards cannot read a line of thirty rates (report.txt and status.json have them all) */
+        int ngpu = 0;
+        for (int i = 0; i < r->nws; i++) ngpu += r->ws[i].kind == 'G';
+        const size_t o0 = o;
         int shown = 0;
-        for (int i = 0; i < r->nws && o < 400; i++) {
+        for (int i = 0; ngpu <= PANEL_GPUS_NAMED && i < r->nws && o < sizeof ln - 1; i++) {
             if (r->ws[i].kind != 'G') continue;
             pz_fmt_si(r->ws[i].rate, a, sizeof a);
             o += (size_t)snprintf(ln + o, sizeof ln - o, "%s%.40s: %s", (ncpu > 0 || shown) ? "  |  " : "", r->ws[i].name, a);
             shown++;
+        }
+        if (ngpu > 0 && (ngpu > PANEL_GPUS_NAMED || (int)o >= p->cols - 1)) {
+            double sum = 0, lo = 0, hi = 0;
+            for (int i = 0; i < r->nws; i++) {
+                if (r->ws[i].kind != 'G') continue;
+                const double x = r->ws[i].rate;
+                sum += x;
+                if (lo == 0 || x < lo) lo = x;
+                if (x > hi) hi = x;
+            }
+            ln[o0] = 0;
+            o = o0;
+            pz_fmt_si(sum, a, sizeof a);
+            pz_fmt_si(lo, b, sizeof b);
+            pz_fmt_si(hi, c, sizeof c);
+            o += (size_t)snprintf(ln + o, sizeof ln - o, "%sGPU x%d: %s (%s to %s each)", ncpu > 0 ? "  |  " : "", ngpu, a, b, c);
         }
         add_line(p, p->D0, p->D1, ln);
     }
