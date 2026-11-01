@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.21.0] — 2026-11-01
 
 ### Added
 - Encrypting the key that is found, for computers that someone else controls (USAGE section 11, ALGORITHMS section 12). `hunt` and `merge` take
