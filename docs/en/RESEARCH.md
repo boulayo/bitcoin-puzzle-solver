@@ -752,7 +752,79 @@ simulated CUDA driver and on pocl, which run the plain code (the new forms are P
   instructions, 77 KB of SASS on top of the 43 of the loop, against an L0 instruction cache of a few tens of KB per partition) and the point
   of pair i + 1 computed in the basic block of the hashes of pair i, under 128 registers for the capped variants (the hash state is about 30,
   the point about 60). Not done here: it is a change of the kernel's shape, which the card judged against the model once already (the peeled
-  loop of 1.19.1).
+  loop of 1.19.1). *Built and modelled in the next part: it gains 0 to 3 % in the model, and ptxas does not mix the two streams.*
+
+**After 1.19.2: the hash and the curve in one stream.** The form the part above left out, built and modelled on the owner's request. The
+loop over the pairs is pipelined by one pair: a turn computes the two points of pair i (the inverse, two lambdas, two squarings, two
+products) and hashes the two x of pair i + 1, kept from the turn before with the parity of their y (18 registers), with the filter
+`hash160_w2` inlined (a call in the kernels of 1.19.2) and the full hash of a key that passes the filter the only call left in the loop,
+behind one branch for both keys; the first pending pair is the centre and C − HALF·G, the epilogue hashes pair 1. Same keys, same
+arithmetic: bit-exact against the CPU on the simulated CUDA driver (the self-test with the tuning of all the variants, planted-key hunts with
+each window forced). The source is in pz_linear.cl under `PZ_INTERLEAVE` (CUDA only; `tools/ptx_table.awk` makes the simulated driver run
+it for a module built with `-DPZ_INTERLEAVE=1`). Tools as above: NVRTC 12.0, `ptxas` 12.9 for sm_75, sm_80, sm_86, sm_89 and sm_90,
+`nvdisasm` 12.0, the issue model of `tools/research/sass_sched.py`, which now reads the loop with the hash inlined. No card: every speed
+below is the model, every count is SASS.
+
+* **What `ptxas` makes of it.** Registers: 128 with the cap (`PZ_MINB=4`) on every target, 116 to 144 bytes of spill outside the loops over
+  the keys (the executed path of the pair loop has no local load or store but the two `LDL.128` of the prefix product; the kernels of 1.19.2
+  spill 0 to 16 bytes, outside the loops too); 231 registers without the cap (254 on sm_90; two blocks per SM, as today); 168 with a cap at
+  three blocks (16 bytes of spill on sm_86 and sm_89). A pair of keys executes 6257 instructions against 6307 (sm_86: the call, the return
+  and the eight `STL` and `LDL` of x through the stack of each key go, a few moves come; ALU 3469, FMA 2766, other 22 against 3486, 2770 and
+  51; the other targets within 3). The order is the point, and `ptxas` does not mix the streams: in windows of 200 instructions of the SASS
+  of the capped module come the SHA-256 of one key (64 % ALU-pipe instructions, no `IMAD.WIDE`), the two products of the inverse (20 to
+  50 % ALU, 130 and 16 `IMAD.WIDE`), the RIPEMD-160 of that key (55 % ALU), the two points (60 to 103 `IMAD.WIDE` per window), then the
+  hash of the other key; the two kinds touch at their boundaries only, in two windows of the thirty. With free registers it interleaves
+  the two hashes with each other (both bound by the ALU pipe: nothing gained) and puts the field work last. It schedules by dependency depth and register pressure, not by pipe; the source order (field work first, or hash a, field work,
+  hash b) changes nothing, while a change beside the point (the copy of x for the full hash made on the common path or in the rare block)
+  moved the arrangement and 3 % of the cycles at two slots. The figures below are for the final source.
+* **The model**, cycles per 32 keys per partition, 4 warps, the capped modules (the pair loop is the same at windows 256 and 512), with an
+  `IMAD.WIDE` at one and at two issue slots:
+
+  | target | 1.19.2        | interleaved   | change            |
+  |--------|---------------|---------------|-------------------|
+  | sm_75  | 3808 / 4149   | 3702 / 4157   | −2.8 % / +0.2 %   |
+  | sm_80  | 3797 / 4153   | 3714 / 4151   | −2.2 % / −0.0 %   |
+  | sm_86  | 3786 / 4142   | 3699 / 4165   | −2.3 % / +0.6 %   |
+  | sm_89  | 3786 / 4142   | 3699 / 4165   | −2.3 % / +0.6 %   |
+  | sm_90  | 3795 / 4148   | 3767 / 4246   | −0.7 % / +2.4 %   |
+
+  Without the cap (window 256, 2 warps per partition, sm_86): 4155 / 4583 → 3950 / 4362, −5 % but behind the capped form; with the cap
+  at three blocks (3 warps): 3856 / 4327. The idle issue cycles with a pipe busy go from 16.3 to 15.2 % at one slot and from 23.6 to 24.7 %
+  at two: the warps are in step in whichever phase the stream is in, as before, only the phases are shorter.
+* **What any order of these instructions could give.** The two streams of the plain kernel (the hash twice, 4784 instructions; the field
+  work of the pair, 1336) re-interleaved by hand in chunks of c hash instructions and c × 1336 / 4784 field instructions, run in the same
+  model with 4 warps (the stall counts stay with their instructions, so the latencies are those of the original neighbours: an estimate,
+  not a schedule), the mean of two starts of the warps, sm_86:
+
+  | chunk     | plain | 1    | 2    | 4    | 8    | 16   | 32   | 64   | 128  | 300  | 600  | hash, then field |
+  |-----------|-------|------|------|------|------|------|------|------|------|------|------|------------------|
+  | one slot  | 3800  | 3768 | 3730 | 3702 | 3706 | 3711 | 3712 | 3721 | 3719 | 3714 | 3730 | 3847             |
+  | two slots | 4165  | 4150 | 4050 | 3994 | 4006 | 4039 | 4080 | 4093 | 4127 | 4106 | 4126 | 4288             |
+
+  With every stall count set to one as well (independent neighbours everywhere, the barriers of the loads kept: the most any scheduler could
+  do): chunks of 4, 3628 and 3900; of 1, 3669 and 4070; of 16, 3643 and 3965; of 300, 3677 and 4053. So the bound of the two pipes of the
+  part above (3428 cycles: −9.5 % and −18 %) is not what this model gives for any order of these instructions: the best is **−4.5 % at one
+  slot and −6.4 % at two**, at a granularity of a few instructions that `ptxas` does not produce, and the arrangement it does produce is
+  worth 0 to 3 %. The bound counts pipe cycles; the model also knows that each warp issues in order and that four warps are all it has:
+  the ALU pipe, which bounds both forms, is busy 92 % of the cycles in the plain kernel, 94 % in the interleaved one and 96 % in the best
+  hand-made mix, and the rest is the time when no warp has an ALU-pipe instruction ready, or all four have one.
+* **Not priced by the model: the instruction cache.** The pair loop grows from 43 KB of straight-line SASS plus the 38 KB of the called hash to
+  98 KB (about 6150 instructions, the rare blocks included), and `pz_search` from 2670 to 13149 instructions (210 KB with the prologue, the
+  epilogue and the rare blocks). The four warps of a partition fetch the same lines and the body runs 511 times per group of 1024 keys, but
+  the instruction caches that microbenchmarks report for Volta and Turing (Jia et al., 2018 and 2019: about 12 to 16 KB per partition, about
+  128 KB per SM; Ampere not measured there) hold neither form's loop in the first level, and the second level the interleaved one only just:
+  the card would say what the fetches cost, the model does not.
+* **On AMD** (clang 18, `-O3`, window 256, the instruction lines of `pz_search`, counted the same way for both forms): gfx1030 4443 → 50146,
+  gfx1100 4661 → 47682, gfx906 4530 → 51342, at 256 VGPRs with more scratch (8544 → 9056 bytes): clang unrolls the pipelined loop and copies
+  the hash many times. The OpenCL kernels keep the plain loop.
+* **Not built as a module, not measured on a card.** The rule of this project sends a form to a card as a forceable variant when the model
+  gains on every target at both slot costs; this one loses at two slots on three targets of five, and the card has already judged a change
+  of the kernel's shape more harshly than the model (the peeled loop of 1.19.1: −2.8 % for 14 instructions saved). The two modules that
+  were built for the checks (windows 256 and 512 with the cap) would add 230 KB to the executable (2.4 MB of PTX each against 1.5, about
+  115 KB each compressed, the first against `linear256m4`, the second against the first: the inlined hash shares little with the called one). The source form stays, and
+  `python3 -I tools/research/sass_sched.py --nvrtc ... --ptxas ... --nvdisasm ... --module linear512m4 --warps 4 -DPZ_INTERLEAVE=1`
+  reproduces the figures. What is left of the idea is what the model says of the ideal order: about 5 %, which no scheduler we can
+  steer reaches.
 
 ## 8. Theoretical limits: how much can still be improved?
 
