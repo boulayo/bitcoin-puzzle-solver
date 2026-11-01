@@ -279,11 +279,12 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
   160 on the device, hits collected with an atomic counter. The duration of a launch is regulated towards a length tuned per device (below;
   0.35 s until it is).
-  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
+  `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are eight variants: window 128, 256 or 512 × free registers
   (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); two further
   forms of the hash160 that moved shifts or rotations onto the FMA pipe (RESEARCH.md section 5, after 1.19.2) were timed on an RTX A2000
-  Laptop and lost 1.3 % and 7.7 %, so they are not built, and a form with the hash of one pair of keys and the curve arithmetic of the next
-  in one instruction stream gains 0 to 3 % in the issue model (same section), so it is not built either. With OpenCL four variants: window 64, 128, 256 or 512. On the first
+  Laptop and lost 1.3 % and 7.7 %, so they are not built; a form with the hash of one pair of keys and the curve arithmetic of the next in
+  one instruction stream gains 0 to 3 % in the issue model (same section) and is built for the two capped windows as the "interleaved"
+  variants (codes 786688 and 786944), a probe for a card to time once. With OpenCL four variants: window 64, 128, 256 or 512. On the first
   run on a device the program warms the GPU up for 3 s, measures them all in turns (in order, in the reverse order, in order again; after
   the first turn only the variants within 5% of the fastest and the default), takes the median of each, and keeps the default (256 with
   CUDA, 128 with OpenCL) unless another one is more than 1% faster, and among the variants within 1% of the fastest it takes the largest

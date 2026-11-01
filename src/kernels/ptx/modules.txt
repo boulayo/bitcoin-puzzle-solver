@@ -28,6 +28,10 @@ linear512      linear  0    linear128  -DHALF=512 -DPZ_FMA_CARRY
 linear128m4    linear  4    linear128  -DHALF=128 -DPZ_MINB=4 -DPZ_FMA_CARRY
 linear256m4    linear  4    linear128m4 -DHALF=256 -DPZ_MINB=4 -DPZ_FMA_CARRY
 linear512m4    linear  4    linear128m4 -DHALF=512 -DPZ_MINB=4 -DPZ_FMA_CARRY
+# the interleaved form of the loop over the pairs (PZ_INTERLEAVE, cfg + 8: VAR_ILV) for the two capped windows: the hash160 of a pair and
+# the curve of the next in one instruction stream, a probe for a card (RESEARCH.md section 5 after 1.19.2: the model gives -2.8 to +2.4 %)
+linear256m4i   linear  12   linear256m4 -DHALF=256 -DPZ_MINB=4 -DPZ_FMA_CARRY -DPZ_INTERLEAVE=1
+linear512m4i   linear  12   linear256m4i -DHALF=512 -DPZ_MINB=4 -DPZ_FMA_CARRY -DPZ_INTERLEAVE=1
 # kangaroos per work-item (one field inversion per NK steps); capped at 128 registers (four blocks per SM: 512 threads;
 # without the cap ptxas uses 150-220 registers and only two blocks fit)
 kang64         kang    0    -          -DNK=64 -DPZ_MINB=4
