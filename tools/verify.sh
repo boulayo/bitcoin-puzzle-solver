@@ -104,9 +104,10 @@ if [ "$(id -u)" = 0 ]; then
   outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together measures the priority of the GPU threads" || { echo "  FAIL priority measurement"; fail=$((fail+1)); }
   outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear measures the priority" || { echo "  FAIL priority measurement (linear)"; fail=$((fail+1)); }
 else echo "  (not root: the priority of the GPU threads cannot be raised, measurement not tried)"; fi
-# the panel's estimate in the first seconds: no completion time until every engine (here the simulated GPU too) has produced something,
+# the panel's estimate in the first seconds (after the one-time tuning of the simulated GPU, about 50 s here): no completion time until
+# every engine (here the simulated GPU too) has produced something,
 # then a provisional one that says so (the multi-line panel only appears on a terminal: a pseudo-terminal stands in)
-PANEL=$(env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/panelcache" python3 -I tools/pty_run.py 30 "$PWD/build/pzsolve" hunt -p 71 -m linear -c e -d "$T/panel" -t 2 --report-interval 1 --ui full 2>&1 || true)
+PANEL=$(env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/panelcache" python3 -I tools/pty_run.py 120 "$PWD/build/pzsolve" hunt -p 71 -m linear -c e -d "$T/panel" -t 2 --report-interval 1 --ui full 2>&1 || true)
 grep -qE "Time left +measuring" <<<"$PANEL" && grep -qE "^ +provisional" <<<"$PANEL" && echo "  OK panel: measuring, then a provisional estimate (CPU + simulated GPU)" || { echo "  FAIL panel: initial estimate"; fail=$((fail+1)); }
 # profile of the machine: measured by the first hunt (CPU + GPU, nothing forced), remembered by the next, applied to -t/--gpu
 PC="$T/profcache"; mkdir -p "$PC"; PROF="env XDG_CACHE_HOME=$PC LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15"
