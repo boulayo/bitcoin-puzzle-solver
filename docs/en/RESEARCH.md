@@ -738,6 +738,12 @@ simulated CUDA driver and on pocl, which run the plain code (the new forms are P
   a move for a move). On AMD the options change nothing (the kernels compile to the same code with and without them on gfx1030, gfx1100 and
   gfx906: 4234, 4572 and 4301 instructions for the linear kernel at window 256, byte for byte those of 1.19.2; `v_alignbit_b32` is one
   instruction per rotation there and `v_mul_hi_u32` runs at a quarter rate).
+* **Measured on the A2000** (`bench --variants`, three turns, medians, keys/s): window 512 with the register cap 875.0, with h1 863.6
+  (**−1.3 %**), with h2 808.2 (**−7.7 %**); window 256 837.4, with h1 839.9 (+0.3 %). So an `IMAD.HI` costs what the probes of `bench`
+  said (2.4 slots: the model gave −0.5 % for h1 at that cost, and the loss is a little larger because the hash phase is not the whole key),
+  and an `IMAD.WIDE` in the hash about two slots (the model's −9 % at two slots against −7.7 % measured). The two variants are dropped;
+  the executable is back to 20 modules. The six kernels of 1.19.2 stay, and the tuner of 1.20.0 picks 256 or 512 with the register cap,
+  875 M keys/s on that card, 4.5 % over the default 256.
 * **What is left, and needs the kernel rather than the hash.** The hash phase leaves the FMA pipe idle 1044 cycles per key (2906 − 1862 at
   one slot per `IMAD.WIDE`) and the field phase leaves the ALU pipe idle; the field work of a pair (1582 FMA-pipe cycles at one slot, 2784
   at two) would fit in the hash's gap if the two ran in the same instruction stream. Bound: max(ALU 5812 + 1044, FMA 3724 + 1582 or 2784)

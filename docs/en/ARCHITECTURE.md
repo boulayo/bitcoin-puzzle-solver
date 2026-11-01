@@ -47,8 +47,7 @@ committed) are embedded compressed (`build/ptx_gen.c`, `embed -z`) in the format
 `embed.c`, which checks each stream it writes with the real decoder, so the build stops if a stream does not unpack to its file. The
 modules of a family differ in few lines (`linear128` and `linear256` in 148 of 38,000), so each module is stored against another one
 (the `base` column of `src/kernels/ptx/modules.txt`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
-the modules take about 1 MB instead of 21 MB (the three hash variants of the linear kernel, whose hash differs from their base in every
-line, cost 39 to 46 KB each), and the stripped Linux executable is under 3 MB instead of 22 MB. `rtcu_build` unpacks the
+the modules take about 1 MB instead of 16 MB, and the stripped Linux executable is under 3 MB instead of 17 MB. `rtcu_build` unpacks the
 module it is about to load (a few milliseconds, once per module load; no hot path touches this), hands the NUL-terminated text to the
 driver and frees it. `tools/gen_ptx.py` and the `.ptx` files are unchanged. The simulated CUDA driver embeds the same files plain
 (`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves;
