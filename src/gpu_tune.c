@@ -125,8 +125,8 @@ static char *kvariant_name(int v, char *b, size_t n)
 }
 static char *variant_name(int v, char *b, size_t n)
 {
-    static const char *const hash[] = {"", ", hash h1", ", hash h2", ", hash h3"};
-    snprintf(b, n, "%d%s%s", VAR_HALF(v), VAR_MINB(v) ? ", register cap" : "", hash[VAR_HASH(v)]);
+    if (VAR_MINB(v)) snprintf(b, n, "%d, register cap", VAR_HALF(v));
+    else snprintf(b, n, "%d", VAR_HALF(v));
     return b;
 }
 

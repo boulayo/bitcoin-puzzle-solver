@@ -10,7 +10,8 @@ tools/gen_ptx.py does, disassembled with the instruction encodings (nvdisasm -he
 instruction are read: the stall count (the cycles before the same warp may issue again, which encodes the fixed latencies of the
 dependencies and the two cycles a 16-lane pipe holds a warp instruction), the yield bit, and the scoreboard barriers of the variable-latency
 operations (loads, stores, calls). The per-pair trace of the kernel is rebuilt from the executed path (the forward loop, then the pair loop
-with the two calls of hash160_w2 expanded and the rare blocks skipped) and N warps run it on one partition: one instruction issued per cycle,
+with the two calls of hash160_w2 expanded, or with the hash already inlined in the interleaved form of pz_linear.cl, -DPZ_INTERLEAVE=1, and
+the rare blocks skipped) and N warps run it on one partition: one instruction issued per cycle,
 IADD3/LOP3/SHF/LEA/SEL/PRMT/ISETP on the ALU pipe and IMAD on the FMA pipe, each holding its pipe two cycles (IMAD.WIDE 2 x --wide), the
 local-memory operations at --mem cycles (the private arrays of a work-item are in video memory on the reference card) and the table and
 constant loads at --l1 cycles. It prints the instructions per pipe, the sum of the stall counts (the time of one warp alone), the bound
@@ -85,20 +86,23 @@ def parse(text):
 
 
 def build_trace(funcs, labels):
-    """the executed instructions of one pair of keys: the forward loop body, then the pair loop with hash160_w2 expanded"""
+    """the executed instructions of one pair of keys: the forward loop body, then the pair loop with hash160_w2 expanded (the plain kernels)
+    or with the filter already inlined (the interleaved kernels, PZ_INTERLEAVE: there the full hash is the only call of the loop); the
+    rare blocks (the full hash of a key that passes the filter) are skipped by taking the conditional branch over them"""
     main = funcs['pz_search']
     ins = [t for _, t, _ in main]
     lab = {k: v[1] for k, v in labels.items() if v[0] == 'pz_search'}
-    hname = [f for f in funcs if 'hash160_w2' in f][0]
+    hname = next((f for f in funcs if 'hash160_w2' in f), None)
     loops = []
     for i, t in enumerate(ins):
         m = re.search(r'BRA\s+`\(\.(L_x_\d+)\)', t)
         if m and m.group(1) in lab and lab[m.group(1)] <= i:
             loops.append((lab[m.group(1)], i))
-    s, e = min([(a, b) for a, b in loops if any('hash160_w2' in x for x in ins[a:b + 1])], key=lambda x: x[1] - x[0])
+    callee = hname if hname else 'hash160_words'
+    s, e = min([(a, b) for a, b in loops if any(callee in x for x in ins[a:b + 1])], key=lambda x: x[1] - x[0])
     trace, i = [], s
     while i <= e:
-        if 'CALL' in ins[i] and 'hash160_w2' in ins[i]:
+        if hname and 'CALL' in ins[i] and hname in ins[i]:
             trace.extend(funcs[hname])                 # the callee, its RET included
             j = i + 1
             while not re.match(r'@!?P\d BRA `\(\.(L_x_\d+)\)', ins[j]):
@@ -106,6 +110,11 @@ def build_trace(funcs, labels):
                 j += 1
             trace.append(main[j])                      # the branch over the rare block (the full hash of a key that passes the filter)
             i = lab[re.match(r'@!?P\d BRA `\(\.(L_x_\d+)\)', ins[j]).group(1)]
+            continue
+        m = re.match(r'@!?U?P\d BRA\s+(?:U?P\d,\s*)?`\(\.(L_x_\d+)\)', ins[i])
+        if not hname and m and m.group(1) in lab and i < lab[m.group(1)] <= e + 1 and any('hash160_words' in x for x in ins[i + 1:lab[m.group(1)]]):
+            trace.append(main[i])                      # the interleaved kernels: the branch over a rare block is taken
+            i = lab[m.group(1)]
             continue
         trace.append(main[i])
         i += 1
