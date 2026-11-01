@@ -193,7 +193,7 @@ bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
             char id[9];
             enc_key_id(&r->cfg.encrypt_pubkey, id);
             pz_log(r->found_seal_failed ? PZ_LOG_ERR : PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log; %s)", source,
-                   r->found_seal_failed ? "it could NOT be encrypted and was not saved anywhere" : "it is encrypted to the key id");
+                   r->found_seal_failed ? "it could NOT be encrypted and was not saved anywhere" : "only its encrypted form is");
             if (!r->found_seal_failed) pz_log(PZ_LOG_INFO, "encrypted to the key id %s: %s", id, r->found_sealed);
         } else
             pz_log(PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log)", source);   /* the box at the end gives the file */
