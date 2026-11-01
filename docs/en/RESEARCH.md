@@ -636,8 +636,8 @@ A2000's herd are 160 MiB per round against 2 MiB of L2).
   overhead per step unchanged: ≈ 65 instructions plus `fe_inv` (14,540 executed per warp) over `NK`. OpenCL: pocl runs every variant bit-exact;
   for gfx1030 clang 18 gives the same VGPR counts within 4 (the quads 250 → 254, no spill) and the same private loads and stores by count.
   **Expected on the A2000**, a model: at 181 → 174 bytes per step and the bandwidth it already reaches, 911 → ≈ 948 M steps/s (+4 %) with `NK`
-  128 quads; the instructions per step do not move, so the energy of a step falls with its bytes. `pzsolve bench --gpu-only --retune`
-  measures it (the tuning is saved per version); `PZ_GPU_NK=128c` forces the variant.
+  128 quads; the instructions per step do not move, so the energy of a step falls with its bytes. Measured below: the gain did not appear, and
+  the form is now the variant "tags once" (`PZ_GPU_NK=128cm`) next to the kernel of 1.19.2.
 * **Counted and dropped.**
   * *x kept across the turn of the pass.* The kernel has one pass per round since 1.7.0 (no second read of x), and the walkers whose state
     could stay on chip from the end of one pass to the start of the next are the few the L2 already serves (above). Shared memory would hold
@@ -658,6 +658,80 @@ A2000's herd are 160 MiB per round against 2 MiB of L2).
   * *The history* is written as 64 contiguous bytes per warp and step and read the same way by the replay: 4 bytes per step, as designed.
   * *The sentinel product* (`TP[0] = 1`, 32 bytes written and read per round per work-item) and the product and inverse around the `fe_inv`
     call: 1.25 bytes per step at `NK` 128, a branch per block or a change of the call for them. Not done.
+
+* **Measured on the A2000** (the owner, `bench --variants`, three turns, medians, steps/s; the kernels with the tags written once for every
+  variant, as the branch then had them; the tuner's pick in every bench of 1.19.2 was `NK` 128 quads at 910 to 916 M, the only figure of that
+  version, the other variants were never printed):
+
+  | variant        | M steps/s | spread | bytes per step (SASS, with the launch) | implied GB/s |
+  |----------------|-----------|--------|----------------------------------------|--------------|
+  | `NK` 64 quads  | **904**   | 0.2 %  | 174                                    | 157          |
+  | `NK` 128 quads | 716       | 0.2 %  | 174                                    | 125          |
+  | `NK` 256 pairs | 850       | 0.0 %  | 190                                    | 161          |
+  | `NK` 64 pairs  | 702       | 1.3 %  | 190                                    | 133          |
+  | `NK` 128 pairs | 694       | 2.3 %  | 190                                    | 132          |
+  | `NK` 256 plain | 742       | 0.5 %  | 221                                    | 164          |
+  | `NK` 64 plain  | 635       | 0.2 %  | 221                                    | 140          |
+  | `NK` 128 plain | 629       | 0.4 %  | 221                                    | 139          |
+  | block herd     | 593       | 0.6 %  | 4                                      |              |
+
+  So `NK` 128 quads lost 21 % against the kernel of 1.19.2 on the same card, in all three turns alike (the turns run the variants in order,
+  reversed, in order: a drift of the clock would show in the spread), while `NK` 64 quads stands where 1.19.2's `NK` 128 quads stood, and
+  the `NK` 256 kernels run at the copy bandwidth of the card (165 GB/s) where the `NK` 64 and 128 ones of the same form do not. The herds:
+  `NK` 128 is 1.31 million walkers with a history 128 rounds deep, `NK` 64 is 655 thousand at 256 rounds, `NK` 256 2.6 million at 64, so a
+  launch is 168 million steps in every case; the herd size, the depth and the measuring procedure (`kang_measure`: a random herd, launches
+  doubled up to the depth, the best of about 1.5 s) are the same code as in 1.19.2.
+* **The two kernels side by side in the SASS** (`NK` 128 quads, sm_86, `ptxas` 12.9, the executed path of one turn of the loop over the
+  walkers, four steps; `tools/research/kang_bytes.py` and the control words of the instructions as `kang_block_sched.py` reads them). The
+  candidates for the cause, each with its number:
+
+  | proxy                                                         | 1.19.2 form | tags once |
+  |---------------------------------------------------------------|-------------|-----------|
+  | bytes per step (read + written)                               | 91 + 86 = 177 | 88 + 82 = 170 |
+  | instructions per step (ALU pipe, FMA pipe, other)             | 1161.2 (523.0, 599.5, 38.8) | 1159.2 (521.2, 599.0, 39.0) |
+  | instructions of the turn, sum of the stall counts             | 4645, 12246 | 4637, 12124 |
+  | `LDL` and `STL` of the turn                                   | 33, 32      | 30, 36 (4 `STL.64` became 4 `STL` and 4 predicated `STL` that run in the last round only) |
+  | scoreboard waits on loads per turn (loads per wait)           | 43 (30 of one load, 11 of two, one of four, one of seven) | 40 (27, 11, 1, 1) |
+  | distance from an `LDL` to its first use, median               | 119 instructions, 340 stall cycles | 121, 327 |
+  | registers, spill (sm_75 / sm_86 / sm_89)                      | 218 / 216 / 216, none | 230 / 230 / 230, none |
+  | registers with `ptxas` 12.0, 12.2, 12.4, 12.6, 12.8, 13.0 (sm_86) | 214, 214, 216, 216, 216, 216, no spill | 232, 232, 232, 230, 230, 230, no spill |
+  | stack frame; `LDL`/`STL` outside the loop                     | 13,888 bytes; the prologue, the epilogue and the 64 bytes passed around `fe_inv` | the same |
+  | `kang_emit_dp`, `kang_replay_state`, `fe_inv` (called)        | 589, 582, 583 instructions, no local access but `fe_inv`'s 8 + 8 | 590, 572, 584, the same |
+
+  1. *Registers.* 230 is below the 255 the launch bound allows (two blocks of 128 per SM either way: 65,536 / (232 × 128) = 2.2, and the
+     allocation is in units of 8), nothing spills in any function, with any `ptxas` from 12.0 to 13.0, so the driver's compiler is unlikely to
+     have spilled either; the rare paths (the distinguished point, the restart, the replay, the zero-product exit) have the same local
+     accesses in both forms.
+  2. *Partial stores.* Local memory is laid out so that consecutive 32-bit words belong to consecutive lanes (NVIDIA's documentation, and
+     what makes an `LDL.128` of a warp 512 contiguous bytes): a 4-byte `STL` of a warp writes 128 contiguous bytes, four whole 32-byte
+     sectors, the 8-byte `STL.64` of the old `PP` wrote eight whole sectors, and the `uint2` load of `CM` reads eight. No store of either
+     form leaves a sector half written, so no read for a write.
+  3. *The schedule.* The loads of x and y (`LDL.128`) sit in the same places in both forms, the distance to their use and the number of
+     loads in flight per wait are the same to within one, the sum of the stall counts is 1 % lower in the new form.
+  4. *`NK` 64 quads:* the same picture (1162.8 → 1163.5 instructions, 216 → 222 registers, 3067 → 3043 stall cycles per step).
+  5. *The rest of the diff:* three `LDL` of the flags fewer, the stores above, and a handful of `IADD3`/`IMAD.MOV` moved; the plain and pairs
+     kernels show the same (the plain kernel even issues its loads earlier: median distance to use 24 → 111 instructions).
+
+  So nothing that the SASS shows separates the two forms by more than 1 %, and the analysis cannot name a cause of the 21 % in the kernel
+  text. What it can say: whatever holds `NK` 128 quads at 125 GB/s is outside the executed instruction stream, which is the same; the
+  addresses are the same too (the frame is 13,888 bytes in both forms, the stride between the regions of the warps 32 × 13,888 bytes, only
+  the 8-byte `PP` slot is split into `PV` and `P2`), and the herd, the depth and the procedure are those of 1.19.2. What could not be checked
+  here is the card itself: the mapping of those addresses onto the L2 slices and the memory channels of a GA107, and the compiler of the
+  owner's driver (no version of `ptxas` at hand spills). A model of bytes alone was right about the bytes and wrong about the rate.
+* **What is shipped.** The kernel of 1.19.2 is the default again, every module byte for byte the PTX of 1.19.2 (`KANG_META` 0 in
+  `pz_kang.cl`), and the form with the tags written once is the variant "tags once" (`KANG_META` 1; `PZ_GPU_NK` with `m` after the letter,
+  `64m` .. `128cm`; six more modules, 243 KB more in the executable: a module compresses to 2 to 36 KB against its sibling of the other `NK`
+  but the quads modules to about 85 KB against any base, as `kang128c` already did) that the tuner measures next to the old form at every
+  `NK` 64 and 128, plain, pairs and quads with CUDA and `NK` 32 to 128 plain and pairs with OpenCL, so that one `bench --variants` shows
+  both forms side by side. Both forms are bit-exact against the CPU on the simulated CUDA driver and on pocl; planted keys are found with
+  every new code forced on the simulated driver.
+* **Prediction for the final measurement**, a model. If the 21 % is in the kernel text after all, through something the SASS does not show,
+  `NK` 128 quads will measure again what 1.19.2 did, 910 to 916 M steps/s, and "`NK` 128 quads, tags once" about 716 next to it; the rule then
+  keeps the default. If it is not, the two forms will measure within the noise of each other at every `NK` (the tags-once form at most +4 %
+  by the bytes), `NK` 128 quads near 716 and `NK` 64 quads near 904 in both forms, and the question moves to the card: why `NK` 128, in
+  every form, falls 15 to 25 % short of the bandwidth that `NK` 256 and `NK` 64 quads reach (a test: `PZ_GPU_NK=128c pzsolve bench --gpu-only`
+  on a cold card against the same after `bench --variants`, and the two forms on the same herd size, which the depth of the history couples
+  to `NK`).
 
 **After 1.19.2: the hash160 of the linear kernel.** Two thirds of the instructions of a key are the hash filter `hash160_w2` (SHA-256 of the
 33-byte key, RIPEMD-160 of the digest, word 2 only). This part accounts for every one of them against the floor of the expression on this

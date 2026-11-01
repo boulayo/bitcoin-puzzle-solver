@@ -21,8 +21,9 @@ struct pz_env {
     bool no_opencl;                 /* PZ_NO_OPENCL: do not load the OpenCL library */
     bool opencl_all;                /* PZ_OPENCL_ALL: use the OpenCL CPU devices and the second view of a device too */
     int gpu_half;                   /* PZ_GPU_HALF=N: window of the linear kernel (the values a device accepts are checked per device), 0 unset */
-    int gpu_nk;                     /* PZ_GPU_NK=N[b|c][l]: walkers per work-item of the kangaroo kernel, 0 unset */
+    int gpu_nk;                     /* PZ_GPU_NK=N[b|c|g][m][l]: walkers per work-item of the kangaroo kernel, 0 unset */
     int gpu_nk_cfg;                 /*   the suffix b (1) or c (2): products at every other (fourth) walker; g (3): block herd; 0 without */
+    bool gpu_nk_meta;               /*   the suffix m: the tags written once (KANG_META=1) */
     bool gpu_nk_l2;                 /*   the suffix l: herd sized to the L2 cache */
     char gpu_nk_text[16];           /*   the text as given, for the messages */
     int gpu_tune;                   /* PZ_GPU_TUNE=0|1: PZ_ENV_TUNE_OFF, PZ_ENV_TUNE_ALL (also the devices that are not GPUs), else PZ_ENV_TUNE_DEFAULT */
@@ -60,8 +61,8 @@ void pz_env_init(void);
  * included (a misspelled name is what `doctor` is there to show); returns how many. */
 int pz_env_each_pz(void (*fn)(const char *entry, void *ctx), void *ctx);
 
-/* The value of PZ_GPU_NK, "128", "128b" (products at every other walker), "128c" (every fourth), with a final "l" for the herd sized to the
- * L2 cache. False if the text is anything else. */
-bool pz_env_parse_nk(const char *text, int *nk, int *cfg, bool *l2);
+/* The value of PZ_GPU_NK, "128", "128b" (products at every other walker), "128c" (every fourth), "4g" (the block herd), then "m" for the
+ * tags written once ("128cm") and a final "l" for the herd sized to the L2 cache. False if the text is anything else. */
+bool pz_env_parse_nk(const char *text, int *nk, int *cfg, bool *meta, bool *l2);
 
 #endif

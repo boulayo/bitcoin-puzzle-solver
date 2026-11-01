@@ -4,14 +4,15 @@
 
     tools/research/kang_bytes.py --nvrtc LIBNVRTC --ptxas PTXAS --nvdisasm NVDISASM [--module kang128c] [--arch sm_86] [-DNAME=... ]
 
-The module (src/kernels/ptx/modules.txt; or `kang` with -D options for a build that is not a module) is compiled with NVRTC and ptxas as
+The module (src/kernels/ptx/modules.txt, `kang128c` the form of 1.19.2 and `kang128cm` the tags written once; or `kang` with -D options for a
+build that is not a module) is compiled with NVRTC and ptxas as
 tools/gen_ptx.py does, disassembled, and the executed path of one turn of the loop over the walkers of a round is rebuilt from the SASS as
 kang_block_sched.py does for the block herd: the loop is the one whose body stores the history entries (STG.U16), a conditional branch is
 taken when it skips a block that holds an ATOMG (a restart, a distinguished point) and not taken when its target calls kang_emit_dp; the
 other conditional branches are not taken (the cycle update then counts its checkpoint form, a few instructions more than the common one).
 The private arrays of the work-item live in device memory, so every LDL and STL of the path is traffic to it (a predicated store and its
 complement under the other polarity of the same predicate count once): the script prints, per step, the bytes read and written by the local
-loads and stores by purpose (from their offsets in the stack frame, which the kernel lays out as X, Y, TP, FL, PV, P2, CM, LD), the history
+loads and stores by purpose (from their offsets in the stack frame, which the kernel lays out as X, Y, TP, FL, the tags, CM, LD), the history
 store, the jump-table loads (served by L1 and L2: the table is 21 KiB), and the instructions of the turn on the two integer pipes and the
 rest; then the round overhead outside that loop (the check of the product, fe_inv as executed for a warp: kang_block_sched.inv_path) per
 step. Used for docs/en/RESEARCH.md section 5 (after 1.19.2). The tools: see tools/research/README.md (sass_count.py)."""
@@ -124,11 +125,12 @@ def frame_base(ins, i, reg, depth=0):
     return None
 
 
-def layout(nk, mc):
-    """the private arrays of pz_kang_step in the order the kernel declares them: [(name, start, end)]"""
+def layout(nk, mc, meta):
+    """the private arrays of pz_kang_step in the order the kernel declares them: [(name, start, end)]; meta: KANG_META (pz_kang.cl), 0 the
+    tags one and two steps back in one array of 8 bytes per walker, 1 in two arrays"""
+    tags = [('PV (tag one step back)', 4 * nk), ('P2 (tag two steps back)', 4 * nk)] if meta else [('PP (tags one and two steps back)', 8 * nk)]
     sizes = [('x', 32 * nk), ('y', 32 * nk), ('TP (batch products)', (2 * nk // mc if mc > 1 else nk) * 32),
-             ('FL (flags, jump index)', 4 * nk), ('PV (tag one step back)', 4 * nk), ('P2 (tag two steps back)', 4 * nk),
-             ('CM (checkpoint, least tag)', 8 * nk), ('LD (step of the last DP)', 8 * nk)]
+             ('FL (flags, jump index)', 4 * nk)] + tags + [('CM (checkpoint, least tag)', 8 * nk), ('LD (step of the last DP)', 8 * nk)]
     out, at = [], 0
     for name, sz in sizes:
         out.append((name, at, at + sz))
@@ -187,18 +189,20 @@ def main():
     lab = {k: v[1] for k, v in labels.items() if v[0] == 'pz_kang_step'}
     head, back = walker_loop(ins, lab)
     path, idx = path_of(ins, lab, head, back)
-    m = re.match(r'kang(\d+)([a-z]?)', module)
-    nk, mc = (int(m.group(1)), {'b': 2, 'c': 4, 'd': 8}.get(m.group(2), 1)) if m else (0, 1)
-    for d in defines:                                   # a build that is not a module: `kang` with -DNK= and -DMC=
+    m = re.match(r'kang(\d+)([bcd]?)(m?)$', module)
+    nk, mc, meta = (int(m.group(1)), {'b': 2, 'c': 4, 'd': 8}.get(m.group(2), 1), m.group(3) == 'm') if m else (0, 1, False)
+    for d in defines:                                   # a build that is not a module: `kang` with -DNK=, -DMC= and -DKANG_META=
         if d.startswith('-DNK='):
             nk = int(d[5:])
         if d.startswith('-DMC='):
             mc = int(d[5:])
+        if d.startswith('-DKANG_META='):
+            meta = int(d[13:]) != 0
     steps = sum('STG.E.U16' in x[1] for x in path)
     n, a, f, o, _ = kbs.stats(path)
     print('%s %s: loop over the walkers at %x..%x, %d steps per turn' % (module, arch, ins[head][0], ins[back][0], steps))
     print('  per step: %.1f instructions (ALU pipe %.1f, FMA pipe %.1f, other %.1f)' % (n / steps, a / steps, f / steps, o / steps))
-    mb = mem_bytes(ins, idx, layout(nk, mc))
+    mb = mem_bytes(ins, idx, layout(nk, mc, meta))
     tot = collections.Counter()
     for (kind, purpose), b in sorted(mb.items()):
         print('  %-6s %-40s %6.1f bytes per step' % (kind, purpose, b / steps))

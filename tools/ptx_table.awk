@@ -6,7 +6,7 @@
 #   bases     name:base for each module that has a base
 #   rtcu      the C source of build/ptx_mods.c: which module an rt_build(program, parameter) call of the CUDA runtime loads (src/rt_priv.h)
 #   mockhdr   tests/mock_cuda: the header with the modules the simulated driver knows, the kernel it runs for each and whether that kernel
-#             works in work-groups (cfg 3 of a kangaroo module: the block herd)
+#             works in work-groups (cfg 3 of a kangaroo module, 19 with the metadata written once: the block herd)
 #   mockcc    tests/mock_cuda: the commands (with COMPILER, objects in DIR) that compile the kernels the simulated driver runs
 #   mockobjs  tests/mock_cuda: the objects those commands make
 # Only POSIX awk is used. A line of the file: name kind cfg base defines...
@@ -19,11 +19,12 @@ function param_of(    s) {
     s = size_of()
     return $3 + 0 ? s " | " $3 " << 16" : s
 }
-# the -D options the kernel emulation takes: the size, the batch products and the block herd (not the register cap, which is for the compiler of the GPU)
+# the -D options the kernel emulation takes: the size, the batch products, the block herd and the form of the metadata (not the register cap,
+# which is for the compiler of the GPU)
 function emul_defines(    i, d) {
     d = ""
     for (i = 5; i <= NF; i++)
-        if ($i ~ /^-D(HALF|NK|MC|KANG_BLOCK)=[0-9]+$/) d = d " " $i
+        if ($i ~ /^-D(HALF|NK|MC|KANG_BLOCK|KANG_META)=[0-9]+$/) d = d " " $i
     return d
 }
 # the linear kernels the simulated driver runs differ by the size and by the batch products (a "p" when they are kept every other denominator)
@@ -70,7 +71,7 @@ END {
         print "static const struct { const unsigned char *ptx; int kind; search_fn search; kang_fn kang; int group; } MODS[] = {"
         for (i = 1; i <= n; i++) {
             if (kind[i] == "linear") printf "    {mock_ptx_%s, M_LINEAR, mock_search%s, NULL, 0},\n", name[i], lt[i]
-            else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s, %d},\n", name[i], name[i], (cfg[i] == 3)
+            else if (kind[i] == "kang") printf "    {mock_ptx_%s, M_KANG, NULL, mock_%s, %d},\n", name[i], name[i], (cfg[i] % 16 == 3)
             else printf "    {mock_ptx_%s, M_TEST, NULL, NULL, 0},\n", name[i]
         }
         print "};"

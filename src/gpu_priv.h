@@ -21,11 +21,15 @@
  * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion
  * for every walker, 1 only for every other one (half the traffic for those products, half a field multiplication more per
  * step), 2 every fourth, 3 the block herd (KV_BLOCK: a few walkers per work-item in registers, one inversion per work-group of
- * KANG_GROUP and round). Measured on the device like the linear variants. */
+ * KANG_GROUP and round) | metadata << 20: 1 writes the tag two steps back once per launch instead of at every step and reads the
+ * flags of a quad once (KANG_META in pz_kang.cl: 7 bytes less per step on the SASS, slower on the RTX A2000 as measured, RESEARCH.md
+ * section 5 after 1.19.2; the suffix m of PZ_GPU_NK), 0 the form of 1.19.2. Measured on the device like the linear variants. */
 #define KV_NK(v) ((v) & 0xFFFF)
 #define KV_CFG(v) (((v) >> 16) & 0xF)
+#define KV_META(v) (((v) >> 20) & 1)
+#define KV_METAFLAG (1 << 20)
 #define KV_L2(v) (((v) >> 24) & 1)            /* the herd is sized to fit the L2 cache (fewer work-items), see kang_l2_threads */
-#define KV_KERNEL(v) ((v) & 0xFFFFF)          /* NK | cfg << 16: what the kernel build takes */
+#define KV_KERNEL(v) ((v) & 0x1FFFFF)         /* NK | cfg << 16 | metadata << 20: what the kernel build takes (modules.txt: cfg + 16 metadata) */
 #define KV_L2FLAG (1 << 24)
 #define KV_BLOCK 3                            /* KV_CFG of the block herd */
 #define KV_WIDE(v) (((v) >> 25) & 3)          /* a herd wider than the default one (more work-items), see kang_wide_threads_for */

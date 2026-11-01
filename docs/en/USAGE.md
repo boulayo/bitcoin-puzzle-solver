@@ -366,7 +366,7 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 | `PZ_GPU_API=cuda\|opencl` | same as `--gpu-api` (which takes precedence) |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | do not load that runtime |
 | `PZ_GPU_HALF=N` | fix the window of the linear kernel (skips the tuning; the values are in ALGORITHMS.md section 5); a number that the device does not offer is reported for each device |
-| `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `64l`, `4g` |
+| `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `128cm`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
 | `PZ_OPENCL_ALL=1` | use OpenCL CPU devices too (section 7.1) |
 | `PZ_NO_PROFILE=1` | same as `--no-tune` |

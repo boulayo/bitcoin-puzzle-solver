@@ -309,7 +309,11 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   traffic for half a multiplication more per step), and `NK` = 64 or 128 with the products every fourth walker (`c`), and on cards of more than
   64 SMs, where the default herd is capped at 32768 work-items, `NK` = 64 at 512 work-items per SM ("full herd"); with OpenCL `NK` = 32, 64
   or 128 (default 64), plain or `b`, and `NK` = 32 or 64, plain or `b`, with 4 or 8 times the 64 work-items per compute unit ("4x herd", "8x
-  herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
+  herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). Each of these except `NK` 256 and the wide herds also
+  comes with the *tags written once* (`m` after the letter: `128m`, `128cm`, "tags once"): the tag of the point two steps back is stored in
+  the last round of a launch instead of at every step, and the quads kernel reads the flags of its four walkers once, 7 bytes less per step
+  on the SASS; on the RTX A2000 the form of 1.19.2, which is the default, measured faster (RESEARCH.md section 5, after 1.19.2), so the two
+  are measured side by side. On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
   work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK=4g` forces the *block herd* (`NK` = 4), which no tuning offers: the four walkers
   of a work-item stay in its registers for the whole launch, two blocks of 128 work-items per SM (20,480 walkers on 20 SMs), and one inversion
   serves a whole block and round (each work-item multiplies its four denominators, 32 work-items of the block multiply the products of a column

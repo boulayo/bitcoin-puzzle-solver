@@ -23,9 +23,12 @@
  *    prefix and suffix products from one round to the next (the pass runs downwards, then upwards, ...): Montgomery's
  *    trick works with either, and each pass reads the products the previous one left behind and overwrites them.
  *  - The state a step needs besides x and y is a few 32-bit words (tags, flags, jump index); the two cycle tags are written only when
- *    they change. The tag two steps back is only used by the next jump choice, which the step that computes it already knows, so it
- *    is kept for the host alone: the last round of a launch stores it (a launch that stops early because a product was zero leaves
- *    the value the launch began with, for walkers the host restarts anyway).
+ *    they change. The two tags one and two steps back are written at every step (KANG_META 0, the form of 1.19.2). With KANG_META 1 the
+ *    tag two steps back, which only the next jump choice uses and the step that computes it already knows, is kept for the host alone: the
+ *    last round of a launch stores it (a launch that stops early because a product was zero leaves the value the launch began with, for
+ *    walkers the host restarts anyway), and the quads kernel keeps the flags of its block in registers. Counted on the SASS the second form
+ *    moves 7 bytes less per step; measured on an RTX A2000 it was slower (RESEARCH.md section 5, after 1.19.2), so it is the variant the
+ *    tuner measures (the m suffix of PZ_GPU_NK) and the first is the default.
  * The history of a launch is rounds * NK * work-items 16-bit entries, laid out so that the work-items of a warp write
  * adjacent addresses. Entry: bits 0-8 jump index, bit 9 negated, 0xFFFF no step (a round skipped for a zero product). */
 
@@ -34,6 +37,9 @@
 #endif
 #ifndef MC
 #define MC 1                       /* kangaroos per block of stored batch products (1: every one) */
+#endif
+#ifndef KANG_META
+#define KANG_META 0                /* 1: the tag two steps back written once per launch, the flags of a quad read once (the top of the file) */
 #endif
 #define KS KANG_STATE_WORDS        /* KANG_* are in pz_kang.h, which the builds put in front of this file (the host reads it too) */
 #define JS KANG_JUMP_WORDS
@@ -150,12 +156,38 @@ PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hi
     }
 }
 
-/* The words of a walker besides x and y: FL[k] the flags (FL_*) and the jump index, PV[k] the tag of the point one step back, CM[k] the
- * checkpoint tag (x) and the least tag since (y), read as one 8-byte word; P2[k] the tag two steps back (see the top of the file). Separate
- * arrays, so that the kernels capped at 128 registers read each word where they use it: one word of 16 bytes read at the start of the step
- * kept three more registers live through it and spilled some of them on sm_75. */
-#define CM_CK x
-#define CM_MN y
+/* The words of a walker besides x and y, in separate arrays so that the kernels capped at 128 registers read each word where they use it
+ * (one word of 16 bytes read at the start of the step kept three more registers live through it and spilled some of them on sm_75): FL[k]
+ * the flags (FL_*) and the jump index, and the tags in one of two forms (KANG_META, see the top of the file):
+ *   0  PP[k] the tags one and two steps back, written at every step as one 8-byte word; CM[k] the checkpoint tag and the least tag since;
+ *   1  PV[k] the tag one step back; P2[k] the tag two steps back, written in the last round only; CM[k] the two cycle tags as one uint2.
+ * KANG_TAGS declares the arrays, KANG_TAGS_IN fills them from the state, KANG_TAGS_OUT writes them back and KANG_TAGS_STEP is the part of the
+ * step that reads and updates them (needs k, f, tag, bnd and more declared; leaves ck, mn, esc and prev2 declared). */
+#if KANG_META
+#define KANG_TAGS uint PV[NK], P2[NK]; uint2 CM[NK]
+#define KANG_TAGS_IN(k, prev, prev2, ck, mn) do { PV[k] = prev; P2[k] = prev2; CM[k].x = ck; CM[k].y = mn; } while (0)
+#define KANG_TAGS_OUT(s, k) do { s[24] = PV[k]; s[25] = P2[k]; s[26] = CM[k].x; s[27] = CM[k].y; } while (0)
+#define KANG_TAGS_STEP \
+            const uint2 cm = CM[k]; \
+            uint ck = cm.x, mn = cm.y, esc = (f >> 2) & 1u; \
+            kang_cycle(bnd, tag, &ck, &mn, &esc); \
+            if (ck != cm.x || mn != cm.y) { CM[k].x = ck; CM[k].y = mn; } \
+            const uint prev2 = PV[k];                      /* the old prev becomes prev2 */ \
+            if (!more) P2[k] = prev2;                      /* for the host (see the top of the file) */ \
+            PV[k] = tag;
+#else
+#define KANG_TAGS uint PP[NK][2], CM[NK][2]
+#define KANG_TAGS_IN(k, prev, prev2, ck, mn) do { PP[k][0] = prev; PP[k][1] = prev2; CM[k][0] = ck; CM[k][1] = mn; } while (0)
+#define KANG_TAGS_OUT(s, k) do { s[24] = PP[k][0]; s[25] = PP[k][1]; s[26] = CM[k][0]; s[27] = CM[k][1]; } while (0)
+#define KANG_TAGS_STEP \
+            uint ck = CM[k][0], mn = CM[k][1], esc = (f >> 2) & 1u; \
+            const uint ck0 = ck, mn0 = mn; \
+            kang_cycle(bnd, tag, &ck, &mn, &esc); \
+            if (ck != ck0 || mn != mn0) { CM[k][0] = ck; CM[k][1] = mn; } \
+            const uint prev2 = PP[k][0];                   /* the old prev becomes prev2 */ \
+            PP[k][0] = tag; \
+            PP[k][1] = prev2;
+#endif
 
 /* the step of one kangaroo once its inverse ik is known; needs k, i, rd, n, bnd, more, f (= FL[k]), J, xk, yk, jx, jy, ik, t, lam, x3, y3, J2
  * declared */
@@ -174,13 +206,7 @@ PZ_NOINLINE void kang_emit_dp(__global const uint *st, __global const ushort *hi
             hist[(size_t)rd * HS + (size_t)k * pz_n + gid] = (ushort)(J | (flip ? H_FLIP : 0u)); \
             /* cycle detection with the tag of the point just left */ \
             const uint tag = xk.v[4]; \
-            const uint2 cm = CM[k]; \
-            uint ck = cm.CM_CK, mn = cm.CM_MN, esc = (f >> 2) & 1u; \
-            kang_cycle(bnd, tag, &ck, &mn, &esc); \
-            if (ck != cm.CM_CK || mn != cm.CM_MN) { CM[k].CM_CK = ck; CM[k].CM_MN = mn; } \
-            const uint prev2 = PV[k];                      /* the old prev becomes prev2 */ \
-            if (!more) P2[k] = prev2;                      /* for the host (see the top of the file) */ \
-            PV[k] = tag; \
+            KANG_TAGS_STEP \
             const uint sg = ((f >> 1) & 1u) ^ flip; \
             J2 = kang_jidx(&x3, prev2, ck, mn, esc, R); \
             FL[k] = (f & FL_KIND) | (sg << 1) | (esc << 2) | (J2 << FL_JSHIFT); \
@@ -216,8 +242,8 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
 #else
     fe TP[NK];
 #endif
-    uint FL[NK], PV[NK], P2[NK];                          /* flags and jump index; tags one and two steps back */
-    uint2 CM[NK];                                         /* checkpoint tag, least tag (CM_*) */
+    uint FL[NK];                                          /* flags and jump index */
+    KANG_TAGS;                                            /* the tags (KANG_TAGS_*) */
     ulong LD[NK];
     const ulong cap = (ulong)cap_lo | ((ulong)cap_hi << 32);
     const ulong step0 = (ulong)step_lo | ((ulong)step_hi << 32);
@@ -225,12 +251,9 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
         __global const uint *s = state + (size_t)(base + k) * KS;
         for (int i = 0; i < 8; i++) { X[k].v[i] = s[i]; Y[k].v[i] = s[8 + i]; }
         const uint prev = s[24], prev2 = s[25], ck = s[26], mn = s[27], esc = s[28];
-        FL[k] = (s[22] & 1u) | ((s[23] & 1u) << 1) | ((esc & 1u) << 2) | (kang_jidx(&X[k], prev2, ck, mn, esc, R) << FL_JSHIFT);
-        PV[k] = prev;
-        P2[k] = prev2;
-        CM[k].CM_CK = ck;
-        CM[k].CM_MN = mn;
+        KANG_TAGS_IN(k, prev, prev2, ck, mn);
         LD[k] = (ulong)s[29] | ((ulong)s[30] << 32);
+        FL[k] = (s[22] & 1u) | ((s[23] & 1u) << 1) | ((esc & 1u) << 2) | (kang_jidx(&X[k], prev2, ck, mn, esc, R) << FL_JSHIFT);
     }
     /* denominators of the first round and their prefix products */
     fe acc;
@@ -272,7 +295,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
 #if MC > 1
         for (int b = 0; b < NK / MC; b++) {
             fe BX[MC], BD[MC], BQ[MC];
-#if MC >= 4
+#if MC >= 4 && KANG_META
             uint BF[MC];                                  /* the flags of the block, read once (the quads kernel has the registers; at the
                                                            * 128-register cap of the pairs they would spill: there the step reads them again) */
 #define FL_OF(c, k) BF[c]
@@ -286,7 +309,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
                 const int i = b * MC + c, k = dir ? i : NK - 1 - i;
                 fe jx0;
                 BX[c] = X[k];
-#if MC >= 4
+#if MC >= 4 && KANG_META
                 BF[c] = FL[k];
 #endif
                 fe_load_g16(&jx0, jump + (FL_OF(c, k) >> FL_JSHIFT) * JS);
@@ -362,10 +385,7 @@ __kernel void pz_kang_step(__global uint *state, __global const uint *jump, __gl
         const uint f = FL[k];
         s[22] = f & 1u;
         s[23] = (f >> 1) & 1u;
-        s[24] = PV[k];
-        s[25] = P2[k];
-        s[26] = CM[k].CM_CK;
-        s[27] = CM[k].CM_MN;
+        KANG_TAGS_OUT(s, k);
         s[28] = (f >> 2) & 1u;
         s[29] = (uint)LD[k];
         s[30] = (uint)(LD[k] >> 32);
@@ -449,8 +469,8 @@ __kernel PZ_KANG_ATTR void pz_kang_step(__global uint *state, __global const uin
     const uint base = gid * NK;
     const size_t HS = (size_t)NK * pz_n;                  /* history stride between rounds */
     fe X[NK], Y[NK], TP[NK];
-    uint FL[NK], PV[NK], P2[NK];                          /* flags and jump index; tags one and two steps back */
-    uint2 CM[NK];                                         /* checkpoint tag, least tag (CM_*) */
+    uint FL[NK];                                          /* flags and jump index */
+    KANG_TAGS;                                            /* the tags (KANG_TAGS_*) */
     ulong LD[NK];
     const ulong cap = (ulong)cap_lo | ((ulong)cap_hi << 32);
     const ulong step0 = (ulong)step_lo | ((ulong)step_hi << 32);
@@ -460,18 +480,17 @@ __kernel PZ_KANG_ATTR void pz_kang_step(__global uint *state, __global const uin
             __global const uint *s = state + (size_t)(base + k) * KS;
             for (int i = 0; i < 8; i++) { X[k].v[i] = s[i]; Y[k].v[i] = s[8 + i]; }
             const uint prev = s[24], prev2 = s[25], ck = s[26], mn = s[27], esc = s[28];
-            FL[k] = (s[22] & 1u) | ((s[23] & 1u) << 1) | ((esc & 1u) << 2) | (kang_jidx(&X[k], prev2, ck, mn, esc, R) << FL_JSHIFT);
-            PV[k] = prev;
-            P2[k] = prev2;
-            CM[k].CM_CK = ck;
-            CM[k].CM_MN = mn;
+            KANG_TAGS_IN(k, prev, prev2, ck, mn);
             LD[k] = (ulong)s[29] | ((ulong)s[30] << 32);
+            FL[k] = (s[22] & 1u) | ((s[23] & 1u) << 1) | ((esc & 1u) << 2) | (kang_jidx(&X[k], prev2, ck, mn, esc, R) << FL_JSHIFT);
         }
     }
     for (uint rd = 0; rd < rounds; rd++) {
         const ulong n = step0 + rd;
         const int bnd = (n & (KANG_CK_PERIOD - 1)) == 0;   /* checkpoint step: cycle detection, watchdog */
+#if KANG_META
         const int more = rd + 1 < rounds;
+#endif
         fe acc;
         fe_set_u32(&acc, 1);
         if (live) {
@@ -532,10 +551,7 @@ __kernel PZ_KANG_ATTR void pz_kang_step(__global uint *state, __global const uin
         const uint f = FL[k];
         s[22] = f & 1u;
         s[23] = (f >> 1) & 1u;
-        s[24] = PV[k];
-        s[25] = P2[k];
-        s[26] = CM[k].CM_CK;
-        s[27] = CM[k].CM_MN;
+        KANG_TAGS_OUT(s, k);
         s[28] = (f >> 2) & 1u;
         s[29] = (uint)LD[k];
         s[30] = (uint)(LD[k] >> 32);

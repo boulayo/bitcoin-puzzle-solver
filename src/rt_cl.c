@@ -120,8 +120,9 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
         src[1] = (const char *)pz_kang_h; len[1] = pz_kang_h_len;
         src[2] = (const char *)pz_kang_cl; len[2] = pz_kang_cl_len;
         nsrc = 3;
-        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", param & 0xFFFF,
-                 (param >> 16) == 1 ? " -DMC=2" : (param >> 16) == 2 ? " -DMC=4" : (param >> 16) == 3 ? " -DKANG_BLOCK=1" : ""); break;
+        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s%s", param & 0xFFFF,
+                 (param >> 16 & 0xF) == 1 ? " -DMC=2" : (param >> 16 & 0xF) == 2 ? " -DMC=4" : (param >> 16 & 0xF) == 3 ? " -DKANG_BLOCK=1" : "",
+                 param >> 20 & 1 ? " -DKANG_META=1" : ""); break;   /* the configuration and the form of the metadata: KV_CFG, KV_META */
     default: src[1] = (const char *)pz_test_cl; len[1] = pz_test_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2"); break;
     }
     if (m->c->dev.no_asm) strcat(opts, " -DPZ_NO_ASM");
