@@ -1,20 +1,23 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* gpu_tune.c - the compile-time variants of the GPU kernels, the choice of the fastest for each device (measured once, remembered
- * on disk) and the size of the kangaroo herd. The benchmark is in gpu_bench.c, the self-test of the choice in gpu_tune_selftest.c. */
+/* gpu_tune.c - the compile-time variants of the GPU kernels that each device offers (their code, name and text are in gpu_variant.h), the
+ * choice of the fastest for each device (measured once, remembered on disk) and the size of the kangaroo herd. The benchmark is in
+ * gpu_bench.c, the self-test of the choice in gpu_tune_selftest.c. */
 #include "gpu_tune_priv.h"
 #include "platform.h"
 #include "envopts.h"
 #include "outfmt.h"
 #include "doctor.h"
 
-static const int CL_VARIANTS[] = {64, 128, 256, 512};
-static const int CU_VARIANTS[] = {128, 256, 512, 128 | 4 << 16, 256 | 4 << 16, 512 | 4 << 16};
-/* the kangaroo variants: NK plain, pairs and quads, each in the form of 1.19.2 and with the tags written once (KV_METAFLAG, pz_kang.cl KANG_META:
- * measured side by side, RESEARCH.md section 5 after 1.19.2) */
-static const int CL_KVARIANTS[] = {32, 64, 128, 32 | 1 << 16, 64 | 1 << 16, 128 | 1 << 16,
-                                   32 | KV_METAFLAG, 64 | KV_METAFLAG, 128 | KV_METAFLAG, 32 | 1 << 16 | KV_METAFLAG, 64 | 1 << 16 | KV_METAFLAG, 128 | 1 << 16 | KV_METAFLAG};
-static const int CU_KVARIANTS[] = {64, 128, 256, 64 | 1 << 16, 128 | 1 << 16, 256 | 1 << 16, 64 | 2 << 16, 128 | 2 << 16,
-                                   64 | KV_METAFLAG, 128 | KV_METAFLAG, 64 | 1 << 16 | KV_METAFLAG, 128 | 1 << 16 | KV_METAFLAG, 64 | 2 << 16 | KV_METAFLAG, 128 | 2 << 16 | KV_METAFLAG};
+/* The variants of the linear kernel that each runtime offers: the window and, for CUDA, the minimum of resident blocks per SM (VAR_MAKE). */
+static const int CL_VARIANTS[] = {VAR_MAKE(64, 0), VAR_MAKE(128, 0), VAR_MAKE(256, 0), VAR_MAKE(512, 0)};
+static const int CU_VARIANTS[] = {VAR_MAKE(128, 0), VAR_MAKE(256, 0), VAR_MAKE(512, 0), VAR_MAKE(128, 4), VAR_MAKE(256, 4), VAR_MAKE(512, 4)};
+/* the kangaroo variants: NK plain, pairs and quads, each in the form of 1.19.2 and with the tags written once (the metadata, pz_kang.cl KANG_META:
+ * measured side by side, RESEARCH.md section 5 after 1.19.2); a row is the walkers per work-item, the configuration and the form of the metadata */
+#define KVROW(nk, cfg, meta) KV_MAKE(nk, cfg, meta, 0, 0)
+static const int CL_KVARIANTS[] = {KVROW(32, 0, 0), KVROW(64, 0, 0), KVROW(128, 0, 0), KVROW(32, 1, 0), KVROW(64, 1, 0), KVROW(128, 1, 0),
+                                   KVROW(32, 0, 1), KVROW(64, 0, 1), KVROW(128, 0, 1), KVROW(32, 1, 1), KVROW(64, 1, 1), KVROW(128, 1, 1)};
+static const int CU_KVARIANTS[] = {KVROW(64, 0, 0), KVROW(128, 0, 0), KVROW(256, 0, 0), KVROW(64, 1, 0), KVROW(128, 1, 0), KVROW(256, 1, 0), KVROW(64, 2, 0), KVROW(128, 2, 0),
+                                   KVROW(64, 0, 1), KVROW(128, 0, 1), KVROW(64, 1, 1), KVROW(128, 1, 1), KVROW(64, 2, 1), KVROW(128, 2, 1)};
 
 int gpu_variants_of(const rt_dev *d, const int **v)
 {
@@ -22,7 +25,7 @@ int gpu_variants_of(const rt_dev *d, const int **v)
     *v = CL_VARIANTS;
     return (int)(sizeof CL_VARIANTS / sizeof *CL_VARIANTS);
 }
-int gpu_default_variant(const rt_dev *d) { return d->api == RT_CUDA ? 256 : 128; }
+int gpu_default_variant(const rt_dev *d) { return d->api == RT_CUDA ? VAR_MAKE(256, 0) : VAR_MAKE(128, 0); }
 /* Work-items of a herd sized to take half the L2 cache with `nk` walkers each, in blocks of 128; 0 when the device has no
  * large cache. Never below 4 warps per SM (a herd smaller than that cannot hide latencies). */
 static size_t kang_l2_threads_for(const rt_dev *d, int nk)
@@ -76,7 +79,7 @@ int gpu_kvariants_of(const rt_dev *d, int *out)
     int n = 0;
     for (int i = 0; i < nb; i++) out[n++] = base[i];
     /* OpenCL: NK 32 and 64, plain and pairs, with 4 and 8 times the work-items; CUDA: NK 64 at 512 per SM (as many walkers as the default NK 128) */
-    static const int CL_WIDE[] = {32, 64, 32 | 1 << 16, 64 | 1 << 16}, CU_WIDE[] = {64};
+    static const int CL_WIDE[] = {KVROW(32, 0, 0), KVROW(64, 0, 0), KVROW(32, 1, 0), KVROW(64, 1, 0)}, CU_WIDE[] = {KVROW(64, 0, 0)};
     const int *wv = d->api == RT_CUDA ? CU_WIDE : CL_WIDE;
     const int nw = d->api == RT_CUDA ? (int)(sizeof CU_WIDE / sizeof *CU_WIDE) : (int)(sizeof CL_WIDE / sizeof *CL_WIDE);
     for (int w = d->api == RT_CUDA ? KV_WIDE_FULL : KV_WIDE_X4; w <= (d->api == RT_CUDA ? KV_WIDE_FULL : KV_WIDE_X8); w++)
@@ -92,12 +95,12 @@ int gpu_kvariants_of(const rt_dev *d, int *out)
             for (size_t i = 0; i < sizeof KV_L2_NK / sizeof *KV_L2_NK; i++) {
                 const int nk = KV_L2_NK[i];
                 const size_t tl = kang_l2_threads_for(d, nk);
-                if (tl && tl * 4 < kang_default_threads_for(d) * 3) out[n++] = (nk | c << 16) | KV_L2FLAG;   /* clearly fewer work-items than the default herd */
+                if (tl && tl * 4 < kang_default_threads_for(d) * 3) out[n++] = KV_MAKE(nk, c, 0, 1, 0);   /* clearly fewer work-items than the default herd */
             }
     }
     return n;
 }
-int gpu_tune_default_kvariant(const rt_dev *d) { return d->api == RT_CUDA ? 128 : 64; }
+int gpu_tune_default_kvariant(const rt_dev *d) { return d->api == RT_CUDA ? KVROW(128, 0, 0) : KVROW(64, 0, 0); }
 static bool valid_kvariant(const rt_dev *d, int v)
 {
     int vs[32];
@@ -108,7 +111,7 @@ static bool valid_kvariant(const rt_dev *d, int v)
 /* what PZ_GPU_NK may force: a variant the tuner measures, or the block herd, which no tuner offers (self-tested all the same) */
 static bool forcible_kvariant(const rt_dev *d, int v)
 {
-    for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) if (v == (KV_BLOCK_NK[i] | KV_BLOCK << 16)) return true;
+    for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) if (v == KV_MAKE(KV_BLOCK_NK[i], KV_BLOCK, 0, 0, 0)) return true;
     return valid_kvariant(d, v);
 }
 static bool valid_variant(const rt_dev *d, int v)
@@ -118,20 +121,6 @@ static bool valid_variant(const rt_dev *d, int v)
     for (int i = 0; i < n; i++) if (vs[i] == v) return true;
     return false;
 }
-char *gpu_kvariant_name(int v, char *b, size_t n)
-{
-    static const char *const wide[] = {"", ", 4x herd", ", 8x herd", ", full herd"};
-    static const char *const cfg[] = {"", " pairs", " quads", " block herd"};
-    snprintf(b, n, "NK %d%s%s%s%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_META(v) ? ", tags once" : "", KV_L2(v) && (KV_CFG(v) || KV_META(v)) ? "," : "",
-             KV_L2(v) ? " L2 herd" : "", wide[KV_WIDE(v)]);
-    return b;
-}
-char *gpu_variant_name(int v, char *b, size_t n)
-{
-    snprintf(b, n, "%d%s", VAR_HALF(v), VAR_MINB(v) ? ", register cap" : "");
-    return b;
-}
-
 int gpu_tune_kang_code(const gpu_session *s) { return s->kvar | (s->l2fit ? KV_L2FLAG : 0) | KV_WIDEFLAG(s->wide); }   /* what the tuner remembers */
 
 /* ---------------- autotune ---------------- */
@@ -299,7 +288,6 @@ static double linear_measure_variant(gpu_session *s, int v)
 }
 void gpu_tune_linear_set_variant(gpu_session *s, int v) { s->variant = v; }
 int gpu_tune_linear_code(const gpu_session *s) { return s->variant; }
-char *gpu_variant_code(int v, char *b, size_t n) { snprintf(b, n, "%d", v); return b; }      /* what PZ_GPU_HALF takes */
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
  * OpenCL the historical 64 per compute unit, unless the tuner chose a herd sized to the L2 cache, a wide one or a block herd (gpu_tune_kang_threads_for). */
@@ -393,15 +381,6 @@ static double kang_measure_variant(gpu_session *s, int v)
 {
     gpu_tune_kang_set_variant(s, v);
     return gpu_tune_kang_measure(s);
-}
-
-/* What PZ_GPU_NK takes for a variant ("128b", "128cm", "64l", "4g"); "-" for a herd it cannot force (the wide herds have no suffix). */
-char *gpu_kvariant_code(int v, char *b, size_t n)
-{
-    static const char *const cfg[] = {"", "b", "c", "g"};
-    if (KV_WIDE(v)) { pz_strlcpy(b, "-", n); return b; }
-    snprintf(b, n, "%d%s%s%s", KV_NK(v), cfg[KV_CFG(v) & 3], KV_META(v) ? "m" : "", KV_L2(v) ? "l" : "");
-    return b;
 }
 
 /* ---------------- the length of a launch ---------------- */
@@ -710,7 +689,7 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     gpu_tune_kang_set_variant(s, gpu_tune_default_kvariant(d));
     s->launch_s = GPU_LAUNCH_S;
     if (g_env.gpu_nk) {
-        const int v = g_env.gpu_nk | g_env.gpu_nk_cfg << 16 | (g_env.gpu_nk_meta ? KV_METAFLAG : 0) | (g_env.gpu_nk_l2 ? KV_L2FLAG : 0);
+        const int v = KV_MAKE(g_env.gpu_nk, g_env.gpu_nk_cfg, g_env.gpu_nk_meta ? 1 : 0, g_env.gpu_nk_l2 ? 1 : 0, 0);
         if (forcible_kvariant(d, v)) { gpu_tune_kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, gpu_kvariant_name(v, nb, sizeof nb)); }
         else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, g_env.gpu_nk_text, rt_api_name(d->api),
                     d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c; 64 and 128, plain, b or c, with m after it (tags once); 4g (block herd)"

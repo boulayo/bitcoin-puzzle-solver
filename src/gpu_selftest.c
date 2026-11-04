@@ -531,18 +531,18 @@ int gpu_selftest(void)
             ok = gpu_test_kang(s);
         }
         for (size_t k = 0; k < 2 * sizeof KV_MC4_NK / sizeof *KV_MC4_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* CUDA tests them as list entries */
-            s->kvar = KV_MC4_NK[k / 2] | 2 << 16 | (k % 2 ? KV_METAFLAG : 0);   /* both forms of the tags */
+            s->kvar = KV_MAKE(KV_MC4_NK[k / 2], 2, (int)(k % 2), 0, 0);   /* both forms of the tags */
             s->NK = KV_MC4_NK[k / 2];
             ok = gpu_test_kang(s);
         }
         for (size_t k = 0; k < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK && ok && devs[i].api == RT_OPENCL; k++) {   /* likewise the block herd */
-            s->kvar = KV_BLOCK_NK[k] | KV_BLOCK << 16;
+            s->kvar = KV_MAKE(KV_BLOCK_NK[k], KV_BLOCK, 0, 0, 0);
             s->NK = KV_BLOCK_NK[k];
             ok = gpu_test_kang(s);
         }
         for (size_t k = 0; k < sizeof KV_L2_NK / sizeof *KV_L2_NK && ok && devs[i].l2_bytes >= KANG_L2_MIN; k++)
             for (int c = 0; c < 2 && ok; c++) {       /* the kernels only the cache-sized herds use */
-                s->kvar = KV_L2_NK[k] | c << 16;
+                s->kvar = KV_MAKE(KV_L2_NK[k], c, 0, 0, 0);
                 s->NK = KV_L2_NK[k];
                 ok = gpu_test_kang(s);
             }

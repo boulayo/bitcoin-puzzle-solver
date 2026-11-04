@@ -2,6 +2,7 @@
 /* rt_cl.c - OpenCL implementation of the GPU runtime interface (kernels compiled from the embedded sources). */
 #include "rt_priv.h"
 #include "cl_api.h"
+#include "gpu_variant.h"
 
 extern const unsigned char pz_common_cl[], pz_linear_cl[], pz_kang_h[], pz_kang_cl[], pz_test_cl[];
 extern const unsigned int pz_common_cl_len, pz_linear_cl_len, pz_kang_h_len, pz_kang_cl_len, pz_test_cl_len;
@@ -115,14 +116,13 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
     cl_uint nsrc = 2;
     char opts[112];
     switch (prog) {
-    case RT_PROG_LINEAR: src[1] = (const char *)pz_linear_cl; len[1] = pz_linear_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DHALF=%d", param & 0xFFFF); break;
+    case RT_PROG_LINEAR: src[1] = (const char *)pz_linear_cl; len[1] = pz_linear_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DHALF=%d", VAR_HALF(param)); break;
     case RT_PROG_KANG:        /* pz_kang.h, the numbers shared with the host, goes in front of the kernel */
         src[1] = (const char *)pz_kang_h; len[1] = pz_kang_h_len;
         src[2] = (const char *)pz_kang_cl; len[2] = pz_kang_cl_len;
         nsrc = 3;
-        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s%s", param & 0xFFFF,
-                 (param >> 16 & 0xF) == 1 ? " -DMC=2" : (param >> 16 & 0xF) == 2 ? " -DMC=4" : (param >> 16 & 0xF) == 3 ? " -DKANG_BLOCK=1" : "",
-                 param >> 20 & 1 ? " -DKANG_META=1" : ""); break;   /* the configuration and the form of the metadata: KV_CFG, KV_META */
+        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s%s", KV_NK(param), gpu_kvariant_cl_config(KV_CFG(param)), gpu_kvariant_cl_meta(KV_META(param)));
+        break;
     default: src[1] = (const char *)pz_test_cl; len[1] = pz_test_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2"); break;
     }
     if (m->c->dev.no_asm) strcat(opts, " -DPZ_NO_ASM");

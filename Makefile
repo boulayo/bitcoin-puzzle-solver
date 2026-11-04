@@ -71,7 +71,7 @@ endif
 BUILD   ?= build
 BIN     := $(BUILD)/pzsolve$(EXE)
 
-CORE_SRC := platform envopts util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common encrypt encrypt_cmd onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
+CORE_SRC := platform envopts gpu_variant util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common encrypt encrypt_cmd onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c

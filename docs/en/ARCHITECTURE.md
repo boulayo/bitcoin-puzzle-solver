@@ -33,6 +33,7 @@
 | `run_linear.c`, `run_kangaroo.c`, `run_bsgs.c` | orchestration of the three modes, kangaroo self-test and benchmark |
 | `gpu.h`, `gpu_priv.h`, `gpu.c` | GPU: listing and choice of devices, start-up of the devices (one thread each, at the same time; the start-up tests are repeated up to three times when they stop on an error of the API), sessions, linear-search and kangaroo workers, recovery after a device error (the launches that follow a failure are a quarter of the size; the failures are forgotten after ten minutes of good launches), `doctor`. Written against `gpu_rt.h`, so identical for CUDA and OpenCL |
 | `gpu_tune.c`, `gpu_tune_priv.h` | variants of the GPU kernels, choice of the fastest for each device by one procedure for both kernels (measured once, saved in `gpu_tune.txt`; two devices of one type measure once), length of a launch, size of the kangaroo herd; the header holds what the next two files share with it |
+| `gpu_variant.h`, `gpu_variant.c` | the code of a kernel variant (the number `PZ_GPU_HALF` and `PZ_GPU_NK` take and `gpu_tune.txt` saves) in one place: the layout of its fields and the macros that build and read it, its name in the logs and tables, its text form and the reading of the text of `PZ_GPU_NK`, and the options of the OpenCL build; a new configuration of the kangaroo kernel is one row of a table there. Libc only |
 | `gpu_bench.c` | GPU benchmark (`bench`) and the tables of every variant of the kernels (`bench --variants`, with `--retune`) |
 | `gpu_tune_selftest.c` | self-test of the choice of a variant: the tuner run on invented rates, the saved choices, the wide herds and the names of the variants |
 | `gpu_selftest.c` | the GPU kernels against the CPU, bit by bit: field arithmetic, hash160, curve arithmetic, every variant of the linear (at every position where it branches) and of the kangaroo kernel; the rules that need no device (recovery, the log of simultaneous start-ups; it also runs `gpu_tune_selftest.c`) |
@@ -154,7 +155,7 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 |----------|------------------|---------|
 | `PZ_NO_CUDA`, `PZ_NO_OPENCL` | `no_cuda`, `no_opencl` | `rt.c`: which runtimes are loaded |
 | `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices (`--gpu-api` comes first) |
-| `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_meta`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off |
+| `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_meta`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off (the text of `PZ_GPU_NK` is read by `gpu_variant.c`) |
 | `PZ_NO_PROFILE` | `no_profile` | `main.c`, `profile.c` |
 | `PZ_NO_LARGE_PAGES` | `no_large_pages` | `platform.c`: `pz_map_zeroed` on Windows |
 | `PZ_BENCH_SCALE` | `bench_scale` | `bench_tg.c`: duration of the measurements |

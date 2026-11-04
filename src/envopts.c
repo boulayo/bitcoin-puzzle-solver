@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* envopts.c - the one place that reads the environment (see envopts.h). */
 #include "envopts.h"
+#include "gpu_variant.h"
 
 #ifdef _WIN32
 #define ENVIRON _environ
@@ -63,22 +64,12 @@ static void env_text(const char *name, char *out, size_t cap)
 
 bool pz_env_parse_nk(const char *t, int *nk, int *cfg, bool *meta, bool *l2)
 {
-    long n = 0;
-    const char *e = t;
-    while (*e >= '0' && *e <= '9' && n <= 0xFFFF) n = n * 10 + (*e++ - '0');   /* no strtol: glibc >= 2.38 would be needed */
-    if (n <= 0 || n > 0xFFFF) return false;
-    int c = 0;
-    if (*e == 'b') { c = 1; e++; }
-    else if (*e == 'c') { c = 2; e++; }                         /* products every fourth walker */
-    else if (*e == 'g') { c = 3; e++; }                         /* the block herd: one inversion per work-group */
-    bool m = false, l = false;
-    if (*e == 'm') { m = true; e++; }                           /* the tags written once (KANG_META=1) */
-    if (*e == 'l') { l = true; e++; }                           /* herd sized to the L2 cache */
-    if (*e) return false;
-    *nk = (int)n;
-    *cfg = c;
-    *meta = m;
-    *l2 = l;
+    int v;
+    if (!gpu_kvariant_parse(t, &v)) return false;                /* the grammar and the layout of the code are in gpu_variant.c */
+    *nk = KV_NK(v);
+    *cfg = KV_CFG(v);
+    *meta = KV_META(v) != 0;
+    *l2 = KV_L2(v) != 0;
     return true;
 }
 
@@ -139,7 +130,7 @@ void pz_env_init(void)
     g_env.no_cuda = env_flag("PZ_NO_CUDA");
     g_env.no_opencl = env_flag("PZ_NO_OPENCL");
     g_env.opencl_all = env_flag("PZ_OPENCL_ALL");
-    if (env_int("PZ_GPU_HALF", 1, 1 << 22, &n)) g_env.gpu_half = (int)n;   /* room above the window for the flags of a variant code (gpu_priv.h) */
+    if (env_int("PZ_GPU_HALF", 1, 1 << 22, &n)) g_env.gpu_half = (int)n;   /* room above the window for the flags of a variant code (gpu_variant.h) */
     env_gpu_nk();
     env_gpu_tune();
     g_env.no_profile = env_flag("PZ_NO_PROFILE");

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* gpu_tune_selftest.c - the self-test of the choice of a variant: the tuner run on invented rates and the helpers it uses (no device needed). */
 #include "gpu_tune_priv.h"
 #include "platform.h"
@@ -352,6 +353,38 @@ static int tune_check_launch_length(void)
     return fails;
 }
 
+/* The codes built from their fields are the numbers that PZ_GPU_HALF, PZ_GPU_NK and gpu_tune.txt have always had, and the text of PZ_GPU_NK reads
+ * back into them (and nothing else does). */
+static int tune_check_variant_encoding(void)
+{
+    int fails = 0;
+    TCHK(VAR_MAKE(256, 4) == 262400 && VAR_MAKE(128, 0) == 128 && VAR_HALF(262400) == 256 && VAR_MINB(262400) == 4);
+    TCHK(KV_MAKE(128, 2, 1, 0, 0) == 1179776 && KV_MAKE(64, 1, 1, 1, KV_WIDE_FULL) == 118554688 && KV_MAKE(4, KV_BLOCK, 0, 0, 0) == 196612);
+    TCHK(KV_MAKE(64, 0, 1, 1, 0) == 17825856 && KV_MAKE(64, 1, 0, 1, KV_WIDE_FULL) == 117506112);
+    const int v = 118554688;
+    TCHK(KV_NK(v) == 64 && KV_CFG(v) == 1 && KV_META(v) == 1 && KV_L2(v) == 1 && KV_WIDE(v) == KV_WIDE_FULL && KV_KERNEL(v) == (64 | 1 << 16 | 1 << 20));
+    static const struct { const char *text; int code; } good[] = {
+        {"128", 128}, {"64b", 64 | 1 << 16}, {"256c", 256 | 2 << 16}, {"4g", 4 | 3 << 16}, {"128cm", 1179776}, {"64l", 64 | 1 << 24}, {"64ml", 17825856},
+        {"32bml", 32 | 1 << 16 | 1 << 20 | 1 << 24}, {"65535", 65535},
+    };
+    int code = -1;
+    for (size_t i = 0; i < sizeof good / sizeof *good; i++) TCHK(gpu_kvariant_parse(good[i].text, &code) && code == good[i].code);
+    static const char *const bad[] = {"", "0", "b", "12k", "64lm", "64bb", "64bc", "64x", "65536", "99999999999", "-4", " 64", "64 ", "64b ", "m"};
+    code = -1;
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) TCHK(!gpu_kvariant_parse(bad[i], &code) && code == -1);
+    char text[24];
+    for (size_t i = 0; i < sizeof good / sizeof *good; i++) {
+        gpu_kvariant_code(good[i].code, text, sizeof text);
+        TCHK(!strcmp(text, good[i].text) || !strcmp(good[i].text, "65535"));
+        TCHK(gpu_kvariant_parse(text, &code) && code == good[i].code);
+    }
+    TCHK(!strcmp(gpu_variant_code(262400, text, sizeof text), "262400") && !strcmp(gpu_variant_name(262400, text, sizeof text), "256, register cap"));
+    TCHK(!strcmp(gpu_kvariant_cl_config(0), "") && !strcmp(gpu_kvariant_cl_config(1), " -DMC=2") && !strcmp(gpu_kvariant_cl_config(2), " -DMC=4"));
+    TCHK(!strcmp(gpu_kvariant_cl_config(3), " -DKANG_BLOCK=1") && !strcmp(gpu_kvariant_cl_config(4), "") && !strcmp(gpu_kvariant_cl_config(15), ""));
+    TCHK(!strcmp(gpu_kvariant_cl_meta(0), "") && !strcmp(gpu_kvariant_cl_meta(1), " -DKANG_META=1"));
+    return fails;
+}
+
 /* The tuner on invented rates, the saved choices, the herds and the names of the variants; the saved choices of the test go to a folder of its own. */
 int gpu_tune_selftest(void)
 {
@@ -367,6 +400,7 @@ int gpu_tune_selftest(void)
     fails += tune_check_kang_no_data();
     fails += tune_check_wide_herds();
     fails += tune_check_variant_names();
+    fails += tune_check_variant_encoding();
     fails += tune_check_block_herd();
     fails += tune_check_saved_file();
     fails += tune_check_launch_length();

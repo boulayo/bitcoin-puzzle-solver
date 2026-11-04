@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* gpu_tune_priv.h - what gpu_tune.c (the choice of a variant for a device) shares with gpu_bench.c (the benchmark and 'bench --variants')
  * and gpu_tune_selftest.c (the self-test of the choice): the description of the tuning of a kernel, its constants, and the steps of the
  * procedure that the benchmark repeats and the self-test drives. */
@@ -72,11 +73,5 @@ void gpu_tune_kang_set_variant(gpu_session *s, int v);
 int gpu_tune_kang_code(const gpu_session *s);
 int gpu_tune_default_kvariant(const rt_dev *d);
 size_t gpu_tune_kang_threads_for(const rt_dev *d, int nk, bool l2fit, int wide, bool block);
-
-/* the name of a variant as the logs and tables print it, and its code as PZ_GPU_HALF or PZ_GPU_NK takes it ("-": none takes it) */
-char *gpu_variant_name(int v, char *b, size_t n);
-char *gpu_kvariant_name(int v, char *b, size_t n);
-char *gpu_variant_code(int v, char *b, size_t n);
-char *gpu_kvariant_code(int v, char *b, size_t n);
 
 #endif

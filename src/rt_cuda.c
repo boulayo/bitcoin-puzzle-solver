@@ -187,7 +187,7 @@ void rtcu_close(rt_ctx *c)
 
 bool rtcu_build(rt_mod *m, rt_prog_id prog, int param)
 {
-    /* the parameter is HALF | minimum blocks per SM << 16 for the linear kernel, NK | configuration << 16 for the kangaroo (see gpu_priv.h) */
+    /* the parameter is HALF | minimum blocks per SM << 16 for the linear kernel, NK | configuration << 16 for the kangaroo (see gpu_variant.h) */
     const pz_blob *ptx = NULL;
     for (int i = 0; i < rtcu_module_count && !ptx; i++)
         if (rtcu_modules[i].prog == prog && (prog == RT_PROG_TEST || rtcu_modules[i].param == param)) ptx = rtcu_modules[i].blob;

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* gpu_bench.c - the GPU benchmark ('bench') and the table of every variant of the kernels ('bench --variants'). */
 #include "gpu_tune_priv.h"
 #include "platform.h"
@@ -194,7 +195,7 @@ static int kvariants_forced_only(const rt_dev *d, int *out)
 {
     (void)d;
     int n = 0;
-    for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) out[n++] = KV_BLOCK_NK[i] | KV_BLOCK << 16;
+    for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) out[n++] = KV_MAKE(KV_BLOCK_NK[i], KV_BLOCK, 0, 0, 0);
     return n;
 }
 
