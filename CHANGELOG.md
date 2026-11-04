@@ -17,6 +17,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   the default of `--part` and the memory rule of `merge --mem`; `FOUND.txt` has no 0600 permissions on Windows.
 
 ### Changed
+- Every source file says in its first line what it holds (six said something else), the parts of a file are in reading order with a
+  section comment each, names say what they hold or do (`deep` to `full` in `doctor`, `load_chunk` to `load_block` to match the guide's
+  word), wrong or stale comments are corrected, five functions and two macros that nothing used are gone, and the steps of the tests
+  have names. No change of behaviour: the compiled code of every file that only changed in names or comments is identical.
 - Internal reorganization with no change of behaviour: `gpu_tune.c` is split into the tuner (`gpu_tune.c`), the benchmark (`gpu_bench.c`) and
   the self-test of the choice (`gpu_tune_selftest.c`, with `gpu_tune_priv.h` for what they share); the over-long test and command functions
   are one named step each; throwaway local names (`tmp`, `t1`, `nn`) say what they hold; the encoding of a GPU kernel variant (its code,
