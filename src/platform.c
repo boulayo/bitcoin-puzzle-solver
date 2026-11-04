@@ -370,6 +370,8 @@ void pz_on_interrupt(void (*fn)(void))
     struct sigaction old;
     if (sigaction(SIGHUP, NULL, &old) == 0 && old.sa_handler != SIG_IGN) sigaction(SIGHUP, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
+    /* a write beyond a file size limit (ulimit -f) must fail with EFBIG, which the writers handle like a full disk, not kill the program */
+    signal(SIGXFSZ, SIG_IGN);
 }
 
 void pz_interrupt_done(void) {}

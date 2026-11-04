@@ -1055,7 +1055,9 @@ static void print_found_banner(const run_ctx *r)
             char id[9];
             enc_key_id(&r->cfg.encrypt_pubkey, id);
             printf("  The key is encrypted to the public key with id %s: only the owner of the matching secret can read it.\n", id);
-            printf("  saved in:       %s\n  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->path_found, r->found_sealed);
+            if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the encrypted key from this screen\n", r->path_found);
+            else printf("  saved in:       %s\n", r->path_found);
+            printf("  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->found_sealed);
         }
         printf("=========================================================\n");
         return;
@@ -1066,7 +1068,9 @@ static void print_found_banner(const run_ctx *r)
     pz_u256_to_be(&r->found_key, kb);
     pz_privkey_to_wif(kb, true, wif, sizeof wif);
     printf("  address:        %s\n  key (hex):      0x%s\n  WIF compressed: %s\n", addr, hx, wif);
-    printf("  saved in:       %s\n=========================================================\n", r->path_found);
+    if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the key from this screen now\n", r->path_found);
+    else printf("  saved in:       %s\n", r->path_found);
+    printf("=========================================================\n");
 }
 
 /* A campaign that has already found the key ('hunt' and 'merge' end there): FOUND.txt is shown. False when it has not. */

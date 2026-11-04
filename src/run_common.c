@@ -251,6 +251,7 @@ static bool write_found_plain(run_ctx *r)
         "KEEP THIS FILE IN A SAFE PLACE and move the funds as soon as possible.\n",
         ts, r->cfg.name, pz, addr, hx, wif, pk, seed, PZ_VERSION);
     const bool ok = pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) == 0;
+    r->found_write_failed = !ok;
     if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
     pz_secure_zero(hx, sizeof hx);
     pz_secure_zero(wif, sizeof wif);
@@ -305,6 +306,7 @@ static bool write_found_encrypted(run_ctx *r)
             "%s\n",
             ts, r->cfg.name, pz, addr, seed, PZ_VERSION, id, r->found_sealed);
     const bool ok = pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) == 0;
+    r->found_write_failed = !ok;
     if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
     return ok && !r->found_seal_failed;
 }

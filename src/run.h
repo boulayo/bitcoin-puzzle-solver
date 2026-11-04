@@ -57,6 +57,7 @@ typedef struct run_ctx {
     double found_time;
     char found_sealed[PZ_SEAL_TEXT_BUF];   /* the PZENC1 line of the found key when the campaign encrypts it (cfg.has_encrypt); the key itself is wiped then */
     bool found_seal_failed;          /* the key was found but could not be encrypted: it was not written anywhere */
+    bool found_write_failed;         /* FOUND.txt could not be written (the log says why): the key is only on the screen */
     char on_found[1024];             /* hunt --on-found: the command to run once when the key is found (given on the command line each time, never stored) */
 
     worker_stat ws[MAX_WORKERS];

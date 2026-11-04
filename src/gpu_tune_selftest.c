@@ -12,12 +12,14 @@
 static struct {
     double rate[3]; int measured; bool check_ok; int set_to; const double (*seq)[3]; int nth[3];
     double len_rate[4]; uint32_t len_size[4]; int len_calls;      /* the rates at the four lengths of a launch and the controller's sizes for them */
+    int stop_after;                                               /* the measurement that stops the campaign of the session (0: none), as a Ctrl-C would */
 } g_fake;
 static const int FAKE_V[3] = {128, 256, 512};
 
 static double fake_measure(gpu_session *s, int v)
 {
     g_fake.measured++;
+    if (g_fake.stop_after && g_fake.measured == g_fake.stop_after && s->r) atomic_store(&s->r->stop, 1);
     gpu_tune_linear_set_variant(s, v);
     for (int i = 0; i < 3; i++) if (FAKE_V[i] == v) return g_fake.seq ? g_fake.seq[i][g_fake.nth[i]++ % 3] : g_fake.rate[i];
     return 0;
@@ -154,6 +156,37 @@ static int tune_check_bad_choice(void)
     g_fake.measured = 0;
     gpu_tune_pick(s, 0, &op);
     TCHK(g_fake.measured >= 3);
+    rt_logseq_done(q, 0);
+    rt_logseq_free(q);
+    free(s);
+    return fails;
+}
+
+/* a stop of the campaign (Ctrl-C) in the middle of the measurements ends them at once: the default, no table, nothing saved (the next start
+ * measures again) */
+static int tune_check_stopped(void)
+{
+    int fails = 0;
+    static run_ctx run;
+    gpu_session *s = fake_session("Test GPU stopped");
+    s->r = &run;
+    atomic_store(&run.stop, 0);
+    g_fake.rate[0] = 100e6; g_fake.rate[1] = 100e6; g_fake.rate[2] = 120e6;
+    g_fake.check_ok = true;
+    g_fake.measured = 0;
+    g_fake.stop_after = 2;
+    tune_ops op = fake_ops();
+    fake_log lg;
+    memset(&lg, 0, sizeof lg);
+    rt_logseq *q = rt_logseq_new(1, fake_sink, &lg);
+    rt_logseq_enter(q, 0);
+    gpu_tune_pick(s, 5, &op);
+    TCHK(g_fake.measured == 2 && s->variant == 256 && lg.n == 1);
+    g_fake.stop_after = 0;
+    atomic_store(&run.stop, 0);
+    g_fake.measured = 0;
+    gpu_tune_pick(s, 5, &op);
+    TCHK(g_fake.measured >= 3 && s->variant == 512);
     rt_logseq_done(q, 0);
     rt_logseq_free(q);
     free(s);
@@ -396,6 +429,7 @@ int gpu_tune_selftest(void)
     pz_strlcpy(g_env.xdg_cache_home, tmp, sizeof g_env.xdg_cache_home);       /* the saved choices of the test go to a folder of its own */
     fails += tune_check_choices();
     fails += tune_check_bad_choice();
+    fails += tune_check_stopped();
     fails += tune_check_turns();
     fails += tune_check_kang_no_data();
     fails += tune_check_wide_herds();
