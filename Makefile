@@ -91,7 +91,7 @@ PTXBASE  := $(shell $(PTXAWK) -v mode=bases $(PTXTAB))
 PTXITEMS := $(foreach p,$(PTXMODS),pz_ptx_$(p)$(addprefix :pz_ptx_,$(patsubst $(p):%,%,$(filter $(p):%,$(PTXBASE)))) src/kernels/ptx/$(p).ptx)
 KANG_SRC := src/kangaroo.c src/kang_log.c src/kang_cpu.c src/kang_selftest.c src/kang_base.c src/bsgs_base.c
 
-GPU_SRC  := cl_api rt rt_cl rt_cuda gpu gpu_tune gpu_selftest
+GPU_SRC  := cl_api rt rt_cl rt_cuda gpu gpu_tune gpu_bench gpu_tune_selftest gpu_selftest
 SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c $(BUILD)/ptx_gen.c $(BUILD)/ptx_mods.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
 ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_shani.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
@@ -274,7 +274,7 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 
 # Unit tests (built against the same sources)
 TESTS := t_core t_env t_encrypt t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
-TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/encrypt_cmd.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_mods.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
+TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/encrypt_cmd.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_bench.o $(BUILD)/gpu_tune_selftest.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_mods.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
 # t_gpufe: the kernel field arithmetic compiled for the host: PTX carry-chain variant (emulated), the OpenCL one with add-with-carry
 # (builtins of the compiler or their C equivalent), the same with the product of AMD GPUs (its two instructions in C) and the OpenCL one in

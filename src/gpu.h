@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* gpu.h - GPU support (gpu.c, gpu_tune.c, gpu_selftest.c), on CUDA or OpenCL devices through the runtime layer of gpu_rt.h. Both
+/* gpu.h - GPU support (gpu.c, gpu_tune.c, gpu_bench.c, gpu_selftest.c), on CUDA or OpenCL devices through the runtime layer of gpu_rt.h. Both
  * runtimes are loaded at run time: without them the program works on the CPU alone. */
 #ifndef PZ_GPU_H
 #define PZ_GPU_H

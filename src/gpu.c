@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* gpu.c - GPU support: device selection, sessions and the worker threads for linear search and the kangaroo. Written against the
  * runtime interface of gpu_rt.h, so the same code drives CUDA and OpenCL devices. The kernel variants, their autotuning and the
- * benchmark are in gpu_tune.c, the self-test in gpu_selftest.c. */
+ * benchmark are in gpu_tune.c and gpu_bench.c, the self-test in gpu_selftest.c. */
 #include "gpu_priv.h"
 #include "doctor.h"
 #include "platform.h"

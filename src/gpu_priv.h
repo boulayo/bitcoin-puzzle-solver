@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* gpu_priv.h - internals of the GPU code shared by gpu.c (devices, sessions, worker threads), gpu_tune.c (kernel variants,
- * autotuning, benchmark) and gpu_selftest.c (the kernels against the CPU). */
+ * autotuning; its own header gpu_tune_priv.h is shared with gpu_bench.c and gpu_tune_selftest.c) and gpu_selftest.c (the kernels against the CPU). */
 #ifndef PZ_GPU_PRIV_H
 #define PZ_GPU_PRIV_H
 
@@ -175,6 +175,7 @@ void gpu_linear_autotune(gpu_session *s, int idx);
 void gpu_kang_autotune(gpu_session *s, int idx);
 /* The kernel variant in use, as the start-up line of a device names it: "window 256", "kangaroo NK 128". */
 char *gpu_variant_text(const gpu_session *s, bool kang, char *buf, size_t n);
+/* gpu_tune_selftest.c */
 int gpu_tune_selftest(void);                             /* the choice of a variant from invented rates (no device needed) */
 
 /* gpu_selftest.c: the kernels against the CPU, and the rules of the recovery (no device needed) */

@@ -679,7 +679,7 @@ A2000's herd are 160 MiB per round against 2 MiB of L2).
   reversed, in order: a drift of the clock would show in the spread), while `NK` 64 quads stands where 1.19.2's `NK` 128 quads stood, and
   the `NK` 256 kernels run at the copy bandwidth of the card (165 GB/s) where the `NK` 64 and 128 ones of the same form do not. The herds:
   `NK` 128 is 1.31 million walkers with a history 128 rounds deep, `NK` 64 is 655 thousand at 256 rounds, `NK` 256 2.6 million at 64, so a
-  launch is 168 million steps in every case; the herd size, the depth and the measuring procedure (`kang_measure`: a random herd, launches
+  launch is 168 million steps in every case; the herd size, the depth and the measuring procedure (`gpu_tune_kang_measure`: a random herd, launches
   doubled up to the depth, the best of about 1.5 s) are the same code as in 1.19.2.
 * **The two kernels side by side in the SASS** (`NK` 128 quads, sm_86, `ptxas` 12.9, the executed path of one turn of the loop over the
   walkers, four steps; `tools/research/kang_bytes.py` and the control words of the instructions as `kang_block_sched.py` reads them). The
