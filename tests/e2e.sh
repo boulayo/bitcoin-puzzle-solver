@@ -64,6 +64,13 @@ for i in 1 2 3 4 5; do
   [ $i -eq 5 ] && ok "checkpoint always written on stop (5 attempts)"
 done
 
+echo "== FOUND.txt that cannot be written (a folder in its way): the box says so instead of 'saved in', the key is on the screen"
+rm -rf "$DIR/nf"; mkdir -p "$DIR/nf/FOUND.txt"
+A=$(field 0x9a3b1 addr)
+OUT=$($BIN hunt -p 20 -a "$A" -c nf -d "$DIR" --ui log -q --no-gpu 2>&1); RC=$?
+echo "$OUT" | grep -q "key (hex): *0x9a3b1" && echo "$OUT" | grep -q "NOT SAVED: .*FOUND.txt could not be written" && ! echo "$OUT" | grep -q "saved in" \
+  && ok "the box shows the key and says that FOUND.txt was not written" || bad "FOUND.txt not written: rc=$RC $(echo "$OUT" | grep -E 'saved|SAVED|key \(hex\)' | tr '\n' ' ')"
+
 echo "== kangaroo (public key known)"
 for n in 32 38 44 50; do
   K=$(rndkey $n $((n*13+5))); PUB=$(field $K pub); A=$(field $K addr)
@@ -514,6 +521,11 @@ enc_case encl 26 0x2a3f5c1 "$EPRIV" --raw-key "$EPUB"
 enc_case enck 38 "$KK" "$EPRIV" --raw-key "$EPUB" -k "$(field "$KK" pub)" -m kangaroo
 enc_case encb 30 "$KB" "$EPRIV" --raw-key "$EPUB" -k "$(field "$KB" pub)" -m bsgs
 enc_case encp 27 "$(rndkey 27 79)" "$EPW" "" "$EPWPUB"
+# an encrypted campaign whose FOUND.txt cannot be written: the box carries the encrypted line and says that the file was not written
+rm -rf "$DIR/nfe"; mkdir -p "$DIR/nfe/FOUND.txt"
+OUT=$($BIN hunt -p 20 -a "$(field 0x9a3b1 addr)" -c nfe -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" 2>&1); RC=$?
+echo "$OUT" | grep -q "^PZENC1:" && echo "$OUT" | grep -q "NOT SAVED: .*FOUND.txt could not be written" && ! echo "$OUT" | grep -q "saved in" \
+  && ok "encrypted key, FOUND.txt not written: the box carries the encrypted line and says so" || bad "encrypted key, FOUND.txt not written: rc=$RC $(echo "$OUT" | grep -E 'saved|SAVED|PZENC1' | cut -c1-80 | tr '\n' ' ')"
 # the checks of decrypt-key on the first campaign
 EL="$DIR/encl/FOUND.txt"; HEXL=2a3f5c1; AL=$(field 0x2a3f5c1 addr)
 OUT=$(printf '%s\n' "$OTHERPRIV" | $BIN decrypt-key --raw-key "$EL" 2>&1); RC=$?
