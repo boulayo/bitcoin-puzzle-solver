@@ -5,6 +5,17 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ## [Unreleased]
 
+### Fixed
+- A file size limit (`ulimit -f`) no longer kills the program: the write past the limit fails like a full disk, is logged, and the session
+  is saved. The two write signals are ignored for every command, `merge` included.
+- The box printed when the key is found no longer says "saved in" when `FOUND.txt` could not be written: it says that the key was not
+  saved and must be copied from the screen (plain and encrypted).
+- Ctrl-C during the one-time tuning of the GPU kernels stops it at once (the default variant is kept and nothing is saved) instead of
+  being ignored until the measurements end.
+- Documentation and help texts: the Italian guide describes the tuner of 1.20.0 (`bench --variants`, turns and medians, the tuned launch
+  length, the summed GPUs of the panel); the exit status of `merge`, the log lines of the machine profile, the sizes in ARCHITECTURE.md,
+  the default of `--part` and the memory rule of `merge --mem`; `FOUND.txt` has no 0600 permissions on Windows.
+
 ### Changed
 - Internal reorganization with no change of behaviour: `gpu_tune.c` is split into the tuner (`gpu_tune.c`), the benchmark (`gpu_bench.c`) and
   the self-test of the choice (`gpu_tune_selftest.c`, with `gpu_tune_priv.h` for what they share); the over-long test and command functions
