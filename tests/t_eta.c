@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* t_eta.c - checks of the completion-time models. */
+/* t_eta.c - the completion-time and success-probability models, and the estimator of the rate they are computed from. */
 #include "../src/eta.h"
 #include "../src/envopts.h"
 #include <stdio.h>

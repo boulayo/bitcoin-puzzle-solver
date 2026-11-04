@@ -16,7 +16,6 @@ static campaign_cfg mkcfg(u64 start, u64 end, unsigned cb)
     return c;
 }
 
-
 /* ---- several computers on one search order (--part) ---- */
 
 /* Scans every claim of the part `spec` of the range, marking the keys in cov (which must still be free). Returns the keys scanned. */
@@ -351,11 +350,11 @@ static void t_linear_chunk_bits(void)
         }
 }
 
-int main(void)
+/* ---- claims, checkpoints and positions ---- */
+
+/* Full coverage, no overlap, custom (non power of two) range with a short last block; the claims completed out of order */
+static void t_coverage(void)
 {
-    pz_env_init();
-    t_linear_chunk_bits();
-    /* Full coverage, no overlap, custom (non power of two) range with a short last chunk. */
     for (int variant = 0; variant < 3; variant++) {
         u64 start = 1000 + (u64)variant * 77, end = start + 300000 + (u64)variant * 1234 - 1;
         campaign_cfg c = mkcfg(start, end, 13);   /* 8192-key chunks */
@@ -385,81 +384,98 @@ int main(void)
         CHECK(s->ndone == 1);
         sched_free(s); free(cov);
     }
-    /* Checkpoint / resume with holes and partial completion. */
-    {
-        campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);
-        sched_t *s = sched_new(&c);
-        claim_t a, b, d, e;
-        CHECK(sched_claim(s, 4096, &a) == CLAIM_OK);
-        CHECK(sched_claim(s, 4096, &b) == CLAIM_OK);
-        CHECK(sched_claim(s, 4096, &d) == CLAIM_OK);
-        sched_complete(s, &a, a.nkeys);
-        sched_complete(s, &d, d.nkeys);          /* b is a hole */
-        CHECK(sched_claim(s, 4096, &e) == CLAIM_OK);
-        sched_complete(s, &e, 2048);             /* partial: second half is a hole */
-        CHECK(sched_save(s, "build/t_jobq.state") == 0);
-        u128 kd = sched_keys_done(s);
-        sched_t *s2 = sched_new(&c);
-        char err[200];
-        CHECK(sched_load(s2, "build/t_jobq.state", err, sizeof err) == 0);
-        CHECK(sched_keys_done(s2) == kd);
-        /* resumed scheduler must hand out exactly the missing pieces first (b, then e's tail) before fresh space */
-        claim_t r;
-        CHECK(sched_claim(s2, 1u << 20, &r) == CLAIM_OK);
-        CHECK(r.v_start == b.v_start && r.nkeys == b.nkeys);
-        sched_complete(s2, &r, r.nkeys);
-        CHECK(sched_claim(s2, 1u << 20, &r) == CLAIM_OK);
-        CHECK(r.v_start == e.v_start + 2048);
-        sched_free(s); sched_free(s2);
-        /* corrupted file is rejected */
-        FILE *f = fopen("build/t_jobq.state", "r+b"); fseek(f, 20, SEEK_SET); fputc('Z', f); fclose(f);
-        sched_t *s3 = sched_new(&c);
-        CHECK(sched_load(s3, "build/t_jobq.state", err, sizeof err) == -1);
-        sched_free(s3);
-    }
-    /* locate: key -> sequence number is consistent with claims */
-    {
-        campaign_cfg c = mkcfg(1 << 20, (1 << 21) - 1, 12);
-        sched_t *s = sched_new(&c);
-        claim_t cl; CHECK(sched_claim(s, 4096, &cl) == CLAIM_OK);
-        pz_u256 seq; u64 off;
-        CHECK(sched_locate(s, &cl.key_start, &seq, &off));
-        CHECK(seq.w[0] == (u64)(cl.v_start >> 12) && !seq.w[1] && off == (cl.v_start & 4095));
-        sched_free(s);
-    }
-    /* locate with positions beyond 128 bits (ranges of puzzle 166 and up): the block position is not truncated */
-    {
-        campaign_cfg c;
-        memset(&c, 0, sizeof c);
-        c.range_start = pz_u256_pow2(169);
-        c.range_end = pz_u256_pow2(170);
-        pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
-        c.chunk_bits = 36;
-        for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 11 + 3);
-        sched_t *s = sched_new(&c);
-        pz_u256 pos = pz_u256_pow2(130);
-        pz_u256_add_u64(&pos, &pos, 12345);                              /* the block at position 2^130 + 12345 of the visiting order */
-        pz_u256 blk = sched_perm_apply(&s->perm, &pos), off36 = pz_u256_shl(&blk, 36), key;
-        pz_u256_add(&key, &s->range_start, &off36);
-        pz_u256_add_u64(&key, &key, 7);
-        pz_u256 got;
-        u64 off;
-        CHECK(sched_locate(s, &key, &got, &off) && !pz_u256_cmp(&got, &pos) && off == 7);
-        sched_free(s);
-        /* an order of visit that does not exist for this range is reported before anything is created */
-        char err[300];
-        c.range_start = pz_u256_pow2(255);
-        c.range_end = pz_u256_zero();
-        pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});    /* 2^256 - 1 */
-        CHECK(!sched_check_part(&c, err, sizeof err) && strstr(err, "too large"));
-        c.range_start = pz_u256_pow2(231);
-        c.range_end = pz_u256_pow2(232);
-        pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
-        c.chunk_bits = 40;
-        CHECK(sched_check_part(&c, err, sizeof err));                   /* puzzle 232 with the largest blocks: 191 bits, still fine */
-        c.chunk_bits = 36;
-        CHECK(!sched_check_part(&c, err, sizeof err));
-    }
+}
+
+/* Checkpoint and resume with holes and a partial completion: the missing pieces are handed out first, a damaged file is refused */
+static void t_checkpoint_resume(void)
+{
+    campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);
+    sched_t *s = sched_new(&c);
+    claim_t a, b, d, e;
+    CHECK(sched_claim(s, 4096, &a) == CLAIM_OK);
+    CHECK(sched_claim(s, 4096, &b) == CLAIM_OK);
+    CHECK(sched_claim(s, 4096, &d) == CLAIM_OK);
+    sched_complete(s, &a, a.nkeys);
+    sched_complete(s, &d, d.nkeys);          /* b is a hole */
+    CHECK(sched_claim(s, 4096, &e) == CLAIM_OK);
+    sched_complete(s, &e, 2048);             /* partial: second half is a hole */
+    CHECK(sched_save(s, "build/t_jobq.state") == 0);
+    u128 kd = sched_keys_done(s);
+    sched_t *s2 = sched_new(&c);
+    char err[200];
+    CHECK(sched_load(s2, "build/t_jobq.state", err, sizeof err) == 0);
+    CHECK(sched_keys_done(s2) == kd);
+    /* resumed scheduler must hand out exactly the missing pieces first (b, then e's tail) before fresh space */
+    claim_t r;
+    CHECK(sched_claim(s2, 1u << 20, &r) == CLAIM_OK);
+    CHECK(r.v_start == b.v_start && r.nkeys == b.nkeys);
+    sched_complete(s2, &r, r.nkeys);
+    CHECK(sched_claim(s2, 1u << 20, &r) == CLAIM_OK);
+    CHECK(r.v_start == e.v_start + 2048);
+    sched_free(s); sched_free(s2);
+    /* corrupted file is rejected */
+    FILE *f = fopen("build/t_jobq.state", "r+b"); fseek(f, 20, SEEK_SET); fputc('Z', f); fclose(f);
+    sched_t *s3 = sched_new(&c);
+    CHECK(sched_load(s3, "build/t_jobq.state", err, sizeof err) == -1);
+    sched_free(s3);
+}
+
+/* locate: the position of a key in the visiting order agrees with the claims */
+static void t_locate(void)
+{
+    campaign_cfg c = mkcfg(1 << 20, (1 << 21) - 1, 12);
+    sched_t *s = sched_new(&c);
+    claim_t cl; CHECK(sched_claim(s, 4096, &cl) == CLAIM_OK);
+    pz_u256 seq; u64 off;
+    CHECK(sched_locate(s, &cl.key_start, &seq, &off));
+    CHECK(seq.w[0] == (u64)(cl.v_start >> 12) && !seq.w[1] && off == (cl.v_start & 4095));
+    sched_free(s);
+}
+
+/* locate with positions beyond 128 bits (the ranges of puzzle 166 and up): the block position is not truncated; an order of visit that does
+ * not exist for a range is reported before anything is created */
+static void t_locate_wide(void)
+{
+    campaign_cfg c;
+    memset(&c, 0, sizeof c);
+    c.range_start = pz_u256_pow2(169);
+    c.range_end = pz_u256_pow2(170);
+    pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
+    c.chunk_bits = 36;
+    for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 11 + 3);
+    sched_t *s = sched_new(&c);
+    pz_u256 pos = pz_u256_pow2(130);
+    pz_u256_add_u64(&pos, &pos, 12345);                              /* the block at position 2^130 + 12345 of the visiting order */
+    pz_u256 blk = sched_perm_apply(&s->perm, &pos), off36 = pz_u256_shl(&blk, 36), key;
+    pz_u256_add(&key, &s->range_start, &off36);
+    pz_u256_add_u64(&key, &key, 7);
+    pz_u256 got;
+    u64 off;
+    CHECK(sched_locate(s, &key, &got, &off) && !pz_u256_cmp(&got, &pos) && off == 7);
+    sched_free(s);
+    /* an order of visit that does not exist for this range is reported before anything is created */
+    char err[300];
+    c.range_start = pz_u256_pow2(255);
+    c.range_end = pz_u256_zero();
+    pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});    /* 2^256 - 1 */
+    CHECK(!sched_check_part(&c, err, sizeof err) && strstr(err, "too large"));
+    c.range_start = pz_u256_pow2(231);
+    c.range_end = pz_u256_pow2(232);
+    pz_u256_sub(&c.range_end, &c.range_end, &(pz_u256){{1, 0, 0, 0}});
+    c.chunk_bits = 40;
+    CHECK(sched_check_part(&c, err, sizeof err));                   /* puzzle 232 with the largest blocks: 191 bits, still fine */
+    c.chunk_bits = 36;
+    CHECK(!sched_check_part(&c, err, sizeof err));
+}
+
+int main(void)
+{
+    pz_env_init();
+    t_linear_chunk_bits();
+    t_coverage();
+    t_checkpoint_resume();
+    t_locate();
+    t_locate_wide();
     t_parts();
     t_seed();
     t_cfg();

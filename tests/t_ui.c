@@ -28,7 +28,6 @@ static void check_text(const char *txt, int lines, int cols, bool color)
     CHECK(nl == lines);
 }
 
-
 /* pz_fputs_wrap: no line longer than the width, the words kept in order, continuation lines indented, long words left whole */
 static char *wrap_to_string(const char *text, int width, int hang, char *out, size_t n)
 {
