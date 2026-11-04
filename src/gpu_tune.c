@@ -501,18 +501,23 @@ int gpu_tune_choose(const tune_ops *op, const double *rate, int nv, int di)
 /* The measurements of the variants in `turns` turns (in order, in the reverse order, in order, ...), after op->warm_s seconds of the default
  * variant: smp[i][0..nsmp[i]-1] for variant i. A variant that could not run in the first turn is not tried again; with `cut`, after the first
  * turn only those within TUNE_NEAR of its fastest and the default (index di) are measured again. */
+/* Whether the campaign of the session was stopped (Ctrl-C) while the tuner was measuring: it ends at the next step, as the measurements of the
+ * machine do, instead of going on for its minute or more. The self-test and the benchmark have sessions without a campaign. */
+static bool tune_stopped(const gpu_session *s) { return s->r && atomic_load(&s->r->stop); }
+
 void gpu_tune_turns(gpu_session *s, const tune_ops *op, int turns, bool cut, int di, double smp[][TUNE_TURNS_MAX], int *nsmp)
 {
     for (int i = 0; i < op->nv; i++) nsmp[i] = 0;
     if (op->warm_s > 0) {
         const double t0 = pz_mono();
-        while (op->measure(s, op->def) > 0 && pz_mono() - t0 < op->warm_s) {}
+        while (!tune_stopped(s) && op->measure(s, op->def) > 0 && pz_mono() - t0 < op->warm_s) {}
     }
     for (int r = 0; r < turns; r++) {
         double top = 0;
         for (int i = 0; i < op->nv; i++) if (nsmp[i] && smp[i][0] > top) top = smp[i][0];
         for (int k = 0; k < op->nv; k++) {
             const int i = r % 2 ? op->nv - 1 - k : k;
+            if (tune_stopped(s)) return;
             if (r > 0 && (smp[i][0] <= 0 || (cut && i != di && smp[i][0] < top * TUNE_NEAR))) continue;
             smp[i][nsmp[i]++] = op->measure(s, op->vs[i]);
         }
@@ -527,12 +532,13 @@ static double tune_launch(gpu_session *s, int idx, const tune_ops *op)
     const int n = (int)(sizeof try_s / sizeof *try_s);
     double rate[8] = {0}, got[8] = {0};
     uint32_t size[8] = {0}, prev = 0;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n && !tune_stopped(s); i++) {
         size[i] = prev;
         got[i] = try_s[i];
         rate[i] = op->at_length(s, try_s[i], &got[i], &size[i]);
         if (rate[i] > 0) prev = size[i];
     }
+    if (tune_stopped(s)) return GPU_LAUNCH_S;
     const int pick = gpu_tune_launch_choose(rate, n);
     char line[600], r[32];
     size_t o = (size_t)snprintf(line, sizeof line, "GPU[%d]: launch length (%s; the size in %s):", idx, op->unit, op->size_unit);
@@ -565,6 +571,7 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
     int nsmp[32], di = 0;
     for (int i = 0; i < op->nv; i++) if (op->vs[i] == op->def) di = i;
     gpu_tune_turns(s, op, TUNE_TURNS, true, di, smp, nsmp);
+    if (tune_stopped(s)) { op->set(s, op->def); return; }                     /* stopped in the middle: the default, nothing saved, no table */
     for (int i = 0; i < op->nv; i++) rate[i] = gpu_tune_median(smp[i], nsmp[i]);
     const int best = gpu_tune_choose(op, rate, op->nv, di);
     const double margin_pct = 100.0 * (TUNE_MARGIN - 1);
@@ -602,6 +609,7 @@ static void tune_measure(gpu_session *s, int idx, const tune_ops *op)
         return;
     }
     s->launch_s = op->at_length ? tune_launch(s, idx, op) : GPU_LAUNCH_S;
+    if (tune_stopped(s)) return;                                             /* the length was not measured in full: the choice is not saved */
     gpu_tune_cache_put(&s->info, op->kang, op->code(s), s->launch_s);
 }
 
