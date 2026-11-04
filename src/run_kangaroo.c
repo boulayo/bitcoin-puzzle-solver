@@ -122,11 +122,9 @@ int run_kangaroo(run_ctx *r)
     return 0;
 }
 
-/* ---------------- self-test / bench ---------------- */
+/* ---------------- synthetic campaigns (self-tests and measurements) ---------------- */
 
 static u64 st_rnd(u64 *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; return *s; }
-
-/* ---------------- synthetic campaigns (self-tests and measurements) ---------------- */
 
 /* The scratch folder of a synthetic campaign (pzkang*, in the temporary folder) holds a file "owner" whose lock the program keeps for as long as
  * the folder exists. A folder whose lock is free and that is not new was left by a program that did not get to remove it (a second Ctrl-C, a
@@ -286,6 +284,8 @@ void kang_free_test_state(struct kang_state *ks)
     synth_free(r);
 }
 
+/* ---------------- self-test ---------------- */
+
 typedef struct { run_ctx *r; progress_info pi; _Atomic int done; } progress_call;
 
 static void *progress_call_main(void *p)
@@ -379,6 +379,8 @@ int kangaroo_selftest(void)
     return fails;
 }
 
+/* ---------------- 'bench' and 'kstat' ---------------- */
+
 double kangaroo_bench(double secs, bool print)
 {
     const pz_u256 lo = pz_u256_pow2(120);
@@ -418,13 +420,13 @@ double kangaroo_bench(double secs, bool print)
     return rate;
 }
 
-/* 'pzsolve kstat BITS RUNS [THREADS]': measures the mean cost of the kangaroo in units of sqrt(W). */
 static int cmp_double(const void *a, const void *b)
 {
     const double x = *(const double *)a, y = *(const double *)b;
     return x < y ? -1 : x > y;
 }
 
+/* 'pzsolve kstat BITS TRIALS [THREADS [R [DP]]]': the mean cost of the kangaroo in units of sqrt(W), measured on random keys. */
 int kangaroo_stats(int argc, char **argv)
 {
     if (argc < 4) pz_die("usage: pzsolve kstat BITS TRIALS [THREADS [R [DP]]]  (see 'pzsolve help kstat')");

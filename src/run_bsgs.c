@@ -31,6 +31,8 @@ typedef struct {
 
 typedef struct { bs_run *b; int slot; } bs_warg;
 
+/* ---- progress and checkpoint ---- */
+
 static void bs_progress(run_ctx *r, progress_info *pi)
 {
     bs_run *b = r->bsgs;
@@ -85,6 +87,8 @@ static int bs_checkpoint(run_ctx *r)
     run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + giants);
     return rc;
 }
+
+/* ---- the search threads and the driver that starts them once the table is ready ---- */
 
 static void bs_on_found(void *user, const pz_u256 *key)
 {
@@ -191,6 +195,8 @@ static void bs_cleanup(run_ctx *r)
         r->bsgs = NULL;
     }
 }
+
+/* ---- the checks before a campaign, and the campaign ---- */
 
 /* RAM of the table of T baby steps: that of a table built now, or, when `table_path` already holds a table, that of the file (a table
  * saved by an earlier version takes more per baby step). */

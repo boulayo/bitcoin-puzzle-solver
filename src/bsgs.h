@@ -117,12 +117,12 @@ u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *u
 /* Diagnostic: giant windows that needed the exact slow path (the key sits exactly on a giant step). */
 extern _Atomic u64 bsgs_slow_windows;
 
-/* Convenience for tests and the self-test: exhaustive search of [lo, hi] for the key behind `pub`, `nthreads` threads.
- * Returns true and the key when found; *giants receives the giants scanned. */
 /* Name of the window routine in use ("scalar" or the lane-parallel variant) and the check of every variant against
  * the scalar one (prints one line each, returns the failures). */
 const char *bsgs_engine_name(void);
 int bsgs_vengine_selftest(void);
+/* Convenience for tests and the self-test: exhaustive search of [lo, hi] for the key behind `pub`, `nthreads` threads.
+ * Returns true and the key when found; *giants receives the giants scanned. */
 bool bsgs_solve(const pz_u256 *lo, const pz_u256 *hi, const pz_ge *pub, u64 T, int nthreads, pz_u256 *key, u64 *giants);
 
 #endif

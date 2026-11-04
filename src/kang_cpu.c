@@ -7,7 +7,7 @@
 #include "envopts.h"
 #include "outfmt.h"
 
-/* ---------------- CPU worker ---------------- */
+/* ---------------- the step variants, and the check of each against the portable one ---------------- */
 
 static bool always(void) { return true; }
 static const kang_round_variant KROUNDS[] = {
@@ -140,57 +140,6 @@ static double kround_rate(kang_round_fn fn)
     kang_worker_free(w);
     kang_free_test_state(ks);
     return (double)steps / (t - t0);
-}
-
-static double kbench_run(kang_state *ks, const sysinfo_t *s, int n, const kang_round_fn *fn, const int *pos, double secs);
-static void kround_choose_pair(void);
-static void kround_choose_mix(bool measured);
-
-static void kround_pick(void)
-{
-    g_kround = 0;
-    double best = 0;
-    const char *forced = g_env.kang_round;                 /* diagnostics: base, x86, avx2v, avx512v, avx512i */
-    if (forced[0]) {
-        const int f = kround_find(forced);
-        if (f >= 0 && KROUNDS[f].supported()) { g_kround = f; kround_choose_mix(false); return; }
-        pz_log(PZ_LOG_WARN, "PZ_KANG_ROUND=%s is not available on this CPU: choosing automatically", forced);
-    }
-    for (int i = 0; i < NKROUNDS; i++) {
-        if (!KROUNDS[i].supported()) continue;
-        if (i > 0 && !kang_round_check(KROUNDS[i].fn, 96, 75)) {
-            pz_log(PZ_LOG_WARN, "kangaroo CPU: variant %s does not match the reference, excluded", KROUNDS[i].name);
-            continue;
-        }
-        g_kround_ok[i] = true;
-        double r = kround_rate(KROUNDS[i].fn);
-        if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, r / 1e6);
-        if (r > best * 1.03) { best = r; g_kround = i; }
-    }
-    kround_choose_pair();
-    kround_choose_mix(true);
-}
-
-kang_round_fn kang_pick_round(void)
-{
-    pthread_once(&g_kround_once, kround_pick);
-    return KROUNDS[g_kround].fn;
-}
-
-const char *kang_round_name(void)
-{
-    pthread_once(&g_kround_once, kround_pick);
-    return KROUNDS[g_kround].name;
-}
-
-/* The widest instruction set among the step variants this CPU supports: unlike the measured choice of kang_round_name,
- * which may differ from one process to the next when two variants are about as fast, it never changes on a machine. */
-const char *kang_round_isa(void)
-{
-    int best = 0;
-    for (int v = 0; v < NKROUNDS; v++)
-        if (KROUNDS[v].supported()) best = v;
-    return best == kround_find("avx512i2") ? "avx512i" : KROUNDS[best].id;
 }
 
 /* ---------------- CPU benchmark of the step variants ---------------- */
@@ -409,6 +358,57 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
     }
     kang_free_test_state(ks);
 }
+
+/* ---------------- the choice of the step ---------------- */
+
+static void kround_pick(void)
+{
+    g_kround = 0;
+    double best = 0;
+    const char *forced = g_env.kang_round;                 /* diagnostics: base, x86, avx2v, avx512v, avx512i */
+    if (forced[0]) {
+        const int f = kround_find(forced);
+        if (f >= 0 && KROUNDS[f].supported()) { g_kround = f; kround_choose_mix(false); return; }
+        pz_log(PZ_LOG_WARN, "PZ_KANG_ROUND=%s is not available on this CPU: choosing automatically", forced);
+    }
+    for (int i = 0; i < NKROUNDS; i++) {
+        if (!KROUNDS[i].supported()) continue;
+        if (i > 0 && !kang_round_check(KROUNDS[i].fn, 96, 75)) {
+            pz_log(PZ_LOG_WARN, "kangaroo CPU: variant %s does not match the reference, excluded", KROUNDS[i].name);
+            continue;
+        }
+        g_kround_ok[i] = true;
+        double r = kround_rate(KROUNDS[i].fn);
+        if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, r / 1e6);
+        if (r > best * 1.03) { best = r; g_kround = i; }
+    }
+    kround_choose_pair();
+    kround_choose_mix(true);
+}
+
+kang_round_fn kang_pick_round(void)
+{
+    pthread_once(&g_kround_once, kround_pick);
+    return KROUNDS[g_kround].fn;
+}
+
+const char *kang_round_name(void)
+{
+    pthread_once(&g_kround_once, kround_pick);
+    return KROUNDS[g_kround].name;
+}
+
+/* The widest instruction set among the step variants this CPU supports: unlike the measured choice of kang_round_name,
+ * which may differ from one process to the next when two variants are about as fast, it never changes on a machine. */
+const char *kang_round_isa(void)
+{
+    int best = 0;
+    for (int v = 0; v < NKROUNDS; v++)
+        if (KROUNDS[v].supported()) best = v;
+    return best == kround_find("avx512i2") ? "avx512i" : KROUNDS[best].id;
+}
+
+/* ---------------- the worker thread ---------------- */
 
 /* The mixed layout (kround_choose_mix): on cores with SMT, the threads after the first run the scalar step. */
 static kang_round_fn kang_round_for_slot(const sysinfo_t *s, int slot)

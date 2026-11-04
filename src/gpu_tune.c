@@ -479,13 +479,13 @@ double gpu_tune_median(const double *s, int n)
     return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
 }
 
-/* The rule for a variant: the index of the one to keep from the medians, the default (index di) unless another is faster by more than
- * TUNE_MARGIN; when the default cannot run (0), the fastest. */
 /* The size of a variant that decides a tie: the window of the linear kernel, the walkers per work-item of the kangaroo. A larger one does the
  * same keys or steps with fewer inversions and fewer launches, so when two variants are within the margin of each other the larger wins
  * (on the RTX A2000 window 256 and 512 with the register cap measured 875.4 and 875.1 M keys/s: the card prefers 512 in a campaign). */
 static int tune_size(const tune_ops *op, int v) { return op->kang ? KV_NK(v) : VAR_HALF(v); }
 
+/* The rule for a variant: the index of the one to keep from the medians, the default (index di) unless another is faster by more than
+ * TUNE_MARGIN; when the default cannot run (0), the fastest. */
 int gpu_tune_choose(const tune_ops *op, const double *rate, int nv, int di)
 {
     int fastest = 0;
@@ -498,13 +498,13 @@ int gpu_tune_choose(const tune_ops *op, const double *rate, int nv, int di)
     return pick;
 }
 
-/* The measurements of the variants in `turns` turns (in order, in the reverse order, in order, ...), after op->warm_s seconds of the default
- * variant: smp[i][0..nsmp[i]-1] for variant i. A variant that could not run in the first turn is not tried again; with `cut`, after the first
- * turn only those within TUNE_NEAR of its fastest and the default (index di) are measured again. */
 /* Whether the campaign of the session was stopped (Ctrl-C) while the tuner was measuring: it ends at the next step, as the measurements of the
  * machine do, instead of going on for its minute or more. The self-test and the benchmark have sessions without a campaign. */
 static bool tune_stopped(const gpu_session *s) { return s->r && atomic_load(&s->r->stop); }
 
+/* The measurements of the variants in `turns` turns (in order, in the reverse order, in order, ...), after op->warm_s seconds of the default
+ * variant: smp[i][0..nsmp[i]-1] for variant i. A variant that could not run in the first turn is not tried again; with `cut`, after the first
+ * turn only those within TUNE_NEAR of its fastest and the default (index di) are measured again. */
 void gpu_tune_turns(gpu_session *s, const tune_ops *op, int turns, bool cut, int di, double smp[][TUNE_TURNS_MAX], int *nsmp)
 {
     for (int i = 0; i < op->nv; i++) nsmp[i] = 0;
@@ -710,6 +710,7 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     gpu_tune_pick(s, idx, &op);
 }
 
+/* ---------------- 'doctor' ---------------- */
 
 void gpu_doctor_cache(void)
 {
@@ -717,10 +718,10 @@ void gpu_doctor_cache(void)
     if (!pz_cache_file("gpu_tune.txt", path, sizeof path)) return;
     char *t = pz_read_file(path, NULL);
     int cnt = 0;
-    const size_t pz_vl = strlen(PZ_VERSION);
+    const size_t vlen = strlen(PZ_VERSION);
     char *eq;
     for (char *p = t, *line; (line = pz_keyed_line(&p, &eq));) {
-        if (eq && (size_t)(eq - line) > pz_vl && !strncmp(eq - pz_vl - 1, "|" PZ_VERSION, pz_vl + 1)) {
+        if (eq && (size_t)(eq - line) > vlen && !strncmp(eq - vlen - 1, "|" PZ_VERSION, vlen + 1)) {
             /* "[kang|]API|NAME|VERSION|CU|PZVERSION=VARIANT" (gpu_tune_key) -> "NAME (API, VERSION): kangaroo NK 128" */
             const bool kang = !strncmp(line, "kang|", 5);
             char key[400], nb[64];

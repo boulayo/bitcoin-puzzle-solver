@@ -21,6 +21,8 @@ static void log_fingerprint(const kang_state *ks, const pz_u256 *base, const cha
     pz_sha256(buf, 72 + 33, fp);
 }
 
+/* ---- writing ---- */
+
 /* wmu held. A write failed (disk full, quota, I/O error): what reached the file is unknown, maybe a torn record, maybe whole ones. Reopens
  * the file, cuts it back to whole records and drops from the block the records that did get there, so the next write appends exactly
  * the rest. */
@@ -177,6 +179,8 @@ void kang_table_unlock(kang_state *ks)
     log_write_block(ks);                                                 /* a failure leaves the block for the next try; the checkpoint reports it */
     pthread_mutex_unlock(&ks->wmu);
 }
+
+/* ---- the header, creating and loading ---- */
 
 /* Fingerprint of the logs of this campaign (see KANG_LOG_MAGIC). */
 void kang_log_fp(const kang_state *ks, u8 fp[32]) { log_fingerprint(ks, &ks->base, "PZDPLOG4", fp); }
@@ -360,6 +364,8 @@ int kang_load_log(kang_state *ks)
     ks->log_refs = ks->log != NULL;
     return ks->log ? 0 : -1;
 }
+
+/* ---- merge ---- */
 
 /* Adds the distinguished points of another computer's log of the same campaign (same range and public key; the jump table must be the same
  * too, i.e. the same seed, or the walks of the two computers never meet). Returns what the header says (KANG_HDR_OK when the points were

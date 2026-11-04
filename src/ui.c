@@ -69,6 +69,8 @@ char *ui_fmt_prob(double p, char *buf, size_t n)
     return buf;
 }
 
+/* ---- the panel ---- */
+
 /* "3h 12m (at 17:33)" / "2d 4h 1m (on 2026-10-23 14:05)"; the clock part only for horizons under a year. */
 static char *fmt_eta_at(double secs, bool with_clock, char *buf, size_t n)
 {
@@ -342,6 +344,8 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     if (!final) add_line(&p, p.D0, p.D1, "Ctrl-C: stop and save progress; run the same command again to resume.");
     return p.lines;
 }
+
+/* ---- the one-line forms ---- */
 
 void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, int cols, char *buf, size_t n)
 {

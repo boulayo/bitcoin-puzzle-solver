@@ -6,6 +6,8 @@
 #include <time.h>
 #include <errno.h>
 
+/* ---- modes, ranges and block sizes ---- */
+
 const char *mode_name(search_mode m) { return m == MODE_KANGAROO ? "kangaroo" : m == MODE_BSGS ? "bsgs" : "linear"; }
 
 bool puzzle_range(int n, pz_u256 *start, pz_u256 *end)
@@ -54,6 +56,8 @@ unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares)
     return (unsigned)b;
 }
 
+/* ---- seeds ---- */
+
 void seed_generate(u8 seed[32])
 {
     u8 pool[32 + 8 + 8 + 8 + 64];
@@ -91,6 +95,8 @@ void seed_to_id(const u8 seed[32], char id[17])
     pz_sha256(buf, 36, h);
     pz_hex_encode(h, 8, id);
 }
+
+/* ---- the shares of --part ---- */
 
 bool part_parse(const char *text, part_spec *out, char *err, size_t errn)
 {
@@ -185,6 +191,8 @@ bool part_split(const u64 *speed, unsigned n, unsigned total, unsigned *counts)
     }
     return true;
 }
+
+/* ---- campaign.conf ---- */
 
 int cfg_save(const campaign_cfg *c, const char *path)
 {

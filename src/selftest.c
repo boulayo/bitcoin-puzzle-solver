@@ -27,6 +27,8 @@ static u64 rnd64(void) { rs_ ^= rs_ << 13; rs_ ^= rs_ >> 7; rs_ ^= rs_ << 17; re
 typedef struct { int hits; pz_u256 key; } hitrec;
 static void on_hit(void *u, const pz_u256 *k) { hitrec *h = u; h->hits++; h->key = *k; }
 
+/* ---- the self-test ---- */
+
 static void t_primitives(void)
 {
     u8 d[32], h[20];
@@ -614,6 +616,8 @@ int selftest_checks(bool banner)
     pz_log_set_quiet(was_quiet);
     return g_fail != 0;
 }
+
+/* ---- 'bench' ---- */
 
 typedef struct { const cpu_engine *e; double secs; u64 keys; int slot; sysinfo_t *s; } bench_arg;
 

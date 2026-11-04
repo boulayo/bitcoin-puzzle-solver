@@ -7,6 +7,8 @@
 
 #define V_CAP (((u128)1) << 126)
 
+/* ---- the hexadecimal of state.dat ---- */
+
 static char *u128_to_hex(u128 v, char *buf)
 {
     if (v >> 64 == 0) snprintf(buf, 40, "%llx", (unsigned long long)v);
@@ -29,6 +31,8 @@ static bool u128_from_hex(const char *s, u128 *out)
     *out = v;
     return true;
 }
+
+/* ---- the blocks of a part (--part) ---- */
 
 /* Blocks of the whole search order (M = ceil(R / 2^b)) and of the part in cfg->part. */
 static bool part_blocks(const campaign_cfg *cfg, part_spec *ps, pz_u256 *m_all, pz_u256 *own, char *err, size_t errn)
@@ -70,6 +74,8 @@ bool sched_check_part(const campaign_cfg *cfg, char *err, size_t errn)
     if (cfg->chunk_bits < 1 || cfg->chunk_bits > 40) { snprintf(err, errn, "chunk_bits must be between 1 and 40"); return false; }
     return part_blocks(cfg, &ps, &m, &own, err, errn);
 }
+
+/* ---- the scheduler ---- */
 
 sched_t *sched_new(const campaign_cfg *cfg)
 {
@@ -137,6 +143,8 @@ void sched_free(sched_t *s)
     free(s);
 }
 
+/* ---- claims ---- */
+
 /* Inserts [a,b) into the done set, merging neighbours. mu held. */
 static void add_done(sched_t *s, u128 a, u128 b)
 {
@@ -197,7 +205,8 @@ bool sched_part_position(const sched_t *s, const pz_u256 *gseq, pz_u256 *local)
     return false;
 }
 
-static void load_chunk(sched_t *s, u128 seq)
+/* The block at position seq of this computer's order: its first key and its length (short for the last block of the range). */
+static void load_block(sched_t *s, u128 seq)
 {
     if (s->cur_valid && s->cur_seq == seq) return;
     pz_u256 sq = global_seq(s, seq);
@@ -236,16 +245,16 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out)
         }
         if (skipped) continue;
         u128 seq = s->next >> s->cbits;
-        u128 chunk_base = seq << s->cbits;
-        u64 off = (u64)(s->next - chunk_base);
-        load_chunk(s, seq);
-        if (off >= s->cur_len) {   /* filler beyond a short last chunk */
-            add_done(s, s->next, chunk_base + ((u128)1 << s->cbits));
-            s->next = chunk_base + ((u128)1 << s->cbits);
+        u128 block_base = seq << s->cbits;
+        u64 off = (u64)(s->next - block_base);
+        load_block(s, seq);
+        if (off >= s->cur_len) {   /* filler beyond a short last block */
+            add_done(s, s->next, block_base + ((u128)1 << s->cbits));
+            s->next = block_base + ((u128)1 << s->cbits);
             continue;
         }
         u128 end = s->next + want;
-        u128 cend = chunk_base + s->cur_len;
+        u128 cend = block_base + s->cur_len;
         if (end > cend) end = cend;
         for (size_t i = 0; i < s->ndone; i++)
             if (s->done[i].a > s->next) { if (s->done[i].a < end) end = s->done[i].a; break; }
@@ -264,9 +273,9 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out)
         s->ninf++;
         s->next = end;
         if (end == cend && s->cur_len < ((u64)1 << s->cbits)) {
-            u128 next_chunk = chunk_base + ((u128)1 << s->cbits);
-            add_done(s, end, next_chunk);
-            s->next = next_chunk;
+            u128 next_block = block_base + ((u128)1 << s->cbits);
+            add_done(s, end, next_block);
+            s->next = next_block;
         }
         pthread_mutex_unlock(&s->mu);
         return CLAIM_OK;
@@ -291,6 +300,8 @@ void sched_complete(sched_t *s, const claim_t *c, u64 covered)
     }
     pthread_mutex_unlock(&s->mu);
 }
+
+/* ---- what the run and the reports ask ---- */
 
 u128 sched_keys_done(sched_t *s)
 {
@@ -336,6 +347,8 @@ bool sched_locate(sched_t *s, const pz_u256 *key, pz_u256 *seq, u64 *offset)
     *seq = sched_perm_invert(&s->perm, &c);
     return true;
 }
+
+/* ---- the checkpoint (state.dat) ---- */
 
 /* true when `path` exists and carries a valid checksum */
 static bool state_file_valid(const char *path)
@@ -412,7 +425,7 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
     if (strncmp(crc + 4, hx, 16)) { snprintf(err, errlen, "invalid checkpoint checksum (corrupt file?)"); free(text); return -1; }
     *crc = 0;
     unsigned cb = 0;
-    char pz_vl[64] = "", kd[64] = "", nds[32] = "";
+    char vlim_text[64] = "", kd_text[64] = "", nds[32] = "";
     size_t nd = 0;
     if (strncmp(text, "PZSCHED 1\n", 10) != 0 || !state_field(text, "cbits", nds, sizeof nds)) {
         snprintf(err, errlen, "unrecognized checkpoint format");
@@ -440,14 +453,14 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
         }
     }
     cb = (unsigned)pz_strtou64(nds);
-    if (!state_field(text, "v_limit", pz_vl, sizeof pz_vl) || !state_field(text, "keys_done", kd, sizeof kd) || !state_field(text, "ndone", nds, sizeof nds)) {
+    if (!state_field(text, "v_limit", vlim_text, sizeof vlim_text) || !state_field(text, "keys_done", kd_text, sizeof kd_text) || !state_field(text, "ndone", nds, sizeof nds)) {
         snprintf(err, errlen, "unrecognized checkpoint format");
         free(text);
         return -1;
     }
     nd = (size_t)pz_strtou64(nds);
     u128 vlim, kdone;
-    if (!u128_from_hex(pz_vl, &vlim) || !u128_from_hex(kd, &kdone) || cb != s->cbits || vlim != s->v_limit) {
+    if (!u128_from_hex(vlim_text, &vlim) || !u128_from_hex(kd_text, &kdone) || cb != s->cbits || vlim != s->v_limit) {
         snprintf(err, errlen, "the checkpoint does not match the campaign (different chunk_bits or size)");
         free(text);
         return -2;

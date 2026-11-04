@@ -1,15 +1,12 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* jobq.h - work scheduler for linear campaigns.
+/* jobq.h - the scheduler of the linear search: the blocks of a range in the order of the seed, claimed in pieces.
  *
- * The search space is split into chunks of 2^chunk_bits keys. The k-th chunk
- * visited by the campaign is chunk perm(k), where perm is the seed-keyed
- * bijection of perm.h. Inside a chunk keys are scanned sequentially, which is
- * what the EC engines are fastest at.
+ * The range is split into blocks of 2^chunk_bits keys (--chunk-bits). The k-th block visited by the campaign is block perm(k),
+ * where perm is the seed-keyed bijection of perm.h. Inside a block the keys are scanned in order, which is what the engines
+ * are fastest at.
  *
- * Progress is tracked in a "virtual" linear space V = k * 2^chunk_bits + offset
- * as a sorted set of completed intervals. Workers claim contiguous pieces of
- * V; the set only ever holds one hole per claim in flight, so it stays tiny
- * and is cheap to checkpoint. */
+ * Progress is kept in a "virtual" linear space V = k * 2^chunk_bits + offset as a sorted set of completed intervals. Workers claim
+ * contiguous pieces of V; the set only ever holds one hole per claim in flight, so it stays tiny and is cheap to checkpoint. */
 #ifndef PZ_JOBQ_H
 #define PZ_JOBQ_H
 
@@ -61,7 +58,7 @@ typedef struct sched {
     vival *done; size_t ndone, capdone;
     struct { u64 id; u128 a, b; } *inflight; size_t ninf, capinf;
     u64 next_id;
-    /* cached chunk */
+    /* the block the last claim came from (load_block): its position, first key and length */
     u128 cur_seq; bool cur_valid; pz_u256 cur_start; u64 cur_len;
     u128 keys_done;        /* exact count of keys covered (excluding fillers) */
     pz_u256 range_size;

@@ -20,6 +20,8 @@ static FILE *g_log_fp;
 static int g_verbose, g_quiet;
 static int g_block_lines;   /* lines of the in-place dashboard currently on screen (0 = none), guarded by g_log_mu */
 
+/* ---- logging ---- */
+
 static void log_lock(void)
 {
     pthread_mutex_lock(&g_log_mu);
@@ -105,6 +107,47 @@ void pz_log_terminal_line_break(void)
     }
     log_unlock();
 }
+
+static void vlog(pz_loglevel lvl, bool terminal, const char *fmt, va_list ap)
+{
+    static const char *tag[] = {"INFO", "WARN", "ERROR", "DEBUG"};
+    char msg[1024];
+    vsnprintf(msg, sizeof msg, fmt, ap);
+
+    char ts[32];
+    log_stamp(ts, sizeof ts);
+
+    log_lock();
+    if (g_log_fp) fprintf(g_log_fp, "%s [%s] %s\n", ts, tag[lvl], msg);
+    if (lvl == PZ_LOG_DEBUG && !g_verbose) terminal = false;
+    if (terminal && g_quiet < 2 && (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN)) {
+        block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
+        char ln[1100 + 32];
+        snprintf(ln, sizeof ln, "[%s] %-6s %s", ts + 11, tag[lvl], msg);
+        if (pz_fd_terminal_cols(2) > 0) pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 18);
+        else fputs(ln, stderr);   /* a file or a pipe: one record per line, for grep and for tools that read the log */
+        fputc('\n', stderr);
+    }
+    log_unlock();
+}
+
+void pz_log(pz_loglevel lvl, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vlog(lvl, true, fmt, ap);
+    va_end(ap);
+}
+
+void pz_log_file(pz_loglevel lvl, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vlog(lvl, false, fmt, ap);
+    va_end(ap);
+}
+
+/* ---- lines of at most PZ_LINE_MAX columns ---- */
 
 static int text_cols(const char *s, size_t n)
 {
@@ -278,44 +321,7 @@ void pz_fputs_wrap(FILE *fp, const char *text, int width, int hang)
     free(line);
 }
 
-static void vlog(pz_loglevel lvl, bool terminal, const char *fmt, va_list ap)
-{
-    static const char *tag[] = {"INFO", "WARN", "ERROR", "DEBUG"};
-    char msg[1024];
-    vsnprintf(msg, sizeof msg, fmt, ap);
-
-    char ts[32];
-    log_stamp(ts, sizeof ts);
-
-    log_lock();
-    if (g_log_fp) fprintf(g_log_fp, "%s [%s] %s\n", ts, tag[lvl], msg);
-    if (lvl == PZ_LOG_DEBUG && !g_verbose) terminal = false;
-    if (terminal && g_quiet < 2 && (!g_quiet || lvl == PZ_LOG_ERR || lvl == PZ_LOG_WARN)) {
-        block_erase_locked();   /* the dashboard is redrawn below the message at its next update */
-        char ln[1100 + 32];
-        snprintf(ln, sizeof ln, "[%s] %-6s %s", ts + 11, tag[lvl], msg);
-        if (pz_fd_terminal_cols(2) > 0) pz_fputs_wrap(stderr, ln, PZ_LINE_MAX, 18);
-        else fputs(ln, stderr);   /* a file or a pipe: one record per line, for grep and for tools that read the log */
-        fputc('\n', stderr);
-    }
-    log_unlock();
-}
-
-void pz_log(pz_loglevel lvl, const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    vlog(lvl, true, fmt, ap);
-    va_end(ap);
-}
-
-void pz_log_file(pz_loglevel lvl, const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    vlog(lvl, false, fmt, ap);
-    va_end(ap);
-}
+/* ---- strings, numbers and key=value lines ---- */
 
 void pz_strlcpy(char *dst, const char *src, size_t n)
 {
@@ -444,6 +450,8 @@ bool pz_index_list_valid(const char *s)
     }
 }
 
+/* ---- memory ---- */
+
 void *pz_xmalloc(size_t n)
 {
     void *p = malloc(n ? n : 1);
@@ -477,6 +485,8 @@ void *pz_xrealloc(void *p, size_t n)
     if (!q) pz_die("out of memory (realloc %zu bytes)", n);
     return q;
 }
+
+/* ---- hex and human-readable quantities ---- */
 
 static int hexval(int c)
 {
@@ -602,6 +612,8 @@ char *pz_fmt_age(double secs, char *buf, size_t n)
     else snprintf(buf, n, "%s ago", pz_fmt_duration(secs, d, sizeof d));
     return buf;
 }
+
+/* ---- files ---- */
 
 int pz_mkdir_p(const char *path)
 {
