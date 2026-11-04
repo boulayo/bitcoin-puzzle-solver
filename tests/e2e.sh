@@ -81,6 +81,14 @@ $BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"
 
+echo "== kangaroo: a file size limit (ulimit -f) fails the writes of dp.bin, which is handled like a full disk; it does not kill the program"
+K=$(rndkey 80 8080); PUB=$(field $K pub); A=$(field $K addr)   # a range the key cannot be found in within seconds; a flood of points reaches the limit at once
+rm -rf "$DIR/xfsz"
+(ulimit -f 64; timeout -s INT 8 $BIN hunt -p 80 -a "$A" -k "$PUB" -m kangaroo --dp-bits 4 --mem 0.05 -c xfsz -d "$DIR" --ui log -q --no-gpu --checkpoint-interval 2 >"$DIR/xfsz.out" 2>&1; echo "rc=$?" >>"$DIR/xfsz.out")
+RC=$(sed -n 's/^rc=//p' "$DIR/xfsz.out")
+[ "$RC" = 124 ] && grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" && [ -s "$DIR/xfsz/session.txt" ] && ok "dp.bin beyond the file size limit: the failed saves are logged, the session is saved, the stop is clean" \
+  || bad "dp.bin beyond the file size limit: rc=$RC (153 = killed by SIGXFSZ): $(grep -c 'checkpoint save failed' "$DIR/xfsz/log.txt" 2>/dev/null) failed saves logged, session.txt $([ -s "$DIR/xfsz/session.txt" ] && echo present || echo missing)"
+
 echo "== kangaroo: a tiny --dp-bits on puzzle 140 (the table is sized by the memory limit; the number of points expected does not fit in 64 bits)"
 rm -rf "$DIR/k140"
 timeout -s INT 6 $BIN hunt -p 140 --dp-bits 2 --mem 0.05 -c k140 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/k140.out" 2>&1
