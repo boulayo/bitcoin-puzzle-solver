@@ -118,7 +118,7 @@ campaigns/NAME/
   session.txt     total time and sessions
   report.txt      readable report, rewritten every 5 s (the first time 2 s after the start)
   status.json     state for external programs (includes time left and probabilities), rewritten every 5 s
-  stats.csv       time series (one row per minute)
+  stats.csv       time series, one row per minute (the file appears after the first minute)
   log.txt         timestamped events (also the error that ended a run)
   FOUND.txt       only when the key is found (permissions 0600); with --encrypt-pubkey it holds the encrypted line, not the key (section 11)
 ```
@@ -140,9 +140,9 @@ campaigns/NAME/
   130 = interrupted by Ctrl-C, `kill` or the closing of the terminal (the state is saved, the same command resumes it);
   2 = error: invalid or inconsistent options, campaign in use, unreadable files, a final save of the state that failed, or a stop that
   nothing asked for (every GPU failed and the CPU is off).
-  The other commands exit with 0 when they succeed and 2 on an error; `selftest` and `doctor` exit with 1 when a check failed, and
-  `merge` with 1 when some file could not be merged (it exits with 0 both when the merge found the key, which it shows and saves in
-  `FOUND.txt`, and when there is no collision yet).
+  The other commands exit with 0 when they succeed and 2 on an error (`merge` too, when some file could not be merged; it exits with 0
+  both when the merge found the key, which it shows and saves in `FOUND.txt`, and when there is no collision yet); `selftest` and
+  `doctor` exit with 1 when a check failed, and `decrypt-key` with 1 when the secret does not open the line or the address does not match.
 * A restart loses at most the work of the blocks in progress (a few seconds per worker); the rest is never redone. In BSGS the
   table is rebuilt (a few minutes) unless you use `--table`.
 * A campaign that has already found the key does not start again: it shows `FOUND.txt`.
@@ -273,9 +273,9 @@ integer instructions and the L2 cache, and for NVIDIA the two ceilings of the ka
 `bench --gpu-only` skips the CPU tests. `bench --retune` ignores the saved choice of the kernel variants
 (`gpu_tune.txt`) and measures it again: useful after a driver update.
 
-`bench --variants` measures every variant of both kernels of each GPU, fairly, and prints one table per kernel. The device is warmed up for
-3 s with the default variant (not counted), then every variant is measured in three turns, in order, in the reverse order and in order
-again (`--turns N` for another number, 1 to 9), with the measurement the tuning uses (a second or two each). The table gives, per variant,
+`bench --variants` measures every variant of both kernels of each GPU, fairly, and prints one table per kernel. Every variant is measured as
+the tuning does (section 7.4: 3 s of warm-up with the default variant, not counted, then three turns; `--turns N` for another number, 1 to 9;
+a second or two each). The table gives, per variant,
 the code that `PZ_GPU_HALF` or `PZ_GPU_NK` takes to force it (`-` for the wide kangaroo herds, which no variable forces), its name, the rate
 of each turn (beyond 3 turns the least and the greatest), the median, the spread (the greatest over the least, in %) and the median against
 the default's; the default, the choice saved by the tuning, the fastest, the variants that cannot run on the device and those that no tuning
@@ -312,10 +312,10 @@ the campaign), saves the result and from then on uses it as the default. It does
 `--no-gpu` or `--limit`. The profile is in the cache folder, next to the kernel tuning (`%LOCALAPPDATA%\pzsolve\machine_profile.txt`
 on Windows, `~/.cache/pzsolve/machine_profile.txt` on Linux) and is tied to the program version, the processor, the number of
 cores, the step/engine used and the GPUs with their driver: if one of these changes it is measured again. The log always says what was
-applied (`profile of this machine from 2026-10-22: 11 CPU threads, GPU 0 (-t and --gpu override them; --retune measures again)`).
+applied (`profile of this machine from 2026-10-22: 11 CPU threads, --gpu 0 (-t and --gpu override them; --retune measures again)`).
 You change your mind like this: `-t`/`--gpu`/`--no-cpu`/`--no-gpu` replace the profile for that run; `--retune` measures it again; `--no-tune`
 (or `PZ_NO_PROFILE=1`) neither measures nor uses it. If no configuration beats the default one by more than the noise of the measurement, the
-saved profile is "the defaults are already the best" and it is not measured again at every start. Ctrl-C during the measurement ends the program
+saved profile says `the default values (all threads, all GPUs) are already the best` and it is not measured again at every start. Ctrl-C during the measurement ends the program
 at once (the search is not started, nothing is saved, and the folder of the measurement is removed). Without a cache folder that can be written
 to (no `HOME` or `XDG_CACHE_HOME`, as for a service) the measurement is skipped with one notice, since it could not be kept.
 

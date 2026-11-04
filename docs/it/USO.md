@@ -17,7 +17,7 @@
 | `pzsolve doctor [-d DIR] [--full]` | controlla programma, sistema, CPU, GPU, taratura e profilo salvati, campagne, disco, orologio e variabili `PZ_*`, e dice cosa non va; da incollare quando si chiede aiuto |
 | `pzsolve devices`   | CPU, set di istruzioni, RAM e GPU (CUDA e OpenCL) rilevate |
 | `pzsolve selftest`  | controlli di correttezza integrati (primitive, database, motori SIMD, canguro, BSGS, GPU) |
-| `pzsolve bench [--together [--linear] [-t N] [--gpu L] [--prio-gpu P]] [--gpu-only] [--retune]` | velocità di ogni motore CPU (1…N thread), del canguro, del BSGS e delle GPU (con banda e throughput intero); `--together`: sezione 7.9 |
+| `pzsolve bench [--together [--linear] [-t N] [--gpu L] [--prio-gpu P]] [--gpu-only] [--variants [--turns N]] [--retune]` | velocità di ogni motore CPU (1…N thread), del canguro, del BSGS e delle GPU (con banda e throughput intero); `--together`: sezione 7.9; `--variants`: ogni variante dei kernel GPU in una tabella, sezione 7.5 |
 | `pzsolve kstat BITS TRIALS [THREADS [R [DP]]]` | statistica del costo del canguro su intervalli di 2^BITS chiavi (R salti invece di 256 e dp-bits fissi, senza riavvii: per studiare i cicli) |
 | `pzsolve version`   | versione e commit di compilazione |
 
@@ -118,7 +118,7 @@ campaigns/NOME/
   session.txt     tempo totale e sessioni
   report.txt      report leggibile, riscritto ogni 5 s (la prima volta 2 s dopo l'avvio)
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto ogni 5 s
-  stats.csv       serie storica (una riga al minuto)
+  stats.csv       serie storica, una riga al minuto (il file compare dopo il primo minuto)
   log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
   FOUND.txt       solo a chiave trovata (permessi 0600); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
 ```
@@ -140,9 +140,9 @@ campaigns/NOME/
   130 = interrotto con Ctrl-C, `kill` o chiusura del terminale (lo stato è salvato, lo stesso comando riprende);
   2 = errore: opzioni non valide o incoerenti, campagna in uso, file illeggibili, salvataggio finale dello stato non riuscito, o un
   arresto che nessuno ha chiesto (tutte le GPU in errore e CPU spenta).
-  Gli altri comandi escono con 0 se riescono e con 2 in caso di errore; `selftest` e `doctor` escono con 1 se un controllo è fallito e
-  `merge` con 1 se qualche file non è stato unito (esce con 0 sia quando l'unione ha trovato la chiave, che mostra e salva in
-  `FOUND.txt`, sia quando non c'è ancora nessuna collisione).
+  Gli altri comandi escono con 0 se riescono e con 2 in caso di errore (anche `merge`, se qualche file non è stato unito; esce con 0 sia
+  quando l'unione ha trovato la chiave, che mostra e salva in `FOUND.txt`, sia quando non c'è ancora nessuna collisione); `selftest` e
+  `doctor` escono con 1 se un controllo è fallito, e `decrypt-key` con 1 se il segreto non apre la riga o l'indirizzo non corrisponde.
 * Un riavvio perde al massimo il lavoro dei blocchi in corso (pochi secondi per worker); il resto non viene mai rifatto. Nel BSGS la
   tabella viene ricostruita (pochi minuti) a meno che tu non usi `--table`.
 * Una campagna che ha già trovato la chiave non riparte: mostra `FOUND.txt`.
@@ -166,6 +166,10 @@ Chance        1h: 7.2e-09% | 24h: 1.7e-07% | 7d: 1.2e-06% | 30d: 5.2e-06% | 365d
               random order: blocks of 2^36 keys
 Ctrl-C: stop and save progress; run the same command again to resume.
 ```
+
+La seconda riga di `Speed` nomina ogni GPU con la sua velocità finché sono al massimo quattro e stanno nel terminale; con più schede dà la
+somma, la minima e la massima (`GPU x8: 7.21 G (870.12 M to 912.33 M each)`); `report.txt` e `status.json` nella cartella della campagna
+elencano sempre ogni worker uno per uno.
 
 * **Progress** (avanzamento): frazione coperta (lineare, BSGS). Nel canguro la riga è `Success prob.`: la **probabilità stimata di aver già
   trovato la chiave**, con i passi fatti e quelli attesi in media.
@@ -243,8 +247,19 @@ Il driver compila i kernel per la tua scheda (con CUDA circa 10 s per modulo; co
 del kernel lineare circa un minuto, poi le varianti del canguro la prima volta che lo usi) e conserva il risultato nella sua cache:
 dalle volte successive l'avvio è immediato. Con più schede la taratura dei dispositivi gira insieme, e le schede dello stesso tipo si misurano una
 volta sola (le altre leggono il risultato: `from earlier tuning`). La taratura è memorizzata in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` su Windows,
-`~/.cache/pzsolve/gpu_tune.txt` su Linux, e si ripete quando cambia la versione del programma. La variante predefinita resta, a meno che un'altra
-non sia più veloce di oltre il 3 %.
+`~/.cache/pzsolve/gpu_tune.txt` su Linux, e si ripete quando cambia la versione del programma. Prima il dispositivo viene scaldato per 3 s, poi
+le varianti vengono misurate in tre turni (in ordine, in ordine inverso, di nuovo in ordine, così che un clock che deriva pesi allo stesso modo su
+tutte), ognuna prende la mediana delle sue velocità, e la variante predefinita resta a meno che un'altra non sia più veloce di oltre l'1 % (una
+misura breve sbaglia del 2-3 % su una GPU di portatile, e così la più veloce di otto; la mediana di tre sbaglia di circa l'1 %). Il log dice cosa è
+stato scelto, con il codice che `PZ_GPU_HALF` o `PZ_GPU_NK` accetta per imporlo, per esempio `linear kernel tuning: window 512, register cap,
+code 262656 (850.00 M keys/s, +2.8% over window 256; margin 1%)`.
+
+La taratura misura anche quanto deve durare un lancio del kernel scelto. Un lancio non si può interrompere: uno corto paga più spesso i suoi costi
+fissi (i trasferimenti, l'attesa, i primi prodotti), uno lungo ritarda l'arresto, il controllo di un risultato e il pannello. La variante scelta
+viene misurata con lanci da 0,15, 0,35, 0,7 e 1,4 s, dimensionati come li dimensionerebbe il controllore di una campagna, e si tiene la durata più
+corta entro l'1 % dalla migliore, salvata in `gpu_tune.txt` accanto alla variante (`...=262656 0.35`; un file della 1.19.x senza la durata vale
+0,35 s, il valore fisso di quelle versioni) e mostrata da `bench`. Con lanci da 1,4 s il pannello si aggiorna comunque ogni secondo: la velocità
+di una GPU è presa fra le fini dei suoi lanci.
 
 Le varianti (finestra, camminatori per thread, branchi dimensionati sulla L2) sono elencate in [`ALGORITHMS.md`](../en/ALGORITHMS.md) sezione 5
 (in inglese). `bench` mostra, per ogni GPU, la variante scelta e la sua velocità. Su un **portatile** CPU e GPU condividono alimentazione e
@@ -256,7 +271,38 @@ Per ogni GPU il `bench` stampa, oltre alla ricerca lineare e al canguro (con la 
 intere a 32 bit e la cache L2, e per le NVIDIA i due tetti del canguro che ne derivano: come leggerli è in [`RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) sezione 8.4 (in inglese).
 
 `bench --gpu-only` salta le prove della CPU. `bench --retune` ignora la scelta salvata delle varianti dei kernel
-(`gpu_tune.txt`) e la misura di nuovo: serve dopo un aggiornamento del driver o per vedere i numeri di tutte le varianti.
+(`gpu_tune.txt`) e la misura di nuovo: serve dopo un aggiornamento del driver.
+
+`bench --variants` misura ogni variante dei due kernel di ogni GPU, in modo equo, e stampa una tabella per kernel. Ogni variante viene misurata
+come fa la taratura (sezione 7.4: 3 s di riscaldamento con la variante predefinita, non contati, poi tre turni; `--turns N` per un altro numero,
+da 1 a 9; un secondo o due ciascuna). La tabella dà, per variante, il codice
+che `PZ_GPU_HALF` o `PZ_GPU_NK` accetta per imporla (`-` per i branchi larghi del canguro, che nessuna variabile impone), il nome, la velocità di
+ogni turno (oltre 3 turni la minima e la massima), la mediana, la dispersione (la massima sulla minima, in %) e la mediana rispetto a quella
+predefinita; sono marcate la predefinita, la scelta salvata dalla taratura, la più veloce, le varianti che non possono girare sul dispositivo e
+quelle che nessuna taratura propone (`4g`, il branco a blocchi: "forced only"). Sotto ogni tabella la regola della taratura dice cosa sceglierebbe
+da queste mediane, e una seconda piccola tabella dà la velocità della variante in uso con lanci da 0,15, 0,35, 0,7 e 1,4 s e la durata che la
+regola sceglie. Non si salva nulla se non si dà anche `--retune`: allora le scelte delle tabelle, una volta che la variante ha superato il
+controllo bit-esatto, sostituiscono la taratura salvata. Circa due o tre minuti per GPU. Sulle macchine di questo progetto è girato solo su
+dispositivi simulati (il driver CUDA simulato sulla CPU, e pocl): le loro velocità non dicono nulla su una scheda.
+
+```
+GPU[0] NVIDIA RTX A2000 Laptop GPU via CUDA
+  linear kernel, keys/s: 6 variants in 3 turns (in order, reversed, in order, ...), after 3 s of the default variant not counted
+  code   variant                       turn 1     turn 2     turn 3     median  spread  vs default
+  128    128                         ...
+  256    256                         ...                                                 +0.0%  default, saved
+  512    512                         ...
+  262272 128, register cap           ...
+  262400 256, register cap           ...
+  262656 512, register cap           ...                                                 +2.8%  fastest
+  -> the rule (the median of the turns, the default unless another is >1% faster, the largest of those within 1% of the
+     fastest) picks window 512, register cap, code 262656 (...)
+  launch length, window 256: the rate with launches of each length, sized as the controller would (groups per work-item)
+  target      measured     size     keys/s     vs best
+  0.15 s      ...
+  0.35 s      ...                                        saved, chosen: the shortest within 1% of the fastest
+  ...
+```
 
 ### 7.6 Profilo automatico della macchina
 
@@ -266,10 +312,10 @@ campagna), salva il risultato e da allora lo usa come predefinito. Non misura ne
 Il profilo è nella cartella della cache, accanto alla taratura dei kernel (`%LOCALAPPDATA%\pzsolve\machine_profile.txt` su Windows,
 `~/.cache/pzsolve/machine_profile.txt` su Linux) ed è legato alla versione del programma, al processore, al numero di core, al passo/motore usato e
 alle GPU con il loro driver: se cambia una di queste cose si rimisura. Il log dice sempre cosa è stato applicato
-(`profile of this machine from 2026-10-22: 11 CPU threads, GPU 0 (-t and --gpu override them; --retune measures again)`). Si cambia idea così:
+(`profile of this machine from 2026-10-22: 11 CPU threads, --gpu 0 (-t and --gpu override them; --retune measures again)`). Si cambia idea così:
 `-t`/`--gpu`/`--no-cpu`/`--no-gpu` sostituiscono il profilo per quella esecuzione; `--retune` lo rimisura; `--no-tune` (o `PZ_NO_PROFILE=1`) non lo
-misura né lo usa. Se nessuna configurazione batte quella predefinita di più del rumore della misura, il profilo salvato è "i valori predefiniti sono
-già i migliori" e non si rimisura a ogni avvio. Ctrl-C durante la misura termina subito il programma (la ricerca non parte, non si salva nulla e la
+misura né lo usa. Se nessuna configurazione batte quella predefinita di più del rumore della misura, il profilo salvato dice `the default values
+(all threads, all GPUs) are already the best` (i valori predefiniti sono già i migliori) e non si rimisura a ogni avvio. Ctrl-C durante la misura termina subito il programma (la ricerca non parte, non si salva nulla e la
 cartella della misura viene rimossa). Senza una cartella di cache scrivibile (né `HOME` né `XDG_CACHE_HOME`, come in un servizio) la misura viene
 saltata con un solo avviso, perché non si potrebbe conservare.
 
@@ -328,7 +374,7 @@ come se la variabile non ci fosse.
 | `PZ_GPU_API=cuda\|opencl` | come `--gpu-api` (che ha la precedenza) |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
 | `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
-| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `64l`, `4g` |
+| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128cm`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |
 | `PZ_OPENCL_ALL=1` | usa anche i dispositivi OpenCL su CPU (sezione 7.1) |
 | `PZ_NO_PROFILE=1` | come `--no-tune` |
