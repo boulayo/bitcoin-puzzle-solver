@@ -144,9 +144,6 @@ bool run_key_in_range(const run_ctx *r, const pz_u256 *key);
  * right key, but this campaign was not asked for it and whether its scan gets there depends on how the end of the range falls on the lanes. It
  * is ignored (false) with a line in the debug log, which does not show the key. Any other hit goes to run_submit_key. */
 bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source);
-/* Writes FOUND.txt (and, with --on-found, starts the command). With cfg.has_encrypt the file carries the PZENC1 line (found_sealed) and neither the key nor its
- * public key. */
-void run_write_found(run_ctx *r);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);
@@ -154,8 +151,9 @@ prio_mode run_prio_arg(const char *v);              /* the value of --prio-gpu (
 #define RUN_MAX_THREADS (MAX_WORKERS - 16)          /* the most CPU threads -t accepts (hunt and bench) */
 /* GPU work-items: pct percent of n, rounded to a multiple of `quantum`, never below `quantum` (and never above n). pct outside 1..99: n. */
 size_t run_limit_items(size_t n, int pct, size_t quantum);
-/* After the thread count is known (before any worker starts): with r->limit_pct set, cuts r->nthreads to that share and puts the
- * threads on distinct physical cores first. Does nothing when the limit is off (0, or 100 and above which is turned into off). */
+/* After the thread count is known (before any worker starts): with r->limit_pct set, cuts r->nthreads to that share (the threads then
+ * land on distinct physical cores first, which is the order sysinfo_detect gives the CPUs). Does nothing when the limit is off (0, or 100
+ * and above, which is turned into off). */
 void run_limit_setup(run_ctx *r);
 
 /* campaign directory handling */

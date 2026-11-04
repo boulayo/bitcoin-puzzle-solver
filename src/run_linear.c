@@ -137,7 +137,7 @@ int run_linear(run_ctx *r)
         ncpu_threads -= reserve;   /* leave one core per OpenCL device to drive it */
         pz_log(PZ_LOG_INFO, "CPU: %d compute threads (one core per OpenCL GPU is reserved to drive it)", ncpu_threads);
     }
-    if (ncpu_threads > MAX_WORKERS - 16) ncpu_threads = MAX_WORKERS - 16;
+    if (ncpu_threads > RUN_MAX_THREADS) ncpu_threads = RUN_MAX_THREADS;
     atomic_store(&r->active_workers, ncpu_threads + ngpu);
     if (ncpu_threads + ngpu == 0) pz_die("no compute device available (CPU disabled and no GPU)");
 
@@ -200,7 +200,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     pz_log_set_quiet(1);
     const int reserve = gpu_cores_needed(gpus, ngpu);
     int total = threads > 0 ? threads : r->sys.ncpu;
-    if (total > MAX_WORKERS - 16) total = MAX_WORKERS - 16;
+    if (total > RUN_MAX_THREADS) total = RUN_MAX_THREADS;
     const int full = threads > 0 ? total : (r->sys.ncpu > reserve ? r->sys.ncpu - reserve : 1);
     r->sched = sched_new(&r->cfg);
     _Atomic int *flags = pz_xcalloc((size_t)total, sizeof *flags);

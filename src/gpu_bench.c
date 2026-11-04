@@ -325,7 +325,7 @@ static double bench_launch_table(gpu_session *s, const tune_ops *op, double save
 /* Both kernels of one device: every variant in `turns` turns (the tuner's procedure without its cut after the first turn, and the variants
  * only forced too), one table each; then the lengths of a launch of the variant in use (the saved one, else the default). With --retune the
  * rule of the tuner decides from the medians, checks the choice bit for bit and saves it with the length, as the first run would. */
-static void bench_variants_kernel(gpu_session *s, int idx, const tune_ops *base, int turns, bool retune, int nforced, const int *forced_v)
+static void bench_variants_kernel(gpu_session *s, const tune_ops *base, int turns, bool retune, int nforced, const int *forced_v)
 {
     tune_ops op = *base;
     bool forced[32] = {false};
@@ -376,7 +376,6 @@ static void bench_variants_kernel(gpu_session *s, int idx, const tune_ops *base,
         bench_say("  -> saved for this device: %s%s (code %s) with launches of %.2f s", op.entry, op.name(use, nb, sizeof nb), op.code_text(use, cb, sizeof cb), len);
     } else bench_say("  -> nothing saved (add --retune to save what the tables decide); the tuner's choice stays %s%s with launches of %.2f s", op.entry,
                      op.name(use, nb, sizeof nb), saved ? saved_s : GPU_LAUNCH_S);
-    (void)idx;
 }
 
 void gpu_bench_variants(int turns)
@@ -401,13 +400,13 @@ void gpu_bench_variants(int turns)
         s->variant = gpu_default_variant(&devs[i]);
         s->launch_s = GPU_LAUNCH_S;
         gpu_tune_linear_ops(&devs[i], &op);
-        bench_variants_kernel(s, i, &op, turns, gpu_retune_requested(), 0, NULL);
+        bench_variants_kernel(s, &op, turns, gpu_retune_requested(), 0, NULL);
         gpu_linear_release_program(s);
         int fv[8];
         const int nf = kvariants_forced_only(&devs[i], fv);
         gpu_tune_kang_set_variant(s, gpu_tune_default_kvariant(&devs[i]));
         gpu_tune_kang_ops(&devs[i], &op);
-        bench_variants_kernel(s, i, &op, turns, gpu_retune_requested(), nf, fv);
+        bench_variants_kernel(s, &op, turns, gpu_retune_requested(), nf, fv);
         gpu_kang_release(s);
         gpu_session_release(s);
         free(s);

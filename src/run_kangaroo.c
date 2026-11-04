@@ -68,7 +68,7 @@ static void kang_cleanup(run_ctx *r)
     r->kang = NULL;
 }
 
-/* Starts workers; returns the number of CPU threads started. r->nthreads is at most MAX_WORKERS - 16 (main, the profile and the callers here). */
+/* Starts workers; returns the number of CPU threads started. r->nthreads is at most RUN_MAX_THREADS (main, the profile and the callers here). */
 static int kang_launch_cpu(run_ctx *r, kang_state *ks, pthread_t *th, kth_arg *args, _Atomic int *active)
 {
     int n = 0;
@@ -390,7 +390,7 @@ double kangaroo_bench(double secs, bool print)
     if (!r) return 0;
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);
-    r->nthreads = r->sys.ncpu > MAX_WORKERS - 16 ? MAX_WORKERS - 16 : r->sys.ncpu;
+    r->nthreads = r->sys.ncpu > RUN_MAX_THREADS ? RUN_MAX_THREADS : r->sys.ncpu;
     kang_state *ks = kang_create(r);
     r->kang = ks;
     kang_configure(ks, 0);
@@ -432,7 +432,7 @@ int kangaroo_stats(int argc, char **argv)
     if (argc < 4) pz_die("usage: pzsolve kstat BITS TRIALS [THREADS [R [DP]]]  (see 'pzsolve help kstat')");
     const unsigned bits = (unsigned)pz_arg_int("kstat BITS", argv[2], 4, 64);
     const int runs = (int)pz_arg_int("kstat TRIALS", argv[3], 1, 1000000);
-    const int thr = argc > 4 ? (int)pz_arg_int("kstat THREADS", argv[4], 1, MAX_WORKERS - 16) : 1;
+    const int thr = argc > 4 ? (int)pz_arg_int("kstat THREADS", argv[4], 1, RUN_MAX_THREADS) : 1;
     kang_try_opts o = {argc > 5 ? (unsigned)pz_arg_int("kstat R", argv[5], 0, KANG_R) : 0, argc > 6 ? (unsigned)pz_arg_int("kstat DP", argv[6], 0, 40) : 0, argc > 5};
     if (o.R && (o.R < 2 || (o.R & (o.R - 1)))) pz_die("kstat R: invalid value '%s' (expected a power of 2 between 2 and %d)", argv[5], KANG_R);
     pz_log_set_quiet(1);
@@ -496,7 +496,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     pz_log_set_quiet(1);
     const int reserve = gpu_cores_needed(gpus, ngpu);
     int total = threads > 0 ? threads : r->sys.ncpu;
-    if (total > MAX_WORKERS - 16) total = MAX_WORKERS - 16;
+    if (total > RUN_MAX_THREADS) total = RUN_MAX_THREADS;
     const int full = threads > 0 ? total : (r->sys.ncpu > reserve ? r->sys.ncpu - reserve : 1);   /* what a campaign without -t runs */
     r->nthreads = total;
     kang_state *ks = kang_create(r);

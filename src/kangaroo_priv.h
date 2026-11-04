@@ -310,9 +310,8 @@ typedef void (*kang_round_fn)(kang_worker *);
 /* The step variants this build has, the portable one first (kangaroo.c); `supported` tells whether this CPU can run one. */
 typedef struct { const char *id, *name; bool (*supported)(void); kang_round_fn fn; } kang_round_variant;
 const kang_round_variant *kang_round_variants(int *n);
-/* The fastest round on this CPU among those that pass kang_round_check (measured once per process). */
+/* The fastest round on this CPU among those that pass kang_round_check (measured once per process); kangaroo.h has its name. */
 kang_round_fn kang_pick_round(void);
-const char *kang_round_name(void);
 /* Makes w->x / w->y current (after lane-parallel rounds). */
 void kang_worker_sync(kang_worker *w);
 /* Runs `fn` and the portable scalar round side by side on identical herds (distinguished points, restarts, a kangaroo
@@ -328,4 +327,3 @@ bool kang_slot_is_sibling(const sysinfo_t *s, int slot);
 void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream);
 
 #endif
-

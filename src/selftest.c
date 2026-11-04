@@ -21,8 +21,8 @@ int pz_sections_printed;
 static int g_fail, g_checks;
 #define CHECK(c, ...) do { g_checks++; if (!(c)) { g_fail++; printf("  FAILED: %s (%s:%d)\n", #c, __FILE__, __LINE__); } } while (0)
 
-static u64 rs_ = 0x2545F4914F6CDD1DULL;
-static u64 rnd64(void) { rs_ ^= rs_ << 13; rs_ ^= rs_ >> 7; rs_ ^= rs_ << 17; return rs_; }
+static u64 g_rnd = 0x2545F4914F6CDD1DULL;
+static u64 rnd64(void) { g_rnd ^= g_rnd << 13; g_rnd ^= g_rnd >> 7; g_rnd ^= g_rnd << 17; return g_rnd; }
 
 typedef struct { int hits; pz_u256 key; } hitrec;
 static void on_hit(void *u, const pz_u256 *k) { hitrec *h = u; h->hits++; h->key = *k; }
@@ -649,13 +649,13 @@ double bench_cpu_rate(double secs)
     return total;
 }
 
-static void bsgs_nofound(void *u, const pz_u256 *k) { (void)u; (void)k; }
+static void ignore_hit(void *u, const pz_u256 *k) { (void)u; (void)k; }   /* the benchmark looks for no key */
 
 typedef struct { const bsgs_job *j; int64_t a0; u64 n; _Atomic int *stop; } bsgs_bench_arg;
 static void *bsgs_bench_thread(void *p)
 {
     bsgs_bench_arg *a = p;
-    bsgs_scan(a->j, a->a0, a->n, bsgs_nofound, NULL, NULL, NULL, a->stop);
+    bsgs_scan(a->j, a->a0, a->n, ignore_hit, NULL, NULL, NULL, a->stop);
     return NULL;
 }
 

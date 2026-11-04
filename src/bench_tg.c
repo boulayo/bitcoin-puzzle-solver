@@ -16,7 +16,7 @@ void tg_section(const char *title)
     if (!tg_silent) pz_section(title);
 }
 
-void tg_say(const char *fmt, ...)
+void tg_printf(const char *fmt, ...)
 {
     if (tg_silent) return;
     char buf[1024];

@@ -11,7 +11,6 @@
 
 static bool profile_path(char *out, size_t n) { return pz_cache_file("machine_profile.txt", out, n); }
 
-/* Key: mode, program version, CPU, topology, the step/engine in use and the GPUs. '=' and newlines cannot appear in it. */
 /* The widest linear engine this CPU supports (the measured choice may differ from one run to the next when two are about as fast). */
 static const char *engine_isa(void)
 {
@@ -23,6 +22,7 @@ static const char *engine_isa(void)
     return name;
 }
 
+/* The key of a machine's entry: mode, program version, CPU, topology, the step/engine in use and the GPUs. '=' and newlines cannot appear in it. */
 static void profile_key(const run_ctx *r, char *out, size_t n)
 {
     char gsig[400] = "nogpu";
@@ -117,7 +117,7 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
         for (gp += 2; *gp && *gp != ' ' && i + 1 < sizeof g; gp++) g[i++] = *gp;
         g[i] = 0;
     }
-    if (t < 0 || t > MAX_WORKERS - 16) return;          /* not a count a measurement writes (an edited file): the entry is ignored */
+    if (t < 0 || t > RUN_MAX_THREADS) return;         /* not a count a measurement writes (an edited file): the entry is ignored */
     r->nthreads = t;
     r->threads_explicit = true;
     if (t == 0) r->use_cpu = false;

@@ -830,9 +830,7 @@ static int log_check_read_error(void)
     }
     return fails;
 }
-
 #endif
-
 
 /* What the loading of dp.bin does with what it finds: it cuts off a record cut short at the end and nothing else (not the records after
  * the one that solved the key), a read error is an error, not the end of the file, a file shorter than its header is started again, and
@@ -863,7 +861,6 @@ int kang_log_file_selftest(void)
 
 #ifndef _WIN32
 #define LCHK(cond) do { if (!(cond)) { fails++; printf("  full disk: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
-
 
 /* A write that stops in the middle of a record (file size limit): `n` points go in, the first ones reach the file, the limit hides the
  * rest, lifting it and flushing completes the file. With `dps` the points enter as the workers insert them (the thread that fills a buffer

@@ -236,7 +236,7 @@ static void detect_os(sysinfo_t *s)
     }
     u64 cg = cgroup_headroom();
     if (cg && cg < s->mem_avail) s->mem_avail = cg;       /* inside a container the cgroup limit is what the OOM killer enforces */
-    if (cg && cg < s->mem_total) s->mem_total = cg + 0;
+    if (cg && cg < s->mem_total) s->mem_total = cg;
     s->l2_kib = cache_kib(s->cpu_ids[0], 2);
     s->l3_kib = cache_kib(s->cpu_ids[0], 3);
     /* physical cores: (package, core id) pairs; without topology every CPU is a core */

@@ -846,7 +846,7 @@ gpu_session *gpu_session_at(gpu_session *s, int i) { return &s[i]; }
 
 /* ---------------- 'doctor' ---------------- */
 
-void gpu_doctor(bool deep)
+void gpu_doctor(bool full)
 {
     rt_dev devs[RT_MAX_DEVS];
     char note[200];
@@ -884,7 +884,7 @@ void gpu_doctor(bool deep)
         free(s);
     }
     if (!used) doctor_line('i', "no GPU usable by default");
-    if (deep && used) {
+    if (full && used) {
         const int fails = gpu_selftest();
         doctor_line(fails ? 'x' : 'o', "full GPU self-test: %s", fails ? "ERRORS" : "passed");
     }

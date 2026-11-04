@@ -360,9 +360,8 @@ static const struct option long_opts[] = {
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
     {"on-found", 1, 0, O_ONFOUND}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
 
-/* Strict numeric option parsing: the whole string must be a number in range (atoi() would silently accept "12abc").
- * pz_parse_* rather than strtoll: on glibc >= 2.38 strtoll resolves to __isoc23_strtoll and the binary would refuse
- * to start on older distributions. Integers: pz_arg_int (util.c). */
+/* ---- the values of the options: the whole text must be a number in its range (atoi would take "12abc"); integers go through
+ * pz_arg_int (util.c) ---- */
 
 /* --mem: GiB, at least 1 MiB (less leaves no room for a table: 32 bytes would make a table of no entries) and at most 1e9 GiB, which still
  * fits in 64 bits of bytes. */
@@ -567,8 +566,8 @@ static void parse_opts(int argc, char **argv, opts_t *o)
     if (optind < argc) {
         /* a bare value is almost always a forgotten option name ("hunt 71" instead of "hunt -p 71") */
         const char *a = argv[optind];
-        bool num = a[0] >= '0' && a[0] <= '9';
-        if (num) pz_usage_error(g_cmd, "unexpected argument '%s' (did you mean -p %s?)", a, a);
+        const bool is_number = a[0] >= '0' && a[0] <= '9';
+        if (is_number) pz_usage_error(g_cmd, "unexpected argument '%s' (did you mean -p %s?)", a, a);
         pz_usage_error(g_cmd, "unexpected argument '%s' (options start with - or --)", a);
     }
     if (o->want_new && o->want_resume) pz_die("--new and --resume are mutually exclusive: --new requires a new campaign, --resume an existing one");
@@ -791,7 +790,6 @@ static void set_target(const opts_t *o, campaign_cfg *c)
     }
     if (!have_target) pz_die("a target is required: --address, --hash160 or --pubkey");
     if (!c->address[0]) pz_hash160_to_address(c->target_h160, c->address, sizeof c->address);
-
 }
 
 /* The method of a new campaign (-m); auto picks BSGS when its table fits and it is the better choice, the kangaroo otherwise, the linear
@@ -947,8 +945,6 @@ static void check_options_for_campaign(const opts_t *o, const campaign_cfg *c, c
     if (o->node && c->mode != MODE_KANGAROO) pz_die("--node is only used with the kangaroo (in linear search split the range with -r)");
     if (fresh && c->mode == MODE_BSGS) run_bsgs_check(c, &r->sys, !o->no_cpu, mem_bytes(o->mem_gb), o->table, NULL);
 }
-
-static void parse_gpu_filter(run_ctx *r, const char *list) { pz_strlcpy(r->gpu_filter, list, sizeof r->gpu_filter); }
 
 /* The size of a range in words: "8,388,608 keys", "2^43 keys", "about 6.65e35 keys". */
 static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
@@ -1169,7 +1165,7 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
     r->node_given = o->node_given;
     r->use_cpu = !o->no_cpu;
     r->use_gpu = !o->no_gpu;
-    if (o->gpu[0]) parse_gpu_filter(r, o->gpu);
+    if (o->gpu[0]) pz_strlcpy(r->gpu_filter, o->gpu, sizeof r->gpu_filter);
     if (o->report_interval > 0) r->report_interval = o->report_interval;
     if (o->checkpoint_interval > 0) r->checkpoint_interval = o->checkpoint_interval;
     r->ui = o->quiet ? UI_LOG : o->ui;
@@ -1248,7 +1244,6 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
     if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", o->prio_gpu == PRIO_YES ? " (--prio-gpu yes)" : " (from the machine profile)");
     if (r->node) pz_log(PZ_LOG_INFO, "node %u: kangaroo starting points differ from those of the other computers on the same campaign", r->node);
     pz_log(PZ_LOG_INFO, "campaign folder: %s", r->cfg.dir);
-
 }
 
 /* The end of a session: the last save, the reports, the final frame, then the found key or what is left to do. Returns the exit status. */
@@ -1557,7 +1552,7 @@ static int cmd_where(int argc, char **argv)
     return 0;
 }
 
-/* Cost model per method for a range of 2^bits keys (W = 2^bits). Units: group operations / keys. */
+/* The method to suggest for an open puzzle. */
 static const char *recommended_method(const puzzle_info *p)
 {
     if (!p->pubkey[0]) return "linear search (only the address is known)";

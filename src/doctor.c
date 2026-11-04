@@ -239,13 +239,13 @@ static void check_env(void)
 int doctor_run(int argc, char **argv)
 {
     const char *base = "campaigns";
-    bool deep = false;
+    bool full = false;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) && i + 1 < argc) {
             base = argv[++i];
             if (!base[0]) pz_die("--dir: invalid value '' (expected the name of a folder)");
         }
-        else if (!strcmp(argv[i], "--full")) deep = true;
+        else if (!strcmp(argv[i], "--full")) full = true;
         else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) pz_usage_error("doctor", "the option '%s' needs a value", argv[i]);
         else pz_usage_error("doctor", "unrecognized option '%s'", argv[i]);
     }
@@ -254,7 +254,7 @@ int doctor_run(int argc, char **argv)
     pz_fputs_wrap(stdout, "pzsolve doctor - checks the program, the machine and the saved state (paste this page if you ask for help)\n", PZ_LINE_MAX, 2);
     check_program();
     check_system(&s);
-    if (!deep) check_primitives();           /* --full: the selftest at the end checks them, and more */
+    if (!full) check_primitives();           /* --full: the selftest at the end checks them, and more */
     check_cpu_engines();
     check_gpus();
     check_cache();
@@ -262,7 +262,7 @@ int doctor_run(int argc, char **argv)
     check_disk(base);
     check_time();
     check_env();
-    if (deep) {
+    if (full) {
         section("Full selftest");
         const int rc = selftest_checks(false);
         printf("\n");

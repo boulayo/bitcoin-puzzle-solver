@@ -28,10 +28,7 @@
 #include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
-#include <spawn.h>
 #include <sys/sysctl.h>
-#include <sys/wait.h>
-extern char **environ;
 #endif
 
 #ifndef MAP_ANONYMOUS
@@ -195,8 +192,8 @@ void pz_os_description(char *buf, size_t n)
     char name[128] = "";
 #ifdef __APPLE__
     char ver[64] = "";
-    size_t pz_vl = sizeof ver;
-    if (sysctlbyname("kern.osproductversion", ver, &pz_vl, NULL, 0) == 0 && ver[0]) snprintf(name, sizeof name, "macOS %s", ver);
+    size_t vlen = sizeof ver;
+    if (sysctlbyname("kern.osproductversion", ver, &vlen, NULL, 0) == 0 && ver[0]) snprintf(name, sizeof name, "macOS %s", ver);
     else snprintf(name, sizeof name, "macOS");
     char *t = NULL;
 #else

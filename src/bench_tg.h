@@ -43,8 +43,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
 /* The tables and messages of the scans go to stdout unless silenced (the first-run calibration of a quiet hunt). */
 extern int tg_silent;
 void tg_section(const char *title);                    /* a "== title" heading, unless silenced */
-void tg_say(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));      /* printf for the scan: wrapped at 128 columns, flushed */
-#define tg_printf tg_say
+void tg_printf(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));   /* printf for the scan: wrapped at 128 columns, flushed */
 
 /* Runs the scan (prints the table) and returns the verdict. Stops early when r->stop is set. */
 tg_choice tg_scan(const tg_scan_cfg *c);

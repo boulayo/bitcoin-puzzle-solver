@@ -134,7 +134,6 @@ static void *driver_main(void *p)
     run_ctx *r = b->r;
     char err[256];
     double t0 = pz_mono();
-    bool have = false;
     if (r->table_path[0] && access(r->table_path, F_OK) == 0) {
         u64 tf = 0;
         if (!bsgs_table_peek(r->table_path, &tf, err, sizeof err)) pz_die("table %s is not usable: %s", r->table_path, err);
@@ -144,10 +143,9 @@ static void *driver_main(void *p)
         pz_log(PZ_LOG_INFO, "BSGS: reading the table from %s", r->table_path);
         if (!bsgs_table_load(&b->tab, r->table_path, b->nthreads, err, sizeof err)) pz_die("reading the table failed: %s", err);
         if (b->tab.T != b->P.T) pz_die("table %s changed while it was being read (%llu baby steps instead of %llu)", r->table_path, (unsigned long long)b->tab.T, (unsigned long long)b->P.T);
-        have = true;
         b->table_from_file = true;
     }
-    if (!have) {
+    if (!b->table_from_file) {
         if (!bsgs_table_alloc(&b->tab, b->P.T, err, sizeof err)) pz_die("%s", err);
         atomic_store(&b->phase, PH_BUILD);
         _Atomic u64 *units[MAX_WORKERS];
@@ -298,7 +296,7 @@ int run_bsgs(run_ctx *r)
         return 0;
     }
     b->nthreads = r->nthreads > 0 ? r->nthreads : 1;
-    if (b->nthreads > MAX_WORKERS - 16) b->nthreads = MAX_WORKERS - 16;
+    if (b->nthreads > RUN_MAX_THREADS) b->nthreads = RUN_MAX_THREADS;
     for (int i = 0; i < b->nthreads; i++) {
         char nm[40];
         snprintf(nm, sizeof nm, "CPU%d", i);
