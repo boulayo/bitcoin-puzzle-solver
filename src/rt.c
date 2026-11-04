@@ -96,21 +96,21 @@ void rt_logseq_free(rt_logseq *q)
 
 int rt_enumerate(rt_dev *out, int max, char *note, size_t nl)
 {
-    char n1[160] = "", n2[160] = "";
-    int nc = 0, no = 0;
+    char cuda_note[160] = "", opencl_note[160] = "";
+    int ncuda = 0, nopencl = 0;
     /* a runtime switched off by the environment is said to be so: "not found" would send the user looking for a driver */
-    if (!g_env.no_cuda) nc = rtcu_enumerate(out, max, n1, sizeof n1);
-    else snprintf(n1, sizeof n1, "CUDA disabled by PZ_NO_CUDA");
-    if (!g_env.no_opencl) no = rtcl_enumerate(out + nc, max - nc, n2, sizeof n2);
-    else snprintf(n2, sizeof n2, "OpenCL disabled by PZ_NO_OPENCL");
-    int n = nc + no;
+    if (!g_env.no_cuda) ncuda = rtcu_enumerate(out, max, cuda_note, sizeof cuda_note);
+    else snprintf(cuda_note, sizeof cuda_note, "CUDA disabled by PZ_NO_CUDA");
+    if (!g_env.no_opencl) nopencl = rtcl_enumerate(out + ncuda, max - ncuda, opencl_note, sizeof opencl_note);
+    else snprintf(opencl_note, sizeof opencl_note, "OpenCL disabled by PZ_NO_OPENCL");
+    int n = ncuda + nopencl;
     for (int i = 0; i < n; i++) { out[i].index = i; out[i].dup_of = -1; }
     /* the NVIDIA OpenCL driver exposes the same GPUs that CUDA drives: pair them by PCI location, or by name and order
      * when the location is unknown, so a GPU is not used twice */
     bool taken[RT_MAX_DEVS] = {false};
-    for (int i = nc; i < n; i++) {
+    for (int i = ncuda; i < n; i++) {
         if (!out[i].is_gpu) continue;
-        for (int j = 0; j < nc; j++) {
+        for (int j = 0; j < ncuda; j++) {
             if (taken[j]) continue;
             bool same = out[i].pci_bus >= 0 && out[j].pci_bus >= 0 ? out[i].pci_bus == out[j].pci_bus && out[i].pci_dev == out[j].pci_dev
                                                                      : strcmp(out[i].name, out[j].name) == 0;
@@ -119,8 +119,8 @@ int rt_enumerate(rt_dev *out, int max, char *note, size_t nl)
     }
     if (note) {
         note[0] = 0;
-        if (n1[0] && n2[0]) snprintf(note, nl, "%s; %s", n1, n2);
-        else snprintf(note, nl, "%s", n1[0] ? n1 : n2);
+        if (cuda_note[0] && opencl_note[0]) snprintf(note, nl, "%s; %s", cuda_note, opencl_note);
+        else snprintf(note, nl, "%s", cuda_note[0] ? cuda_note : opencl_note);
     }
     return n;
 }

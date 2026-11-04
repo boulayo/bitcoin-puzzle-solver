@@ -70,16 +70,16 @@ static void test_seal(void)
     pz_ge q;
     CHECK(pz_ec_mul_g(&q, &d));
     CHECK(enc_random_scalar(&r) && !pz_u256_is_zero(&r) && pz_u256_cmp(&r, &pz_secp256k1_n) < 0);
-    char err[200], t1[PZ_SEAL_TEXT_BUF], t2[PZ_SEAL_TEXT_BUF];
+    char err[200], sealed_1[PZ_SEAL_TEXT_BUF], sealed_2[PZ_SEAL_TEXT_BUF];
     CHECK(enc_check(&q, err, sizeof err));
     u8 key[32], back[32], pay[PZ_SEAL_PAYLOAD_LEN];
     for (int i = 0; i < 32; i++) key[i] = (u8)(i * 9 + 1);
-    CHECK(enc_seal_key(&q, key, t1, sizeof t1));
-    CHECK(enc_seal_key(&q, key, t2, sizeof t2));
-    CHECK(strcmp(t1, t2) != 0);                                                    /* a new random scalar each time */
-    CHECK(pz_seal_decode(pay, t1) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, key, 32));     /* the line and the secret: nothing else */
-    CHECK(pz_seal_decode(pay, t2) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, key, 32));
-    CHECK(!enc_seal_key(&q, key, t1, 20) && t1[0] == 0);                   /* a buffer that is too small: nothing */
+    CHECK(enc_seal_key(&q, key, sealed_1, sizeof sealed_1));
+    CHECK(enc_seal_key(&q, key, sealed_2, sizeof sealed_2));
+    CHECK(strcmp(sealed_1, sealed_2) != 0);                                                    /* a new random scalar each time */
+    CHECK(pz_seal_decode(pay, sealed_1) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, key, 32));     /* the line and the secret: nothing else */
+    CHECK(pz_seal_decode(pay, sealed_2) == PZ_SEAL_OK && pz_seal_open(back, pay, &d) == PZ_SEAL_OK && !memcmp(back, key, 32));
+    CHECK(!enc_seal_key(&q, key, sealed_1, 20) && sealed_1[0] == 0);                   /* a buffer that is too small: nothing */
 }
 
 static const char *const OLD_CONF =

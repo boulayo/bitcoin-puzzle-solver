@@ -254,13 +254,13 @@ int run_bsgs(run_ctx *r)
 
     const u64 T = r->cfg.bsgs_t;
     const u64 bytes = table_ram(r->table_path, T);
-    char mb[48], ma[48], c1[48], c2[48], tg[32], ng[32];
+    char mb[48], ma[48], bsgs_cost[48], kang_cost[48], tg[32], ng[32];
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
     pz_fmt_bytes((double)r->sys.mem_avail, ma, sizeof ma);
-    pz_fmt_si((double)bsgs_mean_cost(&b->P.W, T), c1, sizeof c1);
-    pz_fmt_si((double)kang_mean_cost(&b->P.W), c2, sizeof c2);
+    pz_fmt_si((double)bsgs_mean_cost(&b->P.W, T), bsgs_cost, sizeof bsgs_cost);
+    pz_fmt_si((double)kang_mean_cost(&b->P.W), kang_cost, sizeof kang_cost);
     pz_log(PZ_LOG_INFO, "BSGS: %s baby steps (table %s, available RAM %s), %s giant steps; expected mean cost %s operations (kangaroo: %s)",
-           pz_fmt_u64(T, tg, sizeof tg), mb, ma, pz_fmt_u64(b->P.Ng, ng, sizeof ng), c1, c2);
+           pz_fmt_u64(T, tg, sizeof tg), mb, ma, pz_fmt_u64(b->P.Ng, ng, sizeof ng), bsgs_cost, kang_cost);
     if (r->use_gpu && gpu_count_usable() > 0)
         pz_log(PZ_LOG_INFO, "BSGS: GPUs do not take part in this mode%s", r->mode_auto ? "" : " (use --mode kangaroo to put them to work)");
     if (bsgs_mean_cost(&b->P.W, T) > kang_mean_cost(&b->P.W))

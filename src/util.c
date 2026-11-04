@@ -605,19 +605,19 @@ char *pz_fmt_age(double secs, char *buf, size_t n)
 
 int pz_mkdir_p(const char *path)
 {
-    char tmp[1024];
-    if (strlen(path) >= sizeof tmp) { errno = ENAMETOOLONG; return -1; }
-    snprintf(tmp, sizeof tmp, "%s", path);
-    for (char *p = tmp + 1; *p; p++) {
+    char path_copy[1024];
+    if (strlen(path) >= sizeof path_copy) { errno = ENAMETOOLONG; return -1; }
+    snprintf(path_copy, sizeof path_copy, "%s", path);
+    for (char *p = path_copy + 1; *p; p++) {
         if (*p == '/' || *p == '\\') {
             if (p[-1] == ':' || p[-1] == '/' || p[-1] == '\\') continue;   /* "C:\", "//server" */
             char c = *p;
             *p = 0;
-            if (pz_mkdir1(tmp) != 0) return -1;
+            if (pz_mkdir1(path_copy) != 0) return -1;
             *p = c;
         }
     }
-    return pz_mkdir1(tmp);   /* an existing path must be a directory */
+    return pz_mkdir1(path_copy);   /* an existing path must be a directory */
 }
 
 int pz_write_file_atomic(const char *path, const void *data, size_t len, int mode) { return pz_write_file_atomic_ex(path, data, len, mode, true); }
@@ -627,9 +627,9 @@ int pz_write_file_atomic_ex(const char *path, const void *data, size_t len, int 
     /* The temporary file has a name of its own (process and counter): programs and threads that write the same file at the same
      * moment, such as the caches shared by every pzsolve of the user, must not share it. */
     static _Atomic unsigned seq;
-    char tmp[1100];
-    snprintf(tmp, sizeof tmp, "%s.%d.%u.tmp", path, pz_getpid(), atomic_fetch_add(&seq, 1));
-    int fd = pz_open_trunc(tmp, mode);        /* FOUND.txt holds the private key: 0600 */
+    char temp_path[1100];
+    snprintf(temp_path, sizeof temp_path, "%s.%d.%u.tmp", path, pz_getpid(), atomic_fetch_add(&seq, 1));
+    int fd = pz_open_trunc(temp_path, mode);        /* FOUND.txt holds the private key: 0600 */
     if (fd < 0) return -1;
     const u8 *p = data;
     size_t left = len;
@@ -638,15 +638,15 @@ int pz_write_file_atomic_ex(const char *path, const void *data, size_t len, int 
         if (w < 0) {
             if (errno == EINTR) continue;
             close(fd);
-            unlink(tmp);
+            unlink(temp_path);
             return -1;
         }
         p += w;
         left -= (size_t)w;
     }
-    if (durable && pz_fd_sync(fd)) { close(fd); unlink(tmp); return -1; }
-    if (close(fd)) { unlink(tmp); return -1; }
-    if (pz_rename_replace_ex(tmp, path, durable)) { unlink(tmp); return -1; }
+    if (durable && pz_fd_sync(fd)) { close(fd); unlink(temp_path); return -1; }
+    if (close(fd)) { unlink(temp_path); return -1; }
+    if (pz_rename_replace_ex(temp_path, path, durable)) { unlink(temp_path); return -1; }
     return 0;
 }
 

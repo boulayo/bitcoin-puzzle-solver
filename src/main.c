@@ -636,12 +636,12 @@ static u64 pick_bsgs_entries(const opts_t *o, const pz_u256 *rsz, bool *viable)
 /* The text of --range, "START:END" in hexadecimal. On failure *why is the message to give. */
 static bool range_parse(const char *text, pz_u256 *a, pz_u256 *b, const char **why)
 {
-    char tmp[200];
-    pz_strlcpy(tmp, text, sizeof tmp);
-    char *colon = strchr(tmp, ':');
+    char range_copy[200];
+    pz_strlcpy(range_copy, text, sizeof range_copy);
+    char *colon = strchr(range_copy, ':');
     if (!colon) { *why = "--range requires the format START:END (hexadecimal)"; return false; }
     *colon = 0;
-    if (!pz_u256_from_hex(a, tmp) || !pz_u256_from_hex(b, colon + 1)) { *why = "--range: invalid hexadecimal values"; return false; }
+    if (!pz_u256_from_hex(a, range_copy) || !pz_u256_from_hex(b, colon + 1)) { *why = "--range: invalid hexadecimal values"; return false; }
     return true;
 }
 
@@ -1530,19 +1530,19 @@ static int cmd_where(int argc, char **argv)
     pz_u256 seq;
     u64 off;
     if (!sched_locate(s, &key, &seq, &off)) pz_die("the key is not in the range of the campaign (0x%s - 0x%s)", ra, rb);
-    char sb[80], g1[64], g2[64], g3[64], g4[32];
+    char seq_text[80], block_grouped[64], blocks_grouped[64], blocks_plain[64], offset_text[32];
     const long double blocks = pz_u256_to_ld(&s->blocks_all);            /* of the whole search order, also with --part */
-    snprintf(g3, sizeof g3, "%.0Lf", blocks);
-    pz_prop_line("visit order", "block %s of %s, offset %s within the block, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, sb), g1, sizeof g1),
-                 pz_group_digits(g3, g2, sizeof g2), pz_fmt_u64(off, g4, sizeof g4), pz_u256_to_ld(&seq) * 100.0L / blocks);
+    snprintf(blocks_plain, sizeof blocks_plain, "%.0Lf", blocks);
+    pz_prop_line("visit order", "block %s of %s, offset %s within the block, %.4Lf%% of the way", pz_group_digits(pz_u256_to_dec(&seq, seq_text), block_grouped, sizeof block_grouped),
+                 pz_group_digits(blocks_plain, blocks_grouped, sizeof blocks_grouped), pz_fmt_u64(off, offset_text, sizeof offset_text), pz_u256_to_ld(&seq) * 100.0L / blocks);
     pz_u256 local = seq;
     bool mine = true;
     if (s->part.total) {
         mine = sched_part_position(s, &seq, &local);
-        snprintf(g3, sizeof g3, "%.0Lf", pz_u256_to_ld(&s->blocks_part));
+        snprintf(blocks_plain, sizeof blocks_plain, "%.0Lf", pz_u256_to_ld(&s->blocks_part));
         if (mine)
-            pz_prop_line("part", "in part %s of this computer: its block %s of %s", s->part_text, pz_group_digits(pz_u256_to_dec(&local, sb), g1, sizeof g1),
-                         pz_group_digits(g3, g2, sizeof g2));
+            pz_prop_line("part", "in part %s of this computer: its block %s of %s", s->part_text, pz_group_digits(pz_u256_to_dec(&local, seq_text), block_grouped, sizeof block_grouped),
+                         pz_group_digits(blocks_plain, blocks_grouped, sizeof blocks_grouped));
         else
             pz_prop_line("part", "not in part %s of this computer: another computer will scan it", s->part_text);
     }
@@ -1561,22 +1561,22 @@ static const char *recommended_method(const puzzle_info *p)
 static void print_puzzle_effort(const puzzle_info *p, double rate_lin, double rate_kang, bool measured)
 {
     const int n = p->n;
-    char r1[32], r2[32], t1[48], t2[48], t3[48];
+    char linear_rate[32], kangaroo_rate[32], time_50[48], time_100[48], time_90[48];
     if (rate_lin > 0)
-        pz_prop_line("speed used", "%s keys/s (linear)%s%s%s; %s", pz_fmt_si(rate_lin, r1, sizeof r1), rate_kang > 0 && p->pubkey[0] ? ", " : "",
-                     p->pubkey[0] && rate_kang > 0 ? pz_fmt_si(rate_kang, r2, sizeof r2) : "", p->pubkey[0] && rate_kang > 0 ? " steps/s (kangaroo)" : "",
+        pz_prop_line("speed used", "%s keys/s (linear)%s%s%s; %s", pz_fmt_si(rate_lin, linear_rate, sizeof linear_rate), rate_kang > 0 && p->pubkey[0] ? ", " : "",
+                     p->pubkey[0] && rate_kang > 0 ? pz_fmt_si(rate_kang, kangaroo_rate, sizeof kangaroo_rate) : "", p->pubkey[0] && rate_kang > 0 ? " steps/s (kangaroo)" : "",
                      measured ? "measured now on the CPU of this machine" : "given with --rate");
     pz_section("Mean effort");
     const long double W = ldexpl(1.0L, n - 1);
     pz_prop_line("linear search", "%.3Le keys on average (2^%d), %.3Le in the worst case", W / 2, n - 2, W);
     if (rate_lin > 0)
-        pz_prop_line("", "time: 50%% in %s, 100%% in %s", pz_fmt_duration((double)(W / 2) / rate_lin, t1, sizeof t1), pz_fmt_duration((double)W / rate_lin, t2, sizeof t2));
+        pz_prop_line("", "time: 50%% in %s, 100%% in %s", pz_fmt_duration((double)(W / 2) / rate_lin, time_50, sizeof time_50), pz_fmt_duration((double)W / rate_lin, time_100, sizeof time_100));
     if (p->pubkey[0]) {
         long double st = KANG_C_MEAN * sqrtl(W);
         pz_prop_line("kangaroo", "%.3Le steps on average (2^%.1f)", st, (double)log2l(st));
         if (rate_kang > 0)
-            pz_prop_line("", "time: 50%% in %s, 90%% in %s", pz_fmt_duration((double)(0.9395L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t1, sizeof t1),
-                         pz_fmt_duration((double)(1.7122L * KANG_C_MEAN * sqrtl(W)) / rate_kang, t3, sizeof t3));
+            pz_prop_line("", "time: 50%% in %s, 90%% in %s", pz_fmt_duration((double)(0.9395L * KANG_C_MEAN * sqrtl(W)) / rate_kang, time_50, sizeof time_50),
+                         pz_fmt_duration((double)(1.7122L * KANG_C_MEAN * sqrtl(W)) / rate_kang, time_90, sizeof time_90));
         /* BSGS with a RAM table, if one that beats the kangaroo fits in 70% of the free memory */
         sysinfo_t si;
         sysinfo_detect(&si);
@@ -1689,12 +1689,12 @@ static int cmd_devices(void)
 {
     sysinfo_t s;
     sysinfo_detect(&s);
-    char m1[32], m2[32], c2[32], c3[32];
+    char ram_total_text[32], ram_avail_text[32], l2_text[32], l3_text[32];
     pz_section("CPU");
     pz_prop_line("model", "%s", s.model);
     pz_prop_line("threads", "%d usable logical thread%s on %d physical core%s", s.ncpu, PLURAL(s.ncpu), s.ncore, PLURAL(s.ncore));
-    if (s.l2_kib > 0) pz_prop_line("caches", "L2 %s, L3 %s", pz_fmt_bytes((double)s.l2_kib * 1024, c2, sizeof c2), pz_fmt_bytes((double)s.l3_kib * 1024, c3, sizeof c3));
-    pz_prop_line("RAM", "%s total, %s available", pz_fmt_bytes((double)s.mem_total, m1, sizeof m1), pz_fmt_bytes((double)s.mem_avail, m2, sizeof m2));
+    if (s.l2_kib > 0) pz_prop_line("caches", "L2 %s, L3 %s", pz_fmt_bytes((double)s.l2_kib * 1024, l2_text, sizeof l2_text), pz_fmt_bytes((double)s.l3_kib * 1024, l3_text, sizeof l3_text));
+    pz_prop_line("RAM", "%s total, %s available", pz_fmt_bytes((double)s.mem_total, ram_total_text, sizeof ram_total_text), pz_fmt_bytes((double)s.mem_avail, ram_avail_text, sizeof ram_avail_text));
     pz_section("CPU engines");
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);

@@ -368,15 +368,15 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
     }
     double best = 0;
     int best_v = -1;
-    char b1[32], b2[32], b3[32];
+    char cell_1[32], cell_core[32], cell_all[32];
     for (int v = 0; v < NKROUNDS; v++) {
         if (!KROUNDS[v].supported()) continue;
         for (int i = 0; i < nall; i++) fns[i] = KROUNDS[v].fn;
         const double r1 = kbench_run(ks, s, 1, fns, pos_all, secs);
         const double rc = kbench_run(ks, s, ncore, fns, pos_core, secs);
         const double ra = nall > ncore ? kbench_run(ks, s, nall, fns, pos_all, secs) : rc;
-        printf("  %-24s%12s%12s", KROUNDS[v].name, pz_fmt_cell(r1, b1, sizeof b1), pz_fmt_cell(rc, b2, sizeof b2));
-        if (nall > ncore) printf("%12s", pz_fmt_cell(ra, b3, sizeof b3));
+        printf("  %-24s%12s%12s", KROUNDS[v].name, pz_fmt_cell(r1, cell_1, sizeof cell_1), pz_fmt_cell(rc, cell_core, sizeof cell_core));
+        if (nall > ncore) printf("%12s", pz_fmt_cell(ra, cell_all, sizeof cell_all));
         printf("\n");
         fflush(stdout);
         const double r = ra > rc ? ra : rc;
@@ -403,7 +403,7 @@ void kang_bench_cpu(const sysinfo_t *s, double secs)
         else if (g_env.kang_mix == 0) snprintf(use, sizeof use, "not used (PZ_KANG_MIX=0)");
         else snprintf(use, sizeof use, "not used (PZ_KANG_MIX=1 imposes it)");
         snprintf(ln, sizeof ln, "  mixed: %s on the first thread of each core and %s on the other: %s steps/s, %+.0f%% against the best uniform setup; %s",
-                 KROUNDS[best_v].name, KROUNDS[vx86].name, pz_fmt_si(rm, b1, sizeof b1), 100.0 * (rm / best - 1.0), use);
+                 KROUNDS[best_v].name, KROUNDS[vx86].name, pz_fmt_si(rm, cell_1, sizeof cell_1), 100.0 * (rm / best - 1.0), use);
         pz_fputs_wrap(stdout, ln, PZ_LINE_MAX, 4);
         putchar('\n');
     }

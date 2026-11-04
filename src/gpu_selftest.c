@@ -76,8 +76,8 @@ bool gpu_test_fe(gpu_session *s)
         for (int i = 0; i < H; i++) {
             for (int j = 0; j < 32; j++) xb[i][j] = (u8)gpu_test_rand(s);
             pz_fe_from_be(&xs[i], xb[i]);
-            u8 xx[32]; pz_fe_to_be(xx, &xs[i]);
-            memcpy(xb[i], xx, 32);
+            u8 x_be[32]; pz_fe_to_be(x_be, &xs[i]);
+            memcpy(xb[i], x_be, 32);
             uint32_t pk[8]; pack_fe(pk, &xs[i]);
             memcpy(hin + i * 9, pk, 32);
             hin[i * 9 + 8] = (u32)(gpu_test_rand(s) & 1);

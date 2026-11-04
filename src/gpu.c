@@ -526,15 +526,15 @@ static void *gpu_linear_thread(void *p)
         L.key_start = c.key_start;
         L.nkeys = c.nkeys;
         L.ngroups = ngroups;
-        double t0 = pz_mono();
+        double launch_start = pz_mono();
         if (!gpu_linear_run(s, r->cfg.target_h160, &L)) {
             sched_complete(r->sched, &c, 0);                  /* the block goes back to the pool */
             if (atomic_load(&r->stop) || !gpu_device_error(s, &health, false, &ngroups, NULL, NULL)) break;
             continue;
         }
-        const double t1 = pz_mono();
-        gpu_health_ok(&health, t1);
-        double dt = t1 - t0;
+        const double launch_end = pz_mono();
+        gpu_health_ok(&health, launch_end);
+        double dt = launch_end - launch_start;
         u64 covered = c.nkeys;
         if (L.err) {
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: numeric anomaly in the block, rescanning on the CPU", s->info.index, s->info.name);
@@ -771,11 +771,11 @@ static void *gpu_kang_thread(void *p)
         boost_sync(&boosted);
         if (atomic_load(&s->paused)) { pz_sleep(0.01); continue; }
         uint32_t ndp = 0, nrl = 0;
-        double t0 = pz_mono();
+        double launch_start = pz_mono();
         if (!gpu_kang_run(s, &ks->P, rounds, &ndp, &nrl)) goto device_error;
-        const double t1 = pz_mono();
-        gpu_health_ok(&health, t1);
-        double dt = t1 - t0;
+        const double launch_end = pz_mono();
+        gpu_health_ok(&health, launch_end);
+        double dt = launch_end - launch_start;
         mirror->round = s->gstep;               /* restarts below start counting from here */
         uint32_t nd = ndp > s->dps_cap ? (uint32_t)s->dps_cap : ndp;
         if (ndp > s->dps_cap) atomic_fetch_add(&ks->dropped, ndp - s->dps_cap);
@@ -791,22 +791,22 @@ static void *gpu_kang_thread(void *p)
         GPU_UNITS_STAMP(&r->ws[s->widx], (u64)K * rounds);
         bool solved = nd && kang_insert_dps(ks, recs, (int)nd, dups);
         if (solved) break;
-        uint32_t tmp[KSTRIDE];
+        uint32_t state_words[KSTRIDE];
         for (uint32_t i = 0; i < nd; i++) {
             if (!dups[i]) continue;
             uint32_t idx = dpraw[(size_t)i * 10 + 8];
             if (idx >= (uint32_t)K) continue;
             kang_restart_one(ks, mirror, (int)idx);
-            pack_state(tmp, mirror, (int)idx);
-            rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, tmp, KSTRIDE * 4);
+            pack_state(state_words, mirror, (int)idx);
+            rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, state_words, KSTRIDE * 4);
             atomic_fetch_add(&ks->dups, 1);
         }
         for (uint32_t i = 0; i < nr; i++) {
             uint32_t idx = rlraw[i];
             if (idx >= (uint32_t)K) continue;
             kang_restart_one(ks, mirror, (int)idx);
-            pack_state(tmp, mirror, (int)idx);
-            rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, tmp, KSTRIDE * 4);
+            pack_state(state_words, mirror, (int)idx);
+            rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, state_words, KSTRIDE * 4);
             atomic_fetch_add(&ks->restarts, 1);
         }
         rounds = gpu_launch_resize(rounds, dt, s->launch_s, 0.002, rmax);

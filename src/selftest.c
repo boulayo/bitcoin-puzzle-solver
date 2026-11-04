@@ -224,54 +224,54 @@ static run_ctx *rate_ctx(int threads, bool kang)
 
 static void t_rate_memory(void)
 {
-    char tmp[512];
-    if (!pz_make_temp_dir(tmp, sizeof tmp, "pzrate")) { pz_result_line("speed remembered per configuration", "not tested: no temporary folder"); return; }
-    char old[PZ_ENV_PATH];
-    pz_strlcpy(old, g_env.xdg_cache_home, sizeof old);
-    pz_strlcpy(g_env.xdg_cache_home, tmp, sizeof g_env.xdg_cache_home);
-    run_ctx *a = rate_ctx(4, false);
-    profile_rate_setup(a);
-    CHECK(a->rate_prior == 0 && a->rate_prior_kind == 0 && a->remember_rate != NULL);       /* nothing known yet */
-    a->rate_cold = 900e6;                                                                    /* the calibration's rate of the profile entry */
-    profile_rate_setup(a);
-    CHECK(a->rate_prior == 900e6 && a->rate_prior_kind == 1);
-    a->remember_rate(a, 812345678.0);                                                        /* the steady rate of a run */
-    run_ctx *b = rate_ctx(4, false);
-    b->rate_cold = 900e6;
-    profile_rate_setup(b);
-    CHECK(b->rate_prior == 812345678.0 && b->rate_prior_kind == 2);                          /* beats the cold one */
-    run_ctx *c = rate_ctx(5, false);                                                         /* another thread count: another configuration */
-    profile_rate_setup(c);
-    CHECK(c->rate_prior == 0);
-    run_ctx *d = rate_ctx(4, true);                                                          /* the other mode */
-    profile_rate_setup(d);
-    CHECK(d->rate_prior == 0);
-    run_ctx *e = rate_ctx(4, false);                                                         /* the priority is part of the configuration */
-    e->gpu_boost = true;
-    profile_rate_setup(e);
-    CHECK(e->rate_prior == 0);
-    a->remember_rate(a, 700e6);                                                              /* a later run replaces the value */
-    profile_rate_setup(b);
-    CHECK(b->rate_prior == 700e6);
-    run_ctx *f = rate_ctx(4, false);                                                         /* BSGS has no memory */
-    f->cfg.mode = MODE_BSGS;
-    profile_rate_setup(f);
-    CHECK(f->remember_rate == NULL && f->rate_prior == 0);
-    run_ctx *g = rate_ctx(4, false);                                                         /* a limited run has a speed of its own */
-    g->limit_pct = 50;
-    profile_rate_setup(g);
-    CHECK(g->rate_prior == 0);
-    g->remember_rate(g, 300e6);
-    run_ctx *h = rate_ctx(4, false);
-    h->limit_pct = 50;
-    profile_rate_setup(h);
-    CHECK(h->rate_prior == 300e6 && h->rate_prior_kind == 2);
-    profile_rate_setup(b);
-    CHECK(b->rate_prior == 700e6);                                                           /* and does not touch the unlimited one */
-    free(g); free(h);
-    free(a); free(b); free(c); free(d); free(e); free(f);
-    pz_strlcpy(g_env.xdg_cache_home, old, sizeof g_env.xdg_cache_home);
-    pz_remove_tree(tmp);
+    char tmp_dir[512];
+    if (!pz_make_temp_dir(tmp_dir, sizeof tmp_dir, "pzrate")) { pz_result_line("speed remembered per configuration", "not tested: no temporary folder"); return; }
+    char old_cache_home[PZ_ENV_PATH];
+    pz_strlcpy(old_cache_home, g_env.xdg_cache_home, sizeof old_cache_home);
+    pz_strlcpy(g_env.xdg_cache_home, tmp_dir, sizeof g_env.xdg_cache_home);
+    run_ctx *first_run = rate_ctx(4, false);
+    profile_rate_setup(first_run);
+    CHECK(first_run->rate_prior == 0 && first_run->rate_prior_kind == 0 && first_run->remember_rate != NULL);   /* nothing known yet */
+    first_run->rate_cold = 900e6;                                                                               /* the calibration's rate of the profile entry */
+    profile_rate_setup(first_run);
+    CHECK(first_run->rate_prior == 900e6 && first_run->rate_prior_kind == 1);
+    first_run->remember_rate(first_run, 812345678.0);                                                           /* the steady rate of a run */
+    run_ctx *second_run = rate_ctx(4, false);
+    second_run->rate_cold = 900e6;
+    profile_rate_setup(second_run);
+    CHECK(second_run->rate_prior == 812345678.0 && second_run->rate_prior_kind == 2);                           /* beats the cold one */
+    run_ctx *other_threads = rate_ctx(5, false);                                                                /* another thread count: another configuration */
+    profile_rate_setup(other_threads);
+    CHECK(other_threads->rate_prior == 0);
+    run_ctx *kangaroo_mode = rate_ctx(4, true);                                                                 /* the other mode */
+    profile_rate_setup(kangaroo_mode);
+    CHECK(kangaroo_mode->rate_prior == 0);
+    run_ctx *boosted = rate_ctx(4, false);                                                                      /* the priority is part of the configuration */
+    boosted->gpu_boost = true;
+    profile_rate_setup(boosted);
+    CHECK(boosted->rate_prior == 0);
+    first_run->remember_rate(first_run, 700e6);                                                                 /* a later run replaces the value */
+    profile_rate_setup(second_run);
+    CHECK(second_run->rate_prior == 700e6);
+    run_ctx *bsgs_run = rate_ctx(4, false);                                                                     /* BSGS has no memory */
+    bsgs_run->cfg.mode = MODE_BSGS;
+    profile_rate_setup(bsgs_run);
+    CHECK(bsgs_run->remember_rate == NULL && bsgs_run->rate_prior == 0);
+    run_ctx *limited = rate_ctx(4, false);                                                                      /* a limited run has a speed of its own */
+    limited->limit_pct = 50;
+    profile_rate_setup(limited);
+    CHECK(limited->rate_prior == 0);
+    limited->remember_rate(limited, 300e6);
+    run_ctx *limited_again = rate_ctx(4, false);
+    limited_again->limit_pct = 50;
+    profile_rate_setup(limited_again);
+    CHECK(limited_again->rate_prior == 300e6 && limited_again->rate_prior_kind == 2);
+    profile_rate_setup(second_run);
+    CHECK(second_run->rate_prior == 700e6);                                                                     /* and does not touch the unlimited one */
+    free(limited); free(limited_again);
+    free(first_run); free(second_run); free(other_threads); free(kangaroo_mode); free(boosted); free(bsgs_run);
+    pz_strlcpy(g_env.xdg_cache_home, old_cache_home, sizeof g_env.xdg_cache_home);
+    pz_remove_tree(tmp_dir);
     pz_result_line("speed remembered per configuration", "OK");
 }
 

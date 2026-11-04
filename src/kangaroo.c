@@ -479,13 +479,13 @@ int kang_configure(kang_state *ks, int k_gpu_total)
 
     if (r->silent_setup) return 0;
     /* one line for the terminal, the internals for -v; the digits grouped as in the panel, and no "GPU 0" when no GPU walks */
-    char kt[32], kc[32], kg[32], cpu[64] = "", gpu[48] = "", b1[32], b2[32], b3[32], b4[32], jid[9];
+    char kt[32], kc[32], kg[32], cpu[64] = "", gpu[48] = "", table_text[32], limit_text[32], steps_text[32], dps_text[32], jid[9];
     if (nthr) snprintf(cpu, sizeof cpu, "CPU %d x %s", nthr, pz_fmt_u64((u64)ks->K_thread, kc, sizeof kc));
     if (k_gpu_total) snprintf(gpu, sizeof gpu, "%sGPU %s", nthr ? ", " : "", pz_fmt_u64((u64)k_gpu_total, kg, sizeof kg));
     pz_log(PZ_LOG_INFO, "kangaroo: %s kangaroos (%s%s), dp-bits %d, table %s (max %s); expected ~%s steps, ~%s distinguished points",
-           pz_fmt_u64((u64)ks->K_total, kt, sizeof kt), cpu, gpu, dp, pz_fmt_bytes((double)ks->cap * sizeof(dp_ent), b1, sizeof b1),
-           pz_fmt_bytes((double)r->mem_limit, b2, sizeof b2), pz_fmt_si((double)ks->expected_steps, b3, sizeof b3),
-           pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), b4, sizeof b4));
+           pz_fmt_u64((u64)ks->K_total, kt, sizeof kt), cpu, gpu, dp, pz_fmt_bytes((double)ks->cap * sizeof(dp_ent), table_text, sizeof table_text),
+           pz_fmt_bytes((double)r->mem_limit, limit_text, sizeof limit_text), pz_fmt_si((double)ks->expected_steps, steps_text, sizeof steps_text),
+           pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), dps_text, sizeof dps_text));
     pz_log(PZ_LOG_DEBUG, "kangaroo: W = 2^%.1Lf, mean jump %.3Le, expected effort %.2Lf x sqrt(W)", log2l(pz_u256_to_ld(&ks->W)), mean, (long double)KANG_C_MEAN);
     /* every computer of a shared campaign compares it, node 0 (the one that usually receives the merges) too; log.txt always has it */
     kang_jump_id(ks->jump_tag, jid);

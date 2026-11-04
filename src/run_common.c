@@ -379,12 +379,12 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 {
     const size_t bcap = 8192 + (size_t)r->nws * 128;      /* the list of the workers grows with their number */
     char *buf = pz_xmalloc(bcap);
-    char tb[40], seedhex[65], idb[17], rs[80], re[80], addr[80], hx[48], elapsed[48], state[24];
+    char stamp[40], seedhex[65], idb[17], rs[80], re[80], addr[80], hx[48], elapsed[48], state[24];
     double el = r->elapsed_prev + run_session_elapsed(r);
     time_t now = time(NULL);
     struct tm tmv;
     pz_localtime(now, &tmv);
-    strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", &tmv);
+    strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tmv);
     pz_hex_encode(r->cfg.seed, 32, seedhex);
     seed_to_id(r->cfg.seed, idb);
     pz_u256_to_hex(&r->cfg.range_start, rs);
@@ -478,7 +478,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "%s"
         "Detail:         %s\n"
         "%s",
-        PZ_VERSION, tb, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
+        PZ_VERSION, stamp, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
         pct, amount, speed, tleft,

@@ -260,15 +260,15 @@ static bool decrypt_ask_secret(bool raw, bool from_stdin, pz_u256 *d)
  * target; *recovered counts the keys shown, *failed those that are not the target's. */
 static void decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, const pz_ge *kp, const decrypt_target *tg, int *recovered, int *failed)
 {
-    char hx[PZ_U256_HEX_BUF], wif[PZ_WIF_BUF], a1[PZ_P2PKH_ADDRESS_BUF], a2[96];
+    char key_hex[PZ_U256_HEX_BUF], wif[PZ_WIF_BUF], addr_p2pkh[PZ_P2PKH_ADDRESS_BUF], addr_p2wpkh[96];
     u8 pub[33], hk[20];
     pz_ge_to_pub33(pub, kp);
     pz_hash160(pub, 33, hk);
-    pz_u256_to_hex(k, hx);
+    pz_u256_to_hex(k, key_hex);
     pz_privkey_to_wif(key, true, wif, sizeof wif);
-    pz_hash160_to_address(hk, a1, sizeof a1);
-    if (pz_hash160_to_segwit_address("bc", hk, a2, sizeof a2) < 0) a2[0] = 0;
-    printf("\nKey recovered (line %d)\n  key (hex):         0x%s\n  WIF compressed:    %s\n  address (P2PKH):   %s\n  address (P2WPKH):  %s\n", line, hx, wif, a1, a2);
+    pz_hash160_to_address(hk, addr_p2pkh, sizeof addr_p2pkh);
+    if (pz_hash160_to_segwit_address("bc", hk, addr_p2wpkh, sizeof addr_p2wpkh) < 0) addr_p2wpkh[0] = 0;
+    printf("\nKey recovered (line %d)\n  key (hex):         0x%s\n  WIF compressed:    %s\n  address (P2PKH):   %s\n  address (P2WPKH):  %s\n", line, key_hex, wif, addr_p2pkh, addr_p2wpkh);
     if (tg->puzzle) printf("  puzzle:            #%d\n", tg->puzzle);
     if (!tg->have_addr) {
         printf("address not checked: no address: line in the text and no --address\n");
@@ -279,7 +279,7 @@ static void decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, con
         fprintf(stderr, "line %d: MISMATCH: the key that came out does not belong to the address %s\n", line, tg->address);
         (*failed)++;
     }
-    pz_secure_zero(hx, sizeof hx);
+    pz_secure_zero(key_hex, sizeof key_hex);
     pz_secure_zero(wif, sizeof wif);
     (*recovered)++;
 }

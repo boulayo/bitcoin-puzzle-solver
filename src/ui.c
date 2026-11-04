@@ -308,13 +308,13 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     snprintf(ln, sizeof ln, "Target        %s   range of %s keys", r->cfg.address, ui_fmt_range_bits(&rsz, a, sizeof a));
     add_line(&p, "", "", ln);
 
-    char bb[48], pc[32];
-    bar(bb, 30, pi->fraction);
+    char bar_text[48], pc[32];
+    bar(bar_text, 30, pi->fraction);
     pz_fmt_percent(pi->fraction, pc, sizeof pc);
     ui_fmt_count(pi->done, a, sizeof a);
     ui_fmt_count(pi->total, b, sizeof b);
-    if (kang) snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bb, pc, a, b, pi->unit);
-    else snprintf(ln, sizeof ln, "Progress      [%s] %s   (%s / %s %s)", bb, pc, a, b, pi->unit);
+    if (kang) snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bar_text, pc, a, b, pi->unit);
+    else snprintf(ln, sizeof ln, "Progress      [%s] %s   (%s / %s %s)", bar_text, pc, a, b, pi->unit);
     add_line(&p, "", "", ln);
 
     const bool idle = final && !(pi->rate > 0);                  /* a session over before a speed was measured: no rows of zeros */
@@ -345,33 +345,33 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
 
 void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary *es, int cols, char *buf, size_t n)
 {
-    char rate[32], bb[24], pc[32], t1[48], t2[48], t3[48], pr[32], tag[96];
+    char rate[32], bar_text[24], pc[32], eta_50[48], eta_90[48], eta_last[48], pr[32], tag[96];
     ui_target_tag(r, tag, sizeof tag);
     pz_fmt_si(pi->rate, rate, sizeof rate);
-    bar(bb, 20, pi->fraction);
+    bar(bar_text, 20, pi->fraction);
     pz_fmt_percent(pi->fraction, pc, sizeof pc);
-    ui_fmt_eta(es->t50, t1, sizeof t1);
-    ui_fmt_eta(es->t90, t2, sizeof t2);
+    ui_fmt_eta(es->t50, eta_50, sizeof eta_50);
+    ui_fmt_eta(es->t90, eta_90, sizeof eta_90);
     const bool kang = r->cfg.mode == MODE_KANGAROO;
-    ui_fmt_eta(kang ? es->t99 : es->t_full, t3, sizeof t3);
+    ui_fmt_eta(kang ? es->t99 : es->t_full, eta_last, sizeof eta_last);
     ui_fmt_prob(es->p_win[1], pr, sizeof pr);
     const int limit = cols > 20 ? cols - 1 : 0;   /* cols == 0: no terminal (log file), never shorten */
     if (pi->eta.model == ETA_NONE) {
-        char tt[48] = "";
-        if (pi->rate > 0 && pi->total > pi->done) ui_fmt_eta((double)((pi->total - pi->done) / pi->rate), tt, sizeof tt);
-        snprintf(buf, n, "%s [%s] %s %s %s/s | table phase%s%s", tag, bb, pc, rate, pi->unit, tt[0] ? ", done in " : "", tt);
+        char eta_left[48] = "";
+        if (pi->rate > 0 && pi->total > pi->done) ui_fmt_eta((double)((pi->total - pi->done) / pi->rate), eta_left, sizeof eta_left);
+        snprintf(buf, n, "%s [%s] %s %s %s/s | table phase%s%s", tag, bar_text, pc, rate, pi->unit, eta_left[0] ? ", done in " : "", eta_left);
         if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "%s %s %s %s/s", tag, pc, rate, pi->unit);
     } else if (pi->beyond) {
-        snprintf(buf, n, "%s [%s] %s %s %s/s | time left unknown (beyond the model)", tag, bb, pc, rate, pi->unit);
+        snprintf(buf, n, "%s [%s] %s %s %s/s | time left unknown (beyond the model)", tag, bar_text, pc, rate, pi->unit);
         if (limit && (int)strlen(buf) > limit) snprintf(buf, n, "%s %s %s %s/s | time left unknown", tag, pc, rate, pi->unit);
     } else if (pi->rate > 0 && pi->est_state != RATE_MEASURING) {
         /* richest layout that fits, then drop fields from the least important: bar, P(24h), the last quantile */
         for (int v = 0; v < 5; v++) {
-            if (v == 0) snprintf(buf, n, "%s [%s] %s %s %s/s | 50%%: %s 90%%: %s %s: %s | P(24h)=%s", tag, bb, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
-            else if (v == 1) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s %s: %s | P(24h)=%s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3, pr);
-            else if (v == 2) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s %s: %s", tag, pc, rate, pi->unit, t1, t2, kang ? "99%" : "100%", t3);
-            else if (v == 3) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s", tag, pc, rate, pi->unit, t1, t2);
-            else snprintf(buf, n, "%s %s %s/s | 50%%: %s", tag, pc, rate, t1);
+            if (v == 0) snprintf(buf, n, "%s [%s] %s %s %s/s | 50%%: %s 90%%: %s %s: %s | P(24h)=%s", tag, bar_text, pc, rate, pi->unit, eta_50, eta_90, kang ? "99%" : "100%", eta_last, pr);
+            else if (v == 1) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s %s: %s | P(24h)=%s", tag, pc, rate, pi->unit, eta_50, eta_90, kang ? "99%" : "100%", eta_last, pr);
+            else if (v == 2) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s %s: %s", tag, pc, rate, pi->unit, eta_50, eta_90, kang ? "99%" : "100%", eta_last);
+            else if (v == 3) snprintf(buf, n, "%s %s %s %s/s | 50%%: %s 90%%: %s", tag, pc, rate, pi->unit, eta_50, eta_90);
+            else snprintf(buf, n, "%s %s %s/s | 50%%: %s", tag, pc, rate, eta_50);
             if (!limit || (int)strlen(buf) <= limit) break;
         }
         if (pi->est_state == RATE_PROVISIONAL) {                       /* the estimate is still settling: say so if it fits */
@@ -379,7 +379,7 @@ void ui_render_line(const run_ctx *r, const progress_info *pi, const eta_summary
             if (l + 15 < n && (!limit || (int)l + 14 <= limit)) memcpy(buf + l, " (provisional)", 15);
         }
     } else
-        snprintf(buf, n, "%s [%s] %s | measuring speed...", tag, bb, pc);
+        snprintf(buf, n, "%s [%s] %s | measuring speed...", tag, bar_text, pc);
     if (limit && (int)strlen(buf) > limit) buf[limit] = 0;
 }
 

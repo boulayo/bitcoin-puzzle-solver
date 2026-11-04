@@ -162,27 +162,27 @@ static void t_parts_syntax(void)
 /* Proportional shares: they add up, nobody is left out, the error is under one share */
 static void t_parts_proportional(void)
 {
-    const u64 sp[][4] = {{800, 100, 0, 0}, {1, 1, 1, 0}, {5000000000ULL, 5000000000ULL, 1000, 0}, {3, 7, 11, 19}, {1, 1000000, 1, 1}};
-    const unsigned nn[] = {2, 3, 3, 4, 4};
-    for (int t = 0; t < 5; t++) {
+    const u64 speeds[][4] = {{800, 100, 0, 0}, {1, 1, 1, 0}, {5000000000ULL, 5000000000ULL, 1000, 0}, {3, 7, 11, 19}, {1, 1000000, 1, 1}};
+    const unsigned nshares[] = {2, 3, 3, 4, 4};
+    for (int trial = 0; trial < 5; trial++) {
         unsigned cnt[4], sum = 0;
-        CHECK(part_split(sp[t], nn[t], 100, cnt));
+        CHECK(part_split(speeds[trial], nshares[trial], 100, cnt));
         u128 w = 0;
-        for (unsigned i = 0; i < nn[t]; i++) w += sp[t][i];
+        for (unsigned i = 0; i < nshares[trial]; i++) w += speeds[trial][i];
         unsigned forced = 0;                                  /* computers whose proportional share is under one: given one anyway */
-        for (unsigned i = 0; i < nn[t]; i++) forced += 100.0L * (long double)sp[t][i] / (long double)w < 1.0L;
-        for (unsigned i = 0; i < nn[t]; i++) {
+        for (unsigned i = 0; i < nshares[trial]; i++) forced += 100.0L * (long double)speeds[trial][i] / (long double)w < 1.0L;
+        for (unsigned i = 0; i < nshares[trial]; i++) {
             sum += cnt[i];
             CHECK(cnt[i] >= 1);
-            const long double ideal = 100.0L * (long double)sp[t][i] / (long double)w, slack = 1.0L + forced + 1e-9L;
+            const long double ideal = 100.0L * (long double)speeds[trial][i] / (long double)w, slack = 1.0L + forced + 1e-9L;
             CHECK(cnt[i] - ideal < slack && ideal - cnt[i] < slack);
         }
         CHECK(sum == 100);
     }
     unsigned c2[2];
-    CHECK(part_split(sp[0], 2, 100, c2) && c2[0] == 89 && c2[1] == 11);                  /* 88.9 and 11.1 */
+    CHECK(part_split(speeds[0], 2, 100, c2) && c2[0] == 89 && c2[1] == 11);                  /* 88.9 and 11.1 */
     const u64 zero[2] = {5, 0};
-    CHECK(!part_split(zero, 2, 100, c2) && !part_split(sp[0], 2, 1, c2));
+    CHECK(!part_split(zero, 2, 100, c2) && !part_split(speeds[0], 2, 1, c2));
 }
 
 /* The shares of a range tile it exactly: every key once, short last block included */

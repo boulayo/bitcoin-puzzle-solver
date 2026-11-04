@@ -307,8 +307,8 @@ static void t_bucket_compare(void)
         int n = (int)(rnd() % (BS_BUCKET + 1));
         for (int j = 0; j < BS_BUCKET; j++) {
             u64 tg = (rnd() & 3) == 0 ? edge_tags[rnd() % 6] : rnd() & BS_TAG_MASK;
-            u64 bb = (rnd() & 3) == 0 ? edge_b[rnd() % 6] : 1 + rnd() % BS_VAL_MASK;
-            bk[j] = j < n ? (tg << BS_VAL_BITS) | bb : 0;
+            u64 value = (rnd() & 3) == 0 ? edge_b[rnd() % 6] : 1 + rnd() % BS_VAL_MASK;
+            bk[j] = j < n ? (tg << BS_VAL_BITS) | value : 0;
         }
         u64 tag;
         switch (rnd() % 6) {
@@ -318,12 +318,12 @@ static void t_bucket_compare(void)
         case 3: case 4: tag = n ? bk[rnd() % (u64)n] >> BS_VAL_BITS : 5; break;      /* present */
         default: tag = rnd() & BS_TAG_MASK; break;
         }
-        bool a = bs_bucket_maybe(bk, tag), c = bs_bucket_maybe_scalar(bk, tag), exact = false;
+        bool fast = bs_bucket_maybe(bk, tag), scalar = bs_bucket_maybe_scalar(bk, tag), exact = false;
         for (int j = 0; j < n; j++) exact |= (bk[j] >> BS_VAL_BITS) == tag;
-        CHECK(a == c);
-        CHECK(!exact || a);                                  /* never a miss for a tag that is in the bucket */
-        CHECK(tag == 0 || a == exact);                       /* and exact for any tag but 0 (an empty cell has the tag 0) */
-        yes += a; no += !a;
+        CHECK(fast == scalar);
+        CHECK(!exact || fast);                                  /* never a miss for a tag that is in the bucket */
+        CHECK(tag == 0 || fast == exact);                       /* and exact for any tag but 0 (an empty cell has the tag 0) */
+        yes += fast; no += !fast;
     }
     CHECK(yes > 1000 && no > 1000);
     pz_afree(bk);

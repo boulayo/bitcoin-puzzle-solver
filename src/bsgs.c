@@ -754,18 +754,18 @@ static bool io_all(int fd, u64 *slots, u64 nslots, int nthreads, bool write, u64
 bool bsgs_table_save(const bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen)
 {
     /* a private temporary file in the same directory (two campaigns saving to the same name cannot interleave), then rename */
-    char tmp[1100];
-    snprintf(tmp, sizeof tmp, "%s.tmp.XXXXXX", path);
-    int fd = pz_create_temp(tmp);
+    char temp_path[1100];
+    snprintf(temp_path, sizeof temp_path, "%s.tmp.XXXXXX", path);
+    int fd = pz_create_temp(temp_path);
     if (fd < 0) { snprintf(err, errlen, "cannot create a temporary file next to %s: %s", path, strerror(errno)); return false; }
     u64 sum = 0;
     bool ok = io_all(fd, t->slots, t->nslots, nthreads, true, &sum);
-    if (!ok) { snprintf(err, errlen, "writing %s failed: %s", tmp, strerror(errno)); close(fd); unlink(tmp); return false; }
+    if (!ok) { snprintf(err, errlen, "writing %s failed: %s", temp_path, strerror(errno)); close(fd); unlink(temp_path); return false; }
     bs_header h;
     header_fill(&h, t->T, t->nslots, sum, t->linear ? LAYOUT_LINEAR : t->tag32 ? LAYOUT_TAG32 : LAYOUT_BUCKET8);
     ok = full_pwrite(fd, &h, sizeof h, 0) && pz_fd_sync(fd) == 0;   /* the header goes last: a partial file never validates */
     if (close(fd) != 0) ok = false;
-    if (!ok || pz_rename_replace(tmp, path) != 0) { snprintf(err, errlen, "saving %s failed: %s", path, strerror(errno)); unlink(tmp); return false; }
+    if (!ok || pz_rename_replace(temp_path, path) != 0) { snprintf(err, errlen, "saving %s failed: %s", path, strerror(errno)); unlink(temp_path); return false; }
     return true;
 }
 

@@ -253,15 +253,15 @@ static char *list_text(const char *dir, const char *tmp)
 static void check_old_state_words(const char *dir)
 {
     static const char *const old[][2] = {{"IN CORSO", "STOPPED"}, {"INTERROTTA", "STOPPED"}, {"COMPLETATA", "COMPLETED"}, {"TROVATA", "FOUND"}};
-    char d[700], p[800], tmp[800];
+    char d[700], p[800], list_out[800];
     make_campaign(dir, "oldwords", d, sizeof d);
     snprintf(p, sizeof p, "%s/status.json", d);
-    snprintf(tmp, sizeof tmp, "%s/list.out", dir);
+    snprintf(list_out, sizeof list_out, "%s/list.out", dir);
     for (size_t i = 0; i < sizeof old / sizeof *old; i++) {
         char js[200];
         snprintf(js, sizeof js, "{\n \"state\": \"%s\",\n \"fraction\": 0.5,\n \"updated_unix\": 100\n}\n", old[i][0]);
         put(p, js, strlen(js));
-        char *t = list_text(dir, tmp);
+        char *t = list_text(dir, list_out);
         const char *row = t ? strstr(t, "oldwords") : NULL;
         CHECK(row && strstr(row, old[i][1]) && !strstr(t, old[i][0]));   /* a stopped campaign (nobody holds the lock) */
         free(t);
@@ -269,7 +269,7 @@ static void check_old_state_words(const char *dir)
     const char *busy = "{\n \"state\": \"IN CORSO\"\n}\n";                       /* "in progress" is RUNNING while the lock is held */
     put(p, busy, strlen(busy));
     int fd = campaign_lock(d);
-    char *t = list_text(dir, tmp);
+    char *t = list_text(dir, list_out);
     const char *row = t ? strstr(t, "oldwords") : NULL;
     CHECK(row && strstr(row, "RUNNING") && !strstr(t, "IN CORSO"));
     free(t);

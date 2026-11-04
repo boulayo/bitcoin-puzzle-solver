@@ -188,14 +188,14 @@ bool part_split(const u64 *speed, unsigned n, unsigned total, unsigned *counts)
 
 int cfg_save(const campaign_cfg *c, const char *path)
 {
-    char buf[4096], t1[80], t2[80], h[130], sd[65], pk[80], ep[67] = "";
-    pz_u256_to_hex(&c->range_start, t1);
-    pz_u256_to_hex(&c->range_end, t2);
-    pz_hex_encode(c->target_h160, 20, h);
-    pz_hex_encode(c->seed, 32, sd);
-    pk[0] = 0;
-    if (c->has_pubkey) pz_hex_encode(c->pubkey33, 33, pk);
-    if (c->has_encrypt) pz_hex_encode(c->encrypt_pubkey33, 33, ep);
+    char buf[4096], start_hex[80], end_hex[80], hash160_hex[130], seed_hex[65], pubkey_hex[80], encrypt_pubkey_hex[67] = "";
+    pz_u256_to_hex(&c->range_start, start_hex);
+    pz_u256_to_hex(&c->range_end, end_hex);
+    pz_hex_encode(c->target_h160, 20, hash160_hex);
+    pz_hex_encode(c->seed, 32, seed_hex);
+    pubkey_hex[0] = 0;
+    if (c->has_pubkey) pz_hex_encode(c->pubkey33, 33, pubkey_hex);
+    if (c->has_encrypt) pz_hex_encode(c->encrypt_pubkey33, 33, encrypt_pubkey_hex);
     int n = snprintf(buf, sizeof buf,
         "# pzsolve campaign (do not edit by hand)\n"
         "format=%u\n"
@@ -215,9 +215,9 @@ int cfg_save(const campaign_cfg *c, const char *path)
         "bsgs_entries=%llu\n"
         "part=%s\n"
         "%s%s%s",
-        c->format_version, c->created_with, c->created_at, c->name, c->puzzle, t1, t2,
-        c->address, h, pk, mode_name(c->mode), sd, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part,
-        c->has_encrypt ? "encrypt_pubkey=" : "", ep, c->has_encrypt ? "\n" : "");   /* the line is there only when it is used: the file of a campaign without it is as before */
+        c->format_version, c->created_with, c->created_at, c->name, c->puzzle, start_hex, end_hex,
+        c->address, hash160_hex, pubkey_hex, mode_name(c->mode), seed_hex, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part,
+        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex, c->has_encrypt ? "\n" : "");   /* the line is there only when it is used: the file of a campaign without it is as before */
     return pz_write_file_atomic(path, buf, (size_t)n, 0644);
 }
 

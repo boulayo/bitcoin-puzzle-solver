@@ -46,19 +46,19 @@ static void check_program(void)
 static void check_system(const sysinfo_t *s)
 {
     section("System");
-    char os[200], host[128], m1[32], m2[32], c2[32], c3[32];
+    char os[200], host[128], ram_total_text[32], ram_avail_text[32], l2_text[32], l3_text[32];
     pz_os_description(os, sizeof os);
     pz_hostname(host, sizeof host);
     doctor_line('i', "%s, computer \"%s\"", os, host);
     doctor_line('i', "CPU: %s", s->model);
     doctor_line('i', "%d usable logical threads, %d physical cores, L2 cache %s, L3 cache %s", s->ncpu, s->ncore,
-                pz_fmt_bytes((double)s->l2_kib * 1024, c2, sizeof c2), pz_fmt_bytes((double)s->l3_kib * 1024, c3, sizeof c3));
+                pz_fmt_bytes((double)s->l2_kib * 1024, l2_text, sizeof l2_text), pz_fmt_bytes((double)s->l3_kib * 1024, l3_text, sizeof l3_text));
     if (s->ncpu > s->ncore && s->ncore > 0)
         doctor_line('i', "hyper-threading/SMT is on: kangaroo runs faster with all threads; for the linear search see 'bench' (one thread per core is sometimes better)");
-    pz_fmt_bytes((double)s->mem_total, m1, sizeof m1);
-    pz_fmt_bytes((double)s->mem_avail, m2, sizeof m2);
-    if (s->mem_avail < ((u64)2 << 30)) doctor_line('w', "available RAM %s of %s: low (kangaroo and BSGS keep their tables in RAM: close other programs or use --mem)", m2, m1);
-    else doctor_line('o', "RAM: %s total, %s available", m1, m2);
+    pz_fmt_bytes((double)s->mem_total, ram_total_text, sizeof ram_total_text);
+    pz_fmt_bytes((double)s->mem_avail, ram_avail_text, sizeof ram_avail_text);
+    if (s->mem_avail < ((u64)2 << 30)) doctor_line('w', "available RAM %s of %s: low (kangaroo and BSGS keep their tables in RAM: close other programs or use --mem)", ram_avail_text, ram_total_text);
+    else doctor_line('o', "RAM: %s total, %s available", ram_total_text, ram_avail_text);
     char ps[128];
     pz_power_scheme(ps, sizeof ps);
     if (ps[0]) doctor_line('i', "active power plan: %s (a power-saving plan slows the CPU and GPU down; use 'High performance' for long campaigns)", ps);
@@ -142,16 +142,16 @@ static void check_campaigns(const char *base)
     DIR *d = opendir(base);
     if (!d) { doctor_line('i', "does not exist yet ('hunt' creates it): no campaigns"); return; }
     char **names = NULL;
-    size_t nn = 0;
+    size_t ncampaigns = 0;
     for (struct dirent *e; (e = readdir(d)) != NULL;) {
         if (e->d_name[0] == '.') continue;
-        names = pz_xrealloc(names, (nn + 1) * sizeof *names);
-        names[nn++] = pz_xstrdup(e->d_name);
+        names = pz_xrealloc(names, (ncampaigns + 1) * sizeof *names);
+        names[ncampaigns++] = pz_xstrdup(e->d_name);
     }
     closedir(d);
-    if (nn > 1) qsort(names, nn, sizeof *names, cmp_names);     /* in the order of 'list' (an empty folder: names is NULL) */
+    if (ncampaigns > 1) qsort(names, ncampaigns, sizeof *names, cmp_names);     /* in the order of 'list' (an empty folder: names is NULL) */
     int n = 0;
-    for (size_t k = 0; k < nn; k++) {
+    for (size_t k = 0; k < ncampaigns; k++) {
         const char *name = names[k];
         char conf[1200], dir[1100];
         snprintf(dir, sizeof dir, "%s/%s", base, name);
@@ -180,7 +180,7 @@ static void check_campaigns(const char *base)
         doctor_line(found ? 'o' : 'i', "%-10s %-9s %s: %s, last save %s", name, mode_name(c.mode), pz, state, age);
         if (sleeps > 0) doctor_line('i', "%-10s system suspensions detected during the campaign: %lld (handled: suspended time is not counted and the state is saved)", name, sleeps);
     }
-    for (size_t k = 0; k < nn; k++) free(names[k]);
+    for (size_t k = 0; k < ncampaigns; k++) free(names[k]);
     free(names);
     if (!n) doctor_line('i', "no campaigns");
 }
@@ -190,22 +190,22 @@ static void check_disk(const char *base)
     section("Disk");
     const char *where = pz_is_dir(base) ? base : ".";
     u64 fr, tot;
-    char b1[32], b2[32];
+    char free_text[32], total_text[32];
     if (pz_disk_space(where, &fr, &tot)) {
-        pz_fmt_bytes((double)fr, b1, sizeof b1);
-        pz_fmt_bytes((double)tot, b2, sizeof b2);
-        if (fr < ((u64)200 << 20)) doctor_line('x', "free space %s of %s: too little (the kangaroo distinguished points keep growing for days)", b1, b2);
-        else if (fr < ((u64)5 << 30)) doctor_line('w', "free space %s of %s: low for a long kangaroo campaign", b1, b2);
-        else doctor_line('o', "free space %s of %s", b1, b2);
+        pz_fmt_bytes((double)fr, free_text, sizeof free_text);
+        pz_fmt_bytes((double)tot, total_text, sizeof total_text);
+        if (fr < ((u64)200 << 20)) doctor_line('x', "free space %s of %s: too little (the kangaroo distinguished points keep growing for days)", free_text, total_text);
+        else if (fr < ((u64)5 << 30)) doctor_line('w', "free space %s of %s: low for a long kangaroo campaign", free_text, total_text);
+        else doctor_line('o', "free space %s of %s", free_text, total_text);
     } else doctor_line('w', "free space cannot be read for %s", where);
-    char t[1100];
-    snprintf(t, sizeof t, "%s/.doctor_test", where);
+    char probe_path[1100];
+    snprintf(probe_path, sizeof probe_path, "%s/.doctor_test", where);
     const char payload[] = "pzsolve doctor";
-    if (pz_write_file_atomic(t, payload, sizeof payload - 1, 0644) == 0) {
-        char *back = pz_read_file(t, NULL);
+    if (pz_write_file_atomic(probe_path, payload, sizeof payload - 1, 0644) == 0) {
+        char *back = pz_read_file(probe_path, NULL);
         const bool same = back && !strcmp(back, payload);
         free(back);
-        remove(t);
+        remove(probe_path);
         doctor_line(same ? 'o' : 'x', "atomic write of a file in %s: %s", where, same ? "succeeded" : "the content read back differs");
     } else doctor_line('x', "cannot write to %s (permissions or read-only disk): campaigns cannot save their state", where);
 }
