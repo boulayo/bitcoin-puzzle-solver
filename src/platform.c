@@ -20,8 +20,6 @@
 #include <sys/resource.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
-
-extern char **environ;   /* unistd.h declares it only with _GNU_SOURCE; macOS does not declare it at all */
 #include <sys/wait.h>
 #include <spawn.h>
 #include <termios.h>
@@ -32,6 +30,8 @@ extern char **environ;   /* unistd.h declares it only with _GNU_SOURCE; macOS do
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
+
+extern char **environ;   /* unistd.h declares it only with _GNU_SOURCE; macOS does not declare it at all */
 
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
