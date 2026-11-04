@@ -25,12 +25,10 @@ static void h160_of_key(const pz_u256 *k, u8 h[20])
     pz_hash160(pub, 33, h);
 }
 
-static void test_engine(const cpu_engine *e)
+/* SIMD hash vs scalar */
+static void engine_check_hash160(const cpu_engine *e)
 {
-    printf("  engine %-9s (%d lanes, step of %llu keys)\n", e->name, e->lanes, (unsigned long long)e->granule);
     const int L = e->lanes;
-    const u64 G = e->granule;
-    /* 1. SIMD hash vs scalar */
     u32 X[8 * 64], pfx[64], out[5 * 64];
     for (int round = 0; round < 400 + 256; round++) {
         u8 xb[64][32];
@@ -51,7 +49,12 @@ static void test_engine(const cpu_engine *e)
             CHECK(!memcmp(h, got, 20));
         }
     }
-    /* 2. scans: every key offset of the first two groups, different starting points */
+}
+
+/* Scans: every key offset of the first two groups, different starting points */
+static bool engine_check_scans(const cpu_engine *e)
+{
+    const u64 G = e->granule;
     pz_u256 starts[6];
     starts[0] = pz_u256_from_u64(1);                 /* smallest legal start */
     starts[1] = pz_u256_from_u64(512);
@@ -74,127 +77,166 @@ static void test_engine(const cpu_engine *e)
             CHECK(cov == nkeys);
             CHECK(prog >= nkeys && prog < nkeys + G);
             CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
-            if (fails > 20) return;
+            if (fails > 20) return false;
         }
     }
-    /* 2b. group/lane boundaries, hit at every position of the first lane batch and of the group edges */
-    {
-        pz_u256 st = pz_u256_from_u64(300000);
-        const u64 edges[] = {0, 1, 2, (u64)L - 1, (u64)L, (u64)L + 1, CPU_HALF - 1, CPU_HALF, CPU_HALF + 1, CPU_GRP - 2, CPU_GRP - 1, CPU_GRP, CPU_GRP + 1,
-                             2 * CPU_GRP - 1, 3 * CPU_GRP - 1, G - 1, G, G + 1, 2 * G - 1, 3 * G - 1};
-        for (size_t i = 0; i < sizeof edges / sizeof *edges; i++) {
-            pz_u256 key = st; pz_u256_add_u64(&key, &key, edges[i]);
+    return true;
+}
+
+/* Group/lane boundaries, hit at every position of the first lane batch and of the group edges */
+static void engine_check_group_edges(const cpu_engine *e)
+{
+    const int L = e->lanes;
+    const u64 G = e->granule;
+    pz_u256 st = pz_u256_from_u64(300000);
+    const u64 edges[] = {0, 1, 2, (u64)L - 1, (u64)L, (u64)L + 1, CPU_HALF - 1, CPU_HALF, CPU_HALF + 1, CPU_GRP - 2, CPU_GRP - 1, CPU_GRP, CPU_GRP + 1,
+                         2 * CPU_GRP - 1, 3 * CPU_GRP - 1, G - 1, G, G + 1, 2 * G - 1, 3 * G - 1};
+    for (size_t i = 0; i < sizeof edges / sizeof *edges; i++) {
+        pz_u256 key = st; pz_u256_add_u64(&key, &key, edges[i]);
+        u8 h[20]; h160_of_key(&key, h);
+        scan_job job; scan_job_init(&job, h);
+        hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
+        CHECK(e->scan(&job, &st, 3 * G) == 3 * G);
+        CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
+    }
+}
+
+/* Every window of a round (a lane of the vector engines): edges, centre and the quarter points of each window */
+static void engine_check_windows(const cpu_engine *e)
+{
+    const u64 G = e->granule;
+    pz_u256 st = pz_u256_from_u64(400000);
+    const u64 nw = G / CPU_GRP;
+    for (u64 w = 0; w < nw; w++) {
+        const u64 offs[] = {0, 1, 255, 256, 257, 510, 511};
+        for (size_t i = 0; i < sizeof offs / sizeof *offs; i++) {
+            pz_u256 key = st; pz_u256_add_u64(&key, &key, w * CPU_GRP + offs[i]);
             u8 h[20]; h160_of_key(&key, h);
             scan_job job; scan_job_init(&job, h);
             hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-            CHECK(e->scan(&job, &st, 3 * G) == 3 * G);
+            CHECK(e->scan(&job, &st, 2 * G) == 2 * G);
             CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
         }
     }
-    /* 2c. every window of a round (a lane of the vector engines): edges, centre and the quarter points of each window */
-    {
-        pz_u256 st = pz_u256_from_u64(400000);
-        const u64 nw = G / CPU_GRP;
-        for (u64 w = 0; w < nw; w++) {
-            const u64 offs[] = {0, 1, 255, 256, 257, 510, 511};
-            for (size_t i = 0; i < sizeof offs / sizeof *offs; i++) {
-                pz_u256 key = st; pz_u256_add_u64(&key, &key, w * CPU_GRP + offs[i]);
-                u8 h[20]; h160_of_key(&key, h);
-                scan_job job; scan_job_init(&job, h);
-                hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-                CHECK(e->scan(&job, &st, 2 * G) == 2 * G);
-                CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
-            }
-        }
-    }
-    /* 2d. zero denominators in every window: the centre of window w equals the step point (start = G - 256 - 512 w) */
-    {
-        const u64 nw = G / CPU_GRP;
-        for (u64 w = 0; w < nw; w++) {
-            pz_u256 st = pz_u256_from_u64(G - 256 - w * CPU_GRP);
-            for (u64 off = 0; off < 2 * G; off += 97 + w) {
-                pz_u256 key = st; pz_u256_add_u64(&key, &key, off);
-                u8 h[20]; h160_of_key(&key, h);
-                scan_job job; scan_job_init(&job, h);
-                hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-                CHECK(e->scan(&job, &st, 2 * G) == 2 * G);
-                CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
-            }
-        }
-    }
-    /* 2e. ranges ending at the group order: a key that is 0 mod n has no point and a window centre can be the point at
-     * infinity; neither may crash or corrupt the batch (this used to overrun the hash batch in the vector engines) */
-    {
-        pz_u256 st;
-        pz_u256 back = pz_u256_from_u64(300);
-        pz_u256_sub(&st, &pz_secp256k1_n, &back);
-        for (u64 off = 0; off < 300; off += 13) {
+}
+
+/* Zero denominators in every window: the centre of window w equals the step point (start = G - 256 - 512 w) */
+static void engine_check_zero_denominators(const cpu_engine *e)
+{
+    const u64 G = e->granule;
+    const u64 nw = G / CPU_GRP;
+    for (u64 w = 0; w < nw; w++) {
+        pz_u256 st = pz_u256_from_u64(G - 256 - w * CPU_GRP);
+        for (u64 off = 0; off < 2 * G; off += 97 + w) {
             pz_u256 key = st; pz_u256_add_u64(&key, &key, off);
             u8 h[20]; h160_of_key(&key, h);
             scan_job job; scan_job_init(&job, h);
             hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-            CHECK(e->scan(&job, &st, 3 * G) == 3 * G);
-            CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
-        }
-        /* a window centre equal to -S*G: start = n - 2G + ... so that some centre is exactly n */
-        for (u64 delta = 0; delta < 3; delta++) {
-            pz_u256 back2 = pz_u256_from_u64(2 * G + 256 + delta * CPU_GRP);
-            pz_u256_sub(&st, &pz_secp256k1_n, &back2);
-            pz_u256 key = pz_secp256k1_n;
-            pz_u256 one = pz_u256_from_u64(1 + 5 * delta);
-            pz_u256_sub(&key, &key, &one);              /* a valid key just below n */
-            u8 h[20]; h160_of_key(&key, h);
-            scan_job job; scan_job_init(&job, h);
-            hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-            const u64 span = (2 * G + 256 + delta * CPU_GRP + 2 * G + G - 1) / G * G;   /* reaches past n */
-            CHECK(e->scan(&job, &st, span) == span);
+            CHECK(e->scan(&job, &st, 2 * G) == 2 * G);
             CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
         }
     }
-    /* 2f. degenerate sizes */
-    {
-        pz_u256 st = pz_u256_from_u64(600000);
-        u8 h[20]; h160_of_key(&st, h);
-        scan_job job; scan_job_init(&job, h);
-        hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-        CHECK(e->scan(&job, &st, 0) == 0 && r.hits == 0);
-        CHECK(e->scan(&job, &st, 1) == 1 && r.hits == 1);
-    }
-    /* 2g. a stop requested from the hit callback in the middle of a long scan: the covered keys form a prefix that
-     * contains the key, is a whole number of steps and is shorter than the claim */
-    {
-        pz_u256 st = pz_u256_from_u64(900000);
-        pz_u256 key = st; pz_u256_add_u64(&key, &key, 9 * G + 5);
-        u8 h[20]; h160_of_key(&key, h);
-        scan_job job; scan_job_init(&job, h);
-        _Atomic int stop = 0;
-        stoprec hr = {{0, pz_u256_zero()}, &stop};
-        job.on_hit = on_hit_stop; job.user = &hr; job.stop = &stop;
-        _Atomic u64 prog = 0; job.progress = &prog;
-        u64 cov = e->scan(&job, &st, 64 * G);
-        CHECK(hr.h.hits == 1 && !pz_u256_cmp(&hr.h.key, &key));
-        CHECK(cov > 9 * G + 5 && cov < 64 * G && cov % G == 0);
-        CHECK(prog >= cov - G && prog <= cov + 8 * G);
-    }
-    /* 3. a key just outside the scanned range is not reported */
-    {
-        pz_u256 st = pz_u256_from_u64(77777), key = st;
-        pz_u256_add_u64(&key, &key, 3 * G);
+}
+
+/* Ranges ending at the group order: a key that is 0 mod n has no point and a window centre can be the point at
+ * infinity; neither may crash or corrupt the batch (this used to overrun the hash batch in the vector engines) */
+static void engine_check_group_order(const cpu_engine *e)
+{
+    const u64 G = e->granule;
+    pz_u256 st;
+    pz_u256 back = pz_u256_from_u64(300);
+    pz_u256_sub(&st, &pz_secp256k1_n, &back);
+    for (u64 off = 0; off < 300; off += 13) {
+        pz_u256 key = st; pz_u256_add_u64(&key, &key, off);
         u8 h[20]; h160_of_key(&key, h);
         scan_job job; scan_job_init(&job, h);
         hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-        e->scan(&job, &st, 3 * G);
-        CHECK(r.hits == 0);
-        e->scan(&job, &st, 3 * G + 1);   /* rounds up to a full extra step */
-        CHECK(r.hits == 1);
+        CHECK(e->scan(&job, &st, 3 * G) == 3 * G);
+        CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
     }
-    /* 4. stop flag is honoured */
-    {
-        pz_u256 st = pz_u256_from_u64(1000000);
-        u8 h[20] = {1}; scan_job job; scan_job_init(&job, h);
-        _Atomic int stop = 1; job.stop = &stop;
-        CHECK(e->scan(&job, &st, 1u << 24) == 0);
+    /* a window centre equal to -S*G: start = n - 2G + ... so that some centre is exactly n */
+    for (u64 delta = 0; delta < 3; delta++) {
+        pz_u256 back2 = pz_u256_from_u64(2 * G + 256 + delta * CPU_GRP);
+        pz_u256_sub(&st, &pz_secp256k1_n, &back2);
+        pz_u256 key = pz_secp256k1_n;
+        pz_u256 one = pz_u256_from_u64(1 + 5 * delta);
+        pz_u256_sub(&key, &key, &one);              /* a valid key just below n */
+        u8 h[20]; h160_of_key(&key, h);
+        scan_job job; scan_job_init(&job, h);
+        hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
+        const u64 span = (2 * G + 256 + delta * CPU_GRP + 2 * G + G - 1) / G * G;   /* reaches past n */
+        CHECK(e->scan(&job, &st, span) == span);
+        CHECK(r.hits == 1 && !pz_u256_cmp(&r.key, &key));
     }
+}
+
+/* Degenerate sizes */
+static void engine_check_degenerate_sizes(const cpu_engine *e)
+{
+    pz_u256 st = pz_u256_from_u64(600000);
+    u8 h[20]; h160_of_key(&st, h);
+    scan_job job; scan_job_init(&job, h);
+    hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
+    CHECK(e->scan(&job, &st, 0) == 0 && r.hits == 0);
+    CHECK(e->scan(&job, &st, 1) == 1 && r.hits == 1);
+}
+
+/* A stop requested from the hit callback in the middle of a long scan: the covered keys form a prefix that
+ * contains the key, is a whole number of steps and is shorter than the claim */
+static void engine_check_stop_from_hit(const cpu_engine *e)
+{
+    const u64 G = e->granule;
+    pz_u256 st = pz_u256_from_u64(900000);
+    pz_u256 key = st; pz_u256_add_u64(&key, &key, 9 * G + 5);
+    u8 h[20]; h160_of_key(&key, h);
+    scan_job job; scan_job_init(&job, h);
+    _Atomic int stop = 0;
+    stoprec hr = {{0, pz_u256_zero()}, &stop};
+    job.on_hit = on_hit_stop; job.user = &hr; job.stop = &stop;
+    _Atomic u64 prog = 0; job.progress = &prog;
+    u64 cov = e->scan(&job, &st, 64 * G);
+    CHECK(hr.h.hits == 1 && !pz_u256_cmp(&hr.h.key, &key));
+    CHECK(cov > 9 * G + 5 && cov < 64 * G && cov % G == 0);
+    CHECK(prog >= cov - G && prog <= cov + 8 * G);
+}
+
+/* A key just outside the scanned range is not reported */
+static void engine_check_range_end(const cpu_engine *e)
+{
+    const u64 G = e->granule;
+    pz_u256 st = pz_u256_from_u64(77777), key = st;
+    pz_u256_add_u64(&key, &key, 3 * G);
+    u8 h[20]; h160_of_key(&key, h);
+    scan_job job; scan_job_init(&job, h);
+    hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
+    e->scan(&job, &st, 3 * G);
+    CHECK(r.hits == 0);
+    e->scan(&job, &st, 3 * G + 1);   /* rounds up to a full extra step */
+    CHECK(r.hits == 1);
+}
+
+/* Stop flag is honoured */
+static void engine_check_stop_flag(const cpu_engine *e)
+{
+    pz_u256 st = pz_u256_from_u64(1000000);
+    u8 h[20] = {1}; scan_job job; scan_job_init(&job, h);
+    _Atomic int stop = 1; job.stop = &stop;
+    CHECK(e->scan(&job, &st, 1u << 24) == 0);
+}
+
+static void test_engine(const cpu_engine *e)
+{
+    printf("  engine %-9s (%d lanes, step of %llu keys)\n", e->name, e->lanes, (unsigned long long)e->granule);
+    engine_check_hash160(e);
+    if (!engine_check_scans(e)) return;
+    engine_check_group_edges(e);
+    engine_check_windows(e);
+    engine_check_zero_denominators(e);
+    engine_check_group_order(e);
+    engine_check_degenerate_sizes(e);
+    engine_check_stop_from_hit(e);
+    engine_check_range_end(e);
+    engine_check_stop_flag(e);
 }
 
 int main(int argc, char **argv)

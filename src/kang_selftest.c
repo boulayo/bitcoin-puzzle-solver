@@ -620,10 +620,8 @@ static ssize_t flaky_read(void *c, char *buf, size_t n)
 }
 #endif
 
-/* What the loading of dp.bin does with what it finds: it cuts off a record cut short at the end and nothing else (not the records after
- * the one that solved the key), a read error is an error, not the end of the file, a file shorter than its header is started again, and
- * a file of a newer version is left alone. */
-static int log_file_checks(void)
+/* A record cut short at the end is cut off and the whole ones stay, in logs of both versions */
+static int log_check_cut_tails(void)
 {
     int fails = 0;
     const struct { int n, tail; } cases[] = {{0, 0}, {100, 0}, {100, 13}, {100, 31}, {100, 1}, {0, 20}};
@@ -640,171 +638,215 @@ static int log_file_checks(void)
         FCHK(file_size(ks->log_path) == hlen + 32LL * n);                /* a torn record is gone, the whole ones are all there */
         kang_free_test_state(ks);
     }
-    {   /* a log of version 4 stays one: new points are appended to it, and after a failed write it is cut back to whole records after
-         * its own header */
-        kang_state *ks = kang_make_test_state(40, 1);
-        if (!ks) return fails + 1;
-        FCHK(write_test_log(ks, 10, 0, true));
-        FCHK(kang_load_log(ks) == 0 && ks->log && ks->log_hdr == KANG_LOG_HDR4);
-        if (ks->log) {
-            fputs("torn", ks->log);                                     /* a write that stopped in the middle of a record */
-            fflush(ks->log);
-            ks->log_broken = true;
-            dp_rec rec;
-            memset(&rec, 0, sizeof rec);
-            rec.tagk = ((u64)77 << 20) | KIND_TAME;
-            kang_insert_dps(ks, &rec, 1, NULL);
-            FCHK(kang_flush_log(ks) == 0 && !ks->log_broken && ks->log_recs == 11);
-            fclose(ks->log);
-            ks->log = NULL;
-        }
-        FCHK(file_size(ks->log_path) == KANG_LOG_HDR4 + 32 * 11);
-        FILE *f = fopen(ks->log_path, "rb");
-        u8 m[6];
-        FCHK(f && fread(m, 1, 6, f) == 6 && !memcmp(m, KANG_LOG_MAGIC4, 6));
-        if (f) fclose(f);
-        kang_free_test_state(ks);
+    return fails;
+}
+
+/* a log of version 4 stays one: new points are appended to it, and after a failed write it is cut back to whole records after
+ * its own header */
+static int log_check_v4_append(void)
+{
+    int fails = 0;
+    kang_state *ks = kang_make_test_state(40, 1);
+    if (!ks) return fails + 1;
+    FCHK(write_test_log(ks, 10, 0, true));
+    FCHK(kang_load_log(ks) == 0 && ks->log && ks->log_hdr == KANG_LOG_HDR4);
+    if (ks->log) {
+        fputs("torn", ks->log);                                     /* a write that stopped in the middle of a record */
+        fflush(ks->log);
+        ks->log_broken = true;
+        dp_rec rec;
+        memset(&rec, 0, sizeof rec);
+        rec.tagk = ((u64)77 << 20) | KIND_TAME;
+        kang_insert_dps(ks, &rec, 1, NULL);
+        FCHK(kang_flush_log(ks) == 0 && !ks->log_broken && ks->log_recs == 11);
+        fclose(ks->log);
+        ks->log = NULL;
     }
-    {   /* a collision in the log: the load stops at the record that solves the key, and the records after it stay in the file */
+    FCHK(file_size(ks->log_path) == KANG_LOG_HDR4 + 32 * 11);
+    FILE *f = fopen(ks->log_path, "rb");
+    u8 m[6];
+    FCHK(f && fread(m, 1, 6, f) == 6 && !memcmp(m, KANG_LOG_MAGIC4, 6));
+    if (f) fclose(f);
+    kang_free_test_state(ks);
+    return fails;
+}
+
+/* a collision in the log: the load stops at the record that solves the key, and the records after it stay in the file */
+static int log_check_collision(void)
+{
+    int fails = 0;
+    kang_state *ks = kang_make_test_state(40, 1);
+    if (!ks) return fails + 1;
+    pz_u256 m = pz_u256_from_u64(123456789);         /* the offset of the key of kang_make_test_state from the base */
+    const i192 X = i192_from_signed(false, &m);
+    const pz_u256 w777 = pz_u256_from_u64(777);
+    const i192 dw = i192_from_signed(false, &w777);
+    i192 dt;
+    i192_add(&dt, &X, &dw);
+    const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
+    dp_rec ta = {(tag_of(&X, 0, &dt) & ~km) | KIND_TAME, dt}, wb = {(tag_of(&X, 1, &dw) & ~km) | KIND_WILD_P, dw};
+    u8 fp[32];
+    kang_log_fp(ks, fp);
+    FILE *f = fopen(ks->log_path, "wb");
+    FCHK(f != NULL);
+    if (f) {
+        fwrite(KANG_LOG_MAGIC, 1, 6, f);
+        fwrite(fp, 1, 32, f);
+        fwrite(ks->jump_tag, 1, 4, f);
+        fwrite(&ta, sizeof ta, 1, f);
+        fwrite(&wb, sizeof wb, 1, f);
+        dp_rec rec;
+        memset(&rec, 0, sizeof rec);
+        for (int i = 0; i < 10; i++) {
+            rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
+            fwrite(&rec, sizeof rec, 1, f);
+        }
+        fclose(f);
+    }
+    FCHK(kang_load_log(ks) == 0 && atomic_load(&ks->r->found) && ks->loaded == 2);
+    if (ks->log) { fclose(ks->log); ks->log = NULL; }
+    FCHK(file_size(ks->log_path) == KANG_LOG_HDR + 32 * 12);
+    kang_free_test_state(ks);
+    return fails;
+}
+
+/* a file shorter than its header is an interrupted creation: the log starts again (with the header of this version, also after the
+ * beginning of a header of version 4). Another short file is not ours */
+static int log_check_short_files(void)
+{
+    int fails = 0;
+    u8 want[KANG_LOG_HDR];
+    const int lens[] = {0, 1, 6, 20, 37, 38, 41, -6, -20, -37};
+    for (size_t c = 0; c < sizeof lens / sizeof *lens; c++) {
         kang_state *ks = kang_make_test_state(40, 1);
         if (!ks) return fails + 1;
-        pz_u256 m = pz_u256_from_u64(123456789);         /* the offset of the key of kang_make_test_state from the base */
-        const i192 X = i192_from_signed(false, &m);
-        const pz_u256 w777 = pz_u256_from_u64(777);
-        const i192 dw = i192_from_signed(false, &w777);
-        i192 dt;
-        i192_add(&dt, &X, &dw);
-        const u64 km = ((u64)1 << KANG_KSHIFT) - 1;
-        dp_rec ta = {(tag_of(&X, 0, &dt) & ~km) | KIND_TAME, dt}, wb = {(tag_of(&X, 1, &dw) & ~km) | KIND_WILD_P, dw};
-        u8 fp[32];
-        kang_log_fp(ks, fp);
+        memcpy(want, lens[c] < 0 ? KANG_LOG_MAGIC4 : KANG_LOG_MAGIC, 6);
+        kang_log_fp(ks, want + 6);
+        memcpy(want + 38, ks->jump_tag, 4);
         FILE *f = fopen(ks->log_path, "wb");
         FCHK(f != NULL);
-        if (f) {
-            fwrite(KANG_LOG_MAGIC, 1, 6, f);
-            fwrite(fp, 1, 32, f);
-            fwrite(ks->jump_tag, 1, 4, f);
-            fwrite(&ta, sizeof ta, 1, f);
-            fwrite(&wb, sizeof wb, 1, f);
-            dp_rec rec;
-            memset(&rec, 0, sizeof rec);
-            for (int i = 0; i < 10; i++) {
-                rec.tagk = ((u64)(i + 1) << 20) | KIND_TAME;
-                fwrite(&rec, sizeof rec, 1, f);
-            }
-            fclose(f);
-        }
-        FCHK(kang_load_log(ks) == 0 && atomic_load(&ks->r->found) && ks->loaded == 2);
+        if (f) { fwrite(want, 1, (size_t)abs(lens[c]), f); fclose(f); }
+        FCHK(kang_load_log(ks) == 1 && ks->log);
         if (ks->log) { fclose(ks->log); ks->log = NULL; }
-        FCHK(file_size(ks->log_path) == KANG_LOG_HDR + 32 * 12);
+        FCHK(file_size(ks->log_path) == KANG_LOG_HDR);
+        FCHK(kang_load_log(ks) == 0 && ks->loaded == 0);          /* the next start loads the new file */
+        if (ks->log) { fclose(ks->log); ks->log = NULL; }
         kang_free_test_state(ks);
     }
-    {   /* a file shorter than its header is an interrupted creation: the log starts again (with the header of this version, also after the
-         * beginning of a header of version 4). Another short file is not ours */
-        u8 want[KANG_LOG_HDR];
-        const int lens[] = {0, 1, 6, 20, 37, 38, 41, -6, -20, -37};
-        for (size_t c = 0; c < sizeof lens / sizeof *lens; c++) {
-            kang_state *ks = kang_make_test_state(40, 1);
-            if (!ks) return fails + 1;
-            memcpy(want, lens[c] < 0 ? KANG_LOG_MAGIC4 : KANG_LOG_MAGIC, 6);
-            kang_log_fp(ks, want + 6);
-            memcpy(want + 38, ks->jump_tag, 4);
-            FILE *f = fopen(ks->log_path, "wb");
-            FCHK(f != NULL);
-            if (f) { fwrite(want, 1, (size_t)abs(lens[c]), f); fclose(f); }
+    kang_state *ks = kang_make_test_state(40, 1);
+    if (!ks) return fails + 1;
+    FILE *f = fopen(ks->log_path, "wb");
+    FCHK(f != NULL);
+    if (f) { fputs("hello", f); fclose(f); }
+    FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == 5);
+    /* a file that cannot be opened for another reason than its absence (here a path through a file, not a folder) is an error, and
+     * nothing is created in its place */
+    char inner[700];
+    snprintf(inner, sizeof inner, "%s/dp.bin", ks->log_path);
+    pz_strlcpy(ks->log_path, inner, sizeof ks->log_path);
+    FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(inner) == -1);
+    kang_free_test_state(ks);
+    return fails;
+}
+
+/* the other magics: only PZDP1 to PZDP3 are older layouts that are set aside; PZDP4 is still read; PZDP6 and the like come from a newer
+ * version and stay where they are */
+static int log_check_magics(void)
+{
+    int fails = 0;
+    const u8 m[][6] = {{'P', 'Z', 'D', 'P', '1', '\n'}, {'P', 'Z', 'D', 'P', '3', '\n'}, {'P', 'Z', 'D', 'P', '4', '\n'}, {'P', 'Z', 'D', 'P', '5', '\n'},
+                       {'P', 'Z', 'D', 'P', '6', '\n'}, {'P', 'Z', 'D', 'P', '0', '\n'}, {'P', 'Z', 'D', 'P', 'x', '\n'}, {'P', 'Z', 'D', 'Q', '5', '\n'}};
+    const int want[] = {KANG_LOG_OLDER, KANG_LOG_OLDER, KANG_LOG_V4, KANG_LOG_CURRENT, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_FOREIGN};
+    for (size_t c = 0; c < sizeof want / sizeof *want; c++) FCHK(kang_log_class(m[c]) == want[c]);
+    const char digits[] = "26";
+    for (size_t c = 0; c < sizeof digits - 1; c++) {
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) return fails + 1;
+        u8 body[38 + 3 * 32];
+        memset(body, 0x5A, sizeof body);
+        memcpy(body, "PZDP", 4);
+        body[4] = (u8)digits[c];
+        body[5] = '\n';
+        FILE *f = fopen(ks->log_path, "wb");
+        FCHK(f != NULL);
+        if (f) { fwrite(body, 1, sizeof body, f); fclose(f); }
+        char aside[700];
+        snprintf(aside, sizeof aside, "%s.v%c", ks->log_path, digits[c]);
+        if (digits[c] == '2') {                       /* an older layout: set aside, and a new log */
             FCHK(kang_load_log(ks) == 1 && ks->log);
             if (ks->log) { fclose(ks->log); ks->log = NULL; }
-            FCHK(file_size(ks->log_path) == KANG_LOG_HDR);
-            FCHK(kang_load_log(ks) == 0 && ks->loaded == 0);          /* the next start loads the new file */
-            if (ks->log) { fclose(ks->log); ks->log = NULL; }
-            kang_free_test_state(ks);
+            FCHK(file_size(aside) == (long long)sizeof body && file_size(ks->log_path) == KANG_LOG_HDR);
+        } else {                                      /* a newer version's: an error, the file as it was, nothing set aside */
+            FCHK(kang_load_log(ks) == -1 && !ks->log);
+            FCHK(file_size(ks->log_path) == (long long)sizeof body && file_size(aside) == -1);
+            u8 back[sizeof body];
+            FILE *g = fopen(ks->log_path, "rb");
+            FCHK(g && fread(back, 1, sizeof back, g) == sizeof back && !memcmp(back, body, sizeof body));
+            if (g) fclose(g);
         }
-        kang_state *ks = kang_make_test_state(40, 1);
-        if (!ks) return fails + 1;
-        FILE *f = fopen(ks->log_path, "wb");
-        FCHK(f != NULL);
-        if (f) { fputs("hello", f); fclose(f); }
-        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == 5);
-        /* a file that cannot be opened for another reason than its absence (here a path through a file, not a folder) is an error, and
-         * nothing is created in its place */
-        char inner[700];
-        snprintf(inner, sizeof inner, "%s/dp.bin", ks->log_path);
-        pz_strlcpy(ks->log_path, inner, sizeof ks->log_path);
-        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(inner) == -1);
         kang_free_test_state(ks);
     }
-    {   /* the other magics: only PZDP1 to PZDP3 are older layouts that are set aside; PZDP4 is still read; PZDP6 and the like come from a newer
-         * version and stay where they are */
-        const u8 m[][6] = {{'P', 'Z', 'D', 'P', '1', '\n'}, {'P', 'Z', 'D', 'P', '3', '\n'}, {'P', 'Z', 'D', 'P', '4', '\n'}, {'P', 'Z', 'D', 'P', '5', '\n'},
-                           {'P', 'Z', 'D', 'P', '6', '\n'}, {'P', 'Z', 'D', 'P', '0', '\n'}, {'P', 'Z', 'D', 'P', 'x', '\n'}, {'P', 'Z', 'D', 'Q', '5', '\n'}};
-        const int want[] = {KANG_LOG_OLDER, KANG_LOG_OLDER, KANG_LOG_V4, KANG_LOG_CURRENT, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_FOREIGN};
-        for (size_t c = 0; c < sizeof want / sizeof *want; c++) FCHK(kang_log_class(m[c]) == want[c]);
-        const char digits[] = "26";
-        for (size_t c = 0; c < sizeof digits - 1; c++) {
-            kang_state *ks = kang_make_test_state(40, 1);
-            if (!ks) return fails + 1;
-            u8 body[38 + 3 * 32];
-            memset(body, 0x5A, sizeof body);
-            memcpy(body, "PZDP", 4);
-            body[4] = (u8)digits[c];
-            body[5] = '\n';
-            FILE *f = fopen(ks->log_path, "wb");
-            FCHK(f != NULL);
-            if (f) { fwrite(body, 1, sizeof body, f); fclose(f); }
-            char aside[700];
-            snprintf(aside, sizeof aside, "%s.v%c", ks->log_path, digits[c]);
-            if (digits[c] == '2') {                       /* an older layout: set aside, and a new log */
-                FCHK(kang_load_log(ks) == 1 && ks->log);
-                if (ks->log) { fclose(ks->log); ks->log = NULL; }
-                FCHK(file_size(aside) == (long long)sizeof body && file_size(ks->log_path) == KANG_LOG_HDR);
-            } else {                                      /* a newer version's: an error, the file as it was, nothing set aside */
-                FCHK(kang_load_log(ks) == -1 && !ks->log);
-                FCHK(file_size(ks->log_path) == (long long)sizeof body && file_size(aside) == -1);
-                u8 back[sizeof body];
-                FILE *g = fopen(ks->log_path, "rb");
-                FCHK(g && fread(back, 1, sizeof back, g) == sizeof back && !memcmp(back, body, sizeof body));
-                if (g) fclose(g);
-            }
-            kang_free_test_state(ks);
-        }
-        for (int k = 0; k < 2; k++) {   /* this version's magic with another campaign's fingerprint, or with another jump table: refused, untouched */
-            kang_state *ks = kang_make_test_state(40, 1);
-            if (!ks) return fails + 1;
-            u8 other[KANG_LOG_HDR];
-            memcpy(other, KANG_LOG_MAGIC, 6);
-            if (k == 0) memset(other + 6, 0x5A, 32);
-            else kang_log_fp(ks, other + 6);
-            memcpy(other + 38, ks->jump_tag, 4);
-            if (k == 1) other[41] ^= 0x80;
-            FILE *f = fopen(ks->log_path, "wb");
-            FCHK(f != NULL);
-            if (f) { fwrite(other, 1, sizeof other, f); fclose(f); }
-            FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == KANG_LOG_HDR);
-            kang_free_test_state(ks);
-        }
+    for (int k = 0; k < 2; k++) {   /* this version's magic with another campaign's fingerprint, or with another jump table: refused, untouched */
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) return fails + 1;
+        u8 other[KANG_LOG_HDR];
+        memcpy(other, KANG_LOG_MAGIC, 6);
+        if (k == 0) memset(other + 6, 0x5A, 32);
+        else kang_log_fp(ks, other + 6);
+        memcpy(other + 38, ks->jump_tag, 4);
+        if (k == 1) other[41] ^= 0x80;
+        FILE *f = fopen(ks->log_path, "wb");
+        FCHK(f != NULL);
+        if (f) { fwrite(other, 1, sizeof other, f); fclose(f); }
+        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == KANG_LOG_HDR);
+        kang_free_test_state(ks);
     }
+    return fails;
+}
+
 #ifdef __GLIBC__
-    {   /* a read error in the middle of the records */
-        enum { N = 100 };
-        dp_rec recs[N];
-        memset(recs, 0, sizeof recs);
-        for (int i = 0; i < N; i++) recs[i].tagk = ((u64)(i + 1) << 20) | KIND_TAME;
-        for (int fail = 0; fail < 2; fail++) {
-            kang_state *ks = kang_make_test_state(40, 1);
-            if (!ks) return fails + 1;
-            flaky_src src = {(const u8 *)recs, sizeof recs, 0, fail ? 40 * sizeof(dp_rec) + 5 : sizeof recs + 1};
-            cookie_io_functions_t io = {flaky_read, NULL, NULL, NULL};
-            FILE *f = fopencookie(&src, "r", io);
-            FCHK(f != NULL);
-            if (f) {
-                const long long n = kang_log_read(ks, f);
-                fclose(f);
-                FCHK(fail ? n == -1 : n == N);
-                FCHK(ks->count == (fail ? 40u : (u64)N));
-            }
-            kang_free_test_state(ks);
+/* a read error in the middle of the records */
+static int log_check_read_error(void)
+{
+    int fails = 0;
+    enum { N = 100 };
+    dp_rec recs[N];
+    memset(recs, 0, sizeof recs);
+    for (int i = 0; i < N; i++) recs[i].tagk = ((u64)(i + 1) << 20) | KIND_TAME;
+    for (int fail = 0; fail < 2; fail++) {
+        kang_state *ks = kang_make_test_state(40, 1);
+        if (!ks) return fails + 1;
+        flaky_src src = {(const u8 *)recs, sizeof recs, 0, fail ? 40 * sizeof(dp_rec) + 5 : sizeof recs + 1};
+        cookie_io_functions_t io = {flaky_read, NULL, NULL, NULL};
+        FILE *f = fopencookie(&src, "r", io);
+        FCHK(f != NULL);
+        if (f) {
+            const long long n = kang_log_read(ks, f);
+            fclose(f);
+            FCHK(fail ? n == -1 : n == N);
+            FCHK(ks->count == (fail ? 40u : (u64)N));
         }
+        kang_free_test_state(ks);
     }
+    return fails;
+}
+
+#endif
+
+
+/* What the loading of dp.bin does with what it finds: it cuts off a record cut short at the end and nothing else (not the records after
+ * the one that solved the key), a read error is an error, not the end of the file, a file shorter than its header is started again, and
+ * a file of a newer version is left alone. */
+static int log_file_checks(void)
+{
+    int fails = 0;
+    fails += log_check_cut_tails();
+    fails += log_check_v4_append();
+    fails += log_check_collision();
+    fails += log_check_short_files();
+    fails += log_check_magics();
+#ifdef __GLIBC__
+    fails += log_check_read_error();
 #endif
     return fails;
 }

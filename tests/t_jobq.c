@@ -139,11 +139,11 @@ static void t_cfg(void)
     free(t);
 }
 
-static void t_parts(void)
+/* The syntax */
+static void t_parts_syntax(void)
 {
     char err[300];
     part_spec p;
-    /* the syntax */
     CHECK(part_parse("", &p, err, sizeof err) && p.total == 0);
     CHECK(part_parse("0/1", &p, err, sizeof err) && p.total == 0);                        /* the whole order */
     CHECK(part_parse("0-3/4", &p, err, sizeof err) && p.total == 0);                      /* all the shares: the same */
@@ -157,33 +157,37 @@ static void t_parts(void)
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) CHECK(!part_parse(bad[i], &p, err, sizeof err));
     CHECK(part_parse("0-255/256", &p, err, sizeof err) && p.total == 0);
     CHECK(part_parse("0,2,4/256", &p, err, sizeof err) && p.total == 256 && p.count == 3);
+}
 
-    /* proportional shares: they add up, nobody is left out, the error is under one share */
-    {
-        const u64 sp[][4] = {{800, 100, 0, 0}, {1, 1, 1, 0}, {5000000000ULL, 5000000000ULL, 1000, 0}, {3, 7, 11, 19}, {1, 1000000, 1, 1}};
-        const unsigned nn[] = {2, 3, 3, 4, 4};
-        for (int t = 0; t < 5; t++) {
-            unsigned cnt[4], sum = 0;
-            CHECK(part_split(sp[t], nn[t], 100, cnt));
-            u128 w = 0;
-            for (unsigned i = 0; i < nn[t]; i++) w += sp[t][i];
-            unsigned forced = 0;                                  /* computers whose proportional share is under one: given one anyway */
-            for (unsigned i = 0; i < nn[t]; i++) forced += 100.0L * (long double)sp[t][i] / (long double)w < 1.0L;
-            for (unsigned i = 0; i < nn[t]; i++) {
-                sum += cnt[i];
-                CHECK(cnt[i] >= 1);
-                const long double ideal = 100.0L * (long double)sp[t][i] / (long double)w, slack = 1.0L + forced + 1e-9L;
-                CHECK(cnt[i] - ideal < slack && ideal - cnt[i] < slack);
-            }
-            CHECK(sum == 100);
+/* Proportional shares: they add up, nobody is left out, the error is under one share */
+static void t_parts_proportional(void)
+{
+    const u64 sp[][4] = {{800, 100, 0, 0}, {1, 1, 1, 0}, {5000000000ULL, 5000000000ULL, 1000, 0}, {3, 7, 11, 19}, {1, 1000000, 1, 1}};
+    const unsigned nn[] = {2, 3, 3, 4, 4};
+    for (int t = 0; t < 5; t++) {
+        unsigned cnt[4], sum = 0;
+        CHECK(part_split(sp[t], nn[t], 100, cnt));
+        u128 w = 0;
+        for (unsigned i = 0; i < nn[t]; i++) w += sp[t][i];
+        unsigned forced = 0;                                  /* computers whose proportional share is under one: given one anyway */
+        for (unsigned i = 0; i < nn[t]; i++) forced += 100.0L * (long double)sp[t][i] / (long double)w < 1.0L;
+        for (unsigned i = 0; i < nn[t]; i++) {
+            sum += cnt[i];
+            CHECK(cnt[i] >= 1);
+            const long double ideal = 100.0L * (long double)sp[t][i] / (long double)w, slack = 1.0L + forced + 1e-9L;
+            CHECK(cnt[i] - ideal < slack && ideal - cnt[i] < slack);
         }
-        unsigned c2[2];
-        CHECK(part_split(sp[0], 2, 100, c2) && c2[0] == 89 && c2[1] == 11);                  /* 88.9 and 11.1 */
-        const u64 zero[2] = {5, 0};
-        CHECK(!part_split(zero, 2, 100, c2) && !part_split(sp[0], 2, 1, c2));
+        CHECK(sum == 100);
     }
+    unsigned c2[2];
+    CHECK(part_split(sp[0], 2, 100, c2) && c2[0] == 89 && c2[1] == 11);                  /* 88.9 and 11.1 */
+    const u64 zero[2] = {5, 0};
+    CHECK(!part_split(zero, 2, 100, c2) && !part_split(sp[0], 2, 1, c2));
+}
 
-    /* the shares of a range tile it exactly: every key once, short last block included */
+/* The shares of a range tile it exactly: every key once, short last block included */
+static void t_parts_tiling(void)
+{
     for (int variant = 0; variant < 3; variant++) {
         const u64 start = 1000 + (u64)variant * 77, total = 300000 + (u64)variant * 1234;
         campaign_cfg c = mkcfg(start, start + total - 1, 13);
@@ -197,107 +201,124 @@ static void t_parts(void)
             free(cov);
         }
     }
+}
 
-    /* positions: the blocks of a part are exactly those whose order position has the right remainder, and map back one to one */
-    {
-        campaign_cfg c = mkcfg(1 << 20, (1 << 21) + 5000, 12);                            /* a short last block */
-        campaign_cfg w = c;
-        sched_t *whole = sched_new(&w);
-        const u64 M = (u64)pz_u256_to_ld(&whole->blocks_all);
-        snprintf(c.part, sizeof c.part, "1,3-4/6");
-        sched_t *s = sched_new(&c);
-        u128 expect = 0;
-        for (u64 g = 0; g < M; g++) {
-            pz_u256 gs = pz_u256_from_u64(g), local;
-            bool mine = g % 6 == 1 || g % 6 == 3 || g % 6 == 4;
-            CHECK(sched_part_position(s, &gs, &local) == mine);
-            if (mine) { CHECK(local.w[0] == expect && !local.w[1] && !local.w[2] && !local.w[3]); expect++; }
-        }
-        CHECK((u128)(s->v_limit >> s->cbits) == expect && pz_u256_to_ld(&s->blocks_part) == (long double)expect);
-        /* every claim of the part lies in a block that locate puts at a position of the part, in the order of the part */
+/* Positions: the blocks of a part are exactly those whose order position has the right remainder, and map back one to one */
+static void t_parts_positions(void)
+{
+    campaign_cfg c = mkcfg(1 << 20, (1 << 21) + 5000, 12);                            /* a short last block */
+    campaign_cfg w = c;
+    sched_t *whole = sched_new(&w);
+    const u64 M = (u64)pz_u256_to_ld(&whole->blocks_all);
+    snprintf(c.part, sizeof c.part, "1,3-4/6");
+    sched_t *s = sched_new(&c);
+    u128 expect = 0;
+    for (u64 g = 0; g < M; g++) {
+        pz_u256 gs = pz_u256_from_u64(g), local;
+        bool mine = g % 6 == 1 || g % 6 == 3 || g % 6 == 4;
+        CHECK(sched_part_position(s, &gs, &local) == mine);
+        if (mine) { CHECK(local.w[0] == expect && !local.w[1] && !local.w[2] && !local.w[3]); expect++; }
+    }
+    CHECK((u128)(s->v_limit >> s->cbits) == expect && pz_u256_to_ld(&s->blocks_part) == (long double)expect);
+    /* every claim of the part lies in a block that locate puts at a position of the part, in the order of the part */
+    claim_t cl;
+    u128 want_local = 0;
+    for (;;) {
+        claim_status st = sched_claim(s, 1u << 12, &cl);
+        if (st == CLAIM_DONE) break;
+        pz_u256 g, local;
+        u64 off;
+        CHECK(sched_locate(s, &cl.key_start, &g, &off));
+        CHECK(sched_part_position(s, &g, &local));
+        CHECK(local.w[0] == (u64)(cl.v_start >> 12) && !local.w[1]);
+        if (cl.v_start >> 12 == want_local && off == 0) want_local++;
+        sched_complete(s, &cl, cl.nkeys);
+    }
+    CHECK(want_local == expect || want_local + 1 == expect || want_local + 2 == expect);   /* blocks start at offset 0; a short one still counts */
+    sched_free(s); sched_free(whole);
+}
+
+/* Checkpoints belong to their share: another share, or none, is refused even when the sizes agree */
+static void t_parts_checkpoints(void)
+{
+    char err[300];
+    campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);                           /* 256 blocks: 0/2 and 1/2 have the same size */
+    snprintf(c.part, sizeof c.part, "0/2");
+    sched_t *a = sched_new(&c);
+    claim_t cl;
+    CHECK(sched_claim(a, 4096, &cl) == CLAIM_OK);
+    sched_complete(a, &cl, cl.nkeys);
+    CHECK(sched_save(a, "build/t_jobq_part.state") == 0);
+    sched_t *same = sched_new(&c);
+    CHECK(sched_load(same, "build/t_jobq_part.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
+    campaign_cfg o = c;
+    snprintf(o.part, sizeof o.part, "1/2");
+    sched_t *other = sched_new(&o);
+    CHECK(sched_load(other, "build/t_jobq_part.state", err, sizeof err) == -2 && strstr(err, "split between computers"));
+    o.part[0] = 0;
+    sched_t *none = sched_new(&o);
+    CHECK(sched_load(none, "build/t_jobq_part.state", err, sizeof err) == -2);
+    /* and the other way round: a checkpoint without a split does not load into a share */
+    sched_t *w = sched_new(&o);
+    CHECK(sched_claim(w, 4096, &cl) == CLAIM_OK);
+    sched_complete(w, &cl, cl.nkeys);
+    CHECK(sched_save(w, "build/t_jobq_part.state") == 0);
+    sched_t *a2 = sched_new(&c);
+    CHECK(sched_load(a2, "build/t_jobq_part.state", err, sizeof err) == -2);
+    sched_free(a); sched_free(same); sched_free(other); sched_free(none); sched_free(w); sched_free(a2);
+}
+
+/* Too few blocks for the shares are reported before anything is created */
+static void t_parts_too_few_blocks(void)
+{
+    char err[300];
+    campaign_cfg c = mkcfg(0, 5 * 4096 - 1, 12);                                      /* 5 blocks */
+    snprintf(c.part, sizeof c.part, "0/8");
+    CHECK(sched_check_part(&c, err, sizeof err));
+    snprintf(c.part, sizeof c.part, "6/8");
+    CHECK(!sched_check_part(&c, err, sizeof err) && strstr(err, "too few"));
+    snprintf(c.part, sizeof c.part, "4/8");
+    CHECK(sched_check_part(&c, err, sizeof err));
+}
+
+/* A huge range (the virtual space is capped): the second half-share still starts inside the range, at an odd position */
+static void t_parts_huge_range(void)
+{
+    campaign_cfg c;
+    memset(&c, 0, sizeof c);
+    c.range_start = pz_u256_pow2(138);
+    pz_u256 one = pz_u256_from_u64(1);
+    c.range_end = pz_u256_pow2(139);
+    pz_u256_sub(&c.range_end, &c.range_end, &one);
+    c.chunk_bits = 36;
+    for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 7 + 1);
+    snprintf(c.part, sizeof c.part, "1/2");
+    sched_t *s = sched_new(&c);
+    CHECK(s->v_capped);
+    for (int i = 0; i < 20; i++) {
         claim_t cl;
-        u128 want_local = 0;
-        for (;;) {
-            claim_status st = sched_claim(s, 1u << 12, &cl);
-            if (st == CLAIM_DONE) break;
-            pz_u256 g, local;
-            u64 off;
-            CHECK(sched_locate(s, &cl.key_start, &g, &off));
-            CHECK(sched_part_position(s, &g, &local));
-            CHECK(local.w[0] == (u64)(cl.v_start >> 12) && !local.w[1]);
-            if (cl.v_start >> 12 == want_local && off == 0) want_local++;
-            sched_complete(s, &cl, cl.nkeys);
-        }
-        CHECK(want_local == expect || want_local + 1 == expect || want_local + 2 == expect);   /* blocks start at offset 0; a short one still counts */
-        sched_free(s); sched_free(whole);
+        CHECK(sched_claim(s, 1u << 20, &cl) == CLAIM_OK);
+        CHECK(pz_u256_cmp(&cl.key_start, &c.range_start) >= 0 && pz_u256_cmp(&cl.key_start, &c.range_end) <= 0);
+        pz_u256 g, local;
+        u64 off;
+        CHECK(sched_locate(s, &cl.key_start, &g, &off));
+        CHECK(g.w[0] % 2 == 1);
+        CHECK(sched_part_position(s, &g, &local) && local.w[0] == (u64)(cl.v_start >> 36) && local.w[1] == (u64)(cl.v_start >> 100));
+        sched_complete(s, &cl, cl.nkeys);
     }
+    CHECK(!sched_finished(s));
+    sched_free(s);
+}
 
-    /* checkpoints belong to their share: another share, or none, is refused even when the sizes agree */
-    {
-        campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);                           /* 256 blocks: 0/2 and 1/2 have the same size */
-        snprintf(c.part, sizeof c.part, "0/2");
-        sched_t *a = sched_new(&c);
-        claim_t cl;
-        CHECK(sched_claim(a, 4096, &cl) == CLAIM_OK);
-        sched_complete(a, &cl, cl.nkeys);
-        CHECK(sched_save(a, "build/t_jobq_part.state") == 0);
-        sched_t *same = sched_new(&c);
-        CHECK(sched_load(same, "build/t_jobq_part.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
-        campaign_cfg o = c;
-        snprintf(o.part, sizeof o.part, "1/2");
-        sched_t *other = sched_new(&o);
-        CHECK(sched_load(other, "build/t_jobq_part.state", err, sizeof err) == -2 && strstr(err, "split between computers"));
-        o.part[0] = 0;
-        sched_t *none = sched_new(&o);
-        CHECK(sched_load(none, "build/t_jobq_part.state", err, sizeof err) == -2);
-        /* and the other way round: a checkpoint without a split does not load into a share */
-        sched_t *w = sched_new(&o);
-        CHECK(sched_claim(w, 4096, &cl) == CLAIM_OK);
-        sched_complete(w, &cl, cl.nkeys);
-        CHECK(sched_save(w, "build/t_jobq_part.state") == 0);
-        sched_t *a2 = sched_new(&c);
-        CHECK(sched_load(a2, "build/t_jobq_part.state", err, sizeof err) == -2);
-        sched_free(a); sched_free(same); sched_free(other); sched_free(none); sched_free(w); sched_free(a2);
-    }
-
-    /* too few blocks for the shares are reported before anything is created */
-    {
-        campaign_cfg c = mkcfg(0, 5 * 4096 - 1, 12);                                      /* 5 blocks */
-        snprintf(c.part, sizeof c.part, "0/8");
-        CHECK(sched_check_part(&c, err, sizeof err));
-        snprintf(c.part, sizeof c.part, "6/8");
-        CHECK(!sched_check_part(&c, err, sizeof err) && strstr(err, "too few"));
-        snprintf(c.part, sizeof c.part, "4/8");
-        CHECK(sched_check_part(&c, err, sizeof err));
-    }
-
-    /* a huge range (the virtual space is capped): the second half-share still starts inside the range, at an odd position */
-    {
-        campaign_cfg c;
-        memset(&c, 0, sizeof c);
-        c.range_start = pz_u256_pow2(138);
-        pz_u256 one = pz_u256_from_u64(1);
-        c.range_end = pz_u256_pow2(139);
-        pz_u256_sub(&c.range_end, &c.range_end, &one);
-        c.chunk_bits = 36;
-        for (int i = 0; i < 32; i++) c.seed[i] = (u8)(i * 7 + 1);
-        snprintf(c.part, sizeof c.part, "1/2");
-        sched_t *s = sched_new(&c);
-        CHECK(s->v_capped);
-        for (int i = 0; i < 20; i++) {
-            claim_t cl;
-            CHECK(sched_claim(s, 1u << 20, &cl) == CLAIM_OK);
-            CHECK(pz_u256_cmp(&cl.key_start, &c.range_start) >= 0 && pz_u256_cmp(&cl.key_start, &c.range_end) <= 0);
-            pz_u256 g, local;
-            u64 off;
-            CHECK(sched_locate(s, &cl.key_start, &g, &off));
-            CHECK(g.w[0] % 2 == 1);
-            CHECK(sched_part_position(s, &g, &local) && local.w[0] == (u64)(cl.v_start >> 36) && local.w[1] == (u64)(cl.v_start >> 100));
-            sched_complete(s, &cl, cl.nkeys);
-        }
-        CHECK(!sched_finished(s));
-        sched_free(s);
-    }
+static void t_parts(void)
+{
+    t_parts_syntax();
+    t_parts_proportional();
+    t_parts_tiling();
+    t_parts_positions();
+    t_parts_checkpoints();
+    t_parts_too_few_blocks();
+    t_parts_huge_range();
 }
 
 /* ---- the default block size of the linear search ---- */
