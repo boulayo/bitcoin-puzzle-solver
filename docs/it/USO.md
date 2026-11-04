@@ -120,7 +120,7 @@ campaigns/NOME/
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto ogni 5 s
   stats.csv       serie storica, una riga al minuto (il file compare dopo il primo minuto)
   log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
-  FOUND.txt       solo a chiave trovata (permessi 0600); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
+  FOUND.txt       solo a chiave trovata (permessi 0600 su Linux e macOS; su Windows eredita i diritti della cartella); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
 ```
 
 * **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato. Un secondo

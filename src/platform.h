@@ -85,7 +85,7 @@ bool pz_boost_possible(void);
 int pz_thread_prio_level(void);
 
 /* ---- console ---- */
-void pz_console_init(void);                                /* Windows: UTF-8 output and ANSI escape sequences */
+void pz_console_init(void);                                /* Windows: UTF-8 output and ANSI escape sequences; POSIX: SIGPIPE and SIGXFSZ ignored */
 bool pz_stderr_is_terminal(void);                          /* an interactive terminal that understands the escapes */
 int pz_fd_terminal_cols(int fd);                           /* columns of the terminal that fd 1 or 2 writes to; 0 when it is not one */
 /* Windows: the console window belongs to this process alone (started with a double click from Explorer), so it will

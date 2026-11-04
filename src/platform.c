@@ -340,7 +340,12 @@ bool pz_os_random(void *buf, size_t n)
     return n == 0;
 }
 
-void pz_console_init(void) {}
+void pz_console_init(void)
+{
+    /* every command that writes a file handles EPIPE and EFBIG like a full disk: neither signal may kill the program */
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGXFSZ, SIG_IGN);
+}
 bool pz_console_is_own(void) { return false; }
 
 bool pz_stderr_is_terminal(void)
@@ -369,9 +374,6 @@ void pz_on_interrupt(void (*fn)(void))
     /* closing the terminal sends SIGHUP: stop gracefully and save, unless the process was started under nohup (ignored) */
     struct sigaction old;
     if (sigaction(SIGHUP, NULL, &old) == 0 && old.sa_handler != SIG_IGN) sigaction(SIGHUP, &sa, NULL);
-    signal(SIGPIPE, SIG_IGN);
-    /* a write beyond a file size limit (ulimit -f) must fail with EFBIG, which the writers handle like a full disk, not kill the program */
-    signal(SIGXFSZ, SIG_IGN);
 }
 
 void pz_interrupt_done(void) {}
