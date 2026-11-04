@@ -88,7 +88,7 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
 2. the binary and the paths that need a particular machine: `tools/check_binary.sh` on the Linux binary (no glibc symbol newer than 2.34); the AVX-512 IFMA
    engine (executed by the CPU if it can, under Intel SDE when `PZ_SDE` is set, else with the emulation of `tools/ifma_emul.h`); the CUDA path with a
    simulated driver (self-test, bench, machine profile, `--prio-gpu`, two devices, resume after an error injected into a launch, the number of modules
-   loaded), `doctor`, suspend (frozen process), several computers (kangaroo `merge` and linear-search `--part`);
+   loaded), `doctor`, suspend (frozen process), several computers (kangaroo `merge` and linear-search `--part`), `--limit`;
 3. `tests/e2e.sh` (real campaigns on small puzzles; `E2E_QUICK=1`, or `verify.sh quick`, uses the short version);
 4. a build with **AddressSanitizer + UndefinedBehaviorSanitizer** (with `float-cast-overflow`, which neither GCC nor clang include in
    `undefined`): self-test, **all unit tests** (including the robustness ones on corrupt files, `t_fuzz`, on corrupt compressed kernel
@@ -108,7 +108,8 @@ only when `PZ_NVRTC` is set to the path of `libnvrtc.so.12` (NVRTC 12.0 from pip
 runs `python3 -I tools/gen_ptx.py --nvrtc "$PZ_NVRTC" --check` and takes about a minute). **Neither workflow runs it**, and
 `tools/release.sh` does not set it: for a release that changed a kernel, run `PZ_NVRTC=/path/to/libnvrtc.so.12 tools/release.sh`, or
 `verify.sh` by itself, so that a stale module cannot ship. What the CI workflow (`ci.yml`) does run on every push, besides the build
-and the self-test: the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver and, as an
+and the self-test (Linux x86-64 with gcc, clang and without the x86 engines, Linux arm64): a campaign on puzzle 20, `tools/check_binary.sh`,
+the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver, the Windows cross-build and, as an
 informational job, `make test-shani` (the SHA-extension code under QEMU).
 
 ## Compatibility of the files between versions
