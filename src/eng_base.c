@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* eng_base.c - CPU linear-search engine, base variant. Built with ISA-specific flags (see Makefile). */
+/* eng_base.c - CPU linear-search engine, the portable variant: built with no instruction-set flags, it runs on every CPU. */
 #include "cpu_engine.h"
 #include <pzcore/hash.h>
 #include <pzcore/impl/hash_tables.h>

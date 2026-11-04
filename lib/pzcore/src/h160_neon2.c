@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* h160_neon2.c - lane kernel of the batch hash160 for aarch64 with the ARMv8 SHA-256 instructions (built with -march=armv8-a+crypto). */
+/* h160_neon2.c - lane kernel of the batch hash160 for aarch64 with the ARMv8 SHA-256 instructions, two NEON vectors (8 lanes) advanced together (built with -march=armv8-a+crypto). */
 #include "h160_impl.h"
 
 #ifdef PZ_HAVE_ARM_SHA2

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* encrypt.c - see encrypt.h. */
+/* encrypt.c - the public key that the found key is encrypted to (given, or made from a password), the random scalar and the PZENC1 line (see encrypt.h). */
 #include "encrypt.h"
 #include "platform.h"
 #include "envopts.h"

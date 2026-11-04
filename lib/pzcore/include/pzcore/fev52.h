@@ -2,10 +2,10 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* fev52.h - lane-parallel arithmetic in GF(p), p = 2^256 - 2^32 - 977 (secp256k1), with AVX-512 IFMA.
  *
- * Same interface as pz_fev.h (the engine in engine_vec_impl.inc is written against either), for 8 lanes of 64 bits.
+ * Same interface as fev.h (the engine in engine_vec_impl.inc is written against either), for 8 lanes of 64 bits.
  * One lane holds one field element in 5 limbs of 52 bits: vpmadd52luq / vpmadd52huq add the low / high 52 bits of a
  * 52x52-bit product to a 64-bit accumulator, so a full product takes 25 + 25 multiply-adds (81 multiplications plus
- * the additions with the 29-bit layout of pz_fev.h).
+ * the additions with the 29-bit layout of fev.h).
  *
  * The multipliers read only the low 52 bits of their operands, so every value that may reach a product must have
  * exact limbs. Every operation here therefore returns a "tight" element:
@@ -265,7 +265,7 @@ static inline PZ_VABI void pz_fev_normalize(pz_fev *r)
     for (int i = 0; i < 5; i++) r->l[i] = (t[i] & sel) | (r->l[i] & ~sel);
 }
 
-/* Canonical reduction in the common case, with the interface of pz_fev.h. A tight element has exact limbs 0..3, so it is
+/* Canonical reduction in the common case, with the interface of fev.h. A tight element has exact limbs 0..3, so it is
  * canonical already when limb 4 is below 2^48 - 1 (the value is then below 2^256 - 2^208 < p): nothing to do but check. The
  * returned vector is non-zero in the other lanes (about 2^-48 per lane, every value >= p among them), which keep their value
  * and need pz_fev_normalize. */

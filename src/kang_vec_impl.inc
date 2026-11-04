@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* kang_vec_impl.inc - one batch round of the kangaroo herd with lane-parallel arithmetic (pz_fev.h or, with PZ_FEV_IFMA,
+/* kang_vec_impl.inc - one batch round of the kangaroo herd with lane-parallel arithmetic (fev.h or, with PZ_FEV_IFMA,
  * fev52.h), instantiated per ISA. The includer defines ISA (token) and PZ_VBYTES.
  *
  * Exactly the arithmetic and the rules of kang_isa.inc (same jump choice, 2-cycle escape, even-y representative,

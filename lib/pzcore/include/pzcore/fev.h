@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* pz_fev.h - lane-parallel arithmetic in GF(p), p = 2^256 - 2^32 - 977 (secp256k1).
+/* fev.h - lane-parallel arithmetic in GF(p), p = 2^256 - 2^32 - 977 (secp256k1).
  *
  * The includer defines PZ_VBYTES (32 for AVX2, 64 for AVX-512) before including and compiles with the matching -m flags.
  * One vector lane holds one independent field element, spread over 9 limbs of 29 bits ("structure of arrays"):

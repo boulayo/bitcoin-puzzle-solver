@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* h160_portable.c - lane kernel of the batch hash160 for portable (built with its own instruction-set flags, see the Makefile). */
+/* h160_portable.c - lane kernel of the batch hash160 in portable C (four lanes of 32 bits with the GCC vector extensions, no instruction-set flags): the one every CPU runs. */
 #include "h160_impl.h"
 
 #define PZ_VBYTES 16

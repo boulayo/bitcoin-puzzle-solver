@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* engine_vec_impl.inc - CPU linear-search engine with lane-parallel elliptic-curve arithmetic (pz_fev.h), instantiated once
+/* engine_vec_impl.inc - CPU linear-search engine with lane-parallel elliptic-curve arithmetic (fev.h), instantiated once
  * per vector width. The includer defines ISA (token) and PZ_VBYTES (32 or 64) and VHALF (points on each side of a centre).
  *
  * N = PZ_VBYTES/8 independent windows are processed at once, one per vector lane. Round g covers N consecutive windows of
@@ -9,7 +9,7 @@
  * Per round and lane: one Montgomery batch inversion of the VHALF+1 denominators x(i*G) - x(C), then the points
  * C +- i*G, whose compressed public keys are hashed 2N at a time with the vectorized SHA-256 + RIPEMD-160 pipeline.
  *
- * The field arithmetic is pz_fev.h (9 limbs of 29 bits, vpmuludq) or, when the includer defines PZ_FEV_IFMA, fev52.h (5 limbs
+ * The field arithmetic is fev.h (9 limbs of 29 bits, vpmuludq) or, when the includer defines PZ_FEV_IFMA, fev52.h (5 limbs
  * of 52 bits, AVX-512 IFMA); this file only relies on their common interface. */
 
 #define CAT_(a, b) a##b

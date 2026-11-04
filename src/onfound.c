@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* onfound.c - see onfound.h. */
+/* onfound.c - the command of --on-found: run in a thread of its own once the key is found, joined before the program ends (see onfound.h). */
 #include "onfound.h"
 #include "platform.h"
 #include <pthread.h>

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* pz_fev_chain.inc - the parts of the lane field arithmetic common to pz_fev.h and fev52.h, written against their
+/* fev_chain.inc - the parts of the lane field arithmetic common to fev.h and fev52.h, written against their
  * pz_fev_set_lane / pz_fev_mul / pz_fev_sqr. Included at the end of either header. */
 
 static inline PZ_VABI void pz_fev_broadcast(pz_fev *r, const pz_fe *x)

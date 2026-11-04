@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* bsgs_vec_impl.inc - NL consecutive BSGS windows at once with lane-parallel arithmetic (pz_fev.h or, with PZ_FEV_IFMA,
+/* bsgs_vec_impl.inc - NL consecutive BSGS windows at once with lane-parallel arithmetic (fev.h or, with PZ_FEV_IFMA,
  * fev52.h), instantiated per ISA. The includer defines ISA (token) and PZ_VBYTES.
  *
  * Lane l takes the window centred at C[l]; the result is what bs_group (bsgs_isa.inc) gives for each window: the

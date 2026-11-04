@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* t_jobq.c - the interval scheduler of the linear search: every key of a range claimed once, checkpoint and resume with holes,
+ * the position of a key in the visiting order, the shares of --part, the seed in a checkpoint, campaign.conf and the default block size. */
 #include "../src/jobq.h"
 #include "../src/envopts.h"
 #include "../src/platform.h"
