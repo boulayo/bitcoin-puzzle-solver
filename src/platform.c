@@ -20,6 +20,8 @@
 #include <sys/resource.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
+
+extern char **environ;   /* unistd.h declares it only with _GNU_SOURCE; macOS does not declare it at all */
 #include <sys/wait.h>
 #include <spawn.h>
 #include <termios.h>
@@ -503,8 +505,6 @@ bool pz_harden_process(char *why, size_t n)
 #endif
     return ok;
 }
-
-extern char **environ;
 
 int pz_run_shell(const char *cmd, const char *const *env, double timeout, int *code, char *why, size_t whyn)
 {
