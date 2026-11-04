@@ -3,6 +3,17 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Changed
+- Internal reorganization with no change of behaviour: `gpu_tune.c` is split into the tuner (`gpu_tune.c`), the benchmark (`gpu_bench.c`) and
+  the self-test of the choice (`gpu_tune_selftest.c`, with `gpu_tune_priv.h` for what they share); the over-long test and command functions
+  are one named step each; throwaway local names (`tmp`, `t1`, `nn`) say what they hold; the encoding of a GPU kernel variant (its code,
+  name, text form, the `PZ_GPU_NK` text and the OpenCL build options) lives in `gpu_variant.c`, so that a new variant is one table row.
+  The output of every command, the files, the codes of the variants and the saved choices are the same (checked against 1.21.0 on `help`,
+  `version`, `selftest`, `bench --variants`, `decrypt-key` and a harness over 1152 device configurations and 2.6 million `PZ_GPU_NK` texts);
+  the GPU kernels and the PTX modules are untouched.
+
 ## [1.21.0] — 2026-11-01
 
 ### Added
