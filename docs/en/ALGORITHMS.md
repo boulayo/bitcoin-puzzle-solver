@@ -3,7 +3,7 @@
 This document explains *what* the program computes and *why* it is efficient. For the structure of the code see
 [`ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md), for usage see [`USAGE.md`](USAGE.md). What was tried and discarded, the intermediate measurements
 and the analyses behind the design are in the research log [`RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md). The section numbers are the same in both files (they are cited
-from the source and from the tools); sections 4.5, 4.6, 8.6, 8.7 and 8.9 are in RESEARCH.md only.
+from the source and from the tools); sections 4.5, 4.6, 8.6, 8.7, 8.9, 8.11 to 8.14 and the subsections of 10 are in RESEARCH.md only.
 
 Sections 1 to 7 cover the problem, the linear search, the seed-based visiting order, the interval kangaroo, the GPU kernels, rough running times and references. Section 8 is the theory: what is proven in the literature,
 what was measured, what is only modelled, and how much improvement is still possible. Sections 9 to 11 cover the BSGS mode, the SIMD
