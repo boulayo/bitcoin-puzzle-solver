@@ -36,7 +36,9 @@ void enc_key_id(const pz_ge *q, char id[9])
     pz_hex_encode(k, 4, id);
 }
 
-unsigned enc_log2n(void)
+/* The scrypt cost of the key from a password: 18 (N = 2^18, 256 MiB, about a second). Only PZ_TEST_SEAL_LOG2N changes it, and then a warning is
+ * printed, once, on the error output. */
+static unsigned enc_log2n(void)
 {
     static bool warned;
     if (!g_env.test_seal_log2n) return PZ_SEAL_SCRYPT_LOG2N;

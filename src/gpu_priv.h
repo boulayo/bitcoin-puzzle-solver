@@ -153,9 +153,7 @@ char *gpu_variant_text(const gpu_session *s, bool kang, char *buf, size_t n);
 /* gpu_tune_selftest.c */
 int gpu_tune_selftest(void);                             /* the choice of a variant from invented rates (no device needed) */
 
-/* gpu_selftest.c: the kernels against the CPU, and the rules of the recovery (no device needed) */
-int gpu_policy_selftest(void);
-u64 gpu_test_rand(gpu_session *s);                      /* the random numbers of the tests of one session (xorshift64, not shared with the other sessions) */
+/* gpu_selftest.c: the kernels against the CPU */
 bool gpu_test_fe(gpu_session *s);
 bool gpu_test_linear(gpu_session *s);
 bool gpu_test_kang(gpu_session *s);

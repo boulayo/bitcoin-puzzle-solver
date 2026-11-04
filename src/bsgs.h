@@ -31,7 +31,6 @@
 #define BS_BUCKET32 16              /* cells of 4 bytes per bucket: 64 bytes, one cache line */
 #define BS_LOAD_NUM 7               /* a new table has BS_LOAD_NUM / BS_LOAD_DEN of its cells in use (integers: its size must be */
 #define BS_LOAD_DEN 10              /* the same on every platform, the header of a saved table is checked against it) */
-#define BS_LOAD_FACTOR ((double)BS_LOAD_NUM / BS_LOAD_DEN)
 #define BS_BUCKET 8                 /* PZBSGS02: cells of 8 bytes per bucket (64 bytes), BS_LOAD2_NUM / BS_LOAD2_DEN of them in use */
 #define BS_LOAD2_NUM 7
 #define BS_LOAD2_DEN 10

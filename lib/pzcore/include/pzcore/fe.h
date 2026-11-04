@@ -374,7 +374,6 @@ static inline void pz_fe_mul(pz_fe *r, const pz_fe *a, const pz_fe *b) { pz_fe_m
 /* Squaring with MULX: the six different products once, doubled, plus the four squares, then the reduction. It takes 11.5 ns where the
  * product of a number with itself takes 15.8 ns and the portable pz_fe_sqr_c 13.9 (an inversion is 255 squarings). Written with
  * intrinsics, so it also builds with clang, where the assembly multiplication above is not used. r may alias a. */
-#define PZ_FE_SQR_MULX 1
 static inline void pz_fe_sqr(pz_fe *r, const pz_fe *a)
 {
     typedef unsigned long long ull;

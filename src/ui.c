@@ -29,7 +29,8 @@ const char *ui_state_name(const run_ctx *r, bool final)
     return final ? "STOPPED" : "RUNNING";
 }
 
-char *ui_target_tag(const run_ctx *r, char *buf, size_t n)
+/* "#71", or the campaign name for a custom target */
+static char *ui_target_tag(const run_ctx *r, char *buf, size_t n)
 {
     if (r->cfg.puzzle) snprintf(buf, n, "#%d", r->cfg.puzzle);
     else snprintf(buf, n, "%s", r->cfg.name);

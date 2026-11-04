@@ -6,8 +6,9 @@
 #include "outfmt.h"
 #include <pzcore/hash.h>
 
-/* The state is in the session: after the system sleeps every GPU thread recovers its device and repeats these tests at the same time. */
-u64 gpu_test_rand(gpu_session *s)
+/* The random numbers of the tests of one session (xorshift64, not shared with the other sessions). The state is in the session: after the
+ * system sleeps every GPU thread recovers its device and repeats these tests at the same time. */
+static u64 gpu_test_rand(gpu_session *s)
 {
     u64 x = s->rs ? s->rs : (0x9E3779B97F4A7C15ULL ^ ((u64)(s->info.index + 1) * 0xD1B54A32D192ED03ULL)) | 1;
     x ^= x << 13; x ^= x >> 7; x ^= x << 17;
@@ -363,8 +364,9 @@ static void *rnd_thread(void *p)
     return NULL;
 }
 
-/* The rules by which the worker threads recover from a failed launch. */
-int gpu_policy_selftest(void)
+/* The rules by which the worker threads recover from a failed launch, and the other rules that need no device (the random numbers, the
+ * log sequence, the wait of a recovery, the choice of a variant). */
+static int gpu_policy_selftest(void)
 {
     int fails = 0;
 #define PCHK(cond) do { if (!(cond)) { fails++; printf("  GPU recovery: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)

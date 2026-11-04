@@ -174,6 +174,8 @@ static bool key_matches(run_ctx *r, const pz_u256 *key)
     return r->cfg.has_pubkey && pz_ge_equal(&p, &r->cfg.pubkey);
 }
 
+static void run_write_found(run_ctx *r);
+
 bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
 {
     bool ok = key_matches(r, key);
@@ -313,7 +315,9 @@ static bool write_found_encrypted(run_ctx *r)
     return ok && !r->found_seal_failed;
 }
 
-void run_write_found(run_ctx *r)
+/* Writes FOUND.txt (and, with --on-found, starts the command). With cfg.has_encrypt the file carries the PZENC1 line (found_sealed) and neither the key nor its
+ * public key. */
+static void run_write_found(run_ctx *r)
 {
     const bool ok = r->cfg.has_encrypt ? write_found_encrypted(r) : write_found_plain(r);
     if (!ok || !r->on_found[0]) return;

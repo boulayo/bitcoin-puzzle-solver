@@ -16,9 +16,6 @@
 bool enc_parse_pubkey(const char *hex, pz_ge *q, u8 q33[33], char *err, size_t errn);
 /* The key id of a public key as text: 8 hexadecimal digits (the first four bytes of its HASH160). */
 void enc_key_id(const pz_ge *q, char id[9]);
-/* The scrypt cost of the key from a password: 18 (N = 2^18, 256 MiB, about a second). Only PZ_TEST_SEAL_LOG2N changes it, and then a warning is
- * printed, once, on the error output. */
-unsigned enc_log2n(void);
 /* A random scalar in [1, n - 1] from the operating system. False when the system gives no randomness. */
 bool enc_random_scalar(pz_u256 *r);
 /* Whether a key can be encrypted to q here: the system's random numbers work and a test encryption is produced and opened again. */

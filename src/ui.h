@@ -9,7 +9,6 @@
 double ui_rates(const run_ctx *r, double *cpu, double *gpu, int *ncpu);
 const char *ui_state_name(const run_ctx *r, bool final);
 
-char *ui_target_tag(const run_ctx *r, char *buf, size_t n);  /* "#71", or the campaign name for a custom target */
 char *ui_fmt_count(long double v, char *buf, size_t n);          /* 1.23 M / 4.56e+18 */
 char *ui_fmt_eta(double secs, char *buf, size_t n);              /* "n/a" for unknown/infinite */
 char *ui_fmt_range_bits(const pz_u256 *sz, char *buf, size_t n);  /* "2^74" for an exact power of two, otherwise "~2^21.0" */
