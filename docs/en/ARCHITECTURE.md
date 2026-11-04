@@ -46,12 +46,12 @@
 | `selftest.h`, `selftest.c`, `outfmt.h`, `main.c` | self-test, benchmark, command-line interface; `outfmt.h` is the look of the check lists and tables |
 
 **Embedded kernels.** The kernels are compiled into the executable by `tools/embed.c`, which the `Makefile` builds and runs on the build
-machine. The OpenCL sources (53 KB) become plain arrays (`build/kernels_gen.c`). The 26 PTX modules (18 MB of text in `src/kernels/ptx/`,
+machine. The OpenCL sources (about 100 KB) become plain arrays (`build/kernels_gen.c`). The 26 PTX modules (18 MB of text in `src/kernels/ptx/`,
 committed) are embedded compressed (`build/ptx_gen.c`, `embed -z`) in the format described at the top of `src/lz.c`; the encoder is in
 `embed.c`, which checks each stream it writes with the real decoder, so the build stops if a stream does not unpack to its file. The
-modules of a family differ in few lines (`linear128` and `linear256` in 148 of 38,000), so each module is stored against another one
+modules of a family differ in few lines (`linear128` and `linear256` in 62 of 55,000), so each module is stored against another one
 (the `base` column of `src/kernels/ptx/modules.txt`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
-the modules take about 1.3 MB instead of 18 MB, and the stripped Linux executable is under 4 MB instead of 20 MB. `rtcu_build` unpacks the
+the modules take about 1.1 MB instead of 18 MB, and the stripped Linux executable is about 3 MB instead of 20 MB. `rtcu_build` unpacks the
 module it is about to load (a few milliseconds, once per module load; no hot path touches this), hands the NUL-terminated text to the
 driver and frees it. `tools/gen_ptx.py` and the `.ptx` files are unchanged. The simulated CUDA driver embeds the same files plain
 (`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves;
@@ -73,8 +73,8 @@ Every hit (CPU or GPU) → run_submit_scan_hit: ignored if the key lies beyond t
 block can reach a few keys past it) → run_submit_key: recomputes k·G, compares hash160/pubkey → FOUND.txt → global stop
 ```
 
-The scheduler hands out contiguous portions of a block (≈ 3 s of work for the CPUs, ≈ 0.35 s per launch on the GPUs, adjusted by the
-measured speed). An interrupted worker returns the completed prefix; the rest remains a "hole" in the checkpoint and is taken up first in
+The scheduler hands out contiguous portions of a block (≈ 3 s of work for the CPUs; on the GPUs one launch of the length the tuning chose for
+the device, 0.15 to 1.4 s, or 0.35 s until it is tuned; both sized by the measured speed). An interrupted worker returns the completed prefix; the rest remains a "hole" in the checkpoint and is taken up first in
 the next session.
 
 ## 2b. Flow of BSGS
@@ -104,7 +104,7 @@ kang_insert_dps (under the table mutex): inserts or compares with the existing e
 * `campaign.conf`: text `key=value` (`format=1`, `created_with`, range, target, `mode`, `seed`, `chunk_bits`, `dp_bits`, `bsgs_entries`, `part`, and `encrypt_pubkey` when the campaign encrypts the key it finds: the line is written only then); `format` changes only with incompatible changes. A key that is not read is
   ignored, so a file with a new line is read by an older version (which then ignores the line: see ALGORITHMS.md 12.5), and a file without it by a newer one; `encrypt_pubkey` that is present and not a point stops the campaign from opening.
 * `state.dat`: text; header `PZSCHED 1`, `cbits`, `seed_id` (the seed id of the campaign: a state of another seed is refused; files written
-  before it was recorded have no such line and are accepted), `v_limit`, `keys_done`, lines `iv start end` (hex), final line
+  before it was recorded have no such line and are accepted), `v_limit`, `keys_done`, `ndone` (the number of intervals), lines `iv start end` (hex), final line
   `crc=` (first 8 bytes of the SHA-256 of the content). Atomic write (a temporary file of its own next to it → fsync → rename); the previous file, if valid,
   becomes `state.dat.bak`.
 * `dp.bin`: `"PZDP5\n"` + SHA-256 fingerprint (start, W, `"PZDPLOG4"`, pubkey) + the first 4 bytes of the SHA-256 of the jump table (the
@@ -183,12 +183,14 @@ exists, and removes the file: a device reset after sleep); and the tests of the 
 | Level | Where |
 |-------|-------|
 | Vectors from an independent reference (`tools/ref.py`, pure Python) | `tests/t_core.c`, `src/selftest.c` |
-| Field/assembly | `lib/pzcore/tests/t_fe.c` (two builds: C and MULX/ADX); `lib/pzcore/tests/t_fev.c` (AVX2 and AVX-512: limb bounds, extreme values, verified mutations) |
+| Field/assembly | `lib/pzcore/tests/t_fe.c` (two builds: C and MULX/ADX); `lib/pzcore/tests/t_fev.c` (AVX2 and AVX-512: limb bounds, extreme values, verified mutations); `lib/pzcore/tests/t_fev52.c` (AVX-512 IFMA lanes against the scalar code, skipped without IFMA) |
+| Library primitives | `lib/pzcore/tests/t_u256.c`, `t_ec.c`, `t_hash.c`, `t_address.c` (BIP173 / BIP350 vectors, damaged text), `t_batch.c` (every batch hash160 implementation against the scalar one) |
 | BSGS, ETA, database | `tests/t_bsgs.c` (the three table formats, buckets of either cell size, the recovery of `b`, the files of earlier versions), `t_eta.c`, `t_puzzles.c` |
 | Platform layer, environment | `tests/t_core.c`: files written by several processes at once, `pz_kv_find`, `pz_file_count`, the log and `pz_die` from several threads; `tests/t_env.c`: the reading of every variable into `g_env` (the flag rule, numbers, texts, values that are refused and reported once) |
 | Robustness on damaged input | `tests/t_fuzz.c`: corrupted and hostile files and strings (campaign files, checkpoint, BSGS tables, addresses) from a fixed-seed generator: nothing may crash, hang or read out of bounds (run under ASan/UBSan by `tools/verify.sh`); the state that `list` and `info` show |
 | GPU kernel arithmetic | `tests/t_gpufe.c`: the field of `kernels/pz_common.cl` compiled for the host, portable variant, add-with-carry variant (also with the product of AMD GPUs, its two assembly instructions written in C) and PTX carry-chain variant (with the carry flag emulated according to the PTX ISA), against the CPU on 5 million combinations with all the edge cases |
 | Permutation, scheduler, SIMD engines | `lib/pzcore/tests/t_perm.c`, `tests/t_jobq.c`, `t_engine.c` |
+| Panel and status line | `tests/t_ui.c`: the renderers never overflow, emit no control code when colours are off, keep every line within the terminal width and survive degenerate numbers |
 | Complete campaigns | `tests/e2e.sh` (includes the encrypted key in the three modes, `--on-found`, `decrypt-key`, the refusals; `tests/pty_seal.py` runs the hidden password prompt on a pseudo-terminal) |
 | Encrypted key | `lib/pzcore/tests/t_kdf.c` (RFC 4231, 5869, 7914 vectors), `t_seal.c` (seal and open against `gen_seal_vectors.py`, every byte of the payload damaged, hostile points, the key of a password at the real cost), `tests/t_encrypt.c` (public key parsing, associated data, `campaign.conf`, secret from standard input, `--on-found`, hardening), `src/selftest.c` |
 | Compressed kernels | `tests/t_lz.c`: the decoder and the encoder (round trips of the real PTX modules and of random and adversarial texts, streams built by hand, truncated, extended and corrupted streams must be refused and never touch memory outside the buffers; run under ASan/UBSan by `tools/verify.sh`); `tests/t_kernels.c`: every module embedded in the program unpacks to exactly the bytes of its `.ptx` file |

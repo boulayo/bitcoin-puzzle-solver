@@ -297,7 +297,7 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   of 0.15, 0.35, 0.7 and 1.4 s, sized as the controller sizes them (groups per work-item here, rounds for the kangaroo, at most the depth of
   its history), and the shortest length within 1 % of the best is kept (a launch cannot be interrupted: a longer one delays the stop, the
   check of a hit and the dashboard; a shorter one pays the fixed costs of a launch more often). The choice and the length are stored in
-  `gpu_tune.txt` in the cache folder (key: name, driver version, compute units, program version; value `VARIANT LENGTH`, a value without the
+  `gpu_tune.txt` in the cache folder (key: API, name, driver version, compute units, program version; value `VARIANT LENGTH`, a value without the
   length, from 1.19.x, means 0.35 s). `pzsolve bench --variants` measures every variant of both kernels in turns and prints the tables.
   `PZ_GPU_HALF=N` forces the variant (`N` = window | minimum blocks per SM << 16: 256 is window 256, 262656 window 512 with the register
   cap; `bench --variants` prints the code of each), `PZ_GPU_TUNE=0` disables tuning; `pzsolve selftest` verifies all the variants.
