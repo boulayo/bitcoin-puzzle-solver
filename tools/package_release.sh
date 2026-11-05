@@ -10,7 +10,7 @@
 #                                            runner); OS is linux, macos or windows, ARCH is x86_64 or arm64
 #   tools/package_release.sh --sums          (re)write SHA256SUMS for the archives in dist-release/
 #
-# Output (OUT, default dist-release/):
+# Output (OUT, default dist-release/; <version> is <version>-test.<commit> for a test build, see PZ_VERSION below):
 #   pzsolve-<version>-linux-x86_64.tar.gz     one top folder per archive, with the binary, README.md, LICENSE (if the
 #   pzsolve-<version>-windows-x86_64.zip      repository has one), CHANGELOG.md, the user documents and BUILD-INFO.txt
 #   SHA256SUMS
@@ -25,12 +25,16 @@
 # engine at run time. The Makefile builds with -g (the build/ folders keep the debug information for gdb, valgrind and the
 # sanitizers); the binary that goes into an archive is a copy with the debug information and the symbol table stripped (strip,
 # `strip -x` on macOS, the MinGW strip for Windows; a missing strip only warns and the package is then simply bigger).
-# Environment: OUT, JOBS, WINCC (default x86_64-w64-mingw32-gcc-posix), SKIP_TESTS=1 (skip the self-test).
+# Environment: OUT, JOBS, WINCC (default x86_64-w64-mingw32-gcc-posix), SKIP_TESTS=1 (skip the self-test), PZ_VERSION (the version of
+# the archives and of the binaries the script builds; see VERSION below).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT=${OUT:-dist-release}
-VERSION=$(tr -d '[:space:]' < VERSION)
+# the version in the names of the archives is the one the binaries report: PZ_VERSION when it is set (the release workflow sets it for
+# --pack), otherwise the one the Makefile gives a build of this checkout (VERSION for the commit tagged vVERSION or outside git,
+# VERSION-test.COMMIT for any other commit: a test build; docs/en/RELEASING.md), which the builds below are then given
+VERSION=${PZ_VERSION:-$(make -s print-version 2>/dev/null || tr -d '[:space:]' < VERSION)}
 WINCC=${WINCC:-x86_64-w64-mingw32-gcc-posix}
 JOBS=${JOBS:-$( (nproc || sysctl -n hw.ncpu || echo 2) 2>/dev/null | head -1)}
 export COPYFILE_DISABLE=1          # macOS tar: no ._* AppleDouble files in the archives
@@ -142,7 +146,7 @@ build_linux() {
   local dir=build/release/linux
   say "Linux x86-64: build ($(${CC:-cc} --version | head -1))"
   rm -rf "$dir"
-  make -s BUILD="$dir" -j"$JOBS"
+  make -s BUILD="$dir" PZ_VERSION="$VERSION" -j"$JOBS"
   if [ -z "${SKIP_TESTS:-}" ]; then say "Linux x86-64: self-test"; "$dir/pzsolve" selftest | tail -2; fi
   if command -v objdump >/dev/null 2>&1; then
     local r
@@ -158,7 +162,7 @@ build_windows() {
   local dir=build/release/windows
   say "Windows x86-64: build ($($WINCC --version | head -1))"
   rm -rf "$dir"
-  make -s CC="$WINCC" BUILD="$dir" -j"$JOBS"
+  make -s CC="$WINCC" BUILD="$dir" PZ_VERSION="$VERSION" -j"$JOBS"
   local objdump=${WINCC%gcc*}objdump
   if command -v "$objdump" >/dev/null 2>&1; then
     local r

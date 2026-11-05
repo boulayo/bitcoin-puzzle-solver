@@ -33,6 +33,7 @@ if [ "$NEW" != "$OLD" ]; then
   git commit -q -m "Version $NEW" ${TRAILERS:+-m "$TRAILERS"}
 fi
 
+# the tag comes after the verification: the build verify.sh tests is a test build, it reports $NEW-test.COMMIT (docs/en/RELEASING.md)
 echo "== full verification (clean build, tests, end-to-end, sanitizers, valgrind)"
 tools/verify.sh "${VERIFY_MODE:-quick}"      # VERIFY_MODE=full for the complete end-to-end run
 

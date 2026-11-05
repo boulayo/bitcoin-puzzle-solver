@@ -250,7 +250,9 @@ Il driver compila i kernel per la tua scheda (con CUDA circa 10 s per modulo; co
 del kernel lineare circa un minuto, poi le varianti del canguro la prima volta che lo usi) e conserva il risultato nella sua cache:
 dalle volte successive l'avvio è immediato. Con più schede la taratura dei dispositivi gira insieme, e le schede dello stesso tipo si misurano una
 volta sola (le altre leggono il risultato: `from earlier tuning`). La taratura è memorizzata in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` su Windows,
-`~/.cache/pzsolve/gpu_tune.txt` su Linux, e si ripete quando cambia la versione del programma. Prima il dispositivo viene scaldato per 3 s, poi
+`~/.cache/pzsolve/gpu_tune.txt` su Linux, e si ripete quando cambia la versione del programma. Una build di prova (versione `X.Y.Z-test.COMMIT`,
+compilata da un commit che non è una release) conta come una versione a sé: tara la GPU e misura il profilo della macchina (più avanti) per
+conto suo. Prima il dispositivo viene scaldato per 3 s, poi
 le varianti vengono misurate in tre turni (in ordine, in ordine inverso, di nuovo in ordine, così che un clock che deriva pesi allo stesso modo su
 tutte), ognuna prende la mediana delle sue velocità, e la variante predefinita resta a meno che un'altra non sia più veloce di oltre l'1 % (una
 misura breve sbaglia del 2-3 % su una GPU di portatile, e così la più veloce di otto; la mediana di tre sbaglia di circa l'1 %). Il log dice cosa è

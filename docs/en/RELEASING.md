@@ -14,6 +14,14 @@
   formats it does not know with a clear message instead of misreading them. `campaign.conf` also records the version that created
   the campaign (`created_with`).
 * `pzsolve version` prints the version and the source commit the binary was built from.
+* Only the release of a version reports `X.Y.Z` alone. Any other build is a **test build** and reports `X.Y.Z-test.COMMIT` (for example
+  `1.22.0-test.7bc52d6`): `make` of a commit that is not tagged `vX.Y.Z` (`make -s print-version` prints what a build would report;
+  outside a git checkout, as in a source archive, it is `X.Y.Z`), and a manual run of the release workflow without "publish", whose
+  archives are named with it. The reason: the program saves its GPU tuning (`gpu_tune.txt`) and its machine profile
+  (`machine_profile.txt`) under the version it reports, and a test build that reported `X.Y.Z` used the choices the release (or another
+  test build) had saved, and saved its own over them. With a version of its own a test build measures for itself, and two builds of
+  different commits never look alike. Where the version is compared as a number (`requires=` in `campaign.conf`) only the three
+  numbers count: a test build is its `X.Y.Z` there.
 
 ## Changelog discipline
 
@@ -61,7 +69,8 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    * checks that the version is of the form `X.Y.Z`, that it is greater than the current one, that the git tree is clean, that the section
      exists in `CHANGELOG.md` and that the tag does not exist yet;
    * updates `VERSION` and commits;
-   * runs `tools/verify.sh` (rebuild from scratch, `make test`, `tests/e2e.sh`, sanitizers, Valgrind; see below) and stops at the first error;
+   * runs `tools/verify.sh` (rebuild from scratch, `make test`, `tests/e2e.sh`, sanitizers, Valgrind; see below) and stops at the first error
+     (the commit is not tagged yet, so the build it tests reports `X.Y.Z-test.COMMIT`);
    * creates the annotated tag `vX.Y.Z` on the resulting commit.
    It never builds binaries and never pushes: it prints the push command at the end.
 4. Publish the commit and the tag: `git push origin <branch> --follow-tags`.
@@ -80,7 +89,7 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    checksum file are there.
 
 The workflow can also be run by hand (Actions tab, "Run workflow"). Without "publish" it only builds the archives and keeps them as artifacts of the
-run. With "publish" ticked it creates the tag on the selected commit and a **draft** release (untick "draft" to publish at once).
+run: a test build, whose binaries report `X.Y.Z-test.COMMIT` and whose archives are named with it. With "publish" ticked it creates the tag on the selected commit and a **draft** release (untick "draft" to publish at once).
 Releases of one version are made one at a time, and a run refuses to create or replace the files of a release whose tag points to
 another commit than the one it built (the log says so). To replace the files of a release on purpose, for example after a failed
 upload, run the workflow by hand from the tagged commit; the input "replace" is needed only when the selected commit is another one, and

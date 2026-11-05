@@ -249,7 +249,9 @@ The driver compiles the kernels for your card (with CUDA about 10 s per module; 
 of the linear kernel about one minute, then the kangaroo variants the first time you use it) and keeps the result in its cache:
 from the next runs on, the startup is immediate. With several cards the tuning of the devices runs at the same time, and cards of one type are
 measured once (the others read the result: `from earlier tuning`). The tuning is stored in `%LOCALAPPDATA%\pzsolve\gpu_tune.txt` on Windows,
-`~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes. The device is warmed up for 3 s first, the
+`~/.cache/pzsolve/gpu_tune.txt` on Linux, and is repeated when the program version changes. A test build (version `X.Y.Z-test.COMMIT`,
+built from a commit that is not a release) counts as a version of its own: it tunes the GPU and measures the machine profile (below) for
+itself. The device is warmed up for 3 s first, the
 variants are measured in three turns (in order, in the reverse order, in order again, so that a clock that drifts weighs the same on all of
 them), each gets the median of its rates, and the default variant stays unless another one is more than 1 % faster (one short measurement is
 off by 2 to 3 % on a laptop GPU, and so is the fastest of eight; the median of three is off by about 1 %). The log says what was chosen, with

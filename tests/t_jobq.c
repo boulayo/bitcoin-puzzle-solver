@@ -161,7 +161,8 @@ static void t_cfg(void)
     const struct { const char *req; bool ok; } reqs[] = {
         {"", true},                 /* no line at all: the campaign of an earlier version */
         {"1.0.0", true},
-        {PZ_VERSION, true},         /* exactly this version */
+        {PZ_VERSION, true},         /* exactly this version (with its -test.COMMIT in a test build) */
+        {"1.0.0-test.0123abc", true},   /* a suffix after the three numbers is not part of the version */
         {"99.0.0", false},
         {above, false},
         {"9.0.0", V[0] >= 9},       /* numeric, not textual: "9.0.0" is below "10.0.0" */
@@ -190,6 +191,17 @@ static void t_cfg(void)
     free(t);
     CHECK(cfg_version_cmp("1.9.0", "1.21.0") < 0 && cfg_version_cmp("1.21.0", "1.21.0") == 0 && cfg_version_cmp("2.0.0", "1.99.99") > 0);
     CHECK(cfg_version_cmp("10.0.0", "9.0.0") > 0 && cfg_version_cmp("1.22.0-dev", "1.22.0") == 0 && cfg_version_cmp("junk", "0.0.1") < 0);
+    /* a test build is VERSION-test.COMMIT (Makefile): what follows the third number is not part of the comparison, so a test build
+     * counts as its VERSION, for requires= as for anything else, whatever the commit looks like */
+    CHECK(cfg_version_cmp("1.22.0-test.7bc52d6", "1.22.0") == 0 && cfg_version_cmp("1.22.0", "1.22.0-test.7bc52d6") == 0);
+    CHECK(cfg_version_cmp("1.22.0-test.7bc52d6", "1.21.0") > 0 && cfg_version_cmp("1.22.0-test.7bc52d6", "1.22.1") < 0);
+    CHECK(cfg_version_cmp("1.22.0-test.123", "1.22.0-test.999") == 0 && cfg_version_cmp("1.22.0-test.9", "1.22.10") < 0);
+    CHECK(cfg_version_cmp("1.21.0-test.fff", "1.22.0-test.000") < 0 && cfg_version_cmp("2.0.0-test.0", "1.99.99") > 0);
+    {   /* a test build of a version resumes a campaign that requires that version, and one of the version below does not */
+        char tv[48];
+        snprintf(tv, sizeof tv, "%lu.%lu.%lu-test.0123abc", V[0], V[1], V[2]);
+        CHECK(cfg_version_cmp(tv, PZ_VERSION) == 0 && cfg_version_cmp(tv, above) < 0 && cfg_version_cmp(above, tv) > 0);
+    }
 }
 
 /* The syntax */

@@ -47,6 +47,29 @@ run make lib-examples >/dev/null
 run make OPT=-O0 BUILD=build/o0 lib-test >/dev/null   # an unoptimized build of the library tests (the field asm needs optimization)
 run make lib-cxx >/dev/null
 
+step "the version a build reports: VERSION for the commit tagged vVERSION and outside git, VERSION-test.COMMIT for any other commit"
+VER=$(tr -d '[:space:]' < VERSION); BV=$(build/pzsolve version | awk 'NR==1{print $2}')
+if git describe --tags --exact-match --match "v$VER" HEAD >/dev/null 2>&1; then WANTV=$VER; else WANTV=$VER-test.$(git rev-parse --short HEAD); fi
+[ "$BV" = "$WANTV" ] && [ "$(make -s print-version)" = "$WANTV" ] && echo "  OK build/pzsolve reports $BV, as make print-version says" || { echo "  FAIL build/pzsolve reports '$BV', expected '$WANTV'"; fail=$((fail+1)); }
+# the Makefile alone in a folder of its own: first outside git (a source archive), then as a commit of a new repository, untagged,
+# tagged with another version, and tagged vVERSION (lightweight, as the release workflow makes it, and annotated, as tools/release.sh)
+VT="$T/version"; mkdir -p "$VT/tools" "$VT/src/kernels/ptx"
+cp Makefile VERSION "$VT/"; cp tools/ptx_table.awk "$VT/tools/"; cp src/kernels/ptx/modules.txt "$VT/src/kernels/ptx/"
+vgit() { git -C "$VT" -c user.name=verify -c user.email=verify@localhost -c commit.gpgsign=false -c tag.gpgsign=false "$@" >/dev/null 2>&1; }
+vmake() { GIT_CEILING_DIRECTORIES="$T" make -s -C "$VT" print-version 2>/dev/null; }
+vcase() { local got; got=$(vmake); [ "$got" = "$2" ] && echo "  OK $1: $got" || { echo "  FAIL $1: '$got', expected '$2'"; fail=$((fail+1)); }; }
+vcase "outside git" "$VER"
+vgit init -q && vgit add -A && vgit commit -q -m one
+vcase "an untagged commit" "$VER-test.$(git -C "$VT" rev-parse --short HEAD)"
+vgit tag v0.0.1
+vcase "a commit tagged with another version" "$VER-test.$(git -C "$VT" rev-parse --short HEAD)"
+vgit tag "v$VER"
+vcase "the commit tagged v$VER (lightweight tag)" "$VER"
+vgit commit -q --allow-empty -m two
+vcase "the commit after the tag" "$VER-test.$(git -C "$VT" rev-parse --short HEAD)"
+vgit tag -d "v$VER" && vgit tag -a "v$VER" -m "pzsolve $VER"
+vcase "the commit tagged v$VER (annotated tag)" "$VER"
+
 step "Linux binary compatibility (no glibc symbol newer than 2.34)"
 if r=$(tools/check_binary.sh linux build/pzsolve 2>&1); then echo "  OK $r"; else echo "  FAIL $r"; fail=$((fail+1)); fi
 

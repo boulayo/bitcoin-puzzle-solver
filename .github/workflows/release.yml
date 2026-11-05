@@ -6,6 +6,11 @@
 # Without "publish" a manual run only builds the packages and keeps them as workflow artifacts. A manual publish creates a DRAFT
 # release by default (untick "draft" to publish at once).
 #
+# A test build (no "publish") is not the release: its binaries report <version>-test.<commit> (1.22.0-test.7bc52d6, as a plain `make`
+# of a commit that is not tagged v<version>) and its archives are named with it. The program saves its GPU tuning and its machine
+# profile under the version it reports, so a test build measures its own instead of using the release's, and two test builds of
+# different commits never look alike. A release (a tag push or "publish") reports <version> alone.
+#
 # A release (a tag push, or a manual run with "publish") is made only of a commit on which ci.yml has completed successfully: the first
 # job looks the runs of ci.yml up for the exact commit and fails, before anything is built, when there is none, when the last one is
 # still running or when none passed (a commit that changed only documents does not start the CI by itself: run it by hand on that
@@ -17,6 +22,7 @@
 # they are. Tick "replace" in a manual run to do it on purpose; the job log says what happened.
 #
 # Archives (one top folder each, with the binary, README.md, LICENSE if present, CHANGELOG.md, the user documents and BUILD-INFO.txt):
+# (<version> is <version>-test.<commit> for a test build)
 #   pzsolve-<version>-linux-x86_64.tar.gz    pzsolve-<version>-linux-arm64.tar.gz
 #   pzsolve-<version>-macos-arm64.tar.gz     pzsolve-<version>-macos-x86_64.tar.gz
 #   pzsolve-<version>-windows-x86_64.zip     SHA256SUMS
@@ -107,13 +113,18 @@ jobs:
             exit 1
           fi
 
+  # version: the one in VERSION (the release, its tag and notes); build: the one the binaries report and the archives are named with,
+  # the same for a release, <version>-test.<commit> for a test build
   version:
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.v.outputs.version }}
+      build: ${{ steps.v.outputs.build }}
     steps:
       - uses: actions/checkout@v7
       - id: v
+        env:
+          PUBLISH: ${{ github.ref_type == 'tag' || inputs.publish }}
         run: |
           VERSION=$(tr -d '[:space:]' < VERSION)
           echo "version in VERSION: $VERSION"
@@ -123,7 +134,10 @@ jobs:
           if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
             echo "::warning::CHANGELOG.md has no '## [$VERSION]' section: the release notes will be empty"
           fi
+          if [ "$PUBLISH" = true ]; then BUILDV=$VERSION; else BUILDV="$VERSION-test.$(git rev-parse --short HEAD)"; fi
+          echo "the binaries report: $BUILDV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILDV" >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.os }}-${{ matrix.arch }})
@@ -145,15 +159,17 @@ jobs:
         if: matrix.os == 'windows'
         run: tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix zip
       - name: Build (release, portable)
+        env:
+          PZV: ${{ needs.version.outputs.build }}
         run: |
           echo "::add-matcher::.github/problem-matchers/cc.json"
           if [ "${{ matrix.os }}" = windows ]; then
-            make windows -k -j"$(nproc)" 2>&1 | tee build.log
+            make windows PZ_VERSION="$PZV" -k -j"$(nproc)" 2>&1 | tee build.log
             echo "BIN=build/win/pzsolve.exe" >> "$GITHUB_ENV"
           else
             MAKEARCH=""
             if [ "${{ matrix.os }}-${{ matrix.arch }}" = macos-x86_64 ]; then MAKEARCH="MACOS_ARCH=x86_64"; fi
-            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" $MAKEARCH 2>&1 | tee build.log
+            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" $MAKEARCH PZ_VERSION="$PZV" 2>&1 | tee build.log
             echo "BIN=build/pzsolve" >> "$GITHUB_ENV"
           fi
       - name: The macOS binary is for ${{ matrix.arch }}
@@ -175,6 +191,7 @@ jobs:
         if: matrix.os != 'windows'
         env:
           PZ_NO_OPENCL: ${{ matrix.os == 'macos' && '1' || '' }}
+          PZV: ${{ needs.version.outputs.build }}
         run: |
           RUN=""
           if [ "${{ matrix.os }}-${{ matrix.arch }}" = macos-x86_64 ]; then
@@ -185,6 +202,7 @@ jobs:
             fi
           fi
           $RUN "$BIN" version
+          $RUN "$BIN" version | sed -n 1p | grep -q "^pzsolve $PZV (" || { echo "::error::the binary does not report the version $PZV"; exit 1; }
           $RUN "$BIN" selftest
       - name: Linux binary needs no glibc newer than 2.34
         if: matrix.os == 'linux'
@@ -193,13 +211,15 @@ jobs:
         if: matrix.os == 'windows'
         run: tools/check_binary.sh windows "$BIN"
       - name: Package
+        env:
+          PZ_VERSION: ${{ needs.version.outputs.build }}
         run: |
           export OUT=dist-release
           tools/package_release.sh --pack "$BIN" ${{ matrix.os }} ${{ matrix.arch }}
           ls -l dist-release
       - uses: actions/upload-artifact@v7
         with:
-          name: pzsolve-${{ needs.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          name: pzsolve-${{ needs.version.outputs.build }}-${{ matrix.os }}-${{ matrix.arch }}
           path: dist-release/*
           if-no-files-found: error
       - name: Compiler errors
@@ -221,16 +241,19 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: pzsolve-${{ needs.version.outputs.version }}-windows-x86_64
+          name: pzsolve-${{ needs.version.outputs.build }}-windows-x86_64
           path: pkg
       - name: Unpack
         shell: pwsh
         run: Expand-Archive -Path "pkg/pzsolve-*-windows-x86_64.zip" -DestinationPath pkg/unpacked
       - name: Self-test and smoke test
+        env:
+          PZV: ${{ needs.version.outputs.build }}
         run: |
           cd pkg/unpacked/pzsolve-*-windows-x86_64
           ls
           ./pzsolve.exe version
+          ./pzsolve.exe version | sed -n 1p | tr -d '\r' | grep -q "^pzsolve $PZV (" || { echo "::error::the exe does not report the version $PZV"; exit 1; }
           ./pzsolve.exe selftest
           ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --ui log -q --no-gpu
           grep -qi d2c55 campaigns/ci20/FOUND.txt

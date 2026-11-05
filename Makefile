@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pzsolve - Makefile
-# Targets: all (default), test, test-shani, asan, tsan, windows, wintest, clean
+# Targets: all (default), test, test-shani, asan, tsan, windows, wintest, clean, print-version (the version the build reports)
 #   make windows   cross-compiles build/win/pzsolve.exe with MinGW-w64 (static, no DLLs needed)
 #   make wintest   builds the Windows unit tests and runs them (and the self-test) under Wine
 #   make test-shani   runs the library tests, the shani engine test and the self-test under qemu-x86_64 -cpu max, which executes the SHA
@@ -27,6 +27,13 @@
 
 VERSION  := $(shell cat VERSION)
 GITREV   := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
+# The version the program reports (PZ_VERSION; `make -s print-version` prints it). The release of VERSION is the commit tagged
+# vVERSION, and only that build says VERSION alone; a build of any other commit of a git checkout is a test build and says
+# VERSION-test.COMMIT (1.22.0-test.7bc52d6). The GPU tuning and the machine profile are saved under the version, so a test build
+# measures them for itself instead of using what the release (or another test build) chose. Outside a git checkout (a source
+# archive) the version is VERSION, as it always was. The release workflow sets it on the command line (make PZ_VERSION=X.Y.Z): when
+# a manual run publishes, the tag is created after the build.
+PZ_VERSION := $(VERSION)$(if $(filter nogit,$(GITREV)),,$(if $(shell git describe --tags --exact-match --match 'v$(VERSION)' HEAD 2>/dev/null),,-test.$(GITREV)))
 # the machine the binary is for: what the compiler says, unless a macOS build is for the other architecture (MACOS_ARCH, below)
 MACHINE  := $(shell $(CC) -dumpmachine)
 ifneq ($(findstring apple-darwin,$(MACHINE))$(MACOS_ARCH),$(findstring apple-darwin,$(MACHINE)))
@@ -40,7 +47,7 @@ HOSTCC  ?= cc
 OPT     ?= -O3
 WARN    := -Wall -Wextra -Wshadow -Wno-unused-parameter -Werror=incompatible-pointer-types
 COMMON  := -std=gnu11 $(OPT) -g $(WARN) -D_GNU_SOURCE -fno-strict-aliasing \
-           -DPZ_VERSION=\"$(VERSION)\" -DPZ_BUILD_INFO=\"$(BUILDINFO)\" -Isrc -Ilib/pzcore/include
+           -DPZ_VERSION=\"$(PZ_VERSION)\" -DPZ_BUILD_INFO=\"$(BUILDINFO)\" -Isrc -Ilib/pzcore/include
 LDLIBS  := -lpthread -lm -ldl
 
 # clang (including Apple clang): without the SLP vectorizer. Apple clang 17 (x86-64, -O3) miscompiled the AVX2 lane step of the
@@ -213,19 +220,22 @@ lib-cxx: $(LIB) lib/pzcore/tests/cxx_check.cpp
 lib-examples: $(addsuffix $(EXE),$(addprefix $(BUILD)/pzcore/ex_,$(LIBEXAMPLES)))
 	@for e in $(LIBEXAMPLES); do echo "== $$e"; $(RUN) ./$(BUILD)/pzcore/ex_$$e$(EXE) || exit 1; done
 
-.PHONY: all lib lib-test lib-cxx lib-examples test test-shani e2e asan tsan clean windows wintest mockcuda winmockcuda
+.PHONY: all lib lib-test lib-cxx lib-examples test test-shani e2e asan tsan clean windows wintest mockcuda winmockcuda print-version
 
 all: $(BIN)
+
+print-version:
+	@echo $(PZ_VERSION)
 
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-# PZ_VERSION and PZ_BUILD_INFO reach the compiler as -D options, which make does not see: a new VERSION or a new commit changed no
+# PZ_VERSION and PZ_BUILD_INFO reach the compiler as -D options, which make does not see: a new VERSION, a new commit or a new tag changed no
 # dependency, and an incremental build went on reporting the old ones. The objects whose sources use the macros depend on a stamp file
 # named after the version, the commit and the target. When any of the three changes, the stamp is a new file (the old one is removed),
 # newer than those objects, and they are compiled again; while they stay the same nothing is compiled, and `make -n` is accurate.
 # A header that used the macros would need its includers listed here.
-VSTAMP       := $(BUILD)/version-$(subst /,_,$(VERSION)-$(BUILDINFO)).stamp
+VSTAMP       := $(BUILD)/version-$(subst /,_,$(PZ_VERSION)-$(BUILDINFO)).stamp
 VERSION_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(shell grep -l -E 'PZ_VERSION|PZ_BUILD_INFO' src/*.c))
 $(VERSION_OBJS): $(VSTAMP)
 $(VSTAMP): | $(BUILD)
