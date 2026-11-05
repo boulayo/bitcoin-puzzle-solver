@@ -15,7 +15,7 @@
 | `cpu_engine.h`, `cpu_common.c` | engine interface (`scan_job`, `cpu_engine`); shared tables (`i·G`, `cpu_gmultiples` for tables of any size), engine registry, ISA detection, quick check of every engine (known key), autotune |
 | `jobq.h/.c` | interval scheduler (work requests, completion, checkpoint, resume) |
 | `campaign.h/.c` | immutable campaign configuration (with the public key to encrypt the found key to), seed generation |
-| `encrypt.h/.c`, `encrypt_cmd.h/.c`, `onfound.h/.c` | the encryption of the found key on top of `pzcore/seal.h`: the public key of the options, the random scalar, the key of a password (scrypt in a locked and wiped buffer); the commands `encrypt-keygen` and `decrypt-key`; the command of `--on-found` (a thread, at most 120 s, started when `FOUND.txt` is written, joined when the box is out) |
+| `encrypt.h/.c`, `cmd_encrypt.h/.c`, `onfound.h/.c` | the encryption of the found key on top of `pzcore/seal.h`: the public key of the options, the random scalar, the key of a password (scrypt in a locked and wiped buffer); the commands `encrypt-keygen` and `decrypt-key`; the command of `--on-found` (a thread, at most 120 s, started when `FOUND.txt` is written, joined when the box is out) |
 | `puzzles.h/.c`, `puzzles_data.c` | database of the 160 puzzles (generated from `data/puzzles.csv`) plus the addresses of the emptied puzzles 161-256 (`data/puzzles_withdrawn.csv`) and its verification |
 | `campaigns.h/.c` | campaign lock (via `platform.h`), `list` command |
 | `eta.h/.c`, `ui.h/.c` | time / probability estimation models and the speed estimator (`rate_est`); rendering of the panel and the status line (pure formatting, no I/O) |
@@ -43,7 +43,8 @@
 | `lz.h`, `lz.c` | decoder of the compressed PTX modules (a small LZ77 of our own with an optional dictionary, libc only, every access bounds-checked, checksummed) and `pz_blob_text`, which unpacks an embedded module; the encoder is in `tools/embed.c` (see below) |
 | `kernels/*.cl`, `kernels/pz_cuda.h`, `kernels/pz_kang.h`, `kernels/ptx/*.ptx`, `kernels/ptx/modules.txt` | **a single kernel source**: OpenCL C, compiled by the OpenCL driver or, through `pz_cuda.h`, by NVRTC into PTX (`tools/gen_ptx.py`, committed files). `pz_kang.h` holds the numbers that the kangaroo kernel and the host share (preprocessor lines only: it is put in front of the kernel text wherever that is compiled). `modules.txt` is the one list of the PTX modules, read by the `Makefile` (through `tools/ptx_table.awk`), by `tools/gen_ptx.py`, by the CUDA runtime (`build/ptx_mods.c`) and by the simulated driver |
 | `sysinfo.h/.c` | CPU/RAM/cache, thread affinity |
-| `selftest.h`, `selftest.c`, `outfmt.h`, `main.c` | self-test, benchmark, command-line interface; `outfmt.h` is the look of the check lists and tables |
+| `selftest.h`, `selftest.c`, `outfmt.h` | self-test, benchmark; `outfmt.h` is the look of the check lists and tables |
+| `main.c`, `cmd.h`, `cmd_hunt.c`, `cmd_merge.c`, `cmd_campaigns.c`, `cmd_puzzle.c`, `cmd_devices.c` | the command line: `main.c` holds `main`, the dispatch, the help texts and the reader of the options that `hunt`, `info`, `list`, `where` and `merge` share; the front end of each command is in its `cmd_*.c` (`cmd_hunt.c`: the campaign of the options, new or resumed, the session and the found key, whose encryption and banner `cmd_merge.c` uses too; `cmd_campaigns.c`: `info`, `list`, `where`, `split`; `cmd_puzzle.c`: `puzzle`, `puzzles`), and `cmd.h` declares the entry points and what they share; the other commands are in `cmd_encrypt.c`, `doctor.c`, `selftest.c` (`selftest`, `bench`) and `kangaroo.c` (`kstat`) |
 
 **Embedded kernels.** The kernels are compiled into the executable by `tools/embed.c`, which the `Makefile` builds and runs on the build
 machine. The OpenCL sources (about 100 KB) become plain arrays (`build/kernels_gen.c`). The 26 PTX modules (18 MB of text in `src/kernels/ptx/`,
@@ -156,7 +157,7 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | `PZ_NO_CUDA`, `PZ_NO_OPENCL` | `no_cuda`, `no_opencl` | `rt.c`: which runtimes are loaded |
 | `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices (`--gpu-api` comes first) |
 | `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_meta`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off (the text of `PZ_GPU_NK` is read by `gpu_variant.c`) |
-| `PZ_NO_PROFILE` | `no_profile` | `main.c`, `profile.c` |
+| `PZ_NO_PROFILE` | `no_profile` | `cmd_hunt.c`, `profile.c` |
 | `PZ_NO_LARGE_PAGES` | `no_large_pages` | `platform_win.c`: `pz_map_zeroed` |
 | `PZ_BENCH_SCALE` | `bench_scale` | `bench_tg.c`: duration of the measurements |
 | `XDG_CACHE_HOME`, `HOME`, `LOCALAPPDATA` | `xdg_cache_home`, `home`, `local_app_data` | `util.c`: `pz_cache_file` |

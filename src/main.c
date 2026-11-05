@@ -10,7 +10,7 @@
 #include "platform.h"
 #include "envopts.h"
 #include "encrypt.h"
-#include "encrypt_cmd.h"
+#include "cmd_encrypt.h"
 #include <getopt.h>
 #include <errno.h>
 #include <stdarg.h>
