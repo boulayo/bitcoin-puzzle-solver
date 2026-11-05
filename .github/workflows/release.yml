@@ -6,6 +6,11 @@
 # Without "publish" a manual run only builds the packages and keeps them as workflow artifacts. A manual publish creates a DRAFT
 # release by default (untick "draft" to publish at once).
 #
+# A release (a tag push, or a manual run with "publish") is made only of a commit on which ci.yml has completed successfully: the first
+# job looks the runs of ci.yml up for the exact commit and fails, before anything is built, when there is none, when the last one is
+# still running or when none passed (a commit that changed only documents does not start the CI by itself: run it by hand on that
+# commit first, Actions tab, "CI", "Run workflow"). A test build (no "publish") is not gated.
+#
 # The release job runs one at a time for each version (a tag push and a manual run, or two manual runs, cannot both find no release
 # and create two, or replace each other's files). It also refuses to create or replace the files of a release whose tag points to
 # another commit than the one this run built: the files would not come from the tagged commit, while the tag and the notes stay as
@@ -58,6 +63,47 @@ defaults:
     shell: bash
 
 jobs:
+  # The gate: when the run publishes, ci.yml must have completed successfully on the commit being released. The runs are looked up
+  # by their head commit (actions: read is enough; the repository is public, so the listing needs no right at all). A test build
+  # (no "publish") passes through at once. The job comes first so that a red commit fails in seconds, not after an hour of builds.
+  ci-green:
+    name: CI passed on this commit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: A test build is not gated
+        if: ${{ !(github.ref_type == 'tag' || inputs.publish) }}
+        run: echo "test build (no publish), the CI of the commit is not checked"
+      - uses: actions/checkout@v7
+        if: github.ref_type == 'tag' || inputs.publish
+      - name: ci.yml completed successfully on the commit being released
+        if: github.ref_type == 'tag' || inputs.publish
+        run: |
+          # the commit itself (GITHUB_SHA may name an annotated tag object): the workflow runs are filed under the commit
+          SHA=$(git rev-parse "$GITHUB_SHA^{commit}")
+          # every run of ci.yml for this commit (there is more than one after a re-run or a manual run): "<status> <conclusion> <event> <url>"
+          RUNS=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100" --jq '.workflow_runs[] | "\(.status) \(.conclusion // "none") \(.event) \(.html_url)"')
+          echo "runs of ci.yml on $SHA:"
+          awk 'NF { print "  " $0; n++ } END { if (!n) print "  (none)" }' <<<"$RUNS"
+          HOW="Push the commit, or run the CI workflow by hand on it (Actions tab, \"CI\", \"Run workflow\"; a commit that changed only documents does not start it by itself), wait until it has passed, then start the release again."
+          if [ -z "$RUNS" ]; then
+            echo "::error::no run of the CI workflow (ci.yml) for commit $SHA: the release needs a green CI on the exact commit it releases. $HOW"
+            exit 1
+          elif grep -q '^completed success ' <<<"$RUNS"; then
+            echo "the CI passed on $SHA: going on"
+          elif grep -q -v '^completed ' <<<"$RUNS"; then
+            echo "::error::the CI workflow (ci.yml) has not finished on commit $SHA yet ($(grep -v '^completed ' <<<"$RUNS" | awk '{print $1}' | sort -u | paste -sd,)): the release needs a green CI on the exact commit it releases. Wait until it has passed, then start the release again."
+            exit 1
+          else
+            echo "::error::the CI workflow (ci.yml) did not pass on commit $SHA ($(awk '{print $2}' <<<"$RUNS" | sort -u | paste -sd,)): the release needs a green CI on the exact commit it releases. $HOW"
+            exit 1
+          fi
+
   version:
     runs-on: ubuntu-22.04
     outputs:
@@ -78,7 +124,7 @@ jobs:
 
   build:
     name: build (${{ matrix.os }}-${{ matrix.arch }})
-    needs: version
+    needs: [version, ci-green]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:

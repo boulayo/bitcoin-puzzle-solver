@@ -62,7 +62,13 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    * creates the annotated tag `vX.Y.Z` on the resulting commit.
    It never builds binaries and never pushes: it prints the push command at the end.
 4. Publish the commit and the tag: `git push origin <branch> --follow-tags`.
-5. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
+5. **The CI of the released commit must be green, and the workflow enforces it**: a release run (a tag push, or a manual run with
+   "publish") starts with a job that looks the runs of `ci.yml` up for the exact commit being released and fails, before anything is
+   built, when there is none, when the last one has not finished or when none passed. Pushing the commit starts the CI; wait for it to
+   pass before pushing the tag. A commit that changes only documents does not start the CI by itself (`ci.yml` ignores them): run the CI
+   workflow by hand on it (Actions tab, "CI", "Run workflow"), or release a commit the CI did run on. A test build (a manual run
+   without "publish") is not gated.
+6. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
    Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine), checks the Linux binary
    (no glibc symbol newer than 2.34) and the Windows one (system DLLs only) with `tools/check_binary.sh`, and publishes the five archives, together
    with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page and check that every archive and the
