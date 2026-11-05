@@ -14,6 +14,8 @@
 #   X86=0           force the portable scalar code even on an x86-64 machine (what arm64 builds use)
 #   CC=clang        use another compiler (the default is `cc`: gcc on Linux, Apple clang on macOS)
 #   MACOS_MIN=11.0  oldest macOS the binary will run on
+#   MACOS_ARCH=x86_64  macOS only: build for that architecture (arm64 or x86_64) with Apple clang's -arch, whatever the machine is
+#                   (the release builds the Intel binary this way on an Apple Silicon runner and tests it under Rosetta); ignored elsewhere
 
 # the first rule of the file would be the default goal: say which one it is (lib/pzcore adds rules above `all`)
 .DEFAULT_GOAL := all
@@ -25,7 +27,14 @@
 
 VERSION  := $(shell cat VERSION)
 GITREV   := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
-BUILDINFO := git-$(GITREV)/$(shell $(CC) -dumpmachine)
+# the machine the binary is for: what the compiler says, unless a macOS build is for the other architecture (MACOS_ARCH, below)
+MACHINE  := $(shell $(CC) -dumpmachine)
+ifneq ($(findstring apple-darwin,$(MACHINE))$(MACOS_ARCH),$(findstring apple-darwin,$(MACHINE)))
+ifneq ($(findstring apple-darwin,$(MACHINE)),)
+MACHINE  := $(patsubst $(firstword $(subst -, ,$(MACHINE)))%,$(MACOS_ARCH)%,$(MACHINE))
+endif
+endif
+BUILDINFO := git-$(GITREV)/$(MACHINE)
 
 HOSTCC  ?= cc
 OPT     ?= -O3
@@ -50,7 +59,11 @@ endif
 DARWIN := $(shell $(CC) -dumpmachine | grep -c apple-darwin)
 ifeq ($(DARWIN),1)
 MACOS_MIN ?= 11.0
+MACOS_ARCH ?=
 DEPLOY  := -mmacosx-version-min=$(MACOS_MIN)
+ifneq ($(MACOS_ARCH),)
+DEPLOY  += -arch $(MACOS_ARCH)   # every compile and link line carries DEPLOY: the whole build, the tests and the mock driver are for that architecture
+endif
 COMMON  += $(DEPLOY)
 LDLIBS  := -lm
 else
@@ -103,8 +116,8 @@ DEPS   := $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
 # CPU only the portable engine is built and -DPZ_NO_X86_VARIANTS removes the rest. On arm64 (Apple Silicon, Linux aarch64) ARM64=1 adds
 # the neon and neon2 engines, built with -march=armv8-a+crypto and chosen at run time when the CPU has the SHA-256 instructions.
 # The -m flags below are used only when X86=1: nothing x86-specific reaches an arm64 compiler.
-X86 := $(shell $(CC) -dumpmachine | grep -cE 'x86_64|amd64')
-ARM64 := $(shell $(CC) -dumpmachine | grep -cE 'aarch64|arm64')
+X86 := $(shell echo $(MACHINE) | grep -cE 'x86_64|amd64')
+ARM64 := $(shell echo $(MACHINE) | grep -cE 'aarch64|arm64')
 ifeq ($(ARM64),1)
 NEON_FLAGS   := -march=armv8-a+crypto
 endif

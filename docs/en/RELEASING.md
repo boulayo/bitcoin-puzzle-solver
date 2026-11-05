@@ -69,7 +69,9 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    workflow by hand on it (Actions tab, "CI", "Run workflow"), or release a commit the CI did run on. A test build (a manual run
    without "publish") is not gated.
 6. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
-   Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine), checks the Linux binary
+   Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine; the macOS Intel
+   binary is cross-compiled on the Apple Silicon runner with `make MACOS_ARCH=x86_64` and self-tested under Rosetta, `arch -x86_64`,
+   and the job fails if the runner has no Rosetta: an untested binary is not published), checks the Linux binary
    (no glibc symbol newer than 2.34) and the Windows one (system DLLs only) with `tools/check_binary.sh`, and publishes the five archives, together
    with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page and check that every archive and the
    checksum file are there.

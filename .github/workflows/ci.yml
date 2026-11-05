@@ -8,11 +8,13 @@
 #   linux-arm64    ubuntu-22.04-arm  the portable scalar code (what Apple Silicon also runs)
 #   windows-x86_64 cross-compiled with MinGW-w64 on Ubuntu, then run on a real windows-latest machine
 #   macos-arm64    macos-15          Apple Silicon, Apple clang
-#   macos-x86_64   macos-15-intel    Intel Mac, Apple clang
+#   macos-x86_64   macos-15          the Intel binary, cross-compiled on the Apple Silicon runner (make MACOS_ARCH=x86_64, Apple
+#                                    clang's -arch) and run under Rosetta (arch -x86_64) when the runner has it
 #
-# Runner labels change over time (macos-13 was retired, Intel macOS images are on their way out too): when a job stays queued or
-# fails with "label not found", check the current labels at https://github.com/actions/runner-images and update them here and in
-# release.yml. The ubuntu-22.04-arm label is free only for public repositories.
+# Runner labels change over time (macos-13 was retired; the Intel images, macos-15-intel, are being retired and their jobs waited
+# in the queue for a quarter of an hour and were cancelled, which is why the Intel binary is built on the Apple Silicon runner):
+# when a job stays queued or fails with "label not found", check the current labels at https://github.com/actions/runner-images and
+# update them here and in release.yml. The ubuntu-22.04-arm label is free only for public repositories.
 #
 # Compiler errors: the build step runs `make -k` (keeps compiling the other files after an error, so one run shows every error),
 # the diagnostics become annotations through .github/problem-matchers/cc.json, and a failed build prints an error summary and
@@ -187,8 +189,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64,  runner: macos-15 }
-          - { name: macos-x86_64, runner: macos-15-intel }
+          - { name: macos-arm64,  runner: macos-15, arch: arm64,  make: '' }
+          - { name: macos-x86_64, runner: macos-15, arch: x86_64, make: 'MACOS_ARCH=x86_64' }   # cross-compiled, run under Rosetta
     steps:
       - uses: actions/checkout@v7
       - name: Toolchain
@@ -201,33 +203,55 @@ jobs:
           sysctl -n machdep.cpu.brand_string
           sysctl hw.ncpu hw.physicalcpu hw.memsize
       - name: Build
-        run: make -k -j"$(sysctl -n hw.ncpu)" 2>&1 | tee build.log
-      - name: The binary
+        run: make -k -j"$(sysctl -n hw.ncpu)" ${{ matrix.make }} 2>&1 | tee build.log
+      - name: The binary (for ${{ matrix.arch }})
         run: |
           file build/pzsolve
           lipo -archs build/pzsolve
           otool -L build/pzsolve
+          [ "$(lipo -archs build/pzsolve)" = "${{ matrix.arch }}" ] || { echo "::error::the binary is not for ${{ matrix.arch }}: $(lipo -archs build/pzsolve)"; exit 1; }
           # ad-hoc signature, as in the release (no Apple Developer account involved)
           codesign -s - --force build/pzsolve
           codesign -dv build/pzsolve 2>&1 | head -5
+      # The x86_64 binary runs under Rosetta on this Apple Silicon runner (arch -x86_64 makes that explicit; an x86_64-only Mach-O
+      # would run under it by itself too). Without Rosetta the binary is built but not run here, with a notice; the release workflow
+      # fails in that case, since it must not publish an untested binary.
+      - name: Rosetta
+        id: rosetta
+        run: |
+          if [ "${{ matrix.arch }}" = arm64 ]; then
+            echo "native build: the binary runs as it is"
+          elif arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "Rosetta is present: the x86_64 binary is run with 'arch -x86_64'"
+            echo "run=arch -x86_64" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Rosetta is not installed on this runner: the x86_64 binary is built but not run here (the release workflow fails in this case)"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
       - name: Detected hardware and engines
-        run: build/pzsolve devices
+        if: steps.rosetta.outputs.skip != '1'
+        run: ${{ steps.rosetta.outputs.run }} build/pzsolve devices
       # The runners may expose a virtual GPU through Apple's OpenCL: the first self-test leaves it out so that the CPU code is
       # judged on its own, the second one lets the program try whatever OpenCL finds and does not fail the job.
       - name: Self-test (CPU)
-        run: PZ_NO_OPENCL=1 build/pzsolve selftest
+        if: steps.rosetta.outputs.skip != '1'
+        run: PZ_NO_OPENCL=1 ${{ steps.rosetta.outputs.run }} build/pzsolve selftest
       - name: Self-test (with OpenCL, informational)
+        if: steps.rosetta.outputs.skip != '1'
         continue-on-error: true
-        run: build/pzsolve selftest
+        run: ${{ steps.rosetta.outputs.run }} build/pzsolve selftest
       - name: Smoke test (find the key of puzzle 20)
+        if: steps.rosetta.outputs.skip != '1'
         run: |
-          PZ_NO_OPENCL=1 build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --ui log -q --no-gpu
+          PZ_NO_OPENCL=1 ${{ steps.rosetta.outputs.run }} build/pzsolve hunt -p 20 -c ci20 -d "$RUNNER_TEMP/campaigns" --ui log -q --no-gpu
           grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
       # Informational until the test sources build with Apple clang (tests/t_engine.c uses a GCC nested function) and without the
-      # x86 engines on Apple Silicon (tests/t_bsgs.c calls bs_group_x86 unconditionally).
+      # x86 engines on Apple Silicon (tests/t_bsgs.c calls bs_group_x86 unconditionally). The x86_64 test programs run under Rosetta
+      # by themselves (they are x86_64-only Mach-O files).
       - name: Unit tests
+        if: steps.rosetta.outputs.skip != '1'
         continue-on-error: true
-        run: PZ_NO_OPENCL=1 make test -k
+        run: PZ_NO_OPENCL=1 make test -k ${{ matrix.make }}
       - name: Compiler errors
         if: failure()
         run: grep -nE 'error:|Error [0-9]+|undefined (reference|symbol)' build.log | head -100 || true

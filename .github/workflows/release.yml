@@ -34,7 +34,10 @@
 # refuses it; the release notes tell users to run `xattr -dr com.apple.quarantine <folder>` (files fetched with curl or `gh release
 # download` are not quarantined).
 #
-# Runner labels change over time (see ci.yml): macos-15 is Apple Silicon, macos-15-intel is Intel.
+# macOS: both binaries are built on the Apple Silicon runner (macos-15): arm64 natively, x86_64 cross-compiled with Apple clang's -arch
+# (make MACOS_ARCH=x86_64) and self-tested under Rosetta (arch -x86_64). A runner without Rosetta fails the x86_64 build job: an
+# untested binary is not published. The Intel runners (macos-15-intel) are being retired and their jobs waited a quarter of an hour
+# in the queue and were cancelled. Runner labels change over time (see ci.yml).
 name: Release
 
 on:
@@ -134,7 +137,7 @@ jobs:
           - { os: linux,   arch: x86_64, runner: ubuntu-22.04 }
           - { os: linux,   arch: arm64,  runner: ubuntu-22.04-arm }
           - { os: macos,   arch: arm64,  runner: macos-15 }
-          - { os: macos,   arch: x86_64, runner: macos-15-intel }
+          - { os: macos,   arch: x86_64, runner: macos-15 }       # cross-compiled (MACOS_ARCH=x86_64), self-tested under Rosetta
           - { os: windows, arch: x86_64, runner: ubuntu-24.04 }      # cross-compiled
     steps:
       - uses: actions/checkout@v7
@@ -148,9 +151,17 @@ jobs:
             make windows -k -j"$(nproc)" 2>&1 | tee build.log
             echo "BIN=build/win/pzsolve.exe" >> "$GITHUB_ENV"
           else
-            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" 2>&1 | tee build.log
+            MAKEARCH=""
+            if [ "${{ matrix.os }}-${{ matrix.arch }}" = macos-x86_64 ]; then MAKEARCH="MACOS_ARCH=x86_64"; fi
+            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" $MAKEARCH 2>&1 | tee build.log
             echo "BIN=build/pzsolve" >> "$GITHUB_ENV"
           fi
+      - name: The macOS binary is for ${{ matrix.arch }}
+        if: matrix.os == 'macos'
+        run: |
+          file build/pzsolve
+          lipo -archs build/pzsolve
+          [ "$(lipo -archs build/pzsolve)" = "${{ matrix.arch }}" ] || { echo "::error::the binary is not for ${{ matrix.arch }}: $(lipo -archs build/pzsolve)"; exit 1; }
       - name: Ad-hoc code signature
         if: matrix.os == 'macos'
         run: |
@@ -158,13 +169,23 @@ jobs:
           codesign -v build/pzsolve
           codesign -dv build/pzsolve 2>&1 | head -5
       # The self-test gates the release. On macOS it leaves out OpenCL (Apple's deprecated framework, no usable GPU on the runners).
+      # The x86_64 macOS binary is run under Rosetta on the Apple Silicon runner; without Rosetta the job fails: an untested binary
+      # is not published.
       - name: Self-test
         if: matrix.os != 'windows'
         env:
           PZ_NO_OPENCL: ${{ matrix.os == 'macos' && '1' || '' }}
         run: |
-          "$BIN" version
-          "$BIN" selftest
+          RUN=""
+          if [ "${{ matrix.os }}-${{ matrix.arch }}" = macos-x86_64 ]; then
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then
+              RUN="arch -x86_64"; echo "Rosetta is present: the x86_64 binary is self-tested under it (arch -x86_64)"
+            else
+              echo "::error::Rosetta is not installed on this runner: the x86_64 macOS binary cannot be tested here, and an untested binary is not published"; exit 1
+            fi
+          fi
+          $RUN "$BIN" version
+          $RUN "$BIN" selftest
       - name: Linux binary needs no glibc newer than 2.34
         if: matrix.os == 'linux'
         run: tools/check_binary.sh linux "$BIN"
