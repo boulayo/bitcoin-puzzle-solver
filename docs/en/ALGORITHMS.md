@@ -786,5 +786,8 @@ the search code that found it until it is overwritten, and in memory during the 
 as information (they are public); the line does not depend on them.
 
 The public key to encrypt to is stored in `campaign.conf` as `encrypt_pubkey=HEX`, a line that is added only when it is used: a campaign without it has a file that older versions
-and this one read as before; an older version that resumes a campaign that has the line ignores it and would write the key in plain, so a campaign that encrypts must not
-be resumed with an older program.
+and this one read as before. A version before 1.21.0 that resumes a campaign that has the line ignores it and would write the key in plain. From 1.22.0 on the campaign
+also carries the line `requires=1.21.0` (written with `encrypt_pubkey`, and only then): a version that knows the line and is below the version named refuses to resume the
+campaign, with a message that names the version needed and its own, so the plain fallback cannot happen by mistake with any version from 1.22.0 on. The versions 1.21.0 and
+1.21.1 know `encrypt_pubkey` but not `requires`, and the versions before them know neither: they still ignore the line, so a campaign that one of those may resume must
+not rely on it, and must not be resumed with a version before 1.21.0 at all. The comparison is numeric on the three parts of the version (10.0.0 is above 9.0.0).

@@ -38,6 +38,7 @@ tools/release.sh       release script: checks, bumps VERSION, verifies, tags
 tools/package_release.sh  builds the Linux and Windows packages locally (the workflow packs the binary of every platform with it)
 tools/verify.sh        the full verification run by the release script
 tools/check_binary.sh  the two checks of a binary that is about to be shipped: the glibc ceiling of the Linux one, the DLLs of the Windows one
+tools/check_docs.sh    the two user guides in step (sections, options, environment variables) and the links of every document
 tools/ci_apt_install.sh  installs the packages of the workflows (MinGW-w64, QEMU) with a time limit per try and retries
 .github/workflows/     ci.yml (every push and pull request) and release.yml (the release)
 GitHub Releases        the binaries of every published version, with SHA256SUMS
@@ -64,8 +65,16 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    * creates the annotated tag `vX.Y.Z` on the resulting commit.
    It never builds binaries and never pushes: it prints the push command at the end.
 4. Publish the commit and the tag: `git push origin <branch> --follow-tags`.
-5. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
-   Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine), checks the Linux binary
+5. **The CI of the released commit must be green, and the workflow enforces it**: a release run (a tag push, or a manual run with
+   "publish") starts with a job that looks the runs of `ci.yml` up for the exact commit being released and fails, before anything is
+   built, when there is none, when the last one has not finished or when none passed. Pushing the commit starts the CI; wait for it to
+   pass before pushing the tag. A commit that changes only documents does not start the CI by itself (`ci.yml` ignores them): run the CI
+   workflow by hand on it (Actions tab, "CI", "Run workflow"), or release a commit the CI did run on. A test build (a manual run
+   without "publish") is not gated.
+6. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
+   Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine; the macOS Intel
+   binary is cross-compiled on the Apple Silicon runner with `make MACOS_ARCH=x86_64` and self-tested under Rosetta, `arch -x86_64`,
+   and the job fails if the runner has no Rosetta: an untested binary is not published), checks the Linux binary
    (no glibc symbol newer than 2.34) and the Windows one (system DLLs only) with `tools/check_binary.sh`, and publishes the five archives, together
    with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page and check that every archive and the
    checksum file are there.
@@ -85,7 +94,9 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
 
 `tools/verify.sh` (also used by `tools/release.sh`) runs in sequence:
 
-0. a re-check of the puzzle database with the independent implementation (`tools/gen_puzzles.py --check`);
+0. a re-check of the puzzle database with the independent implementation (`tools/gen_puzzles.py --check`), and the documents
+   (`tools/check_docs.sh`: the Italian guide has the sections, options and environment variables of the English one, every relative
+   link resolves);
 1. a build from scratch and `make test` (unit tests + built-in self-test), the examples and tests of the library, also unoptimized (`-O0`) and as C++;
 2. the binary and the paths that need a particular machine: `tools/check_binary.sh` on the Linux binary (no glibc symbol newer than 2.34); the AVX-512 IFMA
    engine (executed by the CPU if it can, under Intel SDE when `PZ_SDE` is set, else with the emulation of `tools/ifma_emul.h`); the CUDA path with a
@@ -111,8 +122,8 @@ runs `python3 -I tools/gen_ptx.py --nvrtc "$PZ_NVRTC" --check` and takes about a
 `tools/release.sh` does not set it: for a release that changed a kernel, run `PZ_NVRTC=/path/to/libnvrtc.so.12 tools/release.sh`, or
 `verify.sh` by itself, so that a stale module cannot ship. What the CI workflow (`ci.yml`) does run on every push, besides the build
 and the self-test (Linux x86-64 with gcc, clang and without the x86 engines, Linux arm64): a campaign on puzzle 20, `tools/check_binary.sh`,
-the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver, the Windows cross-build and, as an
-informational job, `make test-shani` (the SHA-extension code under QEMU).
+the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver, the Windows cross-build, `tools/check_docs.sh`
+and, as an informational job, `make test-shani` (the SHA-extension code under QEMU).
 
 ## Compatibility of the files between versions
 

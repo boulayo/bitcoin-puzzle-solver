@@ -225,7 +225,8 @@ int cfg_save(const campaign_cfg *c, const char *path)
         "%s%s%s",
         c->format_version, c->created_with, c->created_at, c->name, c->puzzle, start_hex, end_hex,
         c->address, hash160_hex, pubkey_hex, mode_name(c->mode), seed_hex, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part,
-        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex, c->has_encrypt ? "\n" : "");   /* the line is there only when it is used: the file of a campaign without it is as before */
+        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex,   /* the two lines are there only when they are used: the file of a campaign without them is as before */
+        c->has_encrypt ? "\nrequires=" PZ_REQUIRES_ENCRYPT "\n" : "");
     return pz_write_file_atomic(path, buf, (size_t)n, 0644);
 }
 
@@ -237,11 +238,33 @@ int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path)
     pz_hex_encode(c->encrypt_pubkey33, 33, hx);
     const size_t l = strlen(text), cap = l + 100;
     char *out = pz_xmalloc(cap);
-    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\n", text, l && text[l - 1] != '\n' ? "\n" : "", hx);
+    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\nrequires=" PZ_REQUIRES_ENCRYPT "\n", text, l && text[l - 1] != '\n' ? "\n" : "", hx);
     const int rc = pz_write_file_atomic(path, out, (size_t)n, 0644);
     free(out);
     free(text);
     return rc;
+}
+
+/* "X.Y.Z" as three numbers; false when the text does not start with three numbers separated by dots */
+static bool version_parse(const char *s, unsigned long v[3])
+{
+    for (int i = 0; i < 3; i++) {
+        char *end;
+        if (*s < '0' || *s > '9') return false;
+        v[i] = strtoul(s, &end, 10);
+        if (i < 2) { if (*end != '.') return false; end++; }
+        s = end;
+    }
+    return true;
+}
+
+int cfg_version_cmp(const char *a, const char *b)
+{
+    unsigned long va[3] = {0, 0, 0}, vb[3] = {0, 0, 0};
+    (void)version_parse(a, va);
+    (void)version_parse(b, vb);
+    for (int i = 0; i < 3; i++) if (va[i] != vb[i]) return va[i] < vb[i] ? -1 : 1;
+    return 0;
 }
 
 static const char *cfg_val(char *text, const char *key, char *out, size_t outlen)
@@ -267,6 +290,24 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
         snprintf(err, errlen, "campaign format %u not supported by this version (expected %u)", c->format_version, PZ_FORMAT_VERSION);
         free(text);
         return -1;
+    }
+    {
+        char rv[40];   /* the version the campaign needs (absent before 1.22.0 and in a campaign that encrypts nothing): an older version must not
+                        * resume the campaign, because it would ignore what it does not know (encrypt_pubkey: the key would be written in plain) */
+        if (cfg_val(text, "requires", rv, sizeof rv) && rv[0]) {
+            unsigned long dummy[3];
+            if (!version_parse(rv, dummy)) {
+                snprintf(err, errlen, "invalid requires '%.20s' in %s (expected a version X.Y.Z)", rv, path);
+                free(text);
+                return -1;
+            }
+            if (cfg_version_cmp(PZ_VERSION, rv) < 0) {
+                snprintf(err, errlen, "this campaign needs pzsolve %s or later: it was made with %s (this is pzsolve %s)", rv,
+                         pz_kv_find(text, "encrypt_pubkey", '=', 0) ? "--encrypt-pubkey" : "a feature this version does not have", PZ_VERSION);
+                free(text);
+                return -1;
+            }
+        }
     }
     GET("created_with") pz_strlcpy(c->created_with, v, sizeof c->created_with);
     GET("created_at") c->created_at = atof(v);

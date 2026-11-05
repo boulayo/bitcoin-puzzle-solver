@@ -138,6 +138,58 @@ static void t_cfg(void)
         CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "unknown mode 'zzzz'"));
     }
     free(t);
+    /* a campaign that encrypts the key writes the version it needs (requires=X.Y.Z): a version below it refuses the campaign, one at
+     * or above it resumes it; a campaign without the line (every campaign of earlier versions) resumes as before. The cases are
+     * written from the version of this build, so that they hold whatever the version is. */
+    unsigned long V[3] = {0, 0, 0};
+    CHECK(sscanf(PZ_VERSION, "%lu.%lu.%lu", &V[0], &V[1], &V[2]) == 3);
+    c.mode = MODE_LINEAR;
+    c.has_encrypt = true;
+    CHECK(pz_hex_decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", c.encrypt_pubkey33, 33) == 33);   /* G */
+    CHECK(pz_ge_from_pubkey(&c.encrypt_pubkey, c.encrypt_pubkey33, 33));
+    CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
+    t = pz_read_file("build/t_jobq.conf", NULL);
+    CHECK(t && strstr(t, "\nencrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrequires=" PZ_REQUIRES_ENCRYPT "\n"));
+    CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) == 0 && l.has_encrypt);   /* this version is at or above PZ_REQUIRES_ENCRYPT */
+    free(t);
+    c.has_encrypt = false;
+    CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
+    t = pz_read_file("build/t_jobq.conf", NULL);
+    CHECK(t && !strstr(t, "requires="));                                                /* no encryption: no line, the file is as before */
+    char above[40];
+    snprintf(above, sizeof above, "%lu.%lu.%lu", V[0], V[1], V[2] + 1);                 /* the next patch version: above this one */
+    const struct { const char *req; bool ok; } reqs[] = {
+        {"", true},                 /* no line at all: the campaign of an earlier version */
+        {"1.0.0", true},
+        {PZ_VERSION, true},         /* exactly this version */
+        {"99.0.0", false},
+        {above, false},
+        {"9.0.0", V[0] >= 9},       /* numeric, not textual: "9.0.0" is below "10.0.0" */
+        {"1.21", false},            /* not a version */
+        {"x.y.z", false},
+    };
+    for (size_t i = 0; i < sizeof reqs / sizeof *reqs; i++) {
+        char line[80] = "";
+        if (reqs[i].req[0]) snprintf(line, sizeof line, "requires=%s\n", reqs[i].req);
+        FILE *f = fopen("build/t_jobq.conf", "wb");
+        CHECK(f != NULL);
+        if (f) { fputs(t, f); fputs(line, f); fclose(f); }
+        const int rc = cfg_load(&l, "build/t_jobq.conf", err, sizeof err);
+        if (reqs[i].ok) CHECK(rc == 0);
+        else if (reqs[i].req[0] < '0' || reqs[i].req[0] > '9' || !strchr(strchr(reqs[i].req, '.') + 1, '.'))
+            CHECK(rc != 0 && strstr(err, "invalid requires") && strstr(err, reqs[i].req));
+        else   /* the message names the version needed, this one and the reason (no encrypt_pubkey line here: a feature in general) */
+            CHECK(rc != 0 && strstr(err, "needs pzsolve ") && strstr(err, reqs[i].req) && strstr(err, PZ_VERSION) && strstr(err, "a feature this version does not have"));
+    }
+    {   /* with the encrypt_pubkey line the reason is the option */
+        FILE *f = fopen("build/t_jobq.conf", "wb");
+        CHECK(f != NULL);
+        if (f) { fputs(t, f); fprintf(f, "encrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrequires=%s\n", above); fclose(f); }
+        CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "it was made with --encrypt-pubkey"));
+    }
+    free(t);
+    CHECK(cfg_version_cmp("1.9.0", "1.21.0") < 0 && cfg_version_cmp("1.21.0", "1.21.0") == 0 && cfg_version_cmp("2.0.0", "1.99.99") > 0);
+    CHECK(cfg_version_cmp("10.0.0", "9.0.0") > 0 && cfg_version_cmp("1.22.0-dev", "1.22.0") == 0 && cfg_version_cmp("junk", "0.0.1") < 0);
 }
 
 /* The syntax */

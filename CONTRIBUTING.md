@@ -4,6 +4,9 @@ Bug reports, benchmark results from your hardware, documentation fixes and patch
 open an issue first so we can agree on the approach.
 
 * `pzsolve selftest` and `make test` must pass, and new behavior needs a test.
+* A change to the documentation must pass `tools/check_docs.sh`: the Italian guide (`docs/it/USO.md`) keeps the sections, the options and the
+  environment variables of the English one (`docs/en/USAGE.md`), and every relative link of every `.md` file must resolve. The CI runs it,
+  and so does `tools/verify.sh`.
 * `tools/verify.sh` runs the full battery: AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer, Valgrind, a re-check of the puzzle
   database, the end-to-end tests, the aarch64 build under QEMU and the Windows exe under Wine (`docs/en/RELEASING.md` lists the steps). The GPU
   kernels are tested bit by bit against the CPU on pocl (OpenCL on the CPU) and, for CUDA, with a simulated driver (`tests/mock_cuda`).

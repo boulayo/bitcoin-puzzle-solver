@@ -14,6 +14,24 @@ field(){ vec "$1" | awk -v k="$2" '$1==k{print $2}'; }
 dbfield() { awk -F, -v n="$1" -v c="$2" 'NR>1 && $1==n{print $c}' data/puzzles.csv; }
 rndkey() { python3 -c "import random,sys; random.seed($2); n=$1; print(hex(random.randrange(2**(n-1), 2**n)))"; }
 
+# A slow or loaded machine takes longer to reach a state, so the checks wait for the state with a deadline (E2E_WAIT seconds, 60 by default)
+# instead of sleeping a fixed time; what a check proves does not change, only how long it may take.
+WAIT=${E2E_WAIT:-60}
+wait_for() {   # wait_for 'SHELL TEXT': true as soon as the text succeeds (tried every 0.1 s), false at the deadline
+  local i; for i in $(seq 1 $((WAIT * 10))); do eval "$1" && return 0; sleep 0.1; done; eval "$1"
+}
+wait_gone() { wait_for "! kill -0 $1 2>/dev/null"; }     # wait_gone PID: the process has ended (false when it is still there at the deadline)
+running() { grep -q '^State: *RUNNING' "$1/report.txt" 2>/dev/null; }   # running CAMPAIGN_DIR: the search runs (the first report comes 2 s after the start; a stop leaves STOPPED)
+# run_until 'SHELL TEXT' COMMAND...: starts the command (through `timeout`, a safety net of 10 minutes and a hard kill a minute after the stop),
+# waits until the text holds or the program ends by itself, then stops it with SIGINT the way an expired `timeout` does (the signal goes to the
+# process and to its group) and waits for it; RC is the exit status (130 for a clean stop, the program's own if it ended by itself).
+run_until() {
+  local cond=$1 tp; shift
+  timeout -k 60 -s INT 600 "$@" & tp=$!
+  wait_for "! kill -0 $tp 2>/dev/null || { $cond; }"
+  kill -INT $tp 2>/dev/null; wait $tp; RC=$?
+}
+
 echo "== linear search, puzzles 1..24 (random keys)"
 MAXN=24; [ "${E2E_QUICK:-0}" = 1 ] && MAXN=18
 for n in $(seq 1 $MAXN); do
@@ -46,9 +64,8 @@ W1=$($BIN where -c s1 -d "$DIR" --key b3c51 | grep "visit order"); W2=$($BIN whe
 
 echo "== interrupt and resume (linear, puzzle 31)"
 K=$(rndkey 31 99); A=$(field $K addr)
-timeout -s INT 3 $BIN hunt -p 31 -a "$A" -c res -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+run_until 'running "$DIR/res"' $BIN hunt -p 31 -a "$A" -c res -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -f "$DIR/res/state.dat" ] && ok "checkpoint written" || bad "checkpoint missing"
-K1=$(grep -c "^iv" "$DIR/res/state.dat")
 $BIN hunt -c res -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/res/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "key found after resuming" || bad "after resuming: expected ${K#0x} found '$GOT'"
@@ -59,7 +76,7 @@ echo "== stop with repeated signals in quick succession (timeout sends the signa
 A31=$(field 0x5e36d2eb addr)
 for i in 1 2 3 4 5; do
   rm -rf "$DIR/sig"
-  timeout -s INT 2.5 $BIN hunt -p 31 -a "$A31" -c sig -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+  run_until 'running "$DIR/sig"' $BIN hunt -p 31 -a "$A31" -c sig -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
   [ -s "$DIR/sig/state.dat" ] || { bad "attempt $i: no checkpoint after the stop"; break; }
   [ $i -eq 5 ] && ok "checkpoint always written on stop (5 attempts)"
 done
@@ -80,8 +97,9 @@ for n in 32 38 44 50; do
 done
 
 echo "== kangaroo: resume from the distinguished-point log"
-K=$(rndkey 56 4242); PUB=$(field $K pub); A=$(field $K addr)
-timeout -s INT 4 $BIN hunt -p 56 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+# stopped as soon as the log has points (the header is 42 bytes); puzzle 58 takes about ten seconds on four cores, so the first run rarely finds the key
+K=$(rndkey 58 4242); PUB=$(field $K pub); A=$(field $K addr)
+run_until '[ "$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)" -gt 42 ]' $BIN hunt -p 58 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 SZ=$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)
 [ "$SZ" -gt 42 ] && ok "distinguished-point log written ($SZ bytes)" || bad "dp.bin empty"
 $BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
@@ -89,16 +107,18 @@ GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/kres/FOUND.txt
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"
 
 echo "== kangaroo: a file size limit (ulimit -f) fails the writes of dp.bin, which is handled like a full disk; it does not kill the program"
-K=$(rndkey 80 8080); PUB=$(field $K pub); A=$(field $K addr)   # a range the key cannot be found in within seconds; a flood of points reaches the limit at once
+K=$(rndkey 80 8080); PUB=$(field $K pub); A=$(field $K addr)   # a range the key cannot be found in within minutes; a flood of points reaches the limit at once
 rm -rf "$DIR/xfsz"
-(ulimit -f 64; timeout -s INT 8 $BIN hunt -p 80 -a "$A" -k "$PUB" -m kangaroo --dp-bits 4 --mem 0.05 -c xfsz -d "$DIR" --ui log -q --no-gpu --checkpoint-interval 2 >"$DIR/xfsz.out" 2>&1; echo "rc=$?" >>"$DIR/xfsz.out")
+# stopped once a failed save is in the log (the first checkpoint comes 2 s after the start, later on a loaded machine)
+(ulimit -f 64; run_until 'grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" 2>/dev/null' $BIN hunt -p 80 -a "$A" -k "$PUB" -m kangaroo --dp-bits 4 --mem 0.05 -c xfsz -d "$DIR" --ui log -q --no-gpu --checkpoint-interval 2 >"$DIR/xfsz.out" 2>&1; echo "rc=$RC" >>"$DIR/xfsz.out")
 RC=$(sed -n 's/^rc=//p' "$DIR/xfsz.out")
-[ "$RC" = 124 ] && grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" && [ -s "$DIR/xfsz/session.txt" ] && ok "dp.bin beyond the file size limit: the failed saves are logged, the session is saved, the stop is clean" \
+# the final save of the stop fails under the limit too, and the program says so with exit status 2 (130 if it got through); 153 would be the kill
+{ [ "$RC" = 2 ] || [ "$RC" = 130 ]; } && grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" && [ -s "$DIR/xfsz/session.txt" ] && ok "dp.bin beyond the file size limit: the failed saves are logged, the session is saved, the stop is clean (exit status $RC)" \
   || bad "dp.bin beyond the file size limit: rc=$RC (153 = killed by SIGXFSZ): $(grep -c 'checkpoint save failed' "$DIR/xfsz/log.txt" 2>/dev/null) failed saves logged, session.txt $([ -s "$DIR/xfsz/session.txt" ] && echo present || echo missing)"
 
 echo "== kangaroo: a tiny --dp-bits on puzzle 140 (the table is sized by the memory limit; the number of points expected does not fit in 64 bits)"
 rm -rf "$DIR/k140"
-timeout -s INT 6 $BIN hunt -p 140 --dp-bits 2 --mem 0.05 -c k140 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/k140.out" 2>&1
+run_until 'grep -q "dp-bits 2, table" "$DIR/k140/log.txt" 2>/dev/null' $BIN hunt -p 140 --dp-bits 2 --mem 0.05 -c k140 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/k140.out" 2>&1
 grep -q "dp-bits 2, table 32.00 MiB (max 51.20 MiB)" "$DIR/k140/log.txt" && ok "puzzle 140 with --dp-bits 2: table of 32 MiB under a limit of 51.2 MiB" \
   || bad "puzzle 140 with --dp-bits 2: $(grep -o 'table [0-9.]* [KMG]iB (max [0-9.]* [KMG]iB)' "$DIR/k140/log.txt" | head -1)"
 
@@ -157,9 +177,10 @@ cmp -s tests/data/bsgs_v2_t500.bin "$DIR/old2.tbl" && ok "table of the second fo
 head -c 100000 "$DIR/t.tbl" > "$DIR/trunc.tbl"
 $BIN hunt -p 48 -m bsgs --table "$DIR/trunc.tbl" -c bst3 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1 && bad "truncated table accepted" || ok "truncated table rejected"
 rm -rf "$DIR/bsr"
-timeout -s INT 3 $BIN hunt -p 60 -m bsgs --bsgs-entries 3000000 -c bsr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+# each run is stopped once the giant steps are under way (the first report); the state is written at the stop
+run_until 'running "$DIR/bsr"' $BIN hunt -p 60 -m bsgs --bsgs-entries 3000000 -c bsr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ -s "$DIR/bsr/state.dat" ] && ok "BSGS checkpoint written" || bad "BSGS checkpoint missing"
-timeout -s INT 3 $BIN hunt -c bsr -d "$DIR" --ui log --no-gpu >"$DIR/bsr.out" 2>&1
+run_until 'running "$DIR/bsr"' $BIN hunt -c bsr -d "$DIR" --ui log --no-gpu >"$DIR/bsr.out" 2>&1
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/bsr/session.txt")
 grep -q "campaign resumed" "$DIR/bsr.out" && [ "$SES" = 2 ] && ok "BSGS resumed from the checkpoint (2 sessions)" || bad "BSGS resume: sessions '$SES'"
 # a fatal error after the campaign is open is also written to its log (the terminal alone leaves no trace of why a run stopped)
@@ -186,13 +207,13 @@ for n in 36 42; do
   MODE=$(awk -F= '$1=="mode"{print $2}' "$DIR/dbk$n/campaign.conf")
   [ "$GOT" = "$(dbfield $n 4)" ] && { [ "$MODE" = kangaroo ] || [ "$MODE" = bsgs ]; } && ok "db automatic mode ($MODE) puzzle $n" || bad "db puzzle $n: expected $(dbfield $n 4) found '$GOT' mode '$MODE'"
 done
-rm -rf "$DIR/stab"
-timeout -s INT 2 $BIN hunt -p 33 --mode linear -d "$DIR/stab" --ui log -q --no-gpu >/dev/null 2>&1
-[ -s "$DIR/stab/p33/state.dat" ] && ok "stable campaign name p33 created without -c" || bad "campaign p33 not created"
-SEED1=$(awk -F= '$1=="seed"{print $2}' "$DIR/stab/p33/campaign.conf")
-timeout -s INT 2 $BIN hunt -p 33 --mode linear -d "$DIR/stab" --ui log -q --no-gpu >/dev/null 2>&1
-SEED2=$(awk -F= '$1=="seed"{print $2}' "$DIR/stab/p33/campaign.conf")
-SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/stab/p33/session.txt")
+rm -rf "$DIR/stab"   # puzzle 71: its key cannot be found by chance, so the second run is a resume whatever the machine
+run_until 'running "$DIR/stab/p71"' $BIN hunt -p 71 --mode linear -d "$DIR/stab" --ui log -q --no-gpu >/dev/null 2>&1
+[ -s "$DIR/stab/p71/state.dat" ] && ok "stable campaign name p71 created without -c" || bad "campaign p71 not created"
+SEED1=$(awk -F= '$1=="seed"{print $2}' "$DIR/stab/p71/campaign.conf")
+run_until 'running "$DIR/stab/p71"' $BIN hunt -p 71 --mode linear -d "$DIR/stab" --ui log -q --no-gpu >/dev/null 2>&1
+SEED2=$(awk -F= '$1=="seed"{print $2}' "$DIR/stab/p71/campaign.conf")
+SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/stab/p71/session.txt")
 [ "$SEED1" = "$SEED2" ] && [ "$SES" = 2 ] && ok "running the same command again resumes the campaign (2 sessions, same seed)" || bad "automatic resume: sessions '$SES'"
 [ "$($BIN puzzles | grep -cE '^ *[0-9]+ +(solved|OPEN) ')" = 160 ] && ok "list of the 160 puzzles" || bad "puzzle list incomplete"
 $BIN puzzles --open | grep -qE '^ *[0-9]+ +solved ' && bad "--open shows solved puzzles" || ok "--open filter"
@@ -203,21 +224,21 @@ done
 echo "== campaign lock and the list command"
 rm -rf "$DIR/lk"
 ( $BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1 & echo $! > "$DIR/lk.pid" )
-sleep 3
+wait_for 'running "$DIR/lk/p71"'
 OUT=$($BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu 2>&1); RC=$?
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "already running" && ok "second instance on the same campaign rejected (exit status 2)" || bad "double instance not rejected (rc=$RC)"
 LST=$($BIN list -d "$DIR/lk"); echo "$LST" | grep -q "RUNNING" && ok "list shows the running campaign" || bad "list does not see the running campaign"
-kill -INT $(cat "$DIR/lk.pid") 2>/dev/null; sleep 2
+kill -INT $(cat "$DIR/lk.pid") 2>/dev/null; wait_gone $(cat "$DIR/lk.pid") || bad "the campaign did not stop within $WAIT s of SIGINT"
 LST=$($BIN list -d "$DIR/lk"); echo "$LST" | grep -q "STOPPED" && ok "list shows the stopped campaign" || bad "list: state after the stop"
-$BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1 & sleep 2; kill -INT $! 2>/dev/null; wait 2>/dev/null
+run_until 'running "$DIR/lk/p71"' $BIN hunt -p 71 -d "$DIR/lk" --ui log -q --no-gpu >/dev/null 2>&1
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/lk/p71/session.txt"); [ "$SES" = 2 ] && ok "after the stop the campaign resumes (2 sessions)" || bad "resume after the lock: sessions '$SES'"
 
 echo "== info: the state comes from the lock, not only from the report (kill -9 leaves RUNNING in the file)"
 rm -rf "$DIR/k9"
 ( $BIN hunt -p 71 -d "$DIR/k9" --ui log -q --no-gpu -t 2 >/dev/null 2>&1 & echo $! > "$DIR/k9.pid" )
-for _ in $(seq 1 200); do [ -s "$DIR/k9/p71/report.txt" ] && break; sleep 0.1; done   # the first report comes 2 s after the start
+wait_for 'running "$DIR/k9/p71"'
 $BIN info -p 71 -d "$DIR/k9" | grep -q '^State: *RUNNING' && ok "info shows RUNNING while the campaign runs" || bad "info of a running campaign"
-kill -9 $(cat "$DIR/k9.pid") 2>/dev/null; sleep 0.5
+kill -9 $(cat "$DIR/k9.pid") 2>/dev/null; wait_gone $(cat "$DIR/k9.pid")
 grep -q '^State: *RUNNING' "$DIR/k9/p71/report.txt" && ok "the report file still says RUNNING after kill -9" || bad "report.txt after kill -9: $(grep '^State:' "$DIR/k9/p71/report.txt")"
 $BIN info -p 71 -d "$DIR/k9" | grep -q '^State: *STOPPED' && ok "info shows STOPPED, like list" || bad "info after kill -9: $($BIN info -p 71 -d "$DIR/k9" | grep '^State:')"
 $BIN list -d "$DIR/k9" | grep -q 'STOPPED' || bad "list after kill -9"
@@ -245,7 +266,7 @@ $BIN hunt -r 1:fffff -a "$A" --part 0/2 -c xp -d "$DIR" --ui log -q --no-gpu >"$
 for sig in INT TERM; do
   rm -rf "$DIR/xi"
   $BIN hunt -p 71 -c xi -d "$DIR/xi" --ui log -q --no-gpu >/dev/null 2>&1 & XPID=$!
-  for _ in $(seq 1 300); do [ -s "$DIR/xi/xi/report.txt" ] && break; sleep 0.1; done   # running: the first report comes 2 s after the start
+  wait_for 'running "$DIR/xi/xi"'
   kill -$sig $XPID 2>/dev/null; wait $XPID; RC=$?
   [ $RC -eq 130 ] && [ -s "$DIR/xi/xi/state.dat" ] && ok "SIG$sig: state saved, exit status 130" || bad "SIG$sig: exit status $RC"
 done
@@ -258,7 +279,7 @@ $BIN frobnicate >/dev/null 2>&1; RC=$?
 # merge: 0 when the files are merged without a collision, 1 when a file cannot be merged, 2 for a campaign that cannot take it
 rm -rf "$DIR/xm" "$DIR/xm2"
 $BIN hunt -p 120 -c xk -d "$DIR/xm" --ui log -q --no-gpu >/dev/null 2>&1 & XPID=$!
-for _ in $(seq 1 300); do [ -s "$DIR/xm/xk/report.txt" ] && break; sleep 0.1; done
+wait_for 'running "$DIR/xm/xk"'
 kill -INT $XPID 2>/dev/null; wait $XPID
 mkdir -p "$DIR/xm2"; cp -r "$DIR/xm/xk" "$DIR/xm2/xk"
 OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/xk" 2>&1); RC=$?
@@ -281,12 +302,16 @@ OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/v4.bin" 2>&1); RC=$?
 
 echo "== campaign creation: simultaneous starts, and the seed recorded in the state"
 seedid() { python3 -c "import hashlib,sys; print(hashlib.sha256(b'PZID'+bytes.fromhex(sys.argv[1])).hexdigest()[:16])" "$1"; }
+# eight starts race for the lock: the seven losers say so, then the winner is stopped; the race itself is noisy (a loser that is slow to
+# start may not have tried the lock yet when the winner is stopped), so the check is made twice before it fails
 for attempt in 1 2; do
   rm -rf "$DIR/race"; pids=""
   for i in 1 2 3 4 5 6 7 8; do
-    timeout -s INT 3 $BIN hunt -p 66 -m linear -c rc -d "$DIR/race" --ui log --no-gpu -t 1 >"$DIR/race$i.out" 2>&1 &
+    timeout -k 60 -s INT 600 $BIN hunt -p 66 -m linear -c rc -d "$DIR/race" --ui log --no-gpu -t 1 >"$DIR/race$i.out" 2>&1 &
     pids="$pids $!"
   done
+  wait_for '[ "$(grep -l "already running" "$DIR"/race[1-8].out 2>/dev/null | wc -l)" -ge 7 ] && running "$DIR/race/rc"'
+  kill -INT $pids 2>/dev/null
   wait $pids 2>/dev/null
   CONFSEED=$(awk -F= '$1=="seed"{print $2}' "$DIR/race/rc/campaign.conf")
   REPSEED=$(grep -o 'seed id [0-9a-f]*' "$DIR/race/rc/report.txt" | awk '{print $3}')
@@ -296,12 +321,12 @@ done
 [ -n "$CONFSEED" ] && [ "$(seedid "$CONFSEED")" = "$REPSEED" ] && [ "$NLOSE" = 7 ] && ok "8 simultaneous starts: one campaign, one seed in campaign.conf and in the report (2 attempts)" || bad "simultaneous starts: conf seed id '$(seedid "$CONFSEED")', report '$REPSEED', $NLOSE refused"
 rm -rf "$DIR/sd"
 for c in sa sb sc; do
-  timeout -s INT 2 $BIN hunt -p 40 -m linear -s seed-$c -c $c -d "$DIR/sd" --ui log -q --no-gpu -t 1 >/dev/null 2>&1
+  run_until 'running "$DIR/sd/'$c'"' $BIN hunt -p 40 -m linear -s seed-$c -c $c -d "$DIR/sd" --ui log -q --no-gpu -t 1 >/dev/null 2>&1
 done
 grep -q '^seed_id=' "$DIR/sd/sa/state.dat" && ok "the state records the seed id" || bad "state.dat without seed_id"
 cp "$DIR/sd/sa/state.dat" "$DIR/sd/sb/state.dat"; rm -f "$DIR/sd/sb/state.dat.bak"; cp "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep"
-OUT=$(timeout -s INT 5 $BIN hunt -c sb -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1); RC=$?
-[ $RC -ne 0 ] && echo "$OUT" | grep -q "another seed" && cmp -s "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep" && ok "a state of another seed is refused and left untouched" || bad "state of another seed accepted (rc=$RC)"
+OUT=$(run_until 'running "$DIR/sd/sb"' $BIN hunt -c sb -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1; echo "rc=$RC"); RC=${OUT##*rc=}
+[ "$RC" != 0 ] && echo "$OUT" | grep -q "another seed" && cmp -s "$DIR/sd/sb/state.dat" "$DIR/sd/sb.keep" && ok "a state of another seed is refused and left untouched" || bad "state of another seed accepted (rc=$RC)"
 grep -q '\[ERROR\].*another seed' "$DIR/sd/sb/log.txt" && ok "the refusal is in the log of the campaign" || bad "the refusal is not in sb/log.txt"
 python3 - "$DIR/sd/sa/state.dat" "$DIR/sd/sc/state.dat" <<'PYEOF'
 import hashlib, sys
@@ -310,7 +335,7 @@ body = "".join(l + "\n" for l in t[:t.index("crc=")].splitlines() if not l.start
 open(sys.argv[2], "w").write(body + "crc=" + hashlib.sha256(body.encode()).hexdigest()[:16] + "\n")
 PYEOF
 rm -f "$DIR/sd/sc/state.dat.bak"
-OUT=$(timeout -s INT 3 $BIN hunt -c sc -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1)
+OUT=$(run_until 'running "$DIR/sd/sc"' $BIN hunt -c sc -d "$DIR/sd" --ui log --no-gpu -t 1 2>&1)
 echo "$OUT" | grep -q "campaign resumed" && ok "a state without seed id (earlier versions) is still accepted" || bad "state of an earlier version refused"
 grep -q '^seed_id=' "$DIR/sd/sc/state.dat" && ok "the next save records the seed id" || bad "seed_id not recorded after resuming an old state"
 
@@ -323,7 +348,7 @@ echo "== input error checks"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMX -c bad -d "$DIR" -q >/dev/null 2>&1 && bad "address with a wrong checksum accepted" || ok "address with a wrong checksum rejected"
 $BIN hunt -r 1:ffff -c bad2 -d "$DIR" -q >/dev/null 2>&1 && bad "missing target accepted" || ok "missing target rejected"
 $BIN hunt -p 257 -c bad4 -d "$DIR" -q >/dev/null 2>&1 && bad "puzzle 257 accepted" || ok "puzzle 257 rejected"
-timeout -s INT 2 $BIN hunt -p 161 -c p161 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/p161.out" 2>&1
+run_until 'running "$DIR/p161"' $BIN hunt -p 161 -c p161 -d "$DIR" --ui log --no-gpu -t 1 >"$DIR/p161.out" 2>&1
 grep -q "emptied by the creator" "$DIR/p161.out" && grep -q "^address=1JkqBQcC4tHcb1JfdCH6nrWYwTPGznHANh" "$DIR/p161/campaign.conf" 2>/dev/null \
   && ok "puzzle 161 (emptied): warning and address from the database" || bad "puzzle 161: warning or address missing"
 $BIN hunt -p 20 -a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH -k 02e0cd1ed3ab4d2d3d6f3c2b1a5c4f3e2d1c0b9a8f7e6d5c4b3a291807f6e5d4c3 -c bad3 -d "$DIR" -q >/dev/null 2>&1 && bad "invalid pubkey accepted" || ok "invalid pubkey rejected"
@@ -391,10 +416,10 @@ $BIN hunt -r 0001:FFFF -c rg -d "$DIR/rg" -q --no-gpu >/dev/null 2>&1 && ok "-r 
 
 echo "== resume: options that conflict with the existing campaign"
 rm -rf "$DIR/rc"
-timeout -s INT 2 $BIN hunt -p 71 -d "$DIR/rc" --ui log -q --no-gpu >/dev/null 2>&1
+run_until 'running "$DIR/rc/p71"' $BIN hunt -p 71 -d "$DIR/rc" --ui log -q --no-gpu >/dev/null 2>&1
 for conflict in "-s somethingelse" "--chunk-bits 20" "-m kangaroo" "-m bsgs" "-r 400000000000000000:5fffffffffffffffff" "-a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH" "--new"; do
-  OUT=$(timeout -s INT 4 $BIN hunt -c p71 -p 71 $conflict -d "$DIR/rc" --ui log --no-gpu 2>&1); RC=$?
-  [ $RC -ne 0 ] && echo "$OUT" | grep -q "ERROR" && ok "resume with '$conflict' rejected" || bad "resume with '$conflict' accepted (rc=$RC)"
+  OUT=$(run_until 'running "$DIR/rc/p71"' $BIN hunt -c p71 -p 71 $conflict -d "$DIR/rc" --ui log --no-gpu 2>&1; echo "rc=$RC"); RC=${OUT##*rc=}
+  [ "$RC" != 0 ] && echo "$OUT" | grep -q "ERROR" && ok "resume with '$conflict' rejected" || bad "resume with '$conflict' accepted (rc=$RC)"
 done
 SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/rc/p71/session.txt"); [ "$SES" = 1 ] && ok "the rejections left the campaign untouched (1 session)" || bad "sessions after the rejections: '$SES'"
 
@@ -416,14 +441,14 @@ OUT=$($BIN hunt -c bst4 -d "$DIR" --bsgs-entries 777 --ui log --no-gpu 2>&1); RC
 
 echo "== sub-interval of a puzzle: same command = same campaign"
 rm -rf "$DIR/sub"
-for i in 1 2; do timeout -s INT 2 $BIN hunt -p 71 -r 0x400000000000000000:0x4fffffffffffffffff -d "$DIR/sub" --ui log -q --no-gpu >/dev/null 2>&1; done
+for i in 1 2; do run_until 'grep -q "^State: *RUNNING" "$DIR"/sub/p71-*/report.txt 2>/dev/null' $BIN hunt -p 71 -r 0x400000000000000000:0x4fffffffffffffffff -d "$DIR/sub" --ui log -q --no-gpu >/dev/null 2>&1; done
 NC=$(ls -d "$DIR"/sub/p71-* 2>/dev/null | wc -l); SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR"/sub/p71-*/session.txt 2>/dev/null)
 [ "$NC" = 1 ] && [ "$SES" = 2 ] && ok "a single campaign with 2 sessions" || bad "sub-interval: $NC campaigns, sessions '$SES'"
 $BIN hunt -p 71 -r 0x1:0x3f -d "$DIR/sub" --ui log -q --no-gpu >/dev/null 2>&1 && bad "interval outside the puzzle accepted" || ok "interval that does not intersect the puzzle rejected"
 
 echo "== status.json lists every worker; a campaign.conf with a mode this version does not know is refused"
 rm -rf "$DIR/sj"
-timeout -s INT 4 $BIN hunt -p 71 -m linear -t 200 -d "$DIR/sj" --ui log -q --no-gpu >/dev/null 2>&1
+run_until '[ -s "$DIR/sj/p71/status.json" ]' $BIN hunt -p 71 -m linear -t 200 -d "$DIR/sj" --ui log -q --no-gpu >/dev/null 2>&1
 python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if len(d['workers']) == 200 and d['workers'][199]['name'] == 'CPU199' else 1)" "$DIR/sj/p71/status.json" 2>/dev/null \
   && ok "status.json: 200 workers listed, valid JSON" || bad "status.json with 200 workers"
 rm -rf "$DIR/um"; mkdir -p "$DIR/um"; cp -r "$DIR/rc/p71" "$DIR/um/p71"; sed -i 's/^mode=.*/mode=quantum/' "$DIR/um/p71/campaign.conf"
@@ -438,10 +463,9 @@ if [ $(( 0x$(awk '/^SigIgn:/{print $2}' /proc/$$/status 2>/dev/null || echo 0) &
 else
 rm -rf "$DIR/hup"
 ( $BIN hunt -p 71 -d "$DIR/hup" --ui log -q --no-gpu >/dev/null 2>&1 & echo $! > "$DIR/hup.pid" )
-sleep 3; kill -HUP $(cat "$DIR/hup.pid") 2>/dev/null
-# the stop takes ~2 s (the workers finish their current job): wait up to 10 s instead of a fixed 2 s that was right at the edge
-for _ in $(seq 1 100); do kill -0 $(cat "$DIR/hup.pid") 2>/dev/null || break; sleep 0.1; done
-if kill -0 $(cat "$DIR/hup.pid") 2>/dev/null; then bad "the process did not stop on SIGHUP"; kill -INT $(cat "$DIR/hup.pid"); else
+wait_for 'running "$DIR/hup/p71"'; kill -HUP $(cat "$DIR/hup.pid") 2>/dev/null
+# the stop takes about 2 s (the workers finish their current job), more on a loaded machine
+if ! wait_gone $(cat "$DIR/hup.pid"); then bad "the process did not stop within $WAIT s of SIGHUP"; kill -INT $(cat "$DIR/hup.pid"); else
   SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/hup/p71/session.txt" 2>/dev/null)
   [ -s "$DIR/hup/p71/state.dat" ] && [ "$SES" = 1 ] && ok "SIGHUP: state saved (session recorded)" || bad "SIGHUP: state not saved"
 fi
@@ -452,10 +476,18 @@ mkdir -p "$DIR/tmp"
 for n in DEAD01 LIVE01 FRESH1 FOREIGN; do mkdir -p "$DIR/tmp/pzkang$n"; done
 for n in DEAD01 LIVE01 FRESH1; do : > "$DIR/tmp/pzkang$n/owner"; done
 : > "$DIR/tmp/pzkangDEAD01/dp.bin"
-python3 -c "import fcntl,sys,time; f=open(sys.argv[1]); fcntl.flock(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(3)" "$DIR/tmp/pzkangLIVE01/owner" >"$DIR/lock.out" &
-for _ in $(seq 1 50); do grep -q locked "$DIR/lock.out" && break; sleep 0.1; done
+# the lock of LIVE01 is held until the measurement has run (a file says so), not for a fixed time that a loaded machine could outlast
+rm -f "$DIR/lock.stop"
+python3 - "$DIR/tmp/pzkangLIVE01/owner" "$DIR/lock.stop" >"$DIR/lock.out" <<'PYEOF' &
+import fcntl, os, sys, time
+f = open(sys.argv[1]); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush=True)
+t = time.time()
+while not os.path.exists(sys.argv[2]) and time.time() - t < 600: time.sleep(0.1)
+PYEOF
+wait_for 'grep -q locked "$DIR/lock.out"'
 touch -d '10 minutes ago' "$DIR/tmp/pzkangDEAD01" "$DIR/tmp/pzkangLIVE01" "$DIR/tmp/pzkangFOREIGN"   # FRESH1 stays new: it may be being made
 TMPDIR="$DIR/tmp" $BIN kstat 16 1 1 >/dev/null 2>&1
+touch "$DIR/lock.stop"
 [ ! -e "$DIR/tmp/pzkangDEAD01" ] && ok "the folder of a program that is gone (free lock, not new) is removed" || bad "abandoned scratch folder left"
 [ -d "$DIR/tmp/pzkangLIVE01" ] && ok "a folder whose lock is held is left alone" || bad "scratch folder in use removed"
 [ -d "$DIR/tmp/pzkangFRESH1" ] && [ -d "$DIR/tmp/pzkangFOREIGN" ] && ok "a new folder and one without owner file are left alone" || bad "a scratch folder that is not abandoned was removed"
@@ -581,11 +613,12 @@ grep -r -l -F "$EPW" "$DIR/encw" "$DIR/encw.out" "$DIR/encw.err" >/dev/null 2>&1
 printf '%s\n' "$EPW" | $BIN decrypt-key "$DIR/encw/FOUND.txt" 2>/dev/null | grep -q "0x${K#0x}" && ok "--encrypt-password: decrypt-key with the same password gives the key" || bad "--encrypt-password then decrypt-key"
 
 # resuming: the key of the campaign is used; another one is refused; a campaign without one can be given one (the key was not found yet)
+# the seed puts this key in block 14 of the 16 of the visit order (pzsolve where says so), so the short runs below cannot find it by chance
 K=$(rndkey 31 41); A=$(field $K addr); rm -rf "$DIR/encr"
-timeout -s INT 2 $BIN hunt -p 31 -a "$A" -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+run_until 'running "$DIR/encr"' $BIN hunt -p 31 -a "$A" -s encr-2 -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 grep -q "encrypt" "$DIR/encr/campaign.conf" && bad "a campaign without encryption has the field" || ok "a campaign started without encryption has no encrypt_pubkey line (the file is as before)"
 $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" -t 1 >"$DIR/encr.out" 2>&1 & EPID=$!
-for _ in $(seq 1 100); do grep -q "^encrypt_pubkey=" "$DIR/encr/campaign.conf" && break; sleep 0.1; done
+wait_for 'grep -q "^encrypt_pubkey=" "$DIR/encr/campaign.conf"'
 grep -q "^encrypt_pubkey=$EPUB\$" "$DIR/encr/campaign.conf" && ok "resumed with --encrypt-pubkey: the campaign that had none now has it in campaign.conf" || bad "the key was not stored on resume"
 if [ -r /proc/$EPID/limits ]; then
   grep -q "Max core file size *0 *0" /proc/$EPID/limits && ok "with a public key to encrypt to, the process has core dumps off (/proc/$EPID/limits)" || bad "core dump limit: $(grep core /proc/$EPID/limits)"
@@ -598,6 +631,28 @@ OUT=$($BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERP
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "cannot be switched" && echo "$OUT" | grep -q "Resume it without --encrypt-pubkey" && ok "resumed with another public key: refused, with the way to proceed" || bad "other key on resume: rc=$RC $OUT"
 $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 grep -q '^PZENC1:' "$DIR/encr/FOUND.txt" && printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/encr/FOUND.txt" 2>/dev/null | grep -q "0x${K#0x}" && ok "resumed without the option: the stored key is used, and the result opens with the secret" || bad "resume without the option: $(head -c 300 "$DIR/encr/FOUND.txt")"
+# the version the campaign needs (requires=X.Y.Z, written with encrypt_pubkey): a version below it refuses the campaign instead of
+# ignoring the line it does not know; a campaign without the line, or with one at or below this version, resumes as before
+grep -q "^requires=1.21.0\$" "$DIR/encw/campaign.conf" && grep -q "^requires=1.21.0\$" "$DIR/encr/campaign.conf" && ok "an encrypted campaign's campaign.conf has requires=1.21.0 (one made with the option, and one given the key on resume)" \
+  || bad "requires line: '$(grep requires "$DIR/encw/campaign.conf" "$DIR/encr/campaign.conf" | tr '\n' ' ')'"
+grep -q "^requires=" "$DIR/rc/p71/campaign.conf" && bad "a campaign without encryption has a requires line" || ok "a campaign without encryption has no requires line"
+for pair in "99.0.0|refused" "1.0.0|resumed" "|resumed"; do
+  REQ=${pair%%|*}; WANT=${pair#*|}
+  rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/rc/p71" "$DIR/rq/p71"
+  if [ -n "$REQ" ]; then echo "requires=$REQ" >> "$DIR/rq/p71/campaign.conf"; fi
+  OUT=$(run_until 'running "$DIR/rq/p71"' $BIN hunt -c p71 -d "$DIR/rq" --ui log --no-gpu -t 1 2>&1; echo "rc=$RC"); RC=${OUT##*rc=}
+  SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/rq/p71/session.txt")
+  if [ "$WANT" = refused ]; then
+    [ "$RC" = 2 ] && echo "$OUT" | grep -q "this campaign needs pzsolve $REQ or later: it was made with" && echo "$OUT" | grep -q "(this is pzsolve $($BIN version | awk 'NR==1{print $2}'))" && [ "$SES" = 1 ] \
+      && ok "requires=$REQ: refused with the version needed and this one, the campaign untouched (1 session)" || bad "requires=$REQ: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"
+  else
+    echo "$OUT" | grep -q "campaign resumed" && [ "$SES" = 2 ] && ok "requires=${REQ:-(no line)}: resumed (2 sessions)" || bad "requires=${REQ:-(no line)}: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"
+  fi
+done
+rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/encr" "$DIR/rq/encr"; sed -i 's/^requires=.*/requires=99.0.0/' "$DIR/rq/encr/campaign.conf"
+OUT=$($BIN list -d "$DIR/rq" 2>&1); echo "$OUT" | grep -q "needs pzsolve 99.0.0 or later: it was made with --encrypt-pubkey" && ok "list: an encrypted campaign of a later version is reported with the reason" || bad "list with requires=99.0.0: $OUT"
+OUT=$($BIN hunt -c encr -d "$DIR/rq" --ui log -q --no-gpu 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "it was made with --encrypt-pubkey" && ok "hunt: an encrypted campaign of a later version is refused, with the reason (exit status 2)" || bad "hunt with requires=99.0.0 on an encrypted campaign: rc=$RC $OUT"
 # merge gives the key to a kangaroo campaign that has none
 rm -rf "$DIR/xmm"; cp -r "$DIR/xm" "$DIR/xmm" 2>/dev/null
 if [ -d "$DIR/xmm/xk" ]; then

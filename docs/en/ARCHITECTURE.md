@@ -102,8 +102,9 @@ kang_insert_dps (under the table mutex): inserts or compares with the existing e
 
 ## 4. On-disk formats
 
-* `campaign.conf`: text `key=value` (`format=1`, `created_with`, range, target, `mode`, `seed`, `chunk_bits`, `dp_bits`, `bsgs_entries`, `part`, and `encrypt_pubkey` when the campaign encrypts the key it finds: the line is written only then); `format` changes only with incompatible changes. A key that is not read is
+* `campaign.conf`: text `key=value` (`format=1`, `created_with`, range, target, `mode`, `seed`, `chunk_bits`, `dp_bits`, `bsgs_entries`, `part`, and `encrypt_pubkey` with `requires=1.21.0` when the campaign encrypts the key it finds: the two lines are written only then); `format` changes only with incompatible changes. A key that is not read is
   ignored, so a file with a new line is read by an older version (which then ignores the line: see ALGORITHMS.md 12.5), and a file without it by a newer one; `encrypt_pubkey` that is present and not a point stops the campaign from opening.
+  `requires=X.Y.Z` is the oldest version that may resume the campaign (`PZ_REQUIRES_ENCRYPT` in `campaign.h`, to raise when a line is added that older versions must not ignore either): `cfg_load` compares it with the program's version part by part as numbers and refuses the campaign, naming both versions and the reason, when the program is older; versions up to 1.21.1 do not know the line and ignore it.
 * `state.dat`: text; header `PZSCHED 1`, `cbits`, `seed_id` (the seed id of the campaign: a state of another seed is refused; files written
   before it was recorded have no such line and are accepted), `v_limit`, `keys_done`, `ndone` (the number of intervals), lines `iv start end` (hex), final line
   `crc=` (first 8 bytes of the SHA-256 of the content). Atomic write (a temporary file of its own next to it → fsync → rename); the previous file, if valid,
