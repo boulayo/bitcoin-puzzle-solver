@@ -8,6 +8,10 @@
 #include <pzcore/ec.h>
 
 #define PZ_FORMAT_VERSION 1
+/* The version a campaign that encrypts the key it finds needs (campaign.conf: requires=X.Y.Z, written with encrypt_pubkey): a version
+ * older than it does not know the line and would write the key in plain. Raise it when a line is added that older versions must not
+ * ignore either. (1.21.0 and 1.21.1 know encrypt_pubkey but not requires: they still ignore the line.) */
+#define PZ_REQUIRES_ENCRYPT "1.21.0"
 
 typedef enum { MODE_LINEAR = 0, MODE_KANGAROO = 1, MODE_BSGS = 2 } search_mode;
 
@@ -66,7 +70,11 @@ void seed_from_text(const char *text, u8 seed[32]);
 void seed_to_id(const u8 seed[32], char id[17]);   /* short fingerprint */
 
 int cfg_save(const campaign_cfg *c, const char *path);
+/* Refuses (with the message in err) a format it does not know, a requires=X.Y.Z line above this version, and invalid values. */
 int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen);
+/* Compares two versions "X.Y.Z" part by part as numbers (10.0.0 is above 9.0.0; a suffix such as -dev is ignored): negative, 0 or
+ * positive as a is below, equal to or above b; a text without three numbers counts as 0.0.0. */
+int cfg_version_cmp(const char *a, const char *b);
 /* Adds the line encrypt_pubkey=HEX to the campaign.conf at path, which has none (a campaign resumed with --encrypt-pubkey that was started without), keeping
  * every other line as it is. 0 on success. */
 int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path);

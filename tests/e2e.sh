@@ -598,6 +598,28 @@ OUT=$($BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERP
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "cannot be switched" && echo "$OUT" | grep -q "Resume it without --encrypt-pubkey" && ok "resumed with another public key: refused, with the way to proceed" || bad "other key on resume: rc=$RC $OUT"
 $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 grep -q '^PZENC1:' "$DIR/encr/FOUND.txt" && printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/encr/FOUND.txt" 2>/dev/null | grep -q "0x${K#0x}" && ok "resumed without the option: the stored key is used, and the result opens with the secret" || bad "resume without the option: $(head -c 300 "$DIR/encr/FOUND.txt")"
+# the version the campaign needs (requires=X.Y.Z, written with encrypt_pubkey): a version below it refuses the campaign instead of
+# ignoring the line it does not know; a campaign without the line, or with one at or below this version, resumes as before
+grep -q "^requires=1.21.0\$" "$DIR/encw/campaign.conf" && grep -q "^requires=1.21.0\$" "$DIR/encr/campaign.conf" && ok "an encrypted campaign's campaign.conf has requires=1.21.0 (one made with the option, and one given the key on resume)" \
+  || bad "requires line: '$(grep requires "$DIR/encw/campaign.conf" "$DIR/encr/campaign.conf" | tr '\n' ' ')'"
+grep -q "^requires=" "$DIR/rc/p71/campaign.conf" && bad "a campaign without encryption has a requires line" || ok "a campaign without encryption has no requires line"
+for pair in "99.0.0|refused" "1.0.0|resumed" "|resumed"; do
+  REQ=${pair%%|*}; WANT=${pair#*|}
+  rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/rc/p71" "$DIR/rq/p71"
+  if [ -n "$REQ" ]; then echo "requires=$REQ" >> "$DIR/rq/p71/campaign.conf"; fi
+  OUT=$(timeout -s INT 3 $BIN hunt -c p71 -d "$DIR/rq" --ui log --no-gpu -t 1 2>&1); RC=$?
+  SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/rq/p71/session.txt")
+  if [ "$WANT" = refused ]; then
+    [ $RC -eq 2 ] && echo "$OUT" | grep -q "this campaign needs pzsolve $REQ or later: it was made with" && echo "$OUT" | grep -q "(this is pzsolve $($BIN version | awk 'NR==1{print $2}'))" && [ "$SES" = 1 ] \
+      && ok "requires=$REQ: refused with the version needed and this one, the campaign untouched (1 session)" || bad "requires=$REQ: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"
+  else
+    echo "$OUT" | grep -q "campaign resumed" && [ "$SES" = 2 ] && ok "requires=${REQ:-(no line)}: resumed (2 sessions)" || bad "requires=${REQ:-(no line)}: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"
+  fi
+done
+rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/encr" "$DIR/rq/encr"; sed -i 's/^requires=.*/requires=99.0.0/' "$DIR/rq/encr/campaign.conf"
+OUT=$($BIN list -d "$DIR/rq" 2>&1); echo "$OUT" | grep -q "needs pzsolve 99.0.0 or later: it was made with --encrypt-pubkey" && ok "list: an encrypted campaign of a later version is reported with the reason" || bad "list with requires=99.0.0: $OUT"
+OUT=$($BIN hunt -c encr -d "$DIR/rq" --ui log -q --no-gpu 2>&1); RC=$?
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "it was made with --encrypt-pubkey" && ok "hunt: an encrypted campaign of a later version is refused, with the reason (exit status 2)" || bad "hunt with requires=99.0.0 on an encrypted campaign: rc=$RC $OUT"
 # merge gives the key to a kangaroo campaign that has none
 rm -rf "$DIR/xmm"; cp -r "$DIR/xm" "$DIR/xmm" 2>/dev/null
 if [ -d "$DIR/xmm/xk" ]; then

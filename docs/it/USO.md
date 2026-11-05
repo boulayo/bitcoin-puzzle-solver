@@ -111,7 +111,8 @@ Tabelle di altre versioni: [`RELEASING.md`](https://github.com/boulayo/bitcoin-p
 
 ```
 campaigns/NOME/
-  campaign.conf   parametri immutabili (intervallo, bersaglio, modalità, seed, chunk-bits, baby step, la chiave pubblica a cui cifrare la chiave trovata)
+  campaign.conf   parametri immutabili (intervallo, bersaglio, modalità, seed, chunk-bits, baby step, la chiave pubblica a cui cifrare la chiave trovata;
+                  con essa, requires=1.21.0: la versione più vecchia che può riprendere la campagna, una versione dalla 1.22.0 in poi che è più vecchia la rifiuta)
   lock            blocco (flock) che impedisce due processi sulla stessa campagna
   state.dat       checkpoint della ricerca (insieme di intervalli completati, con checksum; .bak = precedente)
   dp.bin          canguro: log append-only dei punti distinti (per riprendere)

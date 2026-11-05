@@ -111,7 +111,8 @@ bytes. Tables of other versions: [`RELEASING.md`](https://github.com/boulayo/bit
 
 ```
 campaigns/NAME/
-  campaign.conf   immutable parameters (range, target, mode, seed, chunk-bits, baby steps, the public key to encrypt the found key to)
+  campaign.conf   immutable parameters (range, target, mode, seed, chunk-bits, baby steps, the public key to encrypt the found key to;
+                  with it, requires=1.21.0: the oldest version that may resume the campaign, a version from 1.22.0 on that is older refuses it)
   lock            lock (flock) that prevents two processes on the same campaign
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
