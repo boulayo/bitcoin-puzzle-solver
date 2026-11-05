@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* encrypt_cmd.c - `encrypt-keygen` (the public key to encrypt to) and `decrypt-key` (the key of a campaign that encrypted it). See encrypt.h. */
+/* cmd_encrypt.c - `encrypt-keygen` (the public key to encrypt to) and `decrypt-key` (the key of a campaign that encrypted it). See encrypt.h. */
 #include "encrypt.h"
-#include "encrypt_cmd.h"
+#include "cmd_encrypt.h"
 #include "platform.h"
 #include <pzcore/address.h>
 #include <pzcore/hash.h>

@@ -51,7 +51,7 @@ bool pz_help(const char *topic, FILE *f);               /* the help of a command
 /* A usage error: the message, the usage line of the command and a pointer to its help; exits with status 2. */
 void pz_usage_error(const char *cmd, const char *fmt, ...) __attribute__((format(PZ_PRINTF, 2, 3), noreturn));
 
-/* Wall-clock helpers (implemented in platform.c). */
+/* Wall-clock helpers (implemented in platform_posix.c and platform_win.c). */
 double pz_now(void);                 /* seconds since the epoch */
 double pz_mono(void);                /* monotonic seconds */
 

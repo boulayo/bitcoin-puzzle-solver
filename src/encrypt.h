@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* encrypt.h - encrypting the key that a campaign finds to a public key, on top of pzcore/seal.h: the public key given by the user or derived from
  * a password that is typed, the randomness of the encryption, the line that is written. The commands encrypt-keygen and
- * decrypt-key are in encrypt_cmd.c. The format and the reasons are in docs/en/ALGORITHMS.md; the use, in docs/en/USAGE.md. */
+ * decrypt-key are in cmd_encrypt.c. The format and the reasons are in docs/en/ALGORITHMS.md; the use, in docs/en/USAGE.md. */
 #ifndef PZ_ENCRYPT_H
 #define PZ_ENCRYPT_H
 

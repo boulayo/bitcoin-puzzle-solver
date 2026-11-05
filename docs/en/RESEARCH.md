@@ -849,8 +849,9 @@ products) and hashes the two x of pair i + 1, kept from the turn before with the
 `hash160_w2` inlined (a call in the kernels of 1.19.2) and the full hash of a key that passes the filter the only call left in the loop,
 behind one branch for both keys; the first pending pair is the centre and C − HALF·G, the epilogue hashes pair 1. Same keys, same
 arithmetic: bit-exact against the CPU on the simulated CUDA driver (the self-test with the tuning of all the variants, planted-key hunts with
-each window forced). The source is in pz_linear.cl under `PZ_INTERLEAVE` (CUDA only; `tools/ptx_table.awk` makes the simulated driver run
-it for a module built with `-DPZ_INTERLEAVE=1`). Tools as above: NVRTC 12.0, `ptxas` 12.9 for sm_75, sm_80, sm_86, sm_89 and sm_90,
+each window forced). The source is `tools/research/pz_linear_interleaved.cl.txt`, the whole kernel in this form (CUDA only; it lived in
+pz_linear.cl under `PZ_INTERLEAVE` until 1.21.1, and the simulated driver could run a module built with `-DPZ_INTERLEAVE=1`; since no module
+is built from it, the kernel source now keeps only the form that runs). Tools as above: NVRTC 12.0, `ptxas` 12.9 for sm_75, sm_80, sm_86, sm_89 and sm_90,
 `nvdisasm` 12.0, the issue model of `tools/research/sass_sched.py`, which now reads the loop with the hash inlined. No card: every speed
 below is the model, every count is SASS.
 
@@ -914,9 +915,9 @@ below is the model, every count is SASS.
   form to a card as a forceable variant when the model gains on every target at both slot costs; this one lost at two slots on three
   targets of five, and the card has now judged a change of the kernel's shape more harshly than the model twice (the peeled loop of
   1.19.1: −2.8 % for 14 instructions saved). The two modules (windows 256 and 512 with the cap) added 230 KB to the executable (2.4 MB of PTX each against 1.5, about
-  115 KB each compressed, the first against `linear256m4`, the second against the first: the inlined hash shares little with the called one). The source form stays, and
-  `python3 -I tools/research/sass_sched.py --nvrtc ... --ptxas ... --nvdisasm ... --module linear512m4 --warps 4 -DPZ_INTERLEAVE=1`
-  reproduces the figures. What is left of the idea is what the model says of the ideal order: about 5 %, which no scheduler we can
+  115 KB each compressed, the first against `linear256m4`, the second against the first: the inlined hash shares little with the called one). The source form stays in
+  `tools/research/pz_linear_interleaved.cl.txt`, and `python3 -I tools/research/sass_sched.py --nvrtc ... --ptxas ... --nvdisasm ...
+  --module linear512m4 --warps 4 -DPZ_INTERLEAVE=1`, which compiles that file in place of pz_linear.cl, reproduces the figures. What is left of the idea is what the model says of the ideal order: about 5 %, which no scheduler we can
   steer reaches.
 
 ## 8. Theoretical limits: how much can still be improved?
