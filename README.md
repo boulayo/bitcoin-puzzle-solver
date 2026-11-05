@@ -131,6 +131,28 @@ in [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob
 * The kangaroo is probabilistic and its cost has a long tail. GPU speeds were measured on one NVIDIA card (CUDA) and one Intel
   integrated GPU (OpenCL); the kangaroo on the GPU is limited by memory bandwidth, and AMD cards are untested for speed.
 
+## What was measured, and on what
+
+The speeds quoted in the documentation come from two machines of the maintainer, and several engines have no figure at all. This table
+says, for each engine, where its figure comes from and with which version; `pzsolve bench` measures your own machine.
+
+| Engine | Machine | Figure | Version |
+|---|---|---|---|
+| linear scan, CPU | Core i7-11850H (8 cores, 16 threads, AVX-512 IFMA), `bench`, `avx512i` | 157.9 M keys/s on 16 threads, 30.3 M on one; 133 M on 15 threads next to the GPU in a campaign | 1.15.0 ([RESEARCH](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) 10.5) |
+| linear scan, GPU, CUDA | RTX A2000 Laptop (20 SM, 4 GB), `bench --variants`, window 512 with the register cap | 888 M keys/s (median of three turns) | 1.20.0 (RESEARCH 5) |
+| linear scan, GPU, OpenCL | Intel UHD of the same laptop (Xe-LP, 32 EU) | 17.5 M keys/s in `bench`, 16 M in a campaign | 1.15.0 (RESEARCH 10.5) |
+| kangaroo, CPU | the same i7-11850H, IFMA lanes | 261 M steps/s on 16 threads, 48.0 M on one | 1.15.0 (RESEARCH 10.5) |
+| kangaroo, GPU, CUDA | the same RTX A2000 Laptop, `NK` 64 quads with the tags once (the tuner's pick) | 922 M steps/s | 1.20.0 (RESEARCH 5) |
+| kangaroo, GPU, OpenCL | the same Intel UHD | 56 M steps/s | 1.15.0 (RESEARCH 10.5) |
+| BSGS | one thread of a Xeon at 2.8 GHz under KVM, AVX-512 lanes | 36 ns of arithmetic per giant step plus 16 to 45 ns of table lookups (a table in L2, or 768 MiB); no whole-machine rate | 1.14.0 (RESEARCH 8.11) |
+| AMD GPUs (OpenCL) | none | not measured: instruction counts only (clang) | 1.15.0 |
+| Linux arm64, Apple silicon (NEON engines) | the CI machines | not measured as a rate: only against the portable engine on the same machine (about 55 to 60 % faster on Linux arm64) | 1.8.1 |
+| macOS (Intel and Apple silicon) | none | not measured: the CI builds and tests the binaries, the speed is unknown | - |
+
+The GPU figures are `bench` peaks on a laptop: in a campaign CPU and GPU share one power budget and after a few minutes the machine sits
+lower (RESEARCH 10.5: 940 to 960 M keys/s for CPU and GPU together after two minutes, 880 to 900 after ten). The CPU changes of 1.17.0 to
+1.19.2 (+1 to +4 % each, one thread, other machines) were not measured again on that laptop.
+
 ## Building from source
 
 Requirements: `gcc` 9 or later (or `clang`) and `make`. No GPU SDK is needed to compile.

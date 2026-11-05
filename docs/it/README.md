@@ -138,6 +138,29 @@ in [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob
 * Il canguro è probabilistico e il suo costo ha una coda lunga. La velocità delle GPU è stata misurata su una scheda NVIDIA (CUDA) e su
   una GPU Intel integrata (OpenCL); sul canguro la GPU è limitata dalla banda di memoria, e le schede AMD non sono provate per la velocità.
 
+## Cosa è stato misurato, e su cosa
+
+Le velocità citate nella documentazione vengono da due macchine del manutentore, e diversi motori non hanno nessun numero. Questa tabella
+dice, per ogni motore, da dove viene il suo numero e con quale versione; `pzsolve bench` misura la tua macchina.
+
+| Motore | Macchina | Valore | Versione |
+|---|---|---|---|
+| ricerca lineare, CPU | Core i7-11850H (8 core, 16 thread, AVX-512 IFMA), `bench`, `avx512i` | 157,9 M chiavi/s con 16 thread, 30,3 M con uno; 133 M con 15 thread accanto alla GPU in una campagna | 1.15.0 ([RESEARCH](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) 10.5) |
+| ricerca lineare, GPU, CUDA | RTX A2000 Laptop (20 SM, 4 GB), `bench --variants`, finestra 512 con il limite di registri | 888 M chiavi/s (mediana di tre turni) | 1.20.0 (RESEARCH 5) |
+| ricerca lineare, GPU, OpenCL | Intel UHD dello stesso portatile (Xe-LP, 32 EU) | 17,5 M chiavi/s in `bench`, 16 M in una campagna | 1.15.0 (RESEARCH 10.5) |
+| canguro, CPU | lo stesso i7-11850H, corsie IFMA | 261 M passi/s con 16 thread, 48,0 M con uno | 1.15.0 (RESEARCH 10.5) |
+| canguro, GPU, CUDA | la stessa RTX A2000 Laptop, `NK` 64 quads con i tag scritti una volta (la scelta del tuner) | 922 M passi/s | 1.20.0 (RESEARCH 5) |
+| canguro, GPU, OpenCL | la stessa Intel UHD | 56 M passi/s | 1.15.0 (RESEARCH 10.5) |
+| BSGS | un thread di uno Xeon a 2,8 GHz sotto KVM, corsie AVX-512 | 36 ns di aritmetica per passo gigante più da 16 a 45 ns di ricerche in tabella (tabella in L2, o da 768 MiB); nessuna velocità dell'intera macchina | 1.14.0 (RESEARCH 8.11) |
+| GPU AMD (OpenCL) | nessuna | non misurato: solo conteggi di istruzioni (clang) | 1.15.0 |
+| Linux arm64, Apple silicon (motori NEON) | le macchine della CI | non misurato come velocità: solo rispetto al motore portabile sulla stessa macchina (circa il 55-60 % più veloce su Linux arm64) | 1.8.1 |
+| macOS (Intel e Apple silicon) | nessuna | non misurato: la CI compila e prova i binari, la velocità non è nota | - |
+
+I valori delle GPU sono picchi di `bench` su un portatile: in una campagna CPU e GPU condividono un solo budget di potenza e dopo qualche
+minuto la macchina si assesta più in basso (RESEARCH 10.5: da 940 a 960 M chiavi/s per CPU e GPU insieme dopo due minuti, da 880 a 900
+dopo dieci). Le modifiche alla CPU dalla 1.17.0 alla 1.19.2 (da +1 a +4 % ciascuna, un thread, altre macchine) non sono state rimisurate
+su quel portatile.
+
 ## Compilazione dai sorgenti
 
 Servono `gcc` 9 o successivo (o `clang`) e `make`. Per compilare non serve nessun SDK per GPU.
