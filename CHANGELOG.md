@@ -3,6 +3,24 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [Unreleased]
+
+### Added
+- `campaign.conf` gets `requires=X.Y.Z` when the campaign encrypts the key: a version older than that refuses to resume it instead of
+  writing the key in plain. Versions 1.21.0 and 1.21.1 do not know the line and still ignore it (ALGORITHMS.md 12.5).
+- `docs/en/RENTED.md` and `docs/it/AFFITTO.md`: the checklist for a computer you do not control, from the checksum of the binary to
+  `decrypt-key` at home. The README has a table of what was measured, on which machine and in which version.
+- `tools/check_docs.sh` keeps the English and Italian guides in step (sections, options, variables, links); run by `verify.sh` and the CI.
+### Changed
+- The release workflow refuses to publish unless the CI has passed on the exact commit; the macOS Intel binary is built on the Apple
+  Silicon runner and self-tested under Rosetta (the Intel runners of GitHub are scarce and being retired).
+- Sources: `platform.c` is `platform_posix.c` and `platform_win.c`; `main.c` keeps `main`, the dispatch and the help texts, the commands
+  are in `cmd_*.c`; the interleaved form of the linear kernel left `pz_linear.cl` for `tools/research/`. No change of behaviour (output
+  byte-identical to 1.21.1 on every command).
+- Tests: the timing checks of `tests/e2e.sh` and `tools/verify.sh` wait for a state with a deadline instead of sleeping a fixed time,
+  so a loaded machine no longer gives false alarms.
+- CHANGELOG: the entries from 1.19.0 on say what changed in a few lines and point to RESEARCH.md for the measurements.
+
 ## [1.21.1] — 2026-11-04
 
 ### Fixed
