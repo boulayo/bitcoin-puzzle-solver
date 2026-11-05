@@ -1933,7 +1933,7 @@ puzzle 71 then came in and are the ground truth it is checked against.
   taken by the message schedule into the bargain; computing the schedule on the lanes (17 cycles per key) leaves the 96 cycles of p5. Not
   implemented. The laptop confirms the table: `shani` measures exactly `avx2` on one thread (7.19 M both; the SHA unit replaces 290 instructions
   per key by a p5 queue of the same length), +6 % on 16 threads. On Zen 3 and Zen 4 `rnds2` issues every cycle (`msg1` 0.5, `msg2` 2): about 62 cycles
-  per key against 73 for the 8-lane AVX2 SHA-256 on three ports, which is where the `shani` engine can win; `--isa auto` measures and decides.
+  per key against 73 for the 8-lane AVX2 SHA-256 on three ports, which is where the `shani` engine can win; the automatic choice (`PZ_ISA=auto`, the default) measures and decides.
 * **GPU: the A2000 is on the ceiling of its ALU pipe.** The sm_86 SASS of `linear256` (NVRTC 12.0, `ptxas`): 2791 instructions per key, of which
   `hash160_w2` 2030 (794 `SHF`, 495 `LOP3`, 457 `IADD3`, 155 `LEA.HI`, 108 `IMAD.IADD`, 8 `PRMT`, 8 `LDL`) and the field about 700 (354 `IMAD`, mostly
   `IMAD.WIDE.U32`, 232 `IADD3.X`, 49 `SEL`, the rest shifts and control); `linear512` with the register cap, the variant the tuner chose on the card,

@@ -3,6 +3,22 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.23.0] — 2026-11-05
+
+### Removed
+- Eight options of `hunt` that had no use in a normal campaign. Each one is now refused with exit status 2 and a message that says what
+  to use instead (USAGE.md 3):
+  - `-H`/`--hash160`: give the address with `-a`.
+  - `--new` and `--resume`: `hunt` creates the campaign or resumes it.
+  - `--report-interval` and `--checkpoint-interval`: the panel is updated every second, the state is saved every 60 seconds.
+  - `--gpu-api`, `--no-tune`: the environment variables `PZ_GPU_API` and `PZ_NO_PROFILE`, as before.
+  - `--isa`, `--prio-gpu`: the new environment variables `PZ_ISA` and `PZ_PRIO_GPU`, same values. `bench --together --prio-gpu` stays.
+### Changed
+- `help hunt` lists the options most campaigns need first and the others under "ADVANCED".
+- A test build reports its own version, `X.Y.Z-test.COMMIT`: a build from a commit that is not the release tag no longer shares the saved
+  GPU tuning and machine profile with the release (RELEASING.md).
+- `tools/verify.sh` runs its sections in parallel (`-j N`, default the number of cores): about 15 minutes instead of 50 on four cores.
+
 ## [1.22.0] — 2026-11-05
 
 ### Added
