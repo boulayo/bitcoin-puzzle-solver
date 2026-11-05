@@ -43,7 +43,7 @@ linear scan. The algorithms are explained in [`docs/en/ALGORITHMS.md`](docs/en/A
 * **Use only part of the machine.** `--limit X` uses X % of the CPU threads and of the GPU work-items at full speed, without pauses.
 * **Persistent campaigns.** Atomic checkpoints, resume after Ctrl-C, crash, reboot or sleep, and a lock against two processes on the
   same campaign. `--keep-awake` prevents sleep on Windows and macOS.
-* **Self-tuning.** `--retune` measures the machine again, `--no-tune` skips it; `bench --together`, `bench --variants` (every GPU kernel
+* **Self-tuning.** `--retune` measures the machine again, `PZ_NO_PROFILE=1` skips it; `bench --together`, `bench --variants` (every GPU kernel
   variant, measured in turns) and `doctor`: see [USAGE](docs/en/USAGE.md) 7.4 to 7.6.
 * **Rented computers.** `--encrypt-pubkey` (or `--encrypt-password`) encrypts the key to a public key the moment it is found: the screen, `FOUND.txt` and the log
   carry only a line `PZENC1:...`, safe to send anywhere (`--on-found` runs your command with it), and `pzsolve decrypt-key` opens it at home with the password

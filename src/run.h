@@ -38,7 +38,7 @@ typedef struct {
     char detail[320];
 } progress_info;
 
-/* Priority of the threads serving the GPUs (--prio-gpu): auto = measured by the calibration and remembered in the machine profile. */
+/* Priority of the threads serving the GPUs (PZ_PRIO_GPU for hunt, --prio-gpu for bench --together): auto = measured by the calibration and remembered in the machine profile. */
 typedef enum { PRIO_AUTO = 0, PRIO_NO, PRIO_YES } prio_mode;
 typedef enum { UI_AUTO = 0, UI_FULL, UI_LINE, UI_LOG } ui_mode;   /* auto = full on a terminal, log otherwise */
 
@@ -91,8 +91,8 @@ typedef struct run_ctx {
     bool mode_auto;                  /* no --mode given: the program chose the method */
     int limit_pct;                   /* --limit: use only this percentage (1..99) of the CPU threads and of the GPU work-items, all of them
                                       * running flat out all the time (0 = off). Set by run_limit_setup */
-    prio_mode prio_gpu;              /* --prio-gpu */
-    bool gpu_boost;                  /* the threads serving the GPUs run above the CPU workers (from --prio-gpu or the profile) */
+    prio_mode prio_gpu;              /* PZ_PRIO_GPU */
+    bool gpu_boost;                  /* the threads serving the GPUs run above the CPU workers (from PZ_PRIO_GPU or the profile) */
     u32 node;                        /* kangaroo: this computer's number in a campaign shared by several (--node): different starting points */
     bool node_given;                 /* --node was given (0 included): the jump table id goes to the terminal too */
     char gpu_filter[128];
@@ -147,7 +147,7 @@ bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);
-prio_mode run_prio_arg(const char *v);              /* the value of --prio-gpu (auto, yes, no): exits with a message on any other */
+prio_mode run_prio_arg(const char *v);              /* the value of bench --prio-gpu (auto, yes, no): exits with a message on any other */
 #define RUN_MAX_THREADS (MAX_WORKERS - 16)          /* the most CPU threads -t accepts (hunt and bench) */
 /* GPU work-items: pct percent of n, rounded to a multiple of `quantum`, never below `quantum` (and never above n). pct outside 1..99: n. */
 size_t run_limit_items(size_t n, int pct, size_t quantum);

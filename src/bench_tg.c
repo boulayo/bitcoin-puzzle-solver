@@ -314,9 +314,9 @@ void tg_gpu_list(const tg_choice *ch, char *out, size_t n)
 void tg_print_advice(const tg_choice *ch, const char *unit)
 {
     char b1[32], b2[32], gl[64];
-    const char *prio = ch->boost ? " --prio-gpu yes" : "";
+    const char *prio = ch->boost ? ", with PZ_PRIO_GPU=yes" : "";
     if (ch->boost_tested && ch->boost)
-        tg_printf("  -> high priority for the GPU threads: %+.1f%%, confirmed in alternating pairs: add --prio-gpu yes\n", ch->boost_gain_pct);
+        tg_printf("  -> high priority for the GPU threads: %+.1f%%, confirmed in alternating pairs: set PZ_PRIO_GPU=yes\n", ch->boost_gain_pct);
     if (!ch->better) {
         tg_printf("  -> no configuration is clearly better than the default (%s %s): leave the default values%s\n",
                   pz_fmt_si(ch->def_rate, b1, sizeof b1), unit, ch->boost ? ", with high priority for the GPU threads" : "");

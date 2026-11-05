@@ -47,7 +47,7 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
 * **Usare solo una parte della macchina.** `--limit X` usa il X % dei thread CPU e dei work-item GPU a pieno ritmo, senza pause.
 * **Campagne persistenti.** Checkpoint atomici, ripresa dopo Ctrl-C, crash, riavvio o sospensione, blocco contro due processi sulla
   stessa campagna. `--keep-awake` impedisce la sospensione su Windows e macOS.
-* **Taratura automatica.** `--retune` misura di nuovo la macchina, `--no-tune` la salta; `bench --together`, `bench --variants` (ogni
+* **Taratura automatica.** `--retune` misura di nuovo la macchina, `PZ_NO_PROFILE=1` la salta; `bench --together`, `bench --variants` (ogni
   variante dei kernel GPU, misurata a turni) e `doctor`: vedi [USO](USO.md) 7.4-7.6.
 * **Computer in affitto.** `--encrypt-pubkey` (o `--encrypt-password`) cifra la chiave a una chiave pubblica nel momento in cui viene trovata: lo schermo, `FOUND.txt` e il log
   contengono solo una riga `PZENC1:...`, che si può spedire ovunque (`--on-found` esegue un tuo comando con essa), e `pzsolve decrypt-key` la apre a casa con la password

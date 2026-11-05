@@ -10,6 +10,7 @@
 enum { PZ_ENV_PATH = 1024 };                          /* size of the fields that hold a folder name (a longer value is ignored) */
 enum { PZ_ENV_API_AUTO = 0, PZ_ENV_API_CUDA, PZ_ENV_API_OPENCL };
 enum { PZ_ENV_TUNE_DEFAULT = 0, PZ_ENV_TUNE_OFF, PZ_ENV_TUNE_ALL };
+enum { PZ_ENV_PRIO_AUTO = 0, PZ_ENV_PRIO_NO, PZ_ENV_PRIO_YES };
 
 /* A variable that is not set, or is set to the empty string, leaves its field at the value of a program started with a clean environment
  * (below, "unset"). The flags follow the two-state rule: on with any value except "" and "0". A value that cannot be used is reported
@@ -28,7 +29,9 @@ struct pz_env {
     char gpu_nk_text[16];           /*   the text as given, for the messages */
     int gpu_tune;                   /* PZ_GPU_TUNE=0|1: PZ_ENV_TUNE_OFF, PZ_ENV_TUNE_ALL (also the devices that are not GPUs), else PZ_ENV_TUNE_DEFAULT */
     /* the rest of the program */
-    bool no_profile;                /* PZ_NO_PROFILE: same as --no-tune */
+    bool no_profile;                /* PZ_NO_PROFILE: the machine profile and the remembered speeds are neither measured nor used */
+    char isa[32];                   /* PZ_ISA=name: the CPU engine of the linear search ("auto" or "" unset: measured); hunt checks the name */
+    int prio_gpu;                   /* PZ_PRIO_GPU=auto|yes|no: PZ_ENV_PRIO_*, auto when unset (the tuning measures it) */
     bool no_large_pages;            /* PZ_NO_LARGE_PAGES: Windows, no large pages for the tables */
     double bench_scale;             /* PZ_BENCH_SCALE=X (0.01 to 100): factor of the durations of the measurements, 1 unset */
     /* places and terminal (the standard variables) */
@@ -49,6 +52,8 @@ struct pz_env {
     int test_jump;                  /* PZ_TEST_JUMP=N (1 to 2^31-1): mean jump in units of sqrt(W), 0 unset */
     long long test_dp_cap;          /* PZ_TEST_DP_CAP=N: entries of the table of distinguished points to start with, -1 unset */
     int test_seal_log2n;            /* PZ_TEST_SEAL_LOG2N=N (1 to 17): scrypt cost 2^N for the key of a password, in place of 2^18 (tests only, with a warning), 0 unset */
+    int test_report_interval;       /* PZ_TEST_REPORT_INTERVAL=S (1 to 86400): seconds between updates of the panel, in place of 1, 0 unset */
+    int test_checkpoint_interval;   /* PZ_TEST_CHECKPOINT_INTERVAL=S (1 to 86400): seconds between saves of the state, in place of 60, 0 unset */
 };
 
 /* The one instance. It holds the values of a clean environment until pz_env_init is called (the programs call it first thing in main), and

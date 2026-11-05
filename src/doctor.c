@@ -63,7 +63,7 @@ static void check_system(const sysinfo_t *s)
     pz_power_scheme(ps, sizeof ps);
     if (ps[0]) doctor_line('i', "active power plan: %s (a power-saving plan slows the CPU and GPU down; use 'High performance' for long campaigns)", ps);
     if (gpu_count_usable() <= 0) return;                       /* the priority of the threads that serve the GPUs */
-    if (pz_boost_possible()) doctor_line('i', "high priority for the GPU threads: possible (the first-run tuning tries it by itself; --prio-gpu yes|no forces it)");
+    if (pz_boost_possible()) doctor_line('i', "high priority for the GPU threads: possible (the first-run tuning tries it by itself; PZ_PRIO_GPU=yes|no forces it)");
     else doctor_line('i', "high priority for the GPU threads: not possible for this user (on Linux it needs root or CAP_SYS_NICE): stays normal");
 }
 
@@ -81,7 +81,7 @@ static void check_cpu_engines(void)
     }
     doctor_line(bad ? 'w' : 'o', "%d of %d engines available, quick check with a known key: %s", ok + bad, n, bad ? "ERRORS" : "passed");
     const cpu_engine *best = cpu_engine_autotune(0.12, false);
-    if (best) doctor_line('i', "chosen by --isa auto for the linear search: %s (%d lanes)", best->name, best->lanes);
+    if (best) doctor_line('i', "chosen automatically for the linear search (PZ_ISA can impose another): %s (%d lanes)", best->name, best->lanes);
     kang_pick_round();
     doctor_line('i', "kangaroo step chosen: %s", kang_round_name());
 }

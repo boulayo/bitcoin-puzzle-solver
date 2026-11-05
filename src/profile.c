@@ -97,7 +97,7 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
     }
     const char *rp = strstr(val, "rate=");
     r->rate_cold = rp ? parse_rate(rp + 5) : 0;           /* what the calibration measured for this entry: the first guess of the completion times */
-    /* "prio=1": the threads serving the GPUs were faster at a higher priority (unless --prio-gpu decided) */
+    /* "prio=1": the threads serving the GPUs were faster at a higher priority (unless PZ_PRIO_GPU decided) */
     const bool prio = strstr(val, "prio=1") != NULL && r->prio_gpu == PRIO_AUTO;
     if (prio) r->gpu_boost = true;
     const char *pn = prio ? ", high priority for the GPU threads" : "";
@@ -126,9 +126,9 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
            fresh ? " (just measured)" : "", when[0] ? " from " : "", when, t, t == 1 ? "" : "s", g[0] ? ", --gpu " : ", all GPUs", g, pn);
 }
 
-void profile_apply(run_ctx *r, bool force, bool disable)
+void profile_apply(run_ctx *r, bool force)
 {
-    if (disable || g_env.no_profile) return;
+    if (g_env.no_profile) return;
     if (r->cfg.mode == MODE_BSGS || r->limit_pct) return;       /* --limit: no measurement at full load, no remembered choice */
     if (r->threads_explicit || r->gpu_filter[0] || !r->use_cpu || !r->use_gpu) return;   /* the user chose: nothing to decide */
     if (gpu_count_usable() <= 0) return;
@@ -141,11 +141,11 @@ void profile_apply(run_ctx *r, bool force, bool disable)
         return;
     }
     const bool kang = r->cfg.mode == MODE_KANGAROO;
-    pz_log(PZ_LOG_INFO, "%s: measuring which CPU thread count and which GPUs work best (about 2 minutes, once; --no-tune skips the measurement, --retune repeats it)",
+    pz_log(PZ_LOG_INFO, "%s: measuring which CPU thread count and which GPUs work best (about 2 minutes, once; PZ_NO_PROFILE=1 skips the measurement, --retune repeats it)",
            force ? "tuning requested" : "first run of this version on this machine");
     tg_choice ch;
     memset(&ch, 0, sizeof ch);
-    ch.prio = r->prio_gpu;                      /* PRIO_AUTO unless --prio-gpu fixed it: then there is nothing to measure */
+    ch.prio = r->prio_gpu;                      /* PRIO_AUTO unless PZ_PRIO_GPU fixed it: then there is nothing to measure */
     tg_silent = pz_log_quiet();                 /* a quiet hunt gets no tables */
     int rc = kang ? kangaroo_bench_together(0, NULL, &ch) : linear_bench_together(r->engine, 0, NULL, &ch);
     if (rc) { tg_silent = 0; pz_log(PZ_LOG_WARN, "CPU+GPU tuning failed: using the default values (will try again on the next run)"); return; }
@@ -244,5 +244,5 @@ void profile_doctor(void)
         }
     }
     free(t);
-    if (!cnt) doctor_line('i', "no CPU+GPU profile saved for version %s: the first 'hunt' on a machine with a GPU measures it by itself (about 2 minutes; --no-tune skips it)", PZ_VERSION);
+    if (!cnt) doctor_line('i', "no CPU+GPU profile saved for version %s: the first 'hunt' on a machine with a GPU measures it by itself (about 2 minutes; PZ_NO_PROFILE=1 skips it)", PZ_VERSION);
 }

@@ -22,13 +22,16 @@
 
 static bool file_exists(const char *p) { struct stat st; return stat(p, &st) == 0; }
 
-/* --isa is validated before a campaign directory is created, so a typo leaves nothing behind. */
-static void check_isa_option(const char *isa)
+/* PZ_ISA: true when it imposes a CPU engine ("auto" and unset do not). Checked before a campaign directory is created, so a typo leaves
+ * nothing behind. */
+static bool isa_forced(void)
 {
-    if (!strcmp(isa, "auto")) return;
+    const char *isa = g_env.isa;
+    if (!isa[0] || !strcmp(isa, "auto")) return false;
     const cpu_engine *e = cpu_engine_by_name(isa);
-    if (!e) pz_die("--isa: invalid value '%s' (expected %s)", isa, PZ_ISA_LIST);
-    if (!e->supported()) pz_die("the CPU does not support the instruction set '%s' (see 'pzsolve devices')", isa);
+    if (!e) pz_die("PZ_ISA: invalid value '%s' (expected %s)", isa, PZ_ISA_LIST);
+    if (!e->supported()) pz_die("PZ_ISA=%s: the CPU does not support this instruction set (see 'pzsolve devices')", isa);
+    return true;
 }
 
 static bool parse_pubkey(const char *hex, campaign_cfg *c)
@@ -105,7 +108,8 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
             snprintf(rng, sizeof rng, "%s:%s", ha, hb);   /* normalised: leading zeros / case do not matter */
         } else pz_strlcpy(rng, o->range, sizeof rng);
     }
-    int kl = snprintf(key, sizeof key, "PZNAME1|%d|%s|%s|%s|%s", o->puzzle, rng, o->address, o->hash160, o->pubkey);
+    /* the empty field is where a hash160 target went until 1.22.0: kept, so that the names of the campaigns made since then stay the same */
+    int kl = snprintf(key, sizeof key, "PZNAME1|%d|%s|%s||%s", o->puzzle, rng, o->address, o->pubkey);
     u8 h[32];
     char id[17];
     pz_sha256((const u8 *)key, (size_t)(kl < (int)sizeof key ? kl : (int)sizeof key - 1), h);
@@ -144,7 +148,7 @@ static void no_pubkey(const campaign_cfg *c, const char *mode)
 static void warn_solved(const opts_t *o, const campaign_cfg *c)
 {
     const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
-    if (!db || !db->privkey[0] || o->address[0] || o->hash160[0] || o->pubkey[0]) return;   /* only for the target of the database */
+    if (!db || !db->privkey[0] || o->address[0] || o->pubkey[0]) return;   /* only for the target of the database */
     pz_log(PZ_LOG_WARN, "puzzle %d is already SOLVED (the key is public): the campaign is only a test run", db->n);
     pz_u256 pk;
     if (o->range[0] && pz_u256_from_hex(&pk, db->privkey) && (pz_u256_cmp(&pk, &c->range_start) < 0 || pz_u256_cmp(&pk, &c->range_end) > 0))
@@ -157,7 +161,7 @@ static void set_target(const opts_t *o, campaign_cfg *c)
     bool have_target = false;
     const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
     bool from_db = false;
-    if (db && !o->address[0] && !o->hash160[0] && !o->pubkey[0]) {
+    if (db && !o->address[0] && !o->pubkey[0]) {
         /* target taken from the built-in database */
         u8 h[20];
         if (!pz_address_to_hash160(db->address, h)) pz_die("puzzle database corrupted (puzzle %d)", db->n);
@@ -205,13 +209,6 @@ static void set_target(const opts_t *o, campaign_cfg *c)
         pz_strlcpy(c->address, o->address, sizeof c->address);
         have_target = true;
     }
-    if (o->hash160[0]) {
-        u8 h[20];
-        if (pz_hex_decode(o->hash160, h, 20) != 20) pz_die("--hash160 requires 40 hexadecimal digits");
-        if (have_target && memcmp(h, c->target_h160, 20) != 0) pz_die("--hash160 does not match the given address/pubkey");
-        memcpy(c->target_h160, h, 20);
-        have_target = true;
-    }
     if (db && !from_db) {
         u8 hd[20];
         if (pz_address_to_hash160(db->address, hd) && memcmp(hd, c->target_h160, 20) != 0)
@@ -228,7 +225,7 @@ static void set_target(const opts_t *o, campaign_cfg *c)
         pz_log(PZ_LOG_WARN, "puzzle %d was emptied by the creator in 2017 (block 475240): address %s holds no "
                "funds, the search is only an exercise (and with 2^%d keys it cannot finish)", o->puzzle, retired, o->puzzle - 1);
     }
-    if (!have_target) pz_die("a target is required: --address, --hash160 or --pubkey");
+    if (!have_target) pz_die("a target is required: --address or --pubkey");
     if (!c->address[0]) pz_hash160_to_address(c->target_h160, c->address, sizeof c->address);
 }
 
@@ -332,10 +329,6 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
     if (o->address[0]) {
         u8 h[20];
         if (!pz_address_to_hash160(o->address, h) || memcmp(h, c->target_h160, 20) != 0) pz_die("the given address does not match the one of the existing campaign");
-    }
-    if (o->hash160[0]) {
-        u8 h[20];
-        if (pz_hex_decode(o->hash160, h, 20) != 20 || memcmp(h, c->target_h160, 20) != 0) pz_die("--hash160 does not match the one of the existing campaign");
     }
     if (o->pubkey[0]) {
         campaign_cfg tmp;
@@ -547,8 +540,6 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
     snprintf(conf, sizeof conf, "%s/campaign.conf", cdir);
     bool resuming = file_exists(conf);
     *locked = false;
-    if (o->want_new && resuming) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o->campaign);
-    if (o->want_resume && !resuming) pz_die("--resume: campaign '%s' does not exist", o->campaign);
     if (!resuming) {
         build_new_cfg(o, &r->cfg);
         check_options_for_campaign(o, &r->cfg, r, true);
@@ -563,7 +554,6 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
         *locked = true;
         snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
         if (file_exists(conf)) {      /* created by a command that has finished meanwhile: this one resumes it */
-            if (o->want_new) pz_die("campaign '%s' already exists (use another name, or drop --new to resume it)", o->campaign);
             resuming = true;
         } else if (cfg_save(&r->cfg, conf) != 0) pz_die("cannot save %s", conf);
     }
@@ -604,25 +594,23 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
     r->use_cpu = !o->no_cpu;
     r->use_gpu = !o->no_gpu;
     if (o->gpu[0]) pz_strlcpy(r->gpu_filter, o->gpu, sizeof r->gpu_filter);
-    if (o->report_interval > 0) r->report_interval = o->report_interval;
-    if (o->checkpoint_interval > 0) r->checkpoint_interval = o->checkpoint_interval;
     r->ui = o->quiet ? UI_LOG : o->ui;
     r->mem_limit = mem_bytes(o->mem_gb);
     pz_strlcpy(r->table_path, o->table, sizeof r->table_path);
     if (o->dp_bits >= 0) r->cfg.dp_bits = (unsigned)o->dp_bits;
 
     if (r->use_cpu && r->cfg.mode == MODE_LINEAR) {
-        if (strcmp(o->isa, "auto") == 0) r->engine = cpu_engine_autotune(0.25, o->verbose);
+        if (!isa_forced()) r->engine = cpu_engine_autotune(0.25, o->verbose);
         else {
-            r->engine = cpu_engine_by_name(o->isa);             /* known and supported: check_isa_option() has already said otherwise and exited */
-            if (!cpu_engine_quickcheck(r->engine)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: use another --isa", o->isa);
+            r->engine = cpu_engine_by_name(g_env.isa);          /* known and supported: isa_forced() has already said otherwise and exited */
+            if (!cpu_engine_quickcheck(r->engine)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: set PZ_ISA to another one", g_env.isa);
         }
     }
 
-    r->prio_gpu = o->prio_gpu;
-    r->gpu_boost = o->prio_gpu == PRIO_YES;
+    r->prio_gpu = g_env.prio_gpu == PZ_ENV_PRIO_YES ? PRIO_YES : g_env.prio_gpu == PZ_ENV_PRIO_NO ? PRIO_NO : PRIO_AUTO;   /* PZ_PRIO_GPU */
+    r->gpu_boost = r->prio_gpu == PRIO_YES;
     r->limit_pct = o->limit;
-    profile_apply(r, o->retune, o->no_tune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
+    profile_apply(r, o->retune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
     if (run_interrupted()) return false;    /* Ctrl-C during the measurement: nothing has started, nothing is lost */
     *thr_full = r->nthreads;
     run_limit_setup(r);
@@ -631,7 +619,7 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
         r->gpu_boost = false;
     }
     gpu_set_boost(r->use_gpu && r->gpu_boost);
-    if (!o->no_tune && !g_env.no_profile) profile_rate_setup(r);
+    if (!g_env.no_profile) profile_rate_setup(r);
 
     return true;
 }
@@ -670,7 +658,8 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
                r->cfg.part, text_seed ? "the same -s" : "this seed (-s ", text_seed ? "" : sd, text_seed ? "" : ")");
     }
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
-    if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes, PLURAL(r->engine->lanes));
+    if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)%s", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes,
+                                        PLURAL(r->engine->lanes), isa_forced() ? ", imposed by PZ_ISA" : "");
     else if (r->use_cpu && r->cfg.mode == MODE_KANGAROO) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, kangaroo steps with %s", r->nthreads, PLURAL(r->nthreads), kang_round_name());
     else if (r->use_cpu) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, giant steps with %s", r->nthreads, PLURAL(r->nthreads), bsgs_engine_name());
     if (r->limit_pct) {
@@ -679,7 +668,7 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
         if (r->use_gpu) snprintf(gpu, sizeof gpu, "%sGPUs at %d%% of the work-items", r->use_cpu ? ", " : "", r->limit_pct);
         pz_log(PZ_LOG_INFO, "limit %d%%: %s%s", r->limit_pct, cpu, gpu);
     }
-    if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", o->prio_gpu == PRIO_YES ? " (--prio-gpu yes)" : " (from the machine profile)");
+    if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", r->prio_gpu == PRIO_YES ? " (PZ_PRIO_GPU=yes)" : " (from the machine profile)");
     if (r->node) pz_log(PZ_LOG_INFO, "node %u: kangaroo starting points differ from those of the other computers on the same campaign", r->node);
     pz_log(PZ_LOG_INFO, "campaign folder: %s", r->cfg.dir);
 }
@@ -738,7 +727,7 @@ int cmd_hunt(int argc, char **argv)
     parse_opts(argc, argv, &o);
     pz_log_set_quiet(o.quiet);
     pz_log_set_verbose(o.verbose);
-    check_isa_option(o.isa);
+    isa_forced();                                       /* PZ_ISA: an unknown or unsupported name stops here */
     if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
     if (o.retune && o.limit) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
     if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */

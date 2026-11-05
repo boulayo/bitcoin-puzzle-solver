@@ -136,8 +136,8 @@ if build/pzcore/t_fev52 | grep -q OK && ! build/pzcore/t_fev52 | grep -q skipped
 elif PZ_ASSUME_IFMA=1 build/pzcore/t_fev52 >/dev/null 2>&1; then
   echo "  OK t_fev52 (IFMA executed by the CPU, hidden by CPUID)"
   PZ_ASSUME_IFMA=1 build/t_engine >/dev/null && echo "  OK t_engine with avx512i" || { echo "  FAIL t_engine with avx512i"; fail=$((fail+1)); }
-  rm -rf "$T/i1"; run env PZ_ASSUME_IFMA=1 build/pzsolve hunt -p 26 -a "$A" --isa avx512i -c i -d "$T/i1" --ui log -q --no-gpu
-  check_found "$T/i1/i" "$K" && echo "  OK linear with --isa avx512i" || { echo "  FAIL linear with --isa avx512i"; fail=$((fail+1)); }
+  rm -rf "$T/i1"; run env PZ_ASSUME_IFMA=1 PZ_ISA=avx512i build/pzsolve hunt -p 26 -a "$A" -c i -d "$T/i1" --ui log -q --no-gpu
+  check_found "$T/i1/i" "$K" && echo "  OK linear with PZ_ISA=avx512i" || { echo "  FAIL linear with PZ_ISA=avx512i"; fail=$((fail+1)); }
 else echo "  (the CPU does not execute IFMA: tried only under SDE, if available)"; fi
 if [ -n "${PZ_SDE:-}" ]; then
   run "$PZ_SDE" -tgl -- build/pzcore/t_fev52
@@ -205,7 +205,7 @@ step "the panel's first estimate (simulated GPU, in a pseudo-terminal)"
 # the panel's estimate in the first seconds (after the one-time tuning of the simulated GPU, about 50 s here): no completion time until
 # every engine (here the simulated GPU too) has produced something,
 # then a provisional one that says so (the multi-line panel only appears on a terminal: a pseudo-terminal stands in)
-PANEL=$(env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/panelcache" python3 -I tools/pty_run.py 120 "$PWD/build/pzsolve" hunt -p 71 -m linear -c e -d "$T/panel" -t 2 --report-interval 1 --ui full 2>&1 || true)
+PANEL=$(env LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/panelcache" python3 -I tools/pty_run.py 120 "$PWD/build/pzsolve" hunt -p 71 -m linear -c e -d "$T/panel" -t 2 --ui full 2>&1 || true)
 grep -qE "Time left +measuring" <<<"$PANEL" && grep -qE "^ +provisional" <<<"$PANEL" && echo "  OK panel: measuring, then a provisional estimate (CPU + simulated GPU)" || { echo "  FAIL panel: initial estimate"; fail=$((fail+1)); }
 }
 
@@ -221,8 +221,8 @@ rm -rf "$T/pr3"; outhas "profile of this machine (just measured)" $PROF build/pz
 check_found "$T/pr3/p" "$KK" && echo "  OK kangaroo with CPU+GPU after tuning" || { echo "  FAIL kangaroo with CPU+GPU after tuning"; fail=$((fail+1)); }
 # a saved verdict that changes nothing goes to the log file only
 rm -rf "$T/pr4"; $PROF build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr4" --ui log >/dev/null 2>&1; grep -q "profile of this machine from " "$T/pr4/p/log.txt" && echo "  OK profile reused on the second run (kangaroo)" || { echo "  FAIL profile reused (kangaroo)"; fail=$((fail+1)); }
-rm -rf "$T/pr6"; outhas "high priority" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr6" --ui log -t 2 --prio-gpu yes && echo "  OK hunt --prio-gpu yes (with an explicit -t)" || { echo "  FAIL hunt --prio-gpu yes"; fail=$((fail+1)); }
-check_found "$T/pr6/p" "$K" && echo "  OK linear found with high priority for the GPU threads" || { echo "  FAIL linear with --prio-gpu yes"; fail=$((fail+1)); }
+rm -rf "$T/pr6"; outhas "high priority" $PROF PZ_PRIO_GPU=yes build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr6" --ui log -t 2 && echo "  OK hunt with PZ_PRIO_GPU=yes (with an explicit -t)" || { echo "  FAIL hunt with PZ_PRIO_GPU=yes"; fail=$((fail+1)); }
+check_found "$T/pr6/p" "$K" && echo "  OK linear found with high priority for the GPU threads" || { echo "  FAIL linear with PZ_PRIO_GPU=yes"; fail=$((fail+1)); }
 rm -rf "$T/pr5"; outhas "profile\|first run" $PROF build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr5" --ui log -t 2 && { echo "  FAIL explicit -t ignored by the profile"; fail=$((fail+1)); } || echo "  OK explicit -t: no tuning"
 # no cache folder to keep the result in (a service without HOME): no measurement of two minutes at every start
 rm -rf "$T/pr7"; PO=$(env -u HOME -u XDG_CACHE_HOME LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve hunt -p 26 -a "$A" -m linear -c p -d "$T/pr7" --ui log 2>&1)
@@ -441,14 +441,14 @@ if command -v valgrind >/dev/null; then
   VG="valgrind -q --error-exitcode=9 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all"
   EPUB=$(epub build/pzsolve)
   K2=0x2aaaaa; A2=$(field $K2 addr)
-  rm -rf "$T/v1"; run $VG build/pzsolve hunt -p 22 -a "$A2" -c v -d "$T/v1" --isa baseline -t 2 --no-gpu --ui log -q
+  rm -rf "$T/v1"; run env PZ_ISA=baseline $VG build/pzsolve hunt -p 22 -a "$A2" -c v -d "$T/v1" -t 2 --no-gpu --ui log -q
   check_found "$T/v1/v" "$K2" && echo "  OK linear (Valgrind)" || { echo "  FAIL linear (Valgrind)"; fail=$((fail+1)); }
   K3=$(python3 -c "import random; random.seed(4); print(hex(random.randrange(2**30, 2**31)))"); P3=$(field "$K3" pub); A3=$(field "$K3" addr)
   rm -rf "$T/v2"; run $VG build/pzsolve hunt -p 31 -a "$A3" -k "$P3" -m kangaroo -c v -d "$T/v2" -t 2 --no-gpu --ui log -q
   check_found "$T/v2/v" "$K3" && echo "  OK kangaroo (Valgrind)" || { echo "  FAIL kangaroo (Valgrind)"; fail=$((fail+1)); }
   rm -rf "$T/v3"; run $VG build/pzsolve hunt -p 31 -a "$A3" -k "$P3" -m bsgs -c v -d "$T/v3" -t 2 --no-gpu --ui log -q
   check_found "$T/v3/v" "$K3" && echo "  OK bsgs (Valgrind)" || { echo "  FAIL bsgs (Valgrind)"; fail=$((fail+1)); }
-  rm -rf "$T/v4"; run $VG build/pzsolve hunt -p 22 -a "$A2" -c v -d "$T/v4" --isa baseline -t 2 --no-gpu --ui log -q --encrypt-pubkey "$EPUB" --on-found "true"
+  rm -rf "$T/v4"; run env PZ_ISA=baseline $VG build/pzsolve hunt -p 22 -a "$A2" -c v -d "$T/v4" -t 2 --no-gpu --ui log -q --encrypt-pubkey "$EPUB" --on-found "true"
   grep -q '^PZENC1:' "$T/v4/v/FOUND.txt" && echo "  OK encrypted key (Valgrind)" || { echo "  FAIL encrypted key (Valgrind)"; fail=$((fail+1)); }
   for t in t_u256 t_address t_hash t_batch t_kdf; do
     run $VG build/pzcore/$t >/dev/null && echo "  OK pzcore $t (Valgrind)"

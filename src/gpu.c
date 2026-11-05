@@ -35,28 +35,13 @@ const char *gpu_fmt_devused(const rt_dev *d, size_t used, char *out, size_t n)
     return out;
 }
 
-static gpu_api_pref g_pref = GPU_API_AUTO;
-static bool g_pref_from_env;
-
-void gpu_set_api_pref(gpu_api_pref p) { g_pref = p; g_pref_from_env = true; }
-
-static gpu_api_pref api_pref(void)
-{
-    if (!g_pref_from_env) {
-        if (g_env.gpu_api == PZ_ENV_API_CUDA) g_pref = GPU_API_CUDA;
-        else if (g_env.gpu_api == PZ_ENV_API_OPENCL) g_pref = GPU_API_OPENCL;
-        g_pref_from_env = true;
-    }
-    return g_pref;
-}
-
-/* Devices used when --gpu is not given: every GPU once (through CUDA when both runtimes see it). */
+/* Devices used when --gpu is not given: every GPU once (through CUDA when both runtimes see it, unless PZ_GPU_API chose a runtime). */
 static bool default_choice(const rt_dev *d)
 {
     if (!d->is_gpu) return false;
-    switch (api_pref()) {
-    case GPU_API_CUDA: return d->api == RT_CUDA;
-    case GPU_API_OPENCL: return d->api == RT_OPENCL;
+    switch (g_env.gpu_api) {
+    case PZ_ENV_API_CUDA: return d->api == RT_CUDA;
+    case PZ_ENV_API_OPENCL: return d->api == RT_OPENCL;
     default: return d->api == RT_CUDA || d->dup_of < 0;
     }
 }

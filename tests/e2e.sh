@@ -110,7 +110,7 @@ echo "== kangaroo: a file size limit (ulimit -f) fails the writes of dp.bin, whi
 K=$(rndkey 80 8080); PUB=$(field $K pub); A=$(field $K addr)   # a range the key cannot be found in within minutes; a flood of points reaches the limit at once
 rm -rf "$DIR/xfsz"
 # stopped once a failed save is in the log (the first checkpoint comes 2 s after the start, later on a loaded machine)
-(ulimit -f 64; run_until 'grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" 2>/dev/null' $BIN hunt -p 80 -a "$A" -k "$PUB" -m kangaroo --dp-bits 4 --mem 0.05 -c xfsz -d "$DIR" --ui log -q --no-gpu --checkpoint-interval 2 >"$DIR/xfsz.out" 2>&1; echo "rc=$RC" >>"$DIR/xfsz.out")
+(ulimit -f 64; export PZ_TEST_CHECKPOINT_INTERVAL=2; run_until 'grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" 2>/dev/null' $BIN hunt -p 80 -a "$A" -k "$PUB" -m kangaroo --dp-bits 4 --mem 0.05 -c xfsz -d "$DIR" --ui log -q --no-gpu >"$DIR/xfsz.out" 2>&1; echo "rc=$RC" >>"$DIR/xfsz.out")
 RC=$(sed -n 's/^rc=//p' "$DIR/xfsz.out")
 # the final save of the stop fails under the limit too, and the program says so with exit status 2 (130 if it got through); 153 would be the kill
 { [ "$RC" = 2 ] || [ "$RC" = 130 ]; } && grep -q "checkpoint save failed" "$DIR/xfsz/log.txt" && [ -s "$DIR/xfsz/session.txt" ] && ok "dp.bin beyond the file size limit: the failed saves are logged, the session is saved, the stop is clean (exit status $RC)" \
@@ -272,8 +272,36 @@ for sig in INT TERM; do
 done
 $BIN hunt -p 40 -t 0 -c xe -d "$DIR" -q >/dev/null 2>&1; RC=$?
 [ $RC -eq 2 ] && ok "invalid option: exit status 2" || bad "invalid option: exit status $RC"
-$BIN hunt -p 40 --resume -c xe -d "$DIR" -q >/dev/null 2>&1; RC=$?
-[ $RC -eq 2 ] && ok "--resume of a campaign that does not exist: exit status 2" || bad "--resume without a campaign: exit status $RC"
+# the options removed in 1.23.0: each one says what to use instead, with exit status 2, and creates nothing (merge and info too)
+for rm_opt in "-H 751e76e8199196d454941c45d1b3a323f1433bd6|--hash160 (-H) was removed in 1.23.0: give the address with -a" \
+              "--hash160=751e76e8199196d454941c45d1b3a323f1433bd6|--hash160 (-H) was removed" \
+              "--new|--new and --resume were removed in 1.23.0: hunt creates the campaign or resumes it" "--resume|--new and --resume were removed" \
+              "--gpu-api opencl|--gpu-api was removed in 1.23.0: set the environment variable PZ_GPU_API=cuda|opencl instead" \
+              "--no-tune|--no-tune was removed in 1.23.0: set the environment variable PZ_NO_PROFILE=1 instead" \
+              "--report-interval 2|--report-interval was removed in 1.23.0: the panel is updated every second" \
+              "--checkpoint-interval 5|--checkpoint-interval was removed in 1.23.0: the state is saved every 60 seconds" \
+              "--isa baseline|--isa was removed in 1.23.0: set the environment variable PZ_ISA instead" \
+              "--prio-gpu yes|--prio-gpu was removed in 1.23.0: set the environment variable PZ_PRIO_GPU=auto|yes|no instead"; do
+  opt=${rm_opt%%|*}; msg=${rm_opt#*|}
+  rm -rf "$DIR/xr"
+  OUT=$($BIN hunt -p 40 $opt -c xr -d "$DIR/xr" -q 2>&1 >/dev/null); RC=$?
+  [ $RC -eq 2 ] && grep -q -F -- "$msg" <<<"$OUT" && [ ! -e "$DIR/xr" ] && ok "hunt $opt: '$msg', exit status 2" || bad "hunt $opt: rc=$RC: $OUT"
+done
+for cmd in "merge -c xr -f x" "info -c xr" "list"; do
+  OUT=$($BIN $cmd --no-tune -d "$DIR/xr" 2>&1 >/dev/null); RC=$?
+  [ $RC -eq 2 ] && grep -q -F -- "--no-tune was removed in 1.23.0" <<<"$OUT" && ok "${cmd%% *} --no-tune: the message of the removed option, exit status 2" || bad "${cmd%% *} --no-tune: rc=$RC: $OUT"
+done
+# PZ_ISA takes the values of the old --isa, checked the same way before anything is created; PZ_PRIO_GPU, a word that is not allowed is ignored
+rm -rf "$DIR/xr"
+OUT=$(PZ_ISA=foo $BIN hunt -p 20 -c xr -d "$DIR/xr" -q --no-gpu 2>&1 >/dev/null); RC=$?
+[ $RC -eq 2 ] && grep -q "PZ_ISA: invalid value 'foo' (expected auto, baseline" <<<"$OUT" && [ ! -e "$DIR/xr" ] && ok "PZ_ISA=foo: refused before anything is created" || bad "PZ_ISA=foo: rc=$RC: $OUT"
+K=$(rndkey 18 4242); A=$(field $K addr)
+OUT=$(PZ_ISA=baseline $BIN hunt -p 18 -a "$A" -c xr -d "$DIR/xr" --ui log -q --no-gpu -t 2 2>&1); RC=$?
+GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/xr/xr/FOUND.txt" 2>/dev/null)
+[ $RC -eq 0 ] && [ "$GOT" = "${K#0x}" ] && grep -q "engine baseline (.*), imposed by PZ_ISA" "$DIR/xr/xr/log.txt" && ok "PZ_ISA=baseline: the engine is imposed and the key found" || bad "PZ_ISA=baseline: rc=$RC, key '$GOT'"
+rm -rf "$DIR/xr"
+OUT=$(PZ_PRIO_GPU=si $BIN hunt -p 18 -a "$A" -c xr -d "$DIR/xr" --ui log -q --no-gpu -t 1 2>&1); RC=$?
+[ $RC -eq 0 ] && grep -q "PZ_PRIO_GPU=si ignored (expected auto, yes or no)" <<<"$OUT" && ok "PZ_PRIO_GPU=si: reported and ignored" || bad "PZ_PRIO_GPU=si: rc=$RC: $OUT"
 $BIN frobnicate >/dev/null 2>&1; RC=$?
 [ $RC -eq 2 ] && ok "unknown command: exit status 2" || bad "unknown command: exit status $RC"
 # merge: 0 when the files are merged without a collision, 1 when a file cannot be merged, 2 for a campaign that cannot take it
@@ -362,7 +390,7 @@ for kopts in "-m kangaroo" "-m auto"; do
 done
 
 echo "== invalid options: clear error and no half-created campaign left behind"
-for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--report-interval 0" "--bsgs-entries 0" "--isa foo" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "--new --resume" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50" "--prio-gpu si"; do
+for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50"; do
   rm -rf "$DIR/opt"
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done
@@ -417,7 +445,7 @@ $BIN hunt -r 0001:FFFF -c rg -d "$DIR/rg" -q --no-gpu >/dev/null 2>&1 && ok "-r 
 echo "== resume: options that conflict with the existing campaign"
 rm -rf "$DIR/rc"
 run_until 'running "$DIR/rc/p71"' $BIN hunt -p 71 -d "$DIR/rc" --ui log -q --no-gpu >/dev/null 2>&1
-for conflict in "-s somethingelse" "--chunk-bits 20" "-m kangaroo" "-m bsgs" "-r 400000000000000000:5fffffffffffffffff" "-a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH" "--new"; do
+for conflict in "-s somethingelse" "--chunk-bits 20" "-m kangaroo" "-m bsgs" "-r 400000000000000000:5fffffffffffffffff" "-a 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"; do
   OUT=$(run_until 'running "$DIR/rc/p71"' $BIN hunt -c p71 -p 71 $conflict -d "$DIR/rc" --ui log --no-gpu 2>&1; echo "rc=$RC"); RC=${OUT##*rc=}
   [ "$RC" != 0 ] && echo "$OUT" | grep -q "ERROR" && ok "resume with '$conflict' rejected" || bad "resume with '$conflict' accepted (rc=$RC)"
 done

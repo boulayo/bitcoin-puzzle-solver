@@ -8,10 +8,6 @@
 
 typedef struct gpu_session gpu_session;
 
-/* Which runtime drives the GPUs that both can see: auto = CUDA for NVIDIA cards (OpenCL as a fallback), OpenCL for the others.
- * Without a call (--gpu-api), the environment variable PZ_GPU_API decides, else auto. */
-typedef enum { GPU_API_AUTO = 0, GPU_API_CUDA, GPU_API_OPENCL } gpu_api_pref;
-void gpu_set_api_pref(gpu_api_pref p);
 /* Dies with a clear message when an index of a --gpu list does not exist. */
 void gpu_check_filter(const char *filter);
 

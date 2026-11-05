@@ -11,25 +11,21 @@
 
 #define PLURAL(n) ((n) == 1 ? "" : "s")
 
-/* instruction sets that --isa accepts on this architecture (the others are not compiled in) */
+/* the CPU engines that PZ_ISA accepts on this architecture (the others are not compiled in) */
 #if defined(__aarch64__)
 #define PZ_ISA_LIST "auto, baseline, neon, neon2"
-#define PZ_ISA_HELP "auto | baseline | neon | neon2\n                          [auto: chosen with a micro-benchmark; neon and neon2 use the hardware SHA-256 of the CPU\n                          with 4 and 8 keys at a time; without it the baseline is used]. On x86-64: auto, baseline, avx2,\n                          shani, avx512, avx2v, avx512v, avx512i"
 #else
 #define PZ_ISA_LIST "auto, baseline, avx2, shani, avx512, avx2v, avx512v, avx512i"
-#define PZ_ISA_HELP "auto | baseline | avx2 | shani | avx512 | avx2v | avx512v | avx512i\n                          [auto: chosen with a micro-benchmark; 'v' = curve arithmetic in\n                          parallel on the SIMD lanes; 'i' = like avx512v but with AVX-512 IFMA;\n                          'shani' = avx2 with the SHA-256 instructions of the CPU (AMD Zen 2 and later, Intel Ice Lake\n                          and later)]. On arm64: auto, baseline, neon, neon2 (the hardware SHA-256 of the CPU, 4 or 8 keys at\n                          a time)"
 #endif
 
 /* ---- the options of hunt, info, list, where and merge ---- */
 
 typedef struct {
     int puzzle;
-    char range[200], address[80], hash160[48], pubkey[160], campaign[96], dir[400], seed[200], mode[16], isa[16], gpu[128];
+    char range[200], address[80], pubkey[160], campaign[96], dir[400], seed[200], mode[16], gpu[128];
     int threads, chunk_bits, dp_bits;
     double mem_gb;
-    int report_interval, checkpoint_interval;
-    bool no_cpu, no_gpu, quiet, verbose, want_new, want_resume, retune, no_tune, keep_awake;
-    prio_mode prio_gpu;
+    bool no_cpu, no_gpu, quiet, verbose, retune, keep_awake;
     char part[PART_TEXT];
     int node, nfiles;
     bool node_given;              /* --node was given, 0 included */

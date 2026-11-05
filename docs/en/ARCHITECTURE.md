@@ -156,9 +156,10 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | Variable | Field of `g_env` | Used in |
 |----------|------------------|---------|
 | `PZ_NO_CUDA`, `PZ_NO_OPENCL` | `no_cuda`, `no_opencl` | `rt.c`: which runtimes are loaded |
-| `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices (`--gpu-api` comes first) |
+| `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices |
 | `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_meta`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off (the text of `PZ_GPU_NK` is read by `gpu_variant.c`) |
 | `PZ_NO_PROFILE` | `no_profile` | `cmd_hunt.c`, `profile.c` |
+| `PZ_ISA`, `PZ_PRIO_GPU` | `isa`, `prio_gpu` | `cmd_hunt.c`: the CPU engine of the linear search (the name is checked there, and an unknown or unsupported one stops the command), the priority of the threads that serve the GPUs (`run_ctx.prio_gpu`, part of the key of the profile when it is not `auto`) |
 | `PZ_NO_LARGE_PAGES` | `no_large_pages` | `platform_win.c`: `pz_map_zeroed` |
 | `PZ_BENCH_SCALE` | `bench_scale` | `bench_tg.c`: duration of the measurements |
 | `XDG_CACHE_HOME`, `HOME`, `LOCALAPPDATA` | `xdg_cache_home`, `home`, `local_app_data` | `util.c`: `pz_cache_file` |
@@ -168,6 +169,7 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | `PZ_BSGS_SCALAR` | `bsgs_scalar` | `bsgs.c`: scalar windows only, no lane-based ones |
 | `PZ_ASSUME_IFMA` | `assume_ifma` | `cpu_common.c`: `cpu_has_ifma` is true when the CPU has AVX-512 (for the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID hides IFMA) |
 | `PZ_TEST_KTHREAD`, `PZ_TEST_JUMP`, `PZ_TEST_DP_CAP` | `test_kthread`, `test_jump`, `test_dp_cap` | `kangaroo.c` (`kang_create`, `kang_configure`): walkers per CPU thread (16 to 1048576); the mean jump in units of √W (1 or more: long walks on a small range); the first size of the table of distinguished points (at least 64: a tiny table exercises its growth and thinning) |
+| `PZ_TEST_REPORT_INTERVAL`, `PZ_TEST_CHECKPOINT_INTERVAL` | `test_report_interval`, `test_checkpoint_interval` | `run_common.c` (`run_init`): the seconds between updates of the panel and between saves of the state (1 to 86400) in place of 1 and 60, for the tests that need a save within seconds |
 | `PZ_TEST_SEAL_LOG2N` | `test_seal_log2n` | `encrypt.c` (`enc_log2n`): the scrypt cost of the key of a password, 2^N (1 to 17) instead of 2^18, so that the tests of the password take milliseconds; a warning is printed whenever it is in effect, and the real cost stays reachable only without it |
 | `PZ_EXPECT_SHANI` | `expect_shani` | `tests/t_engine.c`: the tests fail if the SHA-extension code cannot run (`make test-shani`) |
 

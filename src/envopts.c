@@ -82,6 +82,15 @@ static void env_gpu_api(void)
     else if (strcmp(v, "auto") != 0) env_ignored("PZ_GPU_API", v, "expected cuda or opencl");
 }
 
+static void env_prio_gpu(void)
+{
+    const char *v = env_get("PZ_PRIO_GPU");
+    if (!v) return;
+    if (!strcmp(v, "yes")) g_env.prio_gpu = PZ_ENV_PRIO_YES;
+    else if (!strcmp(v, "no")) g_env.prio_gpu = PZ_ENV_PRIO_NO;
+    else if (strcmp(v, "auto") != 0) env_ignored("PZ_PRIO_GPU", v, "expected auto, yes or no");
+}
+
 static void env_gpu_tune(void)
 {
     const char *v = env_get("PZ_GPU_TUNE");
@@ -134,6 +143,8 @@ void pz_env_init(void)
     env_gpu_nk();
     env_gpu_tune();
     g_env.no_profile = env_flag("PZ_NO_PROFILE");
+    env_text("PZ_ISA", g_env.isa, sizeof g_env.isa);
+    env_prio_gpu();
     g_env.no_large_pages = env_flag("PZ_NO_LARGE_PAGES");
     env_bench_scale();
 
@@ -155,4 +166,6 @@ void pz_env_init(void)
     if (env_int("PZ_TEST_JUMP", 1, 2147483647, &n)) g_env.test_jump = (int)n;
     if (env_int("PZ_TEST_DP_CAP", 0, (long long)1 << 62, &n)) g_env.test_dp_cap = n;
     if (env_int("PZ_TEST_SEAL_LOG2N", 1, 17, &n)) g_env.test_seal_log2n = (int)n;
+    if (env_int("PZ_TEST_REPORT_INTERVAL", 1, 86400, &n)) g_env.test_report_interval = (int)n;
+    if (env_int("PZ_TEST_CHECKPOINT_INTERVAL", 1, 86400, &n)) g_env.test_checkpoint_interval = (int)n;
 }

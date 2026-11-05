@@ -48,7 +48,8 @@ ferma a `n − 1` (l'ordine del gruppo), perché le chiavi oltre non esistono. P
 
 ## 3. `hunt`: opzioni
 
-`pzsolve hunt --help` elenca tutte le opzioni con il loro valore predefinito. Quello che richiede più di una riga dell'aiuto:
+`pzsolve hunt --help` elenca tutte le opzioni con il loro valore predefinito, in fondo, sotto ADVANCED, quelle che quasi nessuna campagna usa.
+Quello che richiede più di una riga dell'aiuto:
 
 * `-p N` con `-r S:E` prende il bersaglio del puzzle N e l'intervallo di `-r`. Una chiave fuori dall'intervallo di `-r` non viene segnalata dalla
   ricerca lineare, nemmeno quando l'ultimo blocco la raggiunge (i motori scandiscono corsie intere).
@@ -62,7 +63,10 @@ ferma a `n − 1` (l'ordine del gruppo), perché le chiavi oltre non esistono. P
 * `--encrypt-pubkey`, `--encrypt-password` e `--on-found` cifrano la chiave trovata ed eseguono un comando quando viene trovata: sezione 11.
 
 Un valore che non si può usare ferma il comando con un messaggio come `--limit: invalid value '100' (expected an integer between 1 and 99)`,
-e un'opzione sconosciuta con `unrecognized option '--foo' (see 'pzsolve help hunt')`.
+e un'opzione sconosciuta con `unrecognized option '--foo' (see 'pzsolve help hunt')`. Le opzioni tolte nella 1.23.0 vengono rifiutate (codice di
+uscita 2) con un messaggio che dice cosa usare al loro posto: `-H`/`--hash160` (dai l'indirizzo con `-a`), `--new` e `--resume` (hunt crea la
+campagna o la riprende), `--report-interval` e `--checkpoint-interval` (1 s e 60 s), e `--gpu-api`, `--no-tune`, `--isa`, `--prio-gpu`, che sono
+diventate le variabili d'ambiente `PZ_GPU_API`, `PZ_NO_PROFILE`, `PZ_ISA` e `PZ_PRIO_GPU` (sezione 7.10).
 
 Esempi:
 
@@ -129,7 +133,7 @@ campaigns/NOME/
 * **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato. Un secondo
   Ctrl-C dopo mezzo secondo esce subito (e perde al massimo l'ultimo minuto di lavoro).
 * **Riprendere**: lo stesso comando (`hunt -p N`, oppure `hunt -c NOME`). Il seed e i parametri che definiscono la ricerca non
-  possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits`, `--bsgs-entries` o `--encrypt-pubkey` diversi da quelli della campagna
+  possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-m`, `--chunk-bits`, `--bsgs-entries` o `--encrypt-pubkey` diversi da quelli della campagna
   esistente il programma **rifiuta** con un errore (non li ignora in silenzio); puoi invece cambiare thread, GPU, ISA, memoria e
   aspetto del pannello. **`pzsolve list`** mostra tutte le campagne e il loro stato.
 * **Nome della campagna** (senza `-c`): `pN` per un puzzle intero; per un sotto-intervallo (`-r`) o un bersaglio personalizzato
@@ -187,7 +191,7 @@ elencano sempre ogni worker uno per uno.
   dalla velocità a regime di una corsa precedente della stessa configurazione, se c'è, altrimenti da quella misurata dalla taratura (ALGORITHMS.md
   sezione 11, in inglese). Finché la stima si assesta una riga lo dice: `provisional (from the remembered speed, settles in ~2 min)` (dalla velocità
   ricordata), `provisional (from the tuning run, settles in ~40 s)` (dalla taratura), oppure `provisional (settles in ~34 s)` quando non c'è nulla
-  da cui partire. Con `--no-tune` le velocità ricordate non si usano né si aggiornano; `pzsolve doctor` le elenca.
+  da cui partire. Con `PZ_NO_PROFILE=1` le velocità ricordate non si usano né si aggiornano; `pzsolve doctor` le elenca.
 * **Chance** (probabilità): probabilità di successo entro la prossima ora, il prossimo giorno, settimana, mese e anno a questo ritmo,
   *supponendo che la chiave sia nell'intervallo* (formule in [`ALGORITHMS.md`](../en/ALGORITHMS.md) sezione 11, in inglese).
 * Nel BSGS, durante la costruzione della tabella, il pannello mostra la fase 1 di 2 e quanti passi giganti seguiranno.
@@ -233,7 +237,7 @@ salti); il branco è limitato a un sesto della memoria dichiarata. Le schede NVI
 
 `pzsolve devices` elenca tutto con un indice per `--gpu`; una scheda NVIDIA compare due volte (CUDA e OpenCL) e di default viene
 usata **una volta sola, tramite CUDA**. Se la via CUDA non supera il self-test il programma prova la stessa scheda tramite OpenCL.
-`--gpu-api opencl` (o `PZ_GPU_API=opencl`) forza OpenCL, `--gpu-api cuda` solo CUDA. Ogni messaggio su un dispositivo lo nomina con il suo
+La variabile d'ambiente `PZ_GPU_API=opencl` forza OpenCL, `PZ_GPU_API=cuda` solo CUDA. Ogni messaggio su un dispositivo lo nomina con il suo
 indice, `GPU[n]`.
 
 All'avvio ogni dispositivo esegue un **self-test bit-esatto contro la CPU** (aritmetica, hash160, somma di punti, ricerca lineare in
@@ -318,8 +322,8 @@ Il profilo è nella cartella della cache, accanto alla taratura dei kernel (`%LO
 `~/.cache/pzsolve/machine_profile.txt` su Linux) ed è legato alla versione del programma, al processore, al numero di core, al passo/motore usato e
 alle GPU con il loro driver: se cambia una di queste cose si rimisura. Il log dice sempre cosa è stato applicato
 (`profile of this machine from 2026-10-22: 11 CPU threads, --gpu 0 (-t and --gpu override them; --retune measures again)`). Si cambia idea così:
-`-t`/`--gpu`/`--no-cpu`/`--no-gpu` sostituiscono il profilo per quella esecuzione; `--retune` lo rimisura; `--no-tune` (o `PZ_NO_PROFILE=1`) non lo
-misura né lo usa. Se nessuna configurazione batte quella predefinita di più del rumore della misura, il profilo salvato dice `the default values
+`-t`/`--gpu`/`--no-cpu`/`--no-gpu` sostituiscono il profilo per quella esecuzione; `--retune` lo rimisura; la variabile d'ambiente `PZ_NO_PROFILE=1`
+non lo misura né lo usa. Se nessuna configurazione batte quella predefinita di più del rumore della misura, il profilo salvato dice `the default values
 (all threads, all GPUs) are already the best` (i valori predefiniti sono già i migliori) e non si rimisura a ogni avvio. Ctrl-C durante la misura termina subito il programma (la ricerca non parte, non si salva nulla e la
 cartella della misura viene rimossa). Senza una cartella di cache scrivibile (né `HOME` né `XDG_CACHE_HOME`, come in un servizio) la misura viene
 saltata con un solo avviso, perché non si potrebbe conservare.
@@ -329,8 +333,9 @@ saltata con un solo avviso, perché non si potrebbe conservare.
 Ogni GPU è servita da un thread che lancia i kernel, raccoglie i risultati e rilancia. Quando tutti i core sono occupati dal calcolo, quel thread
 può aspettare il suo turno mentre la scheda resta ferma; sui portatili l'effetto si confonde con il limite di potenza condiviso. La taratura
 confronta priorità normale e alta con tutti i thread CPU e tiene quella alta solo se è misurabilmente più veloce. L'esito entra nel profilo (`prio=1`) e il log lo dice
-(`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). `--prio-gpu yes|no` la impone o la esclude (e non si
-misura); `--prio-gpu auto` è il predefinito. Su Windows è `ABOVE_NORMAL` per i soli thread delle schede (che dormono quasi sempre in attesa del
+(`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). La variabile d'ambiente `PZ_PRIO_GPU=yes|no` la impone o la
+esclude (non si misura, e un profilo misurato così è una voce a sé); `auto`, o nessuna variabile, è il predefinito (per
+`bench --together` la stessa scelta è `--prio-gpu yes|no`). Su Windows è `ABOVE_NORMAL` per i soli thread delle schede (che dormono quasi sempre in attesa del
 kernel: non tolgono tempo al calcolo); su Linux è `nice -5` e serve root o `CAP_SYS_NICE`: senza, la misura viene saltata e `doctor` lo dice. Non
 è una promessa di velocità: se la causa è la potenza del portatile e non l'attesa del thread, la misura darà ~0 % e la priorità resta normale.
 
@@ -376,13 +381,15 @@ come se la variabile non ci fosse.
 
 | Variabile | Effetto |
 |-----------|---------|
-| `PZ_GPU_API=cuda\|opencl` | come `--gpu-api` (che ha la precedenza) |
+| `PZ_GPU_API=cuda\|opencl` | il runtime delle GPU che vedono sia CUDA sia OpenCL: `cuda` usa solo CUDA, `opencl` solo OpenCL (sezione 7.3); `auto`, o nessuna variabile: CUDA per le schede NVIDIA (OpenCL come riserva), OpenCL per le altre |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
 | `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
 | `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128cm`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |
 | `PZ_OPENCL_ALL=1` | usa anche i dispositivi OpenCL su CPU (sezione 7.1) |
-| `PZ_NO_PROFILE=1` | come `--no-tune` |
+| `PZ_NO_PROFILE=1` | il profilo della macchina non si misura né si usa (tutti i thread e tutte le GPU, sezione 7.6), e nemmeno le velocità ricordate del pannello (sezione 6) |
+| `PZ_ISA=NOME` | il motore CPU della ricerca lineare, al posto di quello scelto dal micro-benchmark: `auto`, `baseline`, `avx2`, `shani` (avx2 con le istruzioni SHA-256 della CPU), `avx512`, `avx2v`, `avx512v` (aritmetica della curva sulle corsie SIMD), `avx512i` (avx512v con AVX-512 IFMA); su arm64 `auto`, `baseline`, `neon`, `neon2`. Diversamente dalle altre variabili, un nome che non è fra questi, o che la CPU non sa eseguire, ferma `hunt` con un errore prima di creare qualsiasi cosa; il log dice `imposed by PZ_ISA` |
+| `PZ_PRIO_GPU=auto\|yes\|no` | la priorità dei thread che servono le GPU: `yes` alta, `no` normale, entrambe senza misurarla; `auto` la misura la taratura (sezione 7.7) |
 | `PZ_NO_LARGE_PAGES=1` | niente pagine grandi (Windows, sezione 10) |
 | `PZ_BENCH_SCALE=0.2` | accorcia a un quinto le misure di `bench --together` e del profilo della macchina, per i test (un numero da 0,01 a 100) |
 | `PZ_KANG_MIX=0\|1` | sui core con hyper-threading il primo thread può usare il passo vettoriale del canguro e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale. Senza la variabile il canguro misura le due soluzioni all'avvio e usa quella mista quando è più veloce almeno del 3% (lo dice una riga del log); `=0` non la usa mai, `=1` sempre. `bench` mostra il guadagno e se è in uso (riga "mixed") |
@@ -397,7 +404,7 @@ e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](https:/
 ## 8. Consigli prestazionali
 
 * Lancia `pzsolve bench` una volta: confronta i motori e il numero di thread; con una GPU lancia anche `pzsolve bench --together` (sezione 7.9).
-  `--isa auto` sceglie il motore più veloce; `bench` li mostra tutti. Ogni motore, prima di essere usato, supera una verifica rapida con una
+  Il programma sceglie il motore più veloce (`PZ_ISA` ne impone uno, sezione 7.10); `bench` li mostra tutti. Ogni motore, prima di essere usato, supera una verifica rapida con una
   chiave nota: un motore che sbagliasse verrebbe escluso.
 * I thread di calcolo vanno prima su core fisici diversi, uno per core, e solo oltre il numero dei core sul secondo thread SMT di un core (su
   Windows l'assegnazione è un suggerimento al sistema, che può spostare i thread).
@@ -507,9 +514,9 @@ Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoin
 | `the BSGS table needs … but only … of RAM are available` | poca RAM: usa `--mem`, `--bsgs-entries` più piccolo (alla creazione) o `--mode kangaroo` |
 | `table … is not usable: …` / `table header corrupted` | file `--table` troncato o di un altro programma: cancellalo, verrà ricostruito |
 | `self-test failed, device excluded` | driver difettoso o compilatore del kernel sbagliato: aggiorna il driver; per una NVIDIA il programma prova anche OpenCL; segnala il caso |
-| `CUDA: the driver is too old for this PTX` | aggiorna il driver NVIDIA (525 o successivo), oppure usa `--gpu-api opencl` |
+| `CUDA: the driver is too old for this PTX` | aggiorna il driver NVIDIA (525 o successivo), oppure imposta `PZ_GPU_API=opencl` |
 | `CUDA driver not found` (in `devices`) | normale senza scheda NVIDIA; con una NVIDIA, reinstalla il driver grafico |
-| `the CPU does not support the instruction set …` | usa `--isa auto` o `--isa baseline` |
+| `PZ_ISA=…: the CPU does not support this instruction set` | togli la variabile `PZ_ISA` (sceglie il programma), oppure imposta `PZ_ISA=baseline` |
 | `NAME=TEXT ignored (…)` | una variabile d'ambiente ha un valore che il programma non può usare e viene ignorata: correggila o toglila (sezione 7.10) |
 | `distinguished-point table full (RAM limit): halving the density of stored points` | atteso in circa una corsa su cinque quando è la memoria a fissare i dp-bits (ALGORITHMS.md sezione 4.4, in inglese): la ricerca prosegue con una collisione un po' più tardiva; un `--mem` più grande aiuta solo se la RAM c'è |
 | velocità molto bassa | controlla `devices` (quante corsie/GPU usate) e che nessun altro processo sia in esecuzione |

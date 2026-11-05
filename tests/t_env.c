@@ -13,8 +13,9 @@ static int fails;
  * with "NAME=" works the same way on Windows, where it removes the variable). */
 static const char *const ALL[] = {
     "PZ_GPU_API", "PZ_NO_CUDA", "PZ_NO_OPENCL", "PZ_OPENCL_ALL", "PZ_GPU_HALF", "PZ_GPU_NK", "PZ_GPU_TUNE", "PZ_NO_PROFILE", "PZ_NO_LARGE_PAGES",
-    "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_VERBOSE", "PZ_KANG_MIX", "PZ_KANG_ROUND",
-    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_EXPECT_SHANI", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N"};
+    "PZ_ISA", "PZ_PRIO_GPU", "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_VERBOSE", "PZ_KANG_MIX", "PZ_KANG_ROUND",
+    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_EXPECT_SHANI", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N",
+    "PZ_TEST_REPORT_INTERVAL", "PZ_TEST_CHECKPOINT_INTERVAL"};
 
 static void setv(const char *name, const char *value)
 {
@@ -79,6 +80,7 @@ static void t_defaults(void)
     CHECK(!g_env.xdg_cache_home[0] && !g_env.home[0] && !g_env.local_app_data[0] && !g_env.tmpdir[0] && !g_env.term_dumb && !g_env.no_color);
     CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma && !g_env.expect_shani);
     CHECK(g_env.test_kthread == 0 && g_env.test_jump == 0 && g_env.test_dp_cap == -1 && g_env.test_seal_log2n == 0);
+    CHECK(!g_env.isa[0] && g_env.prio_gpu == PZ_ENV_PRIO_AUTO && g_env.test_report_interval == 0 && g_env.test_checkpoint_interval == 0);
 }
 
 /* The two-state variables: on with any value except "" and "0"; each one alone, and nothing else changes. */
@@ -132,6 +134,28 @@ static void t_gpu_api(void)
     CHECK(try_value("PZ_GPU_API", "CUDA", last, sizeof last) == 1 && g_env.gpu_api == PZ_ENV_API_AUTO);      /* the names are lower case */
 }
 
+/* PZ_PRIO_GPU: three words, lower case; PZ_ISA: any name that fits (hunt checks it against the engines of the CPU) */
+static void t_prio_and_isa(void)
+{
+    char last[200];
+    CHECK(try_value("PZ_PRIO_GPU", "yes", last, sizeof last) == 0 && g_env.prio_gpu == PZ_ENV_PRIO_YES);
+    CHECK(try_value("PZ_PRIO_GPU", "no", last, sizeof last) == 0 && g_env.prio_gpu == PZ_ENV_PRIO_NO);
+    CHECK(try_value("PZ_PRIO_GPU", "auto", last, sizeof last) == 0 && g_env.prio_gpu == PZ_ENV_PRIO_AUTO);
+    CHECK(try_value("PZ_PRIO_GPU", "", last, sizeof last) == 0 && g_env.prio_gpu == PZ_ENV_PRIO_AUTO);
+    static const char *const bad_prio[] = {"si", "YES", "1", "0", "yes ", " no", "high"};
+    for (size_t k = 0; k < sizeof bad_prio / sizeof *bad_prio; k++) {
+        CHECK(try_value("PZ_PRIO_GPU", bad_prio[k], last, sizeof last) == 1 && g_env.prio_gpu == PZ_ENV_PRIO_AUTO);
+        CHECK(strstr(last, "PZ_PRIO_GPU=") && strstr(last, " ignored (expected auto, yes or no)"));
+    }
+    CHECK(try_value("PZ_ISA", "baseline", last, sizeof last) == 0 && !strcmp(g_env.isa, "baseline") && g_env.prio_gpu == PZ_ENV_PRIO_AUTO);
+    CHECK(try_value("PZ_ISA", "avx512i", last, sizeof last) == 0 && !strcmp(g_env.isa, "avx512i"));
+    CHECK(try_value("PZ_ISA", "foo", last, sizeof last) == 0 && !strcmp(g_env.isa, "foo"));      /* refused by hunt, not here */
+    CHECK(try_value("PZ_ISA", "", last, sizeof last) == 0 && !g_env.isa[0]);
+    CHECK(try_value("PZ_ISA", "an-engine-name-of-more-than-31-bytes", last, sizeof last) == 1 && !g_env.isa[0]);
+    CHECK(!strcmp(last, "PZ_ISA ignored (longer than 31 bytes)"));
+    for (int i = 0; i < NFLAGS; i++) CHECK(!flag_at(i));
+}
+
 static void t_numbers(void)
 {
     char last[200];
@@ -171,6 +195,20 @@ static void t_numbers(void)
     static const char *const bad_sl[] = {"0", "18", "-4", "x", "4k", "99999999999999999999"};
     for (size_t k = 0; k < sizeof bad_sl / sizeof *bad_sl; k++)
         CHECK(try_value("PZ_TEST_SEAL_LOG2N", bad_sl[k], last, sizeof last) == 1 && g_env.test_seal_log2n == 0);
+    /* PZ_TEST_REPORT_INTERVAL, PZ_TEST_CHECKPOINT_INTERVAL: seconds, 1 to a day */
+    static const struct { const char *name; size_t off; } SECS[] = {{"PZ_TEST_REPORT_INTERVAL", offsetof(struct pz_env, test_report_interval)},
+                                                                   {"PZ_TEST_CHECKPOINT_INTERVAL", offsetof(struct pz_env, test_checkpoint_interval)}};
+    for (size_t i = 0; i < sizeof SECS / sizeof *SECS; i++) {
+        const int *v = (const int *)((const char *)&g_env + SECS[i].off);
+        CHECK(try_value(SECS[i].name, "1", last, sizeof last) == 0 && *v == 1);
+        CHECK(try_value(SECS[i].name, "86400", last, sizeof last) == 0 && *v == 86400);
+        CHECK(try_value(SECS[i].name, "", last, sizeof last) == 0 && *v == 0);
+        static const char *const bad_s[] = {"0", "-1", "86401", "2s", "x", "1.5"};
+        for (size_t k = 0; k < sizeof bad_s / sizeof *bad_s; k++) {
+            CHECK(try_value(SECS[i].name, bad_s[k], last, sizeof last) == 1 && *v == 0);
+            CHECK(strstr(last, SECS[i].name) && strstr(last, " ignored (expected an integer between 1 and 86400)"));
+        }
+    }
     /* PZ_BENCH_SCALE: a number from 0.01 to 100 */
     CHECK(try_value("PZ_BENCH_SCALE", "0.2", last, sizeof last) == 0 && g_env.bench_scale == 0.2);
     CHECK(try_value("PZ_BENCH_SCALE", "100", last, sizeof last) == 0 && g_env.bench_scale == 100);
@@ -308,6 +346,7 @@ int main(void)
     t_flags();
     t_kang_mix();
     t_gpu_api();
+    t_prio_and_isa();
     t_numbers();
     t_tune_and_nk();
     t_places();

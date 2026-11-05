@@ -56,8 +56,9 @@ void run_init(run_ctx *r)
     atomic_store(&r->cpu_cap, INT_MAX);
     r->use_cpu = true;
     r->use_gpu = true;
-    r->report_interval = 1;
-    r->checkpoint_interval = 60;
+    /* 1 s and 60 s; the tests that need other intervals set PZ_TEST_REPORT_INTERVAL and PZ_TEST_CHECKPOINT_INTERVAL */
+    r->report_interval = g_env.test_report_interval ? g_env.test_report_interval : 1;
+    r->checkpoint_interval = g_env.test_checkpoint_interval ? g_env.test_checkpoint_interval : 60;
 }
 
 int run_limit_threads(int n, int pct)

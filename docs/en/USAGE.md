@@ -48,7 +48,8 @@ stops at `n − 1` (the group order), because keys beyond it do not exist. Prove
 
 ## 3. `hunt`: options
 
-`pzsolve hunt --help` lists every option with its default. What needs more than a line of the help:
+`pzsolve hunt --help` lists every option with its default, those that most campaigns never need last, under ADVANCED. What needs more than a
+line of the help:
 
 * `-p N` with `-r S:E` takes the target of puzzle N and the range of `-r`. A key outside the `-r` range is not reported by the
   linear search, not even when its last block happens to reach it (the engines scan whole lanes).
@@ -62,7 +63,10 @@ stops at `n − 1` (the group order), because keys beyond it do not exist. Prove
 * `--encrypt-pubkey`, `--encrypt-password` and `--on-found` encrypt the key that is found and run a command when it is: section 11.
 
 A value that cannot be used stops the command with a message such as `--limit: invalid value '100' (expected an integer between 1 and 99)`,
-and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`.
+and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`. The options removed in 1.23.0 are refused (exit status 2)
+with a message that says what to use instead: `-H`/`--hash160` (give the address with `-a`), `--new` and `--resume` (hunt creates the campaign or
+resumes it), `--report-interval` and `--checkpoint-interval` (1 s and 60 s), and `--gpu-api`, `--no-tune`, `--isa`, `--prio-gpu`, which became the
+environment variables `PZ_GPU_API`, `PZ_NO_PROFILE`, `PZ_ISA` and `PZ_PRIO_GPU` (section 7.10).
 
 Examples:
 
@@ -129,7 +133,7 @@ campaigns/NAME/
 * **Stopping**: Ctrl-C, `kill` or closing the terminal (SIGHUP; under `nohup` it is ignored). The state is saved. A second
   Ctrl-C after half a second exits at once (and loses at most the last minute of work).
 * **Resuming**: the same command (`hunt -p N`, or `hunt -c NAME`). The seed and the parameters that define the search
-  cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-H`, `-m`, `--chunk-bits`, `--bsgs-entries` or `--encrypt-pubkey` different from those of the
+  cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-m`, `--chunk-bits`, `--bsgs-entries` or `--encrypt-pubkey` different from those of the
   existing campaign, the program **refuses** with an error (it does not silently ignore them); you can however change threads, GPUs,
   ISA, memory and the look of the panel. **`pzsolve list`** shows all the campaigns and their state.
 * **Campaign name** (without `-c`): `pN` for a whole puzzle; for a sub-range (`-r`) or a custom target
@@ -187,7 +191,7 @@ folder list every worker one by one at all times.
   and then starts from the steady-state speed of a previous run of the same configuration, if there is one, otherwise from the one measured
   by the tuning (ALGORITHMS.md section 11). While the estimate settles a line says so: `provisional (from the remembered speed, settles in ~2 min)`,
   `provisional (from the tuning run, settles in ~40 s)`, or `provisional (settles in ~34 s)` when there is nothing to start from. With
-  `--no-tune` the remembered speeds are neither used nor updated; `pzsolve doctor` lists them.
+  `PZ_NO_PROFILE=1` the remembered speeds are neither used nor updated; `pzsolve doctor` lists them.
 * **Chance**: probability of success within the next hour, day, week, month and year at this rate, *assuming that the key is in
   the range* (formulas in [`ALGORITHMS.md`](ALGORITHMS.md) section 11).
 * In BSGS, while the table is being built, the panel shows phase 1 of 2 and how many giant steps will follow.
@@ -232,7 +236,7 @@ the herd is limited to one sixth of the declared memory. NVIDIA cards have less 
 
 `pzsolve devices` lists everything with an index for `--gpu`; an NVIDIA card appears twice (CUDA and OpenCL) and by default is
 used **only once, through CUDA**. If the CUDA path does not pass the self-test, the program tries the same card through OpenCL.
-`--gpu-api opencl` (or `PZ_GPU_API=opencl`) forces OpenCL, `--gpu-api cuda` CUDA only. Every message about a device names it by its index,
+The environment variable `PZ_GPU_API=opencl` forces OpenCL, `PZ_GPU_API=cuda` CUDA only. Every message about a device names it by its index,
 `GPU[n]`.
 
 At startup every device runs a **bit-exact self-test against the CPU** (arithmetic, hash160, point addition, linear search in
@@ -318,8 +322,8 @@ the campaign), saves the result and from then on uses it as the default. It does
 on Windows, `~/.cache/pzsolve/machine_profile.txt` on Linux) and is tied to the program version, the processor, the number of
 cores, the step/engine used and the GPUs with their driver: if one of these changes it is measured again. The log always says what was
 applied (`profile of this machine from 2026-10-22: 11 CPU threads, --gpu 0 (-t and --gpu override them; --retune measures again)`).
-You change your mind like this: `-t`/`--gpu`/`--no-cpu`/`--no-gpu` replace the profile for that run; `--retune` measures it again; `--no-tune`
-(or `PZ_NO_PROFILE=1`) neither measures nor uses it. If no configuration beats the default one by more than the noise of the measurement, the
+You change your mind like this: `-t`/`--gpu`/`--no-cpu`/`--no-gpu` replace the profile for that run; `--retune` measures it again; the environment
+variable `PZ_NO_PROFILE=1` neither measures nor uses it. If no configuration beats the default one by more than the noise of the measurement, the
 saved profile says `the default values (all threads, all GPUs) are already the best` and it is not measured again at every start. Ctrl-C during the measurement ends the program
 at once (the search is not started, nothing is saved, and the folder of the measurement is removed). Without a cache folder that can be written
 to (no `HOME` or `XDG_CACHE_HOME`, as for a service) the measurement is skipped with one notice, since it could not be kept.
@@ -329,8 +333,9 @@ to (no `HOME` or `XDG_CACHE_HOME`, as for a service) the measurement is skipped 
 Every GPU is served by a thread that launches the kernels, collects the results and launches again. When all the cores are busy computing, that thread may
 wait for its turn while the card sits idle; on laptops the effect is mixed up with the shared power limit. The tuning compares normal and
 high priority with all the CPU threads and keeps the high one only if it is measurably faster. The outcome goes into the profile (`prio=1`) and the log says it
-(`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). `--prio-gpu yes|no` imposes or excludes it (and it is
-not measured); `--prio-gpu auto` is the default. On Windows it is `ABOVE_NORMAL` for the card threads only (which sleep almost all the time
+(`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). The environment variable `PZ_PRIO_GPU=yes|no` imposes or
+excludes it (it is not measured, and a profile measured that way is an entry of its own); `auto`, or no variable, is the default (for
+`bench --together` the same choice is `--prio-gpu yes|no`). On Windows it is `ABOVE_NORMAL` for the card threads only (which sleep almost all the time
 waiting for the kernel: they take no time away from the computation); on Linux it is `nice -5` and needs root or `CAP_SYS_NICE`: without it the
 measurement is skipped and `doctor` says so. It is not a promise of speed: if the cause is the power of the laptop and not the wait of the thread,
 the measurement will give ~0 % and the priority stays normal.
@@ -376,13 +381,15 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 
 | Variable | Effect |
 |----------|--------|
-| `PZ_GPU_API=cuda\|opencl` | same as `--gpu-api` (which takes precedence) |
+| `PZ_GPU_API=cuda\|opencl` | the runtime of the GPUs that both CUDA and OpenCL see: `cuda` uses CUDA only, `opencl` OpenCL only (section 7.3); `auto`, or no variable: CUDA for NVIDIA cards (OpenCL as a fallback), OpenCL for the others |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | do not load that runtime |
 | `PZ_GPU_HALF=N` | fix the window of the linear kernel (skips the tuning; the values are in ALGORITHMS.md section 5); a number that the device does not offer is reported for each device |
 | `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `128cm`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
 | `PZ_OPENCL_ALL=1` | use OpenCL CPU devices too (section 7.1) |
-| `PZ_NO_PROFILE=1` | same as `--no-tune` |
+| `PZ_NO_PROFILE=1` | the machine profile is neither measured nor used (all threads and all GPUs, section 7.6), nor are the remembered speeds of the panel (section 6) |
+| `PZ_ISA=NAME` | the CPU engine of the linear search, instead of the one the micro-benchmark picks: `auto`, `baseline`, `avx2`, `shani` (avx2 with the SHA-256 instructions of the CPU), `avx512`, `avx2v`, `avx512v` (curve arithmetic on the SIMD lanes), `avx512i` (avx512v with AVX-512 IFMA); on arm64 `auto`, `baseline`, `neon`, `neon2`. Unlike the other variables, a name that is not one of these, or one that the CPU cannot run, stops `hunt` with an error before anything is created; the log says `imposed by PZ_ISA` |
+| `PZ_PRIO_GPU=auto\|yes\|no` | the priority of the threads that serve the GPUs: `yes` high, `no` normal, both without measuring it; `auto` measured by the tuning (section 7.7) |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
 | `PZ_BENCH_SCALE=0.2` | shortens the measurements of `bench --together` and of the machine profile to a fifth, for tests (a number from 0.01 to 100) |
 | `PZ_KANG_MIX=0\|1` | on hyper-threaded cores the first thread can use the vector step of the kangaroo and the other one the scalar BMI2/ADX step, which uses the integer multiplier instead of the vector unit. Without the variable the kangaroo measures both at start-up and uses the mixed one when it is at least 3% faster (a line in the log says so); `=0` never uses it, `=1` always does. `bench` shows the gain and whether it is in use (line "mixed") |
@@ -397,7 +404,7 @@ and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](htt
 ## 8. Performance tips
 
 * Run `pzsolve bench` once: it compares the engines and the number of threads; with a GPU also run `pzsolve bench --together` (section 7.9).
-  `--isa auto` picks the fastest engine; `bench` shows them all. Every engine, before being used, passes a quick check with a known key: an
+  The program picks the fastest engine (`PZ_ISA` imposes one, section 7.10); `bench` shows them all. Every engine, before being used, passes a quick check with a known key: an
   engine that got it wrong would be excluded.
 * The compute threads go first on different physical cores, one per core, and only beyond the number of cores on the second SMT thread of a
   core (on Windows the assignment is a hint to the system, which may move the threads).
@@ -507,9 +514,9 @@ The state on disk is never at risk: every write is atomic and the checkpoint is 
 | `the BSGS table needs … but only … of RAM are available` | little RAM: use `--mem`, a smaller `--bsgs-entries` (at creation) or `--mode kangaroo` |
 | `table … is not usable: …` / `table header corrupted` | truncated `--table` file or one from another program: delete it, it will be rebuilt |
 | `self-test failed, device excluded` | faulty driver or wrong kernel compiler: update the driver; for an NVIDIA card the program also tries OpenCL; report the case |
-| `CUDA: the driver is too old for this PTX` | update the NVIDIA driver (525 or later), or use `--gpu-api opencl` |
+| `CUDA: the driver is too old for this PTX` | update the NVIDIA driver (525 or later), or set `PZ_GPU_API=opencl` |
 | `CUDA driver not found` (in `devices`) | normal without an NVIDIA card; with an NVIDIA card, reinstall the graphics driver |
-| `the CPU does not support the instruction set …` | use `--isa auto` or `--isa baseline` |
+| `PZ_ISA=…: the CPU does not support this instruction set` | remove the variable `PZ_ISA` (the program chooses), or set `PZ_ISA=baseline` |
 | `NAME=TEXT ignored (…)` | an environment variable has a value the program cannot use and is ignored: correct or remove it (section 7.10) |
 | `distinguished-point table full (RAM limit): halving the density of stored points` | expected in about one run in five when memory sets dp-bits (ALGORITHMS.md section 4.4): the search goes on with a slightly later collision; a larger `--mem` helps only if the RAM is there |
 | very low speed | check `devices` (how many lanes/GPUs are used) and that no other process is running |

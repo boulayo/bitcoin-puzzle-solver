@@ -116,7 +116,7 @@ other. The checks:
 1. a build from scratch and `make test` (unit tests + built-in self-test), the examples and tests of the library, also unoptimized (`-O0`) and as C++;
 2. the binary and the paths that need a particular machine: `tools/check_binary.sh` on the Linux binary (no glibc symbol newer than 2.34); the AVX-512 IFMA
    engine (executed by the CPU if it can, under Intel SDE when `PZ_SDE` is set, else with the emulation of `tools/ifma_emul.h`); the CUDA path with a
-   simulated driver (self-test, bench, machine profile, `--prio-gpu`, two devices, resume after an error injected into a launch, the number of modules
+   simulated driver (self-test, bench, machine profile, `PZ_PRIO_GPU` and `bench --prio-gpu`, two devices, resume after an error injected into a launch, the number of modules
    loaded), `doctor`, suspend (frozen process), several computers (kangaroo `merge` and linear-search `--part`), `--limit`;
 3. `tests/e2e.sh` (real campaigns on small puzzles; `E2E_QUICK=1`, or `verify.sh quick`, uses the short version);
 4. a build with **AddressSanitizer + UndefinedBehaviorSanitizer** (with `float-cast-overflow`, which neither GCC nor clang include in

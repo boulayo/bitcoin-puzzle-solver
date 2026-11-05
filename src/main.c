@@ -2,7 +2,6 @@
 /* main.c - pzsolve command line interface. */
 #include "run.h"
 #include "cmd.h"
-#include "gpu.h"
 #include "selftest.h"
 #include "doctor.h"
 #include "kangaroo.h"
@@ -74,7 +73,7 @@ static const char *hunt_text(void)
 "pzsolve hunt - start (or resume) a search campaign\n"
 "\n"
 "USAGE\n"
-"  pzsolve hunt (-p N | -r START:END) [-a ADDRESS | -H HASH160 | -k PUBKEY] [options]\n"
+"  pzsolve hunt (-p N | -r START:END) [-a ADDRESS | -k PUBKEY] [options]\n"
 "\n"
 "TARGET\n"
 "  -p, --puzzle N          puzzle 1..256: range, address and (if known) public key are set automatically; the campaign is\n"
@@ -82,8 +81,7 @@ static const char *hunt_text(void)
 "                          creator in 2017 (only their address is known). With -r it selects only the target\n"
 "  -r, --range S:E         custom range in hexadecimal (inclusive); a key outside it is not reported, not even when the last block\n"
 "                          of the linear search reaches it\n"
-"  -a, --address ADDR      bitcoin address to find: \"1...\" or \"bc1q...\" (compressed key); required unless -H or -k is used\n"
-"  -H, --hash160 HEX       instead of the address: its hash160 (40 hex digits)\n"
+"  -a, --address ADDR      bitcoin address to find: \"1...\" or \"bc1q...\" (compressed key); required unless -k is used\n"
 "  -k, --pubkey HEX        known public key (compressed 33 bytes or uncompressed 65 bytes): enables the kangaroo and BSGS\n"
 "\n"
 "CAMPAIGN\n"
@@ -91,44 +89,22 @@ static const char *hunt_text(void)
 "                          from the range and the target, so that the same command resumes it]\n"
 "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
 "  -s, --seed SEED         seed: 64 hex digits (used as they are) or any text (hashed); default or 'auto': generated at random\n"
-"      --new               fail if the campaign already exists\n"
-"      --resume            fail if the campaign does not exist\n"
 "\n"
 "METHOD\n"
 "  -m, --mode M            auto | linear | kangaroo | bsgs   [auto: linear without a public key or for a range of less\n"
 "                          than 2^20 keys; otherwise bsgs when a table that beats the kangaroo fits in RAM (or in --mem) and\n"
 "                          one of these holds: no usable GPU (or --no-gpu), a range of a few seconds of work, --bsgs-entries\n"
 "                          given, a --table file that exists; otherwise kangaroo]\n"
-"      --table FILE        bsgs: reads the baby-step table from FILE if it exists, otherwise builds it and saves it (the table\n"
-"                          does not depend on the target: it is reused for any public key)\n"
-"      --bsgs-entries N    bsgs: baby steps of the table when it is created [optimal for the range, within the RAM limits]\n"
-"      --dp-bits B         kangaroo: bits of the distinguished points (0..60) [0: automatic]\n"
-"      --mem GIB           kangaroo and bsgs: maximum RAM for the table, in GiB (1 GiB = 1073741824 bytes; 0.001 at least)\n"
-"                          [kangaroo: 40%% of the free RAM, at least 256 MiB and at most 64 GiB; bsgs: the table is chosen to\n"
-"                          fit in 70%% of the free RAM]\n"
-"      --chunk-bits B      linear: size of the permuted blocks, 2^B keys (20..40) [as large as the range allows with 16 blocks\n"
-"                          per share, at most 36]; smaller blocks slow down the CPU and above all the GPUs, which receive\n"
-"                          one block per launch\n"
 "\n"
 "RESOURCES\n"
 "  -t, --threads N         CPU threads [all available cores; without -t the linear search leaves one core to drive each\n"
 "                          OpenCL GPU in use]\n"
 "      --no-cpu            do not use the CPU\n"
 "      --no-gpu            do not use the GPUs\n"
-"      --gpu LIST          use only the listed GPUs (comma-separated indices, see 'devices'); it also allows OpenCL devices\n"
-"                          that are CPUs\n"
-"      --gpu-api A         auto | cuda | opencl   [auto: CUDA for NVIDIA cards (OpenCL as a fallback), OpenCL for the others]\n"
-"      --isa I             " PZ_ISA_HELP "\n"
 "      --limit X           use only X%% of the machine (1..99), always at full speed and without pauses: X%% of the CPU threads\n"
 "                          (one per physical core first) and X%% of the GPU work-items; less heat and power, speed reduced\n"
 "                          accordingly [off]. It does not use or update the machine tuning; with -t the X%% is computed on the\n"
 "                          given threads\n"
-"      --prio-gpu P        auto | yes | no: the threads that serve the GPUs (they launch the kernels) run at a higher priority than\n"
-"                          the compute threads [auto: the tuning tests it and remembers it; Linux requires root]\n"
-"      --retune            measure again the best combination of CPU threads and GPUs for this machine (the first run of each\n"
-"                          version measures it automatically, about 2 minutes, and remembers it); not used with -t, --gpu,\n"
-"                          --no-cpu, --no-gpu or -m bsgs, nor without a GPU; refused with --limit\n"
-"      --no-tune           do not measure or use the machine profile, nor the remembered speed: all threads and all GPUs\n"
 "      --keep-awake        Windows and macOS: prevent the system from going to sleep while the campaign runs\n"
 "\n"
 "SEVERAL COMPUTERS (same -s, range and public key on all of them)\n"
@@ -156,15 +132,30 @@ static const char *hunt_text(void)
 "                          PZ_FOUND_ADDRESS, PZ_FOUND_PUZZLE, PZ_FOUND_CAMPAIGN and PZ_FOUND_FILE set, never the key. Not\n"
 "                          stored: give it again at every start\n"
 "\n"
-"DISPLAY AND FILES\n"
+"DISPLAY\n"
 "      --ui U              auto | full (multi-line panel updated in place) | line (one line) | log (one line per minute, suited\n"
 "                          to files)   [auto: full on a terminal]\n"
-"      --report-interval S\n"
-"                          seconds between panel updates [1]\n"
-"      --checkpoint-interval S\n"
-"                          seconds between state saves [60]\n"
 "  -q, --quiet             no progress display: only warnings, errors and the result\n"
+"\n"
+"ADVANCED (the defaults suit almost every campaign)\n"
+"      --table FILE        bsgs: reads the baby-step table from FILE if it exists, otherwise builds it and saves it (the table\n"
+"                          does not depend on the target: it is reused for any public key)\n"
+"      --bsgs-entries N    bsgs: baby steps of the table when it is created [optimal for the range, within the RAM limits]\n"
+"      --dp-bits B         kangaroo: bits of the distinguished points (0..60) [0: automatic]\n"
+"      --mem GIB           kangaroo and bsgs: maximum RAM for the table, in GiB (1 GiB = 1073741824 bytes; 0.001 at least)\n"
+"                          [kangaroo: 40%% of the free RAM, at least 256 MiB and at most 64 GiB; bsgs: the table is chosen to\n"
+"                          fit in 70%% of the free RAM]\n"
+"      --chunk-bits B      linear: size of the permuted blocks, 2^B keys (20..40) [as large as the range allows with 16 blocks\n"
+"                          per share, at most 36]; smaller blocks slow down the CPU and above all the GPUs, which receive\n"
+"                          one block per launch\n"
+"      --gpu LIST          use only the listed GPUs (comma-separated indices, see 'devices'); it also allows OpenCL devices\n"
+"                          that are CPUs\n"
+"      --retune            measure again the best combination of CPU threads and GPUs for this machine (the first run of each\n"
+"                          version measures it automatically, about 2 minutes, and remembers it); not used with -t, --gpu,\n"
+"                          --no-cpu, --no-gpu or -m bsgs, nor without a GPU; refused with --limit\n"
 "  -v, --verbose           more messages\n"
+"  Diagnosis, through environment variables (USAGE.md section 7.10): PZ_ISA (the CPU engine), PZ_PRIO_GPU (the priority of the\n"
+"  threads that serve the GPUs), PZ_GPU_API (CUDA or OpenCL), PZ_NO_PROFILE (no machine profile)\n"
 "\n"
 "EXIT STATUS\n"
 "  0                       the key was found (also when the campaign had already found it: it is in FOUND.txt)\n"
@@ -188,7 +179,7 @@ static const char bench_text[] =
 "      --linear            with --together: the linear search instead of the kangaroo\n"
 "  -t, --threads N         with --together: try only N CPU threads\n"
 "      --gpu LIST          with --together: use only the listed GPUs (as in hunt)\n"
-"      --prio-gpu P        with --together: auto | yes | no, as in hunt\n"
+"      --prio-gpu P        with --together: auto | yes | no (for hunt it is the environment variable PZ_PRIO_GPU)\n"
 "      --gpu-only          skip the CPU tests and run only the GPU ones (bandwidth, integer instructions, linear search, kangaroo)\n"
 "      --variants          GPUs only: every variant of the linear and kangaroo kernels of each GPU, measured in turns (in order,\n"
 "                          reversed, in order), one table per kernel with the median, the spread and the tuner's choice, then the\n"
@@ -306,18 +297,41 @@ void pz_usage_error(const char *cmd, const char *fmt, ...)
 
 static const char *g_cmd = "";
 
-enum { O_GPUAPI = 996, O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_ISA, O_CHUNK, O_DP, O_MEM, O_REPORT, O_CKPT, O_NEW, O_RESUME, O_KEY, O_RETUNE, O_NOTUNE, O_AWAKE, O_NODE, O_PRIO, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND };
+enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND };
 
 static const struct option long_opts[] = {
-    {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"hash160", 1, 0, 'H'}, {"pubkey", 1, 0, 'k'},
+    {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"pubkey", 1, 0, 'k'},
     {"campaign", 1, 0, 'c'}, {"dir", 1, 0, 'd'}, {"seed", 1, 0, 's'}, {"mode", 1, 0, 'm'}, {"threads", 1, 0, 't'},
-    {"no-cpu", 0, 0, O_NOCPU}, {"no-gpu", 0, 0, O_NOGPU}, {"gpu", 1, 0, O_GPU}, {"isa", 1, 0, O_ISA},
-    {"chunk-bits", 1, 0, O_CHUNK}, {"dp-bits", 1, 0, O_DP}, {"mem", 1, 0, O_MEM}, {"report-interval", 1, 0, O_REPORT},
-    {"checkpoint-interval", 1, 0, O_CKPT}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
-    {"new", 0, 0, O_NEW}, {"resume", 0, 0, O_RESUME}, {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN}, {"gpu-api", 1, 0, O_GPUAPI},
-    {"retune", 0, 0, O_RETUNE}, {"no-tune", 0, 0, O_NOTUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE}, {"prio-gpu", 1, 0, O_PRIO},
+    {"no-cpu", 0, 0, O_NOCPU}, {"no-gpu", 0, 0, O_NOGPU}, {"gpu", 1, 0, O_GPU},
+    {"chunk-bits", 1, 0, O_CHUNK}, {"dp-bits", 1, 0, O_DP}, {"mem", 1, 0, O_MEM}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
+    {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN},
+    {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
     {"on-found", 1, 0, O_ONFOUND}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
+
+/* The options removed in 1.23.0 and what takes their place: each one is refused with its own message, not as an unknown option. The
+ * names are those of the command line, between blanks; dropping an entry makes that option an unknown one. */
+static const struct { const char *names, *msg; } removed_opts[] = {
+    {" -H --hash160 ", "--hash160 (-H) was removed in 1.23.0: give the address with -a"},
+    {" --new --resume ", "--new and --resume were removed in 1.23.0: hunt creates the campaign or resumes it"},
+    {" --gpu-api ", "--gpu-api was removed in 1.23.0: set the environment variable PZ_GPU_API=cuda|opencl instead"},
+    {" --no-tune ", "--no-tune was removed in 1.23.0: set the environment variable PZ_NO_PROFILE=1 instead"},
+    {" --report-interval ", "--report-interval was removed in 1.23.0: the panel is updated every second"},
+    {" --checkpoint-interval ", "--checkpoint-interval was removed in 1.23.0: the state is saved every 60 seconds"},
+    {" --isa ", "--isa was removed in 1.23.0: set the environment variable PZ_ISA instead (same values: auto, baseline, avx2, ...)"},
+    {" --prio-gpu ", "--prio-gpu was removed in 1.23.0: set the environment variable PZ_PRIO_GPU=auto|yes|no instead"},
+};
+
+/* An option that getopt_long did not recognize ("-H", "--isa", "--isa=avx2"): the message of removed_opts when it is one of those. */
+static void check_removed_option(const char *arg)
+{
+    char name[48];
+    const size_t l = strcspn(arg, "=");
+    if (l + 3 > sizeof name) return;
+    snprintf(name, sizeof name, " %.*s ", (int)l, arg);
+    for (size_t i = 0; i < sizeof removed_opts / sizeof *removed_opts; i++)
+        if (strstr(removed_opts[i].names, name)) pz_die("%s", removed_opts[i].msg);
+}
 
 /* ---- the values of the options: the whole text must be a number in its range (atoi would take "12abc"); integers go through
  * pz_arg_int (util.c) ---- */
@@ -422,22 +436,18 @@ void parse_opts(int argc, char **argv, opts_t *o)
     o->chunk_bits = -1;
     o->dp_bits = -1;
     o->mem_gb = -1;
-    o->report_interval = -1;
-    o->checkpoint_interval = -1;
     snprintf(o->dir, sizeof o->dir, "campaigns");
     snprintf(o->mode, sizeof o->mode, "auto");
-    snprintf(o->isa, sizeof o->isa, "auto");
     optind = 1;
     int c;
     char optbuf[8];
     opterr = 0;
-    while ((c = getopt_long(argc, argv, ":p:r:a:H:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, ":p:r:a:k:c:d:s:m:t:f:qvh", long_opts, NULL)) != -1) {
         check_option_used(c);
         switch (c) {
         case 'p': o->puzzle = (int)pz_arg_int("--puzzle", optarg, 1, 256); break;
         case 'r': opt_copy("--range", o->range, sizeof o->range, optarg); break;
         case 'a': opt_copy("--address", o->address, sizeof o->address, optarg); break;
-        case 'H': opt_copy("--hash160", o->hash160, sizeof o->hash160, optarg); break;
         case 'k': opt_copy("--pubkey", o->pubkey, sizeof o->pubkey, optarg); break;
         case 'c':
             if (!valid_campaign_name(optarg)) pz_die("invalid campaign name '%s' (allowed: letters, digits, '-', '_', '.'; at most 80 characters; cannot start or end with '.' or be a Windows device name such as con, nul, com1 or lpt1)", optarg);
@@ -453,9 +463,7 @@ void parse_opts(int argc, char **argv, opts_t *o)
         case O_NOCPU: o->no_cpu = true; break;
         case O_NOGPU: o->no_gpu = true; break;
         case O_RETUNE: o->retune = true; break;
-        case O_NOTUNE: o->no_tune = true; break;
         case O_AWAKE: o->keep_awake = true; break;
-        case O_PRIO: o->prio_gpu = run_prio_arg(optarg); break;
         case O_PART: {
             part_spec ps;
             char perr[300];
@@ -475,22 +483,11 @@ void parse_opts(int argc, char **argv, opts_t *o)
             if (!pz_index_list_valid(optarg)) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", optarg);
             opt_copy("--gpu", o->gpu, sizeof o->gpu, optarg);
             break;
-        case O_GPUAPI:
-            if (!strcmp(optarg, "auto")) gpu_set_api_pref(GPU_API_AUTO);
-            else if (!strcmp(optarg, "cuda")) gpu_set_api_pref(GPU_API_CUDA);
-            else if (!strcmp(optarg, "opencl")) gpu_set_api_pref(GPU_API_OPENCL);
-            else pz_die("--gpu-api: invalid value '%s' (expected auto, cuda or opencl)", optarg);
-            break;
-        case O_ISA: opt_copy("--isa", o->isa, sizeof o->isa, optarg); break;
         case O_CHUNK: o->chunk_bits = (int)pz_arg_int("--chunk-bits", optarg, 20, 40); break;   /* smaller blocks starve the GPUs and slow the CPU */
         case O_DP: o->dp_bits = (int)pz_arg_int("--dp-bits", optarg, 0, 60); break;
         case O_MEM: o->mem_gb = opt_mem_gib("--mem", optarg); break;
-        case O_REPORT: o->report_interval = (int)pz_arg_int("--report-interval", optarg, 1, 86400); break;
-        case O_CKPT: o->checkpoint_interval = (int)pz_arg_int("--checkpoint-interval", optarg, 1, 86400); break;
         case 'q': o->quiet = true; break;
         case 'v': o->verbose = true; break;
-        case O_NEW: o->want_new = true; break;
-        case O_RESUME: o->want_resume = true; break;
         case O_ENCPUB: opt_copy("--encrypt-pubkey", o->encrypt_pubkey, sizeof o->encrypt_pubkey, optarg); break;
         case O_ENCPW: o->encrypt_password = true; break;
         case O_ONFOUND: opt_copy("--on-found", o->on_found, sizeof o->on_found, optarg); break;
@@ -508,7 +505,9 @@ void parse_opts(int argc, char **argv, opts_t *o)
             if (!pz_help(g_cmd, stdout)) pz_help(NULL, stdout);
             exit(0);
         case ':': pz_usage_error(g_cmd, "the option '%s' needs a value", bad_option(argv, optbuf, sizeof optbuf));
-        default: pz_usage_error(g_cmd, "unrecognized option '%s'", bad_option(argv, optbuf, sizeof optbuf));
+        default:
+            check_removed_option(bad_option(argv, optbuf, sizeof optbuf));
+            pz_usage_error(g_cmd, "unrecognized option '%s'", bad_option(argv, optbuf, sizeof optbuf));
         }
     }
     if (optind < argc) {
@@ -518,7 +517,6 @@ void parse_opts(int argc, char **argv, opts_t *o)
         if (is_number) pz_usage_error(g_cmd, "unexpected argument '%s' (did you mean -p %s?)", a, a);
         pz_usage_error(g_cmd, "unexpected argument '%s' (options start with - or --)", a);
     }
-    if (o->want_new && o->want_resume) pz_die("--new and --resume are mutually exclusive: --new requires a new campaign, --resume an existing one");
     if (o->encrypt_pubkey[0] && o->encrypt_password) pz_die("--encrypt-pubkey and --encrypt-password cannot be used together: give the public key, or type a password");
     if (o->encrypt_pubkey[0]) {                   /* before anything is created: a key that does not parse is a refusal, never a run that shows the key */
         pz_ge q;

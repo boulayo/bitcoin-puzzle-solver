@@ -68,7 +68,7 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
 
 SHA-256 (a single block: 33 bytes + padding) and RIPEMD-160 (a single block: 32 bytes + padding) are written once with GCC's
 *vector extensions* and instantiated with 4 lanes (SSE2/NEON), 8 lanes (AVX2) and 16 lanes (AVX-512). The engine to use is
-chosen at runtime with a 0.25 s micro-benchmark (`--isa` forces it). For each batch only **one word** of the digest is
+chosen at runtime with a 0.25 s micro-benchmark (the environment variable `PZ_ISA` forces it). For each batch only **one word** of the digest is
 compared with the target: the third, which depends on the fewest steps of RIPEMD-160 (the compiler drops the last three steps
 of the left line and the last four of the right one); the rare candidates are verified in full with the scalar hash and then
 verified again by recomputing `k·G` from scratch. The round constants of both hashes are read as broadcast operands from tables (those of
