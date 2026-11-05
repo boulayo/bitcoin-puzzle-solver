@@ -249,11 +249,10 @@ int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path)
 static bool version_parse(const char *s, unsigned long v[3])
 {
     for (int i = 0; i < 3; i++) {
-        char *end;
         if (*s < '0' || *s > '9') return false;
-        v[i] = strtoul(s, &end, 10);
-        if (i < 2) { if (*end != '.') return false; end++; }
-        s = end;
+        v[i] = 0;                               /* no strtoul: on glibc >= 2.38 it would pull in __isoc23_strtoul (common.h) */
+        while (*s >= '0' && *s <= '9' && v[i] < 100000000UL) v[i] = v[i] * 10 + (unsigned long)(*s++ - '0');
+        if (i < 2) { if (*s != '.') return false; s++; }
     }
     return true;
 }

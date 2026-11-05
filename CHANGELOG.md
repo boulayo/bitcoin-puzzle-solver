@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
-## [Unreleased]
+## [1.22.0] — 2026-11-05
 
 ### Added
 - `campaign.conf` gets `requires=X.Y.Z` when the campaign encrypts the key: a version older than that refuses to resume it instead of
