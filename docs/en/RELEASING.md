@@ -36,6 +36,7 @@ tools/release.sh       release script: checks, bumps VERSION, verifies, tags
 tools/package_release.sh  builds the Linux and Windows packages locally (the workflow packs the binary of every platform with it)
 tools/verify.sh        the full verification run by the release script
 tools/check_binary.sh  the two checks of a binary that is about to be shipped: the glibc ceiling of the Linux one, the DLLs of the Windows one
+tools/check_docs.sh    the two user guides in step (sections, options, environment variables) and the links of every document
 tools/ci_apt_install.sh  installs the packages of the workflows (MinGW-w64, QEMU) with a time limit per try and retries
 .github/workflows/     ci.yml (every push and pull request) and release.yml (the release)
 GitHub Releases        the binaries of every published version, with SHA256SUMS
@@ -91,7 +92,9 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
 
 `tools/verify.sh` (also used by `tools/release.sh`) runs in sequence:
 
-0. a re-check of the puzzle database with the independent implementation (`tools/gen_puzzles.py --check`);
+0. a re-check of the puzzle database with the independent implementation (`tools/gen_puzzles.py --check`), and the documents
+   (`tools/check_docs.sh`: the Italian guide has the sections, options and environment variables of the English one, every relative
+   link resolves);
 1. a build from scratch and `make test` (unit tests + built-in self-test), the examples and tests of the library, also unoptimized (`-O0`) and as C++;
 2. the binary and the paths that need a particular machine: `tools/check_binary.sh` on the Linux binary (no glibc symbol newer than 2.34); the AVX-512 IFMA
    engine (executed by the CPU if it can, under Intel SDE when `PZ_SDE` is set, else with the emulation of `tools/ifma_emul.h`); the CUDA path with a
@@ -117,8 +120,8 @@ runs `python3 -I tools/gen_ptx.py --nvrtc "$PZ_NVRTC" --check` and takes about a
 `tools/release.sh` does not set it: for a release that changed a kernel, run `PZ_NVRTC=/path/to/libnvrtc.so.12 tools/release.sh`, or
 `verify.sh` by itself, so that a stale module cannot ship. What the CI workflow (`ci.yml`) does run on every push, besides the build
 and the self-test (Linux x86-64 with gcc, clang and without the x86 engines, Linux arm64): a campaign on puzzle 20, `tools/check_binary.sh`,
-the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver, the Windows cross-build and, as an
-informational job, `make test-shani` (the SHA-extension code under QEMU).
+the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver, the Windows cross-build, `tools/check_docs.sh`
+and, as an informational job, `make test-shani` (the SHA-extension code under QEMU).
 
 ## Compatibility of the files between versions
 

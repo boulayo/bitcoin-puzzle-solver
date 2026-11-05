@@ -22,6 +22,10 @@
 #
 # The CUDA code needs no toolkit here: the PTX modules are committed, the build only embeds them. That they are the ones the kernels
 # generate is not checked here either (tools/gen_ptx.py --check needs NVRTC from pip, see docs/en/RELEASING.md).
+#
+# The docs job runs tools/check_docs.sh (the Italian guide has the sections, options and environment variables of the English one, and
+# every relative link of the documents resolves). The workflow does not start for a push that changes only documents (paths-ignore,
+# below), so that check runs with the next push that builds, and before every release in tools/verify.sh.
 name: CI
 
 on:
@@ -44,6 +48,15 @@ defaults:
     shell: bash
 
 jobs:
+  docs:
+    name: documents (the two guides in step, links)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: tools/check_docs.sh
+        run: tools/check_docs.sh
+
   linux:
     name: ${{ matrix.name }} (${{ matrix.variant }})
     runs-on: ${{ matrix.runner }}

@@ -35,6 +35,9 @@ run_until() {   # run_until 'SHELL TEXT' COMMAND...: the command runs until the 
 step "puzzle database (re-checked with the independent implementation)"
 run python3 -I tools/gen_puzzles.py --check
 
+step "the two user guides in step, and the links of every document (tools/check_docs.sh)"
+run tools/check_docs.sh
+
 step "clean build and unit tests"
 run make clean >/dev/null
 run make -j"$(nproc)"
