@@ -19,6 +19,18 @@ KK=$(python3 -c "import random; random.seed(15); print(hex(random.randrange(2**4
 # outhas PATTERN COMMAND...: the whole output is captured first (grep -q exiting early would kill the command with SIGPIPE, and pipefail turns that into a failure)
 outhas() { local pat=$1 o; shift; o=$("$@" 2>&1); grep -q -- "$pat" <<<"$o"; }
 check_found() { grep -q "private key hex: 0x${2#0x}" "$1/FOUND.txt" 2>/dev/null; }
+# The timed checks wait for a state with a deadline (WAIT seconds) instead of sleeping a fixed time, so that a loaded machine only makes
+# them slower (the helpers are those of tests/e2e.sh)
+WAIT=${E2E_WAIT:-60}
+wait_for() { local i; for i in $(seq 1 $((WAIT * 10))); do eval "$1" && return 0; sleep 0.1; done; eval "$1"; }   # wait_for 'SHELL TEXT'
+wait_gone() { wait_for "! kill -0 $1 2>/dev/null"; }       # wait_gone PID
+running() { grep -q '^State: *RUNNING' "$1/report.txt" 2>/dev/null; }   # running CAMPAIGN_DIR: the first report is written 2 s after the start (a stop leaves STOPPED)
+run_until() {   # run_until 'SHELL TEXT' COMMAND...: the command runs until the text holds (or it ends by itself), then gets SIGINT; RC is its exit status
+  local cond=$1 tp; shift
+  timeout -k 60 -s INT 600 "$@" & tp=$!
+  wait_for "! kill -0 $tp 2>/dev/null || { $cond; }"
+  kill -INT $tp 2>/dev/null; wait $tp; RC=$?
+}
 
 step "puzzle database (re-checked with the independent implementation)"
 run python3 -I tools/gen_puzzles.py --check
@@ -130,10 +142,9 @@ grep -q "no cache folder that can be written to" <<<"$PO" && ! grep -q "measurin
 rm -rf "$T/pr8" "$T/tmp8" "$T/prof8"; mkdir "$T/tmp8"
 env TMPDIR="$T/tmp8" XDG_CACHE_HOME="$T/prof8" LD_LIBRARY_PATH=$PWD/build/mockcuda PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c p -d "$T/pr8" --ui log >"$T/pr8.out" 2>&1 &
 PID8=$!
-for _ in $(seq 1 600); do grep -q "warm-up" "$T/pr8.out" && break; sleep 0.1; done
-sleep 0.7; kill -INT $PID8 2>/dev/null
-for _ in $(seq 1 100); do kill -0 $PID8 2>/dev/null || break; sleep 0.1; done
-if kill -0 $PID8 2>/dev/null; then kill -KILL $PID8; echo "  FAIL Ctrl-C during the first-run measurement: still running 10 s later"; fail=$((fail+1)); else
+wait_for 'grep -q "warm-up" "$T/pr8.out"'
+sleep 0.7; kill -INT $PID8 2>/dev/null   # the signal lands inside the measurement, which the warm-up line says has begun
+if ! wait_gone $PID8; then kill -KILL $PID8; echo "  FAIL Ctrl-C during the first-run measurement: still running $WAIT s later"; fail=$((fail+1)); else
   wait $PID8 2>/dev/null
   grep -q "interrupted during the measurement of the machine" "$T/pr8.out" && [ -z "$(ls -A "$T/tmp8")" ] && ! grep -q "kang|" "$T/prof8/pzsolve/machine_profile.txt" 2>/dev/null \
     && echo "  OK Ctrl-C during the first-run measurement: stopped, scratch folder removed, nothing remembered" || { echo "  FAIL Ctrl-C during the first-run measurement"; fail=$((fail+1)); }
@@ -147,12 +158,13 @@ $MOCK build/pzsolve doctor -d "$T" >/dev/null && echo "  OK doctor with a simula
 $MOCK build/pzsolve doctor --full -d "$T" >"$T/dfull.out" 2>&1; DRC=$?
 NG=$(grep -c '^  GPU\[0\]' "$T/dfull.out"); NR=$(grep -c 'GPU recovery rules' "$T/dfull.out")
 [ $DRC -eq 0 ] && [ "$NG" = 1 ] && [ "$NR" = 1 ] && echo "  OK doctor --full: the GPU tests run once" || { echo "  FAIL doctor --full: GPU[0] test $NG times, recovery rules $NR times (rc=$DRC)"; fail=$((fail+1)); }
-gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while the campaign runs
-  local f="$T/fault.$1" d="$T/fl.$1" o="$T/fl.$1.log"
+gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while the campaign runs (a few seconds into the search), the device must be reopened
+  local f="$T/fault.$1" d="$T/fl.$1" o="$T/fl.$1.log" tp
   rm -rf "$d" "$f"
-  ( sleep 14; touch "$f" ) &
-  $MOCK PZ_MOCK_FAIL_FILE="$f" PZ_GPU_TUNE=0 timeout -s INT 34 build/pzsolve hunt -p "$2" -m "$1" -c f -d "$d" --no-cpu --ui log > "$o" 2>&1
-  wait
+  $MOCK PZ_MOCK_FAIL_FILE="$f" PZ_GPU_TUNE=0 timeout -k 60 -s INT 600 build/pzsolve hunt -p "$2" -m "$1" -c f -d "$d" --no-cpu --ui log > "$o" 2>&1 & tp=$!
+  wait_for 'running "$d/f"'; sleep 3; touch "$f"
+  wait_for 'grep -q "device resumed" "$o"'
+  kill -INT $tp 2>/dev/null; wait $tp
   grep -q "device resumed" "$o"
 }
 gpu_fault_test linear 40 && echo "  OK GPU error mid-campaign: reopened (linear)" || { echo "  FAIL GPU recovery (linear)"; fail=$((fail+1)); }
@@ -182,18 +194,20 @@ grep -q "attempt 1 of 3" <<<"$MO" && [ "$(dev_order "$MO" | tr -d '\n' | wc -c)"
 rm -rf "$T/md4" "$T/md4c"; MO=$($MD2 PZ_MOCK_SAME_NAME=1 PZ_GPU_TUNE=1 XDG_CACHE_HOME="$T/md4c" build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/md4" --no-cpu --ui log -v 2>&1)
 [ "$(grep -c 'tuning the kangaroo kernel' <<<"$MO")" = 1 ] && [ "$(grep -c 'GPU\[[01]\]: kangaroo with .* (from earlier tuning)' <<<"$MO")" = 1 ] && check_found "$T/md4/c" "$KK" \
   && echo "  OK two simulated GPUs of one model: the kernel variants are measured once" || { echo "  FAIL tuning of two simulated GPUs of one model"; grep -E "GPU\\[|WARN|ERROR" <<<"$MO" | head -n 20; fail=$((fail+1)); }
-rm -rf "$T/sus"; ( build/pzsolve hunt -p 45 -m linear -c s -d "$T/sus" --no-gpu --ui log -t 2 > "$T/sus.log" 2>&1 & p=$!; sleep 6; kill -STOP $p; sleep 18; kill -CONT $p; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
+# the 18 s frozen are the thing measured (the program takes a gap of that size for a suspension); the rest waits for a state, not a time
+rm -rf "$T/sus"; ( build/pzsolve hunt -p 45 -m linear -c s -d "$T/sus" --no-gpu --ui log -t 2 > "$T/sus.log" 2>&1 & p=$!; wait_for 'running "$T/sus/s"'; kill -STOP $p; sleep 18; kill -CONT $p; wait_for 'grep -q "system suspension detected" "$T/sus.log"'; kill -INT $p; wait $p ) 2>/dev/null
 grep -q "system suspension detected" "$T/sus.log" && echo "  OK frozen process (like a suspension): detected" || { echo "  FAIL suspension detection"; fail=$((fail+1)); }
 
 # several computers on one campaign: same seed and range, different --node; merge adds the other's distinguished points
 NS=$(python3 -c "print('ab'*32)"); MA="$T/ma"; MB="$T/mb"
-for n in 0 1; do d=$([ $n = 0 ] && echo "$MA" || echo "$MB"); ( build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node $n --no-gpu -t 2 --mem 0.05 -c p140 -d "$d" --ui log -q >/dev/null 2>&1 & p=$!; sleep 6; kill -INT $p; wait $p ) 2>/dev/null; done
+has_dps() { [ "$(stat -c %s "$1/dp.bin" 2>/dev/null || echo 0)" -gt 42 ]; }   # the log has points beyond its 42-byte header
+for n in 0 1; do d=$([ $n = 0 ] && echo "$MA" || echo "$MB"); run_until 'has_dps "$d/p140"' build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node $n --no-gpu -t 2 --mem 0.05 -c p140 -d "$d" --ui log -q >/dev/null 2>&1; done
 outhas "new, 0 already known" build/pzsolve merge -c p140 -d "$MA" -f "$MB/p140" && echo "  OK merge: points of another node added (no overlap between nodes)" || { echo "  FAIL merge between two nodes"; fail=$((fail+1)); }
 outhas "already known" build/pzsolve merge -c p140 -d "$MA" -f "$MB/p140/dp.bin" && echo "  OK repeated merge: all already known" || { echo "  FAIL repeated merge"; fail=$((fail+1)); }
 build/pzsolve merge -c p140 -d "$MA" -f "$T/nonexistent.bin" >/dev/null 2>&1 && { echo "  FAIL merge of a nonexistent file gave no error"; fail=$((fail+1)); } || echo "  OK merge: nonexistent file rejected"
 # the header of dp.bin carries the jump table: a computer started with another seed walks other paths, merge refuses its log; a log of
 # version 4 ("PZDP4", no jump table in the header) is merged as it is
-ME="$T/me"; ( build/pzsolve hunt -p 140 -s "$(python3 -c "print('ef'*32)")" --dp-bits 22 --node 1 --no-gpu -t 2 --mem 0.05 -c p140 -d "$ME" --ui log -q >/dev/null 2>&1 & p=$!; sleep 4; kill -INT $p; wait $p ) 2>/dev/null
+ME="$T/me"; run_until 'has_dps "$ME/p140"' build/pzsolve hunt -p 140 -s "$(python3 -c "print('ef'*32)")" --dp-bits 22 --node 1 --no-gpu -t 2 --mem 0.05 -c p140 -d "$ME" --ui log -q >/dev/null 2>&1
 outhas "another jump table" build/pzsolve merge -c p140 -d "$MA" -f "$ME/p140" && echo "  OK merge refuses the log of a computer started with another seed" || { echo "  FAIL merge of a log of another seed"; fail=$((fail+1)); }
 { printf 'PZDP4\n'; tail -c +7 "$MB/p140/dp.bin" | head -c 32; tail -c +43 "$MB/p140/dp.bin"; } > "$T/dp.v4"
 outhas "already known" build/pzsolve merge -c p140 -d "$MA" -f "$T/dp.v4" && echo "  OK merge takes a log of version 4" || { echo "  FAIL merge of a log of version 4"; fail=$((fail+1)); }
@@ -201,7 +215,7 @@ outhas "already known" build/pzsolve merge -c p140 -d "$MA" -f "$T/dp.v4" && ech
 # on with a new file, merge refuses it with an explanation
 MC="$T/mc"; mkdir -p "$MC/p140"
 printf 'PZDP2\n' > "$MC/p140/dp.bin"; head -c 32 /dev/zero >> "$MC/p140/dp.bin"; cp "$MC/p140/dp.bin" "$T/dp.old"
-( build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --ui log >"$T/old.log" 2>&1 & p=$!; sleep 6; kill -INT $p; wait $p ) 2>/dev/null
+run_until 'running "$MC/p140"' build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --ui log >"$T/old.log" 2>&1
 grep -q "older layout" "$T/old.log" && cmp -s "$MC/p140/dp.bin.v2" "$T/dp.old" && [ "$(head -c 6 "$MC/p140/dp.bin")" = "$(printf 'PZDP5\n')" ] && echo "  OK hunt keeps a dp.bin of an older kangaroo layout as dp.bin.v2 and goes on with a new log" || { echo "  FAIL old dp.bin not set aside by hunt"; fail=$((fail+1)); }
 outhas "older layout" build/pzsolve merge -c p140 -d "$MA" -f "$MC/p140/dp.bin.v2" && echo "  OK merge refuses a log of an older kangaroo layout with an explanation" || { echo "  FAIL merge of an old log"; fail=$((fail+1)); }
 # a dp.bin of a NEWER version ("PZDP6") is not an older layout: hunt refuses it and leaves it alone (no dp.bin.v6), merge says where it comes from
@@ -272,7 +286,7 @@ check_found "$T/a7/a" "$KK" && echo "  OK bsgs with table from file (ASan)" || {
 rm -rf "$T/a3"; PZ_TEST_DP_CAP=64 run build/asan/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c a -d "$T/a3" --ui log -q --no-gpu --mem 0.002 --dp-bits 3
 check_found "$T/a3/a" "$KK" && echo "  OK kangaroo with a tiny table (growth + density reduction)" || { echo "  FAIL kangaroo tiny table"; fail=$((fail+1)); }
 # the table of a huge interval with a tiny --dp-bits: the number of points expected does not fit in 64 bits (float-cast-overflow)
-rm -rf "$T/a8"; timeout -s INT 8 build/asan/pzsolve hunt -p 140 --dp-bits 2 --mem 0.05 -c a -d "$T/a8" --ui log -q --no-gpu -t 1 >"$T/a8.out" 2>&1
+rm -rf "$T/a8"; run_until 'grep -q "table 32.00 MiB" "$T/a8/a/log.txt" 2>/dev/null' build/asan/pzsolve hunt -p 140 --dp-bits 2 --mem 0.05 -c a -d "$T/a8" --ui log -q --no-gpu -t 1 >"$T/a8.out" 2>&1
 ! grep -q "runtime error" "$T/a8.out" && grep -q "table 32.00 MiB (max 51.20 MiB)" "$T/a8/a/log.txt" && echo "  OK kangaroo, puzzle 140 with --dp-bits 2 (ASan/UBSan)" || { echo "  FAIL kangaroo, puzzle 140 with --dp-bits 2 (ASan/UBSan)"; fail=$((fail+1)); }
 rm -rf "$T/a4"; run env PZ_OPENCL_ALL=1 build/asan/pzsolve hunt -p 26 -a "$A" -c a -d "$T/a4" --ui log -q --gpu 0 --no-cpu
 check_found "$T/a4/a" "$K" && echo "  OK linear on OpenCL (ASan)" || echo "  (OpenCL not available or not used: ignored)"
@@ -344,9 +358,9 @@ if command -v x86_64-w64-mingw32-gcc-posix >/dev/null && command -v wine >/dev/n
   (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c k -d camp --no-cpu --ui log -q >/dev/null 2>&1)
   check_found "$W/camp/k" "$KK" && echo "  OK kangaroo via CUDA (exe)" || { echo "  FAIL kangaroo via CUDA (exe)"; fail=$((fail+1)); }
   (cd "$W" && wine pzsolve.exe hunt -p 71 -c i -d camp --no-gpu --ui log -q >/dev/null 2>&1 &)
-  for i in $(seq 1 60); do [ -s "$W/camp/i/log.txt" ] && break; sleep 0.5; done; sleep 4   # started (Wine may take a while), then running for a moment
+  wait_for 'running "$W/camp/i"'   # started (Wine may take a while) and running: the first report is written 2 s after the start
   P=$(ps -eo pid,args | awk '$2 ~ /pzsolve\.exe$/ && $3=="hunt" {print $1}' | head -1)
-  [ -n "$P" ] && kill -INT "$P"; for i in $(seq 1 30); do [ -n "$P" ] && kill -0 "$P" 2>/dev/null || break; sleep 0.5; done
+  [ -n "$P" ] && { kill -INT "$P"; wait_gone "$P"; }
   [ -s "$W/camp/i/state.dat" ] && grep -q "sessions=1" "$W/camp/i/session.txt" && echo "  OK Ctrl-C: state saved (exe)" || { echo "  FAIL Ctrl-C (exe)"; fail=$((fail+1)); }
 else
   echo "  MinGW-w64 or Wine not installed: skipped"
