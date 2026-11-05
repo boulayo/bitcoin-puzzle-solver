@@ -12,202 +12,130 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   saved and must be copied from the screen (plain and encrypted).
 - Ctrl-C during the one-time tuning of the GPU kernels stops it at once (the default variant is kept and nothing is saved) instead of
   being ignored until the measurements end.
-- Documentation and help texts: the Italian guide describes the tuner of 1.20.0 (`bench --variants`, turns and medians, the tuned launch
-  length, the summed GPUs of the panel); the exit status of `merge`, the log lines of the machine profile, the sizes in ARCHITECTURE.md,
-  the default of `--part` and the memory rule of `merge --mem`; `FOUND.txt` has no 0600 permissions on Windows.
+- Documentation and help texts: the Italian guide describes the tuner of 1.20.0; the exit status of `merge`, the log lines of the machine
+  profile, the sizes in ARCHITECTURE.md, the default of `--part` and the memory rule of `merge --mem` are corrected; `FOUND.txt` has no
+  0600 permissions on Windows.
 
 ### Changed
-- Every source file says in its first line what it holds (six said something else), the parts of a file are in reading order with a
-  section comment each, names say what they hold or do (`deep` to `full` in `doctor`, `load_chunk` to `load_block` to match the guide's
-  word), wrong or stale comments are corrected, five functions and two macros that nothing used are gone, and the steps of the tests
-  have names. No change of behaviour: the compiled code of every file that only changed in names or comments is identical.
-- Internal reorganization with no change of behaviour: `gpu_tune.c` is split into the tuner (`gpu_tune.c`), the benchmark (`gpu_bench.c`) and
-  the self-test of the choice (`gpu_tune_selftest.c`, with `gpu_tune_priv.h` for what they share); the over-long test and command functions
-  are one named step each; throwaway local names (`tmp`, `t1`, `nn`) say what they hold; the encoding of a GPU kernel variant (its code,
-  name, text form, the `PZ_GPU_NK` text and the OpenCL build options) lives in `gpu_variant.c`, so that a new variant is one table row.
-  The output of every command, the files, the codes of the variants and the saved choices are the same (checked against 1.21.0 on `help`,
-  `version`, `selftest`, `bench --variants`, `decrypt-key` and a harness over 1152 device configurations and 2.6 million `PZ_GPU_NK` texts);
-  the GPU kernels and the PTX modules are untouched.
+- Source and tests, no change of behaviour: every file says in its first line what it holds, its parts are in reading order with a section
+  comment each, names say what they hold or do (`deep` to `full` in `doctor`, `load_chunk` to `load_block`), five unused functions and two
+  macros are gone, and the steps of the tests have names.
+- Internal reorganization, no change of behaviour: `gpu_tune.c` is split into the tuner, the benchmark (`gpu_bench.c`) and the self-test of
+  the choice (`gpu_tune_selftest.c`), and the encoding of a GPU kernel variant lives in `gpu_variant.c`, so that a new variant is one table
+  row. The output of every command, the files, the codes of the variants and the saved choices are the same as in 1.21.0 (checked on `help`,
+  `version`, `selftest`, `bench --variants`, `decrypt-key` and a harness over 1152 device configurations); the kernels and the PTX modules
+  are untouched. ARCHITECTURE.md section 1.
 
 ## [1.21.0] — 2026-11-01
 
 ### Added
-- Encrypting the key that is found, for computers that someone else controls (USAGE section 11, ALGORITHMS section 12). `hunt` and `merge` take
-  `--encrypt-pubkey HEX` (66 digits compressed, 130 uncompressed), or `--encrypt-password` to type a password (hidden, twice) from which the public key is made,
-  and `--on-found COMMAND`. When the key is found it is encrypted to that public key first (ECIES on secp256k1: ephemeral key, HKDF-SHA256, XOR with the key stream,
-  a 16-byte HMAC-SHA256 tag), and the box on the screen, `FOUND.txt` and `log.txt` carry only the line `PZENC1:` plus the Base58Check of an 86-byte payload (version,
-  key id, `R`, ciphertext, tag), which is safe to send anywhere and opens with the secret alone (no associated data: the check that the key belongs to the address is made
-  after opening). The public key is stored in `campaign.conf` (`encrypt_pubkey`, written only when it is used, so the files of campaigns without it and older versions are
-  unaffected); a resumed campaign uses it, a different key is refused, a campaign started without one can be given one on resume. An invalid key stops the command
-  before anything is created and the program never falls back to showing the key. Core dumps are turned off (Linux, macOS; Windows has no way from user code) and on
-  Linux the process becomes non-dumpable, the copy of the key kept by the run is wiped as soon as the line is made, and the password buffers and the scrypt memory are
-  locked in RAM when the system allows and wiped.
-- `--on-found COMMAND` runs a command once, with `/bin/sh -c` (Windows: `cmd.exe /c`), after `FOUND.txt` is written, in a thread of its own, with `PZ_FOUND_SEALED`,
-  `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`, `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` (never the key); at most 120 seconds, its exit status is logged, and the search
-  and the box do not wait for it. It is not stored in the campaign.
-- New commands `encrypt-keygen [--random]` (the public key from a password, or a random key pair; warns about passwords of fewer than 12 characters) and
-  `decrypt-key [--raw-key] [--address A] [FILE | -]` (finds every `PZENC1:` token in a file or a pasted text, shows the key id, says "wrong password" by
-  key id before trying, reports a damaged copy, an unknown version or a failed authentication each with its own message, prints the key, its WIF and its P2PKH and P2WPKH addresses, and compares the key with the
-  `address:` line of the text or with `--address`: OK, or MISMATCH with exit status 1, or "address not checked" with exit status 0 when there is none). The password is read with the echo off (terminal restored on every exit, signals included; Windows
-  console mode), never from an argument, and as one line of standard input when there is no terminal.
-- pzcore: `seal.h` with HMAC-SHA256, HKDF-SHA256, PBKDF2-HMAC-SHA256, scrypt (the caller passes the work buffer), a constant-time comparison, a wipe that the compiler
-  cannot remove, the seal and its opening, the text form and the key of a password; `pz_ec_mul` (`k*P` for any point). Tests with the vectors of RFC 4231, 5869 and 7914
-  and with an independent Python generator (`gen_seal_vectors.py`).
-- Tests: `t_kdf`, `t_seal`, `tests/t_encrypt.c`, the encrypted key in `selftest` (the real scrypt cost once), the end-to-end cases for all three modes, and
-  `tests/pty_seal.py`, which checks the hidden prompt on a pseudo-terminal. `PZ_TEST_SEAL_LOG2N` (tests only, with a warning) lowers the scrypt cost.
+- Encrypting the key that is found, for computers that someone else controls: `hunt` and `merge` take `--encrypt-pubkey HEX` (66 digits
+  compressed, 130 uncompressed) or `--encrypt-password` (typed hidden, twice; the public key is made from it), and the box on the screen,
+  `FOUND.txt` and `log.txt` then carry only a line `PZENC1:...` (ECIES on secp256k1, Base58Check), safe to send anywhere, and never the key
+  nor its public key. An invalid key stops the command before anything is created; the program never falls back to showing the key.
+  USAGE section 11, ALGORITHMS section 12.
+- The public key is stored in `campaign.conf` (`encrypt_pubkey`, written only when it is used: the files of other campaigns and of older
+  versions are unaffected); a resumed campaign uses it, a different key is refused, a campaign started without one can be given one on
+  resume. Core dumps are turned off (Linux, macOS; on Linux the process is also non-dumpable), the key is wiped as soon as the line is
+  made, and the password buffers and the scrypt memory are locked in RAM when the system allows it.
+- `--on-found COMMAND` runs a command once, with `/bin/sh -c` (Windows: `cmd.exe /c`), after `FOUND.txt` is written, in a thread of its
+  own (at most 120 seconds; the search does not wait for it), with `PZ_FOUND_SEALED`, `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`,
+  `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` in its environment, never the key. It is not stored in the campaign: give it at every start.
+- New commands `encrypt-keygen [--random]` (the public key from a password, or a random key pair; a warning under 12 characters) and
+  `decrypt-key [--raw-key] [--address A] [FILE | -]` (finds every `PZENC1:` token in a file or a pasted text, says "wrong password" by key
+  id before trying, prints the key, its WIF and its two addresses, and checks the key against the `address:` line or `--address`: exit
+  status 1 on a mismatch or a wrong secret, 2 when the input is not usable). The password is read with the echo off, never from an argument.
+- pzcore: `seal.h` (HMAC-SHA256, HKDF-SHA256, PBKDF2, scrypt, a constant-time comparison, a wipe the compiler cannot remove, the seal and
+  its opening) and `pz_ec_mul`, tested with the vectors of RFC 4231, 5869 and 7914 and an independent Python generator. Tests `t_kdf`,
+  `t_seal`, `t_encrypt`, the encrypted key in `selftest`, the end-to-end cases of the three modes and `tests/pty_seal.py` for the hidden
+  prompt; `PZ_TEST_SEAL_LOG2N` (tests only, with a warning) lowers the scrypt cost.
 
 ### Changed
-- When the key is encrypted, `FOUND.txt` no longer carries the public key of the key found (nor the private key): it has the date, campaign, puzzle, address, seed,
-  version, the key id and the encrypted line. Without `--encrypt-pubkey` or `--encrypt-password` everything is as before.
+- When the key is encrypted, `FOUND.txt` no longer carries the public key of the key found (nor the private key): it has the date, campaign,
+  puzzle, address, seed, version, the key id and the encrypted line. Without `--encrypt-pubkey` or `--encrypt-password` everything is as before.
 
 ## [1.20.1] — 2026-11-01
 
 ### Added
-- Legal notice: `pzsolve version` also prints the copyright, the license and the warranty disclaimer, and the main help ends with them;
-  the new `NOTICE` file adds two terms under section 7 of the AGPL, that whoever conveys pzsolve, modified or not, keeps the notices
-  (the copyright line, the license, `NOTICE`, the output of `version`) and marks a modified version as different from the original
-  without presenting it as the original. The README (English and Italian) states the terms; the pzcore folder has its own copy of
-  `NOTICE` and `LICENSE`.
+- Legal notice: `pzsolve version` also prints the copyright, the license and the warranty disclaimer, and the main help ends with them.
+  The new `NOTICE` file adds two terms under section 7 of the AGPL (whoever conveys pzsolve keeps the notices and marks a modified version
+  as different from the original); the README states them, and the pzcore folder has its own `NOTICE` and `LICENSE`.
 
 ### Changed
-- pzcore carries the copyright and the license of the project in its own files: every source, header and test has the
-  `SPDX-FileCopyrightText: 2026 Leonardo Boulay` line next to its `SPDX-License-Identifier`, the generated test files and the generator
-  of `vectors.h` write both, and `lib/pzcore/LICENSE` holds the license text so that the folder can be taken on its own.
-- Documentation: the README (English and Italian) mentions `bench --variants` and says that compiling on the machine that runs the
-  program (`make ARCH_NATIVE=1`) does not make it faster: the engine is chosen at run time and the GPU kernels are compiled by the
-  driver; measured on an AVX-512 IFMA machine, `-march=native` gave the same speed within the noise of `bench`.
+- pzcore carries the copyright and the license of the project in its own files: the `SPDX-FileCopyrightText: 2026 Leonardo Boulay` line
+  next to every `SPDX-License-Identifier`, also in the generated test files, and `lib/pzcore/LICENSE`.
+- Documentation: the README (English and Italian) mentions `bench --variants` and says that `make ARCH_NATIVE=1` does not make the program
+  faster: the engine is chosen at run time and the GPU kernels are compiled by the driver (measured on an AVX-512 IFMA machine, the same
+  speed within the noise of `bench`).
 
 ## [1.20.0] — 2026-11-01
 
 ### Added
-- `bench --variants`: every variant of the linear and kangaroo kernels of each GPU, measured fairly in one run (3 s of warm-up with the
-  default variant, then every variant in three turns: in order, reversed, in order; `--turns N`), one table per kernel with the code that
-  `PZ_GPU_HALF` or `PZ_GPU_NK` takes, the name, the rate of each turn, the median, the spread and the median against the default's, the
-  tuner's saved choice and the fastest marked, the variants that cannot run listed and the block herd measured as "forced only"; then what
-  the tuner's rule would pick, and a second table with the rate of the variant in use at launches of 0.15, 0.35, 0.7 and 1.4 s. Nothing is
-  saved unless `--retune` is given too. `bench` also prints the length of the launches of each kernel. Run on simulated devices only (the
-  simulated CUDA driver with two devices, pocl); not yet on a card.
+- `bench --variants [--turns N]`: every variant of the linear and kangaroo kernels of each GPU, measured fairly in one run (3 s of warm-up,
+  then three turns: in order, reversed, in order), one table per kernel with the code that `PZ_GPU_HALF` or `PZ_GPU_NK` takes, the rate of
+  each turn, the median, the tuner's saved choice and what its rule would pick, then the rate of the variant in use at launches of 0.15 to
+  1.4 s. Nothing is saved unless `--retune` is given too. `bench` also prints the launch length of each kernel. USAGE section 7.5.
 ### Changed
 - Panel: with more than four GPUs, or when their names do not fit the terminal, the speed line gives their sum with the least and the
   greatest (`GPU x8: 7.21 G (870.12 M to 912.33 M each)`) instead of a rate per card; `report.txt` and `status.json` list every worker.
-- GPU tuning: the device is warmed up for 3 s with the default variant, the variants are measured in turns (in order, in the reverse
-  order, in order again, so that a drift of the clock of a laptop GPU weighs the same on all of them; after the first turn only those within
-  5% of the fastest, and the default), each gets the median of its rates, the default stays unless another is more than 1% faster, and
-  among the variants within 1% of the fastest the largest window (the most walkers per work-item for the kangaroo) is taken, since on the
-  RTX A2000 windows 256 and 512 with the register cap measure the same in `bench` and 512 is faster in a campaign
-  (it was 3%: one short measurement each, whose noise and the luck of the fastest of many were both about that size, so that on the A2000
-  the choice between window 256 and window 512 with the register cap, 2.8 % apart, depended on the run). The log line of the choice gives the
-  code to force it and the margin. The tuning takes longer once (about a minute per kernel on a laptop) and then stays saved.
-- GPU launches: their length is tuned per device instead of the fixed 0.35 s of 1.19.x. After the variant is chosen the tuner measures it
-  with launches of 0.15, 0.35, 0.7 and 1.4 s, sized as the controller sizes them (groups per work-item of the linear kernel, rounds of the
-  kangaroo within the depth of its history), and keeps the shortest within 1 % of the best (a longer launch delays the stop, the hit check
-  and the dashboard); the controllers of both kernels aim at that length, which is saved in `gpu_tune.txt` next to the variant (a line of
-  1.19.x without it means 0.35 s). The speed of a GPU on the dashboard and in `bench --together` is taken between the ends of its launches
-  instead of over a window of the clock, so that launches longer than a second do not make it swing. Measured on simulated devices only,
-  where the lengths tried are reached when the device is fast enough for them.
-- GPU kangaroo: a second form of the metadata of a step, as the variants "tags once" (`PZ_GPU_NK` with `m` after the letter: `128m`, `128bm`,
-  `128cm`; CUDA `NK` 64 and 128 plain, pairs and quads, OpenCL `NK` 32, 64 and 128 plain and pairs): the tag of the point two steps back is
-  stored in the last round of a launch instead of at every step (the next jump choice, the only thing that uses it, is made by the step that
-  knows it), the quads kernel reads the flags of a block of walkers once, and the two cycle tags are one 8-byte word. Device memory traffic
-  per step, counted on the executed path of the SASS for sm_86 (`tools/research/kang_bytes.py`): `NK` 128 quads 177 to 170 bytes, plain 222
-  to 218, pairs 192 to 188, 1 to 3 instructions fewer per step, 14 registers more for the quads (216 to 230), no spill with any `ptxas` from
-  12.0 to 13.0 on sm_75, sm_86 and sm_89. The model expected +4 % on the RTX A2000 Laptop; measured there with `bench --variants` (three
-  turns, medians) as the kernels of all variants, `NK` 128 quads gave 716 M steps/s against the 910 to 916 of 1.19.2's kernel in every
-  earlier bench, `NK` 64 quads 904, the pairs 702 to 850 and the plain kernels 629 to 742 (RESEARCH.md section 5 has the table). The SASS
-  of the two forms is the same in every proxy that can be counted here (bytes, instructions per pipe, the stall counts and the loads in
-  flight of the loop, registers and spills, the rare paths), so the loss has no cause in the kernel text that the analysis can name; the
-  kernels of 1.19.2 are therefore the default again (every module byte for byte the PTX of 1.19.2) and the new form is the variant the
-  tuner measures next to them. Measured side by side on the same card: `NK` 128 quads 908 (the kernel of 1.19.2, back to its figure) and
-  743 with the tags once; `NK` 64 quads 896 and **922** with the tags once, the fastest kernel of the card and the tuner's pick (+1.5 % over
-  1.19.2's); the plain and pairs kernels lose 6 to 15 % with the tags once. The cause is in the card, not in the counts: the same change
-  helps one herd size and hurts the next. Same walk, history and host side; bit-exact
-  against the CPU on the simulated CUDA driver and on pocl, planted keys found with every variant on both. Six more PTX modules (`kang64m`
-  to `kang128cm`), 243 KB more in the executable (the quads modules compress to about 85 KB each against any base).
-- Documentation: RESEARCH.md section 5 has the byte audit of the kangaroo step (every load and store of a round by purpose, before and after,
-  on sm_75, sm_86 and sm_89), the launch-level traffic, what the L2 can serve, and the candidates counted and dropped (walkers kept in shared
-  memory across the pass boundary, products every eighth walker, longer launches).
-- CUDA linear search: two forms of the hash160 that move work from the ALU pipe, which bounds the hash, onto the FMA pipe (the two
-  shifts of each sigma of the SHA-256 schedule as `mul.hi` by a power of two, 88 `IMAD.HI` per key; the rotation by 10 of every RIPEMD-160
-  step as the two halves of a product, 151 `IMAD.WIDE` and 151 `IMAD`) were built as forceable variants and timed on an RTX A2000 Laptop
-  with `bench --variants`: 863.6 against 875.0 M keys/s for window 512 with the register cap (-1.3 %) and 808.2 (-7.7 %), as the issue
-  model of RESEARCH.md section 5 predicts when an `IMAD.HI` takes the 2.4 issue slots the probes of `bench` measure on that card. They
-  are not in this version; the counts and the measurement are in RESEARCH.md. The CUDA linear kernels are those of 1.19.2.
-- CUDA linear search: the form with the hash160 of a pair of keys and the curve arithmetic of the next pair in one instruction stream (the
-  loop over the pairs pipelined by one pair, the hash filter inlined, which RESEARCH.md section 5 left as the one thing that could still pay
-  in the hash phase) was built, checked bit-exact against the CPU on the simulated CUDA driver, compiled for sm_75 to sm_90 and run through
-  the issue model: `ptxas` keeps the two phases apart (one hash, the field work, the other hash), the model gives −0.7 to −2.8 % with an
-  `IMAD.WIDE` at one issue slot and −0.0 to +2.4 % at two where the bound of the two pipes said −9.5 and −18 %, and a hand-made interleave
-  of the two streams reaches at most −4.5 and −6.4 % in the same model. Built for the two capped windows and
-  timed once on the RTX A2000 Laptop with `bench --variants`: 851 against 888 M keys/s for window 512 with the register cap (-4.2 %), 845
-  against 886 for 256 (-4.7 %). Not kept: the kernels are those of 1.19.2. The form stays in the kernel source under `PZ_INTERLEAVE` (no
-  module uses it; `tools/research/sass_sched.py` reads it for the model).
-- Documentation: RESEARCH.md section 5 accounts for every instruction of the hash160 filter against the floor of its expression on the
-  SASS of Turing to Hopper (the rotations, shifts, logic and rotate-and-add are at that floor: 1453 against 1451 ALU-pipe instructions per
-  key, the seven RIPEMD-160 steps that word 2 does not need are already dropped), and models what is left: the hash phase runs the ALU
-  pipe at 99.8 % and the field phase the FMA pipe, with the warps in step, so only an interleaving of the two phases could pay (about
-  -9 % to -18 % in the bound, not done).
-- Documentation: RESEARCH.md 8.14 searches once more for a lower constant of the kangaroo: the literature from Pollard 2000 to 2026 and
-  the puzzle community's methods in this project's normalization (the best published low-memory constant is 1.253, the two-species
-  line this program left in 1.7.8; 0.9 to 1.0 needs memory of order the square root of the range), and ten ideas priced in the exact
-  pair model and the walk model (the endomorphism and the automorphisms of the curve, shares that follow the progress of the search,
-  tame herds laid in advance, tables of tame trails and the Bernstein-Lange precomputation at 64 GiB, a tame herd shared by puzzles 136
-  to 140, finer start densities, the cheap second point of a step, a fourth species over all residue families, walks with memory).
-  None reaches 1 % under the constraints of a campaign; the program is unchanged. New scripts in `tools/research` (`ksched.py`,
-  `kprecomp.py`, `klambda.py`, `kideal.py`, the option `cheap=1` of `kwalk.c`).
+- GPU tuning: 3 s of warm-up, the variants measured in turns (in order, reversed, in order, so that the drift of a laptop clock weighs the
+  same on all), the median of each, the default kept unless another is more than 1 % faster, and among the variants within 1 % the largest
+  window (the most walkers per work-item for the kangaroo), since on the RTX A2000 windows 256 and 512 measure the same in `bench` and 512
+  is faster in a campaign. The log gives the code to force the choice. About a minute per kernel once, then saved. ALGORITHMS section 5.
+- GPU launches: their length is tuned per device (the shortest of 0.15, 0.35, 0.7 and 1.4 s within 1 % of the best) instead of the fixed
+  0.35 s of 1.19.x, and saved in `gpu_tune.txt` next to the variant (a line of 1.19.x without it means 0.35 s). The speed of a GPU on the
+  dashboard and in `bench --together` is taken between the ends of its launches, so that long launches do not make it swing. Measured on
+  simulated devices only. ALGORITHMS section 5.
+- GPU kangaroo: a second form of the metadata of a step, "tags once" (`PZ_GPU_NK` with `m` after the letter: `128m`, `128bm`, `128cm`), as
+  variants the tuner measures next to the kernels of 1.19.2, which stay the default (every module byte for byte the PTX of 1.19.2). On the
+  RTX A2000 Laptop (`bench --variants`, medians of three turns) `NK` 64 quads with the tags once gives 922 M steps/s against 896, the
+  tuner's pick (+1.5 % over 1.19.2's best), while `NK` 128 quads loses (743 against 908). Six more PTX modules, 243 KB more in the
+  executable. The byte audit of the step and the measurements: RESEARCH.md section 5.
+- CUDA linear search: three forms were built and timed on the RTX A2000 Laptop with `bench --variants` and none is kept: two that move hash
+  work onto the FMA pipe (863.6 against 875.0 M keys/s and 808.2, window 512 with the register cap) and one with the hash of a pair of
+  keys and the curve arithmetic of the next in one instruction stream (851 against 888; it stays in the source under `PZ_INTERLEAVE`, no
+  module uses it). The CUDA linear kernels are those of 1.19.2. The issue model, the floor of the hash160 filter and the counts: RESEARCH.md section 5.
+- Documentation: RESEARCH.md 8.14 searches once more for a lower constant of the kangaroo (the literature from Pollard 2000 to 2026 and
+  ten ideas priced in the exact pair model and the walk model): none reaches 1 % under the constraints of a campaign, and the program is
+  unchanged. New scripts in `tools/research` (`ksched.py`, `kprecomp.py`, `klambda.py`, `kideal.py`, the option `cheap=1` of `kwalk.c`).
 
 ## [1.19.2] — 2026-10-31
 
 ### Changed
-- CPU, AVX-512 IFMA lanes: the products skip four masks that did nothing (the multiply-adds read only the low 52 bits of their
-  operands) and a product with an added term starts its columns from that term; the linear search forms the x of a candidate as four
-  64-bit words split by one permutation instead of eight words apart. Instructions: kangaroo lane step 141.0 to 137.0, pair step 161.3 to
-  152.6, linear search 268.6 to 263.5 per key. Measured on one thread (Sapphire Rapids class Xeon): kangaroo lanes +1.8 %, pairs +1.3 %,
-  linear search +0.9 %. Same results bit for bit.
-- Documentation: RESEARCH.md 10.8 records the attempt to schedule the IFMA curve step by hand (two products interleaved, two chains in
-  the kangaroo inversion, a skewed lane loop, split columns): none was faster on every processor model, and on a core with two IFMA ports
-  the linear search turns out to be at its port floor.
-- Documentation: RESEARCH.md section 5 has an energy model per key of the CUDA linear kernel from the SASS (instruction classes, register
-  and reuse-cache reads, writes, cycles, DRAM bytes; `tools/research/sass_energy.py`) and the measurement on an RTX A2000 Laptop of the
-  changes it suggested: a loop over the pairs of keys with the first denominator and the centre taken out, 96 registers, and the prefix
-  products kept for every other denominator. The first cost 2.8 % on the card and the other two did not win it back, so none of them is in
-  this version: the CUDA linear kernels are those of 1.19.0.
-- `tools/gen_ptx.py` compiles every module in a process of its own: in one process the output of the largest module changed between runs,
-  and `--check` failed at random. The callseq comments of all the modules are renumbered; no instruction changes.
-GPU kernels, GPU tuning and the choice of CPU threads and GPUs are those of 1.19.1; the tuning is saved per version, so the first run of
-this version measures the GPU variants again.
+- CPU, AVX-512 IFMA lanes: four masks that did nothing are gone and a product with an added term starts from that term. Measured on one
+  thread (Sapphire Rapids class Xeon): kangaroo lanes +1.8 %, pairs +1.3 %, linear search +0.9 %. Same results bit for bit. RESEARCH.md
+  10.8 also records the attempt to schedule the IFMA curve step by hand, none of it faster on every processor model.
+- CUDA linear search: the energy model per key from the SASS (`tools/research/sass_energy.py`) and the measurement on an RTX A2000 Laptop
+  of the three changes it suggested: one cost 2.8 % and the others did not win it back, so the CUDA linear kernels are those of 1.19.0.
+  RESEARCH.md section 5.
+- `tools/gen_ptx.py` compiles every module in a process of its own (in one process the output of the largest module changed between runs,
+  and `--check` failed at random). The callseq comments of all the modules are renumbered; no instruction changes.
+- GPU kernels, GPU tuning and the choice of CPU threads and GPUs are those of 1.19.1; the tuning is saved per version, so the first run of
+  this version measures the GPU variants again.
 
 ### Added
 - GPU kangaroo: a *block herd* kernel variant (`kang4g`, "NK 4 block herd"), forced with `PZ_GPU_NK=4g`: 4 walkers per work-item in
-  registers for the whole launch and one field inversion per block of 128 work-items and round (32 lanes of one warp invert the column
-  products of the block), so a step touches the device memory only for its 2-byte history (≈ 4 bytes per step instead of ≈ 215). Same walk,
-  history and host side; bit-exact against the CPU (self-test on the simulated CUDA driver and on pocl, planted keys found). As the model
-  of RESEARCH.md section 5 expected, it is slower than `NK` 128 quads on the A2000 (one inversion per round is a 32,000-cycle chain that
-  1,024 walkers per SM cannot hide), so no tuner measures it. The OpenCL runtime launches kernels that require a work-group size in groups
-  of that size; the simulated CUDA driver runs kernels with barriers a block at a time.
+  registers for the whole launch and one field inversion per block of 128 work-items and round, so a step touches the device memory only
+  for its 2-byte history. Bit-exact against the CPU; slower than `NK` 128 quads on the A2000, as the model expected, so no tuner measures
+  it. ALGORITHMS section 5, RESEARCH.md section 5.
 
 ## [1.19.1] — 2026-10-30
 
 ### Changed
 - Linear search: the default size of the blocks is as large as the range allows, with at least 16 blocks for each share of `--part` and at
-  most 2^36 keys (a range of 2^36 keys now gets blocks of 2^32, was 2^24). A launch of a GPU cannot cross a block, and its controller aims at
-  launches of about a third of a second: with blocks of 2^24 keys the launches lasted 20 ms and the card ran about a fifth slower than on a
-  large range (measured on an RTX A2000 Laptop: 647 against 827 M keys/s; `--chunk-bits 32` gave the speed of the large ranges). Ranges from
-  2^48 keys up keep 2^36 as before. The value depends on the range and the number of shares only, never on the machine. Campaigns that
-  exist keep the value stored in `campaign.conf`; BSGS and the kangaroo are not changed. **Upgrade note.** The computers of a `--part` split
-  must have the same block size: if one of them runs a version before 1.19.1, give `--chunk-bits` explicitly on all of them.
+  most 2^36 keys (a range of 2^36 keys now gets blocks of 2^32, was 2^24): a GPU launch cannot cross a block, and with blocks of 2^24 keys
+  an RTX A2000 Laptop ran 647 against 827 M keys/s. The value depends on the range and the number of shares only; existing campaigns
+  keep the value in `campaign.conf`; BSGS and the kangaroo are not changed. **Upgrade note.** The computers of a `--part` split must have
+  the same block size: if one of them runs a version before 1.19.1, give `--chunk-bits` explicitly on all of them.
 
 ## [1.19.0] — 2026-10-30
 
 ### Changed
-- CPU linear search, lane engines: the hash filter has fewer operations on the two vector ports. The majority function of SHA-256 is one
-  `vpternlogd` with AVX-512 (GCC made two of it) and four operations instead of five elsewhere; the RIPEMD-160 round constants, folded with
-  the padding words, are read as broadcast operands from a table instead of being moved to a general register and broadcast on port 5 (57
-  times per batch). Per batch of 16 keys 3009 to 2904 instructions; measured on one thread avx512i +2.0 % (275 to 269 instructions per
-  key), avx512v +1.2 %; the AVX2 and SSE2 engines change by less than 0.1 % in instructions. Same digests, same candidates.
-- Documentation: RESEARCH.md 10.7 records what was measured and dropped: the step of the next points interleaved with the hash of the last
-  batch at the instruction level (no gain: the hash is bound by the vector ports and the decoder alike, and the merge costs spills), the
-  compiler variants for the engine object, and why the second thread of a core adds 9 to 12 % on the laptop of 10.5, with the test that
-  would show otherwise.
+- CPU linear search, lane engines: the hash filter has fewer operations on the two vector ports (the majority function of SHA-256 is one
+  `vpternlogd` with AVX-512, the RIPEMD-160 round constants are broadcast operands from a table). Measured on one thread: avx512i +2.0 %
+  (275 to 269 instructions per key), avx512v +1.2 %; AVX2 and SSE2 within 0.1 %. Same digests, same candidates.
+- Documentation: RESEARCH.md 10.7 records what was measured and dropped (the step of the next points interleaved with the hash of the last
+  batch, the compiler variants for the engine object) and why the second thread of a core adds 9 to 12 % on the laptop of 10.5.
 
 ## [1.18.0] — 2026-10-30
 

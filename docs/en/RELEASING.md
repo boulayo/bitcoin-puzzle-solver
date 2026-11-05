@@ -26,6 +26,8 @@
   change to the campaign file formats (and whether old campaigns still resume).
 * Say what was measured and what was not. Performance claims that rest on a model, an estimate or a simulated device are marked as
   such, with the machine and the numbers when they were measured.
+* An entry says what changed for the user in a few lines, with the measured effect and its machine in a few words, and points to
+  RESEARCH.md (or ALGORITHMS.md) for the measurements and the reasoning: the long form belongs there, not in the changelog.
 
 ## Where things are
 
