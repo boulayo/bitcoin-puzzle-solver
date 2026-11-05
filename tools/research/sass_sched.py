@@ -10,8 +10,8 @@ tools/gen_ptx.py does, disassembled with the instruction encodings (nvdisasm -he
 instruction are read: the stall count (the cycles before the same warp may issue again, which encodes the fixed latencies of the
 dependencies and the two cycles a 16-lane pipe holds a warp instruction), the yield bit, and the scoreboard barriers of the variable-latency
 operations (loads, stores, calls). The per-pair trace of the kernel is rebuilt from the executed path (the forward loop, then the pair loop
-with the two calls of hash160_w2 expanded, or with the hash already inlined in the interleaved form of pz_linear.cl, -DPZ_INTERLEAVE=1, and
-the rare blocks skipped) and N warps run it on one partition: one instruction issued per cycle,
+with the two calls of hash160_w2 expanded, or with the hash already inlined in the interleaved form of the kernel, which -DPZ_INTERLEAVE=1
+compiles from tools/research/pz_linear_interleaved.cl.txt in place of pz_linear.cl, and the rare blocks skipped) and N warps run it on one partition: one instruction issued per cycle,
 IADD3/LOP3/SHF/LEA/SEL/PRMT/ISETP on the ALU pipe and IMAD on the FMA pipe, each holding its pipe two cycles (IMAD.WIDE 2 x --wide), the
 local-memory operations at --mem cycles (the private arrays of a work-item are in video memory on the reference card) and the table and
 constant loads at --l1 cycles. It prints the instructions per pipe, the sum of the stall counts (the time of one warp alone), the bound
@@ -23,6 +23,7 @@ sass_count.py."""
 import collections, ctypes, importlib.util, os, random, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INTERLEAVED = os.path.join(ROOT, 'tools', 'research', 'pz_linear_interleaved.cl.txt')
 ALU = {'IADD3', 'LOP3', 'SHF', 'LEA', 'SEL', 'PRMT', 'ISETP', 'FLO', 'POPC', 'BREV', 'MOV', 'IMNMX', 'PLOP3', 'P2R', 'R2P', 'BMSK', 'VOTE', 'IABS'}
 
 
@@ -49,6 +50,8 @@ def compile_module(nvrtc, ptxas, nvdisasm, module, arch, extra):
     if module not in mods:
         raise SystemExit('unknown module %s (see src/kernels/ptx/modules.txt)' % module)
     name, files, defines = mods[module]
+    if '-DPZ_INTERLEAVE=1' in extra:       # the interleaved form, kept outside the kernel source since no module is built from it
+        files = [INTERLEAVED if f == 'pz_linear.cl' else f for f in files]
     ptx = gp.compile_one(ctypes.CDLL(nvrtc), name, files, defines + extra)
     with tempfile.TemporaryDirectory() as d:
         open(d + '/k.ptx', 'w').write(ptx)
@@ -87,7 +90,7 @@ def parse(text):
 
 def build_trace(funcs, labels):
     """the executed instructions of one pair of keys: the forward loop body, then the pair loop with hash160_w2 expanded (the plain kernels)
-    or with the filter already inlined (the interleaved kernels, PZ_INTERLEAVE: there the full hash is the only call of the loop); the
+    or with the filter already inlined (the interleaved form, PZ_INTERLEAVE: there the full hash is the only call of the loop); the
     rare blocks (the full hash of a key that passes the filter) are skipped by taking the conditional branch over them"""
     main = funcs['pz_search']
     ins = [t for _, t, _ in main]
