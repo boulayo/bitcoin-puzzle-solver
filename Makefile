@@ -71,7 +71,13 @@ endif
 BUILD   ?= build
 BIN     := $(BUILD)/pzsolve$(EXE)
 
-CORE_SRC := platform envopts gpu_variant util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common encrypt encrypt_cmd onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
+# platform.h has one implementation per system (platform_posix.c, platform_win.c) and platform.c for what the two share
+ifeq ($(WIN),1)
+PLATFORM_SRC := platform platform_win
+else
+PLATFORM_SRC := platform platform_posix
+endif
+CORE_SRC := $(PLATFORM_SRC) envopts gpu_variant util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common encrypt encrypt_cmd onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c

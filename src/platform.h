@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* platform.h - the operating-system services the program needs, behind one interface.
- * Two implementations live in platform.c: POSIX (Linux and macOS, with a few #ifdef __APPLE__ shims) and Windows (MinGW-w64).
+ * Two implementations, in the order of this file: platform_posix.c (Linux and macOS, with a few #ifdef __APPLE__ shims) and platform_win.c
+ * (MinGW-w64); platform.c holds what the two share.
  * Everything else in the program is plain C11 + pthreads and does not test _WIN32. */
 #ifndef PZ_PLATFORM_H
 #define PZ_PLATFORM_H
