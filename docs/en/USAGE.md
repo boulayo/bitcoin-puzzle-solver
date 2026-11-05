@@ -1,5 +1,7 @@
 # Usage guide
 
+For a computer that someone else controls (a rented machine) there is a checklist in order, [RENTED.md](RENTED.md); the details are in section 11.
+
 ## 1. Commands
 
 | Command | What it does |

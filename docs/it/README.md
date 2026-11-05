@@ -159,6 +159,7 @@ Le build per macOS e arm64 sono compilate e provate dalla CI a ogni push; la ver
 ## Documentazione
 
 * [`docs/it/USO.md`](USO.md): comandi, tutte le opzioni, cartella della campagna, GPU, più computer, problemi comuni, Windows.
+* [`docs/it/AFFITTO.md`](AFFITTO.md): la lista di controllo per un computer in affitto, dal checksum dell'eseguibile alla decifratura della chiave a casa.
 * In inglese: [`docs/en/ALGORITHMS.md`](../en/ALGORITHMS.md) (algoritmi, tempi, limiti teorici), [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md) (diario di ricerca: cosa è stato provato e misurato), [`docs/en/ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md) (sorgente), [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md) (rilascio), [`CHANGELOG.md`](../../CHANGELOG.md) e [`tools/README.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/tools/README.md).
 
 ## Uso responsabile

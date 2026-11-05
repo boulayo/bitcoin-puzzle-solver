@@ -152,6 +152,7 @@ The macOS and arm64 builds are built and tested by the CI on every push; the ful
 ## Documentation
 
 * [`docs/en/USAGE.md`](docs/en/USAGE.md): commands, all options, the campaign folder, GPUs, several computers, troubleshooting, Windows.
+* [`docs/en/RENTED.md`](docs/en/RENTED.md): the checklist for a rented computer, from the checksum of the binary to the decryption of the key at home.
 * [`docs/en/ALGORITHMS.md`](docs/en/ALGORITHMS.md): the algorithms, the running times and the theoretical limits.
 * [`docs/en/RESEARCH.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RESEARCH.md): the research log, what was tried and what was measured (variants that were discarded, intermediate measurements).
 * [`docs/en/ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md): how the source is organized.

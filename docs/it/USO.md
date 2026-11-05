@@ -1,5 +1,7 @@
 # Guida all'uso
 
+Per un computer controllato da altri (una macchina in affitto) c'è una lista di controllo in ordine, [AFFITTO.md](AFFITTO.md); i dettagli sono nella sezione 11.
+
 ## 1. Comandi
 
 | Comando | Cosa fa |
