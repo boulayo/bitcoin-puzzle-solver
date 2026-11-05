@@ -58,6 +58,8 @@ int cmd_info(int argc, char **argv);
 int cmd_list(int argc, char **argv);
 int cmd_where(int argc, char **argv);
 int cmd_split(int argc, char **argv);
+int cmd_puzzle(int argc, char **argv);
+int cmd_puzzles(int argc, char **argv);
 
 /* ---- what hunt and merge share (cmd_hunt.c): the encryption of the key that is found, and the key when it has been ---- */
 
