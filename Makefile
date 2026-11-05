@@ -326,8 +326,9 @@ $(BUILD)/t_lz$(EXE): tests/t_lz.c tools/embed.c src/lz.h $(BUILD)/lz.o | $(BUILD
 $(BUILD)/t_kernels$(EXE): tests/t_kernels.c src/lz.h $(BUILD)/lz.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_tab.o | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(BUILD)/lz.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_tab.o $(LDLIBS)
 
+# PZ_TEST_DIR: where a test writes its files (t_jobq), its own build folder
 $(BUILD)/t_%$(EXE): tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
-	$(CC) $(COMMON) -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
+	$(CC) $(COMMON) -DPZ_TEST_DIR=\"$(BUILD)\" -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
 test: lib-test $(BIN) $(addsuffix $(EXE),$(addprefix $(BUILD)/,$(TESTS)))
 	@for t in $(TESTS); do $(RUN) ./$(BUILD)/$$t$(EXE) || exit 1; done

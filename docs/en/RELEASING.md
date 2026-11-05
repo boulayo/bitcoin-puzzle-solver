@@ -101,7 +101,14 @@ The optional environment variable `COMMIT_TRAILERS` adds lines (for example `Co-
 
 ## Before every release
 
-`tools/verify.sh` (also used by `tools/release.sh`) runs in sequence:
+`tools/verify.sh` (also used by `tools/release.sh`) runs the checks below. They are grouped in independent sections (the table
+`SECTIONS` in the script), each with a temporary folder, a cache folder (`XDG_CACHE_HOME`) and a `TMPDIR` of its own, and a build folder
+of its own when it builds (`build/asan`, `build/tsan`, `build/arm64`, `build/win`...), so that sections can run at the same time: up to
+as many as the machine has processors, `-j N` to choose, `-j 1` for one after the other in the order of the list below. The sections that
+run `build/pzsolve` start once the section that builds it has ended. What a section prints is kept in its own log and printed whole
+when it ends, followed by its time; the summary counts the OK and FAIL lines of all the sections and gives the time of each, and the exit
+status is not zero when anything failed. On a 4-core machine `verify.sh quick` takes about 15 minutes, against 50 one section after the
+other. The checks:
 
 0. a re-check of the puzzle database with the independent implementation (`tools/gen_puzzles.py --check`), and the documents
    (`tools/check_docs.sh`: the Italian guide has the sections, options and environment variables of the English one, every relative

@@ -5,6 +5,11 @@
 #include "../src/envopts.h"
 #include "../src/platform.h"
 #include <pzcore/hash.h>
+/* the folder of the files the tests write: the build folder of this test (the Makefile sets it), so that the builds of tools/verify.sh
+ * that run at the same time (build, build/asan, build/arm64, build/win...) do not write the same files */
+#ifndef PZ_TEST_DIR
+#define PZ_TEST_DIR "build"
+#endif
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
@@ -76,37 +81,37 @@ static void t_seed(void)
     claim_t cl;
     CHECK(sched_claim(a, 4096, &cl) == CLAIM_OK);
     sched_complete(a, &cl, cl.nkeys);
-    CHECK(sched_save(a, "build/t_jobq_seed.state") == 0);
-    char *t = pz_read_file("build/t_jobq_seed.state", NULL);
+    CHECK(sched_save(a, PZ_TEST_DIR "/t_jobq_seed.state") == 0);
+    char *t = pz_read_file(PZ_TEST_DIR "/t_jobq_seed.state", NULL);
     CHECK(t && strstr(t, "\nseed_id=") && strstr(t, a->seed_id));
     free(t);
     /* the same seed resumes */
     sched_t *same = sched_new(&c);
-    CHECK(sched_load(same, "build/t_jobq_seed.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
+    CHECK(sched_load(same, PZ_TEST_DIR "/t_jobq_seed.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
     /* another seed is refused, and nothing is loaded: the positions of the file point at other blocks */
     campaign_cfg o = c;
     o.seed[7] ^= 1;
     sched_t *other = sched_new(&o);
     CHECK(strcmp(other->seed_id, a->seed_id) != 0);
-    CHECK(sched_load(other, "build/t_jobq_seed.state", err, sizeof err) == -2 && strstr(err, "another seed"));
+    CHECK(sched_load(other, PZ_TEST_DIR "/t_jobq_seed.state", err, sizeof err) == -2 && strstr(err, "another seed"));
     CHECK(sched_keys_done(other) == 0 && other->ndone == 0);
     /* a checkpoint of an earlier version carries no seed: it is accepted, whatever the seed, and the next save records it */
-    make_legacy_state("build/t_jobq_seed.state", "build/t_jobq_seed_old.state");
-    t = pz_read_file("build/t_jobq_seed_old.state", NULL);
+    make_legacy_state(PZ_TEST_DIR "/t_jobq_seed.state", PZ_TEST_DIR "/t_jobq_seed_old.state");
+    t = pz_read_file(PZ_TEST_DIR "/t_jobq_seed_old.state", NULL);
     CHECK(t && !strstr(t, "seed_id") && !strncmp(t, "PZSCHED 1\ncbits=12\nv_limit=", 27));
     free(t);
     sched_t *old = sched_new(&c);
-    CHECK(sched_load(old, "build/t_jobq_seed_old.state", err, sizeof err) == 0 && sched_keys_done(old) == 4096);
-    CHECK(sched_save(old, "build/t_jobq_seed_old.state") == 0);
-    t = pz_read_file("build/t_jobq_seed_old.state", NULL);
+    CHECK(sched_load(old, PZ_TEST_DIR "/t_jobq_seed_old.state", err, sizeof err) == 0 && sched_keys_done(old) == 4096);
+    CHECK(sched_save(old, PZ_TEST_DIR "/t_jobq_seed_old.state") == 0);
+    t = pz_read_file(PZ_TEST_DIR "/t_jobq_seed_old.state", NULL);
     CHECK(t && strstr(t, old->seed_id));
     free(t);
     /* a checkpoint cut or altered in the seed line fails the checksum like any other damage */
-    FILE *f = fopen("build/t_jobq_seed.state", "r+b");
+    FILE *f = fopen(PZ_TEST_DIR "/t_jobq_seed.state", "r+b");
     CHECK(f != NULL);
     if (f) { fseek(f, 40, SEEK_SET); int ch = fgetc(f); fseek(f, 40, SEEK_SET); fputc(ch == 'a' ? 'b' : 'a', f); fclose(f); }
     sched_t *bad = sched_new(&c);
-    CHECK(sched_load(bad, "build/t_jobq_seed.state", err, sizeof err) == -1);
+    CHECK(sched_load(bad, PZ_TEST_DIR "/t_jobq_seed.state", err, sizeof err) == -1);
     sched_free(a); sched_free(same); sched_free(other); sched_free(old); sched_free(bad);
 }
 
@@ -118,24 +123,24 @@ static void t_cfg(void)
     campaign_cfg c = mkcfg(1000, 2000, 12), l;
     c.format_version = PZ_FORMAT_VERSION;
     snprintf(c.name, sizeof c.name, "t");
-    CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
-    CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) == 0 && l.mode == MODE_LINEAR);
+    CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
+    CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) == 0 && l.mode == MODE_LINEAR);
     const struct { search_mode m; const char *name; } modes[] = {{MODE_LINEAR, "linear"}, {MODE_KANGAROO, "kangaroo"}, {MODE_BSGS, "bsgs"}};
     for (size_t i = 0; i < sizeof modes / sizeof *modes; i++) {
         c.mode = modes[i].m;
-        CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
-        CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) == 0 && l.mode == modes[i].m);
+        CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
+        CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) == 0 && l.mode == modes[i].m);
     }
     /* a mode this version does not know is refused, not taken for a linear search */
-    char *t = pz_read_file("build/t_jobq.conf", NULL);
+    char *t = pz_read_file(PZ_TEST_DIR "/t_jobq.conf", NULL);
     char *m = t ? strstr(t, "mode=bsgs") : NULL;
     CHECK(m != NULL);
     if (m) {
         memcpy(m, "mode=zzzz", 9);
-        FILE *f = fopen("build/t_jobq.conf", "wb");
+        FILE *f = fopen(PZ_TEST_DIR "/t_jobq.conf", "wb");
         CHECK(f != NULL);
         if (f) { fputs(t, f); fclose(f); }
-        CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "unknown mode 'zzzz'"));
+        CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "unknown mode 'zzzz'"));
     }
     free(t);
     /* a campaign that encrypts the key writes the version it needs (requires=X.Y.Z): a version below it refuses the campaign, one at
@@ -147,14 +152,14 @@ static void t_cfg(void)
     c.has_encrypt = true;
     CHECK(pz_hex_decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", c.encrypt_pubkey33, 33) == 33);   /* G */
     CHECK(pz_ge_from_pubkey(&c.encrypt_pubkey, c.encrypt_pubkey33, 33));
-    CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
-    t = pz_read_file("build/t_jobq.conf", NULL);
+    CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
+    t = pz_read_file(PZ_TEST_DIR "/t_jobq.conf", NULL);
     CHECK(t && strstr(t, "\nencrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrequires=" PZ_REQUIRES_ENCRYPT "\n"));
-    CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) == 0 && l.has_encrypt);   /* this version is at or above PZ_REQUIRES_ENCRYPT */
+    CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) == 0 && l.has_encrypt);   /* this version is at or above PZ_REQUIRES_ENCRYPT */
     free(t);
     c.has_encrypt = false;
-    CHECK(cfg_save(&c, "build/t_jobq.conf") == 0);
-    t = pz_read_file("build/t_jobq.conf", NULL);
+    CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
+    t = pz_read_file(PZ_TEST_DIR "/t_jobq.conf", NULL);
     CHECK(t && !strstr(t, "requires="));                                                /* no encryption: no line, the file is as before */
     char above[40];
     snprintf(above, sizeof above, "%lu.%lu.%lu", V[0], V[1], V[2] + 1);                 /* the next patch version: above this one */
@@ -172,10 +177,10 @@ static void t_cfg(void)
     for (size_t i = 0; i < sizeof reqs / sizeof *reqs; i++) {
         char line[80] = "";
         if (reqs[i].req[0]) snprintf(line, sizeof line, "requires=%s\n", reqs[i].req);
-        FILE *f = fopen("build/t_jobq.conf", "wb");
+        FILE *f = fopen(PZ_TEST_DIR "/t_jobq.conf", "wb");
         CHECK(f != NULL);
         if (f) { fputs(t, f); fputs(line, f); fclose(f); }
-        const int rc = cfg_load(&l, "build/t_jobq.conf", err, sizeof err);
+        const int rc = cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err);
         if (reqs[i].ok) CHECK(rc == 0);
         else if (reqs[i].req[0] < '0' || reqs[i].req[0] > '9' || !strchr(strchr(reqs[i].req, '.') + 1, '.'))
             CHECK(rc != 0 && strstr(err, "invalid requires") && strstr(err, reqs[i].req));
@@ -183,10 +188,10 @@ static void t_cfg(void)
             CHECK(rc != 0 && strstr(err, "needs pzsolve ") && strstr(err, reqs[i].req) && strstr(err, PZ_VERSION) && strstr(err, "a feature this version does not have"));
     }
     {   /* with the encrypt_pubkey line the reason is the option */
-        FILE *f = fopen("build/t_jobq.conf", "wb");
+        FILE *f = fopen(PZ_TEST_DIR "/t_jobq.conf", "wb");
         CHECK(f != NULL);
         if (f) { fputs(t, f); fprintf(f, "encrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrequires=%s\n", above); fclose(f); }
-        CHECK(cfg_load(&l, "build/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "it was made with --encrypt-pubkey"));
+        CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "it was made with --encrypt-pubkey"));
     }
     free(t);
     CHECK(cfg_version_cmp("1.9.0", "1.21.0") < 0 && cfg_version_cmp("1.21.0", "1.21.0") == 0 && cfg_version_cmp("2.0.0", "1.99.99") > 0);
@@ -313,23 +318,23 @@ static void t_parts_checkpoints(void)
     claim_t cl;
     CHECK(sched_claim(a, 4096, &cl) == CLAIM_OK);
     sched_complete(a, &cl, cl.nkeys);
-    CHECK(sched_save(a, "build/t_jobq_part.state") == 0);
+    CHECK(sched_save(a, PZ_TEST_DIR "/t_jobq_part.state") == 0);
     sched_t *same = sched_new(&c);
-    CHECK(sched_load(same, "build/t_jobq_part.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
+    CHECK(sched_load(same, PZ_TEST_DIR "/t_jobq_part.state", err, sizeof err) == 0 && sched_keys_done(same) == 4096);
     campaign_cfg o = c;
     snprintf(o.part, sizeof o.part, "1/2");
     sched_t *other = sched_new(&o);
-    CHECK(sched_load(other, "build/t_jobq_part.state", err, sizeof err) == -2 && strstr(err, "split between computers"));
+    CHECK(sched_load(other, PZ_TEST_DIR "/t_jobq_part.state", err, sizeof err) == -2 && strstr(err, "split between computers"));
     o.part[0] = 0;
     sched_t *none = sched_new(&o);
-    CHECK(sched_load(none, "build/t_jobq_part.state", err, sizeof err) == -2);
+    CHECK(sched_load(none, PZ_TEST_DIR "/t_jobq_part.state", err, sizeof err) == -2);
     /* and the other way round: a checkpoint without a split does not load into a share */
     sched_t *w = sched_new(&o);
     CHECK(sched_claim(w, 4096, &cl) == CLAIM_OK);
     sched_complete(w, &cl, cl.nkeys);
-    CHECK(sched_save(w, "build/t_jobq_part.state") == 0);
+    CHECK(sched_save(w, PZ_TEST_DIR "/t_jobq_part.state") == 0);
     sched_t *a2 = sched_new(&c);
-    CHECK(sched_load(a2, "build/t_jobq_part.state", err, sizeof err) == -2);
+    CHECK(sched_load(a2, PZ_TEST_DIR "/t_jobq_part.state", err, sizeof err) == -2);
     sched_free(a); sched_free(same); sched_free(other); sched_free(none); sched_free(w); sched_free(a2);
 }
 
@@ -463,11 +468,11 @@ static void t_checkpoint_resume(void)
     sched_complete(s, &d, d.nkeys);          /* b is a hole */
     CHECK(sched_claim(s, 4096, &e) == CLAIM_OK);
     sched_complete(s, &e, 2048);             /* partial: second half is a hole */
-    CHECK(sched_save(s, "build/t_jobq.state") == 0);
+    CHECK(sched_save(s, PZ_TEST_DIR "/t_jobq.state") == 0);
     u128 kd = sched_keys_done(s);
     sched_t *s2 = sched_new(&c);
     char err[200];
-    CHECK(sched_load(s2, "build/t_jobq.state", err, sizeof err) == 0);
+    CHECK(sched_load(s2, PZ_TEST_DIR "/t_jobq.state", err, sizeof err) == 0);
     CHECK(sched_keys_done(s2) == kd);
     /* resumed scheduler must hand out exactly the missing pieces first (b, then e's tail) before fresh space */
     claim_t r;
@@ -478,9 +483,9 @@ static void t_checkpoint_resume(void)
     CHECK(r.v_start == e.v_start + 2048);
     sched_free(s); sched_free(s2);
     /* corrupted file is rejected */
-    FILE *f = fopen("build/t_jobq.state", "r+b"); fseek(f, 20, SEEK_SET); fputc('Z', f); fclose(f);
+    FILE *f = fopen(PZ_TEST_DIR "/t_jobq.state", "r+b"); fseek(f, 20, SEEK_SET); fputc('Z', f); fclose(f);
     sched_t *s3 = sched_new(&c);
-    CHECK(sched_load(s3, "build/t_jobq.state", err, sizeof err) == -1);
+    CHECK(sched_load(s3, PZ_TEST_DIR "/t_jobq.state", err, sizeof err) == -1);
     sched_free(s3);
 }
 

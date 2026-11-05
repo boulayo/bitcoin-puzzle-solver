@@ -8,8 +8,9 @@ open an issue first so we can agree on the approach.
   environment variables of the English one (`docs/en/USAGE.md`), and every relative link of every `.md` file must resolve. The CI runs it,
   and so does `tools/verify.sh`.
 * `tools/verify.sh` runs the full battery: AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer, Valgrind, a re-check of the puzzle
-  database, the end-to-end tests, the aarch64 build under QEMU and the Windows exe under Wine (`docs/en/RELEASING.md` lists the steps). The GPU
-  kernels are tested bit by bit against the CPU on pocl (OpenCL on the CPU) and, for CUDA, with a simulated driver (`tests/mock_cuda`).
+  database, the end-to-end tests, the aarch64 build under QEMU and the Windows exe under Wine, in sections that run at the same time
+  (`-j N` to choose how many; `docs/en/RELEASING.md` lists the steps). The GPU kernels are tested bit by bit against the CPU on pocl
+  (OpenCL on the CPU) and, for CUDA, with a simulated driver (`tests/mock_cuda`).
 * One topic per pull request, in the style of the surrounding code (C11, no external dependencies).
 * Do not copy code you cannot license under the terms below, nor code from other puzzle tools unless its license allows it.
 
