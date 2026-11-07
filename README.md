@@ -195,8 +195,8 @@ pzsolve is free and developed in spare time. If it saved you time or taught you 
 | <img src="docs/img/donate-bitcoin.svg" width="190" alt="QR code of the Bitcoin address"> | <img src="docs/img/donate-lightning.svg" width="190" alt="QR code of the Lightning address"> |
 | `bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz` | `trivialalarm90@cake.cash` |
 
-Scan a code with your wallet, or copy the text. The only official place for these addresses is this README in the official repository:
-be wary of copies elsewhere.
+Scan a code with your wallet, or copy the text. pzsolve also shows these addresses when it finds a key. The only official place for
+them is this README in the official repository: be wary of copies elsewhere.
 
 ## License
 

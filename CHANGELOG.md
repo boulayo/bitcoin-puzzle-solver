@@ -3,6 +3,13 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.23.2] — 2026-11-08
+
+### Added
+- When a key is found, a few lines under the box congratulate the finder and give the donation addresses of the README (Bitcoin and
+  Lightning), with a pointer to the README of the official repository to check them against. They are not shown when the key could not
+  be encrypted and was lost.
+
 ## [1.23.1] — 2026-11-07
 
 ### Changed

@@ -196,7 +196,7 @@ elencano sempre ogni worker uno per uno.
   *supponendo che la chiave sia nell'intervallo* (formule in [`ALGORITHMS.md`](../en/ALGORITHMS.md) sezione 11, in inglese).
 * Nel BSGS, durante la costruzione della tabella, il pannello mostra la fase 1 di 2 e quanti passi giganti seguiranno.
 * Quando la chiave viene trovata il pannello finisce con `KEY FOUND`, e un riquadro sotto dà la chiave (`key (hex): 0x…`) e il percorso di
-  `FOUND.txt`.
+  `FOUND.txt`. Sotto il riquadro, qualche riga di congratulazioni e gli indirizzi per le donazioni del [README](../../README.md#support-the-project).
 
 Modalità: `--ui full` (pannello), `--ui line` (una sola riga dinamica), `--ui log` (una riga di riepilogo al minuto nel log,
 adatta a file e `nohup`), `--ui auto` (predefinito: pannello su un terminale, altrimenti log). La riga singola è così (il nome della campagna

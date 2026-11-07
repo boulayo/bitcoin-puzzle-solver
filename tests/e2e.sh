@@ -87,6 +87,9 @@ A=$(field 0x9a3b1 addr)
 OUT=$($BIN hunt -p 20 -a "$A" -c nf -d "$DIR" --ui log -q --no-gpu 2>&1); RC=$?
 echo "$OUT" | grep -q "key (hex): *0x9a3b1" && echo "$OUT" | grep -q "NOT SAVED: .*FOUND.txt could not be written" && ! echo "$OUT" | grep -q "saved in" \
   && ok "the box shows the key and says that FOUND.txt was not written" || bad "FOUND.txt not written: rc=$RC $(echo "$OUT" | grep -E 'saved|SAVED|key \(hex\)' | tr '\n' ' ')"
+echo "$OUT" | grep -q "Congratulations, you solved it" && echo "$OUT" | grep -q "Bitcoin: *bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz" \
+  && echo "$OUT" | grep -q "Lightning address: *trivialalarm90@cake.cash" && echo "$OUT" | grep -q "README of https://github.com/boulayo/bitcoin-puzzle-solver" \
+  && ok "under the box: congratulations and the donation addresses of the README" || bad "no congratulations or donation addresses under the box: $(echo "$OUT" | tail -8 | tr '\n' ' ')"
 
 echo "== kangaroo (public key known)"
 for n in 32 38 44 50; do

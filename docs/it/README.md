@@ -200,8 +200,8 @@ mai dovuta.
 | <img src="../img/donate-bitcoin.svg" width="190" alt="Codice QR dell'indirizzo Bitcoin"> | <img src="../img/donate-lightning.svg" width="190" alt="Codice QR dell'indirizzo Lightning"> |
 | `bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz` | `trivialalarm90@cake.cash` |
 
-Inquadra un codice con il wallet, oppure copia il testo. L'unico posto ufficiale per questi indirizzi è il README del repository
-ufficiale: diffida delle copie altrove.
+Inquadra un codice con il wallet, oppure copia il testo. pzsolve mostra questi indirizzi anche quando trova una chiave. L'unico posto
+ufficiale per loro è il README del repository ufficiale: diffida delle copie altrove.
 
 ## Licenza
 

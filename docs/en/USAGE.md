@@ -196,6 +196,7 @@ folder list every worker one by one at all times.
   the range* (formulas in [`ALGORITHMS.md`](ALGORITHMS.md) section 11).
 * In BSGS, while the table is being built, the panel shows phase 1 of 2 and how many giant steps will follow.
 * When the key is found the panel ends with `KEY FOUND`, and a box below it gives the key (`key (hex): 0x…`) and the path of `FOUND.txt`.
+  Under the box, a few lines congratulate the finder and give the donation addresses of the [README](../../README.md#support-the-project).
 
 Modes: `--ui full` (panel), `--ui line` (a single dynamic line), `--ui log` (one summary line per minute in the log,
 suited to files and `nohup`), `--ui auto` (default: panel on a terminal, log otherwise). The single line looks like this (the campaign name

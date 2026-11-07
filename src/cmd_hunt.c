@@ -466,6 +466,18 @@ void announce_encrypt(const run_ctx *r)
     pz_log(PZ_LOG_INFO, "the key will be encrypted to the public key with id %s when found: the screen, FOUND.txt and the log will carry only the encrypted line", id);
 }
 
+/* Printed under the box of a found key: what the program is for, and how to support it. The addresses are those of README.md, which
+ * stays the official place for them: the message points there, so that a copy of the program with other addresses can be told apart. */
+static void print_found_thanks(void)
+{
+    printf("\n  Congratulations, you solved it!\n"
+           "  pzsolve was created to give everyone a real chance at these prizes.\n"
+           "  If it helped you win, please consider a donation to its author:\n"
+           "    Bitcoin:            bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz\n"
+           "    Lightning address:  trivialalarm90@cake.cash\n"
+           "  Check them against the README of https://github.com/boulayo/bitcoin-puzzle-solver\n\n");
+}
+
 /* The banner printed when the key is found (by 'hunt' or by 'merge'). */
 void print_found_banner(const run_ctx *r)
 {
@@ -487,6 +499,7 @@ void print_found_banner(const run_ctx *r)
             printf("  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->found_sealed);
         }
         printf("=========================================================\n");
+        if (!r->found_seal_failed) print_found_thanks();
         return;
     }
     char hx[80], wif[80];
@@ -498,6 +511,7 @@ void print_found_banner(const run_ctx *r)
     if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the key from this screen now\n", r->path_found);
     else printf("  saved in:       %s\n", r->path_found);
     printf("=========================================================\n");
+    print_found_thanks();
 }
 
 /* A campaign that has already found the key ('hunt' and 'merge' end there): FOUND.txt is shown. False when it has not. */
