@@ -73,7 +73,7 @@ combinazione migliore di thread CPU e GPU (circa 2 minuti). Il risultato è salv
 Windows `%LOCALAPPDATA%\pzsolve`) e l'avvio successivo è immediato.
 
 Avanzamento: `pzsolve list` dalla stessa cartella (stato, avanzamento, velocità, tempo residuo); `campaigns/p71/report.txt` è il
-rapporto leggibile e `status.json` lo stesso per i programmi, entrambi riscritti ogni 5 secondi. Ferma con Ctrl-C (o `kill PID`): lo
+rapporto leggibile e `status.json` lo stesso per i programmi, entrambi riscritti ogni minuto. Ferma con Ctrl-C (o `kill PID`): lo
 stato viene salvato. Riprendi con lo stesso comando, `--on-found` compreso. Più macchine sullo stesso puzzle: lo stesso seed su tutte e
 una quota ciascuna, `pzsolve hunt -p 71 -s SEED --part 0/2 ...` sulla prima e `--part 1/2` sulla seconda (USO sezione 8.2; `pzsolve split`
 divide le quote fra macchine di velocità diverse).

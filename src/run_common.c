@@ -498,7 +498,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         n += snprintf(buf + n, bcap - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);
     }
     if (atomic_load(&r->found)) n += snprintf(buf + n, bcap - (size_t)n, "\nKEY FOUND: see %s\n", r->path_found);
-    pz_write_file_atomic_ex(r->path_report, buf, (size_t)n, 0644, false);   /* derived from the state, rewritten every 5 s: no fsync */
+    pz_write_file_atomic_ex(r->path_report, buf, (size_t)n, 0644, false);   /* derived from the state, rewritten every minute: no fsync */
     free(buf);
 
     /* status.json (machine readable; used by the 'list' command) */
@@ -648,7 +648,7 @@ void run_reporter_loop(run_ctx *r)
                 for (int i = 0; i < r->nws; i++) { r->ws[i].last_units = atomic_load(&r->ws[i].units); r->ws[i].last_t_units = atomic_load(&r->ws[i].t_units); r->ws[i].rate = 0; }
                 t_last = now;
                 pz_log(PZ_LOG_WARN, "system suspension detected (about %s without computing): not counted in times and speeds; saving the state", pz_fmt_duration(gap, gb, sizeof gb));
-                next_ckpt = now;                       /* save at once: a hibernation may end in a power cut */
+                next_ckpt = next_files = now;          /* save at once: a hibernation may end in a power cut */
             }
         }
         if (atomic_exchange(&r->rate_restart, 0)) {        /* the unit changed (BSGS: the search begins after the table) */
@@ -716,7 +716,8 @@ void run_reporter_loop(run_ctx *r)
         if (!need_pi) continue;
         run_final_progress(r, &pi);
         if (now >= next_term) { ui_draw(r, &pi, false); next_term = now + term_period; }
-        if (now >= next_files) { run_write_report_files(r, &pi, false); next_files = now + 5; }
+        /* report.txt and status.json: 2 s after the start, then with the checkpoint (60 s), and at the end */
+        if (now >= next_files) { run_write_report_files(r, &pi, false); next_files = now + r->checkpoint_interval; }
         if (now >= next_csv) { append_stats_csv(r, &pi); next_csv = now + 60; }
         if (now >= next_ckpt) {
             if (r->checkpoint && r->checkpoint(r) != 0) pz_log(PZ_LOG_WARN, "checkpoint save failed");

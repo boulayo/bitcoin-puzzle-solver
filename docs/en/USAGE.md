@@ -123,8 +123,8 @@ campaigns/NAME/
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
   session.txt     total time and sessions
-  report.txt      readable report, rewritten every 5 s (the first time 2 s after the start)
-  status.json     state for external programs (includes time left and probabilities), rewritten every 5 s
+  report.txt      readable report, rewritten every minute with the checkpoint (the first time 2 s after the start, and at the end)
+  status.json     state for external programs (includes time left and probabilities), rewritten with report.txt
   stats.csv       time series, one row per minute (the file appears after the first minute)
   log.txt         timestamped events (also the error that ended a run)
   FOUND.txt       only when the key is found (permissions 0600 on Linux and macOS; on Windows it inherits the folder's rights); with --encrypt-pubkey it holds the encrypted line, not the key (section 11)

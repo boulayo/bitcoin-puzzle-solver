@@ -70,7 +70,7 @@ mix of CPU threads and GPUs (about 2 minutes). The result is saved in the cache 
 `%LOCALAPPDATA%\pzsolve`) and the next start is immediate.
 
 Progress: `pzsolve list` from the same folder (state, progress, speed, time left); `campaigns/p71/report.txt` is the readable report
-and `status.json` the same for programs, both rewritten every 5 seconds. Stop with Ctrl-C (or `kill PID`): the state is saved. Resume
+and `status.json` the same for programs, both rewritten every minute. Stop with Ctrl-C (or `kill PID`): the state is saved. Resume
 with the same command, `--on-found` included. Several machines on the same puzzle: the same seed on all of them and one share each,
 `pzsolve hunt -p 71 -s SEED --part 0/2 ...` on the first and `--part 1/2` on the second (USAGE section 8.2; `pzsolve split` divides
 the shares among machines of different speeds).

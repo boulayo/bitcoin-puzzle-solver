@@ -3,6 +3,13 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.23.1] — 2026-11-07
+
+### Changed
+- `report.txt` and `status.json` are rewritten once a minute, together with the checkpoint, instead of every 5 seconds: the panel on
+  the screen still updates every second, and the files are still written 2 s after the start, after a system suspension and at the end.
+  A campaign folder kept in a synced folder (OneDrive, Dropbox, Google Drive) or on a network disk is no longer uploaded every few seconds.
+
 ## [1.23.0] — 2026-11-05
 
 ### Removed

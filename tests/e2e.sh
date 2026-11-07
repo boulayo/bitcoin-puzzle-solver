@@ -479,6 +479,16 @@ rm -rf "$DIR/sj"
 run_until '[ -s "$DIR/sj/p71/status.json" ]' $BIN hunt -p 71 -m linear -t 200 -d "$DIR/sj" --ui log -q --no-gpu >/dev/null 2>&1
 python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if len(d['workers']) == 200 and d['workers'][199]['name'] == 'CPU199' else 1)" "$DIR/sj/p71/status.json" 2>/dev/null \
   && ok "status.json: 200 workers listed, valid JSON" || bad "status.json with 200 workers"
+# the two report files are written 2 s after the start and then once a minute (with the checkpoint), not every few seconds
+rm -rf "$DIR/fq"
+timeout -k 60 -s INT 600 $BIN hunt -p 71 -m linear -t 1 -d "$DIR/fq" --ui log -q --no-gpu >/dev/null 2>&1 & FQP=$!
+if wait_for '[ -s "$DIR/fq/p71/status.json" ]'; then
+  U1=$(grep -o '"updated_unix": [0-9]*' "$DIR/fq/p71/status.json"); sleep 8
+  U2=$(grep -o '"updated_unix": [0-9]*' "$DIR/fq/p71/status.json")
+  kill -0 $FQP 2>/dev/null && [ -n "$U1" ] && [ "$U1" = "$U2" ] && ok "status.json not rewritten in the 8 s after the first write" || bad "status.json rewritten too often: '$U1' then '$U2'"
+else bad "status.json of the frequency check never appeared"; fi
+kill -INT $FQP 2>/dev/null; wait $FQP
+grep -q '^State: *STOPPED' "$DIR/fq/p71/report.txt" && ok "the stop rewrites report.txt at once" || bad "report.txt after the stop: $(grep '^State:' "$DIR/fq/p71/report.txt")"
 rm -rf "$DIR/um"; mkdir -p "$DIR/um"; cp -r "$DIR/rc/p71" "$DIR/um/p71"; sed -i 's/^mode=.*/mode=quantum/' "$DIR/um/p71/campaign.conf"
 OUT=$($BIN list -d "$DIR/um" 2>&1); echo "$OUT" | grep -q "unknown mode 'quantum'" && ok "list: unknown mode reported" || bad "list with an unknown mode: $OUT"
 OUT=$(timeout 10 $BIN hunt -c p71 -d "$DIR/um" --ui log -q --no-gpu 2>&1); RC=$?

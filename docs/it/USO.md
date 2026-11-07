@@ -123,8 +123,8 @@ campaigns/NOME/
   state.dat       checkpoint della ricerca (insieme di intervalli completati, con checksum; .bak = precedente)
   dp.bin          canguro: log append-only dei punti distinti (per riprendere)
   session.txt     tempo totale e sessioni
-  report.txt      report leggibile, riscritto ogni 5 s (la prima volta 2 s dopo l'avvio)
-  status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto ogni 5 s
+  report.txt      report leggibile, riscritto ogni minuto con il checkpoint (la prima volta 2 s dopo l'avvio, e alla fine)
+  status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto con report.txt
   stats.csv       serie storica, una riga al minuto (il file compare dopo il primo minuto)
   log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
   FOUND.txt       solo a chiave trovata (permessi 0600 su Linux e macOS; su Windows eredita i diritti della cartella); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
