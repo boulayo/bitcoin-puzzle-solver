@@ -5,6 +5,8 @@
 # promise: BIP340 signatures, ECDH and ECDSA.
 #   make peer        build/pzpeer
 #   make peer-test   the unit tests of src/peer (tests/peer/t_*.c)
+#   make signer      build/pzfirma, the two-party signer (signer/, Rust: needs cargo, and builds GMP from source the first time)
+#   make signer-test its tests: two pzfirma sessions relayed by the test (signer/tests/session.rs)
 
 SECP_DIR   := lib/secp256k1
 SECP_FLAGS  = -std=c99 $(OPT) -g $(DEPLOY) -I$(SECP_DIR) -I$(SECP_DIR)/include -w \
@@ -46,4 +48,18 @@ peer-test: $(PEER) $(addsuffix $(EXE),$(addprefix $(BUILD)/peer/,$(PEERTESTS)))
 	@for t in $(PEERTESTS); do $(RUN) ./$(BUILD)/peer/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(PEER) version
 
-.PHONY: peer peer-test
+# pzfirma is a Rust crate with its own build: cargo decides what to rebuild, so the rule always runs it. --locked keeps the versions
+# of signer/Cargo.lock. It is built for the machine that runs make (not with a MinGW cross compiler: GMP would need one too).
+SIGNER      := $(BUILD)/pzfirma$(EXE)
+CARGO       ?= cargo
+SIGNER_CARGO = $(CARGO) build --release --locked --manifest-path signer/Cargo.toml
+
+signer:
+	$(SIGNER_CARGO)
+	@mkdir -p $(BUILD)
+	cp signer/target/release/pzfirma$(EXE) $(SIGNER)
+
+signer-test:
+	$(CARGO) test --release --locked --manifest-path signer/Cargo.toml
+
+.PHONY: peer peer-test signer signer-test

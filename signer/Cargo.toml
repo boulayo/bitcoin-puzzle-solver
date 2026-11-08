@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Leonardo Boulay
+# pzfirma, the two-party ECDSA signer of the shared kangaroo network (docs/en/NETWORK.md 7.6). Every dependency is pinned and
+# Cargo.lock is committed: the build is `cargo build --release --locked`.
+
+[package]
+name = "pzfirma"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[[bin]]
+name = "pzfirma"
+path = "src/main.rs"
+
+[dependencies]
+# CGGMP21 threshold ECDSA (MIT OR Apache-2.0). It brings rug and gmp-mpfr-sys (LGPL-3.0-or-later), which build GMP from source.
+cggmp21 = { version = "=0.6.3", default-features = false, features = ["curve-secp256k1", "state-machine"] }
+# the envelope of the messages between the two parties (MIT OR Apache-2.0)
+postcard = { version = "=1.1.3", default-features = false, features = ["alloc"] }
+rand_core = { version = "=0.6.4", features = ["getrandom"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"
+hex = "=0.4.3"
+zeroize = "=1.9.1"
