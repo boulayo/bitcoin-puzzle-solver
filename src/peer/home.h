@@ -21,6 +21,7 @@ typedef struct {
     unsigned id_bits;               /* leading zero bits of node IDs (NODE_ID_ZERO_BITS; fewer on a test network) */
     const char *const *pzsolve_args; /* more options for pzsolve hunt (for example -t 2 --no-gpu) */
     int nargs;
+    bool allow_private;             /* loopback and private addresses on a main-chain network too (other chains allow them) */
     bool exit_when_done;            /* tests: stop after the first session that ends, or when pzsolve ends */
     bool verbose;
 } home_cfg;

@@ -19,12 +19,17 @@ static int usage(void)
                     "       pzpeer netcheck NETWORK_FILE         the values, the fingerprint and the signatures of a network file\n"
                     "       pzpeer netsign KEY_FILE NETWORK_FILE the signature line of a maintainer (KEY_FILE: 64 hex digits)\n"
                     "       pzpeer run --network FILE --dir DIR --payout ADDRESS --rpc HOST:PORT:USER:PASSWORD [--listen PORT] [--bind ADDR]\n"
-                    "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzfirma PATH] [--id-bits N] [--exit-when-done] [--verbose]\n"
+                    "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzfirma PATH] [--id-bits N] [--allow-private] [--exit-when-done]\n"
+                    "                  [--verbose]\n"
                     "                  [-- PZSOLVE OPTIONS]\n"
                     "                    the home: pzsolve on the network, its points published, sessions paid through bitcoind\n"
-                    "       pzpeer node --network FILE --seed-hex HEX --dir DIR [--listen PORT] [--bind ADDR] [--peer HOST:PORT]... [--verbose]\n"
-                    "                    a node of the network until interrupted: it keeps the records of others and alerts their owners\n"
-                    "                    (it publishes nothing of its own yet); without --listen it only dials out\n");
+                    "       pzpeer node --network FILE --seed-hex HEX --dir DIR [--listen PORT] [--bind ADDR] [--peer HOST:PORT]...\n"
+                    "                  [--store-gb N] [--allow-private] [--verbose]\n"
+                    "                    a node of the network until interrupted: it keeps the records of others and alerts their owners,\n"
+                    "                    and relays the sessions of homes that cannot dial each other (it publishes nothing of its own);\n"
+                    "                    without --listen it only dials out\n"
+                    "  --allow-private   take loopback and private addresses on a main-chain network (a network of another chain takes them)\n"
+                    "  --store-gb N      the records this node keeps for others, in GB of disk (default 37; the index takes about 1/8 of it in RAM)\n");
     return 2;
 }
 
@@ -148,14 +153,15 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     const char *network = NULL, *seedhex = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
     char entries[16][256];
     int nb = 0, npeer = 0;
-    long port = 0;
-    bool verbose = false;
+    long port = 0, store_gb = 0;
+    bool verbose = false, allow_private = false;
     const char *peers[32];
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         char *end;
-        if (!strcmp(a, "--verbose")) {
-            verbose = true;
+        if (!strcmp(a, "--verbose") || !strcmp(a, "--allow-private")) {
+            if (!strcmp(a, "--verbose")) verbose = true;
+            else allow_private = true;
             continue;
         }
         if (!v) return usage();
@@ -167,6 +173,9 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         else if (!strcmp(a, "--listen")) {
             port = strtol(v, &end, 10);
             if (*end || port < 0 || port > 65535) return usage();
+        } else if (!strcmp(a, "--store-gb")) {
+            store_gb = strtol(v, &end, 10);
+            if (*end || store_gb < 1 || store_gb > 1000000) return usage();
         } else return usage();
         i++;
     }
@@ -199,7 +208,9 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     }
     for (int i = 0; i < npeer; i++) boot[nb++] = peers[i];
     const dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
-                            .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose};
+                            .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose,
+                            .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
+                            .store_max = (uint64_t)store_gb * 1000000000ull / RECORD_LEN};
     char err[300], idhex[65];
     dht *d = dht_create(&cfg, err, sizeof err);
     if (!d) {
@@ -244,6 +255,7 @@ static int cmd_run(int argc, char **argv)
         }
         if (!strcmp(a, "--verbose")) { cfg.verbose = true; continue; }
         if (!strcmp(a, "--exit-when-done")) { cfg.exit_when_done = true; continue; }
+        if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) cfg.network = v;
         else if (!strcmp(a, "--dir")) cfg.dir = v;
