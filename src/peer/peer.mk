@@ -25,12 +25,12 @@ $(SECP_LIB): $(SECP_OBJ)
 	$(AR) rcs $@ $^
 
 # The modules of pzpeer, in the order of the layers (docs/en/NETWORK.md 2): main is the daemon and its commands.
-PEER_SRC   := json btc btc_rpc noise keys record dpfeed pieces signer payout main
+PEER_SRC   := json btc btc_rpc noise keys record dpfeed pieces signer payout session main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ)) $(BUILD)/netfile.o   # netfile.o: the reader of pzsolve, libc and pzcore only
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  := t_json t_btc t_btc_rpc t_noise t_record t_pieces t_payout
+PEERTESTS  := t_json t_btc t_btc_rpc t_noise t_record t_pieces t_payout t_session
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer

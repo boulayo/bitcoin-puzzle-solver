@@ -245,19 +245,38 @@ the node looks up its own ID to fill its buckets, and saves the contacts that an
 
 ### 7.5 The session of a coincidence
 
-Between the two homes, over a Noise channel between their identities:
+Between the two homes, over a Noise channel between their identities (`src/peer/session.c`, run in a thread with the channel and the
+chain given as interfaces). Party 0 is the owner with the smaller identity; `eid = SHA256("pznet1/eid" || F || record_0 || record_1)`;
+F, the party whose tiny coin goes into the second transaction, is the last bit of `eid`, S the other. Every step is a message both sides
+send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`; an `S_ABORT` with its
+reason can come instead of any of them):
 
-1. `S_HELLO(record_mine, record_yours)`; each side checks both records and asks the other's proof of possession.
-2. The pieces. With `D = t1 − t2` (party 0 is the owner with the smaller identity):
-   `x0 = −d1/D + base`, `x1 = d2/D` (mod n), `X0 = x0·G`, `X1 = x1·G`; both check `X0 + X1 = P`.
-3. A proof of knowledge of the piece: a BIP340 signature by `x_i` over the transcript of the session.
-4. The two transactions (section 8): each side builds them on its own and they compare the hashes.
-5. pzfirma for each input of the puzzle: the frames of type 0x81 of one side go to the other as `S_SIGNER(more, bytes)`. A message of
-   pzfirma can be larger than a Noise frame (the auxiliary data, about 200 KB): it travels in pieces of at most 65 000 bytes, `more` = 1
-   on all but the last, and the receiver joins them before it hands the message to its pzfirma as one frame 0x02.
-   The session id `eid` is `SHA256("pznet1/eid" || F || record_0 || record_1)`, the same on both sides and different for every pair of
-   records; pzfirma relies on it to keep the messages of one run out of another.
-6. The first sender of the last message keeps its tiny coin as a cancel lever (project 2.4).
+1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
+   checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
+   about the same pair. The fee rate is the higher of the two, refused above the home's limit; the payout scripts must be of standard
+   addresses. The nonce is `SHA256("pznet1/nonce" || coin key || eid)`: unpredictable to the partner, no randomness needed.
+2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
+   is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
+   computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`.
+3. `S_PLAN`: `SHA256("pznet1/plan" || the first transaction)`, which each side built on its own from the confirmed coins of the puzzle
+   (section 8); a different hash stops the session. Then the two-party signing of its inputs (step 5), the broadcast by both, and one
+   confirmation.
+4. `S_PLAN` again for the second transaction, built from the first; then F sends `S_TINYSIG`, the scriptSig of its tiny coin, which S checks.
+5. The two-party signing: pzfirma on each side, its messages (0x81) relayed as `S_SIGNER(more, bytes)` in pieces of at most 65 000 bytes,
+   `more` = 1 on all but the last piece; `S_SIGNED(status)` ends the messages of a side. **S sends its k-th message only after the k-th of F
+   has arrived**: F's last message reaches S before S's reaches F, so S has the whole signature first, and F, whose tiny coin is in the
+   transaction, holds the cancel. Each signing has its id `SHA256("pznet1/run/" || 'A' or 'B' || eid)`; both use the primes file of the
+   session.
+6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
+   address, and the transaction S may be holding is worth nothing. F also sends the second transaction itself when it got the whole
+   signature.
+
+`tests/peer/t_session.c` runs both homes against each other with the real pzfirma and a chain in memory that checks every input: the
+payout (half each, F's tiny coin back to F, S keeps its own), and a partner that keeps the second transaction and its last message, which
+ends with F's cancel and the prize still under the joint key.
+
+Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
+for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are).
 
 ### 7.6 pzfirma
 
