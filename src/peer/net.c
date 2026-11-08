@@ -312,7 +312,7 @@ static net_conn *conn_new(int fd, const net_cfg *cfg)
 {
     net_conn *c = malloc(sizeof *c);
     if (!c) return NULL;
-    memset(c, 0, offsetof(net_conn, buf));
+    memset(c, 0, offsetof(net_conn, sbuf));
     c->fd = fd;
     c->timeout_ms = cfg->timeout_ms;
     return c;
@@ -397,16 +397,16 @@ net_conn *net_handshake(const net_cfg *cfg, int fd, const net_addr *from)
 bool net_send(net_conn *c, const uint8_t *body, size_t len)
 {
     if (len > NOISE_FRAME_MAX) return false;
-    const size_t n = noise_frame_seal(&c->tx, body, len, c->buf);
-    return write_full(c->fd, c->buf, n, now_ms() + c->timeout_ms);
+    const size_t n = noise_frame_seal(&c->tx, body, len, c->sbuf);
+    return write_full(c->fd, c->sbuf, n, now_ms() + c->timeout_ms);
 }
 
 bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len)
 {
     const int64_t deadline = now_ms() + c->timeout_ms;         /* the head and the body together */
     size_t l;
-    if (!read_full(c->fd, c->buf, NOISE_HEAD, deadline) || !noise_frame_head(&c->rx, c->buf, &l) || l > cap ||
-        !read_full(c->fd, c->buf, l + NOISE_TAG, deadline) || !noise_frame_body(&c->rx, c->buf, l, body))
+    if (!read_full(c->fd, c->rbuf, NOISE_HEAD, deadline) || !noise_frame_head(&c->rx, c->rbuf, &l) || l > cap ||
+        !read_full(c->fd, c->rbuf, l + NOISE_TAG, deadline) || !noise_frame_body(&c->rx, c->rbuf, l, body))
         return false;
     *len = l;
     return true;
@@ -418,7 +418,7 @@ void net_close(net_conn *c)
 {
     if (!c) return;
     close(c->fd);
-    pz_secure_zero(c, offsetof(net_conn, buf));
+    pz_secure_zero(c, offsetof(net_conn, sbuf));
     free(c);
 }
 

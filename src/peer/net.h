@@ -37,8 +37,8 @@ typedef struct {
     int timeout_ms;
 } net_cfg;
 
-/* A connection after its handshake. The fields are read only. Sending and receiving share the frame buffer: one thread at a time uses a
- * connection. */
+/* A connection after its handshake. The fields are read only. Each direction has its own keys and buffer: one thread may send while another
+ * receives (the relay of a signing session), but two threads never send, or receive, on the same connection. */
 typedef struct {
     int fd;
     int timeout_ms;                /* of each frame from now on (net_set_timeout) */
@@ -47,7 +47,7 @@ typedef struct {
     uint8_t remote_id[32];         /* its node ID */
     net_addr addr;                 /* dialled: the address; accepted: the address seen, with the port the other side listens on (0: none) */
     uint8_t hash[32];              /* the hash of the handshake, the same on both sides (a session can sign it) */
-    uint8_t buf[NOISE_HEAD + NOISE_FRAME_MAX + NOISE_TAG];
+    uint8_t sbuf[NOISE_HEAD + NOISE_FRAME_MAX + NOISE_TAG], rbuf[NOISE_HEAD + NOISE_FRAME_MAX + NOISE_TAG];
 } net_conn;
 
 void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identity *self, const uint8_t fp[32], unsigned id_bits,
