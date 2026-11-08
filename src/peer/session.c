@@ -331,8 +331,8 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
     const session_chain *ch = s->c->chain;
     const uint64_t until = ch->height(ch->ctx) + blocks;
     for (;;) {
-        const int k = ch->confirmations(ch->ctx, txid, vout);
-        if (conf < 0 ? k < 0 : k >= conf) return true;
+        const int k = ch->confirmations(ch->ctx, txid, vout);   /* -2: the chain did not answer, which says nothing */
+        if (k != -2 && (conf < 0 ? k == -1 : k >= conf)) return true;
         if (ch->height(ch->ctx) >= until) return false;
         pause_ms(s->c->poll_ms);
     }

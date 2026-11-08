@@ -25,7 +25,8 @@ typedef struct {
     /* the confirmed coins of a P2PKH script, their values verified from the transactions that made them; -1 when the chain cannot be asked */
     int (*coins)(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max);
     bool (*broadcast)(void *ctx, const btc_tx *tx);
-    /* the confirmations of an output: -1 spent or unknown, 0 in the mempool, n in the n-th block from the top */
+    /* the confirmations of an output: -1 spent or unknown, 0 in the mempool, n in the n-th block from the top; -2 when the chain did not
+     * answer (never taken for spent: F would not cancel) */
     int (*confirmations)(void *ctx, const uint8_t txid[32], uint32_t vout);
     uint64_t (*height)(void *ctx);
     uint64_t (*feerate)(void *ctx);         /* satoshis per 1000 virtual bytes for a confirmation within a few blocks */

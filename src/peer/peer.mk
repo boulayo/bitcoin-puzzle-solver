@@ -25,12 +25,12 @@ $(SECP_LIB): $(SECP_OBJ)
 	$(AR) rcs $@ $^
 
 # The modules of pzpeer, in the order of the layers (docs/en/NETWORK.md 2): main is the daemon and its commands.
-PEER_SRC   := json btc btc_rpc noise keys record dpfeed pieces signer payout session main
+PEER_SRC   := json btc btc_rpc noise keys record dpfeed pieces signer payout session chain_rpc trust main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ)) $(BUILD)/netfile.o   # netfile.o: the reader of pzsolve, libc and pzcore only
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  := t_json t_btc t_btc_rpc t_noise t_record t_pieces t_payout t_session
+PEERTESTS  := t_json t_btc t_btc_rpc t_noise t_record t_pieces t_payout t_session t_trust
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
@@ -46,8 +46,16 @@ $(BUILD)/peer/t_btc$(EXE): tests/peer/btc_vectors.h
 
 peer: $(PEER)
 
+# The tests of the two-party signing (t_pieces, t_session) run the real pzfirma when it and two primes files are there: `make signer peer-primes`
+# once (the primes take seconds to a minute), then every `make peer-test` uses them; without them those tests say they were skipped.
+PEER_PRIMES := $(BUILD)/peer/primes0.json $(BUILD)/peer/primes1.json
+peer-primes: | $(BUILD)/peer
+	@for f in $(PEER_PRIMES); do [ -f $$f ] || ./$(BUILD)/pzfirma$(EXE) primes $$f || exit 1; done
+
 peer-test: $(PEER) $(addsuffix $(EXE),$(addprefix $(BUILD)/peer/,$(PEERTESTS)))
-	@for t in $(PEERTESTS); do $(RUN) ./$(BUILD)/peer/$$t$(EXE) || exit 1; done
+	@if [ -x $(BUILD)/pzfirma$(EXE) ] && [ -f $(BUILD)/peer/primes0.json ] && [ -f $(BUILD)/peer/primes1.json ]; then \
+	    export PZFIRMA=$(BUILD)/pzfirma$(EXE) PZFIRMA_PRIMES0=$(BUILD)/peer/primes0.json PZFIRMA_PRIMES1=$(BUILD)/peer/primes1.json; fi; \
+	for t in $(PEERTESTS); do $(RUN) ./$(BUILD)/peer/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(PEER) version
 
 # pzfirma is a Rust crate with its own build: cargo decides what to rebuild, so the rule always runs it. --locked keeps the versions
@@ -64,4 +72,4 @@ signer:
 signer-test:
 	$(CARGO) test --release --locked --manifest-path signer/Cargo.toml
 
-.PHONY: peer peer-test signer signer-test
+.PHONY: peer peer-test peer-primes signer signer-test
