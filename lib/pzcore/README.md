@@ -24,6 +24,7 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 | `address.h` | Base58Check, bech32 and bech32m (BIP173, BIP350), SegWit addresses, P2PKH / P2WPKH helpers, WIF |
 | `hash160_batch.h` | `pz_hash160_x_batch`: HASH160 of n compressed keys given as x coordinates and parity; run-time choice among avx512, avx2, neon2, neon, portable, scalar (and `shani` on request: the SHA instructions of x86-64, never the default); query and override |
 | `seal.h` | HMAC-SHA256, HKDF-SHA256, PBKDF2-HMAC-SHA256, scrypt (the caller passes the work buffer), a constant-time comparison, a wipe the compiler cannot remove; and a 32-byte secret encrypted to a secp256k1 public key (ECIES: ephemeral key, HKDF, XOR, truncated HMAC; the caller passes the random scalar), its 86-byte payload and the text line `PZENC1:...` (Base58Check), the key of a password |
+| `aead.h` | ChaCha20, Poly1305 and the AEAD ChaCha20-Poly1305 (RFC 8439), with no table and no branch on the key or the data: the cipher of the encrypted channels of pzpeer |
 | `perm.h` | `pz_perm_init / apply / invert`: a seed-keyed bijection of `[0, M)`, `M <= 2^192`, expected O(1) per call, identical on every platform and version (pinned by `tests/perm_pins.h`) |
 | `cpu.h` | `pz_cpu_has_avx2 / avx512 / ifma / shani / sha2` |
 | advanced: `fev.h`, `fev52.h`, `impl/` | lane-parallel field arithmetic (AVX2, AVX-512 IFMA) and the lane hash templates that the pzsolve engines include; not part of the stable interface |
@@ -36,7 +37,8 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
   checksums, over-long strings, coordinates not below p, points off the curve.
 * **Threads:** everything is thread-safe. Global state is the curve table (built once, atomically, 264 KB static), the choice of batch
   implementation (an atomic pointer) and a cached CPU probe. No initialisation call is needed.
-* **Not constant-time.** Branches and table lookups depend on the data: do not use it with secret scalars where a side channel matters.
+* **Not constant-time.** Branches and table lookups depend on the data: do not use it with secret scalars where a side channel matters
+  (`aead.h` is the exception: its time depends on the lengths only).
   It has no signatures and no random numbers; `seal.h` has a wipe (`pz_secure_zero`) and a constant-time comparison for the secrets it handles, and the
   functions of that header clear their own temporaries, but the scalar multiplications under it are not constant-time (see `seal.h`).
 * **Aliasing:** outputs may alias inputs unless the header says otherwise. The library is built with strict aliasing on.
