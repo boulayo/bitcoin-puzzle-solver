@@ -5,9 +5,9 @@
  *
  * Each call returns false on failure and leaves the reason in c->err: the transport (no connection, a timeout, a reply cut short),
  * an HTTP status without a JSON-RPC error (401: wrong credentials), a reply that is not what the call returns, or the error bitcoind
- * gave, with its code and message. The node may be someone else's: what it says about amounts is checked by the callers against the
- * raw previous transactions (btc_prevout), and every reply is read as hostile input. POSIX sockets; a client is used by one thread at
- * a time. */
+ * gave, with its code and message. The node is the home's own and trusted for what it says about the chain (docs/en/NETWORK.md 8),
+ * but every reply is still read as hostile input: a malformed one is refused, never read past its buffers. POSIX sockets; a client is
+ * used by one thread at a time. */
 #ifndef PZPEER_BTC_RPC_H
 #define PZPEER_BTC_RPC_H
 
@@ -72,7 +72,7 @@ typedef struct {
 } btc_chaininfo;
 bool btc_rpc_getblockchaininfo(btc_rpc *c, btc_chaininfo *info);
 
-/* an unspent output as scantxoutset or gettxout report it; the value is the server's word until btc_prevout confirms it */
+/* an unspent output as scantxoutset or gettxout report it */
 typedef struct {
     uint8_t  txid[32];
     uint32_t vout;

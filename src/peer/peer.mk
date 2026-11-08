@@ -30,7 +30,7 @@ PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  := t_json t_btc t_btc_rpc t_noise t_record t_net t_store t_dht t_pieces t_payout t_session t_trust
+PEERTESTS  := t_json t_btc t_btc_rpc t_chain_rpc t_noise t_record t_net t_store t_dht t_pieces t_payout t_session t_trust
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer

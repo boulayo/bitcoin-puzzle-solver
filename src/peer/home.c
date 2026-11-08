@@ -309,6 +309,10 @@ static void *session_main(void *arg)
             goto done;
         }
         chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 6, .fallback_feerate = 2000};
+        if (chain_rpc_ready(&crpc, why, sizeof why) != 1) {   /* a node that is behind would report coins that are not those of the chain */
+            btc_rpc_done(&rpc);
+            goto done;
+        }
         const session_chain chain = chain_rpc_iface(&crpc);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                           .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .chan = &chan, .chain = &chain,
