@@ -2,13 +2,16 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_net.c - the channel of net.c over 127.0.0.1: a handshake and an exchange, then what must be refused (another network, a responder
  * that is not the expected identity, an ID without the zero bits on either side, a malformed or oversized frame, bytes that are not a
- * handshake) and what must not hang (a peer that says nothing, on both sides). Identities with few zero bits, so that they are quick. */
+ * handshake) and what must not hang (a peer that says nothing, on both sides, or one that drips its handshake). The addresses a public
+ * network refuses, and their blocks. A relay: two connections spliced, a handshake end to end over them that checks both identities,
+ * megabytes both ways, and the limit of bytes. Identities with few zero bits, so that they are quick. */
 #include "net.h"
 #include <pzcore/hash.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -22,7 +25,7 @@ static int fails;
 
 static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0x5e, 0x70};
-static home_identity ida, idb, nobits;   /* nobits: an identity whose node ID lacks the BITS zero bits */
+static home_identity ida, idb, idc, nobits;   /* nobits: an identity whose node ID lacks the BITS zero bits */
 
 static int64_t ms(void)
 {
@@ -111,6 +114,35 @@ static void test_addr(void)
     CHECK(!net_parse_addr("::1:80", &a) && !net_parse_addr("[::1]80", &a) && !net_parse_addr(":80", &a) && !net_parse_addr("1.2.3.4:8x", &a));
     uint8_t r1[32], r2[32];
     CHECK(net_random(r1, 32) && net_random(r2, 32) && memcmp(r1, r2, 32) != 0);
+    /* the addresses a public network refuses (dialled from a NODES answer they would reach the user's own network) */
+    static const char *const NOT_PUBLIC[] = {"0.1.2.3:1", "10.0.0.1:1", "100.64.0.1:1", "100.127.255.255:1", "127.0.0.1:1", "169.254.1.1:1",
+        "172.16.0.1:1", "172.31.9.9:1", "192.168.1.1:1", "192.0.2.5:1", "198.18.0.1:1", "198.51.100.7:1", "203.0.113.9:1", "224.0.0.1:1",
+        "255.255.255.255:1", "[::]:1", "[::1]:1", "[fc00::1]:1", "[fd12::1]:1", "[fe80::1]:1", "[ff02::1]:1", "[2001:db8::1]:1",
+        "[::1.2.3.4]:1", "[100::1]:1", "[fec0::1]:1"};
+    static const char *const PUBLIC[] = {"1.2.3.4:1", "8.8.8.8:53", "100.63.0.1:1", "100.128.0.1:1", "172.32.0.1:1", "192.0.1.1:1",
+        "198.20.0.1:1", "223.255.255.1:1", "[2001:4860::8888]:1", "[2a00:1450::1]:1", "[::ffff:9.9.9.9]:1"};
+    for (size_t i = 0; i < sizeof NOT_PUBLIC / sizeof *NOT_PUBLIC; i++)
+        if (!net_parse_addr(NOT_PUBLIC[i], &a) || net_addr_public(&a)) printf("FAIL %s:%d: %s is public\n", __FILE__, __LINE__, NOT_PUBLIC[i]), fails++;
+    for (size_t i = 0; i < sizeof PUBLIC / sizeof *PUBLIC; i++)
+        if (!net_parse_addr(PUBLIC[i], &a) || !net_addr_public(&a)) printf("FAIL %s:%d: %s is not public\n", __FILE__, __LINE__, PUBLIC[i]), fails++;
+    /* blocks: the /24 of IPv4, the /48 of IPv6, the whole address otherwise; never the port */
+    net_addr b;
+    uint8_t ka[16], kb[16];
+    CHECK(net_parse_addr("1.2.3.4:1", &a) && net_parse_addr("1.2.3.200:9", &b));
+    net_addr_block(&a, ka), net_addr_block(&b, kb);
+    CHECK(!memcmp(ka, kb, 16));
+    CHECK(net_parse_addr("1.2.4.4:1", &b));
+    net_addr_block(&b, kb);
+    CHECK(memcmp(ka, kb, 16) != 0);
+    CHECK(net_parse_addr("[2a00:1450:4001:1::1]:1", &a) && net_parse_addr("[2a00:1450:4001:ffff::2]:2", &b));
+    net_addr_block(&a, ka), net_addr_block(&b, kb);
+    CHECK(!memcmp(ka, kb, 16));
+    CHECK(net_parse_addr("[2a00:1450:4002::1]:1", &b));
+    net_addr_block(&b, kb);
+    CHECK(memcmp(ka, kb, 16) != 0);
+    CHECK(net_parse_addr("127.0.0.1:1", &a) && net_parse_addr("127.0.0.2:1", &b));
+    net_addr_block(&a, ka), net_addr_block(&b, kb);
+    CHECK(memcmp(ka, kb, 16) != 0);
 }
 
 static void test_exchange(void)
@@ -262,6 +294,169 @@ static void test_timeouts(void)
     net_close_fd(l2);
 }
 
+static bool read_all(int fd, uint8_t *p, size_t n)
+{
+    while (n) {
+        const ssize_t r = read(fd, p, n);
+        if (r <= 0) return false;
+        p += r, n -= (size_t)r;
+    }
+    return true;
+}
+
+/* An initiator that sends each handshake message just within one timeout of the last: before, each message had a timeout of its own and
+ * this held a handler for about three; now the whole handshake has one. */
+static void test_drip(void)
+{
+    server s;
+    pthread_t th;
+    net_addr addr;
+    start(&s, &th, &idb, FP, BITS, &addr);                     /* the server's timeout: 3 * SHORT_MS */
+    const int fd = raw_connect(&addr);
+    CHECK(fd >= 0);
+    noise_hs hs;
+    uint8_t e[32], m[NOISE_HS_MAX], pl[NOISE_PAYLOAD_MAX], prologue[38], port[2] = {0, 0};
+    size_t n, plen;
+    memcpy(prologue, "pznet1", 6), memcpy(prologue + 6, FP, 32);
+    memset(e, 7, sizeof e);
+    CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, e));
+    const struct timespec wait = {0, 2 * SHORT_MS * 1000000L};
+    nanosleep(&wait, NULL);
+    n = noise_hs_write(&hs, NULL, 0, m);
+    CHECK(fd >= 0 && write(fd, m, n) == (ssize_t)n && read_all(fd, m, NET_HS2) && noise_hs_read(&hs, m, NET_HS2, pl, &plen));
+    nanosleep(&wait, NULL);                                    /* 4 * SHORT_MS since the connection: past the one deadline */
+    n = noise_hs_write(&hs, port, 2, m);
+    if (fd >= 0) (void)!write(fd, m, n);
+    finish(&s, th);
+    CHECK(!s.hs_ok && s.took < 4 * SHORT_MS + 500);
+    if (fd >= 0) close(fd);
+}
+
+/* ---- a relay: R accepts two connections, reads a join from each, says go to both and splices them ---- */
+
+typedef struct {
+    net_cfg cfg;
+    int lfd;
+    uint64_t max, moved;
+} relay_srv;
+
+static void *relay_main(void *arg)
+{
+    relay_srv *r = arg;
+    net_conn *c[2] = {NULL, NULL};
+    for (int i = 0; i < 2; i++) {
+        net_addr from;
+        uint8_t m[16];
+        size_t n;
+        const int fd = net_accept(r->lfd, 3000, &from);
+        c[i] = fd >= 0 ? net_handshake(&r->cfg, fd, &from) : NULL;
+        if (!c[i] || !net_recv(c[i], m, sizeof m, &n) || n != 4 || memcmp(m, "join", 4)) break;
+    }
+    if (c[0] && c[1] && net_send(c[0], (const uint8_t *)"go", 2) && net_send(c[1], (const uint8_t *)"go", 2)) {
+        r->moved = net_splice(c[0], c[1], r->max, 10000, NULL);
+    } else {
+        net_close(c[0]);
+        net_close(c[1]);
+    }
+    return NULL;
+}
+
+typedef struct {
+    const home_identity *id;
+    const uint8_t *expect;          /* the partner it must find at the other end */
+    bool initiator, hs_ok;
+    net_addr r;
+    int frames;                     /* frames of 60 000 bytes the initiator sends and the other side sends back */
+    int echoed;
+} relay_home;
+
+static void *relay_home_main(void *arg)
+{
+    relay_home *h = arg;
+    net_cfg cfg;
+    net_cfg_init(&cfg, ctx, h->id, FP, BITS, 0, 2000);
+    net_conn *c = net_dial(&cfg, &h->r, idb.xonly);
+    uint8_t m[16];
+    size_t n;
+    if (!c || !net_send(c, (const uint8_t *)"join", 4) || !net_recv(c, m, sizeof m, &n) || n != 2) {
+        net_close(c);
+        return NULL;
+    }
+    h->hs_ok = net_rehandshake(&cfg, c, h->initiator, h->expect);
+    uint8_t *big = malloc(60000), *got = malloc(60000);
+    for (int i = 0; h->hs_ok && big && got && i < h->frames; i++) {
+        memset(big, i, 60000);
+        size_t l;
+        if (h->initiator) {
+            if (!net_send(c, big, 60000) || !net_recv(c, got, 60000, &l) || l != 60000 || memcmp(got, big, 60000)) break;
+        } else if (!net_recv(c, got, 60000, &l) || l != 60000 || got[0] != (uint8_t)i || !net_send(c, got, l)) {
+            break;
+        }
+        h->echoed++;
+    }
+    free(big);
+    free(got);
+    net_close(c);
+    return NULL;
+}
+
+/* two homes through a relay R (idb): ida initiates, idc answers; expect_a is the identity ida must find at the other end */
+static void relay_run(uint64_t max, const uint8_t *expect_a, int frames, relay_home *a, relay_home *c, relay_srv *r)
+{
+    pthread_t tr, ta, tc;
+    uint16_t port;
+    memset(r, 0, sizeof *r);
+    net_cfg_init(&r->cfg, ctx, &idb, FP, BITS, 0, 2000);
+    r->max = max;
+    r->lfd = net_listen("127.0.0.1", 0, &port);
+    CHECK(r->lfd >= 0);
+    *a = (relay_home){.id = &ida, .expect = expect_a, .initiator = true, .frames = frames};
+    *c = (relay_home){.id = &idc, .expect = ida.xonly, .initiator = false, .frames = frames};
+    CHECK(net_parse_addr("127.0.0.1:1", &a->r));
+    a->r.port = port;
+    c->r = a->r;
+    CHECK(pthread_create(&tr, NULL, relay_main, r) == 0);
+    CHECK(pthread_create(&ta, NULL, relay_home_main, a) == 0);
+    CHECK(pthread_create(&tc, NULL, relay_home_main, c) == 0);
+    pthread_join(ta, NULL);
+    pthread_join(tc, NULL);
+    pthread_join(tr, NULL);
+    net_close_fd(r->lfd);
+}
+
+static void test_relay(void)
+{
+    relay_home a, c;
+    relay_srv r;
+    /* 50 frames of 60 000 bytes each way, end to end: 6 MB through R, which only saw the ciphertext of a handshake it is not part of */
+    relay_run(64u << 20, idc.xonly, 50, &a, &c, &r);
+    CHECK(a.hs_ok && c.hs_ok && a.echoed == 50 && c.echoed == 50);
+    CHECK(r.moved > 2 * 50 * 60000ull && r.moved < 2 * 50 * 60100ull + 1000);
+    /* the relay's limit of bytes: the copy stops, and the homes see the end of the channel */
+    relay_run(1u << 20, idc.xonly, 50, &a, &c, &r);
+    CHECK(a.hs_ok && c.hs_ok && a.echoed < 10 && r.moved <= 1u << 20);
+    /* the initiator expects another identity than the one at the other end (a relay that splices it to someone else): refused before
+     * it shows its own key, and the other side sees the end */
+    relay_run(64u << 20, idb.xonly, 1, &a, &c, &r);
+    CHECK(!a.hs_ok && !c.hs_ok && a.echoed == 0);
+    /* the responder checks the initiator too */
+    pthread_t tr, ta, tc;
+    uint16_t port;
+    memset(&r, 0, sizeof r);
+    net_cfg_init(&r.cfg, ctx, &idb, FP, BITS, 0, 2000);
+    r.max = 1u << 20;
+    r.lfd = net_listen("127.0.0.1", 0, &port);
+    a = (relay_home){.id = &ida, .expect = idc.xonly, .initiator = true, .frames = 1};
+    c = (relay_home){.id = &idc, .expect = idb.xonly, .initiator = false, .frames = 1};
+    CHECK(r.lfd >= 0 && net_parse_addr("127.0.0.1:1", &a.r));
+    a.r.port = port, c.r = a.r;
+    CHECK(pthread_create(&tr, NULL, relay_main, &r) == 0 && pthread_create(&ta, NULL, relay_home_main, &a) == 0 &&
+          pthread_create(&tc, NULL, relay_home_main, &c) == 0);
+    pthread_join(ta, NULL), pthread_join(tc, NULL), pthread_join(tr, NULL);
+    net_close_fd(r.lfd);
+    CHECK(!c.hs_ok && a.echoed == 0);
+}
+
 static void test_ipv6(void)
 {
     uint16_t port;
@@ -295,6 +490,7 @@ int main(void)
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     identity("net a", BITS, &ida);
     identity("net b", BITS, &idb);
+    identity("net c", BITS, &idc);
     for (int i = 0;; i++) {                                    /* the first identity of 0 bits whose ID lacks BITS of them */
         char label[32];
         snprintf(label, sizeof label, "no bits %d", i);
@@ -305,6 +501,8 @@ int main(void)
     test_exchange();
     test_refusals();
     test_timeouts();
+    test_drip();
+    test_relay();
     test_ipv6();
     secp256k1_context_destroy(ctx);
     printf(fails ? "t_net: %d FAILED\n" : "t_net: OK\n", fails);
