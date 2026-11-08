@@ -43,6 +43,9 @@ bool record_sign(const secp256k1_context *ctx, const record_net *net, const secp
 /* The checks on arrival: x on the curve with the zero bits, and the signature of the owner. */
 bool record_check(const secp256k1_context *ctx, const record_net *net, const record *r);
 
+/* d*G = R - t*Q', the point whose scalar the owner knows; false at infinity (d = 0) or for an x off the curve. */
+bool record_dpoint(const secp256k1_context *ctx, const record_net *net, const record *r, secp256k1_pubkey *out);
+
 /* The proof of possession (docs/en/NETWORK.md 7.2): a BIP340 signature by the scalar d of R - t*Q', over the record, the identity of the asker
  * and a nonce of the asker. d32 is d mod n, big-endian, with R = t*Q' + d*G for the even-y R of the record. */
 bool record_prove(const secp256k1_context *ctx, const record_net *net, const record *r, const uint8_t d32[32], const uint8_t asker[32],

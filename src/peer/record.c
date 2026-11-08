@@ -83,8 +83,7 @@ bool record_check(const secp256k1_context *ctx, const record_net *net, const rec
     return secp256k1_schnorrsig_verify(ctx, r->sig, h, 32, &owner);
 }
 
-/* R - t*Q', the point whose scalar the owner knows; false at infinity (d = 0) or for an x off the curve */
-static bool point_of_d(const secp256k1_context *ctx, const record_net *net, const record *r, secp256k1_pubkey *out)
+bool record_dpoint(const secp256k1_context *ctx, const record_net *net, const record *r, secp256k1_pubkey *out)
 {
     uint8_t c[33] = {2};
     memcpy(c + 1, r->x, 32);
@@ -112,7 +111,7 @@ bool record_prove(const secp256k1_context *ctx, const record_net *net, const rec
     secp256k1_keypair kp;
     secp256k1_xonly_pubkey xw, xd;
     uint8_t h[32];
-    bool ok = point_of_d(ctx, net, r, &want) && secp256k1_keypair_create(ctx, &kp, d32) && secp256k1_keypair_xonly_pub(ctx, &xd, NULL, &kp) &&
+    bool ok = record_dpoint(ctx, net, r, &want) && secp256k1_keypair_create(ctx, &kp, d32) && secp256k1_keypair_xonly_pub(ctx, &xd, NULL, &kp) &&
               secp256k1_xonly_pubkey_from_pubkey(ctx, &xw, NULL, &want) && secp256k1_xonly_pubkey_cmp(ctx, &xw, &xd) == 0;   /* the right d */
     if (ok) {
         possess_msg(net, r, asker, nonce, h);
@@ -128,7 +127,7 @@ bool record_proof_ok(const secp256k1_context *ctx, const record_net *net, const 
     secp256k1_pubkey p;
     secp256k1_xonly_pubkey x;
     uint8_t h[32];
-    if (!point_of_d(ctx, net, r, &p) || !secp256k1_xonly_pubkey_from_pubkey(ctx, &x, NULL, &p)) return false;
+    if (!record_dpoint(ctx, net, r, &p) || !secp256k1_xonly_pubkey_from_pubkey(ctx, &x, NULL, &p)) return false;
     possess_msg(net, r, asker, nonce, h);
     return secp256k1_schnorrsig_verify(ctx, sig, h, 32, &x);
 }
