@@ -1275,11 +1275,18 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
         ans[0] = DHT_PONG;
         return 1;
     case DHT_FIND_NODE: {
+        /* no address twice, or the asker refuses the whole answer: a stale contact and the node now at its address are both in the
+         * table until the stale one has failed FAILS_MAX times */
         dht_contact cs[DHT_K];
+        int n = 0;
         if (len != 33) return 0;
-        const int n = rt_closest(d, m + 1, cs, DHT_K);
+        const int all = rt_closest(d, m + 1, cs, DHT_K);
+        for (int i = 0; i < all; i++) {
+            int j = 0;
+            while (j < i && (memcmp(cs[j].addr.ip, cs[i].addr.ip, 16) || cs[j].addr.port != cs[i].addr.port)) j++;
+            if (j == i) encode_contact(&cs[i], ans + 2 + (size_t)n++ * NODE_LEN);
+        }
         ans[0] = DHT_NODES, ans[1] = (uint8_t)n;
-        for (int i = 0; i < n; i++) encode_contact(&cs[i], ans + 2 + (size_t)i * NODE_LEN);
         return 2 + (size_t)n * NODE_LEN;
     }
     case DHT_STORE:
