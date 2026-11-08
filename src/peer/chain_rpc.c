@@ -6,6 +6,7 @@
 #include <pzcore/address.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define COINBASE_MATURITY 100
 
@@ -26,7 +27,13 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     btc_utxo u[64];
     size_t n;
     uint64_t tip;
-    if (!p2pkh_address(c->chain, spk, addr, sizeof addr) || !btc_rpc_scan(c->rpc, addrs, 1, u, 64, &n, &tip)) return -1;
+    if (!p2pkh_address(c->chain, spk, addr, sizeof addr)) return -1;
+    for (int tries = 0; !btc_rpc_scan(c->rpc, addrs, 1, u, 64, &n, &tip); tries++) {
+        /* the node runs one scan at a time: another one (the partner on the same node, a wallet) is answered with an error, not queued */
+        if (tries == 300 || c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress")) return -1;
+        const struct timespec ts = {0, 200000000};
+        nanosleep(&ts, NULL);
+    }
     if (n > 64) n = 64;
     int k = 0;
     for (size_t i = 0; i < n && k < max; i++) {

@@ -6,7 +6,9 @@
  * message) to itself, which F answers by spending its tiny coin after 3 blocks. Needs PZFIRMA, PZFIRMA_PRIMES0 and PZFIRMA_PRIMES1; without
  * them it says it was skipped. */
 #include "peertest.h"
+#include "chain_rpc.h"
 #include "session.h"
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include <pthread.h>
 #include <secp256k1_extrakeys.h>
@@ -106,11 +108,84 @@ static uint64_t ch_height(void *c)
 
 static uint64_t ch_feerate(void *c) { return c ? 3000 : 2000; }   /* the two homes propose different rates: the higher is taken */
 
+/* ---- or a bitcoind on regtest (PZ_REGTEST=host:port:user:password): the same cases on a real node, through chain_rpc ---- */
+
+static bool regtest;
+static struct {
+    char host[64], user[64], pass[64];
+    unsigned port;
+} node;
+static char mine_addr[100];
+
+static bool rpc_client(btc_rpc *c)
+{
+    return btc_rpc_init(c, node.host, node.port, node.user, node.pass) && (c->timeout_ms = 60000, true);
+}
+
+static void addr_of(const uint8_t spk[BTC_P2PKH_LEN], char *out, size_t cap)
+{
+    uint8_t payload[21] = {0x6f};
+    CHECK(btc_script_is_p2pkh(spk, BTC_P2PKH_LEN, payload + 1) && pz_base58check_encode(payload, 21, out, cap) > 0);
+}
+
+static void mine(btc_rpc *c, unsigned blocks) { CHECK(btc_rpc_generatetoaddress(c, blocks, mine_addr, NULL)); }
+
+/* the confirmed value at a P2PKH script */
+static uint64_t balance(const uint8_t spk[BTC_P2PKH_LEN])
+{
+    uint64_t v = 0;
+    if (regtest) {
+        btc_rpc c;
+        chain_rpc cr = {.rpc = &c, .chain = BTC_REGTEST, .fallback_feerate = 2000};
+        payout_coin coins[64];
+        CHECK(rpc_client(&c));
+        mine(&c, 1);                                            /* what is in the mempool, confirmed first */
+        const session_chain ch = chain_rpc_iface(&cr);
+        const int n = ch.coins(ch.ctx, spk, coins, 64);
+        for (int i = 0; i < n; i++) v += coins[i].value;
+        btc_rpc_done(&c);
+        return v;
+    }
+    pthread_mutex_lock(&chain.mu);
+    for (int j = 0; j < chain.n; j++)
+        if (!chain.u[j].spent && chain.u[j].spk_len == BTC_P2PKH_LEN && !memcmp(chain.u[j].spk, spk, BTC_P2PKH_LEN)) v += chain.u[j].value;
+    pthread_mutex_unlock(&chain.mu);
+    return v;
+}
+
+static void fund(const uint8_t spk[BTC_P2PKH_LEN], const uint8_t txid_seed[32])
+{
+    if (regtest) {
+        btc_rpc c;
+        char addr[64];
+        uint8_t txid[32];
+        CHECK(rpc_client(&c) && btc_rpc_set_wallet(&c, "pz"));
+        addr_of(spk, addr, sizeof addr);
+        CHECK(btc_rpc_sendtoaddress(&c, addr, 100000000, txid));
+        mine(&c, 1);
+        btc_rpc_done(&c);
+        return;
+    }
+    pthread_mutex_lock(&chain.mu);
+    add_utxo(txid_seed, 0, 100000000, spk, BTC_P2PKH_LEN, chain.tip);
+    pthread_mutex_unlock(&chain.mu);
+}
+
 static void *miner(void *arg)
 {
     (void)arg;
+    btc_rpc c;
+    if (regtest) CHECK(rpc_client(&c));
     for (;;) {
-        usleep(200000);
+        usleep(regtest ? 1000000 : 200000);
+        if (regtest) {
+            pthread_mutex_lock(&chain.mu);
+            const bool stop = chain.stop;
+            pthread_mutex_unlock(&chain.mu);
+            if (stop) return NULL;
+            mine(&c, 1);
+            continue;
+        }
         pthread_mutex_lock(&chain.mu);
         const bool stop = chain.stop;
         chain.tip++;
@@ -208,8 +283,12 @@ static void p2pkh_of(const uint8_t sec[32], uint8_t spk[BTC_P2PKH_LEN])
 }
 
 /* a puzzle, its coin on the chain, two homes whose records meet on the same point; then the session of both */
-static void run_case(const char *label, bool withhold, const char *bin, const char *const primes[2])
+static void run_case(const char *name, bool withhold, const char *bin, const char *const primes[2])
 {
+    /* on a node that keeps its chain the keys are new at every run: coins left by an earlier run would change the first transaction (and
+     * the count of messages the second case relies on) */
+    char label[96];
+    snprintf(label, sizeof label, "%s %ld", name, regtest ? (long)time(NULL) : 0L);
     static record_net net;
     uint8_t base[32] = {0}, k[32], x[32] = {0}, hb[32], p33[33];
     base[23] = 0x80;
@@ -225,9 +304,7 @@ static void run_case(const char *label, bool withhold, const char *bin, const ch
     uint8_t puzzle_spk[BTC_P2PKH_LEN], coin_txid[32];
     p2pkh_of(k, puzzle_spk);
     hashed("funding", coin_txid), coin_txid[0] ^= (uint8_t)withhold;
-    pthread_mutex_lock(&chain.mu);
-    add_utxo(coin_txid, 0, 100000000, puzzle_spk, BTC_P2PKH_LEN, chain.tip);   /* 1 BTC on the puzzle address */
-    pthread_mutex_unlock(&chain.mu);
+    fund(puzzle_spk, coin_txid);                                /* 1 BTC on the puzzle address */
     /* the pair: a tame point d_a*G and a wild one Q' + d_b*G, with d_a = x + d_b */
     uint8_t d[2][32], c[33];
     hashed("wild distance", d[1]), d[1][0] = 0;
@@ -246,6 +323,8 @@ static void run_case(const char *label, bool withhold, const char *bin, const ch
     end e[2] = {{.in = &q[0], .out = &q[1]}, {.in = &q[1], .out = &q[0]}};
     session_chan chan[2];
     session_chain chn[2];
+    btc_rpc rpcs[2];
+    chain_rpc crpc[2];
     uint8_t xo[2][32];
     for (int i = 0; i < 2; i++) {
         uint8_t s[32];
@@ -272,7 +351,11 @@ static void run_case(const char *label, bool withhold, const char *bin, const ch
         p2pkh_of(ps, g->pay_spk), g->pay_len = BTC_P2PKH_LEN;
         g->max_feerate = 10000, g->pzfirma = bin, g->primes = primes[i];
         chan[i] = (session_chan){&e[i], q_send, q_recv};
-        chn[i] = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate};
+        if (regtest) {                                          /* each home its own client of the node */
+            CHECK(rpc_client(&rpcs[i]));
+            crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = 2000 + 1000 * (uint64_t)i};
+            chn[i] = chain_rpc_iface(&crpc[i]);
+        } else chn[i] = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate};
         g->chan = &chan[i], g->chain = &chn[i];
         g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3;
     }
@@ -286,24 +369,18 @@ static void run_case(const char *label, bool withhold, const char *bin, const ch
     pthread_t th[2];
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
-    printf("  %s: F %s (%s), S %s (%s)\n", label, h[F_home].res == SESSION_PAID ? "paid" : h[F_home].res == SESSION_CANCELLED ? "cancelled" : "failed",
+    printf("  %s: F %s (%s), S %s (%s)\n", name, h[F_home].res == SESSION_PAID ? "paid" : h[F_home].res == SESSION_CANCELLED ? "cancelled" : "failed",
            h[F_home].why, h[S_home].res == SESSION_PAID ? "paid" : "failed", h[S_home].why);
     /* what the chain holds now */
-    uint64_t pay[2] = {0, 0}, at_puzzle = 0;
-    uint8_t coin_spk[2][BTC_P2PKH_LEN];
-    bool coin_left[2] = {false, false};
-    for (int i = 0; i < 2; i++) p2pkh_of(h[i].cfg.coin_sec, coin_spk[i]);
-    pthread_mutex_lock(&chain.mu);
-    for (int j = 0; j < chain.n; j++) {
-        const utxo *u = &chain.u[j];
-        if (u->spent) continue;
-        for (int i = 0; i < 2; i++) {
-            if (u->spk_len == h[i].cfg.pay_len && !memcmp(u->spk, h[i].cfg.pay_spk, u->spk_len)) pay[i] += u->value;
-            if (!memcmp(u->spk, coin_spk[i], BTC_P2PKH_LEN)) coin_left[i] = true;
-        }
-        if (!memcmp(u->spk, puzzle_spk, BTC_P2PKH_LEN)) at_puzzle += u->value;
+    uint64_t pay[2], at_puzzle = balance(puzzle_spk);
+    bool coin_left[2];
+    for (int i = 0; i < 2; i++) {
+        uint8_t coin_spk[BTC_P2PKH_LEN];
+        p2pkh_of(h[i].cfg.coin_sec, coin_spk);
+        pay[i] = balance(h[i].cfg.pay_spk);
+        coin_left[i] = balance(coin_spk) > 0;
+        if (regtest) btc_rpc_done(&rpcs[i]);
     }
-    pthread_mutex_unlock(&chain.mu);
     printf("    paid: F %llu, S %llu sat; left on the puzzle address %llu sat\n", (unsigned long long)pay[F_home], (unsigned long long)pay[S_home],
            (unsigned long long)at_puzzle);
     if (!withhold) {
@@ -326,6 +403,17 @@ int main(void)
         return 0;
     }
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+    const char *rt = getenv("PZ_REGTEST");
+    if (rt && *rt) {                                            /* host:port:user:password */
+        regtest = sscanf(rt, "%63[^:]:%u:%63[^:]:%63s", node.host, &node.port, node.user, node.pass) == 4;
+        btc_rpc c;
+        CHECK(regtest && rpc_client(&c));
+        (void)btc_rpc_createwallet(&c, "pz");                   /* or loaded already */
+        CHECK(btc_rpc_set_wallet(&c, "pz") && btc_rpc_getnewaddress(&c, "legacy", mine_addr, sizeof mine_addr));
+        mine(&c, 101);                                          /* coinbase coins mature after 100 blocks */
+        btc_rpc_done(&c);
+        printf("  on the regtest node %s:%u\n", node.host, node.port);
+    }
     pthread_t m;
     pthread_create(&m, NULL, miner, NULL);
     run_case("payout", false, bin, primes);
