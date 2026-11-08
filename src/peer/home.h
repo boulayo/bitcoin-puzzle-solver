@@ -13,7 +13,8 @@ typedef struct {
     const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files */
     const char *pzsolve, *pzfirma;  /* the programs */
     const char *payout;             /* the payout address of this home */
-    const char *rpc;                /* bitcoind: host:port:user:password */
+    const char *rpc;                /* bitcoind: host:port:user:password, or host:port with rpc_cookie (btc_rpc_init_arg) */
+    const char *rpc_cookie;         /* the cookie file of bitcoind, or NULL */
     const char *listen_host;        /* NULL: every address */
     int listen_port;                /* 0: do not listen (dial out only) */
     const char *const *peers;       /* host:port, besides the entry lines of the network file */

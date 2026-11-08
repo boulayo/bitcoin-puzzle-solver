@@ -22,6 +22,7 @@ static int usage(void)
                     "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzfirma PATH] [--id-bits N] [--exit-when-done] [--verbose]\n"
                     "                  [-- PZSOLVE OPTIONS]\n"
                     "                    the home: pzsolve on the network, its points published, sessions paid through bitcoind\n"
+                    "                    (or --rpc HOST:PORT --rpc-cookie FILE: the .cookie of the node's data directory, no password)\n"
                     "       pzpeer node --network FILE --seed-hex HEX --dir DIR [--listen PORT] [--bind ADDR] [--peer HOST:PORT]... [--verbose]\n"
                     "                    a node of the network until interrupted: it keeps the records of others and alerts their owners\n"
                     "                    (it publishes nothing of its own yet); without --listen it only dials out\n");
@@ -249,6 +250,7 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--dir")) cfg.dir = v;
         else if (!strcmp(a, "--payout")) cfg.payout = v;
         else if (!strcmp(a, "--rpc")) cfg.rpc = v;
+        else if (!strcmp(a, "--rpc-cookie")) cfg.rpc_cookie = v;
         else if (!strcmp(a, "--bind")) cfg.listen_host = v;
         else if (!strcmp(a, "--pzsolve")) cfg.pzsolve = v;
         else if (!strcmp(a, "--pzfirma")) cfg.pzfirma = v;

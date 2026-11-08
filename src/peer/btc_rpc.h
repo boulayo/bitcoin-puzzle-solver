@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     char host[256], port[8];
     char auth[BTC_RPC_AUTH_MAX / 3 * 4 + 8];   /* the base64 of user:password */
+    char cookie[1024];      /* the cookie file the credentials come from, or empty: read again when the node answers 401 */
     char wallet[80];        /* the path of the wallet calls, /wallet/<name>, or empty */
     int timeout_ms;         /* of every call but scantxoutset; 30 s from btc_rpc_init */
     int scan_timeout_ms;    /* scantxoutset reads the whole set of unspent outputs: minutes on the main chain; 30 min */
@@ -44,8 +45,14 @@ typedef struct {
 /* A client of the node at host:port (a name, an IPv4 or an IPv6 address). False when an argument is too long or empty, or the host
  * has a character no name or address has (it goes into the Host header). */
 bool btc_rpc_init(btc_rpc *c, const char *host, unsigned port, const char *user, const char *pass);
-/* The same with the credentials of the cookie file the node writes (.cookie in its data directory: "__cookie__:<password>"). */
+/* The same with the credentials of the cookie file the node writes (.cookie in its data directory: "__cookie__:<password>"). The node
+ * writes a new one each time it starts: the file is read again when the node refuses the credentials. */
 bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char *cookie_path);
+/* The client of the --rpc option of pzpeer: arg is HOST:PORT:USER:PASSWORD (the password is the rest, ':' and spaces included) or,
+ * with cookie_path, HOST:PORT; an IPv6 address goes in brackets ([::1]:8332). On failure c is wiped but for c->err: BTC_RPC_EPROTO
+ * when arg is not one of the forms, BTC_RPC_ENET when the cookie file cannot be read (the node writes it when it starts and removes it
+ * when it stops: it may not be running). */
+bool btc_rpc_init_arg(btc_rpc *c, const char *arg, const char *cookie_path);
 /* The wallet the wallet calls (getnewaddress, sendtoaddress) use, when the node has more than one loaded; NULL or "" for none. The
  * name is limited to letters, digits, '-', '_' and '.', which need no escaping in the path. */
 bool btc_rpc_set_wallet(btc_rpc *c, const char *name);

@@ -89,19 +89,57 @@ bool btc_rpc_init(btc_rpc *c, const char *host, unsigned port, const char *user,
     return ok;
 }
 
-bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char *cookie_path)
+/* the credentials of c->cookie: one line, user:password, as the node writes it without a newline (a hand-made one may have one) */
+static bool read_cookie(btc_rpc *c)
 {
-    if (!init_common(c, host, port) || !cookie_path) return false;
-    FILE *f = fopen(cookie_path, "rb");
+    FILE *f = fopen(c->cookie, "rb");
     if (!f) return false;
     char buf[BTC_RPC_AUTH_MAX + 4];
     size_t n = fread(buf, 1, sizeof buf, f);
     fclose(f);
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;   /* the node writes it without a newline; a hand-made one may have one */
+    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
     const bool ok = n <= BTC_RPC_AUTH_MAX && !memchr(buf, '\n', n) && set_auth(c, buf, n);
     pz_secure_zero(buf, sizeof buf);
-    if (!ok) btc_rpc_done(c);
     return ok;
+}
+
+bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char *cookie_path)
+{
+    if (init_common(c, host, port) && cookie_path && strlen(cookie_path) < sizeof c->cookie) {
+        strcpy(c->cookie, cookie_path);
+        if (read_cookie(c)) return true;
+    }
+    btc_rpc_done(c);
+    return false;
+}
+
+bool btc_rpc_init_arg(btc_rpc *c, const char *arg, const char *cookie_path)
+{
+    char host[256];
+    const char *h = arg, *he, *p;
+    if (!arg) goto bad;
+    if (*arg == '[') {                                          /* [IPv6]:PORT */
+        h = arg + 1;
+        if (!(he = strchr(h, ']'))) goto bad;
+        p = he + 1;
+    } else p = he = arg + strcspn(arg, ":");
+    if (he == h || (size_t)(he - h) >= sizeof host || *p != ':' || !isdigit((unsigned char)p[1])) goto bad;
+    memcpy(host, h, (size_t)(he - h));
+    host[he - h] = 0;
+    unsigned long port = 0;
+    for (p++; isdigit((unsigned char)*p) && port <= 65535; p++) port = port * 10 + (unsigned long)(*p - '0');
+    if (port > 65535) goto bad;
+    if (!*p) {                                                  /* HOST:PORT: the credentials are in the cookie file */
+        if (!cookie_path) goto bad;
+        if (btc_rpc_init_cookie(c, host, (unsigned)port, cookie_path)) return true;
+        return fail(c, BTC_RPC_ENET, 0, "cannot take the credentials of the cookie file %.200s (is the node running?)", cookie_path);
+    }
+    /* :USER:PASSWORD is the user:password of basic auth as it is: the user ends at the first ':' */
+    if (*p != ':' || cookie_path || !init_common(c, host, (unsigned)port) || !set_auth(c, p + 1, strlen(p + 1))) goto bad;
+    return true;
+bad:
+    btc_rpc_done(c);
+    return fail(c, BTC_RPC_EPROTO, 0, "expected HOST:PORT:USER:PASSWORD, or HOST:PORT with the cookie file");
 }
 
 bool btc_rpc_set_wallet(btc_rpc *c, const char *name)
@@ -409,8 +447,18 @@ static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int
     size_t bl;
     const char *body = jw_done(&w, &bl);
     reply r;
-    const bool ok = body && exchange(c, wallet, body, bl, timeout_ms, &r);
+    bool ok = body && exchange(c, wallet, body, bl, timeout_ms, &r);
     if (!body) fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
+    /* A node that started again since the cookie was read has a new one: read again, the call is made once more. */
+    if (ok && r.status == 401 && c->cookie[0]) {
+        char old[sizeof c->auth];
+        memcpy(old, c->auth, sizeof old);
+        if (read_cookie(c) && strcmp(old, c->auth)) {
+            free(r.p);
+            ok = exchange(c, wallet, body, bl, timeout_ms, &r);
+        }
+        pz_secure_zero(old, sizeof old);
+    }
     jw_free(&w);
     if (!ok) return false;
     const char *b = r.p + r.head;

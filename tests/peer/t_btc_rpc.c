@@ -722,7 +722,6 @@ static void test_auth(void)
     CHECK(!btc_rpc_init_cookie(&C, "127.0.0.1", S.port, path));
     remove(path);
     CHECK(!btc_rpc_init_cookie(&C, "127.0.0.1", S.port, path));   /* missing */
-    rmdir(dir);
     /* arguments */
     char longpass[600];
     memset(longpass, 'p', sizeof longpass - 1);
@@ -735,6 +734,49 @@ static void test_auth(void)
     CHECK(!btc_rpc_init(&C, "127.0.0.1\r\nX-Injected: 1", 8332, "u", "p") && !btc_rpc_init(&C, "a b", 8332, "u", "p"));
     CHECK(!btc_rpc_init(&C, "[::1]", 8332, "u", "p") && btc_rpc_init(&C, "fe80::1%eth0", 8332, "u", "p") && btc_rpc_init(&C, "node-1.lan", 1, "u", "p"));
     btc_rpc_done(&C);
+
+    /* the --rpc option: HOST:PORT:USER:PASSWORD, the password the rest of it; HOST:PORT with the cookie; IPv6 in brackets */
+    char want[300];
+    CHECK(btc_rpc_init_arg(&C, "127.0.0.1:8332:alice:pa:ss word", NULL) && !strcmp(C.host, "127.0.0.1") && !strcmp(C.port, "8332"));
+    CHECK_STR(C.auth, "YWxpY2U6cGE6c3Mgd29yZA==");   /* alice:pa:ss word */
+    CHECK(btc_rpc_init_arg(&C, "[::1]:18443:u:p", NULL) && !strcmp(C.host, "::1") && !strcmp(C.port, "18443"));
+    static const char *const bad_arg[] = {
+        "127.0.0.1", "127.0.0.1:", "127.0.0.1:x:u:p", "127.0.0.1:0:u:p", "127.0.0.1:65536:u:p", "127.0.0.1:99999999999999999999:u:p",
+        "127.0.0.1:8332:", "127.0.0.1:8332:user", ":8332:u:p", "[::1:8332:u:p", "[]:8332:u:p", "::1:8332:u:p", "127.0.0.1:8332",
+        "127.0.0.1:8332x:u:p", "h\r\nX: 1:8332:u:p", "",
+    };
+    for (size_t k = 0; k < sizeof bad_arg / sizeof bad_arg[0]; k++)
+        if (btc_rpc_init_arg(&C, bad_arg[k], NULL) || C.err.kind != BTC_RPC_EPROTO || !strstr(C.err.msg, "expected HOST:PORT")) {
+            printf("FAIL --rpc accepted: \"%s\"\n", bad_arg[k]);
+            g_fails++;
+        }
+    CHECK(!btc_rpc_init_arg(&C, NULL, NULL) && C.auth[0] == 0);
+    f = fopen(path, "wb");
+    fputs("__cookie__:old", f);
+    fclose(f);
+    CHECK(!btc_rpc_init_arg(&C, "127.0.0.1:8332:u:p", path));   /* the password or the cookie, not both */
+    CHECK(btc_rpc_init_arg(&C, "localhost:8332", path) && !strcmp(C.host, "localhost") && !strcmp(C.cookie, path));
+    snprintf(want, sizeof want, "%s/missing", dir);
+    CHECK(!btc_rpc_init_arg(&C, "localhost:8332", want) && C.err.kind == BTC_RPC_ENET && strstr(C.err.msg, "cookie file") && C.cookie[0] == 0);
+
+    /* The node writes a new cookie each time it starts: a 401 makes the client read it again and call once more, with the new one. */
+    snprintf(want, sizeof want, "127.0.0.1:%u", S.port);
+    CHECK(btc_rpc_init_arg(&C, want, path));
+    f = fopen(path, "wb");
+    fputs("__cookie__:new", f);
+    fclose(f);
+    serve_n(2, (reply_case){401, "", LENGTH, ALL, NULL}, ok_body("{\"result\":9,\"error\":null,\"id\":@ID@}"));
+    CHECK(btc_rpc_getblockcount(&C, &h) && h == 9);
+    served();
+    CHECK(strstr(S.first, "Basic X19jb29raWVfXzpvbGQ=") != NULL);   /* __cookie__:old */
+    CHECK_STR(req_header("Authorization"), "Basic X19jb29raWVfXzpuZXc=");
+    /* the same cookie: refused again, a 401 for the caller, and no second call */
+    serve((reply_case){401, "", LENGTH, ALL, NULL});
+    CHECK(!btc_rpc_getblockcount(&C, &h) && C.err.kind == BTC_RPC_EHTTP && C.err.code == 401);
+    served();
+    btc_rpc_done(&C);
+    remove(path);
+    rmdir(dir);
 }
 
 int main(void)
