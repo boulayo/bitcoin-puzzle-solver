@@ -47,7 +47,8 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
 | `netfile.c` | the signatures of the maintainers over the network file (the parsing is `src/netfile.c`) |
 | `keys.c` | the keys derived from the home seed |
-| `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 over a socket |
+| `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 and the frames after it: a state machine, no I/O |
+| `net.c` | TCP: one connection per exchange, the handshake, frames, timeouts. The only file that calls the sockets of the system |
 | `record.c` | the record of a distinguished point, its signature, the proof of possession |
 | `store.c` | the custodian: records by key, on disk, coincidence detection |
 | `dht.c` | Kademlia: routing table, lookups, store, alerts, bootstrap |
@@ -72,7 +73,7 @@ names the use and binds the network fingerprint `F` (section 5):
 
 | Key | info | Use |
 |---|---|---|
-| identity | `"identity" || F || j` | BIP340 key of the home: signs records, sessions; Noise static key. `j` is the first counter for which the node ID has 16 leading zero bits (section 7.1) |
+| identity | `"identity" || F || j` | BIP340 key of the home: signs records, sessions; Noise static key. `j` (4 bytes, big-endian) is the first counter for which the node ID has 16 leading zero bits (section 7.1; the unit tests use fewer) |
 | starts | `"starts" || F` | the 32-byte secret seed of the starts of pzsolve (section 6) |
 | coin n | `"coin" || F || n` | secp256k1 key of the n-th tiny coin of the home (P2PKH) |
 
@@ -132,8 +133,17 @@ immutable part refuses the file. `puzzle=0` is a target of its own (tests); `dpb
   - DH: libsecp256k1 ECDH, output `SHA256(compressed shared point)`, as in BOLT 8.
   - Static keys are the identity keys (compressed points on the wire, x-only identity = their x).
   - Prologue: `"pznet1" || F`, so peers of another network fail the handshake.
+  - The three handshake messages have fixed lengths, so they travel without a length: 33 bytes (`e`), 98 (`e`, `ee`, `s`, `es`, an
+    empty payload), 67 (`s`, `se`, and as payload the port the initiator listens on, 2 bytes, 0 when it does not accept connections).
+    The responder puts the initiator in its routing table with the address it sees and that port.
+  - Both sides check that the node ID of the other's static key has the 16 zero bits. An initiator that dials a known contact also
+    checks that the responder is that identity, before it sends the third message (the one that shows its own key).
   - After the handshake, frames of at most 65 535 bytes: a 2-byte encrypted length and the encrypted body, each with its own nonce, as in
     BOLT 8; keys rotate every 1000 messages.
+  - One TCP connection per exchange: connect, handshake, one request frame, one answer frame, close. A session (messages 16–31) keeps its
+    connection. Each connect, handshake message and frame has a deadline (10 s by default): a peer that stops talking costs a timeout.
+    A malformed message, or a frame longer than the receiver takes, closes the connection without an answer.
+  - Ephemeral keys: 32 bytes from the system (`getrandom`, or `/dev/urandom`).
 
 ### 7.2 The record of a distinguished point
 
@@ -145,7 +155,7 @@ Fixed 138 bytes:
 | 1 | signed type t: 0, +1 or −1 (as two's complement byte) |
 | 32 | x of the point; the point is the representative with even y |
 | 32 | x-only identity of the owner |
-| 8 | sequence number of the owner (strictly increasing) |
+| 8 | sequence number of the owner (strictly increasing: pzpeer uses the microseconds of the clock, always above the last it used) |
 | 64 | BIP340 signature of the owner over `SHA256("pznet1/record" || F || the 74 bytes above)` |
 
 The point is `R = t·Q' + d·G` with `Q' = P − base·G`, `base` the start of the range, `d` the owner's exact distance (an integer of up to
@@ -158,27 +168,64 @@ counts them), signature.
 ### 7.3 Custody and coincidences
 
 - Key of a record: `K = SHA256("pznet1/key" || x)`. A record goes to the 5 nodes whose IDs are closest to K (XOR distance).
-- A custodian keeps records on disk (append-only file plus an index in memory by the first 8 bytes of K) and refuses a second record
-  with the same x **from the same owner**.
-- Same x, different owners: a coincidence. Same type: a merge (both walkers should restart). Different types: useful; the custodian sends
-  `ALERT(record1, record2)` to both owners, and stores it in their mailboxes (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`).
+- A custodian keeps records on disk and an index in memory by the first 8 bytes of K. The file, `store.bin` in the data folder, is
+  append-only: a 40-byte header (`PZSTORE1` and F: a file of another network is refused) and the 138-byte records one after the other.
+  At start the index is rebuilt from the file, and a record cut by a crash at its end is dropped.
+- A custodian refuses a record that does not pass the checks of 7.2 or whose owner's node ID has not the zero bits (an owner is a node:
+  the alerts find it by its ID), a second record with the same x **from the same owner** (duplicate: the first is kept), and a new
+  record whose sequence number is not above the last one it has of that owner. So an owner sends its records to each custodian in the
+  order of their numbers, and a republish signs them again with new numbers (7.4).
+- Same x, different owners: a coincidence. Same type: a merge (both walkers should restart). Different types: useful. Both kinds are
+  alerted the same way; the owners tell them apart by the types. The custodian sends `ALERT(record1, record2)` to both owners (found
+  by their node IDs) and to the mailboxes of each (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`). A record that comes again
+  (a duplicate) with a coincidence alerts again, at most once an hour for a pair: an alert lost on the way comes back with the next
+  republish.
+- A node that receives an `ALERT` checks both records (signatures, same x, different owners). It keeps the pair as a mailbox (in
+  memory, the last 4096 pairs), and when one owner is itself it checks the proofs of possession: its own (the daemon gives the distance
+  of the point) and the other owner's (`POSSESS`, with a nonce of its own). Only then the daemon gets the alert. An alert whose other
+  owner does not answer is retried every minute for a day; a wrong proof drops it.
+- An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour, and every minute when it does not listen.
 
 ### 7.4 Kademlia
 
-k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type):
+k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type; an answer is its request + 1; `n` is one byte):
 
 | Type | Message | Answer |
 |---|---|---|
 | 1 | PING | 2 PONG |
-| 3 | FIND_NODE(target 32) | 4 NODES(n, n × (node id 32, xonly 32, ip 16, port 2)) |
-| 5 | STORE(n, n × record) | 6 STORED(n, n × status byte) |
+| 3 | FIND_NODE(target 32) | 4 NODES(n, n × (node id 32, xonly 32, ip 16, port 2)), n ≤ 20 |
+| 5 | STORE(n, n × record), 1 ≤ n ≤ 255 | 6 STORED(n, n × status byte) |
 | 7 | ALERT(record, record) | 8 OK |
-| 9 | MBOX_GET(owner) | 10 MBOX(n, n × (record, record)) |
+| 9 | MBOX_GET(owner 32) | 10 MBOX(n, n × (record, record)), n ≤ 64, the newest first |
 | 11 | POSSESS(record, nonce 32) | 12 PROOF(sig 64) |
 | 16–31 | session messages (section 7.5) | |
 
-Bootstrap: the `entry=` lines of the network file, the saved `peers.txt`, and addresses given with `--peer`. After the first contact
-the node looks up its own ID to fill its buckets, and saves the contacts that answered.
+- The lengths are exact. In NODES each contact must have the ID of its identity, with the zero bits, and a port; the ip is IPv6, an
+  IPv4 address as `::ffff:a.b.c.d`. Any other answer is refused whole.
+- STORED statuses: 0 stored, 1 duplicate, 2 invalid, 3 sequence number not above the last, 4 stored and a coincidence (alerts follow),
+  5 the custodian could not write it. A record counts as held for 0, 1 and 4.
+- POSSESS is answered only for a record of the node itself, with its signature; the proof binds the asker's identity, which the
+  handshake told. A node that cannot prove closes the connection.
+- The routing table: buckets by the number of leading bits an ID shares with the node's own, the least recently seen contact first. A
+  contact goes to the tail when it answers or asks something. A full bucket replaces a contact that failed; otherwise it pings its
+  oldest contact and keeps it if it answers (the newcomer waits as the candidate). Three failed exchanges in a row drop a contact. A
+  node that does not listen (port 0) is never put in a table: it dials out, publishes, polls its mailboxes, and is never a custodian.
+- Lookups are iterative: rounds of up to α FIND_NODE to the closest candidates not asked yet, among the `want` closest that did not fail;
+  they end when those `want` have all answered. The result counts the node itself when it listens. `want` is 20 to find nodes, 5 to
+  find the custodians of a record or the mailboxes of an owner.
+- Publishing: a lookup for each record, then one STORE per custodian with all its records, in the order of their sequence numbers.
+  pzpeer signs the records itself (owner, sequence number, signature) and sends them under one lock, so the numbers of one owner reach
+  every custodian in order. Its own records are also kept in `own.bin` (the format of `store.bin`). Every day it publishes them again,
+  signed with new numbers: a node that became a custodian since takes them, the others answer duplicate. Custodians do not copy
+  records to each other.
+- Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, and the saved `peers.txt` (whose lines name the
+  identity too, which is checked). A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
+  contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an
+  empty table tries again every 30 s.
+- Every hour each bucket that had no lookup in its range gets one, for a random ID in it (from the first bucket a node ID can be in to
+  the one after the deepest that has contacts).
+- Threads: one accepts connections, 8 answer them (a connection that finds them all busy and 64 waiting is closed), one runs the jobs
+  that take time (the alerts of a custodian, the proofs of an alert, the ping of a full bucket), one does the periodic work above.
 
 ### 7.5 The session of a coincidence
 
@@ -236,4 +283,9 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 | Part | State |
 |---|---|
 | build of pzpeer, libsecp256k1 | done |
+| TCP and the channel (`net.c`): one exchange per connection, timeouts, IPv4 and IPv6 | done (`tests/peer/t_net.c`); POSIX only, the Windows shim is to come |
+| custody (`store.c`): records on disk, index, duplicates, sequence numbers, coincidences, mailbox | done (`tests/peer/t_store.c`) |
+| Kademlia (`dht.c`): table, lookups, bootstrap, `peers.txt`, publish and republish, alerts, mailboxes, proofs | done (`tests/peer/t_dht.c`: 30 nodes in one process); no limit of contacts per address block yet (project 4.2), no UPnP or NAT-PMP |
+| `pzpeer node` | a node with no points of its own (custodian and mailbox only), for manual tests |
+| the daemon: `dp.bin` fed to `dht_publish`, alerts to sessions over `dht_dial` and `on_session` | to do |
 | everything else | in progress |

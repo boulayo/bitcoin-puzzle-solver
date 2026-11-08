@@ -63,7 +63,9 @@ static size_t encrypt_and_hash(noise_hs *hs, const uint8_t *pt, size_t len, uint
         nonce_of(hs->n++, nonce);
         pz_aead_seal(hs->k, nonce, hs->h, 32, pt, len, out, out + len);
         n += NOISE_TAG;
-    } else memmove(out, pt, len);
+    } else if (len) {
+        memmove(out, pt, len);                                 /* an empty payload may come as NULL */
+    }
     mix_hash(hs, out, n);
     return n;
 }
