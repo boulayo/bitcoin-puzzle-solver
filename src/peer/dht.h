@@ -6,17 +6,25 @@
  * A record goes to the DHT_KSTORE nodes closest to K = SHA256("pznet1/key" || x). A custodian that sees the same x from two owners sends
  * ALERT(record, record) to both owners and to the DHT_KSTORE mailbox nodes of each (closest to SHA256("pznet1/mbox" || owner)). An alert
  * for this node is handed to the daemon (on_alert) only after both proofs of possession check out: this node's own (from own_distance) and
- * the other owner's (POSSESS). A node that does not listen (listen_port 0) only dials out: it gets its alerts by polling its mailboxes.
+ * the other owner's, asked with POSSESS or sent by it in an ALERT that carries its proof (so two homes that do not listen prove to each
+ * other through their mailboxes). A node that does not listen (listen_port 0) only dials out: it gets its alerts by polling its mailboxes.
+ * A node that listens is also a relay: it joins the connections of two homes that cannot dial each other (docs/en/NETWORK.md 7.7).
+ *
+ * Everything that comes from the network is bounded (docs/en/NETWORK.md 7.4): contacts per address block in the table, connections and
+ * requests per block, the records a custodian takes (only those it may be a custodian of, from their owner, within its limits), the
+ * pairs a mailbox keeps, the alerts an owner remembers, the relays.
  *
  * Threads: one accepts, a bounded pool handles the connections (one request and its answer, or a session handed to on_session), one runs
  * the jobs that take time (the alerts of a custodian, the proofs of an alert, the ping of the oldest contact of a full bucket), one keeps
- * the node fresh (bucket refresh, republish of the own records, mailbox polls, the alerts that wait for a proof, peers.txt). The callbacks
- * run on those threads: they must be thread-safe and must not call dht_stop. Every other function may be called from any thread. */
+ * the node fresh (bucket refresh, republish of the own records, mailbox polls, the alerts that wait for a proof, peers.txt), one per
+ * relay under way. The callbacks run on those threads: they must be thread-safe and must not call dht_stop. Every other function may be
+ * called from any thread. */
 #ifndef PZPEER_DHT_H
 #define PZPEER_DHT_H
 
 #include "net.h"
 #include "record.h"
+#include "store.h"
 
 #define DHT_K 20                   /* contacts per bucket, nodes in an answer, nodes of a lookup */
 #define DHT_ALPHA 3                /* requests of a lookup at a time */
@@ -25,15 +33,16 @@
 #define DHT_STORE_MAX 255          /* records in one STORE */
 #define DHT_MBOX_MAX 64            /* pairs in one MBOX */
 #define DHT_ANY_PORT (-1)          /* listen_port: any free port (tests; dht_port tells which) */
+#define DHT_MBOX_ENTRY (2 * RECORD_LEN + 1 + 2 * 64)   /* a pair in MBOX: the two records, which proofs follow, the two proofs */
 
 /* the messages (docs/en/NETWORK.md 7.4): an answer is its request + 1 */
 enum {
     DHT_PING = 1, DHT_PONG, DHT_FIND_NODE, DHT_NODES, DHT_STORE, DHT_STORED, DHT_ALERT, DHT_OK, DHT_MBOX_GET, DHT_MBOX, DHT_POSSESS,
-    DHT_PROOF, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31
+    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31
 };
 
 /* the status of a record in STORED */
-enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_OLD, DHT_ST_COINCIDENCE, DHT_ST_FAILED };
+enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_OLD, DHT_ST_COINCIDENCE, DHT_ST_FAILED, DHT_ST_FULL, DHT_ST_FAR };
 
 typedef struct {
     uint8_t id[32];                /* node ID = SHA256("pznet1/id" || xonly) */
@@ -66,9 +75,19 @@ typedef struct {
     unsigned refresh_s;            /* bucket refresh; 0: 3600 */
     unsigned republish_s;          /* republish of the own records; 0: 86400 */
     unsigned mbox_poll_s;          /* mailbox polls; 0: 60 when not listening, 3600 when listening */
-    unsigned retry_s;              /* an alert whose other owner did not answer is retried after this (for a day); 0: 60 */
+    unsigned retry_s;              /* an alert whose other owner did not answer is retried after this, then twice as late each time up to an
+                                    * hour, for a day; 0: 60 */
+    bool allow_private;            /* a test network (or --allow-private): loopback and private addresses are taken, and not limited.
+                                    * A public network refuses them in answers and in the table, so no answer sends it into the LAN */
+    uint64_t store_max;            /* records this node keeps as a custodian; 0: DHT_STORE_DEFAULT. An owner gets 1/16 of them at most */
+    int relay_max;                 /* relays at once (a node that listens is a relay); 0: 8 */
+    uint64_t relay_bytes;          /* bytes of one relay, both ways together; 0: 32 MiB */
+    unsigned relay_s;              /* the life of one relay; 0: 4 hours */
+    unsigned relay_slot_s;         /* the slot of time that picks the relay of a pair (docs/en/NETWORK.md 7.7); 0: 60 */
     bool verbose;                  /* what the node does, on stderr */
 } dht_config;
+
+#define DHT_STORE_DEFAULT (1ull << 28) /* records of a custodian: 37 GB on disk, an index of about 4.5 GB in memory */
 
 typedef struct dht dht;
 
@@ -96,6 +115,18 @@ bool dht_find(dht *d, const uint8_t xonly[32], dht_contact *out);
  * on_session). Close it with net_close. */
 net_conn *dht_dial(dht *d, const dht_contact *c);
 
+/* The daemon's side of a channel: waits up to ms (0: only a look) for the connection the partner opened to this node, the one on_session
+ * got; NULL when none came. *give_up: set when the daemon stops waiting (it is stopping). */
+typedef net_conn *(*dht_wait_fn)(void *arg, int ms, bool *give_up);
+
+/* A channel with the home partner (x-only identity) for the pair named name (a session's eid), within wait_ms (docs/en/NETWORK.md 7.7):
+ * dialled when this side dials (party 0, the smaller identity, when it finds the partner; a side that does not listen), the partner's own
+ * connection when it comes (wait), else through a relay, with a handshake end to end that checks the partner. NULL when none could be
+ * made in time, or when wait gives up. wait may be NULL. Close the channel with net_close. */
+net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32], int wait_ms, dht_wait_fn wait, void *arg);
+/* The relays of this node: waiting for their second home, under way, and done since it started. */
+void dht_relays(dht *d, int *waiting, int *active, uint64_t *done);
+
 /* The proof of possession of a record by its owner (found and dialled; this node's own record is proved from own_distance): 1 the proof
  * checks out, 0 the owner answered with a wrong proof, -1 no answer (offline, unreachable, or it closed without a proof). */
 int dht_ask_proof(dht *d, const record *r);
@@ -115,8 +146,10 @@ int dht_contacts(dht *d, dht_contact *out, int max);
 /* What the node holds: the records of the network with x, the number of them, the alert pairs of an owner in its mailbox. */
 int dht_local_records(dht *d, const uint8_t x[32], record *out, int max);
 uint64_t dht_local_count(dht *d);
-int dht_local_mbox(dht *d, const uint8_t owner[32], record (*pairs)[2], int max);
+int dht_local_mbox(dht *d, const uint8_t owner[32], mbox_pair *pairs, int max);
 /* SHA256("pznet1/mbox" || owner): the mailboxes of an owner are the DHT_KSTORE nodes closest to it. */
 void dht_mbox_key(const uint8_t owner[32], uint8_t k[32]);
+/* The check of a NODES answer, as a lookup makes it (for the tests): its contacts, -1 when the answer is refused whole. */
+int dht_parse_nodes(const dht *d, const uint8_t *msg, size_t len, dht_contact *out);
 
 #endif
