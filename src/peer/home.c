@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* home.c - the daemon of a home (see home.h). One thread feeds the table from dp.bin; the node answers the others; every useful coincidence
- * gets a thread of its own that runs the session. Who opens the channel of a pair: party 0 (the smaller identity) when it can find the
- * partner in the table, party 1 only when it does not listen itself (it cannot be found then); the other side waits for the connection. */
+ * gets a thread of its own that runs the session. The channel of a pair comes from dht_channel (docs/en/NETWORK.md 7.7): dialled by party 0
+ * (the smaller identity) when it finds the partner or by a side that does not listen, the partner's own connection, or a relay. */
 #include "home.h"
 #include "chain_rpc.h"
 #include "dht.h"
@@ -261,7 +261,23 @@ static void hex8(const uint8_t *p, char out[17])
     for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", p[i]);
 }
 
-typedef struct { home *h; session_slot *s; } session_job;
+typedef struct { home *h; session_slot *s; } session_job, chan_wait;
+
+/* the partner's own connection to this home, which on_session handed to the slot: dht_channel looks for it while it tries the others */
+static net_conn *incoming(void *arg, int ms, bool *give_up)
+{
+    chan_wait *w = arg;
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += ms / 1000, until.tv_nsec += (long)(ms % 1000) * 1000000L;
+    if (until.tv_nsec >= 1000000000L) until.tv_sec++, until.tv_nsec -= 1000000000L;
+    pthread_mutex_lock(&w->h->mu);
+    while (!w->s->have_conn && !g_stop && pthread_cond_timedwait(&w->h->cv, &w->h->mu, &until) == 0) {}
+    net_conn *c = w->s->have_conn ? w->s->conn : NULL;
+    pthread_mutex_unlock(&w->h->mu);
+    *give_up = g_stop;
+    return c;
+}
 
 static void *session_main(void *arg)
 {
@@ -281,19 +297,9 @@ static void *session_main(void *arg)
         snprintf(why, sizeof why, "pzfirma primes failed");
         goto done;
     }
-    /* the channel: dialled by party 0 when it finds the partner, by party 1 when it does not listen; else it comes to us */
-    dht_contact pc;
-    const bool dial = (me == 0 || cfg->listen_port == 0) && dht_find(h->d, s->theirs.owner, &pc);
-    if (dial) c = dht_dial(h->d, &pc);
-    if (!c) {                                                   /* not ours to dial, or the partner did not answer: it dials us */
-        pthread_mutex_lock(&h->mu);
-        struct timespec until;
-        clock_gettime(CLOCK_REALTIME, &until);
-        until.tv_sec += 600;
-        while (!s->have_conn && !g_stop && pthread_cond_timedwait(&h->cv, &h->mu, &until) == 0) {}
-        c = s->conn;
-        pthread_mutex_unlock(&h->mu);
-    }
+    /* the channel (docs/en/NETWORK.md 7.7): dialled, the partner's own connection (on_session), or through a relay */
+    chan_wait w = {h, s};
+    c = dht_channel(h->d, s->theirs.owner, s->eid, 600000, incoming, &w);
     if (!c) {
         snprintf(why, sizeof why, "no channel with the partner");
         goto done;
@@ -327,6 +333,7 @@ done:
     remove(primes);
     say(h, "session %s: %s (%s)", tag, res == SESSION_PAID ? "PAID" : res == SESSION_CANCELLED ? "cancelled" : "failed", why);
     pthread_mutex_lock(&h->mu);
+    if (s->conn && s->conn != c) net_close(s->conn);           /* the partner's connection came too, after another one */
     s->running = false, s->have_conn = false, s->conn = NULL;
     h->ended++;
     h->paid |= res == SESSION_PAID;
@@ -450,7 +457,8 @@ int home_run(const home_cfg *cfg)
     mkdir(nodedir, 0700);
     const dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
                            .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
-                           .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose};
+                           .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose,
+                           .allow_private = h->chain != BTC_MAIN || cfg->allow_private};
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);

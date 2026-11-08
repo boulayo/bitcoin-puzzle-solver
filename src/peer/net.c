@@ -158,6 +158,36 @@ void net_addr_str(const net_addr *a, char *out, size_t cap)
     }
 }
 
+static bool v4_public(const uint8_t *b)
+{
+    return !(b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 ||   /* this network, private, loopback, multicast and reserved */
+             (b[0] == 100 && (b[1] & 0xc0) == 64) ||                  /* shared, behind a carrier's NAT (RFC 6598) */
+             (b[0] == 169 && b[1] == 254) || (b[0] == 172 && (b[1] & 0xf0) == 16) || (b[0] == 192 && b[1] == 168) ||
+             (b[0] == 192 && b[1] == 0 && (b[2] == 0 || b[2] == 2)) ||  /* protocol assignments, documentation */
+             (b[0] == 198 && (b[1] & 0xfe) == 18) ||                 /* benchmarking */
+             (b[0] == 198 && b[1] == 51 && b[2] == 100) || (b[0] == 203 && b[1] == 0 && b[2] == 113));
+}
+
+bool net_addr_public(const net_addr *a)
+{
+    const uint8_t *b = a->ip;
+    static const uint8_t ZERO[12] = {0};
+    if (!memcmp(b, V4MAPPED, 12)) return v4_public(b + 12);
+    return !(!memcmp(b, ZERO, 12) ||                                  /* unspecified, loopback, IPv4-compatible */
+             (b[0] & 0xfe) == 0xfc || b[0] == 0xff ||                  /* unique local, multicast */
+             (b[0] == 0xfe && (b[1] & 0x80) == 0x80) ||                /* link-local and the old site-local */
+             (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8) ||   /* documentation */
+             (b[0] == 0x01 && !memcmp(b + 1, ZERO, 7)));              /* discard-only (RFC 6666) */
+}
+
+void net_addr_block(const net_addr *a, uint8_t block[16])
+{
+    memcpy(block, a->ip, 16);
+    if (!net_addr_public(a)) return;
+    if (!memcmp(a->ip, V4MAPPED, 12)) block[15] = 0;
+    else memset(block + 6, 0, 10);
+}
+
 /* ---- sockets ---- */
 
 /* non-blocking, closed on exec, no Nagle (a request is one small write and its answer one small read), no SIGPIPE */
@@ -336,18 +366,18 @@ static bool handshake(const net_cfg *cfg, net_conn *c, bool initiator, const uin
         if (tries == 4 || !net_random(e, sizeof e)) goto out;
         if (noise_hs_init(&hs, cfg->ctx, initiator, cfg->prologue, sizeof cfg->prologue, cfg->self->sec, e)) break;
     }
-    const int t = c->timeout_ms;
+    const int64_t until = now_ms() + c->timeout_ms;            /* the whole handshake: a peer that drips its bytes gains nothing */
     if (initiator) {
         const uint8_t port[2] = {(uint8_t)(cfg->port >> 8), (uint8_t)cfg->port};
-        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS1 || !write_full(c->fd, m, n, now_ms() + t)) goto out;
-        if (!read_full(c->fd, m, NET_HS2, now_ms() + t) || !noise_hs_read(&hs, m, NET_HS2, pl, &plen) || plen != 0) goto out;
+        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS1 || !write_full(c->fd, m, n, until)) goto out;
+        if (!read_full(c->fd, m, NET_HS2, until) || !noise_hs_read(&hs, m, NET_HS2, pl, &plen) || plen != 0) goto out;
         if (!peer_ok(cfg, hs.rs, expect)) goto out;            /* before this side shows its own key */
-        if ((n = noise_hs_write(&hs, port, 2, m)) != NET_HS3 || !write_full(c->fd, m, n, now_ms() + t)) goto out;
+        if ((n = noise_hs_write(&hs, port, 2, m)) != NET_HS3 || !write_full(c->fd, m, n, until)) goto out;
     } else {
-        if (!read_full(c->fd, m, NET_HS1, now_ms() + t) || !noise_hs_read(&hs, m, NET_HS1, pl, &plen) || plen != 0) goto out;
-        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS2 || !write_full(c->fd, m, n, now_ms() + t)) goto out;
-        if (!read_full(c->fd, m, NET_HS3, now_ms() + t) || !noise_hs_read(&hs, m, NET_HS3, pl, &plen) || plen != 2) goto out;
-        if (!peer_ok(cfg, hs.rs, NULL)) goto out;
+        if (!read_full(c->fd, m, NET_HS1, until) || !noise_hs_read(&hs, m, NET_HS1, pl, &plen) || plen != 0) goto out;
+        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS2 || !write_full(c->fd, m, n, until)) goto out;
+        if (!read_full(c->fd, m, NET_HS3, until) || !noise_hs_read(&hs, m, NET_HS3, pl, &plen) || plen != 2) goto out;
+        if (!peer_ok(cfg, hs.rs, expect)) goto out;
         c->addr.port = (uint16_t)(pl[0] << 8 | pl[1]);
     }
     if (!noise_hs_split(&hs, &c->tx, &c->rx, rs, c->hash)) goto out;
@@ -392,6 +422,15 @@ net_conn *net_handshake(const net_cfg *cfg, int fd, const net_addr *from)
     return c;
 }
 
+bool net_rehandshake(const net_cfg *cfg, net_conn *c, bool initiator, const uint8_t expect[32])
+{
+    const int fd = c->fd, t = c->timeout_ms;
+    const net_addr a = c->addr;
+    pz_secure_zero(c, offsetof(net_conn, sbuf));
+    c->fd = fd, c->timeout_ms = t, c->addr = a;
+    return handshake(cfg, c, initiator, expect);
+}
+
 /* ---- frames ---- */
 
 bool net_send(net_conn *c, const uint8_t *body, size_t len)
@@ -414,12 +453,71 @@ bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len)
 
 void net_set_timeout(net_conn *c, int timeout_ms) { c->timeout_ms = timeout_ms > 0 ? timeout_ms : NET_TIMEOUT_MS; }
 
+bool net_readable(net_conn *c, int ms)
+{
+    struct pollfd p = {.fd = c->fd, .events = POLLIN};
+    return poll(&p, 1, ms > 0 ? ms : 0) > 0;                   /* an interrupted wait says no: the caller waits again */
+}
+
+bool net_alive(net_conn *c)
+{
+    struct pollfd p = {.fd = c->fd, .events = POLLIN};
+    uint8_t b;
+    if (poll(&p, 1, 0) == 0) return true;                      /* nothing to read: still there */
+    return !(p.revents & (POLLERR | POLLHUP | POLLNVAL)) && recv(c->fd, &b, 1, MSG_PEEK) < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+}
+
 void net_close(net_conn *c)
 {
     if (!c) return;
     close(c->fd);
     pz_secure_zero(c, offsetof(net_conn, sbuf));
     free(c);
+}
+
+uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms, const atomic_bool *stop)
+{
+    /* direction i copies fd[i] to fd[1 - i] through the receive buffer of its connection, which the relay no longer needs */
+    const int fd[2] = {a->fd, b->fd};
+    uint8_t *buf[2] = {a->rbuf, b->rbuf};
+    size_t len[2] = {0, 0}, off[2] = {0, 0};
+    bool eof[2] = {false, false};
+    uint64_t moved = 0;
+    const int64_t until = now_ms() + max_ms;
+    pz_secure_zero(&a->tx, sizeof a->tx), pz_secure_zero(&a->rx, sizeof a->rx);
+    pz_secure_zero(&b->tx, sizeof b->tx), pz_secure_zero(&b->rx, sizeof b->rx);
+    while (!(stop && atomic_load(stop))) {
+        const int64_t left = until - now_ms();
+        if (left <= 0 || (eof[0] && off[0] == len[0]) || (eof[1] && off[1] == len[1])) break;   /* one side is done and delivered */
+        struct pollfd p[2] = {{.fd = fd[0]}, {.fd = fd[1]}};
+        for (int i = 0; i < 2; i++) {
+            if (off[i] < len[i]) p[1 - i].events |= POLLOUT;
+            else p[i].events |= POLLIN;
+        }
+        const int r = poll(p, 2, left < 200 ? (int)left : 200);  /* in slices: the stop flag is looked at */
+        if (r < 0 && errno != EINTR) break;
+        if (r <= 0) continue;
+        bool broken = false;
+        for (int i = 0; i < 2 && !broken; i++) {
+            const int o = 1 - i;
+            if (off[i] == len[i] && (p[i].revents & (POLLIN | POLLHUP | POLLERR))) {
+                const ssize_t n = recv(fd[i], buf[i], sizeof a->rbuf, 0);
+                if (n > 0 && moved + (uint64_t)n <= max_bytes) off[i] = 0, len[i] = (size_t)n, moved += (uint64_t)n;
+                else if (n == 0) eof[i] = true;
+                else if (n > 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) broken = true;   /* over the limit, or an error */
+            }
+            if (off[i] < len[i] && (p[o].revents & (POLLOUT | POLLHUP | POLLERR))) {
+                const ssize_t n = send(fd[o], buf[i] + off[i], len[i] - off[i], MSG_NOSIGNAL);
+                if (n > 0) off[i] += (size_t)n;
+                else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) broken = true;
+                if (off[i] == len[i]) off[i] = len[i] = 0;
+            }
+        }
+        if (broken) break;
+    }
+    net_close(a);
+    net_close(b);
+    return moved;
 }
 
 bool net_exchange(const net_cfg *cfg, const net_addr *to, const uint8_t expect[32], const uint8_t *req, size_t rlen, uint8_t *ans,
