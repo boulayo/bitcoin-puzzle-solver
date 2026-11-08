@@ -1,0 +1,1 @@
+0.7.1 (bitcoin-core/secp256k1 833ca65; Debian orig tarball, sha256 420e5339a461986737641cea6303d0f37d2042438bfbe4ed0d2bfa72be78d158). Only the sources of the library and of the ecdh, extrakeys and schnorrsig modules are kept.

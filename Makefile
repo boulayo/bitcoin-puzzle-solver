@@ -411,4 +411,7 @@ winmockcuda:
 clean:
 	rm -rf build
 
+# pzpeer, the daemon of the shared network (its own rules and libraries; pzsolve does not depend on it)
+include src/peer/peer.mk
+
 -include $(DEPS)
