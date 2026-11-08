@@ -5,9 +5,9 @@
  *
  * Each call returns false on failure and leaves the reason in c->err: the transport (no connection, a timeout, a reply cut short),
  * an HTTP status without a JSON-RPC error (401: wrong credentials), a reply that is not what the call returns, or the error bitcoind
- * gave, with its code and message. The node may be someone else's: what it says about amounts is checked by the callers against the
- * raw previous transactions (btc_prevout), and every reply is read as hostile input. POSIX sockets; a client is used by one thread at
- * a time. */
+ * gave, with its code and message. The node is the home's own and trusted for what it says about the chain (docs/en/NETWORK.md 8),
+ * but every reply is still read as hostile input: a malformed one is refused, never read past its buffers. POSIX sockets; a client is
+ * used by one thread at a time. */
 #ifndef PZPEER_BTC_RPC_H
 #define PZPEER_BTC_RPC_H
 
@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     char host[256], port[8];
     char auth[BTC_RPC_AUTH_MAX / 3 * 4 + 8];   /* the base64 of user:password */
+    char cookie[1024];      /* the cookie file the credentials come from, or empty: read again when the node answers 401 */
     char wallet[80];        /* the path of the wallet calls, /wallet/<name>, or empty */
     int timeout_ms;         /* of every call but scantxoutset; 30 s from btc_rpc_init */
     int scan_timeout_ms;    /* scantxoutset reads the whole set of unspent outputs: minutes on the main chain; 30 min */
@@ -41,10 +42,17 @@ typedef struct {
     btc_rpc_err err;
 } btc_rpc;
 
-/* A client of the node at host:port (a name, an IPv4 or an IPv6 address). False when an argument is too long or empty. */
+/* A client of the node at host:port (a name, an IPv4 or an IPv6 address). False when an argument is too long or empty, or the host
+ * has a character no name or address has (it goes into the Host header). */
 bool btc_rpc_init(btc_rpc *c, const char *host, unsigned port, const char *user, const char *pass);
-/* The same with the credentials of the cookie file the node writes (.cookie in its data directory: "__cookie__:<password>"). */
+/* The same with the credentials of the cookie file the node writes (.cookie in its data directory: "__cookie__:<password>"). The node
+ * writes a new one each time it starts: the file is read again when the node refuses the credentials. */
 bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char *cookie_path);
+/* The client of the --rpc option of pzpeer: arg is HOST:PORT:USER:PASSWORD (the password is the rest, ':' and spaces included) or,
+ * with cookie_path, HOST:PORT; an IPv6 address goes in brackets ([::1]:8332). On failure c is wiped but for c->err: BTC_RPC_EPROTO
+ * when arg is not one of the forms, BTC_RPC_ENET when the cookie file cannot be read (the node writes it when it starts and removes it
+ * when it stops: it may not be running). */
+bool btc_rpc_init_arg(btc_rpc *c, const char *arg, const char *cookie_path);
 /* The wallet the wallet calls (getnewaddress, sendtoaddress) use, when the node has more than one loaded; NULL or "" for none. The
  * name is limited to letters, digits, '-', '_' and '.', which need no escaping in the path. */
 bool btc_rpc_set_wallet(btc_rpc *c, const char *name);
@@ -61,7 +69,17 @@ bool btc_rpc_getblockhash(btc_rpc *c, uint64_t height, uint8_t hash[32]);
  * the block blockhash when it is not NULL, which needs no index. As the server sent them: btc_prevout is the check. */
 bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t *blockhash, uint8_t **raw, size_t *len);
 
-/* an unspent output as scantxoutset or gettxout report it; the value is the server's word until btc_prevout confirms it */
+/* what getblockchaininfo says of the node's chain */
+typedef struct {
+    char chain[16];       /* main, test, testnet4, signet, regtest */
+    uint64_t blocks;      /* the height of its tip */
+    uint64_t headers;     /* the height of the best chain of headers it knows: above blocks while it catches up */
+    bool ibd;             /* initialblockdownload: still syncing */
+    bool pruned;
+} btc_chaininfo;
+bool btc_rpc_getblockchaininfo(btc_rpc *c, btc_chaininfo *info);
+
+/* an unspent output as scantxoutset or gettxout report it */
 typedef struct {
     uint8_t  txid[32];
     uint32_t vout;
@@ -74,7 +92,11 @@ typedef struct {
 } btc_utxo;
 
 /* scantxoutset with an addr() descriptor for each address: the unspent outputs of the addresses as of the tip the scan saw (its
- * height in *height). The first cap go to out and their total number to *n, which can be more than cap. */
+ * height in *height). Their total number goes to *n, which can be more than cap, and the cap largest to out (in no order; of equal
+ * values, those of the smaller outpoint, txid in internal order then vout): an address may hold thousands of tiny coins, and the
+ * largest must not be missed. The scan reads the whole set of unspent outputs, minutes on the main chain, and the node runs one at a
+ * time: another one is refused with an error that says "in progress". A scan this client gave up on is aborted, so as not to keep the
+ * node busy. */
 bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height);
 /* gettxout: *found false when the output is spent or never was; with mempool, a spend in the mempool counts as spent */
 bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool mempool, bool *found, btc_utxo *out);
