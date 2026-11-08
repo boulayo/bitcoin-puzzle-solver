@@ -3,7 +3,7 @@
 /* t_trust.c - the signatures of the maintainers on a network file: thresholds, keys counted once, and that a change of any line (of the
  * immutable part, through F, or of the updatable part) voids every signature. */
 #include "peertest.h"
-#include "trust.h"
+#include "netfile.h"
 #include <pzcore/hash.h>
 #include <secp256k1_extrakeys.h>
 

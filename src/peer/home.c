@@ -9,8 +9,7 @@
 #include "dpfeed.h"
 #include "keys.h"
 #include "session.h"
-#include "trust.h"
-#include "../netfile.h"
+#include "netfile.h"
 #include <pzcore/seal.h>
 #include <pzcore/seed.h>
 #include <errno.h>
@@ -200,8 +199,16 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     const bool wrote = write_hex32(key, sk);
     pz_secure_zero(sk, sizeof sk);
     if (!wrote) return snprintf(err, errlen, "cannot write %.300s", key), false;
-    const char *argv[64] = {h->cfg->pzsolve, "hunt", "--network", h->cfg->network, "--start-key", key, "-d", camp, "--ui", "log"};
-    int n = 10;
+    /* pzsolve knows nothing of the network: the walk of the network file as plain options of a shared walk */
+    char range[2 * PZ_U256_HEX_BUF + 2], a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], pub[67], js[65], dp[8], name[40];
+    snprintf(range, sizeof range, "%s:%s", pz_u256_to_hex(&h->nf.start, a), pz_u256_to_hex(&h->nf.end, b));
+    for (int i = 0; i < 33; i++) snprintf(pub + 2 * i, 3, "%02x", h->nf.pubkey33[i]);
+    for (int i = 0; i < 32; i++) snprintf(js + 2 * i, 3, "%02x", h->nf.jumpseed[i]);
+    snprintf(dp, sizeof dp, "%u", h->nf.dpbits);
+    snprintf(name, sizeof name, "net-%s", h->nf.net);
+    const char *argv[64] = {h->cfg->pzsolve, "hunt", "-r", range, "-k", pub, "--dp-bits", dp, "--jump-seed", js, "--start-key", key,
+                            "-c", name, "-d", camp, "--ui", "log"};
+    int n = 18;
     for (int i = 0; i < h->cfg->nargs && n < 62; i++) argv[n++] = h->cfg->pzsolve_args[i];
     argv[n] = NULL;
     snprintf(h->logpath, sizeof h->logpath, "%s/pzsolve.out", h->cfg->dir);

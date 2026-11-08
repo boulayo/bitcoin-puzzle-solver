@@ -194,7 +194,7 @@ int cfg_save(const campaign_cfg *c, const char *path)
     pz_u256_to_hex(&c->range_start, start_hex);
     pz_u256_to_hex(&c->range_end, end_hex);
     pz_hex_encode(c->target_h160, 20, hash160_hex);
-    if (c->net) seed_hex[0] = 0;           /* the start key of a network campaign stays in memory: pzpeer gives it at every start */
+    if (c->net) seed_hex[0] = 0;           /* the start key of a shared walk stays in memory: pzpeer gives it at every start */
     else pz_hex_encode(c->seed, 32, seed_hex);
     pubkey_hex[0] = 0;
     if (c->has_pubkey) pz_hex_encode(c->pubkey33, 33, pubkey_hex);
@@ -203,7 +203,7 @@ int cfg_save(const campaign_cfg *c, const char *path)
     if (c->net) {
         char js[65];
         pz_hex_encode(c->net_jumpseed, 32, js);
-        snprintf(net_lines, sizeof net_lines, "network=%s\njumpseed=%s\nstart_key_id=%s\n", c->net_name, js, c->net_keyid);
+        snprintf(net_lines, sizeof net_lines, "jumpseed=%s\nstart_key_id=%s\n", js, c->net_keyid);
     }
     /* the lines below part= are there only when they are used: the file of a campaign without them is as before */
     const char *req = c->net ? PZ_REQUIRES_NET : c->has_encrypt ? PZ_REQUIRES_ENCRYPT : NULL;
@@ -339,10 +339,9 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
         free(text);
         return -1;
     }
-    if (cfg_val(text, "network", v, sizeof v) && v[0]) {                             /* a network campaign: no seed on disk (cfg_save) */
+    if (cfg_val(text, "jumpseed", v, sizeof v) && v[0]) {                            /* a shared walk: no seed on disk (cfg_save) */
         c->net = true;
-        pz_strlcpy(c->net_name, v, sizeof c->net_name);
-        GET("jumpseed") if (pz_hex_decode(v, c->net_jumpseed, 32) != 32) { snprintf(err, errlen, "invalid jumpseed"); free(text); return -1; }
+        if (pz_hex_decode(v, c->net_jumpseed, 32) != 32) { snprintf(err, errlen, "invalid jumpseed"); free(text); return -1; }
         GET("start_key_id") pz_strlcpy(c->net_keyid, v, sizeof c->net_keyid);
     } else {
         GET("seed") if (pz_hex_decode(v, c->seed, 32) != 32) { snprintf(err, errlen, "invalid seed"); free(text); return -1; }

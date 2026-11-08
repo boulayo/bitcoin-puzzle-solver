@@ -97,7 +97,7 @@ PLATFORM_SRC := platform platform_win
 else
 PLATFORM_SRC := platform platform_posix
 endif
-CORE_SRC := $(PLATFORM_SRC) envopts gpu_variant util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common encrypt cmd_encrypt onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest netfile cmd_hunt cmd_merge cmd_campaigns cmd_puzzle cmd_devices main
+CORE_SRC := $(PLATFORM_SRC) envopts gpu_variant util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq cpu_common sysinfo run_common encrypt cmd_encrypt onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest cmd_hunt cmd_merge cmd_campaigns cmd_puzzle cmd_devices main
 ENG_BASE := src/eng_base.c
 ENG_AVX2 := src/eng_avx2.c
 ENG_AVX5 := src/eng_avx512.c

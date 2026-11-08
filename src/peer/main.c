@@ -4,8 +4,7 @@
 #include "dht.h"
 #include "dpfeed.h"
 #include "home.h"
-#include "trust.h"
-#include "../netfile.h"             /* the reader of the network file is the one of pzsolve */
+#include "netfile.h"
 #include <pzcore/seal.h>
 #include <signal.h>
 #include <stdio.h>

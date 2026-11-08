@@ -6,10 +6,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
-- `hunt --network FILE --start-key FILE`: the kangaroo of the shared network (docs/en/NETWORK.md). The network file sets target, range,
-  the public jump table and the bits of the distinguished points; the walkers follow the schema rete-06, and every start draws from a
-  generator of its own seeded with the secret start key of the home, which is never written in the campaign files or in the reports.
-  `dp.bin` keeps every point, also those the RAM limit leaves out of the table, for pzpeer to publish.
+- `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the
+  public seed, the walkers follow the schema rete-06, and every start draws from a generator of its own seeded with the secret start key,
+  which is never written in the campaign files or in the reports. The distinguished points are exactly those of `--dp-bits`, and `dp.bin`
+  keeps every point, also those the RAM limit leaves out of the table, for pzpeer to publish. pzsolve knows nothing else of the network.
 - pzpeer, the daemon of the shared network, and pzfirma, its two-party signer (docs/en/NETWORK.md): a home publishes the points of its
   pzsolve, keeps the records of others in a Kademlia table, and for every coincidence of a tame and a wild point of two homes runs with
   the other home a two-party ECDSA signing (cggmp21) and the two-step payout, half each, through bitcoind. Test networks only for now:

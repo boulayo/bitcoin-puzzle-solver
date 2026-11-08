@@ -10,7 +10,7 @@ Status: under construction on the branch `rete-condivisa`. Section 9 lists what 
 
 ```
 pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)                 pzfirma (Rust, cggmp21)
-  hunt --network FILE                           reads the network file and the home seed        the two-party ECDSA signer,
+  hunt --jump-seed --start-key                  reads the network file and the home seed        the two-party ECDSA signer,
   walks rete-06 kangaroos                       publishes the distinguished points             one process per signing session,
   writes dp.bin as today          ---------->   stores the records of others (custodian)   <-> spoken to over stdin/stdout
                                                 detects coincidences, sends alerts
@@ -18,8 +18,8 @@ pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)    
                                                 builds, checks and broadcasts the transactions
 ```
 
-- **pzsolve** stays the program people use. In network mode (`hunt --network FILE`) the campaign takes its parameters from the
-  network file, its jump table from the public jump seed of the file, and its starts from a secret key that pzpeer derives from the
+- **pzsolve** stays the program people use, and knows nothing of the network. pzpeer starts it with the options of a shared walk
+  (section 6): the range and the key of the network file, its jump seed, its dp bits, and a secret start key that pzpeer derives from the
   home seed. Nothing else changes in the search: the distinguished points go to `dp.bin` as in any campaign.
 - **pzpeer** reads `dp.bin` as it grows, recomputes each point from its kind and distance, signs a record and publishes it. It is also
   a custodian for the records of others, and the one that pays.
@@ -33,7 +33,6 @@ pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)    
 | `lib/secp256k1/` | libsecp256k1 0.7.1, the library of Bitcoin Core (MIT), with the ecdh, extrakeys and schnorrsig modules. Used for every operation on a secret key: BIP340 signatures, ECDH, ECDSA of the coins of the home |
 | `lib/pzcore/src/seed.c` | the generator of the home seed (several sources, health tests, HKDF) |
 | `lib/pzcore/src/aead.c` | ChaCha20-Poly1305 (RFC 8439) |
-| `src/netfile.c` | the network file: its lines, its fingerprint `F`, the values of the immutable part. libc and pzcore only: pzsolve and pzpeer link the same object |
 | `src/peer/` | pzpeer, one file per layer (below) |
 | `signer/` | pzfirma, a Rust crate |
 | `tests/peer/` | unit tests of pzpeer (`make peer-test`) and the end-to-end test on regtest |
@@ -43,6 +42,7 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | File | Layer |
 |---|---|
 | `json.c` | a small JSON reader and writer (bitcoind, pzfirma) |
+| `netfile.c` | the network file: its lines, its fingerprint `F`, the values of the immutable part, the signatures of the maintainers |
 | `btc.c` | Bitcoin transactions: serialization, txid, legacy signature hash, scripts of addresses, DER |
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
 | `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 and the frames after it: a state machine, no I/O |
@@ -57,7 +57,6 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `payout.c` | the transactions of the pair: the first, the second, the cancel |
 | `session.c` | the session of a coincidence, from the hello to the payout (section 7.5) |
 | `chain_rpc.c` | the chain of a session on bitcoind |
-| `trust.c` | the signatures of the maintainers on the network file (the parsing is `src/netfile.c`) |
 | `home.c` | the daemon of a home: seed and keys, pzsolve, the feed of `dp.bin`, a session for every useful coincidence |
 | `main.c` | the commands |
 
@@ -169,21 +168,24 @@ immutable part refuses the file. `puzzle=0` is a target of its own (tests); `dpb
 
 ## 6. pzsolve in network mode
 
-- `pzsolve hunt --network FILE --start-key FILE2`: pzpeer writes the start key (64 hex digits, the key *starts* of section 4) to `FILE2`
-  and starts pzsolve. The network file sets target, range, method and `--dp-bits`; the options that would change them are refused with it.
-  The campaign is `net-<net>`.
-- **campaign.conf** has `network=`, `jumpseed=`, `start_key_id=` (the `seed_to_id` of the start key) and `requires=1.24.0`; `seed=` is
-  empty. A resume needs `--network` with the same network and jump seed and a start key with the same id; the reports and `FOUND.txt`
-  show the seed as not written.
-- **Jump table**: from `jumpseed` (`krng_seed(jumpseed, "jumps4")`), not from the campaign seed. Everyone walks the same graph.
+pzsolve knows nothing of the network: pzpeer reads the network file and starts pzsolve with the options of a **shared walk**:
+
+```
+pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE -c net-NAME -d DIR --ui log
+```
+
+- `--jump-seed`: the jump table comes from this public seed (`krng_seed(jumpseed, "jumps4")`), not from the campaign seed: every home
+  walks the same graph. `--start-key`: the 64 hex digits of the key *starts* of section 4, written by pzpeer to a file only this user reads.
+- **campaign.conf** has `jumpseed=`, `start_key_id=` (the `seed_to_id` of the start key) and `requires=1.24.0`; `seed=` is empty. A resume
+  needs the same jump seed and a start key with the same id; the reports and `FOUND.txt` show the seed as not written.
 - **Species**: the table `rete-06` (864 rows, `src/kang_spec_net6.inc`, made by `tools/research/kspec_table.py` from
   `tools/research/kang_net6.txt`). As with schema 3 the rows are grouped by (coefficient, residue mod 12): a walker belongs to a group for
   its life, and every start draws a band of the group by its share, so the index of a walker stays one byte (at most 64 groups).
 - **Starts**: each start draws from a generator of its own, a xoshiro state set to `HMAC-SHA256(start key, "pznet1/s" || session || n)`
   (session: 8 bytes, the session number of the campaign and `--node` above it; n: 8 bytes, a counter of the starts of the session). A
   record shows the point and the type of a start, never the state of a generator that made another one.
-- **Distinguished points**: `dpbits` of the file, whatever the walkers and the memory of this home would pick. A point the table leaves
-  out (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
+- **Distinguished points**: exactly `--dp-bits`, whatever the walkers and the memory of this home would pick. A point the table leaves out
+  (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
   of the network.
 - `dp.bin` is the usual log of the campaign. pzpeer reads it.
 - `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network. On the curve, W = 2^40, 3000 trials each, one thread:
@@ -385,7 +387,7 @@ in `t_session` with `PZ_REGTEST`.
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 30 nodes in one process); POSIX only (the Windows shim is to come); no limit of contacts per address block yet (project 4.2), no UPnP or NAT-PMP |
 | `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1) |
 | pzfirma, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
-| `trust.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
+| `netfile.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
 | to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
 

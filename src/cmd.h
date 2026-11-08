@@ -35,8 +35,8 @@ typedef struct {
     char encrypt_pubkey[200];     /* --encrypt-pubkey */
     bool encrypt_password;        /* --encrypt-password */
     char on_found[1024];          /* --on-found */
-    char network[600];            /* --network: the network file (docs/en/NETWORK.md 5) */
-    char start_key[600];          /* --start-key: the file with the start key of this home */
+    char jump_seed[80];           /* --jump-seed: the public seed of the jumps of a shared walk (docs/en/NETWORK.md 6) */
+    char start_key[600];          /* --start-key: the file with its secret start key */
     char table[600];
     u64 bsgs_entries;
     ui_mode ui;

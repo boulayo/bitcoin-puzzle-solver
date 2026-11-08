@@ -61,11 +61,11 @@ line of the help:
   of 2^24 keys a GPU loses about a fifth of its speed.
 
 * `--encrypt-pubkey`, `--encrypt-password` and `--on-found` encrypt the key that is found and run a command when it is: section 11.
-* `--network FILE` and `--start-key FILE` run the kangaroo of the shared network ([NETWORK.md](NETWORK.md), in development): pzpeer starts
-  pzsolve with them. The network file sets target, range, jump table and `--dp-bits`, so `-p`, `-r`, `-a`, `-k`, `-m`, `-s`, `--dp-bits`,
-  `--part` and `--chunk-bits` are not given with it; the campaign is `net-NAME`. The start key is the secret of the starting points of this
-  home and stays in memory: `campaign.conf` keeps only its id, the reports say it is not written, and the campaign resumes only with the
-  same key.
+* `--jump-seed HEX` and `--start-key FILE` make a shared walk, the kangaroo of the shared network ([NETWORK.md](NETWORK.md), in
+  development): pzpeer starts pzsolve with them, with `-r`, `-k` and `--dp-bits` from the network file. The jumps come from the public seed,
+  so that every computer walks the same graph; the walkers follow the schema rete-06; the distinguished points are exactly those of
+  `--dp-bits`. The start key is the secret of the starting points and stays in memory: `campaign.conf` keeps only its id, the reports say
+  it is not written, and the campaign resumes only with the same key. `-s`, `-m` and `--part` are not given with them.
 
 A value that cannot be used stops the command with a message such as `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`. The options removed in 1.23.0 are refused (exit status 2)

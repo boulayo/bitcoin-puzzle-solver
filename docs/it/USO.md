@@ -61,11 +61,12 @@ Quello che richiede più di una riga dell'aiuto:
   attraversare un blocco: con blocchi da 2^24 chiavi una GPU perde circa un quinto della velocità.
 
 * `--encrypt-pubkey`, `--encrypt-password` e `--on-found` cifrano la chiave trovata ed eseguono un comando quando viene trovata: sezione 11.
-* `--network FILE` e `--start-key FILE` avviano il canguro della rete condivisa ([NETWORK.md](../en/NETWORK.md), in sviluppo): li passa
-  pzpeer quando avvia pzsolve. Il file della rete fissa obiettivo, intervallo, tabella dei salti e `--dp-bits`, quindi `-p`, `-r`, `-a`,
-  `-k`, `-m`, `-s`, `--dp-bits`, `--part` e `--chunk-bits` non si danno insieme; la campagna è `net-NOME`. La chiave di partenza è il
-  segreto dei punti di partenza di questa casa e resta in memoria: `campaign.conf` ne tiene solo l'identificativo, i rapporti dicono che
-  non è scritta, e la campagna riprende solo con la stessa chiave.
+* `--jump-seed HEX` e `--start-key FILE` fanno un cammino condiviso, il canguro della rete condivisa ([NETWORK.md](../en/NETWORK.md),
+  in sviluppo): li passa pzpeer quando avvia pzsolve, con `-r`, `-k` e `--dp-bits` presi dal file della rete. I salti vengono dal seme
+  pubblico, così tutti i computer camminano sullo stesso grafo; i canguri seguono lo schema rete-06; i punti distinti sono esattamente
+  quelli di `--dp-bits`. La chiave di partenza è il segreto dei punti di partenza e resta in memoria: `campaign.conf` ne tiene solo
+  l'identificativo, i rapporti dicono che non è scritta, e la campagna riprende solo con la stessa chiave. `-s`, `-m` e `--part` non si
+  danno insieme.
 
 Un valore che non si può usare ferma il comando con un messaggio come `--limit: invalid value '100' (expected an integer between 1 and 99)`,
 e un'opzione sconosciuta con `unrecognized option '--foo' (see 'pzsolve help hunt')`. Le opzioni tolte nella 1.23.0 vengono rifiutate (codice di

@@ -222,10 +222,10 @@ bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
 }
 
 /* the file of a campaign that does not encrypt the key; false if it could not be written */
-/* The seed as the reports show it: a network campaign's is the start key of the home, which stays in memory (docs/en/NETWORK.md 6). */
+/* The seed as the reports show it: a shared walk's is its start key, which stays in memory (docs/en/NETWORK.md 6). */
 static void seed_text(const campaign_cfg *c, char out[65])
 {
-    if (c->net) snprintf(out, 65, "(start key of the network: not written)");
+    if (c->net) snprintf(out, 65, "(start key: not written)");
     else pz_hex_encode(c->seed, 32, out);
 }
 
