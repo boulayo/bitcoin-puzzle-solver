@@ -371,10 +371,11 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 ## 9. Status
 
 Everything below works and is tested; `tests/peer/e2e_net.sh` runs the whole of it on one machine with a bitcoind in regtest: a custodian
-node and two homes (`pzpeer run`, each with its pzsolve), a puzzle of 48 bits funded with 1 BTC. With Bitcoin Core 28.1 a coincidence
-between the two homes ended in the payout: 0.49999366 and 0.49989366 BTC (the difference is F's tiny coin, back to F), nothing left on the
-puzzle address. With two homes only, a home often finds the key on its own first (its own walkers meet too): the script then starts a new
-try with a new puzzle.
+node and three homes (`pzpeer run`, each with its pzsolve), a puzzle of 58 bits funded with 1 BTC. With Bitcoin Core 28.1 a coincidence
+between two homes ended in the payout: 0.49999366 and 0.49989366 BTC (the difference is F's tiny coin, back to F), nothing left on the
+puzzle address. With so few homes a home may find the key on its own first (its own walkers meet too): the script then starts a new try
+with a new puzzle. The cases of the session (the payout, and the cancel when a partner keeps the second transaction) also run on the node
+in `t_session` with `PZ_REGTEST`.
 
 | Part | State |
 |---|---|

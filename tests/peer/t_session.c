@@ -254,6 +254,12 @@ static bool q_recv(void *c, uint8_t *m, size_t cap, size_t *len, int timeout_ms)
     return ok;
 }
 
+/* the messages nobody read (the end of a session that stopped early) */
+static void q_drain(queue *q)
+{
+    for (; q->head != q->tail; q->head++) free(q->msg[q->head % 4096]);
+}
+
 /* ---- the two homes ---- */
 
 static void hashed(const char *s, uint8_t out[32]) { pz_sha256((const uint8_t *)s, strlen(s), out); }
@@ -369,6 +375,7 @@ static void run_case(const char *name, bool withhold, const char *bin, const cha
     pthread_t th[2];
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
+    q_drain(&q[0]), q_drain(&q[1]);
     printf("  %s: F %s (%s), S %s (%s)\n", name, h[F_home].res == SESSION_PAID ? "paid" : h[F_home].res == SESSION_CANCELLED ? "cancelled" : "failed",
            h[F_home].why, h[S_home].res == SESSION_PAID ? "paid" : "failed", h[S_home].why);
     /* what the chain holds now */
