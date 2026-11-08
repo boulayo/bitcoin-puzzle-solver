@@ -1,8 +1,9 @@
 # pzcore
 
 The cryptographic core of pzsolve as a small C library: 256-bit integers, the secp256k1 field and curve, SHA-256 / RIPEMD-160 / HASH160,
-Base58Check, bech32 / bech32m and SegWit addresses, encryption of a key to a public key with the functions it needs (HMAC, HKDF, PBKDF2, scrypt), a keyed permutation of `[0, M)`, and HASH160 of many public keys at once with the SIMD
-code of the CPU. It depends on the C library only (no pthread, no allocation, no I/O) and on GCC or Clang (it uses `unsigned __int128`, GNU
+Base58Check, bech32 / bech32m and SegWit addresses, encryption of a key to a public key with the functions it needs (HMAC, HKDF, PBKDF2, scrypt), a keyed permutation of `[0, M)`, HASH160 of many public keys at once with the SIMD
+code of the CPU, and a generator of secret seeds from several entropy sources. It depends on the C library only (no pthread; no allocation
+and no I/O except in the seed generator, which maps pages, reads the clock and the TPM device, and on Windows needs `bcrypt`) and on GCC or Clang (it uses `unsigned __int128`, GNU
 vector types and, on x86-64, inline assembly), so it builds with MinGW-w64 but not with MSVC.
 
 **License and copyright:** part of pzsolve, so the same terms and the same holder: Copyright (C) 2026 Leonardo Boulay,
@@ -26,6 +27,7 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 | `seal.h` | HMAC-SHA256, HKDF-SHA256, PBKDF2-HMAC-SHA256, scrypt (the caller passes the work buffer), a constant-time comparison, a wipe the compiler cannot remove; and a 32-byte secret encrypted to a secp256k1 public key (ECIES: ephemeral key, HKDF, XOR, truncated HMAC; the caller passes the random scalar), its 86-byte payload and the text line `PZENC1:...` (Base58Check), the key of a password |
 | `perm.h` | `pz_perm_init / apply / invert`: a seed-keyed bijection of `[0, M)`, `M <= 2^192`, expected O(1) per call, identical on every platform and version (pinned by `tests/perm_pins.h`) |
 | `cpu.h` | `pz_cpu_has_avx2 / avx512 / ifma / shani / sha2` |
+| `seed.h` | `pz_seed_generate`: a 256-bit secret seed from the OS generator (mandatory), RDSEED / RDRAND or RNDRRS / RNDR, the TPM, CPU timing jitter and an optional source of the caller, each one with its own health tests, mixed with HKDF-SHA256 in locked memory; at least 128 bits must come from the TPM, the caller's source and the jitter. A report gives the bits credited to each source and why one was left out, never the data (`docs/en/NETWORK.md` 4.1) |
 | advanced: `fev.h`, `fev52.h`, `impl/` | lane-parallel field arithmetic (AVX2, AVX-512 IFMA) and the lane hash templates that the pzsolve engines include; not part of the stable interface |
 
 ## Rules
@@ -37,7 +39,7 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 * **Threads:** everything is thread-safe. Global state is the curve table (built once, atomically, 264 KB static), the choice of batch
   implementation (an atomic pointer) and a cached CPU probe. No initialisation call is needed.
 * **Not constant-time.** Branches and table lookups depend on the data: do not use it with secret scalars where a side channel matters.
-  It has no signatures and no random numbers; `seal.h` has a wipe (`pz_secure_zero`) and a constant-time comparison for the secrets it handles, and the
+  It has no signatures, and its only random numbers are those of `seed.h`; `seal.h` has a wipe (`pz_secure_zero`) and a constant-time comparison for the secrets it handles, and the
   functions of that header clear their own temporaries, but the scalar multiplications under it are not constant-time (see `seal.h`).
 * **Aliasing:** outputs may alias inputs unless the header says otherwise. The library is built with strict aliasing on.
 
@@ -51,7 +53,8 @@ make lib-cxx        # the public headers compiled and linked as C++
 cc -Ilib/pzcore/include prog.c build/libpzcore.a
 ```
 
-To vendor it, copy `lib/pzcore` and compile `src/*.c` (`bytes.h` and `h160_impl.h` are private). Per-instruction-set files need their flags:
+To vendor it, copy `lib/pzcore` and compile `src/*.c` (`bytes.h` and `h160_impl.h` are private); link the math library for `seed.c`, and
+`bcrypt` on Windows. Per-instruction-set files need their flags:
 `h160_avx2.c` `-mavx2 -mbmi2 -madx`, `h160_avx512.c` `-mavx512f -mavx512vl -mavx512bw -mavx512dq -mbmi2 -madx`, `h160_shani.c` `-msha -mavx2 -mssse3 -msse4.1`, `h160_neon.c`, `h160_neon2.c` and
 `sha256_arm.c` `-march=armv8-a+crypto`; omit the ones for other architectures, or define `PZ_NO_X86_VARIANTS` / `PZ_NO_ARM_SHA2`. Compile your
 own code with `-mbmi2 -madx` on x86-64 to get the assembly field multiplication from `fe.h`; the archive itself is built for the baseline.
@@ -66,7 +69,8 @@ Hot loops should include `fe.h`, `fev.h` and the templates and be compiled for t
 
 `tests/` holds the unit tests and `gen_vectors.py`, which writes `vectors.h` with an independent Python implementation (integers, the SHA-256
 of hashlib, the pure-Python RIPEMD-160 of `tools/ref.py`) and checks the BIP173 / BIP350 vectors it embeds. `t_kdf.c` carries the vectors of RFC 4231, RFC 5869 and RFC 7914;
-`gen_seal_vectors.py` writes `seal_vectors.h` (the seal, `k*P`, keys of passwords at the real scrypt cost) with hashlib and its own ECIES, and checks the RFC vectors it embeds against hashlib. Run clean under ASan, UBSan, TSan, Valgrind, Wine and QEMU (aarch64, with and without the SHA-256
+`gen_seal_vectors.py` writes `seal_vectors.h` (the seal, `k*P`, keys of passwords at the real scrypt cost) with hashlib and its own ECIES, and checks the RFC vectors it embeds against hashlib. `t_seed.c` includes `src/seed.c` with the fault hooks that the archive does not have
+(`PZ_SEED_TEST`) and breaks every source of the generator in turn; its known answers of the mixing were computed with Python's `hmac`. Run clean under ASan, UBSan, TSan, Valgrind, Wine and QEMU (aarch64, with and without the SHA-256
 instructions); `tools/verify.sh` runs them all.
 
 ## Performance

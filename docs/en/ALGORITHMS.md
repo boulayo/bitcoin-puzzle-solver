@@ -98,8 +98,8 @@ visits the blocks in the order `π(0), π(1), π(2), …` where `π` is a **pseu
 * Inside a block the scan is sequential (the most efficient form). Progress is kept as a set of
   completed intervals in the "virtual space" `V = position_in_path · 2^B + offset`: there are at most as many holes as work requests
   in flight, so the checkpoint stays a few lines long even after months (`state.dat`, with checksum).
-* The seed has 256 bits (`getrandom` + time + pid + host, hashed); `--seed` accepts 64 hex digits (used as they are) or
-  any text (hashed).
+* The seed has 256 bits, from pzcore's generator (`seed.h`: the OS generator, the CPU's, CPU timing jitter and the TPM, mixed with
+  HKDF-SHA256; [NETWORK.md](NETWORK.md) 4.1); `--seed` accepts 64 hex digits (used as they are) or any text (hashed).
 
 * **Several computers (`--part`)**. The *positions* of the visiting order are split, not the interval: with `T` shares, the computer
   that holds the shares `r₁ < r₂ < … < r_m` scans the blocks at positions `k` with `k mod T ∈ {r₁,…,r_m}`, in its local order

@@ -63,7 +63,7 @@ pz_u256 cfg_range_size(const campaign_cfg *c);
 /* The default size of the blocks of the visiting order (bits) for a range; the stored value of an existing campaign wins. */
 unsigned cfg_default_chunk_bits(const pz_u256 *range_size);   /* BSGS (the giant steps) and the other modes */
 unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares);   /* new linear campaigns: it depends on the shares of --part too */
-/* Generates a fresh 256-bit seed from OS entropy mixed with time/pid/host. */
+/* Generates a fresh 256-bit seed with pzcore's generator (seed.h); dies only when the OS gives no random numbers. */
 void seed_generate(u8 seed[32]);
 /* Parses a user seed: 64 hex digits are used verbatim, anything else is hashed. */
 void seed_from_text(const char *text, u8 seed[32]);
