@@ -491,6 +491,23 @@ bool btc_rpc_getblockhash(btc_rpc *c, uint64_t height, uint8_t hash[32])
     return done(c, &d, get_hash(res, hash), "getblockhash");
 }
 
+bool btc_rpc_getblockchaininfo(btc_rpc *c, btc_chaininfo *info)
+{
+    json_doc d;
+    const json_val *res;
+    if (!call(c, false, "getblockchaininfo", NULL, &d, &res)) return false;
+    btc_chaininfo x = {0};
+    const char *chain = json_str(json_get(res, "chain"));
+    const bool ok = chain && strlen(chain) < sizeof x.chain && json_u64(json_get(res, "blocks"), &x.blocks) &&
+                    json_u64(json_get(res, "headers"), &x.headers) && json_bool(json_get(res, "initialblockdownload"), &x.ibd) &&
+                    json_bool(json_get(res, "pruned"), &x.pruned);
+    if (ok) {
+        strcpy(x.chain, chain);
+        *info = x;
+    }
+    return done(c, &d, ok, "getblockchaininfo");
+}
+
 static void put_hash(json_w *w, const uint8_t h[32])
 {
     char hex[65];
@@ -539,6 +556,14 @@ static bool get_u32(const json_val *v, uint32_t *out)
     return true;
 }
 
+/* whether a goes before b in the order of the coins kept by a scan: the larger value first, then the smaller outpoint */
+static bool before(const btc_utxo *a, const btc_utxo *b)
+{
+    if (a->value != b->value) return a->value > b->value;
+    const int c = memcmp(a->txid, b->txid, 32);
+    return c ? c < 0 : a->vout < b->vout;
+}
+
 bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height)
 {
     json_w w;
@@ -550,7 +575,10 @@ bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo 
     jw_arr(&w);
     for (size_t k = 0; k < n_addr; k++) {
         char desc[128];
-        if (!addrs[k] || snprintf(desc, sizeof desc, "addr(%s)", addrs[k]) >= (int)sizeof desc) {
+        /* an address is letters and digits: nothing else may change the descriptor around it */
+        static const char ALNUM[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        if (!addrs[k] || !addrs[k][0] || addrs[k][strspn(addrs[k], ALNUM)] ||
+            snprintf(desc, sizeof desc, "addr(%s)", addrs[k]) >= (int)sizeof desc) {
             jw_free(&w);
             return fail(c, BTC_RPC_EPROTO, 0, "scantxoutset: bad address");
         }
@@ -560,7 +588,18 @@ bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo 
     jw_end(&w);
     const bool ok = rpc(c, false, "scantxoutset", &w, c->scan_timeout_ms, &d, &res);
     jw_free(&w);
-    if (!ok) return false;
+    if (!ok) {
+        if (c->err.kind == BTC_RPC_ENET) {   /* the node goes on with a scan whose client has gone, and refuses the next one meanwhile */
+            const btc_rpc_err e = c->err;
+            jw_init(&w);
+            jw_arr(&w);
+            jw_str(&w, "abort");
+            jw_end(&w);
+            if (call(c, false, "scantxoutset", &w, &d, &res)) json_free(&d);
+            c->err = e;
+        }
+        return false;
+    }
     bool success = false;
     const json_val *list = json_get(res, "unspents");
     if (!json_bool(json_get(res, "success"), &success) || !success || !json_u64(json_get(res, "height"), height) || !list ||
@@ -575,7 +614,14 @@ bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo 
             return done(c, &d, false, "scantxoutset");
         const json_val *cb = json_get(e, "coinbase");
         if (cb && !json_bool(cb, &u.coinbase)) return done(c, &d, false, "scantxoutset");
-        if (k < cap) out[k] = u;
+        if (k < cap) {
+            out[k] = u;
+            continue;
+        }
+        size_t last = 0;   /* full: u takes the place of the last of those kept, when it goes before it */
+        for (size_t i = 1; i < cap; i++)
+            if (before(&out[last], &out[i])) last = i;
+        if (cap && before(&u, &out[last])) out[last] = u;
     }
     *n = list->n;
     return done(c, &d, true, "scantxoutset");

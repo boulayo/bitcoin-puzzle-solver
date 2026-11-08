@@ -62,6 +62,16 @@ bool btc_rpc_getblockhash(btc_rpc *c, uint64_t height, uint8_t hash[32]);
  * the block blockhash when it is not NULL, which needs no index. As the server sent them: btc_prevout is the check. */
 bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t *blockhash, uint8_t **raw, size_t *len);
 
+/* what getblockchaininfo says of the node's chain */
+typedef struct {
+    char chain[16];       /* main, test, testnet4, signet, regtest */
+    uint64_t blocks;      /* the height of its tip */
+    uint64_t headers;     /* the height of the best chain of headers it knows: above blocks while it catches up */
+    bool ibd;             /* initialblockdownload: still syncing */
+    bool pruned;
+} btc_chaininfo;
+bool btc_rpc_getblockchaininfo(btc_rpc *c, btc_chaininfo *info);
+
 /* an unspent output as scantxoutset or gettxout report it; the value is the server's word until btc_prevout confirms it */
 typedef struct {
     uint8_t  txid[32];
@@ -75,7 +85,11 @@ typedef struct {
 } btc_utxo;
 
 /* scantxoutset with an addr() descriptor for each address: the unspent outputs of the addresses as of the tip the scan saw (its
- * height in *height). The first cap go to out and their total number to *n, which can be more than cap. */
+ * height in *height). Their total number goes to *n, which can be more than cap, and the cap largest to out (in no order; of equal
+ * values, those of the smaller outpoint, txid in internal order then vout): an address may hold thousands of tiny coins, and the
+ * largest must not be missed. The scan reads the whole set of unspent outputs, minutes on the main chain, and the node runs one at a
+ * time: another one is refused with an error that says "in progress". A scan this client gave up on is aborted, so as not to keep the
+ * node busy. */
 bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height);
 /* gettxout: *found false when the output is spent or never was; with mempool, a spend in the mempool counts as spent */
 bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool mempool, bool *found, btc_utxo *out);
