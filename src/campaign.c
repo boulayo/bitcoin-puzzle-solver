@@ -2,6 +2,7 @@
 /* campaign.c - configuration persistence, seeds. */
 #include "campaign.h"
 #include <pzcore/hash.h>
+#include <pzcore/seed.h>
 #include "platform.h"
 #include <time.h>
 #include <errno.h>
@@ -58,21 +59,14 @@ unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares)
 
 /* ---- seeds ---- */
 
+/* pzcore's generator (seed.h): the OS, the CPU's generator, CPU timing jitter and the TPM where there is one. A campaign seed only has
+ * to be unpredictable and its own, so it takes what the OS alone gives when the others fall short (a virtual machine with a coarse
+ * timer), as campaigns always did, and waits for more jitter only briefly. */
 void seed_generate(u8 seed[32])
 {
-    u8 pool[32 + 8 + 8 + 8 + 64];
-    memset(pool, 0, sizeof pool);
-    size_t n = 0;
-    if (!pz_os_random(pool, 32)) pz_die("cannot get entropy from the system");
-    n = 32;
-    double t = pz_now(), m = pz_mono();   /* extra, non-secret diversity: time, process, host */
-    memcpy(pool + n, &t, 8); n += 8;
-    memcpy(pool + n, &m, 8); n += 8;
-    u64 pid = (u64)pz_getpid();
-    memcpy(pool + n, &pid, 8); n += 8;
-    pz_hostname((char *)pool + n, 64);
-    n += 64;
-    pz_sha256(pool, n, seed);
+    const pz_seed_opts o = {.flags = PZ_SEED_ALLOW_DEGRADED, .max_ms = 200};
+    pz_seed_report r;
+    if (pz_seed_generate(seed, &o, &r) != PZ_SEED_OK) pz_die("cannot generate a seed: %s", r.error);
 }
 
 void seed_from_text(const char *text, u8 seed[32])

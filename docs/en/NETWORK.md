@@ -76,6 +76,67 @@ names the use and binds the network fingerprint `F` (section 5):
 | starts | `"starts" || F` | the 32-byte secret seed of the starts of pzsolve (section 6) |
 | coin n | `"coin" || F || n` | secp256k1 key of the n-th tiny coin of the home (P2PKH) |
 
+### 4.1 The home seed
+
+`pz_seed_generate` (`lib/pzcore/include/pzcore/seed.h`, `lib/pzcore/src/seed.c`). pzpeer calls it once, when a home is created;
+pzsolve uses it for the seed of every new campaign.
+
+| Source, in the order it is read | What is read | Bits credited | Counts for the 128 |
+|---|---|---|---|
+| CPU generator: RDSEED, else RDRAND (x86-64); RNDRRS, else RNDR (arm64) | 128 words; 1024 from RDRAND or RNDR | 128 (RNDR 64) | no |
+| TPM 2.0: `TPM2_GetRandom` on `/dev/tpmrm0` or `/dev/tpm0` (Linux), TBS (Windows) | 8 × 32 bytes | 128 | yes |
+| the caller's source (GPU timing jitter from pzsolve or pzpeer, later) | fixed by the caller, at most 64 KiB | what it claims, at most 256 | yes |
+| CPU timing jitter: timer deltas around a fixed walk through 1 MiB | rounds of 4096 samples | 0.5 per sample that is not stuck, at most 256 | yes |
+| OS generator: getrandom, getentropy, BCryptGenRandom | 2 × 512 bytes | 256 | mandatory |
+| system context: process ids, clocks, host, boot id, OS, CPU | | 0: it is the public salt | |
+
+**Rules.**
+- The CPU generator is read first, while no other secret is in the process; the OS last, so that its output spends the least time in
+  memory and comes after any snapshot of a virtual machine taken during the slower steps.
+- Each source tests its own raw output and is excluded and wiped when it fails; the others go on. A TPM that is absent or that the user
+  may not open (the `tss` group) is skipped.
+- If the OS fails there is no seed (`PZ_SEED_E_OS`).
+- The TPM, the caller's source and the jitter must give at least 128 bits together. The CPU generator does not count: nobody can check
+  it, and the kernel often seeds its own generator from it (`random.trust_cpu`). When they fall short, the jitter source collects more
+  rounds, for at most 3 s; still short, there is no seed (`PZ_SEED_E_SHORT`, "make it on another computer"). A campaign seed of pzsolve
+  accepts the OS alone in that case, as before (`PZ_SEED_ALLOW_DEGRADED`, at most 0.2 s more of jitter).
+- Health tests (SP 800-90B 4.4, cutoffs from the claimed entropy): for the outputs that claim full entropy (OS, CPU generator, TPM) the
+  repetition count and adaptive proportion tests at H = 8, α = 2^-40, the count of every byte value and a monobit test; for the CPU
+  generator also the words all ones (the AMD RDRAND erratum), zero, or repeated, and the retry limits; for the TPM well-formed answers of
+  the size asked, all different; for the jitter a timer that advances and is monotonic, jitterentropy's stuck test, the repetition
+  count and adaptive proportion tests at H = 0.5, α = 2^-30, and a live estimate, min(MCV, 8 × Markov), of at least 1 bit per sample:
+  twice the credit.
+- Mixing: HKDF-SHA256 over labelled records that carry their lengths, salt = SHA-256 of the context (the format is in `seed.h`). One
+  honest source with enough entropy keeps the seed unpredictable; a dishonest one that sees everything else can only grind.
+- Memory: the raw outputs live in one region locked in RAM, left out of core dumps and seen as zeros by a forked child, wiped before it
+  is unmapped; `PZ_SEED_HARDEN` also turns core files off and makes the process non-dumpable. The report gives the bits and the reasons
+  of each source, never data.
+
+**Measured** on 2026-11-08 on the development machine, a VM (Intel Xeon at 2.3 GHz, 4 vCPUs under KVM, Linux 6.18), with
+`tools/research/seed_assess.c`, which runs the generator's own collector:
+
+| | |
+|---|---|
+| Min-entropy of the jitter, 10^6 samples | **6.61 bits per 8-bit sample** (lowest estimator: t-tuple; MCV 6.89, 8 × Markov 6.78). The prototype measured 6.44 on the same kind of VM |
+| Samples for 128 bits | 39 at a safety factor of 2, 78 at 4. The generator credits 0.5 bit per sample, 13 times less, and needs 256 |
+| Restart test (SP 800-90B 3.1.4), 1000 processes × 1000 samples, H_I = 6 | sanity check passed (a value at most 30 times at one position, cutoff 36); min(H_rows, H_columns) = 6.44 |
+| Live estimate, 1000 generations | 5.70 to 6.13 bits per sample, median 5.99 (the threshold is 1); 4058 to 4090 samples of 4096 not stuck; no second round ever needed |
+| Time of a seed | median 9.7 ms, 99% under 14 ms (the jitter is 97% of it); with the other 3 vCPUs busy, median 22 ms, live estimate unchanged |
+| Elsewhere | under Wine 5.9 to 6.0 bits per sample, and TBS answers "no TPM"; under qemu-aarch64 (RNDRRS, emulated counter) 3.0, which says nothing of real arm64 |
+| `lib/pzcore/tests/t_seed.c` | 39 cases of broken, missing and attacker-known sources, all as the rules say; a malicious CPU generator sets a XOR combiner to its target, and with every other input known 2^16 tries fix 13 to 17 bits of the HKDF seed (about log2 of the work); 2000 seeds with only the OS honest: no duplicate, bits and bytes balanced |
+
+**Limits.**
+- One machine was measured, and it is a VM: its TSC is always even (at most 7 bits in an 8-bit sample), and part of the noise comes
+  from the host, which can observe it. ARM machines with a 24 MHz counter (Apple M, many Neoverse) and quiet desktops need their own
+  assessment; the 0.5-bit credit is a policy with a wide margin, not a certified value.
+- No TPM here: the TPM code was tested with a file that stands for the device. RNDR on Windows is not detected.
+- The CPU generator and the TPM cannot be checked from outside, and the tests on conditioned output (OS, CPU generator, TPM) catch only
+  gross failures. That is why no source has to be trusted alone.
+- A seed copied with a VM image, or generated in a VM that is then cloned, is the same in every copy; the context does not tell clones
+  apart. The home seed belongs on a physical computer.
+- The platform is trusted: a malicious kernel, CPU or hypervisor can read the seed. Registers and copies made by the compiler are not
+  wiped.
+
 ## 5. The network file
 
 A text file of `key=value` lines. The immutable part, whose fingerprint `F = SHA256("pznet1/file" || canonical lines)` binds keys and
@@ -243,4 +304,5 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 |---|---|
 | build of pzpeer, libsecp256k1 | done |
 | `json.c`, `btc.c`, `btc_rpc.c` | done, with unit tests (`tests/peer/t_json.c`, `t_btc.c`, `t_btc_rpc.c`); the test against a real node on regtest is to come |
+| generator of the home seed (`lib/pzcore/src/seed.c`, section 4.1) | done; the GPU source of pzsolve and pzpeer to come |
 | everything else | in progress |

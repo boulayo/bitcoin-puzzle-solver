@@ -343,7 +343,7 @@ int kangaroo_selftest(void)
     u64 s = 0xC0FFEE1234ULL;
     struct { unsigned wbits; int n; } cases[] = {{24, 4}, {34, 3}};
     for (size_t c = 0; c < sizeof cases / sizeof *cases; c++) {
-        const kang_try_opts so = {0, 0, false};
+        const kang_try_opts so = {0, 0, false, false};
         char vals[160] = "";
         int lost = 0;
         for (int t = 0; t < cases[c].n; t++) {
@@ -371,7 +371,7 @@ int kangaroo_selftest(void)
         pz_u256 lo = pz_u256_pow2(80 + (unsigned)t), key;
         pz_u256 off = pz_u256_from_u64(st_rnd(&s) & ((1ULL << 30) - 1));
         pz_u256_add(&key, &lo, &off);
-        const kang_try_opts o = {8, 7, true};
+        const kang_try_opts o = {8, 7, true, false};
         double steps = kang_try(&lo, 30, &key, 2, 60.0, st_rnd(&s), &o);
         if (steps < 0) { fails++; cyc_lost++; }
         else snprintf(cyc + strlen(cyc), sizeof cyc - strlen(cyc), "%s%.2f", cyc[0] ? " " : "", steps / sqrt(ldexp(1.0, 30)));

@@ -16,5 +16,6 @@
 #include <pzcore/hash160_batch.h>
 #include <pzcore/perm.h>
 #include <pzcore/cpu.h>
+#include <pzcore/seed.h>
 
 #endif
