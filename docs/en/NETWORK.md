@@ -189,7 +189,11 @@ Between the two homes, over a Noise channel between their identities:
    `x0 = −d1/D + base`, `x1 = d2/D` (mod n), `X0 = x0·G`, `X1 = x1·G`; both check `X0 + X1 = P`.
 3. A proof of knowledge of the piece: a BIP340 signature by `x_i` over the transcript of the session.
 4. The two transactions (section 8): each side builds them on its own and they compare the hashes.
-5. pzfirma for each input of the puzzle: the frames of type 0x81 of one side go to the other as `S_SIGNER(bytes)`.
+5. pzfirma for each input of the puzzle: the frames of type 0x81 of one side go to the other as `S_SIGNER(more, bytes)`. A message of
+   pzfirma can be larger than a Noise frame (the auxiliary data, about 200 KB): it travels in pieces of at most 65 000 bytes, `more` = 1
+   on all but the last, and the receiver joins them before it hands the message to its pzfirma as one frame 0x02.
+   The session id `eid` is `SHA256("pznet1/eid" || F || record_0 || record_1)`, the same on both sides and different for every pair of
+   records; pzfirma relies on it to keep the messages of one run out of another.
 6. The first sender of the last message keeps its tiny coin as a cancel lever (project 2.4).
 
 ### 7.6 pzfirma
@@ -206,9 +210,19 @@ Frames on stdin and stdout: a 4-byte big-endian length L, then L bytes: a type b
 
 Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex33], "key": hex33, "primes": path, "digests": [hex32, ...]}`.
 `share` is the own additive piece (party 0's includes `base`), `pub` the two public pieces, `key` the puzzle key. Result:
-`{"sigs": [{"r": hex32, "s": hex32}, ...]}`, `s` low. Commands: `pzfirma primes FILE` (pregenerates the primes of a session, minutes);
-`pzfirma selftest` (both parties in one process). The session runs the auxiliary data generation, then one signing per digest with the
-execution id `SHA256("pznet1/eid" || eid || i)`; no presignatures.
+`{"sigs": [{"r": hex32, "s": hex32}, ...]}`, `s` low and verified against `key` before it is given. Commands: `pzfirma primes FILE`
+(pregenerates the two safe primes of a session: seconds to a minute; a file serves one session, and pzpeer deletes it after);
+`pzfirma selftest` (both parties in one process). The session runs the auxiliary data generation with the execution id
+`SHA256("pznet1/aux" || eid)`, then one signing per digest with `SHA256("pznet1/eid" || eid || u32_be(index))`; no presignatures.
+
+- The messages between the two pzfirma are an envelope (version, sender, phase, broadcast flag, the library's message) that pzpeer
+  relays as it is. On a failure pzfirma first sends an envelope of phase *abort* with the reason, then its 0x83: the other side stops at
+  once instead of waiting. 0x82 or 0x83 is always the last frame.
+- `blame` lists the parties the library names as culprits, or the other party when its message is malformed. It can be empty (no culprit
+  is known) and, when a broadcast was not reliable, each side blames the other.
+- The last message can be lost after one side already has the signatures: one side ends with 0x82 and the other with 0x83. This is the
+  case of the cancel lever of step 6 of section 7.5.
+- pzfirma has no timeouts: pzpeer ends a process that does not answer.
 
 ## 8. Transactions
 
