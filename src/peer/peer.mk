@@ -23,19 +23,19 @@ $(SECP_LIB): $(SECP_OBJ)
 	$(AR) rcs $@ $^
 
 # The modules of pzpeer, in the order of the layers (docs/en/NETWORK.md 2): main is the daemon and its commands.
-PEER_SRC   := main
+PEER_SRC   := noise keys record dpfeed main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
-PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
+PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ)) $(BUILD)/netfile.o   # netfile.o: the reader of pzsolve, libc and pzcore only
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  :=
+PEERTESTS  := t_noise t_record
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
 	$(CC) $(PEER_FLAGS) -MMD -MP -c $< -o $@
 
-$(PEER): $(PEER_OBJ) $(LIB) $(SECP_LIB)
-	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
+$(PEER): $(PEER_OBJ) $(BUILD)/netfile.o $(LIB) $(SECP_LIB)
+	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(BUILD)/netfile.o $(LIB) $(SECP_LIB) $(LIBLDLIBS)
 
 $(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
 	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
