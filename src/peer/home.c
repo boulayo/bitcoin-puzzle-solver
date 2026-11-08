@@ -5,8 +5,9 @@
  * partner in the table, party 1 only when it does not listen itself (it cannot be found then); the other side waits for the connection.
  *
  * A hello can start a session before this home has the alert of its pair, and anyone can copy the x of a published record into one of
- * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzfirma only after that), and
- * at most HELLO_SESSIONS of them run at a time, one per partner, so they never take the slots of the pairs the table alerted. */
+ * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzfirma only after that), at
+ * most HELLO_SESSIONS of them run at a time, one per partner, and a slot whose partner proved nothing is given back: they never take the
+ * slots of the pairs the table alerted. */
 #include "home.h"
 #include "chain_rpc.h"
 #include "dht.h"
@@ -37,6 +38,8 @@ extern char **environ;
 #define HELLO_SESSIONS 16          /* sessions started by a hello alone, without an alert of the table (the others always have room) */
 #define FAILS_MAX 10               /* failed signings of a home on a network, with any partner (project 4.6) */
 #define FAILS_PAIR_MAX 3           /* and with one pair */
+#define RETRY_S 600                /* a kept pair whose session did not pay starts again after this, */
+#define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
 
 /* the own points: x prefix -> index in dp.bin (the distance is read back from the file when it is needed: 16 bytes a point in memory) */
 typedef struct {
@@ -46,8 +49,10 @@ typedef struct {
 
 typedef struct session_slot {
     bool used, running, have_conn;
-    bool alerted;                   /* the table alerted the pair (both proofs checked): the slot is kept when its session ends */
+    bool alerted;                   /* the table alerted the pair, or its partner proved its distance in a session: the slot is kept */
     bool waiting;                   /* its session waits for the partner to dial */
+    int64_t retry_at;               /* when its session starts again (0: never), the seconds of mono_s */
+    int tries;
     uint8_t eid[32], partner[32];
     record mine, theirs;
     net_conn *conn;                 /* an incoming channel handed by on_session */
@@ -77,6 +82,13 @@ typedef struct {
     session_limit limit;            /* the failed signings, counted in the home folder */
     char limitpath[1200];
 } home;
+
+static int64_t mono_s(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec;
+}
 
 static volatile sig_atomic_t g_stop;                            /* 1: stop; 2 (a second signal): do not wait for the sessions */
 static void on_signal(int sig) { (void)sig, g_stop = g_stop < 2 ? g_stop + 1 : 2; }
@@ -255,31 +267,34 @@ static void *session_main(void *arg)
     snprintf(primes, sizeof primes, "%s/primes-%s.json", cfg->dir, tag);
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
+    bool proved = false;
     /* the channel: the partner's hello if it came first; else dialled by party 0 when it finds the partner, by party 1 when it does not
      * listen; else it comes to us */
     pthread_mutex_lock(&h->mu);
-    net_conn *in = s->have_conn ? s->conn : NULL, *c = NULL;
+    net_conn *c = s->have_conn ? s->conn : NULL;
     pthread_mutex_unlock(&h->mu);
     dht_contact pc;
-    if (!in && (me == 0 || cfg->listen_port == 0) && dht_find(h->d, s->theirs.owner, &pc)) c = dht_dial(h->d, &pc);
-    if (!in && !c) {                                            /* not ours to dial, or the partner did not answer: it dials us */
+    const bool dial = !c && (me == 0 || cfg->listen_port == 0) && dht_find(h->d, s->theirs.owner, &pc);
+    if (dial) c = dht_dial(h->d, &pc);
+    if (!c) {                                                   /* not ours to dial, or the partner did not answer: it dials us */
         pthread_mutex_lock(&h->mu);
         struct timespec until;
         clock_gettime(CLOCK_REALTIME, &until);
         until.tv_sec += 600;
-        s->waiting = true;
+        s->waiting = true;                                      /* a hello may come in only now */
         while (!s->have_conn && !g_stop && pthread_cond_timedwait(&h->cv, &h->mu, &until) == 0) {}
         s->waiting = false;
-        in = s->have_conn ? s->conn : NULL;
+        c = s->conn;
         pthread_mutex_unlock(&h->mu);
     }
-    if (!c) c = in;
     if (!c) {
         snprintf(why, sizeof why, "no channel with the partner");
         goto done;
     }
     {
-        conn_chan cc = {c, c == in ? s->first : NULL, s->first_len, 0};
+        pthread_mutex_lock(&h->mu);
+        conn_chan cc = {c, c == s->conn ? s->first : NULL, s->first_len, 0};
+        pthread_mutex_unlock(&h->mu);
         session_chan chan = {&cc, cc_send, cc_recv};
         btc_rpc rpc;
         char host[256] = "", user[128] = "", pass[256] = "";
@@ -291,8 +306,8 @@ static void *session_main(void *arg)
         chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 6, .fallback_feerate = 2000};
         const session_chain chain = chain_rpc_iface(&crpc);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
-                          .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .limit = &h->limit, .chan = &chan,
-                          .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
+                          .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .limit = &h->limit, .proved = &proved,
+                          .chan = &chan, .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
         memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
         memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
         const uint32_t n = (uint32_t)s->eid[0] << 24 | (uint32_t)s->eid[1] << 16 | (uint32_t)s->eid[2] << 8 | s->eid[3];
@@ -309,7 +324,9 @@ done:
     if (c) net_close(c);
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* a hello that came while this session ran on its own channel */
     s->running = false, s->have_conn = false, s->conn = NULL;
-    s->used = s->alerted;                                       /* a pair the table never alerted gives its slot back */
+    s->alerted |= proved;                                       /* an alert that comes after it starts no second session */
+    s->used = s->alerted;                                       /* a pair whose partner never proved anything gives its slot back */
+    s->retry_at = s->alerted && res != SESSION_PAID && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
     h->ended++;
     h->paid |= res == SESSION_PAID;
     pthread_mutex_unlock(&h->mu);
@@ -508,7 +525,11 @@ int home_run(const home_cfg *cfg)
         pthread_mutex_lock(&h->mu);
         const bool done = cfg->exit_when_done && h->ended > 0;
         bool busy = false;
-        for (int i = 0; i < MAX_SESSIONS; i++) busy |= h->s[i].running;
+        for (int i = 0; i < MAX_SESSIONS; i++) {
+            session_slot *s = &h->s[i];
+            if (s->used && !s->running && s->retry_at && mono_s() >= s->retry_at) s->retry_at = 0, start_session(h, s);   /* again */
+            busy |= s->running;
+        }
         pthread_mutex_unlock(&h->mu);
         if (done && !busy) break;
     }

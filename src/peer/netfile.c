@@ -168,7 +168,7 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen)
         while (*v == ' ' || *v == '\t') v++;
         if (nlines == MAX_LINES) return fail(err, errlen, "too many lines", NULL);
         char *canon = buf[nlines++];
-        snprintf(canon, LINE_MAX_LEN, "%s=%s", k, v);
+        if (snprintf(canon, LINE_MAX_LEN, "%s=%s", k, v) >= LINE_MAX_LEN) return fail(err, errlen, "a line is too long", NULL);   /* never: it was one */
         int i;
         if ((i = key_index(k, IMMUTABLE, NIMM)) >= 0) {
             if (seen[i]) return fail(err, errlen, "repeated key", k);

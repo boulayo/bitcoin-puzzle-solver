@@ -11,8 +11,9 @@
 
 #define SESSION_MSG_MAX 65535               /* a Noise frame */
 
-/* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). */
-enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT };
+/* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
+ * while a session waits for blocks, and is skipped by the reader. */
+enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE };
 
 typedef struct {
     void *ctx;
@@ -60,10 +61,12 @@ typedef struct {
     uint64_t max_feerate;                   /* the highest fee rate this home accepts (satoshis per 1000 virtual bytes) */
     const char *pzfirma, *primes;           /* the signer and the primes file of this session (made by the session when it is missing) */
     session_limit *limit;                   /* NULL: no limit (tests) */
+    bool *proved;                           /* set when the partner has proved its distance (NULL: not wanted) */
     const session_chan *chan;
     const session_chain *chain;
     int timeout_ms;                         /* the longest wait for one message of the partner */
     int poll_ms;                            /* how often the chain is asked while waiting for a block */
+    int alive_ms;                           /* how often S_ALIVE goes to the partner while waiting for a block (0: every minute) */
     int cancel_blocks;                      /* the blocks F waits for the second transaction before it cancels (3) */
     bool withhold;                          /* tests only: as S, do not send the second transaction (the test channel also drops S's last message) */
 } session_cfg;

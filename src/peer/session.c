@@ -28,6 +28,7 @@
 #define HELLO_MS 30000                      /* the longest wait for the hello and the proof of the partner, which it makes at once */
 #define LIMIT_LINES 1024                    /* lines of the file of the limit: one per network, one per pair that failed */
 #define LIMIT_WAIT_S 120                    /* the longest wait for the turn of a signing (a partner waits 300 s for a message) */
+#define ALIVE_MS 60000                      /* S_ALIVE while waiting for blocks: an idle channel is cut by NATs and relays */
 
 typedef struct {
     const session_cfg *c;
@@ -59,7 +60,7 @@ static bool send_msg(sess *s, uint8_t type, const uint8_t *p, size_t len)
     uint8_t m[SESSION_MSG_MAX];
     if (len + 1 > sizeof m) return false;
     m[0] = type;
-    memcpy(m + 1, p, len);
+    if (len) memcpy(m + 1, p, len);
     return s->c->chan->send(s->c->chan->ctx, m, len + 1);
 }
 
@@ -68,7 +69,9 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
 {
     uint8_t m[SESSION_MSG_MAX];
     size_t n;
-    if (!s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, s->wait_ms) || n == 0) return fail(s, "the partner did not answer");
+    do
+        if (!s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, s->wait_ms) || n == 0) return fail(s, "the partner did not answer");
+    while (m[0] == S_ALIVE);                                    /* sent while the partner waited for blocks */
     if (m[0] == S_ABORT) {                                      /* its words go into our log: printable characters only */
         char r[201];
         size_t k = 0;
@@ -164,6 +167,7 @@ static bool hello(sess *s)
     if (!record_prove(c->ctx, c->net, &c->mine, c->d, c->partner, s->nonce[you], proof)) return fail(s, "the distance does not fit the record");
     if (!send_msg(s, S_PROOF, proof, 64) || !recv_msg(s, S_PROOF, their_proof, 64, &n)) return false;
     if (n != 64 || !record_proof_ok(c->ctx, c->net, &c->theirs, s->my_x, s->nonce[s->me], their_proof)) return fail(s, "the partner did not prove its distance");
+    if (c->proved) *c->proved = true;
     return true;
 }
 
@@ -215,7 +219,8 @@ static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *co
     return ok && rename(tmp, path) == 0;
 }
 
-/* d (+1 or -1) to the failures of the network and of the pair; +1 is refused at either limit. False with the reason in why (mu held) */
+/* d (+1 or -1) to the failures of the network and of the pair; +1 is refused at either limit, and 0 only checks them. False with the
+ * reason in why (mu held) */
 static bool limit_add(const sess *s, int d, char *why, size_t whylen)
 {
     const session_limit *l = s->c->limit;
@@ -232,12 +237,26 @@ static bool limit_add(const sess *s, int d, char *why, size_t whylen)
             if (n == LIMIT_LINES) return snprintf(why, whylen, "the count of failed signings in %.200s is full", l->path), false;
             memcpy(key[n], which[w], 32), count[n++] = 0;
         }
-        if (d > 0 && count[at[w]] >= max[w])
+        if (d >= 0 && count[at[w]] >= max[w])
             return snprintf(why, whylen, "%u failed signings %s: no more (the limit of a home, docs/en/NETWORK.md 7.5)", count[at[w]],
                             w ? "of this pair" : "on this network"), false;
     }
+    if (!d) return true;
     for (int w = 0; w < 2; w++) count[at[w]] = d > 0 ? count[at[w]] + 1 : count[at[w]] ? count[at[w]] - 1 : 0;
     return limit_write(l->path, key, count, n) || (snprintf(why, whylen, "cannot write the count of failed signings to %.200s", l->path), false);
+}
+
+/* whether this home may still sign for the pair: asked before the plan, so that a home at its limit stops before the partner's pzfirma
+ * starts, which would then count a failure of its own */
+static bool limit_ok(sess *s)
+{
+    session_limit *l = s->c->limit;
+    char why[300];
+    if (!l) return true;
+    pthread_mutex_lock(&l->mu);
+    const bool ok = limit_add(s, 0, why, sizeof why);
+    pthread_mutex_unlock(&l->mu);
+    return ok || fail(s, "%s", why);
 }
 
 /* before a run of pzfirma: its turn (one at a time), and counted as failed until it gives valid signatures. The wait is bounded: two homes
@@ -351,6 +370,7 @@ static void *relay_in(void *arg)
     for (;;) {
         size_t n;
         if (!r->s->c->chan->recv(r->s->c->chan->ctx, m, sizeof m, &n, r->s->wait_ms) || n < 1) break;
+        if (m[0] == S_ALIVE) continue;
         if (m[0] == S_SIGNED || m[0] == S_ABORT) break;
         if (m[0] != S_SIGNER || n < 2 || len + n - 2 > SIGNER_FRAME_MAX) {
             r->failed = true;
@@ -451,15 +471,26 @@ static uint64_t height_now(sess *s)
     return h;
 }
 
-/* waits until output vout of txid has at least `conf` confirmations (or, conf < 0, until it is spent), for at most `blocks` new blocks */
+static int64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* waits until output vout of txid has at least `conf` confirmations (or, conf < 0, until it is spent), for at most `blocks` new blocks;
+ * meanwhile an S_ALIVE now and then keeps the channel from being cut as idle (the partner may have closed it: that is no error) */
 static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, uint64_t blocks)
 {
     const session_chain *ch = s->c->chain;
     const uint64_t until = height_now(s) + blocks;
+    const int every = s->c->alive_ms > 0 ? s->c->alive_ms : ALIVE_MS;
+    int64_t alive = now_ms() + every;
     for (;;) {
         const int k = ch->confirmations(ch->ctx, txid, vout);   /* -2: the chain did not answer, which says nothing */
         if (k != -2 && (conf < 0 ? k == -1 : k >= conf)) return true;
         if (ch->height(ch->ctx) >= until) return false;
+        if (now_ms() >= alive) (void)send_msg(s, S_ALIVE, NULL, 0), alive = now_ms() + every;
         pause_ms(s->c->poll_ms);
     }
 }
@@ -477,7 +508,7 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     btc_tx a, b, x;
     size_t used;
     if (nc <= 0 || !payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "no coin of the puzzle to spend"), SESSION_FAILED;
-    if (!plan(&s, &a)) return SESSION_FAILED;
+    if (!limit_ok(&s) || !plan(&s, &a)) return SESSION_FAILED;
     if (access(c->primes, R_OK) != 0 && !signer_primes(c->pzfirma, c->primes)) return fail(&s, "pzfirma could not make its primes"), SESSION_FAILED;
     if (!sign_jointly(&s, &a, a.n_in, 'A')) return SESSION_FAILED;
     uint8_t aid[32];

@@ -246,7 +246,7 @@ static void test_dpfeed(void)
     uint8_t hdr[DPBIN_HDR] = "PZDP5\n", rec[3][DPBIN_REC], x[32], h[32];
     fwrite(hdr, 1, sizeof hdr, f);
     for (int i = 0; i < 3; i++) {
-        char label[16];
+        char label[24];
         snprintf(label, sizeof label, "file %d", i);
         hashed(label, h);
         dp_record(&net, (unsigned)i, 1, h, rec[i], x);

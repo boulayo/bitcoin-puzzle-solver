@@ -233,7 +233,7 @@ enum { LAST_SENT, LAST_DROPPED, LAST_ABORT, LAST_DAMAGED };
 typedef struct {
     queue *in, *out;
     int last_b;                        /* LAST_*: the last signing message of the second transaction */
-    int plans, msgs_a, msgs;
+    int plans, msgs_a, msgs, alives;
 } end;
 
 static void q_put(queue *q, const uint8_t *m, size_t len)
@@ -247,6 +247,8 @@ static void q_put(queue *q, const uint8_t *m, size_t len)
 static bool q_send(void *c, const uint8_t *m, size_t len)
 {
     end *e = c;
+    if (len >= 1 && m[0] == S_ALIVE) e->alives++;
+    if (len >= 1 && (m[0] == S_PLAN || m[0] == S_SIGNER)) q_put(e->out, (const uint8_t[]){S_ALIVE}, 1);   /* the reader must skip it */
     if (e->last_b != LAST_SENT && len >= 1) {
         if (m[0] == S_PLAN) {
             if (++e->plans == 2) e->msgs_a = e->msgs;          /* the second plan: the first signing is over, its messages counted */
@@ -368,6 +370,7 @@ typedef struct {
     unsigned fails_F, fails_S;        /* the failed signings F and S count in the case */
     const char *bin[2];               /* the pzfirma of each home (NULL: the real one) */
     const char *why;                  /* in the reason of both homes, when not NULL */
+    bool before_proofs;               /* the session stops before the proofs of possession */
 } tcase;
 
 /* a puzzle, its coin on the chain, two homes whose records meet on the same point; then the session of both */
@@ -414,11 +417,12 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
     btc_rpc rpcs[2];
     chain_rpc crpc[2];
     session_limit lim[2];
+    bool proved[2] = {false, false};
     char limpath[2][96], mine_primes[96];
     uint8_t xo[2][32];
     for (int i = 0; i < 2; i++) {
         uint8_t sec[32];
-        char l[64];
+        char l[128];
         secp256k1_xonly_pubkey xpk;
         snprintf(l, sizeof l, "%s home %d", label, i), hashed(l, sec);
         CHECK(secp256k1_keypair_create(ctx, &h[i].id, sec) && secp256k1_keypair_xonly_pub(ctx, &xpk, NULL, &h[i].id));
@@ -438,7 +442,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         memcpy(g->base, base, 32), memcpy(g->pubkey33, p33, 33), memcpy(g->partner, xo[1 - i], 32);
         g->mine = r[i], g->theirs = r[1 - i];
         memcpy(g->d, d[i], 32);
-        char l[64];
+        char l[128];
         snprintf(l, sizeof l, "%s coin %d", label, i), hashed(l, g->coin_sec);
         snprintf(l, sizeof l, "%s pay %d", label, i);
         uint8_t ps[32];
@@ -453,7 +457,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate};
         chn[i].lost = tc->lost_heights;
         g->chan = &chan[i];
-        g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3;
+        g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3, g->alive_ms = 1;
         /* each home its limit, in a file of the case */
         snprintf(l, sizeof l, "limit%d", i);
         in_dir(l, limpath[i], sizeof limpath[i]);
@@ -461,7 +465,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         lim[i] = (session_limit){.path = limpath[i], .max = 10, .pair_max = 3};
         pthread_mutex_init(&lim[i].mu, NULL);
         pthread_cond_init(&lim[i].cv, NULL);
-        g->limit = &lim[i];
+        g->limit = &lim[i], g->proved = &proved[i];
         if (tc->limit[i]) {
             char hex[65], text[200];
             pt_hex(i ? eid : net.fp, 32, hex);
@@ -511,6 +515,8 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         CHECK(at_puzzle == 100000000 && pay[0] == 0 && pay[1] == 0 && !coin_left[0] && !coin_left[1]);   /* nothing was signed */
     }
     if (tc->why) CHECK(strstr(h[0].why, tc->why) || strstr(h[1].why, tc->why));
+    if (tc->expect == CANCEL) CHECK(e[F_home].alives > 0);      /* sent while F waited its blocks */
+    CHECK(proved[0] == !tc->before_proofs && proved[1] == !tc->before_proofs);
     /* the limits: a failed signing counts for the network and the pair, a good one nothing, a refused one nothing */
     for (int i = 0; i < 2; i++) {
         const unsigned failed = i == F_home ? tc->fails_F : tc->fails_S;
@@ -568,6 +574,8 @@ static void run_copied(const char *bin)
     g->max_feerate = 200000, g->pzfirma = bin, g->primes = in_dir("primes-copied", prim, sizeof prim);
     remove(prim);
     g->chan = &chan, g->chain = &chn, g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3;
+    bool proved = false;
+    g->proved = &proved;
     pthread_t th;
     pthread_create(&th, NULL, run_home, &h);
     /* the thief: its hello, then a proof it could not make */
@@ -582,7 +590,7 @@ static void run_copied(const char *bin)
     pthread_join(th, NULL);
     q_drain(&q[0]), q_drain(&q[1]);
     printf("  copied x: %s (%s)\n", h.res == SESSION_FAILED ? "failed" : "not failed", h.why);
-    CHECK(h.res == SESSION_FAILED && strstr(h.why, "did not prove"));
+    CHECK(h.res == SESSION_FAILED && strstr(h.why, "did not prove") && !proved);
     CHECK(access(prim, F_OK) != 0);
 }
 
@@ -623,8 +631,11 @@ int main(void)
         {.name = "F stops at its last message", .expect = CANCEL, .f_last = LAST_ABORT, .fails_F = 1, .fails_S = 1},
         {.name = "F damages its last message", .expect = CANCEL, .f_last = LAST_DAMAGED, .fails_F = 1, .fails_S = 1},
         /* S proposes a rate at which F's cancel would be dust, and holds back: refused at the hello (before, F could not cancel) */
-        {.name = "fee rate too high to cancel", .expect = NOTHING, .s_last = LAST_DROPPED, .s_withholds = true, .fee = 60000, .why = "too high for the cancel"},
-        {.name = "limit reached", .expect = NOTHING, .limit = {10, 3}, .why = "failed signings"},
+        {.name = "fee rate too high to cancel", .expect = NOTHING, .s_last = LAST_DROPPED, .s_withholds = true, .fee = 60000, .why = "too high for the cancel",
+         .before_proofs = true},
+        /* one home at its limit (on the network, or for the pair): it stops before the plan, and the other counts no failure */
+        {.name = "limit of the network reached", .expect = NOTHING, .limit = {10, 0}, .why = "failed signings on this network"},
+        {.name = "limit of the pair reached", .expect = NOTHING, .limit = {0, 3}, .why = "failed signings of this pair"},
         {.name = "a pzfirma that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) run_case(&cases[i], bin, primes);

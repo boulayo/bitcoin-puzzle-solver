@@ -304,7 +304,8 @@ Between the two homes, over a Noise channel between their identities (`src/peer/
 chain given as interfaces). Party 0 is the owner with the smaller identity; `eid = SHA256("pznet1/eid" || F || record_0 || record_1)`;
 F, the party whose tiny coin goes into the second transaction, is the last bit of `eid`, S the other. Every step is a message both sides
 send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`; an `S_ABORT` with its
-reason can come instead of any of them):
+reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so that NATs and
+relays do not cut the channel as idle, and the reader skips it):
 
 1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
@@ -338,14 +339,16 @@ reason can come instead of any of them):
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of F or of an eid> <failures>`: every run of pzfirma counts as failed
 before it starts (written through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash
-or a kill in the middle counts. At 10 failures on a network, with any partner, or 3 for one pair, the home signs no more on it. Runs are one
+or a kill in the middle counts. At 10 failures on a network, with any partner, or 3 for one pair, the home signs no more on it, and says so
+before the plan of the first transaction, so that the partner's pzfirma does not start (it would count a failure of its own). Runs are one
 at a time; a session that does not get its turn within 2 minutes gives up without a run. Not done yet: the count published in the network
 and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
 
 **The daemon** (`src/peer/home.c`). A session starts on the alert of the table (both proofs checked there) or on a hello that names the
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
 the proofs (the primes come after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
-they end: at least 48 of the 64 slots are always there for the pairs the table alerted. The primes file of a session is removed when it ends, and
+they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. A pair
+that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day. The primes file of a session is removed when it ends, and
 at the start of the daemon those left by a crash (a Paillier key: with the messages of the session the partner could find the piece).
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzfirma and a chain in memory that checks every input: the
@@ -358,9 +361,9 @@ limit are checked in every case.
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
 for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are);
-a pair whose session failed before any signing is tried again only when the partner says hello again or at the next start; F takes a spend
-of the prize in its node's mempool for the payout (chain_rpc asks `gettxout` with the mempool), so a second transaction that S sends and
-that then leaves the mempools unconfirmed would be S's to hold again.
+F takes a spend of the prize in its node's mempool for the payout (chain_rpc asks `gettxout` with the mempool), so a second transaction
+that S sends and that then leaves the mempools unconfirmed would be S's to hold again; two sessions of one puzzle at once build their
+first transactions from the same coins, and the one that loses waits its 144 blocks.
 
 ### 7.6 pzfirma
 
