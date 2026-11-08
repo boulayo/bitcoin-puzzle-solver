@@ -27,20 +27,26 @@ static void test_keys(void)
     uint8_t seed[32], fp2[32] = {1}, a[32], b[32];
     hashed("home seed", seed);
     home_identity id, id2;
-    CHECK(keys_identity(ctx, seed, FP, &id));
-    CHECK(id.id[0] == 0 && id.id[1] == 0 && keys_id_ok(id.id));
+    CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id));
+    CHECK(id.id[0] == 0 && id.id[1] == 0 && keys_id_ok(id.id, NODE_ID_ZERO_BITS));
     uint8_t again[32];
     keys_node_id(id.xonly, again);
     CHECK(!memcmp(again, id.id, 32));
-    CHECK(keys_identity(ctx, seed, FP, &id2) && id2.j == id.j && !memcmp(id2.sec, id.sec, 32));   /* deterministic */
-    CHECK(keys_identity(ctx, seed, fp2, &id2) && memcmp(id2.xonly, id.xonly, 32) != 0);         /* another network, another identity */
+    CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id2) && id2.j == id.j && !memcmp(id2.sec, id.sec, 32));   /* deterministic */
+    CHECK(keys_identity(ctx, seed, fp2, NODE_ID_ZERO_BITS, &id2) && memcmp(id2.xonly, id.xonly, 32) != 0);         /* another network */
     CHECK(!memcmp(id.pub33 + 1, id.xonly, 32));                                                 /* the Noise key has the same x */
     keys_starts(seed, FP, a);
     keys_starts(seed, fp2, b);
     CHECK(memcmp(a, b, 32) != 0 && memcmp(a, id.sec, 32) != 0);
     CHECK(keys_coin(ctx, seed, FP, 0, a) && keys_coin(ctx, seed, FP, 1, b) && memcmp(a, b, 32) != 0);
     uint8_t zid[32] = {0, 0, 0xff}, nid[32] = {0, 1};
-    CHECK(keys_id_ok(zid) && !keys_id_ok(nid));
+    CHECK(keys_id_ok(zid, NODE_ID_ZERO_BITS) && !keys_id_ok(nid, NODE_ID_ZERO_BITS));
+    CHECK(keys_id_ok(nid, 15) && !keys_id_ok(nid, 16) && keys_id_ok(zid, 16) && !keys_id_ok(zid, 17) && keys_id_ok(nid, 0));
+    /* fewer bits (the tests of the network): the first j whose ID has 4 zero bits, about 16 tries, at or before the one with 16 */
+    home_identity few;
+    CHECK(keys_identity(ctx, seed, FP, 4, &few) && keys_id_ok(few.id, 4) && few.j <= id.j);
+    CHECK(few.j == id.j || !keys_id_ok(few.id, NODE_ID_ZERO_BITS));
+    CHECK(!keys_identity(ctx, seed, FP, 33, &few));
 }
 
 /* a network with a known key: P = k*G, base, dpbits 0 (every point is distinguished) */
@@ -81,7 +87,7 @@ static void test_record(void)
     uint8_t seed[32];
     hashed("owner", seed);
     home_identity id;
-    CHECK(keys_identity(ctx, seed, FP, &id));
+    CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id));
     record r = {.t = -1, .seq = 0x0102030405060708ULL}, back;
     uint8_t d[32], enc[RECORD_LEN];
     hashed("distance", d);
@@ -95,7 +101,10 @@ static void test_record(void)
     CHECK(record_sign(ctx, &net, &id.kp, &r) && record_check(ctx, &net, &r));
     record_encode(&r, enc);
     CHECK(enc[0] == 1 && enc[66] == 1 && enc[73] == 8);
-    CHECK(record_decode(enc, &back) && !memcmp(&back, &r, sizeof r) && record_check(ctx, &net, &back));
+    uint8_t enc2[RECORD_LEN];
+    CHECK(record_decode(enc, &back) && record_check(ctx, &net, &back));
+    record_encode(&back, enc2);
+    CHECK(!memcmp(enc2, enc, RECORD_LEN));                       /* compared by the encoding: the struct has padding */
     for (int i = 1; i < RECORD_LEN; i++) {                     /* any changed byte: refused by the format or by the signature */
         uint8_t e2[RECORD_LEN];
         memcpy(e2, enc, sizeof e2);
