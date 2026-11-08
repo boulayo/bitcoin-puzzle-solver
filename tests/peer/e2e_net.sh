@@ -17,8 +17,9 @@ rpc() {   # rpc [wallet] METHOD PARAMS_JSON: the result as JSON text
     curl -s --user "$RU:$RW" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"$m\",\"params\":$p}" "http://$RH:$RP$path" |
         python3 -c 'import json,sys; r=json.load(sys.stdin); print(json.dumps(r["result"]) if r["error"] is None else "ERROR " + json.dumps(r["error"]))'
 }
-rpc createwallet '["pz"]' >/dev/null
+rpc createwallet '["pz"]' >/dev/null; rpc loadwallet '["pz"]' >/dev/null   # made by an earlier run: loaded again after a restart of the node
 MINE=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"')
+case $MINE in ERROR*|"") echo "E2E NET FAILED: the node gives no address: $MINE"; exit 1;; esac
 rpc generatetoaddress "[101, \"$MINE\"]" >/dev/null
 ( while sleep 1; do rpc generatetoaddress "[1, \"$MINE\"]" >/dev/null; done ) &
 
@@ -35,7 +36,7 @@ n=int.from_bytes(p,'big'); a='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqr
 while n: n,r=divmod(n,58); s=a[r]+s
 print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     rpc wallet sendtoaddress "[\"$PADDR\", 1]" >/dev/null
-    PORT=$((30000 + 10 * try))
+    PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
     printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=rete-06\ndpbits=14\nchain=regtest\nentry=127.0.0.1:%d\n' \
         "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" "$PORT" > "$T/net.txt"
     "$BIN/pzpeer" netsign "$DIR/maint.key" "$T/net.txt" >> "$T/net.txt"
