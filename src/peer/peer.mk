@@ -23,12 +23,12 @@ $(SECP_LIB): $(SECP_OBJ)
 	$(AR) rcs $@ $^
 
 # The modules of pzpeer, in the order of the layers (docs/en/NETWORK.md 2): main is the daemon and its commands.
-PEER_SRC   := main
+PEER_SRC   := json btc btc_rpc main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  :=
+PEERTESTS  := t_json t_btc t_btc_rpc
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
@@ -37,8 +37,10 @@ $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
 $(PEER): $(PEER_OBJ) $(LIB) $(SECP_LIB)
 	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
 
-$(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
+$(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c tests/peer/peertest.h $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
 	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
+# the expected values of t_btc, written by tests/peer/gen_btc_vectors.py (python3 gen_btc_vectors.py > btc_vectors.h)
+$(BUILD)/peer/t_btc$(EXE): tests/peer/btc_vectors.h
 
 peer: $(PEER)
 
