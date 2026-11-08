@@ -363,12 +363,86 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 
 - Inputs: P2PKH only (the puzzle address and the tiny coins), legacy signature hash, `SIGHASH_ALL`, low `s`.
 - Outputs to any standard address of the chain of the network file.
-- Amounts are verified from the previous transactions (their hash is their id): `btc_prevout` takes the raw bytes of the previous
-  transaction, in either serialization, and gives the value and the script of the output only when the hash of those bytes is the txid.
+- Amounts: the signature of a legacy input does not cover the value it spends, and a value too low would give the difference to the
+  miners. Where a value comes from a source that is not trusted, it is verified from the previous transaction (its hash is its id):
+  `btc_prevout` takes the raw bytes of the previous transaction, in either serialization, and gives the value and the script of the
+  output only when the hash of those bytes is the txid. With the home's own node (8.1) the node itself is the verification.
+- Fees: in satoshis per 1000 virtual bytes, as `estimatesmartfee` gives them (BTC per kvB, read exactly, never through a double). Our
+  transactions are legacy, so their virtual size is their size; it is counted with every signature at its longest (71 bytes of DER
+  with a low `s`, and the hashtype), and the fee is rounded up: the rate paid is never below the one agreed.
+- What we build is standard: version 2, P2PKH inputs, every output above the dust limit of P2PKH (546 satoshis, the highest of the
+  standard forms), at most 16 inputs and 16 outputs, far below the size limit.
 - The vectors of `tests/peer/t_btc.c` come from transactions of the main chain, pinned by their txids, and from
   `tests/peer/gen_btc_vectors.py`, an independent implementation in Python of the serialization, the legacy signature hash, RFC 6979 and
   DER (`python3 tests/peer/gen_btc_vectors.py > tests/peer/btc_vectors.h`).
 - The rules of the project document (section 4.5): at most 8 inputs, coins worth less than 3 times their fee are left, half each.
+- `tests/peer/fuzz_peer.c` mutates JSON documents, raw transactions and HTTP replies and checks that the readers agree with each other
+  (`make peer-fuzz`, under the sanitizers: `make BUILD=build_asan OPT="-O1 -fsanitize=address,undefined" peer-fuzz FUZZ_SECONDS=300`).
+
+### 8.1 The home's node
+
+`pzpeer run --rpc` is the home's own bitcoind, on the same machine or over a link the user trusts (the JSON-RPC is plain HTTP with basic
+authentication). It is trusted as a wallet trusts its node: it validated every block, and what it says of its own set of unspent outputs
+is the chain, values included. So the coins of the puzzle address are taken with their values from `scantxoutset`, which reads that set:
+a pruned node serves as well as a full one. (The puzzle coins are of 2015: a pruned node no longer has their blocks, nor the bytes of
+the transactions that made them, and those bytes would come from the same node anyway.) A node that is not trusted could hide coins,
+report spent ones, or give a value too low: a node of someone else is not supported, and 8.2 is the way without a node of one's own.
+Every reply is still read as hostile input: it is refused, never read past its buffers, when it is malformed.
+
+On the main chain:
+
+- Credentials: `--rpc HOST:PORT --rpc-cookie FILE` takes them from the `.cookie` that bitcoind writes in its data directory when it has
+  no `rpcpassword` (its default; `~/.bitcoin/.cookie` on the main chain, `~/.bitcoin/testnet3/.cookie`, `signet/`, `regtest/`), and no
+  password goes on the command line, where the list of processes shows it. Only the user of bitcoind reads the file, unless bitcoind
+  runs with `-rpccookieperms=group` (Bitcoin Core 28). bitcoind writes a new cookie each time it starts: the client reads the file
+  again when the node refuses it. `--rpc HOST:PORT:USER:PASSWORD` still works (the password is the rest of the text; `[::1]:8332`
+  for IPv6). `pzpeer run` checks the option when it starts and says where the node is; a node that is not running yet (no cookie)
+  only delays the sessions.
+- A node that is behind: a session starts only on a node of the chain of the network file (`chain` of `getblockchaininfo`, where
+  `testnet4` counts as `test`), out of its initial download, with its blocks at most one behind the headers it knows
+  (`chain_rpc_ready`). A node on another chain stops `pzpeer run` at its start; one still syncing only delays the sessions.
+- The scan reads the whole set of unspent outputs, minutes on the main chain, and the node runs one at a time: a session waits for the
+  scan of another (the partner on the same node, a wallet) as long as a scan may take (30 minutes). A scan it gives up on is aborted:
+  the node would go on with it, and refuse the next one meanwhile.
+- Thousands of tiny coins may be sent to a puzzle address. The scan keeps the 64 largest (equal values by outpoint, the order of
+  `payout_first`, so that both homes keep the same), not the first 64 the node lists: it lists them in the order of their txids,
+  where the prize may come last.
+- When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
+  would cancel at once.
+
+Not yet handled: a puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON
+reader, and no session starts. It would cost an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a
+prize. The prizes of the network file (`prize=txid:vout:sats`) can each be checked with `gettxout`, with no scan: the session does not
+use them yet.
+
+### 8.2 Without a node of one's own (to come)
+
+The light verification of project 4.4: the coins come from several servers, and nothing they say is believed without a proof. The
+shortest sound design is on the Electrum protocol, which the servers of most wallets speak; plain TCP is enough, as every answer is
+proven (and TLS would be a new dependency).
+
+1. **Headers.** A checkpoint (the height and hash of a block, a line of the signed network file), and every header after it from 3 or
+   more servers chosen at random among the `electrum=` lines of the file and those of the user. Each header is checked: the hash of the
+   one before, its proof of work below its target, the target of every 2016 blocks, its time above the median of the 11 before. The
+   valid chain with the most work is kept on disk, 80 bytes a block; a server that sends an invalid header is dropped. It is also the
+   clock of the session: the blocks F waits count on it, and no server can make them come faster without the work.
+2. **Coins.** `blockchain.scripthash.listunspent` of the puzzle address from each server, and the union of what they list. For each
+   coin, the transaction that made it (`blockchain.transaction.get`), whose hash must be its txid (`btc_prevout`: its value and its
+   script), and its Merkle branch (`blockchain.transaction.get_merkle`) to the header of its height in the kept chain: then it is
+   confirmed, as deep as that header. A "transaction" of 64 bytes is refused, as it could be an inner node of the tree passed off
+   as a leaf (CVE-2017-12842).
+3. What a lying server can still do: hide a coin, which is taken later by another session, or list a coin already spent, which makes
+   the first transaction invalid: it is refused, and the session starts again with other servers. The two homes compare the hash of
+   the first transaction as they do now, so different views stop the session before any signing.
+4. **Our transactions** go to every server, and are confirmed when a Merkle branch of their txid links to the kept chain. For the wait
+   of F, the prize has moved only when a transaction that spends it is confirmed that way (the second, or the same with another
+   encoding of a signature): a server that just stops listing the prize proves nothing, and the partner could run it. Servers that
+   hide a confirmed second transaction only make F send a cancel that is invalid, its coin being spent already.
+5. **Fee rate:** the median of `blockchain.estimatefee` of the servers, under the cap of the file.
+
+The code: the headers and their rules (a few hundred lines), the Merkle branch (twenty), a client of the Electrum JSON-RPC over TCP (one
+JSON object per line: simpler than `btc_rpc.c`), and `chain_electrum.c`, a second `session_chain` beside `chain_rpc.c`. The main chain
+first: the minimum difficulty of testnet and the signed blocks of signet are more rules for little use.
 
 ## 9. Status
 
@@ -385,11 +459,11 @@ in `t_session` with `PZ_REGTEST`.
 | pzcore: ChaCha20-Poly1305, the generator of the home seed (section 4.1) | done (`t_aead`: RFC 8439 vectors; `t_seed`); the GPU source of the seed to come |
 | `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 30 nodes in one process); POSIX only (the Windows shim is to come); no limit of contacts per address block yet (project 4.2), no UPnP or NAT-PMP |
-| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1) |
+| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node); the light verification of section 8.2 to come |
 | pzfirma, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
-| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
+| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4, section 8.2); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
 
 ## 10. A test network on one machine
 
@@ -407,6 +481,9 @@ into `PZNET_TRUST`, and every home runs
 ```sh
 pzpeer run --network FILE --dir HOME --payout ADDRESS --rpc 127.0.0.1:18443:pz:pz --listen PORT --peer 127.0.0.1:OTHER -- -t 2 --no-gpu
 ```
+
+With a bitcoind of its own and no `rpcpassword`, `--rpc 127.0.0.1:8332 --rpc-cookie ~/.bitcoin/.cookie` takes its credentials from its
+cookie file instead (section 8.1).
 
 The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); `HOME/start.key` is
 the start key pzpeer gives to pzsolve; the campaign is in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
