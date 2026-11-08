@@ -7,6 +7,7 @@
 
 #include "payout.h"
 #include "pieces.h"
+#include <pthread.h>
 
 #define SESSION_MSG_MAX 65535               /* a Noise frame */
 
@@ -32,6 +33,18 @@ typedef struct {
     uint64_t (*feerate)(void *ctx);         /* satoshis per 1000 virtual bytes for a confirmation within a few blocks */
 } session_chain;
 
+/* The limit of failed signings of a home (docs/en/NETWORK.md 7.5, project 4.6). A bug of the two-party signer could leak a bit of a piece
+ * through each signing that fails, so every run of pzfirma counts as failed, in a file, before it starts, and is taken off once it gave valid
+ * signatures; at max failures on the network, or pair_max for one pair, there are no more signings. The file survives a restart and a crash
+ * in the middle of a run. Runs are one at a time (busy): a session that does not get its turn within two minutes gives up without one. */
+typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    bool busy;                              /* a run of pzfirma is under way */
+    const char *path;                       /* lines "<hex of F or of a session id> <failures>" */
+    unsigned max, pair_max;
+} session_limit;
+
 typedef struct {
     const secp256k1_context *ctx;
     const record_net *net;
@@ -45,7 +58,8 @@ typedef struct {
     uint8_t pay_spk[BTC_SPK_MAX];           /* the payout address of this home */
     size_t pay_len;
     uint64_t max_feerate;                   /* the highest fee rate this home accepts (satoshis per 1000 virtual bytes) */
-    const char *pzfirma, *primes;           /* the signer and the primes file of this session */
+    const char *pzfirma, *primes;           /* the signer and the primes file of this session (made by the session when it is missing) */
+    session_limit *limit;                   /* NULL: no limit (tests) */
     const session_chan *chan;
     const session_chain *chain;
     int timeout_ms;                         /* the longest wait for one message of the partner */

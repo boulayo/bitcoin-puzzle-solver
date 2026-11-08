@@ -4,6 +4,7 @@
 #include "signer.h"
 #include <pzcore/seal.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
@@ -15,23 +16,51 @@
 
 extern char **environ;
 
+/* a pipe whose ends no other child inherits: a pzfirma that held a copy of the stdin of another session's would keep that one from seeing
+ * the end of its input, and pzfirma has no business with any other descriptor of pzpeer (dp.bin, sockets) */
+static bool pipe_cloexec(int p[2])
+{
+    if (pipe(p) != 0) return false;
+    if (fcntl(p[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(p[1], F_SETFD, FD_CLOEXEC) == 0) return true;
+    close(p[0]), close(p[1]);
+    return false;
+}
+
+/* a process group of its own: a Ctrl-C at the terminal stops pzpeer, which lets the sessions under way end, and must not kill their
+ * pzfirma in the middle of a signing */
+static int spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *fa, char *const argv[])
+{
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&at, 0);
+    const int rc = posix_spawn(pid, path, fa, &at, argv, environ);
+    posix_spawnattr_destroy(&at);
+    return rc;
+}
+
+static bool reap(pid_t pid, int *st)
+{
+    pid_t r;
+    while ((r = waitpid(pid, st, 0)) < 0 && errno == EINTR) {}
+    return r == pid;
+}
+
 bool signer_start(signer *s, const char *path)
 {
     int in[2], out[2];
     s->pid = -1, s->to = s->from = -1;
-    if (pipe(in) != 0) return false;
-    if (pipe(out) != 0) {
+    if (!pipe_cloexec(in)) return false;
+    if (!pipe_cloexec(out)) {
         close(in[0]), close(in[1]);
         return false;
     }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_adddup2(&fa, in[0], 0);
+    posix_spawn_file_actions_adddup2(&fa, in[0], 0);              /* the copies on 0 and 1 stay open across exec, the originals do not */
     posix_spawn_file_actions_adddup2(&fa, out[1], 1);
-    posix_spawn_file_actions_addclose(&fa, in[1]);
-    posix_spawn_file_actions_addclose(&fa, out[0]);
     char *argv[] = {(char *)path, "session", NULL};
-    const int rc = posix_spawn(&s->pid, path, &fa, NULL, argv, environ);
+    const int rc = spawn(&s->pid, path, &fa, argv);
     posix_spawn_file_actions_destroy(&fa);
     close(in[0]), close(out[1]);
     if (rc != 0) {
@@ -99,18 +128,28 @@ bool signer_recv(signer *s, uint8_t *type, uint8_t **payload, size_t *len, int t
     return true;
 }
 
+void signer_kill(signer *s)
+{
+    if (s->pid > 0) kill(s->pid, SIGKILL);                     /* not reaped yet: the pid is still this process (or its zombie) */
+}
+
 void signer_stop(signer *s)
 {
     if (s->to >= 0) close(s->to);
     if (s->from >= 0) close(s->from);
     if (s->pid > 0) {
         int st;
-        if (waitpid(s->pid, &st, WNOHANG) == 0) {               /* still running: it has nothing more to say */
-            kill(s->pid, SIGKILL);
-            waitpid(s->pid, &st, 0);
-        }
+        if (waitpid(s->pid, &st, WNOHANG) == 0) kill(s->pid, SIGKILL), (void)reap(s->pid, &st);   /* still running: nothing more to say */
     }
     s->pid = -1, s->to = s->from = -1;
+}
+
+bool signer_primes(const char *path, const char *file)
+{
+    pid_t pid;
+    char *argv[] = {(char *)path, "primes", (char *)file, NULL};
+    int st;
+    return spawn(&pid, path, NULL, argv) == 0 && reap(pid, &st) && WIFEXITED(st) && WEXITSTATUS(st) == 0;
 }
 
 static void hex(const uint8_t *p, size_t n, char *out)

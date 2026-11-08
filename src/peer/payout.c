@@ -64,15 +64,27 @@ bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
            btc_tx_add_out(tx, v[0], t->pay_spk[0], t->pay_len[0]) && btc_tx_add_out(tx, v[1], t->pay_spk[1], t->pay_len[1]);
 }
 
+/* the output of F's cancel and its fee */
+static uint64_t cancel_out(const payout_terms *t, btc_out *out)
+{
+    *out = (btc_out){.script_len = (uint8_t)t->pay_len[t->first]};
+    memcpy(out->script, t->pay_spk[t->first], t->pay_len[t->first]);
+    return btc_fee(btc_vsize_p2pkh(1, out, 1), t->feerate);
+}
+
+bool payout_can_cancel(const payout_terms *t)
+{
+    btc_out out;
+    return (t->first == 0 || t->first == 1) && t->pay_len[t->first] <= BTC_SPK_MAX && cancel_out(t, &out) + 546 <= PAYOUT_TINY;
+}
+
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx)
 {
     uint8_t txid[32];
-    if (!first_ok(t, first) || !btc_tx_txid(first, txid)) return false;
+    btc_out out;
+    if (!first_ok(t, first) || !payout_can_cancel(t) || !btc_tx_txid(first, txid)) return false;
+    const uint64_t fee = cancel_out(t, &out);
     btc_tx_init(tx);
-    btc_out out = {.script_len = (uint8_t)t->pay_len[t->first]};
-    memcpy(out.script, t->pay_spk[t->first], t->pay_len[t->first]);
-    const uint64_t fee = btc_fee(btc_vsize_p2pkh(1, &out, 1), t->feerate);
-    if (PAYOUT_TINY < fee + 546) return false;                  /* a fee rate this high would leave dust: wait for a lower one */
     return btc_tx_add_in(tx, txid, (uint32_t)(1 + t->first), BTC_SEQUENCE_FINAL) &&
            btc_tx_add_out(tx, PAYOUT_TINY - fee, out.script, out.script_len);
 }
