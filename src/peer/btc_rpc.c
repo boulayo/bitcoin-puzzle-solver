@@ -1,0 +1,717 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
+/* btc_rpc.c - the JSON-RPC client of bitcoind (btc_rpc.h). */
+#include "btc_rpc.h"
+#include <pzcore/seal.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <netdb.h>
+#include <poll.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+
+#ifndef MSG_NOSIGNAL   /* macOS: SO_NOSIGPIPE on the socket instead */
+#define MSG_NOSIGNAL 0
+#endif
+
+#define HEAD_MAX  (64u << 10)                     /* the status line and the headers of a reply */
+#define REPLY_MAX (JSON_MAX_SIZE + (1u << 20))    /* a whole reply, with the framing of a chunked body */
+
+static bool fail(btc_rpc *c, btc_rpc_kind kind, int code, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    c->err.kind = kind;
+    c->err.code = code;
+    vsnprintf(c->err.msg, sizeof c->err.msg, fmt, ap);
+    va_end(ap);
+    for (char *p = c->err.msg; *p; p++)   /* the text may come from the server: nothing that would act on a terminal */
+        if ((unsigned char)*p < 0x20 || *p == 0x7f) *p = '?';
+    return false;
+}
+
+/* ---- setup ---- */
+
+static void base64(const uint8_t *p, size_t n, char *out)
+{
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 3) {
+        const uint32_t v = (uint32_t)p[i] << 16 | (i + 1 < n ? (uint32_t)p[i + 1] << 8 : 0) | (i + 2 < n ? p[i + 2] : 0);
+        out[o++] = T[v >> 18];
+        out[o++] = T[v >> 12 & 63];
+        out[o++] = i + 1 < n ? T[v >> 6 & 63] : '=';
+        out[o++] = i + 2 < n ? T[v & 63] : '=';
+    }
+    out[o] = 0;
+}
+
+static bool set_auth(btc_rpc *c, const char *userpass, size_t n)
+{
+    if (!n || n > BTC_RPC_AUTH_MAX || !memchr(userpass, ':', n)) return false;
+    base64((const uint8_t *)userpass, n, c->auth);
+    return true;
+}
+
+static bool init_common(btc_rpc *c, const char *host, unsigned port)
+{
+    memset(c, 0, sizeof *c);
+    if (!host || !host[0] || strlen(host) >= sizeof c->host || !port || port > 65535) return false;
+    strcpy(c->host, host);
+    snprintf(c->port, sizeof c->port, "%u", port);
+    c->timeout_ms = 30000;
+    c->scan_timeout_ms = 30 * 60000;
+    return true;
+}
+
+bool btc_rpc_init(btc_rpc *c, const char *host, unsigned port, const char *user, const char *pass)
+{
+    if (!init_common(c, host, port) || !user || !pass || strchr(user, ':')) return false;   /* basic auth splits at the first ':' */
+    char up[BTC_RPC_AUTH_MAX + 1];
+    const int n = snprintf(up, sizeof up, "%s:%s", user, pass);
+    const bool ok = n > 0 && (size_t)n < sizeof up && set_auth(c, up, (size_t)n);
+    pz_secure_zero(up, sizeof up);
+    if (!ok) btc_rpc_done(c);
+    return ok;
+}
+
+bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char *cookie_path)
+{
+    if (!init_common(c, host, port) || !cookie_path) return false;
+    FILE *f = fopen(cookie_path, "rb");
+    if (!f) return false;
+    char buf[BTC_RPC_AUTH_MAX + 4];
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;   /* the node writes it without a newline; a hand-made one may have one */
+    const bool ok = n <= BTC_RPC_AUTH_MAX && !memchr(buf, '\n', n) && set_auth(c, buf, n);
+    pz_secure_zero(buf, sizeof buf);
+    if (!ok) btc_rpc_done(c);
+    return ok;
+}
+
+bool btc_rpc_set_wallet(btc_rpc *c, const char *name)
+{
+    if (!name || !name[0]) {
+        c->wallet[0] = 0;
+        return true;
+    }
+    const size_t n = strlen(name);
+    if (n > sizeof c->wallet - sizeof "/wallet/") return false;
+    for (size_t i = 0; i < n; i++) {
+        const unsigned char ch = (unsigned char)name[i];
+        if (!(ch >= 'a' && ch <= 'z') && !(ch >= 'A' && ch <= 'Z') && !(ch >= '0' && ch <= '9') && ch != '-' && ch != '_' && ch != '.')
+            return false;
+    }
+    snprintf(c->wallet, sizeof c->wallet, "/wallet/%s", name);
+    return true;
+}
+
+void btc_rpc_done(btc_rpc *c) { pz_secure_zero(c, sizeof *c); }
+
+/* ---- transport ---- */
+
+static int64_t now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+/* 1 when fd is ready for ev, 0 at the deadline, -1 on an error of poll */
+static int wait_fd(int fd, short ev, int64_t deadline)
+{
+    for (;;) {
+        const int64_t left = deadline - now_ms();
+        if (left <= 0) return 0;
+        struct pollfd p = {.fd = fd, .events = ev};
+        const int r = poll(&p, 1, left > INT_MAX ? INT_MAX : (int)left);
+        if (r > 0) return 1;   /* an error or a hang-up shows in the read or write that follows */
+        if (r == 0) return 0;
+        if (errno != EINTR) return -1;
+    }
+}
+
+static int tcp_connect(btc_rpc *c, int64_t deadline)
+{
+    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM}, *res;
+    const int rc = getaddrinfo(c->host, c->port, &hints, &res);
+    if (rc) {
+        fail(c, BTC_RPC_ENET, 0, "%s: %s", c->host, gai_strerror(rc));
+        return -1;
+    }
+    int fd = -1, why = 0;
+    for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            why = errno;
+            continue;
+        }
+        /* not inherited by pzfirma; non-blocking, so that every wait has the deadline */
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+#ifdef SO_NOSIGPIPE
+        const int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        why = errno;
+        if (why == EINPROGRESS) {
+            const int w = wait_fd(fd, POLLOUT, deadline);
+            socklen_t l = sizeof why;
+            if (w > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &why, &l) == 0 && why == 0) break;
+            if (w == 0) why = ETIMEDOUT;
+            else if (w < 0) why = errno;
+        }
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0) fail(c, BTC_RPC_ENET, 0, "cannot connect to %s port %s: %s", c->host, c->port, strerror(why));
+    return fd;
+}
+
+static bool send_all(btc_rpc *c, int fd, const char *p, size_t n, int64_t deadline)
+{
+    while (n) {
+        const ssize_t k = send(fd, p, n, MSG_NOSIGNAL);
+        if (k > 0) {
+            p += k;
+            n -= (size_t)k;
+            continue;
+        }
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            const int w = wait_fd(fd, POLLOUT, deadline);
+            if (w > 0) continue;
+            return fail(c, BTC_RPC_ENET, 0, w ? "sending the request: %s" : "timeout sending the request", strerror(errno));
+        }
+        return fail(c, BTC_RPC_ENET, 0, "sending the request: %s", strerror(errno));
+    }
+    return true;
+}
+
+/* ---- HTTP ---- */
+
+static int hex_digit(unsigned c)
+{
+    if (c - '0' < 10) return (int)(c - '0');
+    c |= 0x20;
+    if (c - 'a' < 6) return (int)(c - 'a' + 10);
+    return -1;
+}
+
+/* A body in the chunked transfer coding (RFC 9112 7.1): 1 when it is complete, its decoded length in *n and the data in out when out
+ * is not NULL; 0 when more is to come; -1 when it is malformed. */
+static int dechunk(const char *p, size_t len, char *out, size_t *n)
+{
+    size_t i = 0, o = 0;
+    for (;;) {
+        size_t size = 0, digits = 0;
+        for (int d; i < len && (d = hex_digit((unsigned char)p[i])) >= 0; i++, digits++) {
+            if (size > JSON_MAX_SIZE) return -1;
+            size = size << 4 | (size_t)d;
+        }
+        if (i == len) return 0;
+        if (!digits || (p[i] != ';' && p[i] != '\r')) return -1;
+        const char *lf = memchr(p + i, '\n', len - i);   /* after the size, an extension (ignored) up to the end of the line */
+        if (!lf) return len - i > 4096 ? -1 : 0;
+        if (lf[-1] != '\r') return -1;
+        i = (size_t)(lf - p) + 1;
+        if (!size) {   /* the last chunk, then the trailer lines up to an empty one */
+            for (;;) {
+                const char *e = memchr(p + i, '\n', len - i);
+                if (!e) return len - i > 4096 ? -1 : 0;
+                const size_t ll = (size_t)(e - (p + i));
+                if (!ll || p[i + ll - 1] != '\r') return -1;
+                i += ll + 1;
+                if (ll == 1) {
+                    *n = o;
+                    return 1;
+                }
+            }
+        }
+        if (len - i < size + 2) return 0;
+        if (p[i + size] != '\r' || p[i + size + 1] != '\n') return -1;
+        if (out) memmove(out + o, p + i, size);   /* out may be p itself: the decoded data never passes the coded */
+        o += size;
+        i += size + 2;
+        if (o > JSON_MAX_SIZE) return -1;
+    }
+}
+
+typedef struct {
+    char *p;
+    size_t len, cap;
+    size_t head;      /* the length of the status line and the headers with the empty line, once they are all in; 0 before */
+    int status;
+    bool chunked;
+    long long clen;   /* Content-Length, or -1 */
+} reply;
+
+/* the value of header name in the headers h[0..n), trimmed, or NULL; *vl is its length */
+static const char *header(const char *h, size_t n, const char *name, size_t *vl)
+{
+    const size_t nl = strlen(name);
+    for (const char *p = h, *end = h + n; p < end;) {
+        const char *eol = memchr(p, '\n', (size_t)(end - p));
+        if (!eol) break;
+        if ((size_t)(eol - p) > nl && p[nl] == ':' && !strncasecmp(p, name, nl)) {
+            const char *v = p + nl + 1, *e = eol;
+            while (v < e && (*v == ' ' || *v == '\t')) v++;
+            while (e > v && (e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) e--;
+            *vl = (size_t)(e - v);
+            return v;
+        }
+        p = eol + 1;
+    }
+    return NULL;
+}
+
+/* The status line and the headers, once the empty line that ends them has come: 1 when parsed, 0 when more is to come, -1 when
+ * malformed. */
+static int parse_head(reply *r)
+{
+    if (!r->head) {
+        const char *e = NULL;
+        for (size_t i = 0; i + 3 < r->len && i < HEAD_MAX; i++)
+            if (r->p[i] == '\r' && !memcmp(r->p + i, "\r\n\r\n", 4)) {
+                e = r->p + i + 4;
+                break;
+            }
+        if (!e) return r->len >= HEAD_MAX ? -1 : 0;
+        r->head = (size_t)(e - r->p);
+        const char *p = r->p;
+        if (r->head < 14 || (memcmp(p, "HTTP/1.1 ", 9) && memcmp(p, "HTTP/1.0 ", 9))) return -1;
+        r->status = 0;
+        for (int k = 9; k < 12; k++) {
+            if (p[k] < '0' || p[k] > '9') return -1;
+            r->status = r->status * 10 + (p[k] - '0');
+        }
+        if (p[12] != ' ' && p[12] != '\r') return -1;
+        size_t vl;
+        const char *v = header(p, r->head, "Transfer-Encoding", &vl);
+        r->chunked = v && vl >= 7 && !strncasecmp(v + vl - 7, "chunked", 7);   /* the last coding is the one that frames the body */
+        r->clen = -1;
+        v = header(p, r->head, "Content-Length", &vl);
+        if (v && !r->chunked) {   /* with both, the chunked coding frames the body (RFC 9112 6.3) */
+            long long n = 0;
+            if (!vl || vl > 10) return -1;
+            for (size_t k = 0; k < vl; k++) {
+                if (v[k] < '0' || v[k] > '9') return -1;
+                n = n * 10 + (v[k] - '0');
+            }
+            if (n > JSON_MAX_SIZE) return -1;
+            r->clen = n;
+        }
+    }
+    return 1;
+}
+
+/* whether the body is all in: 1 yes, 0 not yet, -1 malformed; at eof, 0 means it was cut short */
+static int body_done(reply *r, bool eof)
+{
+    const int h = parse_head(r);
+    if (h <= 0) return h;
+    const size_t have = r->len - r->head;
+    if (r->chunked) {
+        size_t n;
+        return dechunk(r->p + r->head, have, NULL, &n);
+    }
+    if (r->clen >= 0) return have >= (size_t)r->clen;
+    return eof;   /* neither: the body ends where the server closes */
+}
+
+static bool recv_reply(btc_rpc *c, int fd, int64_t deadline, reply *r)
+{
+    for (;;) {
+        if (r->len == r->cap) {
+            if (r->cap >= REPLY_MAX) return fail(c, BTC_RPC_EPROTO, 0, "the reply is too large");
+            size_t cap = r->cap ? r->cap * 2 : 65536;
+            if (cap > REPLY_MAX) cap = REPLY_MAX;
+            char *p = realloc(r->p, cap);
+            if (!p) return fail(c, BTC_RPC_EPROTO, 0, "out of memory");
+            r->p = p;
+            r->cap = cap;
+        }
+        const ssize_t k = recv(fd, r->p + r->len, r->cap - r->len, 0);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            const int w = wait_fd(fd, POLLIN, deadline);
+            if (w > 0) continue;
+            return fail(c, BTC_RPC_ENET, 0, w ? "reading the reply: %s" : "timeout waiting for the reply", strerror(errno));
+        }
+        if (k < 0) return fail(c, BTC_RPC_ENET, 0, "reading the reply: %s", strerror(errno));
+        r->len += (size_t)k;
+        const int d = body_done(r, k == 0);
+        if (d < 0) return fail(c, BTC_RPC_EPROTO, 0, "the reply is not valid HTTP");
+        if (d > 0) return true;
+        if (k == 0) return fail(c, BTC_RPC_ENET, 0, r->head ? "the reply was cut short" : "the connection closed without a reply");
+    }
+}
+
+/* ---- JSON-RPC ---- */
+
+static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int timeout_ms, json_doc *doc, const json_val **result)
+{
+    *doc = (json_doc){0};
+    *result = NULL;
+    c->err = (btc_rpc_err){0};
+    const char *pt = "[]";
+    size_t pl = 2;
+    if (params && !(pt = jw_done(params, &pl))) return fail(c, BTC_RPC_EPROTO, 0, "%s: bad parameters", method);
+    const uint64_t id = ++c->id;
+    json_w w;
+    jw_init(&w);
+    jw_obj(&w);
+    jw_key(&w, "jsonrpc");
+    jw_str(&w, "1.0");   /* answered by every version, with the error in the body (and an HTTP status that says it) */
+    jw_key(&w, "id");
+    jw_u64(&w, id);
+    jw_key(&w, "method");
+    jw_str(&w, method);
+    jw_key(&w, "params");
+    jw_raw(&w, pt, pl);
+    jw_end(&w);
+    size_t bl;
+    const char *body = jw_done(&w, &bl);
+    if (!body) {
+        jw_free(&w);
+        return fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
+    }
+    /* the head carries the credentials: wiped once sent */
+    char head[sizeof c->auth + sizeof c->host + sizeof c->wallet + 256];
+    const bool v6 = strchr(c->host, ':') != NULL;
+    const int hl = snprintf(head, sizeof head,
+                            "POST %s HTTP/1.1\r\nHost: %s%s%s:%s\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\n"
+                            "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+                            wallet && c->wallet[0] ? c->wallet : "/", v6 ? "[" : "", c->host, v6 ? "]" : "", c->port, c->auth, bl);
+    if (hl <= 0 || (size_t)hl >= sizeof head) {
+        jw_free(&w);
+        return fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
+    }
+    const int64_t deadline = now_ms() + (timeout_ms > 0 ? timeout_ms : 1);
+    reply r = {0};
+    bool ok = false;
+    const int fd = tcp_connect(c, deadline);
+    if (fd >= 0) {
+        ok = send_all(c, fd, head, (size_t)hl, deadline) && send_all(c, fd, body, bl, deadline) && recv_reply(c, fd, deadline, &r);
+        close(fd);
+    }
+    pz_secure_zero(head, sizeof head);
+    jw_free(&w);
+    if (!ok) {
+        free(r.p);
+        return false;
+    }
+    /* the body, decoded in place when chunked (the decoded form is never longer) */
+    char *b = r.p + r.head;
+    size_t n = r.len - r.head;
+    if (r.chunked) dechunk(b, n, b, &n);
+    else if (r.clen >= 0) n = (size_t)r.clen;
+    const int status = r.status;
+    if (!n || !json_parse(doc, b, n)) {
+        free(r.p);
+        if (status != 200) return fail(c, BTC_RPC_EHTTP, status, "%s: HTTP status %d%s", method, status,
+                                       status == 401 ? " (wrong RPC user or password)" : "");
+        return fail(c, BTC_RPC_EPROTO, 0, "%s: the reply is not JSON", method);
+    }
+    free(r.p);
+    const json_val *root = doc->v, *err = json_get(root, "error"), *res = json_get(root, "result");
+    uint64_t rid;
+    if (root->type != JSON_OBJECT) {
+        json_free(doc);
+        return fail(c, BTC_RPC_EPROTO, 0, "%s: the reply is not a JSON-RPC object", method);
+    }
+    if (err && !json_is_null(err)) {
+        int64_t code;
+        const char *msg = json_str(json_get(err, "message"));
+        const bool coded = json_i64(json_get(err, "code"), &code) && code >= INT_MIN && code <= INT_MAX;
+        fail(c, coded ? BTC_RPC_ERPC : BTC_RPC_EPROTO, coded ? (int)code : 0, "%s: %s", method, msg ? msg : "error without a message");
+        json_free(doc);
+        return false;
+    }
+    if (status != 200 || !res || !json_u64(json_get(root, "id"), &rid) || rid != id) {
+        json_free(doc);
+        if (status != 200) return fail(c, BTC_RPC_EHTTP, status, "%s: HTTP status %d", method, status);
+        return fail(c, BTC_RPC_EPROTO, 0, "%s: %s", method, res ? "the reply is for another request" : "the reply has no result");
+    }
+    *result = res;
+    return true;
+}
+
+bool btc_rpc_call(btc_rpc *c, bool wallet, const char *method, json_w *params, json_doc *doc, const json_val **result)
+{
+    return rpc(c, wallet, method, params, c->timeout_ms, doc, result);
+}
+
+/* ---- the calls ---- */
+
+/* The params of most calls are a few values: written into w, which the call frees. */
+static bool call(btc_rpc *c, bool wallet, const char *method, json_w *w, json_doc *doc, const json_val **res)
+{
+    const bool ok = rpc(c, wallet, method, w, c->timeout_ms, doc, res);
+    if (w) jw_free(w);
+    return ok;
+}
+
+/* the end of a call that read what it needed from the result: false, with the message, when it was not what was expected */
+static bool done(btc_rpc *c, json_doc *doc, bool ok, const char *method)
+{
+    json_free(doc);
+    return ok || fail(c, BTC_RPC_EPROTO, 0, "%s: unexpected result", method);
+}
+
+static bool get_hash(const json_val *v, uint8_t h[32]) { return btc_hash_from_hex(json_str(v), h); }
+
+bool btc_rpc_getblockcount(btc_rpc *c, uint64_t *height)
+{
+    json_doc d;
+    const json_val *res;
+    if (!call(c, false, "getblockcount", NULL, &d, &res)) return false;
+    return done(c, &d, json_u64(res, height), "getblockcount");
+}
+
+bool btc_rpc_getblockhash(btc_rpc *c, uint64_t height, uint8_t hash[32])
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_u64(&w, height);
+    jw_end(&w);
+    if (!call(c, false, "getblockhash", &w, &d, &res)) return false;
+    return done(c, &d, get_hash(res, hash), "getblockhash");
+}
+
+static void put_hash(json_w *w, const uint8_t h[32])
+{
+    char hex[65];
+    btc_hash_to_hex(h, hex);
+    jw_str(w, hex);
+}
+
+bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t *blockhash, uint8_t **raw, size_t *len)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    put_hash(&w, txid);
+    jw_u64(&w, 0);   /* verbosity 0: the hex; every version takes the number */
+    if (blockhash) put_hash(&w, blockhash);
+    jw_end(&w);
+    if (!call(c, false, "getrawtransaction", &w, &d, &res)) return false;
+    const char *hex = json_str(res);
+    const size_t n = hex ? res->n / 2 : 0;
+    uint8_t *b = n ? malloc(n) : NULL;
+    const bool ok = b && btc_unhex(hex, res->n, b);
+    if (!ok) free(b);
+    else {
+        *raw = b;
+        *len = n;
+    }
+    return done(c, &d, ok, "getrawtransaction");
+}
+
+/* the fields an unspent output has in both scantxoutset and gettxout: the script in hex and the coinbase flag */
+static bool get_spk(const json_val *v, btc_utxo *u)
+{
+    const char *hex = json_str(v);
+    if (!hex || v->n > 2 * BTC_SPK_MAX || !btc_unhex(hex, v->n, u->spk)) return false;
+    u->spk_len = (uint8_t)(v->n / 2);
+    return true;
+}
+
+static bool get_u32(const json_val *v, uint32_t *out)
+{
+    uint64_t x;
+    if (!json_u64(v, &x) || x > UINT32_MAX) return false;
+    *out = (uint32_t)x;
+    return true;
+}
+
+bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_str(&w, "start");
+    jw_arr(&w);
+    for (size_t k = 0; k < n_addr; k++) {
+        char desc[128];
+        if (!addrs[k] || snprintf(desc, sizeof desc, "addr(%s)", addrs[k]) >= (int)sizeof desc) {
+            jw_free(&w);
+            return fail(c, BTC_RPC_EPROTO, 0, "scantxoutset: bad address");
+        }
+        jw_str(&w, desc);
+    }
+    jw_end(&w);
+    jw_end(&w);
+    const bool ok = rpc(c, false, "scantxoutset", &w, c->scan_timeout_ms, &d, &res);
+    jw_free(&w);
+    if (!ok) return false;
+    bool success = false;
+    const json_val *list = json_get(res, "unspents");
+    if (!json_bool(json_get(res, "success"), &success) || !success || !json_u64(json_get(res, "height"), height) || !list ||
+        list->type != JSON_ARRAY)
+        return done(c, &d, false, "scantxoutset");
+    const json_val *e = list + 1;
+    for (uint32_t k = 0; k < list->n; k++, e = json_next(e)) {
+        btc_utxo u = {0};
+        if (!get_hash(json_get(e, "txid"), u.txid) || !get_u32(json_get(e, "vout"), &u.vout) ||
+            !json_sats(json_get(e, "amount"), &u.value) || !get_u32(json_get(e, "height"), &u.height) ||
+            !get_spk(json_get(e, "scriptPubKey"), &u))
+            return done(c, &d, false, "scantxoutset");
+        const json_val *cb = json_get(e, "coinbase");
+        if (cb && !json_bool(cb, &u.coinbase)) return done(c, &d, false, "scantxoutset");
+        if (k < cap) out[k] = u;
+    }
+    *n = list->n;
+    return done(c, &d, true, "scantxoutset");
+}
+
+bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool mempool, bool *found, btc_utxo *out)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    put_hash(&w, txid);
+    jw_u64(&w, vout);
+    jw_bool(&w, mempool);
+    jw_end(&w);
+    if (!call(c, false, "gettxout", &w, &d, &res)) return false;
+    *found = !json_is_null(res);
+    if (!*found) return done(c, &d, true, "gettxout");
+    btc_utxo u = {.vout = vout};
+    memcpy(u.txid, txid, 32);
+    const json_val *cb = json_get(res, "coinbase");
+    const bool ok = json_sats(json_get(res, "value"), &u.value) && get_u32(json_get(res, "confirmations"), &u.confirmations) &&
+                    get_spk(json_get(json_get(res, "scriptPubKey"), "hex"), &u) && (!cb || json_bool(cb, &u.coinbase));
+    if (ok) *out = u;
+    return done(c, &d, ok, "gettxout");
+}
+
+bool btc_rpc_estimatesmartfee(btc_rpc *c, unsigned target, uint64_t *sat_per_kvb)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_u64(&w, target);
+    jw_end(&w);
+    if (!call(c, false, "estimatesmartfee", &w, &d, &res)) return false;
+    const json_val *rate = json_get(res, "feerate");
+    bool ok = res->type == JSON_OBJECT;
+    if (!rate) *sat_per_kvb = 0;   /* "errors" instead: no estimate */
+    else ok = ok && json_sats(rate, sat_per_kvb);
+    return done(c, &d, ok, "estimatesmartfee");
+}
+
+bool btc_rpc_testmempoolaccept(btc_rpc *c, const uint8_t *raw, size_t len, bool *ok, char *reason, size_t cap)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_arr(&w);
+    jw_hex(&w, raw, len);
+    jw_end(&w);
+    jw_end(&w);
+    if (!call(c, false, "testmempoolaccept", &w, &d, &res)) return false;
+    const json_val *r0 = json_at(res, 0);
+    const char *why = json_str(json_get(r0, "reject-reason"));
+    const bool good = res->n == 1 && json_bool(json_get(r0, "allowed"), ok) && (*ok || why);
+    if (good && cap) snprintf(reason, cap, "%s", *ok ? "" : why);
+    return done(c, &d, good, "testmempoolaccept");
+}
+
+bool btc_rpc_sendrawtransaction(btc_rpc *c, const uint8_t *raw, size_t len, uint8_t txid[32])
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_hex(&w, raw, len);
+    jw_end(&w);
+    if (!call(c, false, "sendrawtransaction", &w, &d, &res)) return false;
+    return done(c, &d, get_hash(res, txid), "sendrawtransaction");
+}
+
+bool btc_rpc_createwallet(btc_rpc *c, const char *name)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_str(&w, name);
+    jw_end(&w);
+    if (!call(c, false, "createwallet", &w, &d, &res)) return false;
+    return done(c, &d, res->type == JSON_OBJECT, "createwallet");
+}
+
+bool btc_rpc_getnewaddress(btc_rpc *c, const char *type, char *addr, size_t cap)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    if (type) {
+        jw_str(&w, "");   /* the label */
+        jw_str(&w, type);
+    }
+    jw_end(&w);
+    if (!call(c, true, "getnewaddress", &w, &d, &res)) return false;
+    const char *a = json_str(res);
+    const bool ok = a && res->n < cap;
+    if (ok) memcpy(addr, a, res->n + 1);
+    return done(c, &d, ok, "getnewaddress");
+}
+
+bool btc_rpc_sendtoaddress(btc_rpc *c, const char *addr, uint64_t sats, uint8_t txid[32])
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_str(&w, addr);
+    jw_sats(&w, sats);
+    jw_end(&w);
+    if (!call(c, true, "sendtoaddress", &w, &d, &res)) return false;
+    return done(c, &d, get_hash(res, txid), "sendtoaddress");
+}
+
+bool btc_rpc_generatetoaddress(btc_rpc *c, unsigned blocks, const char *addr, uint8_t last[32])
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    jw_u64(&w, blocks);
+    jw_str(&w, addr);
+    jw_end(&w);
+    if (!call(c, false, "generatetoaddress", &w, &d, &res)) return false;
+    bool ok = res->type == JSON_ARRAY && res->n == blocks;
+    if (ok && last && blocks) ok = get_hash(json_at(res, blocks - 1), last);
+    return done(c, &d, ok, "generatetoaddress");
+}

@@ -2,14 +2,13 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_record.c - the keys of a home, the record of a distinguished point, its proof of possession and the points of dp.bin records. The
  * points are built here with libsecp256k1 from known scalars: a puzzle key k, the start of a range, distances d of both signs. */
+#include "peertest.h"
 #include "dpfeed.h"
 #include "keys.h"
 #include <pzcore/hash.h>
 #include <secp256k1_schnorrsig.h>
 #include <string.h>
 
-static int fails;
-#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
 static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0xf0, 0x0d};
@@ -221,6 +220,6 @@ int main(void)
     test_record();
     test_dpfeed();
     secp256k1_context_destroy(ctx);
-    printf(fails ? "t_record: %d FAILED\n" : "t_record: OK\n", fails);
-    return fails != 0;
+    printf(g_fails ? "t_record: %d FAILED\n" : "t_record: OK\n", g_fails);
+    return g_fails != 0;
 }

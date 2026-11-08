@@ -230,7 +230,11 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 
 - Inputs: P2PKH only (the puzzle address and the tiny coins), legacy signature hash, `SIGHASH_ALL`, low `s`.
 - Outputs to any standard address of the chain of the network file.
-- Amounts are verified from the previous transactions (their hash is their id).
+- Amounts are verified from the previous transactions (their hash is their id): `btc_prevout` takes the raw bytes of the previous
+  transaction, in either serialization, and gives the value and the script of the output only when the hash of those bytes is the txid.
+- The vectors of `tests/peer/t_btc.c` come from transactions of the main chain, pinned by their txids, and from
+  `tests/peer/gen_btc_vectors.py`, an independent implementation in Python of the serialization, the legacy signature hash, RFC 6979 and
+  DER (`python3 tests/peer/gen_btc_vectors.py > tests/peer/btc_vectors.h`).
 - The rules of the project document (section 4.5): at most 8 inputs, coins worth less than 3 times their fee are left, half each.
 
 ## 9. Status
@@ -238,4 +242,5 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 | Part | State |
 |---|---|
 | build of pzpeer, libsecp256k1 | done |
+| `json.c`, `btc.c`, `btc_rpc.c` | done, with unit tests (`tests/peer/t_json.c`, `t_btc.c`, `t_btc_rpc.c`); the test against a real node on regtest is to come |
 | everything else | in progress |

@@ -3,13 +3,12 @@
 /* t_noise.c - the handshake XX and the frames of noise.c against vectors made with an independent implementation: the noiseprotocol
  * package of Python with a secp256k1 DH plugged in (SHA256 of the compressed shared point), the frames and the key rotation of BOLT 8
  * written over the cryptography package. Then the refusals: a changed byte anywhere, a message out of turn, another prologue. */
+#include "peertest.h"
 #include "noise.h"
 #include <pzcore/hash.h>
 #include <stdio.h>
 #include <string.h>
 
-static int fails;
-#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
 static const char M0[] =
     "0322bd171dff80542457ce8670ecd4fff0126bfed832a378343f66cc3276740825707a6e6574312068656c6c6f";
@@ -191,6 +190,6 @@ int main(void)
     test_frames(ctx);
     test_refusals(ctx);
     secp256k1_context_destroy(ctx);
-    printf(fails ? "t_noise: %d FAILED\n" : "t_noise: OK\n", fails);
-    return fails != 0;
+    printf(g_fails ? "t_noise: %d FAILED\n" : "t_noise: OK\n", g_fails);
+    return g_fails != 0;
 }
