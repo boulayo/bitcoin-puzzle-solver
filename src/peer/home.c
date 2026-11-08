@@ -2,7 +2,11 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* home.c - the daemon of a home (see home.h). One thread feeds the table from dp.bin; the node answers the others; every useful coincidence
  * gets a thread of its own that runs the session. Who opens the channel of a pair: party 0 (the smaller identity) when it can find the
- * partner in the table, party 1 only when it does not listen itself (it cannot be found then); the other side waits for the connection. */
+ * partner in the table, party 1 only when it does not listen itself (it cannot be found then); the other side waits for the connection.
+ *
+ * A hello can start a session before this home has the alert of its pair, and anyone can copy the x of a published record into one of
+ * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzfirma only after that), and
+ * at most HELLO_SESSIONS of them run at a time, one per partner, so they never take the slots of the pairs the table alerted. */
 #include "home.h"
 #include "chain_rpc.h"
 #include "dht.h"
@@ -12,6 +16,7 @@
 #include "netfile.h"
 #include <pzcore/seal.h>
 #include <pzcore/seed.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -29,6 +34,9 @@
 extern char **environ;
 
 #define MAX_SESSIONS 64
+#define HELLO_SESSIONS 16          /* sessions started by a hello alone, without an alert of the table (the others always have room) */
+#define FAILS_MAX 10               /* failed signings of a home on a network, with any partner (project 4.6) */
+#define FAILS_PAIR_MAX 3           /* and with one pair */
 
 /* the own points: x prefix -> index in dp.bin (the distance is read back from the file when it is needed: 16 bytes a point in memory) */
 typedef struct {
@@ -38,6 +46,8 @@ typedef struct {
 
 typedef struct session_slot {
     bool used, running, have_conn;
+    bool alerted;                   /* the table alerted the pair (both proofs checked): the slot is kept when its session ends */
+    bool waiting;                   /* its session waits for the partner to dial */
     uint8_t eid[32], partner[32];
     record mine, theirs;
     net_conn *conn;                 /* an incoming channel handed by on_session */
@@ -64,10 +74,12 @@ typedef struct {
     session_slot s[MAX_SESSIONS];
     int ended;                      /* sessions that ended, and how: for exit_when_done */
     bool paid;
+    session_limit limit;            /* the failed signings, counted in the home folder */
+    char limitpath[1200];
 } home;
 
-static volatile sig_atomic_t g_stop;
-static void on_signal(int sig) { (void)sig, g_stop = 1; }
+static volatile sig_atomic_t g_stop;                            /* 1: stop; 2 (a second signal): do not wait for the sessions */
+static void on_signal(int sig) { (void)sig, g_stop = g_stop < 2 ? g_stop + 1 : 2; }
 
 static void say(const home *h, const char *fmt, ...)
 {
@@ -86,44 +98,16 @@ static void say(const home *h, const char *fmt, ...)
 
 /* ---- files of the home ---- */
 
-static bool read_hex32(const char *path, uint8_t out[32])
-{
-    char hex[80] = "";
-    FILE *f = fopen(path, "r");
-    const bool got = f && fgets(hex, sizeof hex, f);
-    if (f) fclose(f);
-    hex[strcspn(hex, " \t\r\n")] = 0;
-    bool ok = got && strlen(hex) == 64;
-    for (int i = 0; ok && i < 32; i++) {
-        unsigned v;
-        ok = sscanf(hex + 2 * i, "%2x", &v) == 1, out[i] = (uint8_t)v;
-    }
-    pz_secure_zero(hex, sizeof hex);
-    return ok;
-}
-
-static bool write_hex32(const char *path, const uint8_t v[32])
-{
-    char hex[66];
-    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", v[i]);
-    hex[64] = '\n', hex[65] = 0;
-    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);   /* a secret: only this user reads it */
-    const bool ok = fd >= 0 && write(fd, hex, 65) == 65;
-    if (fd >= 0) close(fd);
-    pz_secure_zero(hex, sizeof hex);
-    return ok;
-}
-
 /* the home seed: made once, from several sources (lib/pzcore/src/seed.c), and kept */
 static bool home_seed(home *h, char *err, size_t errlen)
 {
     char path[1100];
     snprintf(path, sizeof path, "%s/home.seed", h->cfg->dir);
-    if (read_hex32(path, h->seed)) return true;
-    if (access(path, F_OK) == 0) return snprintf(err, errlen, "%.300s is not a seed of 64 hex digits: it is left as it is", path), false;
+    const int got = keys_file_read(path, h->seed, err, errlen);
+    if (got) return got > 0;
     pz_seed_report rep;
     if (pz_seed_generate(h->seed, NULL, &rep) != PZ_SEED_OK) return snprintf(err, errlen, "no home seed: %s", rep.error), false;
-    if (!write_hex32(path, h->seed)) return snprintf(err, errlen, "cannot write %.300s: %s", path, strerror(errno)), false;
+    if (!keys_file_write(path, h->seed)) return snprintf(err, errlen, "cannot write %.300s: %s", path, strerror(errno)), false;
     say(h, "a new home seed in %s: keep a copy of it, it is the key of every point of this home", path);
     return true;
 }
@@ -196,7 +180,7 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     snprintf(camp, sizeof camp, "%s/campaigns", h->cfg->dir);
     uint8_t sk[32];
     keys_starts(h->seed, h->nf.fp, sk);
-    const bool wrote = write_hex32(key, sk);
+    const bool wrote = keys_file_write(key, sk);
     pz_secure_zero(sk, sizeof sk);
     if (!wrote) return snprintf(err, errlen, "cannot write %.300s", key), false;
     /* pzsolve knows nothing of the network: the walk of the network file as plain options of a shared walk */
@@ -229,8 +213,9 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
 
 typedef struct {
     net_conn *c;
-    const uint8_t *first;           /* replayed by the first recv (a session that was dialled starts with the partner's hello) */
+    const uint8_t *first;           /* replayed by the first recv (a session that came to us starts with the partner's hello) */
     size_t first_len;
+    int timeout_ms;                 /* the one set on c */
 } conn_chan;
 
 static bool cc_send(void *ctx, const uint8_t *m, size_t len) { return net_send(((conn_chan *)ctx)->c, m, len); }
@@ -244,16 +229,10 @@ static bool cc_recv(void *ctx, uint8_t *m, size_t cap, size_t *len, int timeout_
         cc->first = NULL;
         return true;
     }
-    net_set_timeout(cc->c, timeout_ms);
+    /* set only when it changes, which is before the relay of a signing: then one thread sends while another receives, and the send
+     * reads the timeout of the connection too */
+    if (timeout_ms != cc->timeout_ms) net_set_timeout(cc->c, cc->timeout_ms = timeout_ms);
     return net_recv(cc->c, m, cap, len);
-}
-
-static bool run_prog(const char *path, const char *a1, const char *a2)
-{
-    pid_t pid;
-    char *argv[] = {(char *)path, (char *)a1, (char *)a2, NULL};
-    int st;
-    return posix_spawn(&pid, path, NULL, NULL, argv, environ) == 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0;
 }
 
 static void hex8(const uint8_t *p, char out[17])
@@ -274,32 +253,33 @@ static void *session_main(void *arg)
     hex8(s->eid, tag);
     const int me = memcmp(s->mine.owner, s->theirs.owner, 32) < 0 ? 0 : 1;
     snprintf(primes, sizeof primes, "%s/primes-%s.json", cfg->dir, tag);
-    say(h, "session %s: a coincidence with %02x%02x..., party %d; making the primes of the signer", tag, s->theirs.owner[0], s->theirs.owner[1], me);
+    say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
-    net_conn *c = NULL;
-    if (!run_prog(cfg->pzfirma, "primes", primes)) {
-        snprintf(why, sizeof why, "pzfirma primes failed");
-        goto done;
-    }
-    /* the channel: dialled by party 0 when it finds the partner, by party 1 when it does not listen; else it comes to us */
+    /* the channel: the partner's hello if it came first; else dialled by party 0 when it finds the partner, by party 1 when it does not
+     * listen; else it comes to us */
+    pthread_mutex_lock(&h->mu);
+    net_conn *in = s->have_conn ? s->conn : NULL, *c = NULL;
+    pthread_mutex_unlock(&h->mu);
     dht_contact pc;
-    const bool dial = (me == 0 || cfg->listen_port == 0) && dht_find(h->d, s->theirs.owner, &pc);
-    if (dial) c = dht_dial(h->d, &pc);
-    if (!c) {                                                   /* not ours to dial, or the partner did not answer: it dials us */
+    if (!in && (me == 0 || cfg->listen_port == 0) && dht_find(h->d, s->theirs.owner, &pc)) c = dht_dial(h->d, &pc);
+    if (!in && !c) {                                            /* not ours to dial, or the partner did not answer: it dials us */
         pthread_mutex_lock(&h->mu);
         struct timespec until;
         clock_gettime(CLOCK_REALTIME, &until);
         until.tv_sec += 600;
+        s->waiting = true;
         while (!s->have_conn && !g_stop && pthread_cond_timedwait(&h->cv, &h->mu, &until) == 0) {}
-        c = s->conn;
+        s->waiting = false;
+        in = s->have_conn ? s->conn : NULL;
         pthread_mutex_unlock(&h->mu);
     }
+    if (!c) c = in;
     if (!c) {
         snprintf(why, sizeof why, "no channel with the partner");
         goto done;
     }
     {
-        conn_chan cc = {c, c == s->conn ? s->first : NULL, s->first_len};
+        conn_chan cc = {c, c == in ? s->first : NULL, s->first_len, 0};
         session_chan chan = {&cc, cc_send, cc_recv};
         btc_rpc rpc;
         char host[256] = "", user[128] = "", pass[256] = "";
@@ -311,8 +291,8 @@ static void *session_main(void *arg)
         chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 6, .fallback_feerate = 2000};
         const session_chain chain = chain_rpc_iface(&crpc);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
-                          .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .chan = &chan, .chain = &chain,
-                          .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
+                          .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .limit = &h->limit, .chan = &chan,
+                          .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
         memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
         memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
         const uint32_t n = (uint32_t)s->eid[0] << 24 | (uint32_t)s->eid[1] << 16 | (uint32_t)s->eid[2] << 8 | s->eid[3];
@@ -323,19 +303,21 @@ static void *session_main(void *arg)
         btc_rpc_done(&rpc);
     }
 done:
-    if (c) net_close(c);
-    remove(primes);
+    remove(primes);                                             /* the Paillier key of this session: a secret, of no use after it */
     say(h, "session %s: %s (%s)", tag, res == SESSION_PAID ? "PAID" : res == SESSION_CANCELLED ? "cancelled" : "failed", why);
     pthread_mutex_lock(&h->mu);
+    if (c) net_close(c);
+    if (s->have_conn && s->conn != c) net_close(s->conn);      /* a hello that came while this session ran on its own channel */
     s->running = false, s->have_conn = false, s->conn = NULL;
+    s->used = s->alerted;                                       /* a pair the table never alerted gives its slot back */
     h->ended++;
     h->paid |= res == SESSION_PAID;
     pthread_mutex_unlock(&h->mu);
     return NULL;
 }
 
-/* the slot of a pair (mu held): found, or made; NULL when there is no room */
-static session_slot *slot_of(home *h, const record *mine, const record *theirs, bool *fresh)
+/* the slot of a pair (mu held): found, or (make) made; NULL when there is none, or no room */
+static session_slot *slot_of(home *h, const record *mine, const record *theirs, bool make, bool *fresh)
 {
     record pair[2];
     uint8_t eid[32];
@@ -344,7 +326,7 @@ static session_slot *slot_of(home *h, const record *mine, const record *theirs, 
     pieces_eid(&h->net, pair, eid);
     for (int i = 0; i < MAX_SESSIONS; i++)
         if (h->s[i].used && !memcmp(h->s[i].eid, eid, 32)) return &h->s[i];
-    for (int i = 0; i < MAX_SESSIONS; i++)
+    for (int i = 0; make && i < MAX_SESSIONS; i++)
         if (!h->s[i].used) {
             session_slot *s = &h->s[i];
             memset(s, 0, sizeof *s);
@@ -377,7 +359,8 @@ static void on_alert(void *user, const record *mine, const record *theirs, bool 
     if (merge) return say(h, "a merge with another home on the same type: no key from it");   /* the walkers go on: a restart is to come */
     bool fresh;
     pthread_mutex_lock(&h->mu);
-    session_slot *s = slot_of(h, mine, theirs, &fresh);
+    session_slot *s = slot_of(h, mine, theirs, true, &fresh);
+    if (s) s->alerted = true;                                   /* also a slot that a hello made first */
     if (s && fresh) start_session(h, s);                       /* an alert that comes again (a restart, a mailbox) changes nothing */
     pthread_mutex_unlock(&h->mu);
 }
@@ -395,9 +378,16 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
     }
     bool fresh;
     pthread_mutex_lock(&h->mu);
-    session_slot *s = slot_of(h, &b, &a, &fresh);              /* mine is b: the partner's hello lists its record first */
-    (void)fresh;
-    if (!s || s->have_conn || len > sizeof s->first) {
+    session_slot *s = slot_of(h, &b, &a, false, &fresh);       /* mine is b: the partner's hello lists its record first */
+    if (!s) {                                                   /* no alert yet: room for it, one per partner */
+        int open = 0;
+        bool busy = false;
+        for (int i = 0; i < MAX_SESSIONS; i++)
+            if (h->s[i].used && !h->s[i].alerted) open++, busy |= !memcmp(h->s[i].partner, a.owner, 32);
+        if (!busy && open < HELLO_SESSIONS) s = slot_of(h, &b, &a, true, &fresh);
+    }
+    /* a session that runs takes the connection only while it waits for one */
+    if (!s || s->have_conn || (s->running && !s->waiting) || len > sizeof s->first) {
         pthread_mutex_unlock(&h->mu);
         net_close(c);
         return;
@@ -423,7 +413,24 @@ int home_run(const home_cfg *cfg)
     h->ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     trust_set ts;
     int valid;
-    mkdir(cfg->dir, 0700);
+    /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0644 by pzsolve), the primes of the sessions
+     * and the output of pzsolve, which shows a key it finds: nobody else may go in */
+    struct stat ds;
+    if ((mkdir(cfg->dir, 0700) != 0 && errno != EEXIST) || stat(cfg->dir, &ds) != 0 || !S_ISDIR(ds.st_mode) || ds.st_uid != geteuid() ||
+        (ds.st_mode & 077))
+        return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", cfg->dir), 1;
+    DIR *dir = opendir(cfg->dir);                               /* the primes of sessions cut by a crash: secrets of no further use */
+    for (struct dirent *e; dir && (e = readdir(dir));)
+        if (!strncmp(e->d_name, "primes-", 7)) {
+            char p[1400];
+            snprintf(p, sizeof p, "%s/%s", cfg->dir, e->d_name);
+            remove(p);
+        }
+    if (dir) closedir(dir);
+    snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", cfg->dir);
+    pthread_mutex_init(&h->limit.mu, NULL);
+    pthread_cond_init(&h->limit.cv, NULL);
+    h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX;
     if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
     if (!trust_load(&ts, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!trust_check(h->ctx, &ts, &h->nf, &valid)) return fprintf(stderr, "%s: %d valid signatures of maintainers, %d needed\n", cfg->network, valid, ts.threshold), 1;
@@ -473,6 +480,7 @@ int home_run(const home_cfg *cfg)
         if (!df.f && dpfeed_open(&df, h->dpbin)) {
             pthread_mutex_lock(&h->mu);
             h->dpr = fopen(h->dpbin, "rb");
+            if (h->dpr) (void)fcntl(fileno(h->dpr), F_SETFD, FD_CLOEXEC);   /* the distances of the home: not for pzfirma */
             pthread_mutex_unlock(&h->mu);
         }
         own_point p[DHT_STORE_MAX];
@@ -505,20 +513,26 @@ int home_run(const home_cfg *cfg)
         if (done && !busy) break;
     }
     if (h->pzsolve > 0) kill(h->pzsolve, SIGINT), waitpid(h->pzsolve, NULL, 0);
-    for (int wait = 0; wait < 600; wait++) {                   /* sessions under way end on their own: a payout is not cut in half */
-        bool busy = false;
+    if (!g_stop) g_stop = 1;                                    /* a session that waits for its channel gives up now */
+    bool busy = true, paid = false;
+    for (int wait = 0; busy && wait < 600; wait++) {            /* sessions under way end on their own: a payout is not cut in half */
         pthread_mutex_lock(&h->mu);
+        pthread_cond_broadcast(&h->cv);
+        busy = false;
         for (int i = 0; i < MAX_SESSIONS; i++) busy |= h->s[i].running;
+        paid = h->paid;
         pthread_mutex_unlock(&h->mu);
-        if (!busy || g_stop > 1) break;
-        sleep(1);
+        if (busy && g_stop < 2) sleep(1);
+        else break;
     }
-    dht_stop(h->d);
-    dpfeed_close(&df);
-    if (h->dpr) fclose(h->dpr);
-    say(h, "home stopped: %llu points published, %s", (unsigned long long)published, h->paid ? "a session paid" : solved_alone ? "pzsolve found the key" : "no payout");
-    pz_secure_zero(h->seed, sizeof h->seed);
-    pz_secure_zero(&h->id, sizeof h->id);
-    secp256k1_context_destroy(h->ctx);
-    return rc ? rc : (h->paid || solved_alone || !cfg->exit_when_done) ? 0 : 3;
+    say(h, "home stopped: %llu points published, %s", (unsigned long long)published, paid ? "a session paid" : solved_alone ? "pzsolve found the key" : "no payout");
+    if (!busy) {                                                /* else sessions still use the node, the context and the keys: the exit ends them */
+        dht_stop(h->d);
+        dpfeed_close(&df);
+        if (h->dpr) fclose(h->dpr);
+        pz_secure_zero(h->seed, sizeof h->seed);
+        pz_secure_zero(&h->id, sizeof h->id);
+        secp256k1_context_destroy(h->ctx);
+    }
+    return rc ? rc : (paid || solved_alone || !cfg->exit_when_done) ? 0 : 3;
 }
