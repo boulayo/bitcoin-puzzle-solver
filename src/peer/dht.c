@@ -1058,13 +1058,13 @@ static void *relay_main(void *arg)
     relay_job *j = arg;
     dht *d = j->d;
     const uint64_t n = net_splice(j->a, j->b, d->cfg.relay_bytes, d->relay_ms, &d->stop);
-    pthread_mutex_lock(&d->r_mu);
+    dlog(d, "a relay ended: %" PRIu64 " bytes", n);
+    pthread_mutex_lock(&d->r_mu);                              /* the last use of d: dht_stop may free it once this is unlocked */
     j->slot->used = false;
     d->nactive--;
     d->relays_done++;
     pthread_cond_broadcast(&d->r_cv);
     pthread_mutex_unlock(&d->r_mu);
-    dlog(d, "a relay ended: %" PRIu64 " bytes", n);
     free(j);
     return NULL;
 }

@@ -9,7 +9,8 @@
  * back), the eviction of the oldest contact of a full bucket. The limits: a public network refuses loopback, a NODES answer aimed at one
  * address or block is refused, the table keeps few contacts per block, idle connections hold few handlers, a flood of alerts that will
  * never be proved does not shut out a real one. The relay: two homes that do not listen get their alerts through their mailboxes and run
- * a stand-in session through a relay; a relay's limits (a wait without partner, a third party, relays at once, bytes). */
+ * a stand-in session through a relay; a relay's limits (a wait without partner, a third party, relays at once, bytes); a relay stopped
+ * while it copies. */
 #include "dht.h"
 #include "store.h"
 #include <pzcore/hash.h>
@@ -1092,6 +1093,32 @@ static void test_relay_limits(void)
     CHECK(act == 0 && dn == done0 + 2);
 }
 
+/* A node stopped while it relays a pair: the relay ends within a slice of its copy, both homes see the end, and dht_stop returns. Before,
+ * the thread of the relay still read the node after it had told dht_stop it was done, when dht_stop may have freed it (the thread
+ * sanitizer reported it). */
+static void test_relay_stop(void)
+{
+    node r;
+    joiner a, b;
+    pthread_t th;
+    memset(&r, 0, sizeof r);
+    r.d = scratch("s-relay", true, DHT_ANY_PORT, -1, &r.id);
+    CHECK(r.d != NULL);
+    if (!r.d) return;
+    joiner_init(&a, &r, "stop a", "stop pair", NULL);
+    joiner_init(&b, &r, "stop b", "stop pair", &a);
+    CHECK(pthread_create(&th, NULL, join_main, &a) == 0);
+    join_main(&b);
+    pthread_join(th, NULL);
+    CHECK(a.relayed && b.relayed);
+    const int64_t t0 = ms();
+    scratch_end(r.d, "s-relay");
+    CHECK(ms() - t0 < 2000);
+    if (a.c) CHECK(closed_within(a.c->fd, 1000));
+    if (b.c) CHECK(closed_within(b.c->fd, 1000));
+    net_close(a.c), net_close(b.c);
+}
+
 int main(void)
 {
     const int64_t t_start = ms();
@@ -1147,6 +1174,7 @@ int main(void)
     t0 = ms();
     test_relay_session();
     test_relay_limits();
+    test_relay_stop();
     printf("t_dht: the relay in %.1f s\n", (double)(ms() - t0) / 1000);
     t0 = ms();
     all(stop_main, NODES);
