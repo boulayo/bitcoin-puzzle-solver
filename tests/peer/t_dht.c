@@ -4,15 +4,23 @@
  * making them is quick). Checked against a brute force over all the nodes: lookups find the true 20 closest; records published by several
  * owners are held by 4 or 5 of their 5 closest nodes. Then the coincidences: a useful one and a merge, whose owners both get on_alert
  * after the proofs of possession, with the pair in their mailboxes; an owner that does not listen, which gets its alert from its
- * mailboxes. Then a session over dht_dial, malformed requests, a node stopped and started again (its store and its peers come back), and
- * the eviction of the oldest contact of a full bucket. */
+ * mailboxes, and its partner, which gets that owner's proof in an ALERT. Then a session over dht_dial, malformed requests (and records
+ * refused: of another owner, far from the custodian), a node stopped and started again (its store, its peers and its sequence number come
+ * back), the eviction of the oldest contact of a full bucket. The limits: a public network refuses loopback, a NODES answer aimed at one
+ * address or block is refused, the table keeps few contacts per block, idle connections hold few handlers, a flood of alerts that will
+ * never be proved does not shut out a real one. The relay: two homes that do not listen get their alerts through their mailboxes and run
+ * a stand-in session through a relay; a relay's limits (a wait without partner, a third party, relays at once, bytes). */
 #include "dht.h"
 #include "store.h"
 #include <pzcore/hash.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -24,6 +32,8 @@ static int fails;
 #define N 30                       /* nodes that listen */
 #define U N                        /* a node that does not listen */
 #define E (N + 1)                  /* a node alone, for the eviction */
+#define W (N + 2)                  /* another node that does not listen: U and W meet through a relay */
+#define NODES (N + 3)
 #define OWNERS 4
 #define RECS 2000
 #define ROOT "build/peer/t_dht_data"
@@ -50,7 +60,7 @@ static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0xd4, 0x7};
 static record_net net;
 static uint8_t qp[32];             /* q' = k - base, the scalar of Q' (the tests know the key of their puzzle) */
-static node nodes[N + 2];
+static node nodes[NODES];
 static record recs[RECS];
 
 static int64_t ms(void)
@@ -142,7 +152,7 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 
 static void clean_dir(const char *dir)
 {
-    static const char *const FILES[] = {"store.bin", "own.bin", "peers.txt", "peers.txt.tmp"};
+    static const char *const FILES[] = {"store.bin", "own.bin", "peers.txt", "peers.txt.tmp", "own.seq", "own.seq.tmp"};
     char p[128];
     for (size_t i = 0; i < sizeof FILES / sizeof *FILES; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, FILES[i]);
@@ -151,15 +161,23 @@ static void clean_dir(const char *dir)
     rmdir(dir);
 }
 
-/* port: 0 for no listening, DHT_ANY_PORT or the port; boot: the index of the bootstrap node, -1 for none */
+/* port: 0 for no listening, DHT_ANY_PORT or the port; boot: the index of the bootstrap node, -1 for none. A test network: loopback
+ * addresses are taken; slots of relays of one second; two relays at once, of 8 MiB each. */
+static dht_config node_cfg(node *n, int port)
+{
+    const dht_config cfg = {
+        .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
+        .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = 2000, .handlers = 4,
+        .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .allow_private = true, .relay_max = 2, .relay_bytes = 8u << 20, .relay_slot_s = 1,
+        .verbose = getenv("T_DHT_VERBOSE") != NULL,
+    };
+    return cfg;
+}
+
 static bool start_node(node *n, int port, int boot)
 {
     char err[200];
-    dht_config cfg = {
-        .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
-        .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = 2000, .handlers = 4,
-        .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .verbose = getenv("T_DHT_VERBOSE") != NULL,
-    };
+    dht_config cfg = node_cfg(n, port);
     if (boot >= 0) {
         snprintf(n->boot, sizeof n->boot, "127.0.0.1:%u", dht_port(nodes[boot].d));
         n->bootv[0] = n->boot;
@@ -189,7 +207,7 @@ static void *stop_main(void *arg)
 /* on every node at once, each on a thread */
 static void all(void *(*fn)(void *), int count)
 {
-    pthread_t th[N + 2];
+    pthread_t th[NODES];
     for (int i = 0; i < count; i++) CHECK(pthread_create(&th[i], NULL, fn, &nodes[i]) == 0);
     for (int i = 0; i < count; i++) pthread_join(th[i], NULL);
 }
@@ -326,10 +344,10 @@ static int in_mailboxes(const uint8_t owner[32], const record *a, const record *
     dht_mbox_key(owner, k);
     const int m = brute(k, DHT_KSTORE, near);
     for (int j = 0; j < m; j++) {
-        record pairs[8][2];
+        mbox_pair pairs[8];
         const int g = dht_local_mbox(nodes[near[j]].d, owner, pairs, 8);
         bool has = false;
-        for (int h = 0; h < g; h++) has = has || (same(&pairs[h][0], a) && same(&pairs[h][1], b)) || (same(&pairs[h][0], b) && same(&pairs[h][1], a));
+        for (int h = 0; h < g; h++) has = has || (same(&pairs[h].r[0], a) && same(&pairs[h].r[1], b)) || (same(&pairs[h].r[0], b) && same(&pairs[h].r[1], a));
         n += has;
     }
     return n;
@@ -356,10 +374,10 @@ static void test_coincidences(void)
     CHECK(publish_one(A, 0, xA, &rA) && publish_one(C, 0, xC, &rC) && publish_one(Un, 0, xU, &rU));
     CHECK(publish_one(B, 1, xA, &rB) && publish_one(D, 0, xC, &rD) && publish_one(V, -1, xU, &rV));
     const int64_t t0 = ms();
-    node *const want[5] = {A, B, C, D, Un};
+    node *const want[6] = {A, B, C, D, Un, V};
     for (int done = 0; !done && ms() - t0 < 30000; nap(50)) {
         done = 1;
-        for (int i = 0; i < 5; i++) done = done && alerts_of(want[i], NULL, NULL, NULL) > 0;
+        for (int i = 0; i < 6; i++) done = done && alerts_of(want[i], NULL, NULL, NULL) > 0;
     }
     record mine, theirs;
     bool merge;
@@ -368,7 +386,9 @@ static void test_coincidences(void)
     CHECK(alerts_of(C, &mine, &theirs, &merge) == 1 && same(&mine, &rC) && same(&theirs, &rD) && merge);
     CHECK(alerts_of(D, &mine, &theirs, &merge) == 1 && same(&mine, &rD) && same(&theirs, &rC) && merge);
     CHECK(alerts_of(Un, &mine, &theirs, &merge) == 1 && same(&mine, &rU) && same(&theirs, &rV) && !merge);
-    printf("t_dht: the five alerts in %.1f s\n", (double)(ms() - t0) / 1000);
+    /* V cannot dial U for its proof: U, which can dial V, sent its own with its ALERT (before, V's alert waited for a day) */
+    CHECK(alerts_of(V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rU) && !merge);
+    printf("t_dht: the six alerts in %.1f s\n", (double)(ms() - t0) / 1000);
     /* the mailboxes of each owner have the pair (the custodians send it there after the owners) */
     const int64_t t1 = ms();
     int mbA = 0, mbB = 0, mbU = 0, mbV = 0;
@@ -378,8 +398,6 @@ static void test_coincidences(void)
         if (mbA == DHT_KSTORE && mbB == DHT_KSTORE && mbU == DHT_KSTORE && mbV == DHT_KSTORE) break;
     }
     CHECK(mbA >= 4 && mbB >= 4 && mbU >= 4 && mbV >= 4);
-    /* V reached U only through the mailboxes: it cannot dial U for its proof, so its alert waits (the session will come from U) */
-    CHECK(alerts_of(V, NULL, NULL, NULL) == 0);
     /* a proof asked by hand, and one of a record whose owner cannot prove it (it has no such point) */
     CHECK(dht_ask_proof(nodes[20].d, &rB) == 1 && dht_ask_proof(A->d, &rA) == 1);
     record fake = rA;
@@ -437,11 +455,9 @@ static void test_malformed(void)
     CHECK(!net_exchange(&cli, &a, NULL, req, 34, ans, sizeof ans, &n, NULL));
     req[0] = DHT_SESSION_FIRST + 1;
     CHECK(net_exchange(&cli, &a, NULL, req, 5, ans, sizeof ans, &n, NULL) && n == 5);        /* a session: the test's echo */
-    /* well formed, refused record by record: a changed signature, an owner whose node ID has not the zero bits */
-    record bad = recs[0];
-    bad.sig[9] ^= 4;
-    req[0] = DHT_STORE, req[1] = 2;
-    record_encode(&bad, req + 2);
+    /* well formed, refused record by record: a changed signature, an owner whose node ID has not the zero bits (sent by that owner),
+     * a record of another owner (an owner stores its own: before, anyone could), a record of the sender whose key is far from node 0
+     * (node 0 knows many nodes closer to it: before, it was stored); and one node 0 is the closest to, stored */
     home_identity nob;
     for (int i = 0;; i++) {
         char label[32];
@@ -450,15 +466,45 @@ static void test_malformed(void)
         CHECK(keys_identity(ctx, seed, FP, 0, &nob));
         if (!keys_id_ok(nob.id, BITS)) break;
     }
+    record mk[3];                                              /* of cid: a broken signature, far from node 0, near node 0 */
+    for (int i = 0, got = 0; got < 3; i++) {
+        char label[32];
+        uint8_t k[32], kk[32], x[32];
+        secp256k1_pubkey p;
+        uint8_t c33[33];
+        size_t l33 = 33;
+        snprintf(label, sizeof label, "cid point %d", i);
+        hashed(label, k);
+        CHECK(secp256k1_ec_pubkey_create(ctx, &p, k) && secp256k1_ec_pubkey_serialize(ctx, c33, &l33, &p, SECP256K1_EC_COMPRESSED));
+        memcpy(x, c33 + 1, 32);
+        store_key(x, kk);
+        int nearer = 0;                                         /* the nodes closer to the key than node 0 */
+        for (int j = 1; j < N; j++) nearer += closer(kk, nodes[j].id.id, nodes[0].id.id);
+        const int want = got == 1;                              /* near, far, near: the signature is checked after the cheap checks */
+        if ((want == 1 && nearer < 15) || (want == 0 && nearer != 0)) continue;
+        record r = {.t = 0, .seq = 1000 + (uint64_t)got};
+        memcpy(r.x, x, 32);
+        memcpy(r.owner, cid.xonly, 32);
+        CHECK(record_sign(ctx, &net, &cid.kp, &r));
+        mk[got++] = r;
+    }
+    mk[0].sig[9] ^= 4;
+    uint8_t big[2 + 3 * RECORD_LEN];
+    big[0] = DHT_STORE, big[1] = 3;
+    record_encode(&recs[0], big + 2);
+    record_encode(&mk[1], big + 2 + RECORD_LEN);
+    record_encode(&mk[2], big + 2 + 2 * RECORD_LEN);
+    CHECK(net_exchange(&cli, &a, NULL, big, sizeof big, ans, sizeof ans, &n, NULL) && n == 5 && ans[0] == DHT_STORED && ans[1] == 3 &&
+          ans[2] == DHT_ST_INVALID && ans[3] == DHT_ST_FAR && ans[4] == DHT_ST_STORED);
     record r2 = {.t = 0, .seq = 7};
     memcpy(r2.x, recs[5].x, 32);
     memcpy(r2.owner, nob.xonly, 32);
     CHECK(record_sign(ctx, &net, &nob.kp, &r2) && record_check(ctx, &net, &r2));
-    record_encode(&r2, req + 2 + RECORD_LEN);
-    uint8_t big[2 + 2 * RECORD_LEN];
-    memcpy(big, req, sizeof big);
-    CHECK(net_exchange(&cli, &a, NULL, big, sizeof big, ans, sizeof ans, &n, NULL) && n == 4 && ans[0] == DHT_STORED && ans[1] == 2 &&
-          ans[2] == DHT_ST_INVALID && ans[3] == DHT_ST_INVALID);
+    big[1] = 2;
+    record_encode(&mk[0], big + 2);
+    record_encode(&r2, big + 2 + RECORD_LEN);
+    CHECK(net_exchange(&cli, &a, NULL, big, 2 + 2 * RECORD_LEN, ans, sizeof ans, &n, NULL) && n == 4 && ans[2] == DHT_ST_INVALID &&
+          ans[3] == DHT_ST_INVALID);
 }
 
 static void test_restart(void)
@@ -543,6 +589,509 @@ static void test_eviction(void)
     CHECK(n == DHT_K && has(cs, n, fake[DHT_K].id, NULL) && !has(cs, n, fake[0].id, NULL) && has(cs, n, live.id, NULL));
 }
 
+/* ---- the limits ---- */
+
+static void make_id(const char *label, home_identity *id)
+{
+    uint8_t seed[32];
+    hashed(label, seed);
+    CHECK(keys_identity(ctx, seed, FP, BITS, id));
+}
+
+/* a node of its own, with no callbacks: a public network's (allow_private false) or a test network's; started when port is not 0 */
+static dht *scratch(const char *name, bool allow_private, int port, int boot, home_identity *id)
+{
+    char err[200], dir[64];
+    static char bootv[8][32];
+    static const char *bp[8];
+    static int nb;
+    node tmp;
+    memset(&tmp, 0, sizeof tmp);
+    snprintf(dir, sizeof dir, ROOT "/%s", name);
+    clean_dir(dir);
+    make_id(name, id);
+    tmp.id = *id;
+    snprintf(tmp.dir, sizeof tmp.dir, "%s", dir);
+    dht_config cfg = node_cfg(&tmp, port);
+    cfg.self = id;
+    cfg.on_alert = NULL, cfg.own_distance = NULL, cfg.on_session = NULL, cfg.user = NULL;
+    cfg.allow_private = allow_private;
+    if (boot >= 0) {
+        snprintf(bootv[nb], sizeof bootv[nb], "127.0.0.1:%u", dht_port(nodes[boot].d));
+        bp[nb] = bootv[nb];
+        cfg.bootstrap = &bp[nb++];
+        cfg.nbootstrap = 1;
+    }
+    dht *d = dht_create(&cfg, err, sizeof err);
+    if (!d) printf("t_dht: %s\n", err);
+    else if (port && dht_start(d) < 0) CHECK(!"started");
+    return d;
+}
+
+static void scratch_end(dht *d, const char *name)
+{
+    char dir[64];
+    dht_stop(d);
+    snprintf(dir, sizeof dir, ROOT "/%s", name);
+    clean_dir(dir);
+}
+
+/* a NODES answer of n contacts, the identities ids at the addresses addrs */
+static size_t nodes_msg(uint8_t *m, const home_identity *ids, const char *const *addrs, int n)
+{
+    m[0] = DHT_NODES, m[1] = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        uint8_t *p = m + 2 + 82 * (size_t)i;
+        net_addr a;
+        CHECK(net_parse_addr(addrs[i], &a));
+        memcpy(p, ids[i].id, 32), memcpy(p + 32, ids[i].xonly, 32), memcpy(p + 64, a.ip, 16);
+        p[80] = (uint8_t)(a.port >> 8), p[81] = (uint8_t)a.port;
+    }
+    return 2 + 82 * (size_t)n;
+}
+
+static void seen_at(dht *d, const home_identity *id, const char *addr)
+{
+    dht_contact c;
+    memcpy(c.id, id->id, 32), memcpy(c.xonly, id->xonly, 32);
+    CHECK(net_parse_addr(addr, &c.addr));
+    dht_seen(d, &c);
+}
+
+/* What a public network refuses, and the limits by address block: in NODES answers (loopback and private addresses, port 0, one address
+ * for two identities, more than 4 contacts of one block) and in the table (2 of a block in a bucket, 4 in the table). A test network takes
+ * loopback without a limit. A node of a public network on 127.0.0.1 bootstraps from node 0 and keeps nothing: every answer points at
+ * loopback. Before, all of it was taken. */
+static void test_policy(void)
+{
+    home_identity pid, tid, ids[24];
+    dht *pub = scratch("s-pub", false, 0, -1, &pid), *tst = scratch("s-test", true, 0, -1, &tid);
+    CHECK(pub && tst);
+    if (!pub || !tst) return;
+    for (int i = 0; i < 24; i++) {
+        char label[32];
+        snprintf(label, sizeof label, "policy %d", i);
+        make_id(label, &ids[i]);
+    }
+    uint8_t m[2 + 82 * DHT_K];
+    dht_contact out[DHT_K];
+    static const char *const LOOP[] = {"127.0.0.1:1000", "127.0.0.1:1001", "127.0.0.1:1002", "127.0.0.1:1003", "127.0.0.1:1004", "127.0.0.1:1005"};
+    static const char *const PUB2[] = {"1.2.3.4:1000", "5.6.7.8:1000"};
+    static const char *const LAN[] = {"5.6.7.8:1000", "192.168.1.10:80"};
+    static const char *const PORT0[] = {"5.6.7.8:1000", "1.2.3.4:1"};   /* the second's port set to 0 below */
+    static const char *const TWICE[] = {"8.8.4.4:5", "5.6.7.8:1000", "8.8.4.4:5"};
+    static const char *const BLOCK5[] = {"1.2.3.1:1", "1.2.3.2:1", "1.2.3.3:1", "1.2.3.4:1", "1.2.3.5:1"};
+    size_t l = nodes_msg(m, ids, LOOP, 2);
+    CHECK(dht_parse_nodes(tst, m, l, out) == 2 && dht_parse_nodes(pub, m, l, out) == -1);
+    l = nodes_msg(m, ids, LOOP, 6);
+    CHECK(dht_parse_nodes(tst, m, l, out) == 6);                /* loopback on a test network: no limit */
+    l = nodes_msg(m, ids, PUB2, 2);
+    CHECK(dht_parse_nodes(tst, m, l, out) == 2 && dht_parse_nodes(pub, m, l, out) == 2);
+    l = nodes_msg(m, ids, LAN, 2);
+    CHECK(dht_parse_nodes(tst, m, l, out) == 2 && dht_parse_nodes(pub, m, l, out) == -1);
+    l = nodes_msg(m, ids, PORT0, 2);
+    m[2 + 82 + 80] = m[2 + 82 + 81] = 0;
+    CHECK(dht_parse_nodes(tst, m, l, out) == -1 && dht_parse_nodes(pub, m, l, out) == -1);
+    l = nodes_msg(m, ids, TWICE, 3);
+    CHECK(dht_parse_nodes(tst, m, l, out) == -1 && dht_parse_nodes(pub, m, l, out) == -1);
+    l = nodes_msg(m, ids, BLOCK5, 5);
+    CHECK(dht_parse_nodes(tst, m, l, out) == -1 && dht_parse_nodes(pub, m, l, out) == -1);
+    l = nodes_msg(m, ids, BLOCK5, 4);
+    CHECK(dht_parse_nodes(pub, m, l, out) == 4);
+    l = nodes_msg(m, ids, PUB2, 2);
+    m[2 + 82 + 40] ^= 1;                                        /* the second identity does not give its ID */
+    CHECK(dht_parse_nodes(pub, m, l, out) == -1);
+
+    /* the table of the public network's node: no loopback or LAN; of one /24, two in a bucket and four in all */
+    dht_contact cs[64];
+    seen_at(pub, &ids[0], "127.0.0.1:5000");
+    seen_at(pub, &ids[1], "192.168.1.10:5000");
+    CHECK(dht_contacts(pub, cs, 64) == 0);
+    int byb[DHT_BUCKETS + 1] = {0}, in_table = 0, kept = 0;
+    for (int i = 0; i < 24; i++) {
+        char addr[32];
+        const int b = bucket_of(pid.id, ids[i].id);
+        snprintf(addr, sizeof addr, "9.9.9.%d:7000", i + 1);
+        seen_at(pub, &ids[i], addr);
+        const int want = byb[b] < 2 && in_table < 4;
+        byb[b] += want, in_table += want;
+        kept += want;
+    }
+    const int n = dht_contacts(pub, cs, 64);
+    CHECK(n == kept && n == 4);
+    int per[DHT_BUCKETS + 1] = {0};
+    for (int i = 0; i < n; i++) per[bucket_of(pid.id, cs[i].id)]++;
+    for (int b = 0; b <= DHT_BUCKETS; b++) CHECK(per[b] <= 2);
+    seen_at(pub, &ids[23], "9.9.10.1:7000");                    /* another block is welcome */
+    CHECK(dht_contacts(pub, cs, 64) == 5);
+    /* the test network's node: loopback in any number */
+    for (int i = 0; i < 10; i++) {
+        char addr[32];
+        snprintf(addr, sizeof addr, "127.0.0.1:%d", 6000 + i);
+        seen_at(tst, &ids[i], addr);
+    }
+    CHECK(dht_contacts(tst, cs, 64) == 10);
+    scratch_end(pub, "s-pub");
+    scratch_end(tst, "s-test");
+    /* a public network's node on loopback: node 0 answers its PING (an address given by hand is dialled), but keeps none of it */
+    home_identity bid;
+    dht *b = scratch("s-boot", false, DHT_ANY_PORT, 0, &bid);
+    CHECK(b && dht_contacts(b, cs, 64) == 0);
+    if (b) scratch_end(b, "s-boot");
+}
+
+static int raw_connect(uint16_t port)
+{
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0 && connect(fd, (const struct sockaddr *)&a, sizeof a) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* whether the other side closed fd within ms */
+static bool closed_within(int fd, int msec)
+{
+    struct pollfd p = {.fd = fd, .events = POLLIN};
+    uint8_t b;
+    return poll(&p, 1, msec) == 1 && recv(fd, &b, 1, 0) <= 0;
+}
+
+/* Connections that open and say nothing, from one address, on a node of a public network (whose limits apply to loopback, as to any
+ * address there): four hold four handlers, the fifth is closed at once, and so is a request from that address until they go. Before,
+ * the fifth waited in the queue for a handler, and every request behind it, for the timeout of each idle one. */
+static void test_slowloris(void)
+{
+    home_identity sid, cid;
+    dht *sv = scratch("s-slow", false, DHT_ANY_PORT, -1, &sid);
+    CHECK(sv != NULL);
+    if (!sv) return;
+    make_id("slow client", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 1000);
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(sv);
+    int idle[4];
+    for (int i = 0; i < 4; i++) idle[i] = raw_connect(a.port);
+    nap(200);
+    const int fifth = raw_connect(a.port);
+    CHECK(fifth >= 0 && closed_within(fifth, 500));
+    const uint8_t ping = DHT_PING;
+    uint8_t ans[4];
+    size_t n;
+    int64_t t0 = ms();
+    CHECK(!net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && ms() - t0 < 500);
+    for (int i = 0; i < 4; i++)
+        if (idle[i] >= 0) close(idle[i]);
+    if (fifth >= 0) close(fifth);
+    nap(300);
+    CHECK(net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG);
+    scratch_end(sv, "s-slow");
+}
+
+/* A flood of alerts that will never be proved: copies of a record of A2 by 1100 identities that are no node. A2 does not know that
+ * point's distance, so they all wait, and fill its table of alerts (1024). Then a real coincidence of A2 with B2: before, it was refused
+ * (the table was full of waiting alerts and kept them for a day); now the oldest waiting one goes, and the real one gets its on_alert. */
+static void test_alert_flood(void)
+{
+    node *A2 = &nodes[17], *B2 = &nodes[19];
+    uint8_t xf[32], dA[32], dB[32], xA[32], nq[32];
+    record rF, rA, rB;
+    hashed("flooded", dA);
+    even_point(dA, xf);
+    CHECK(publish_one(A2, 0, xf, &rF));                         /* no give_point: A2 does not know its distance */
+    home_identity cid;
+    make_id("flooder", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(A2->d);
+    int sent = 0;
+    const int64_t t0 = ms();
+    for (int i = 0; i < 1100; i++) {
+        char label[32];
+        home_identity sy;
+        snprintf(label, sizeof label, "sybil %d", i);
+        make_id(label, &sy);
+        record r = {.t = 1, .seq = 1};
+        memcpy(r.x, xf, 32), memcpy(r.owner, sy.xonly, 32);
+        CHECK(record_sign(ctx, &net, &sy.kp, &r));
+        uint8_t req[1 + 2 * RECORD_LEN], ans[1];
+        size_t n;
+        req[0] = DHT_ALERT;
+        record_encode(&rF, req + 1), record_encode(&r, req + 1 + RECORD_LEN);
+        sent += net_exchange(&cli, &a, A2->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_OK;
+    }
+    CHECK(sent == 1100);
+    printf("t_dht: 1100 alerts that will never be proved sent in %.1f s\n", (double)(ms() - t0) / 1000);
+    /* the real one: A2 tame, B2 wild + */
+    hashed("after the flood", dA);
+    even_point(dA, xA);
+    memcpy(nq, qp, 32);
+    CHECK(secp256k1_ec_seckey_negate(ctx, nq));
+    memcpy(dB, dA, 32);
+    CHECK(secp256k1_ec_seckey_tweak_add(ctx, dB, nq));
+    give_point(A2, 0, xA, dA), give_point(B2, 1, xA, dB);
+    CHECK(publish_one(A2, 0, xA, &rA) && publish_one(B2, 1, xA, &rB));
+    const int64_t t1 = ms();
+    while (ms() - t1 < 20000 && (alerts_of(A2, NULL, NULL, NULL) < 1 || alerts_of(B2, NULL, NULL, NULL) < 1)) nap(50);
+    record mine, theirs;
+    bool merge;
+    CHECK(alerts_of(A2, &mine, &theirs, &merge) == 1 && same(&mine, &rA) && same(&theirs, &rB) && !merge);
+    CHECK(alerts_of(B2, &mine, &theirs, &merge) == 1 && same(&mine, &rB) && same(&theirs, &rA));
+    printf("t_dht: the real alert after the flood in %.1f s\n", (double)(ms() - t1) / 1000);
+}
+
+/* The sequence number survives a restart (own.seq): a republish signs the records with numbers that own.bin does not keep, so a node that
+ * restarts with its clock behind its last republish would sign below what the custodians saw, and be refused. own.seq holds a number
+ * ahead of the clock here (a clock that went back); the next record is above it. */
+static void test_seq(void)
+{
+    node *n = &nodes[3];
+    const int port = dht_port(n->d);
+    char path[128];
+    dht_stop(n->d);
+    n->d = NULL;
+    const uint64_t ahead = (uint64_t)time(NULL) * 1000000 + 1000000000000ull;   /* 11 days ahead */
+    snprintf(path, sizeof path, "%s/own.seq", n->dir);
+    FILE *f = fopen(path, "w");
+    CHECK(f != NULL);
+    if (f) fprintf(f, "%llu\n", (unsigned long long)ahead), fclose(f);
+    CHECK(start_node(n, port, -1));
+    uint8_t d[32], x[32];
+    record r;
+    hashed("after a clock went back", d);
+    even_point(d, x);
+    CHECK(publish_one(n, 1, x, &r) && r.seq > ahead);
+}
+
+/* ---- the relay ---- */
+
+typedef struct {
+    dht *d;
+    const uint8_t *partner, *name;
+    net_conn *c;
+    int frames, echoed;
+} chan_job;
+
+static void *chan_main(void *arg)
+{
+    chan_job *j = arg;
+    j->c = dht_channel(j->d, j->partner, j->name, 20000, NULL, NULL);
+    return NULL;
+}
+
+/* a stand-in session: the initiator sends frames of 60 000 bytes, the other side sends each back */
+typedef struct {
+    net_conn *c;
+    bool first;
+    int frames, done;
+} stand_in;
+
+static void *stand_in_main(void *arg)
+{
+    stand_in *s = arg;
+    uint8_t *m = malloc(60000), *got = malloc(60000);
+    size_t l;
+    for (int i = 0; m && got && i < s->frames; i++) {
+        memset(m, i * 7 + 1, 60000);
+        if (s->first ? !net_send(s->c, m, 60000) || !net_recv(s->c, got, 60000, &l) || l != 60000 || memcmp(got, m, 60000)
+                     : !net_recv(s->c, got, 60000, &l) || l != 60000 || got[0] != m[0] || !net_send(s->c, got, l))
+            break;
+        s->done++;
+    }
+    free(m), free(got);
+    return NULL;
+}
+
+static uint64_t relays_done(void)
+{
+    uint64_t sum = 0;
+    for (int i = 0; i < N; i++) {
+        int w, a;
+        uint64_t dn;
+        dht_relays(nodes[i].d, &w, &a, &dn);
+        sum += dn;
+    }
+    return sum;
+}
+
+/* Two homes that do not listen, U and W, with a useful coincidence: neither can dial the other for a proof, so each sends its own to the
+ * other's mailboxes, and both get on_alert (before, both alerts waited for a day: no session could start). Then each asks dht_channel
+ * for a channel with the other: through the relay of the slot, a handshake end to end, and a stand-in session of 2 x 2.4 MB on it. */
+static void test_relay_session(void)
+{
+    node *Un = &nodes[U], *Wn = &nodes[W];
+    uint8_t dU[32], dW[32], x[32], nq[32];
+    record rU, rW;
+    hashed("relay useful", dU);
+    even_point(dU, x);
+    memcpy(nq, qp, 32);
+    CHECK(secp256k1_ec_seckey_negate(ctx, nq));
+    memcpy(dW, dU, 32);
+    CHECK(secp256k1_ec_seckey_tweak_add(ctx, dW, nq));
+    give_point(Un, 0, x, dU), give_point(Wn, 1, x, dW);
+    const int before = alerts_of(Un, NULL, NULL, NULL);
+    CHECK(publish_one(Un, 0, x, &rU) && publish_one(Wn, 1, x, &rW));
+    int64_t t0 = ms();
+    while (ms() - t0 < 30000 && (alerts_of(Un, NULL, NULL, NULL) <= before || alerts_of(Wn, NULL, NULL, NULL) < 1)) nap(50);
+    record mine, theirs;
+    bool merge;
+    CHECK(alerts_of(Un, &mine, &theirs, &merge) == before + 1 && same(&mine, &rU) && same(&theirs, &rW) && !merge);
+    CHECK(alerts_of(Wn, &mine, &theirs, &merge) == 1 && same(&mine, &rW) && same(&theirs, &rU) && !merge);
+    printf("t_dht: two homes that do not listen proved their points to each other through their mailboxes in %.1f s\n", (double)(ms() - t0) / 1000);
+    /* the channel, both at once, as the two sessions would ask for it */
+    uint8_t name[32];
+    hashed("the eid of U and W", name);
+    const uint64_t done0 = relays_done();
+    chan_job ju = {Un->d, Wn->id.xonly, name, NULL, 0, 0}, jw = {Wn->d, Un->id.xonly, name, NULL, 0, 0};
+    pthread_t tu, tw;
+    t0 = ms();
+    CHECK(pthread_create(&tu, NULL, chan_main, &ju) == 0 && pthread_create(&tw, NULL, chan_main, &jw) == 0);
+    pthread_join(tu, NULL), pthread_join(tw, NULL);
+    CHECK(ju.c && jw.c);
+    if (ju.c && jw.c) {
+        CHECK(!memcmp(ju.c->remote, Wn->id.xonly, 32) && !memcmp(jw.c->remote, Un->id.xonly, 32));
+        printf("t_dht: a relayed channel in %.1f s\n", (double)(ms() - t0) / 1000);
+        const bool u_first = memcmp(Un->id.xonly, Wn->id.xonly, 32) < 0;
+        stand_in su = {ju.c, u_first, 40, 0}, sw = {jw.c, !u_first, 40, 0};
+        t0 = ms();
+        CHECK(pthread_create(&tu, NULL, stand_in_main, &su) == 0 && pthread_create(&tw, NULL, stand_in_main, &sw) == 0);
+        pthread_join(tu, NULL), pthread_join(tw, NULL);
+        CHECK(su.done == 40 && sw.done == 40);
+        printf("t_dht: a stand-in session of 2 x 2.4 MB through the relay in %.1f s\n", (double)(ms() - t0) / 1000);
+    }
+    net_close(ju.c), net_close(jw.c);
+    for (t0 = ms(); ms() - t0 < 5000 && relays_done() == done0; nap(20)) {}
+    CHECK(relays_done() == done0 + 1);
+}
+
+/* a home that joins node r's relay by hand */
+typedef struct {
+    node *r;
+    home_identity id;
+    uint8_t name[32], partner[32];
+    int wait_ms;
+    net_conn *c;
+    bool relayed;
+    int64_t took;
+} joiner;
+
+static void *join_main(void *arg)
+{
+    joiner *j = arg;
+    net_cfg cfg;
+    net_addr a;
+    uint8_t req[65], ans[4];
+    size_t n;
+    const int64_t t0 = ms();
+    net_cfg_init(&cfg, ctx, &j->id, FP, BITS, 0, j->wait_ms);
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(j->r->d);
+    j->c = net_dial(&cfg, &a, j->r->id.xonly);
+    req[0] = DHT_RELAY;
+    memcpy(req + 1, j->name, 32), memcpy(req + 33, j->partner, 32);
+    j->relayed = j->c && net_send(j->c, req, sizeof req) && net_recv(j->c, ans, sizeof ans, &n) && n == 1 && ans[0] == DHT_RELAYED;
+    j->took = ms() - t0;
+    if (!j->relayed) net_close(j->c), j->c = NULL;
+    return NULL;
+}
+
+static void joiner_init(joiner *j, node *r, const char *who, const char *name, const joiner *partner)
+{
+    memset(j, 0, sizeof *j);
+    j->r = r;
+    j->wait_ms = 4000;
+    make_id(who, &j->id);
+    hashed(name, j->name);
+    if (partner) memcpy(j->partner, partner->id.xonly, 32), memcpy(((joiner *)partner)->partner, j->id.xonly, 32);
+}
+
+typedef struct {
+    joiner *j;
+    bool initiator, ok;
+    int frames, done;
+} relay_end;
+
+static void *relay_end_main(void *arg)
+{
+    relay_end *e = arg;
+    net_cfg cfg;
+    net_cfg_init(&cfg, ctx, &e->j->id, FP, BITS, 0, 3000);
+    e->ok = net_rehandshake(&cfg, e->j->c, e->initiator, e->j->partner);
+    stand_in s = {e->j->c, e->initiator, e->frames, 0};
+    if (e->ok) stand_in_main(&s);
+    e->done = s.done;
+    return NULL;
+}
+
+/* A relay's limits, at node 2, with homes that join by hand. A home whose partner never comes is closed after a slot and a quarter. A third
+ * party that names the pair is not joined to anyone. Two relays at once (this network's relay_max): the third pair is refused, both of it.
+ * The bytes of one relay (8 MiB here): a stand-in session that sends 9 MB is cut. */
+static void test_relay_limits(void)
+{
+    node *R = &nodes[2];
+    joiner lone, a, x, p[3], q[3];
+    pthread_t th[8];
+    int w, act;
+    uint64_t done0, dn;
+    dht_relays(R->d, &w, &act, &done0);
+    joiner_init(&lone, R, "lone", "lone pair", NULL);
+    hashed("nobody", lone.partner);
+    join_main(&lone);
+    CHECK(!lone.relayed && lone.took >= 1000 && lone.took < 3000);
+    dht_relays(R->d, &w, &act, &dn);
+    CHECK(w == 0 && act == 0);
+    /* a waits for b; x names the same pair, with a as its partner: no match (a waits for b, not for x) */
+    joiner b;
+    joiner_init(&a, R, "pair a", "pair ab", NULL);
+    joiner_init(&b, R, "pair b", "pair ab", &a);
+    joiner_init(&x, R, "intruder", "pair ab", &a);
+    memcpy(a.partner, b.id.xonly, 32);
+    CHECK(pthread_create(&th[0], NULL, join_main, &a) == 0 && pthread_create(&th[1], NULL, join_main, &x) == 0);
+    pthread_join(th[0], NULL), pthread_join(th[1], NULL);
+    CHECK(!a.relayed && !x.relayed);
+    /* two pairs relayed, the third refused */
+    for (int i = 0; i < 3; i++) {
+        char who[16], name[16];
+        snprintf(who, sizeof who, "p%d", i), snprintf(name, sizeof name, "pq%d", i);
+        joiner_init(&p[i], R, who, name, NULL);
+        snprintf(who, sizeof who, "q%d", i);
+        joiner_init(&q[i], R, who, name, &p[i]);
+    }
+    for (int i = 0; i < 2; i++) CHECK(pthread_create(&th[2 * i], NULL, join_main, &p[i]) == 0 && pthread_create(&th[2 * i + 1], NULL, join_main, &q[i]) == 0);
+    for (int i = 0; i < 4; i++) pthread_join(th[i], NULL);
+    CHECK(p[0].relayed && q[0].relayed && p[1].relayed && q[1].relayed);
+    dht_relays(R->d, &w, &act, &dn);
+    CHECK(act == 2);
+    CHECK(pthread_create(&th[4], NULL, join_main, &p[2]) == 0);
+    nap(100);
+    join_main(&q[2]);
+    pthread_join(th[4], NULL);
+    CHECK(!p[2].relayed && !q[2].relayed && q[2].took < 1000);
+    /* the first pair: a session of 9 MB, cut at 8 MiB; the second ends at once */
+    net_close(p[1].c), net_close(q[1].c);
+    const bool p_first = memcmp(p[0].id.xonly, q[0].id.xonly, 32) < 0;
+    relay_end ep = {&p[0], p_first, false, 150, 0}, eq = {&q[0], !p_first, false, 150, 0};
+    CHECK(pthread_create(&th[0], NULL, relay_end_main, &ep) == 0 && pthread_create(&th[1], NULL, relay_end_main, &eq) == 0);
+    pthread_join(th[0], NULL), pthread_join(th[1], NULL);
+    CHECK(ep.ok && eq.ok && ep.done < 75 && ep.done > 30);
+    net_close(p[0].c), net_close(q[0].c);
+    for (const int64_t t0 = ms(); ms() - t0 < 3000; nap(20)) {
+        dht_relays(R->d, &w, &act, &dn);
+        if (act == 0) break;
+    }
+    CHECK(act == 0 && dn == done0 + 2);
+}
+
 int main(void)
 {
     const int64_t t_start = ms();
@@ -559,7 +1108,7 @@ int main(void)
     CHECK(secp256k1_ec_seckey_negate(ctx, nb) && secp256k1_ec_seckey_tweak_add(ctx, qp, nb));
     mkdir("build/peer", 0755);
     mkdir(ROOT, 0755);
-    for (int i = 0; i < N + 2; i++) {
+    for (int i = 0; i < NODES; i++) {
         char label[32];
         uint8_t seed[32];
         node *n = &nodes[i];
@@ -576,9 +1125,10 @@ int main(void)
     CHECK(start_node(&nodes[0], DHT_ANY_PORT, -1));
     for (int i = 1; i < N && !fails; i++) CHECK(start_node(&nodes[i], DHT_ANY_PORT, 0));
     if (!fails) CHECK(start_node(&nodes[U], 0, 0) && dht_port(nodes[U].d) == 0);
+    if (!fails) CHECK(start_node(&nodes[W], 0, 0) && dht_port(nodes[W].d) == 0);
     if (fails) return 1;
     all(refresh_main, N);
-    printf("t_dht: %d nodes up and refreshed in %.1f s\n", N + 1, (double)(ms() - t0) / 1000);
+    printf("t_dht: %d nodes up and refreshed in %.1f s\n", N + 2, (double)(ms() - t0) / 1000);
     if (fails) return 1;
     t0 = ms();
     test_lookups();
@@ -590,10 +1140,18 @@ int main(void)
     test_malformed();
     test_restart();
     test_eviction();
+    test_policy();
+    test_slowloris();
+    test_alert_flood();
+    test_seq();
     t0 = ms();
-    all(stop_main, N + 2);
+    test_relay_session();
+    test_relay_limits();
+    printf("t_dht: the relay in %.1f s\n", (double)(ms() - t0) / 1000);
+    t0 = ms();
+    all(stop_main, NODES);
     printf("t_dht: stopped in %.1f s\n", (double)(ms() - t0) / 1000);
-    for (int i = 0; i < N + 2; i++) {
+    for (int i = 0; i < NODES; i++) {
         clean_dir(nodes[i].dir);
         pthread_mutex_destroy(&nodes[i].mu);
     }

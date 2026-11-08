@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* home.c - the daemon of a home (see home.h). One thread feeds the table from dp.bin; the node answers the others; every useful coincidence
- * gets a thread of its own that runs the session. Who opens the channel of a pair: party 0 (the smaller identity) when it can find the
- * partner in the table, party 1 only when it does not listen itself (it cannot be found then); the other side waits for the connection.
+ * gets a thread of its own that runs the session. The channel of a pair comes from dht_channel (docs/en/NETWORK.md 7.7): dialled by party 0
+ * (the smaller identity) when it finds the partner or by a side that does not listen, the partner's own connection, or a relay.
  *
  * A hello can start a session before this home has the alert of its pair, and anyone can copy the x of a published record into one of
  * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzfirma only after that), at
@@ -252,7 +252,23 @@ static void hex8(const uint8_t *p, char out[17])
     for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", p[i]);
 }
 
-typedef struct { home *h; session_slot *s; } session_job;
+typedef struct { home *h; session_slot *s; } session_job, chan_wait;
+
+/* the partner's own connection to this home, which on_session handed to the slot: dht_channel looks for it while it tries the others */
+static net_conn *incoming(void *arg, int ms, bool *give_up)
+{
+    chan_wait *w = arg;
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += ms / 1000, until.tv_nsec += (long)(ms % 1000) * 1000000L;
+    if (until.tv_nsec >= 1000000000L) until.tv_sec++, until.tv_nsec -= 1000000000L;
+    pthread_mutex_lock(&w->h->mu);
+    while (!w->s->have_conn && !g_stop && pthread_cond_timedwait(&w->h->cv, &w->h->mu, &until) == 0) {}
+    net_conn *c = w->s->have_conn ? w->s->conn : NULL;
+    pthread_mutex_unlock(&w->h->mu);
+    *give_up = g_stop;
+    return c;
+}
 
 static void *session_main(void *arg)
 {
@@ -268,25 +284,17 @@ static void *session_main(void *arg)
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
     bool proved = false;
-    /* the channel: the partner's hello if it came first; else dialled by party 0 when it finds the partner, by party 1 when it does not
-     * listen; else it comes to us */
+    /* the channel (docs/en/NETWORK.md 7.7): the partner's hello if it came first (dialling as well would lose it); else dialled, the
+     * partner's own connection (on_session), or through a relay */
     pthread_mutex_lock(&h->mu);
     net_conn *c = s->have_conn ? s->conn : NULL;
+    s->waiting = !c;                                            /* a hello may come in only while dht_channel looks */
     pthread_mutex_unlock(&h->mu);
-    dht_contact pc;
-    const bool dial = !c && (me == 0 || cfg->listen_port == 0) && dht_find(h->d, s->theirs.owner, &pc);
-    if (dial) c = dht_dial(h->d, &pc);
-    if (!c) {                                                   /* not ours to dial, or the partner did not answer: it dials us */
-        pthread_mutex_lock(&h->mu);
-        struct timespec until;
-        clock_gettime(CLOCK_REALTIME, &until);
-        until.tv_sec += 600;
-        s->waiting = true;                                      /* a hello may come in only now */
-        while (!s->have_conn && !g_stop && pthread_cond_timedwait(&h->cv, &h->mu, &until) == 0) {}
-        s->waiting = false;
-        c = s->conn;
-        pthread_mutex_unlock(&h->mu);
-    }
+    chan_wait w = {h, s};
+    if (!c) c = dht_channel(h->d, s->theirs.owner, s->eid, 600000, incoming, &w);
+    pthread_mutex_lock(&h->mu);
+    s->waiting = false;
+    pthread_mutex_unlock(&h->mu);
     if (!c) {
         snprintf(why, sizeof why, "no channel with the partner");
         goto done;
@@ -297,13 +305,15 @@ static void *session_main(void *arg)
         pthread_mutex_unlock(&h->mu);
         session_chan chan = {&cc, cc_send, cc_recv};
         btc_rpc rpc;
-        char host[256] = "", user[128] = "", pass[256] = "";
-        unsigned port = 0;
-        if (sscanf(cfg->rpc, "%255[^:]:%u:%127[^:]:%255s", host, &port, user, pass) != 4 || !btc_rpc_init(&rpc, host, port, user, pass)) {
-            snprintf(why, sizeof why, "invalid --rpc");
+        if (!btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) {
+            snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
             goto done;
         }
         chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 6, .fallback_feerate = 2000};
+        if (chain_rpc_ready(&crpc, why, sizeof why) != 1) {   /* a node that is behind would report coins that are not those of the chain */
+            btc_rpc_done(&rpc);
+            goto done;
+        }
         const session_chain chain = chain_rpc_iface(&crpc);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                           .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .limit = &h->limit, .proved = &proved,
@@ -322,7 +332,7 @@ done:
     say(h, "session %s: %s (%s)", tag, res == SESSION_PAID ? "PAID" : res == SESSION_CANCELLED ? "cancelled" : "failed", why);
     pthread_mutex_lock(&h->mu);
     if (c) net_close(c);
-    if (s->have_conn && s->conn != c) net_close(s->conn);      /* a hello that came while this session ran on its own channel */
+    if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
     s->running = false, s->have_conn = false, s->conn = NULL;
     s->alerted |= proved;                                       /* an alert that comes after it starts no second session */
     s->used = s->alerted;                                       /* a pair whose partner never proved anything gives its slot back */
@@ -456,6 +466,17 @@ int home_run(const home_cfg *cfg)
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;
     h->pay_len = cfg->payout ? btc_address_script(h->chain, cfg->payout, h->pay_spk) : 0;
     if (!h->pay_len) return fprintf(stderr, "--payout: not an address of the %s chain\n", h->nf.chain), 1;
+    {                                                           /* the node: a wrong --rpc or chain now, not at the first session */
+        btc_rpc rpc;
+        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain};
+        int ready = 0;
+        if (btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) ready = chain_rpc_ready(&crpc, err, sizeof err);
+        else if (rpc.err.kind == BTC_RPC_EPROTO) return fprintf(stderr, "--rpc: %s\n", rpc.err.msg), 1;
+        else snprintf(err, sizeof err, "%s", rpc.err.msg);      /* no cookie yet: the node is not running */
+        btc_rpc_done(&rpc);
+        if (ready < 0) return fprintf(stderr, "bitcoind: %s\n", err), 1;
+        say(h, "bitcoind: %s%s", err, ready ? "" : " (a session waits for it)");
+    }
     if (!home_seed(h, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!keys_identity(h->ctx, h->seed, h->nf.fp, cfg->id_bits, &h->id)) return fprintf(stderr, "no identity\n"), 1;
     /* the table: the entry lines of the file and the peers given */
@@ -474,7 +495,8 @@ int home_run(const home_cfg *cfg)
     mkdir(nodedir, 0700);
     const dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
                            .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
-                           .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose};
+                           .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose,
+                           .allow_private = h->chain != BTC_MAIN || cfg->allow_private};
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);

@@ -1,14 +1,27 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* chain_rpc.c - session_chain on bitcoind (see chain_rpc.h). The node is trusted for what it can only report (which outputs exist and are
- * unspent, the height), not for what can be checked: every value comes from the bytes of the transaction that made it, whose hash is its id. */
+/* chain_rpc.c - session_chain on bitcoind (see chain_rpc.h). */
 #include "chain_rpc.h"
 #include <pzcore/address.h>
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
 #define COINBASE_MATURITY 100
+#define SCAN_MAX 64
+
+static void pause_s(void)
+{
+    const struct timespec ts = {1, 0};
+    nanosleep(&ts, NULL);
+}
+
+static int64_t now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
 
 /* the address of a P2PKH script on the chain, for the descriptor of scantxoutset */
 static bool p2pkh_address(btc_chain chain, const uint8_t spk[BTC_P2PKH_LEN], char *out, size_t cap)
@@ -19,38 +32,43 @@ static bool p2pkh_address(btc_chain chain, const uint8_t spk[BTC_P2PKH_LEN], cha
     return pz_base58check_encode(payload, sizeof payload, out, cap) > 0;
 }
 
+int chain_rpc_ready(chain_rpc *c, char *why, size_t cap)
+{
+    btc_chaininfo ci;
+    btc_chain on;
+    if (!btc_rpc_getblockchaininfo(c->rpc, &ci)) return snprintf(why, cap, "the node does not answer: %s", c->rpc->err.msg), 0;
+    /* the names of getblockchaininfo are those of the network file, but for the fourth test network, which shares the forms of test */
+    if (!btc_chain_parse(strcmp(ci.chain, "testnet4") ? ci.chain : "test", &on) || on != c->chain)
+        return snprintf(why, cap, "the node is on the chain %s, not on the chain of the network", ci.chain), -1;
+    if (ci.ibd || ci.headers > ci.blocks + 1)
+        return snprintf(why, cap, "the node is still syncing: block %llu of %llu", (unsigned long long)ci.blocks,
+                        (unsigned long long)ci.headers), 0;
+    snprintf(why, cap, "the node is at block %llu%s", (unsigned long long)ci.blocks, ci.pruned ? ", pruned" : "");
+    return 1;
+}
+
 static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
 {
     chain_rpc *c = ctx;
-    char addr[64];
+    char addr[64], why[300];
     const char *addrs[1] = {addr};
-    btc_utxo u[64];
+    btc_utxo u[SCAN_MAX];
     size_t n;
     uint64_t tip;
-    if (!p2pkh_address(c->chain, spk, addr, sizeof addr)) return -1;
-    for (int tries = 0; !btc_rpc_scan(c->rpc, addrs, 1, u, 64, &n, &tip); tries++) {
-        /* the node runs one scan at a time: another one (the partner on the same node, a wallet) is answered with an error, not queued */
-        if (tries == 300 || c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress")) return -1;
-        const struct timespec ts = {0, 200000000};
-        nanosleep(&ts, NULL);
+    if (max <= 0 || !p2pkh_address(c->chain, spk, addr, sizeof addr) || chain_rpc_ready(c, why, sizeof why) != 1) return -1;
+    /* the node runs one scan at a time and answers another one (the partner on the same node, a wallet) with an error, not in a queue:
+     * on the main chain a scan takes minutes, so the wait is as long as a scan may be */
+    const int64_t until = now_ms() + c->rpc->scan_timeout_ms;
+    while (!btc_rpc_scan(c->rpc, addrs, 1, u, max < SCAN_MAX ? (size_t)max : SCAN_MAX, &n, &tip)) {
+        if (c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress") || now_ms() > until) return -1;
+        pause_s();
     }
-    if (n > 64) n = 64;
+    if (n > SCAN_MAX) n = SCAN_MAX;
     int k = 0;
     for (size_t i = 0; i < n && k < max; i++) {
-        uint8_t bh[32], *raw = NULL;
-        size_t len;
-        uint64_t value;
-        const uint8_t *s;
-        size_t sl;
         if (!u[i].height || (u[i].coinbase && tip + 1 < u[i].height + COINBASE_MATURITY)) continue;   /* not spendable yet */
-        if (!btc_rpc_getblockhash(c->rpc, u[i].height, bh) || !btc_rpc_getrawtransaction(c->rpc, u[i].txid, bh, &raw, &len)) {
-            free(raw);
-            return -1;
-        }
-        const bool ok = btc_prevout(raw, len, u[i].txid, u[i].vout, &value, &s, &sl) && sl == BTC_P2PKH_LEN && !memcmp(s, spk, sl);
-        free(raw);
-        if (!ok) continue;                                     /* the node said something its own bytes do not: not taken */
-        memcpy(out[k].txid, u[i].txid, 32), out[k].vout = u[i].vout, out[k].value = value, k++;
+        if (u[i].spk_len != BTC_P2PKH_LEN || memcmp(u[i].spk, spk, BTC_P2PKH_LEN)) continue;           /* not the script asked */
+        memcpy(out[k].txid, u[i].txid, 32), out[k].vout = u[i].vout, out[k].value = u[i].value, k++;
     }
     return k;
 }
@@ -75,11 +93,17 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
     return found ? (int)u.confirmations : -1;
 }
 
+/* The height has no value for "unknown", and a session counts blocks from it: a 0 after a call that failed would end a wait of a
+ * few blocks at once (and F would cancel). So a few tries, then the last height the node gave. */
 static uint64_t height(void *ctx)
 {
-    uint64_t h = 0;
-    (void)btc_rpc_getblockcount(((chain_rpc *)ctx)->rpc, &h);
-    return h;
+    chain_rpc *c = ctx;
+    uint64_t h;
+    for (int tries = 0; tries < 10; tries++) {
+        if (btc_rpc_getblockcount(c->rpc, &h)) return c->tip = h;
+        pause_s();
+    }
+    return c->tip;
 }
 
 static uint64_t feerate(void *ctx)

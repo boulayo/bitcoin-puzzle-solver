@@ -13,7 +13,8 @@ typedef struct {
     const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files */
     const char *pzsolve, *pzfirma;  /* the programs */
     const char *payout;             /* the payout address of this home */
-    const char *rpc;                /* bitcoind: host:port:user:password */
+    const char *rpc;                /* bitcoind: host:port:user:password, or host:port with rpc_cookie (btc_rpc_init_arg) */
+    const char *rpc_cookie;         /* the cookie file of bitcoind, or NULL */
     const char *listen_host;        /* NULL: every address */
     int listen_port;                /* 0: do not listen (dial out only) */
     const char *const *peers;       /* host:port, besides the entry lines of the network file */
@@ -21,6 +22,7 @@ typedef struct {
     unsigned id_bits;               /* leading zero bits of node IDs (NODE_ID_ZERO_BITS; fewer on a test network) */
     const char *const *pzsolve_args; /* more options for pzsolve hunt (for example -t 2 --no-gpu) */
     int nargs;
+    bool allow_private;             /* loopback and private addresses on a main-chain network too (other chains allow them) */
     bool exit_when_done;            /* tests: stop after the first session that ends, or when pzsolve ends */
     bool verbose;
 } home_cfg;

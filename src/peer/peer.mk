@@ -5,6 +5,7 @@
 # promise: BIP340 signatures, ECDH and ECDSA.
 #   make peer        build/pzpeer
 #   make peer-test   the unit tests of src/peer (tests/peer/t_*.c)
+#   make peer-fuzz   the mutation fuzzer of the readers of hostile input, FUZZ_SECONDS long (60)
 #   make signer      build/pzfirma, the two-party signer (signer/, Rust: needs cargo, and builds GMP from source the first time)
 #   make signer-test its tests: two pzfirma sessions relayed by the test (signer/tests/session.rs)
 
@@ -30,7 +31,7 @@ PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  := t_json t_btc t_btc_rpc t_noise t_record t_net t_store t_dht t_pieces t_payout t_session t_trust
+PEERTESTS  := t_json t_btc t_btc_rpc t_chain_rpc t_noise t_record t_net t_store t_dht t_pieces t_payout t_session t_trust
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
@@ -45,6 +46,16 @@ $(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c tests/peer/peertest.h $(PEER_LIBOBJ) $
 $(BUILD)/peer/t_btc$(EXE): tests/peer/btc_vectors.h
 
 peer: $(PEER)
+
+# The mutation fuzzer of the readers of hostile input (tests/peer/fuzz_peer.c), for FUZZ_SECONDS. It includes btc_rpc.c for the reader of
+# the HTTP replies, so it links the other modules without btc_rpc.o. Best under the sanitizers (docs/en/NETWORK.md 8).
+FUZZ_SECONDS ?= 60
+FUZZ_OBJ    = $(filter-out $(BUILD)/peer/btc_rpc.o,$(PEER_LIBOBJ))
+$(BUILD)/peer/fuzz_peer$(EXE): tests/peer/fuzz_peer.c src/peer/btc_rpc.c tests/peer/peertest.h tests/peer/btc_vectors.h $(FUZZ_OBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
+	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(FUZZ_OBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
+
+peer-fuzz: $(BUILD)/peer/fuzz_peer$(EXE)
+	$(RUN) ./$(BUILD)/peer/fuzz_peer$(EXE) $(FUZZ_SECONDS)
 
 # The tests of the two-party signing (t_pieces, t_session) run the real pzfirma when it and two primes files are there: `make signer peer-primes`
 # once (the primes take seconds to a minute), then every `make peer-test` uses them; without them those tests say they were skipped.
@@ -72,4 +83,4 @@ signer:
 signer-test:
 	$(CARGO) test --release --locked --manifest-path signer/Cargo.toml
 
-.PHONY: peer peer-test peer-primes signer signer-test
+.PHONY: peer peer-test peer-fuzz peer-primes signer signer-test

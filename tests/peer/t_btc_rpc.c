@@ -31,9 +31,11 @@ typedef struct {
 static struct {
     int lfd;
     unsigned port;
-    reply_case rc;
-    char req[1 << 20];
+    reply_case rc[2];   /* the reply to the first connection, and to a second one when n == 2 */
+    int n;
+    char req[1 << 20];  /* the last request */
     size_t req_len;
+    char first[4096];   /* the first request, when there were two */
     pthread_t th;
 } S;
 
@@ -71,13 +73,30 @@ static char *make_body(const char *tmpl)
     return out;
 }
 
+static void answer(int fd, const reply_case *rc);
+
 static void *server(void *arg)
 {
     (void)arg;
-    struct pollfd pl = {.fd = S.lfd, .events = POLLIN};
-    if (poll(&pl, 1, 5000) <= 0) return NULL;
-    const int fd = accept(S.lfd, NULL, NULL);
-    if (fd < 0) return NULL;
+    for (int i = 0; i < S.n; i++) {
+        struct pollfd pl = {.fd = S.lfd, .events = POLLIN};
+        if (poll(&pl, 1, 5000) <= 0) return NULL;
+        const int fd = accept(S.lfd, NULL, NULL);
+        if (fd < 0) return NULL;
+        if (i) {
+            const size_t n = S.req_len < sizeof S.first - 1 ? S.req_len : sizeof S.first - 1;
+            memcpy(S.first, S.req, n);
+            S.first[n] = 0;
+        }
+        S.req_len = 0;
+        S.req[0] = 0;
+        answer(fd, &S.rc[i]);
+    }
+    return NULL;
+}
+
+static void answer(int fd, const reply_case *rc)
+{
     /* the request: the head, then Content-Length bytes */
     for (;;) {
         const ssize_t k = recv(fd, S.req + S.req_len, sizeof S.req - 1 - S.req_len, 0);
@@ -87,7 +106,6 @@ static void *server(void *arg)
         const char *e = strstr(S.req, "\r\n\r\n"), *cl = strcasestr(S.req, "\r\nContent-Length:");
         if (e && cl && S.req_len >= (size_t)(e + 4 - S.req) + strtoul(cl + 17, NULL, 10)) break;
     }
-    const reply_case *rc = &S.rc;
     const bool drip = rc->delivery == DRIP;
     if (rc->delivery == SILENT) {
         char tmp[64];
@@ -128,16 +146,21 @@ static void *server(void *arg)
     struct pollfd p = {.fd = fd, .events = POLLIN};
     while (poll(&p, 1, 3000) > 0 && recv(fd, tmp, sizeof tmp, 0) > 0) {}
     close(fd);
-    return NULL;
 }
 
-static void serve(reply_case rc)
+/* the replies to n connections, one after the other (two: a call the client makes again, or a call that follows) */
+static void serve_n(int n, reply_case a, reply_case b)
 {
-    S.rc = rc;
+    S.rc[0] = a;
+    S.rc[1] = b;
+    S.n = n;
     S.req_len = 0;
     S.req[0] = 0;
+    S.first[0] = 0;
     pthread_create(&S.th, NULL, server, NULL);
 }
+
+static void serve(reply_case rc) { serve_n(1, rc, rc); }
 
 static void served(void) { pthread_join(S.th, NULL); }
 
@@ -320,10 +343,37 @@ static void test_calls(void)
     CHECK(u[0].vout == 1 && u[0].value == 12345 && u[0].height == 869000 && !u[0].coinbase && u[0].spk_len == 25 && u[0].txid[0] == 0x16);
     CHECK(u[1].vout == 0 && u[1].value == 625000000 && u[1].height == 100 && u[1].coinbase && u[1].spk_len == 22 && u[1].spk[1] == 20);
     CHECK(u[2].vout == 0xeeeeeeee);   /* untouched */
+    /* with room for one, the largest, which comes last */
     memset(u, 0xee, sizeof u);
     serve(ok_body(scan));
-    CHECK(btc_rpc_scan(&C, addrs, 2, u, 1, &n, &height) && n == 2 && u[0].value == 12345 && u[1].vout == 0xeeeeeeee);
+    CHECK(btc_rpc_scan(&C, addrs, 2, u, 1, &n, &height) && n == 2 && u[0].value == 625000000 && u[1].vout == 0xeeeeeeee);
     served();
+    /* An address with more coins than room: thousands of tiny ones may be sent to a puzzle address, and the node lists them in the
+     * order of their txids, so the prize can come after the room is full. The largest are kept; of equal values, the smaller
+     * outpoints. Here 59 coins of 546 satoshis, 40 of 2000, and the prize last: the 23 of 546 with the smallest txids make 64. */
+    {
+        enum { NU = 100, ROOM = 64 };
+        char *many = malloc(NU * 300 + 256);
+        size_t at = (size_t)sprintf(many, "{\"result\":{\"success\":true,\"height\":870000,\"unspents\":[");
+        for (int k = 0; k < NU; k++) {
+            const unsigned long long sat = k < 59 ? 546 : k < 99 ? 2000 : 100000000;
+            at += (size_t)sprintf(many + at, "%s{\"txid\":\"%064x\",\"vout\":0,\"scriptPubKey\":\"76a914751e76e8199196d454941c45d1b3a323f1433bd688ac\","
+                                 "\"amount\":%llu.%08llu,\"height\":%d}", k ? "," : "", k + 1, sat / 100000000, sat % 100000000, 1000 + k);
+        }
+        sprintf(many + at, "]},\"error\":null,\"id\":@ID@}");
+        btc_utxo w[ROOM];
+        serve(ok_body(many));
+        CHECK(btc_rpc_scan(&C, addrs, 1, w, ROOM, &n, &height) && n == NU);
+        served();
+        int prize = 0, mid = 0, tiny = 0, last_tiny = 0;
+        for (int k = 0; k < ROOM; k++) {
+            prize += w[k].value == 100000000;
+            mid += w[k].value == 2000;
+            if (w[k].value == 546) tiny++, last_tiny = w[k].txid[0] > last_tiny ? w[k].txid[0] : last_tiny;
+        }
+        CHECK(prize == 1 && mid == 40 && tiny == 23 && last_tiny == 23);
+        free(many);
+    }
     /* another amount of the same length; a fraction of a satoshi (1234567e-9 BTC); not JSON; a scan that did not finish; a field
      * missing */
     char *bad = malloc(strlen(scan) + 1);
@@ -349,6 +399,17 @@ static void test_calls(void)
     CHECK(!btc_rpc_scan(&C, addrs, 2, u, 3, &n, &height) && C.err.kind == BTC_RPC_EPROTO);
     served();
     free(bad);
+
+    /* getblockchaininfo: where the node is */
+    btc_chaininfo ci;
+    serve(ok_body("{\"result\":{\"chain\":\"main\",\"blocks\":869990,\"headers\":870000,\"bestblockhash\":\"00\",\"verificationprogress\":0.99,"
+                  "\"initialblockdownload\":false,\"size_on_disk\":1,\"pruned\":true,\"pruneheight\":860000,\"warnings\":[]},\"error\":null,\"id\":@ID@}"));
+    CHECK(btc_rpc_getblockchaininfo(&C, &ci) && !strcmp(ci.chain, "main") && ci.blocks == 869990 && ci.headers == 870000 && !ci.ibd && ci.pruned);
+    served();
+    CHECK_STR(req_method(), "getblockchaininfo");
+    serve(ok_body("{\"result\":{\"chain\":\"main\",\"blocks\":1,\"headers\":1,\"pruned\":false},\"error\":null,\"id\":@ID@}"));
+    CHECK(!btc_rpc_getblockchaininfo(&C, &ci) && C.err.kind == BTC_RPC_EPROTO);   /* no initialblockdownload */
+    served();
 
     /* gettxout: spent, unspent */
     bool found = true;
@@ -553,10 +614,46 @@ static void test_http(void)
         served();
     }
     /* the message of the server cannot reach a terminal with control characters */
-    serve(ok_body("{\"result\":null,\"error\":{\"code\":-1,\"message\":\"a\\nb\\u001b[31m\"},\"id\":@ID@}"));
+    serve(ok_body("{\"result\":null,\"error\":{\"code\":-1,\"message\":\"a\\nb\\u001b[31m \\u009b31m \xc2\x9b" "1m\"},\"id\":@ID@}"));
     CHECK(!btc_rpc_getblockcount(&C, &h));
-    CHECK_STR(C.err.msg, "getblockcount: a?b?[31m");
+    CHECK_STR(C.err.msg, "getblockcount: a?b?[31m ??31m ??1m");   /* C0, and C1 in UTF-8 (CSI, U+009B) */
     served();
+
+    /* a body of 60 kB in chunks of one byte, as they come: each chunk is decoded once, when it is whole */
+    {
+        const size_t hexn = 30000;
+        char *body = malloc(2 * hexn + 64), *wire = malloc(6 * (2 * hexn + 64) + 256);
+        int bo = sprintf(body, "{\"result\":\"");
+        for (size_t i = 0; i < hexn; i++) bo += sprintf(body + bo, "%02x", (unsigned)(i & 0xff));
+        bo += sprintf(body + bo, "\",\"error\":null,\"id\":%llu}", (unsigned long long)C.id + 1);   /* @ID@ would be cut in chunks */
+        int wo = sprintf(wire, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+        for (int i = 0; i < bo; i++) wo += sprintf(wire + wo, "1\r\n%c\r\n", body[i]);
+        sprintf(wire + wo, "0\r\n\r\n");
+        uint8_t *raw = NULL, txid[32] = {0};
+        size_t len = 0;
+        serve((reply_case){0, NULL, 0, ALL, wire});
+        CHECK(btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && len == hexn && raw[hexn - 1] == (uint8_t)(hexn - 1));
+        served();
+        free(raw);
+        free(body);
+        free(wire);
+    }
+
+    /* a scan the client gives up on is aborted: the node would go on with it and refuse the next one */
+    C.scan_timeout_ms = 300;
+    {
+        const char *a1[1] = {"1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"};
+        btc_utxo u1[1];
+        size_t n1;
+        uint64_t h1;
+        serve_n(2, (reply_case){200, good, LENGTH, SILENT, NULL}, ok_body("{\"result\":true,\"error\":null,\"id\":@ID@}"));
+        CHECK(!btc_rpc_scan(&C, a1, 1, u1, 1, &n1, &h1) && C.err.kind == BTC_RPC_ENET && strstr(C.err.msg, "timeout"));
+        served();
+        CHECK(strstr(S.first, "\"params\":[\"start\",") && !strcmp(req_method(), "scantxoutset") && !strcmp(req_params(), "[\"abort\"]"));
+        /* an address that would change the descriptor around it */
+        const char *a2[1] = {"1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH),raw(51"};
+        CHECK(!btc_rpc_scan(&C, a2, 1, u1, 1, &n1, &h1) && C.err.kind == BTC_RPC_EPROTO);
+    }
 
     /* a server that never answers: the call ends at its time limit */
     C.timeout_ms = 300;
@@ -625,7 +722,6 @@ static void test_auth(void)
     CHECK(!btc_rpc_init_cookie(&C, "127.0.0.1", S.port, path));
     remove(path);
     CHECK(!btc_rpc_init_cookie(&C, "127.0.0.1", S.port, path));   /* missing */
-    rmdir(dir);
     /* arguments */
     char longpass[600];
     memset(longpass, 'p', sizeof longpass - 1);
@@ -634,6 +730,53 @@ static void test_auth(void)
     CHECK(!btc_rpc_init(&C, "h", 8332, "a:b", "p") && !btc_rpc_init(&C, "h", 8332, "u", longpass) && !btc_rpc_init(&C, NULL, 1, "u", "p"));
     CHECK(btc_rpc_init(&C, "::1", 18443, "u", "") && C.timeout_ms == 30000);
     btc_rpc_done(&C);
+    /* the host goes into the Host header: nothing that could end its line, or that no name has */
+    CHECK(!btc_rpc_init(&C, "127.0.0.1\r\nX-Injected: 1", 8332, "u", "p") && !btc_rpc_init(&C, "a b", 8332, "u", "p"));
+    CHECK(!btc_rpc_init(&C, "[::1]", 8332, "u", "p") && btc_rpc_init(&C, "fe80::1%eth0", 8332, "u", "p") && btc_rpc_init(&C, "node-1.lan", 1, "u", "p"));
+    btc_rpc_done(&C);
+
+    /* the --rpc option: HOST:PORT:USER:PASSWORD, the password the rest of it; HOST:PORT with the cookie; IPv6 in brackets */
+    char want[300];
+    CHECK(btc_rpc_init_arg(&C, "127.0.0.1:8332:alice:pa:ss word", NULL) && !strcmp(C.host, "127.0.0.1") && !strcmp(C.port, "8332"));
+    CHECK_STR(C.auth, "YWxpY2U6cGE6c3Mgd29yZA==");   /* alice:pa:ss word */
+    CHECK(btc_rpc_init_arg(&C, "[::1]:18443:u:p", NULL) && !strcmp(C.host, "::1") && !strcmp(C.port, "18443"));
+    static const char *const bad_arg[] = {
+        "127.0.0.1", "127.0.0.1:", "127.0.0.1:x:u:p", "127.0.0.1:0:u:p", "127.0.0.1:65536:u:p", "127.0.0.1:99999999999999999999:u:p",
+        "127.0.0.1:8332:", "127.0.0.1:8332:user", ":8332:u:p", "[::1:8332:u:p", "[]:8332:u:p", "::1:8332:u:p", "127.0.0.1:8332",
+        "127.0.0.1:8332x:u:p", "h\r\nX: 1:8332:u:p", "",
+    };
+    for (size_t k = 0; k < sizeof bad_arg / sizeof bad_arg[0]; k++)
+        if (btc_rpc_init_arg(&C, bad_arg[k], NULL) || C.err.kind != BTC_RPC_EPROTO || !strstr(C.err.msg, "expected HOST:PORT")) {
+            printf("FAIL --rpc accepted: \"%s\"\n", bad_arg[k]);
+            g_fails++;
+        }
+    CHECK(!btc_rpc_init_arg(&C, NULL, NULL) && C.auth[0] == 0);
+    f = fopen(path, "wb");
+    fputs("__cookie__:old", f);
+    fclose(f);
+    CHECK(!btc_rpc_init_arg(&C, "127.0.0.1:8332:u:p", path));   /* the password or the cookie, not both */
+    CHECK(btc_rpc_init_arg(&C, "localhost:8332", path) && !strcmp(C.host, "localhost") && !strcmp(C.cookie, path));
+    snprintf(want, sizeof want, "%s/missing", dir);
+    CHECK(!btc_rpc_init_arg(&C, "localhost:8332", want) && C.err.kind == BTC_RPC_ENET && strstr(C.err.msg, "cookie file") && C.cookie[0] == 0);
+
+    /* The node writes a new cookie each time it starts: a 401 makes the client read it again and call once more, with the new one. */
+    snprintf(want, sizeof want, "127.0.0.1:%u", S.port);
+    CHECK(btc_rpc_init_arg(&C, want, path));
+    f = fopen(path, "wb");
+    fputs("__cookie__:new", f);
+    fclose(f);
+    serve_n(2, (reply_case){401, "", LENGTH, ALL, NULL}, ok_body("{\"result\":9,\"error\":null,\"id\":@ID@}"));
+    CHECK(btc_rpc_getblockcount(&C, &h) && h == 9);
+    served();
+    CHECK(strstr(S.first, "Basic X19jb29raWVfXzpvbGQ=") != NULL);   /* __cookie__:old */
+    CHECK_STR(req_header("Authorization"), "Basic X19jb29raWVfXzpuZXc=");
+    /* the same cookie: refused again, a 401 for the caller, and no second call */
+    serve((reply_case){401, "", LENGTH, ALL, NULL});
+    CHECK(!btc_rpc_getblockcount(&C, &h) && C.err.kind == BTC_RPC_EHTTP && C.err.code == 401);
+    served();
+    btc_rpc_done(&C);
+    remove(path);
+    rmdir(dir);
 }
 
 int main(void)

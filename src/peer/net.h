@@ -7,12 +7,16 @@
  *
  * Both sides check that the node ID of the other's static key has the leading zero bits of the network; a dialler that knows whom it calls
  * also checks the identity before it shows its own (the initiator of XX sends its static key last). The initiator tells, in its last
- * handshake message, the port it listens on, so the responder can put it in its routing table with the address it sees. */
+ * handshake message, the port it listens on, so the responder can put it in its routing table with the address it sees.
+ *
+ * A relay (docs/en/NETWORK.md 7.7) joins two connections: net_splice copies their bytes, and the two homes run a second handshake end to
+ * end over them (net_rehandshake), so the relay sees only ciphertext. */
 #ifndef PZPEER_NET_H
 #define PZPEER_NET_H
 
 #include "keys.h"
 #include "noise.h"
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -59,6 +63,12 @@ bool net_random(uint8_t *out, size_t n);
 bool net_parse_addr(const char *hostport, net_addr *out);
 /* "a.b.c.d:port" or "[ipv6]:port" (at least 48 bytes). */
 void net_addr_str(const net_addr *a, char *out, size_t cap);
+/* Whether a is an address of the public internet: not unspecified, loopback, private (RFC 1918, RFC 4193), shared (RFC 6598), link-local,
+ * benchmarking, documentation, multicast or reserved. A node of a public network dials and keeps only these (docs/en/NETWORK.md 7.4). */
+bool net_addr_public(const net_addr *a);
+/* The block of an address, for the limits by block: the /24 of a public IPv4 address, the /48 of a public IPv6 one, the whole address of
+ * one that is not public; the port does not count. 16 bytes. */
+void net_addr_block(const net_addr *a, uint8_t block[16]);
 
 /* A listening socket on a numeric address (NULL or "": every address, IPv6 and IPv4, or IPv4 alone where there is no IPv6), port 0 for a
  * free one; the port it got in *bound. -1 on failure. */
@@ -68,18 +78,32 @@ int net_listen(const char *host, uint16_t port, uint16_t *bound);
 int net_accept(int lfd, int timeout_ms, net_addr *from);
 void net_close_fd(int fd);
 
-/* Dials and runs the handshake as initiator. expect: the x-only identity the other side must have (NULL: any valid one). NULL on failure. */
+/* Dials and runs the handshake as initiator. expect: the x-only identity the other side must have (NULL: any valid one). NULL on failure.
+ * The connect has its timeout, and the whole handshake one more: a responder that drips its bytes cannot stretch it. */
 net_conn *net_dial(const net_cfg *cfg, const net_addr *to, const uint8_t expect[32]);
-/* The handshake as responder on an accepted socket, which the connection takes (it is closed on failure). NULL on failure. */
+/* The handshake as responder on an accepted socket, which the connection takes (it is closed on failure). NULL on failure. The three
+ * messages must come within one timeout, so a peer that sends a byte now and then holds a handler for one timeout at most. */
 net_conn *net_handshake(const net_cfg *cfg, int fd, const net_addr *from);
+/* A new handshake over the socket of c, whose channel ends (its keys are wiped): the homes of a relayed channel run it end to end through
+ * the relay. expect: the identity the other side must have, checked on both sides. False on failure: close c. */
+bool net_rehandshake(const net_cfg *cfg, net_conn *c, bool initiator, const uint8_t expect[32]);
 /* One frame of at most NOISE_FRAME_MAX bytes. */
 bool net_send(net_conn *c, const uint8_t *body, size_t len);
 /* The next frame into body; false on a timeout, a closed connection, a frame that does not authenticate or one longer than cap. After a
  * false the channel is out of step: close it. */
 bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len);
 void net_set_timeout(net_conn *c, int timeout_ms);
+/* Whether bytes (or the end of the connection) can be read within ms: a wait in slices, that checks a stop flag between them. */
+bool net_readable(net_conn *c, int ms);
+/* Whether the other side may still be there: no end of the connection, no error, and no byte waiting that it should not have sent. */
+bool net_alive(net_conn *c);
 /* Closes the socket and wipes the keys of the channel. NULL is ignored. */
 void net_close(net_conn *c);
+
+/* The relay: copies the bytes of a to b and of b to a, as they come, until one side closes (what it sent before is delivered), an error,
+ * max_bytes in all (both ways together), max_ms, or *stop. Their channels are not used (their keys are wiped); both are closed at the
+ * end. The bytes copied. */
+uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms, const atomic_bool *stop);
 
 /* One exchange: dial, the request, the answer (at most cap bytes), close. remote (may be NULL): the identity that answered. */
 bool net_exchange(const net_cfg *cfg, const net_addr *to, const uint8_t expect[32], const uint8_t *req, size_t rlen, uint8_t *ans,

@@ -212,8 +212,11 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
   - After the handshake, frames of at most 65 535 bytes: a 2-byte encrypted length and the encrypted body, each with its own nonce, as in
     BOLT 8; a key rotates after 1000 encryptions (500 frames).
   - One TCP connection per exchange: connect, handshake, one request frame, one answer frame, close. A session (messages 16–31) keeps its
-    connection. Each connect, handshake message and frame has a deadline (10 s by default): a peer that stops talking costs a timeout.
-    A malformed message, or a frame longer than the receiver takes, closes the connection without an answer.
+    connection. The connect has a deadline (10 s by default), the whole handshake one more (a peer that sends a byte now and then gains
+    nothing: before, each of its three messages had a deadline of its own), and each frame one: a peer that stops talking costs a
+    timeout. A malformed message, or a frame longer than the receiver takes, closes the connection without an answer.
+  - A relayed channel (7.7) runs a second handshake, end to end, on the same socket after the relay joined it to the partner's; there the
+    responder checks the initiator's identity too.
   - Ephemeral keys: 32 bytes from the system (`getrandom`, or `/dev/urandom`).
 
 ### 7.2 The record of a distinguished point
@@ -246,15 +249,41 @@ counts them), signature.
   the alerts find it by its ID), a second record with the same x **from the same owner** (duplicate: the first is kept), and a new
   record whose sequence number is not above the last one it has of that owner. So an owner sends its records to each custodian in the
   order of their numbers, and a republish signs them again with new numbers (7.4).
+- What a custodian takes is bounded (a record costs its owner one signature, with any x that has the zero bits: no discrete log is
+  needed, so a flood is cheap to make):
+  - only records of the node that sends them (an owner stores its own; custodians do not copy), and only records whose key it may be a
+    custodian of: it refuses one when its table knows 10 nodes closer to K (a sum over buckets: a contact of bucket j is closer exactly
+    when bit j of `ID ⊕ K` is 1). An honest publisher found it among the 5 closest, so it knows at most 4 closer; a flood sprayed at
+    random nodes is refused, and one aimed at a node costs about (nodes / 10) tries per record;
+  - within a rate per address block of the sender (the table of the limits in 7.4);
+  - at most `store_max` records in all (`--store-gb`, 37 GB by default, 2^28 records; the index in memory is about 1/8 of the file), at
+    most 1/16 of them of one owner, at most 8 owners of one x.
+  The checks that cost nothing come first, the signature last.
+- `store.bin` is the custodian's own file, so its records are not checked again when it is opened, except the last 1024: a crash can
+  leave a record whole in length and wrong in content, which could give its owner a huge sequence number and refuse all its next ones.
+  A record that fails there is not indexed. The records a coincidence is made of are checked again when they are read back, so a record
+  damaged in the middle of the file never becomes an alert.
 - Same x, different owners: a coincidence. Same type: a merge (both walkers should restart). Different types: useful. Both kinds are
   alerted the same way; the owners tell them apart by the types. The custodian sends `ALERT(record1, record2)` to both owners (found
   by their node IDs) and to the mailboxes of each (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`). A record that comes again
   (a duplicate) with a coincidence alerts again, at most once an hour for a pair: an alert lost on the way comes back with the next
-  republish.
-- A node that receives an `ALERT` checks both records (signatures, same x, different owners). It keeps the pair as a mailbox (in
-  memory, the last 4096 pairs), and when one owner is itself it checks the proofs of possession: its own (the daemon gives the distance
-  of the point) and the other owner's (`POSSESS`, with a nonce of its own). Only then the daemon gets the alert. An alert whose other
-  owner does not answer is retried every minute for a day; a wrong proof drops it.
+  republish. A record the custodian does not keep because it is full is still alerted. Each alert costs the custodian four lookups and a
+  dozen connections, so a record alerts at most 2 pairs, and the coincidences of the records of one address block are limited (7.4).
+- A node that receives an `ALERT` checks both records (signatures, same x, different owners). It keeps the pair as a mailbox when it may
+  be a mailbox of one of the owners (the rule of the custodian above, for the key of the mailbox), in memory: the last 4096 pairs, at
+  most 64 of one owner (a flood of the pairs of one owner pushes out its own). When one owner is itself it checks the proofs of
+  possession: its own (the daemon gives the distance of the point) and the other owner's. Only then the daemon gets the alert.
+- The other owner's proof comes one of two ways. `POSSESS`, with a nonce of the asker, when the other owner listens. Or the other owner
+  sends it: once its own proof checks out, an owner sends `ALERT(its record, the other record, proof)` to the other owner when it can
+  dial it and to the other owner's mailboxes, and again every hour while the alert waits. That proof is over the pair: the asker is the
+  other owner and the nonce is the name of the pair, `SHA256("pznet1/pair" || the two records in the order of their owners)`. It binds
+  the asker, so it proves nothing to anyone else, and a fixed nonce lets it wait in a mailbox; a copier cannot make it without the
+  distance. A mailbox checks it and keeps it with the pair, and `MBOX` carries it. So two homes that do not listen prove their points to
+  each other through their mailboxes (before, both alerts waited for a day and no session could start).
+- An alert that waits is tried again after a minute, then twice as late each time up to an hour, for a day; a wrong proof drops it. A
+  node remembers 1024 alerts: when they are all waiting, the oldest goes, so a flood of alerts that will never be proved (copies of a
+  home's points by identities that do not answer) cannot shut out the next real one, which is tried at once; an alert pushed out comes
+  back with the next republish or poll.
 - An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour, and every minute when it does not listen.
 
 ### 7.4 Kademlia
@@ -266,37 +295,69 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 | 1 | PING | 2 PONG |
 | 3 | FIND_NODE(target 32) | 4 NODES(n, n × (node id 32, xonly 32, ip 16, port 2)), n ≤ 20 |
 | 5 | STORE(n, n × record), 1 ≤ n ≤ 255 | 6 STORED(n, n × status byte) |
-| 7 | ALERT(record, record) | 8 OK |
-| 9 | MBOX_GET(owner 32) | 10 MBOX(n, n × (record, record)), n ≤ 64, the newest first |
+| 7 | ALERT(record, record), or ALERT(record, record, proof 64): the proof of the first record's owner for the second's (7.3) | 8 OK |
+| 9 | MBOX_GET(owner 32) | 10 MBOX(n, n × (record, record, flags, proof 64, proof 64)), n ≤ 64, the newest first; the records in the order of their owners, bit i of flags set when the proof of the owner of record i is there (else zeros) |
 | 11 | POSSESS(record, nonce 32) | 12 PROOF(sig 64) |
+| 13 | RELAY(name 32, partner 32) (7.7) | 14 RELAYED, when the partner came; then the bytes of the partner's connection |
 | 16–31 | session messages (section 7.5) | |
 
-- The lengths are exact. In NODES each contact must have the ID of its identity, with the zero bits, and a port; the ip is IPv6, an
-  IPv4 address as `::ffff:a.b.c.d`. Any other answer is refused whole.
-- STORED statuses: 0 stored, 1 duplicate, 2 invalid, 3 sequence number not above the last, 4 stored and a coincidence (alerts follow),
-  5 the custodian could not write it. A record counts as held for 0, 1 and 4.
+- The lengths are exact. In NODES each contact must have the ID of its identity, with the zero bits, a port, and an address the node may
+  dial; no address twice (one address with two identities is no honest table), at most 4 contacts of one address block. The ip is IPv6,
+  an IPv4 address as `::ffff:a.b.c.d`. Any other answer is refused whole.
+- STORED statuses: 0 stored, 1 duplicate, 2 invalid (also: a record of another owner than the sender), 3 sequence number not above the
+  last, 4 stored and a coincidence (alerts follow), 5 the custodian could not write it, 6 refused for now (the custodian is full, or
+  the owner's share, or the owners of its x, or its address block is over its rate), 7 not a custodian of it (it knows 10 nodes closer
+  to its key). A record counts as held for 0, 1 and 4.
+- Addresses. On a public network (the chain of the network file is `main`) a node dials and keeps only public addresses: not
+  unspecified, loopback, private (RFC 1918, RFC 4193), shared (RFC 6598), link-local, benchmarking, documentation, multicast or reserved.
+  A NODES answer that points elsewhere is refused (it would make the node connect into the user's own LAN), and so is a contact that
+  asks from such an address (it is answered, not kept). On a test network (`test`, `signet`, `regtest`, or `--allow-private`) they are
+  taken, and the limits by block below do not apply to them: the nodes of a test are on one machine.
+- The limits by address block: the /24 of an IPv4 address, the /48 of an IPv6 one, the whole address of one that is not public (on a
+  public network). They apply to public addresses everywhere, and to all addresses on a public network.
+
+  | Limit | Value |
+  |---|---|
+  | contacts of one block in a bucket, in the table, in a NODES answer | 2, 4, 4 |
+  | queries of one lookup, to one block | 64, 4 (a candidate past them counts as failed) |
+  | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most) |
+  | records stored from one block | 50 a second, 100 000 at once (a republish sends them all) |
+  | ALERTs received from one block | 2 a second, 64 at once (checked before the signatures) |
+  | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs |
+  | relays (waiting or under way) of the homes of one block; waits of one identity | 2; 2 |
+
+  The rates are buckets of tokens, kept for 4096 blocks (an entry with no connection is reused, the one used longest ago).
 - POSSESS is answered only for a record of the node itself, with its signature; the proof binds the asker's identity, which the
   handshake told. A node that cannot prove closes the connection.
 - The routing table: buckets by the number of leading bits an ID shares with the node's own, the least recently seen contact first. A
-  contact goes to the tail when it answers or asks something. A full bucket replaces a contact that failed; otherwise it pings its
-  oldest contact and keeps it if it answers (the newcomer waits as the candidate). Three failed exchanges in a row drop a contact. A
-  node that does not listen (port 0) is never put in a table: it dials out, publishes, polls its mailboxes, and is never a custodian.
+  contact goes to the tail when it answers or asks something. A full bucket pings its weakest contact (the one that failed most, the
+  oldest among equals) and keeps it if it answers; the newcomer waits as the candidate, and a candidate that answered a request of this
+  node is not pushed aside by one that only asked. Before, a contact that had missed one answer was replaced at once, which an attacker
+  on the path could use to swap good contacts for its own. Three failed exchanges in a row drop a contact. A contact enters the table
+  only when it answers or asks, never from a NODES answer, and only within the limits by block: one attacker's nodes, on its few
+  networks, cannot fill a bucket or the table (project 4.2). A known contact that moves to a block that has its share keeps its old
+  address. A node that does not listen (port 0) is never put in a table: it dials out, publishes, polls its mailboxes, and is never a
+  custodian.
 - Lookups are iterative: rounds of up to α FIND_NODE to the closest candidates not asked yet, among the `want` closest that did not fail;
-  they end when those `want` have all answered. The result counts the node itself when it listens. `want` is 20 to find nodes, 5 to
-  find the custodians of a record or the mailboxes of an owner.
+  they end when those `want` have all answered, or after 64 queries (answers that keep pointing at new nodes cannot make a lookup
+  endless). A lookup asks at most 4 nodes of one address block: answers that all point at one network, a victim or the attacker's own,
+  do not make the node dial it more. The result counts the node itself when it listens. `want` is 20 to find nodes, 5 to find the
+  custodians of a record or the mailboxes of an owner.
 - Publishing: a lookup for each record, then one STORE per custodian with all its records, in the order of their sequence numbers.
   pzpeer signs the records itself (owner, sequence number, signature) and sends them under one lock, so the numbers of one owner reach
   every custodian in order. Its own records are also kept in `own.bin` (the format of `store.bin`). Every day it publishes them again,
   signed with new numbers: a node that became a custodian since takes them, the others answer duplicate. Custodians do not copy
-  records to each other.
+  records to each other. The last number signed is kept in `own.seq`: `own.bin` keeps the numbers of the first publication only, and a
+  node that restarted with its clock behind its last republish would sign below what the custodians saw, and be refused by all of them.
 - Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, and the saved `peers.txt` (whose lines name the
   identity too, which is checked). A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
   contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an
   empty table tries again every 30 s.
 - Every hour each bucket that had no lookup in its range gets one, for a random ID in it (from the first bucket a node ID can be in to
   the one after the deepest that has contacts).
-- Threads: one accepts connections, 8 answer them (a connection that finds them all busy and 64 waiting is closed), one runs the jobs
-  that take time (the alerts of a custodian, the proofs of an alert, the ping of a full bucket), one does the periodic work above.
+- Threads: one accepts connections, 8 answer them (a connection that finds them all busy and 64 waiting is closed, and so is one whose
+  block is over its limits), one runs the jobs that take time (the alerts of a custodian, the proofs of an alert, the ping of a full
+  bucket), one does the periodic work above, one copies the bytes of each relay under way (7.7).
 
 ### 7.5 The session of a coincidence
 
@@ -348,8 +409,9 @@ and countersigned by the partner, so that it survives a restore of the seed; the
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
 the proofs (the primes come after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
 they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. A pair
-that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day. The primes file of a session is removed when it ends, and
-at the start of the daemon those left by a crash (a Paillier key: with the messages of the session the partner could find the piece).
+that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day.
+The primes file of a session is removed when it ends, and at the start of the daemon those left by a crash (a Paillier key: with the
+messages of the session the partner could find the piece).
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzfirma and a chain in memory that checks every input: the
 payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height, and the primes
@@ -396,16 +458,140 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
   (a pzfirma that stopped reading would otherwise keep the relay of the partner's messages waiting for ever). Its pipes are not
   inherited by any other program pzpeer starts, nor are dp.bin and the sockets.
 
+### 7.7 The relay
+
+Most homes are behind a router that takes no connection from outside, and a session needs a channel between the two homes of a pair. When
+neither can dial the other, a node that listens joins their connections (`src/peer/dht.c`, the copy in `net_splice`).
+
+- **Which relay.** Time is cut in slots of 60 s (`s = unix time / 60`). The relay of a pair in slot s is the node closest to
+  `SHA256("pznet1/relay" || name || s)` (s as 8 bytes, big-endian; name: the eid of the session) that is neither home, found by a
+  lookup: both homes find the same one without a word between them. A relay that is down, full or lying costs one slot, and the next
+  slot has a relay of its own under another key. A fixed list tried in order would not do: its first relay could hold both homes for
+  ever by answering nothing, and two homes that fail on different relays of the list would never meet. So no node placed near one key
+  can stop a pair. The clocks of the two homes must agree within a few seconds (a wait lasts a slot and a quarter).
+- **The joins.** Each home dials the relay (checking its identity), sends `RELAY(name, partner)` and waits until the end of its slot.
+  The relay matches two joins with the same name where each names the other as its partner (the handshake told the relay who joined),
+  so a third party that names the pair is joined to nobody. It answers `RELAYED` to both, and from then on copies the bytes of each
+  connection to the other as they come. It closes a join over its limits, and both joins of a pair it cannot serve; a home whose
+  partner did not come is closed after a slot and a quarter, and a join whose partner left meanwhile is not matched.
+- **End to end.** After `RELAYED` the two homes run a Noise XX handshake through the relay, on the same sockets: party 0 (the smaller
+  identity) initiates, and each side checks that the other's static key is the partner (the initiator before it shows its own). The
+  relay sees ephemeral keys and ciphertext only: it can stop or delay the channel, not read or change it. The session then runs on it as
+  on a direct one.
+- **Limits at the relay:** 8 relays under way at once and 32 homes waiting; 2 relays (waiting or under way) per address block of the
+  homes and 2 waits per identity; 32 MiB per relay, both ways together (a session moves a few MB: the auxiliary data of pzfirma is
+  about 200 KB a message); 4 hours per relay (the channel stays open while the session waits for the confirmation of its first
+  transaction). A relay under way is one thread that copies through the receive buffers of the two connections.
+- **The channel of a session:** `dht_channel(partner, eid)` gives the daemon one connection with the partner, whichever way it comes.
+  Party 0 dials the partner it finds in the table, and so does a side that does not listen (nobody can dial it). A side that listens
+  gives the partner's own connection (the one `on_session` got) the first slot. Then the relay of each slot, slot after slot, while the
+  partner's connection is still taken if it comes; for 10 minutes. `home.c` asks it for every session.
+- The relay carries sessions only: the proofs of an alert go through the mailboxes (7.3), the requests of the table are not relayed.
+
+`tests/peer/t_net.c` splices two connections, runs 6 MB through them end to end, and checks both identities and the limit of bytes.
+`tests/peer/t_dht.c` has two homes that do not listen prove their points to each other through their mailboxes and run a stand-in
+session of 2 × 2.4 MB through the relay of their slot, then tries the limits of a relay: a wait without a partner, a third party, the
+relays at once, the bytes.
+
+### 7.8 What the network layer still lacks for a public network
+
+| Missing | Why it is not done |
+|---|---|
+| UPnP and NAT-PMP (project 4.2): a home behind a router opens its own port | protocol code (SSDP over UDP multicast and SOAP over HTTP; NAT-PMP or PCP over UDP) against routers that each do it their way, which needs real routers to test. The relay makes sessions work without it; custody needs reachable nodes, so it would raise their number |
+| IPv6 as a way out of NAT | addresses, listening (`::` takes IPv4 too) and NODES carry IPv6 already, but a home does not learn or announce a public IPv6 address of its own: a responder keeps the address it sees. There is no IPv6 on the test machine |
+| Tor, optional (project 2.5) | a SOCKS5 client in `net.c`, and onion addresses in NODES, which has 16 bytes for an address: a new format. A node behind Tor cannot be a custodian, like one that does not listen |
+| The BitTorrent DHT as a source of first contacts (project 4.2) | a second DHT (BEP 5, bencoded KRPC over UDP), or the library of Transmission, a new dependency. The `entry=` lines, `--peer` and `peers.txt` serve the tests; the DNS names of 4.2 are not done either |
+| Spot checks of the walks (project 4.2) | they need the previous distinguished point of a walk from its owner, so pzsolve and `dp.bin` would have to keep the chain of each walker; a check costs minutes of a core and needs a protocol of its own (ask, walk, revoke a machine) |
+| A republish that scales | every day each home sends all its records again: at the end of a campaign with 10 000 GPUs that is about 8·10^7 records a home a day, far above the traffic of project 4.3. A custodian should get only what it lacks (a digest of what it holds, or the republish only to the nodes that became custodians) |
+| Open connections instead of polls | a home that does not listen polls its mailboxes every minute (a lookup and 5 connections); the project wants it to keep a few connections open to reachable nodes and get its alerts on them |
+| More than one relay at a time | a pair tries one relay per slot; two homes that cannot reach the same node in any slot (a network that blocks part of the Internet) get no channel |
+| The cost of an identity | 16 zero bits cost seconds, so thousands of identities are cheap: the limits by block bound what one network can do, not what many networks (a botnet, a cloud) can |
+| An index that fits a home | 2^28 records take about 4.5 GB of RAM for the index; a larger store needs its index on disk |
+
 ## 8. Transactions
 
 - Inputs: P2PKH only (the puzzle address and the tiny coins), legacy signature hash, `SIGHASH_ALL`, low `s`.
 - Outputs to any standard address of the chain of the network file.
-- Amounts are verified from the previous transactions (their hash is their id): `btc_prevout` takes the raw bytes of the previous
-  transaction, in either serialization, and gives the value and the script of the output only when the hash of those bytes is the txid.
+- Amounts: the signature of a legacy input does not cover the value it spends, and a value too low would give the difference to the
+  miners. Where a value comes from a source that is not trusted, it is verified from the previous transaction (its hash is its id):
+  `btc_prevout` takes the raw bytes of the previous transaction, in either serialization, and gives the value and the script of the
+  output only when the hash of those bytes is the txid. With the home's own node (8.1) the node itself is the verification.
+- Fees: in satoshis per 1000 virtual bytes, as `estimatesmartfee` gives them (BTC per kvB, read exactly, never through a double). Our
+  transactions are legacy, so their virtual size is their size; it is counted with every signature at its longest (71 bytes of DER
+  with a low `s`, and the hashtype), and the fee is rounded up: the rate paid is never below the one agreed.
+- What we build is standard: version 2, P2PKH inputs, every output above the dust limit of P2PKH (546 satoshis, the highest of the
+  standard forms), at most 16 inputs and 16 outputs, far below the size limit.
 - The vectors of `tests/peer/t_btc.c` come from transactions of the main chain, pinned by their txids, and from
   `tests/peer/gen_btc_vectors.py`, an independent implementation in Python of the serialization, the legacy signature hash, RFC 6979 and
   DER (`python3 tests/peer/gen_btc_vectors.py > tests/peer/btc_vectors.h`).
 - The rules of the project document (section 4.5): at most 8 inputs, coins worth less than 3 times their fee are left, half each.
+- `tests/peer/fuzz_peer.c` mutates JSON documents, raw transactions and HTTP replies and checks that the readers agree with each other
+  (`make peer-fuzz`, under the sanitizers: `make BUILD=build_asan OPT="-O1 -fsanitize=address,undefined" peer-fuzz FUZZ_SECONDS=300`).
+
+### 8.1 The home's node
+
+`pzpeer run --rpc` is the home's own bitcoind, on the same machine or over a link the user trusts (the JSON-RPC is plain HTTP with basic
+authentication). It is trusted as a wallet trusts its node: it validated every block, and what it says of its own set of unspent outputs
+is the chain, values included. So the coins of the puzzle address are taken with their values from `scantxoutset`, which reads that set:
+a pruned node serves as well as a full one. (The puzzle coins are of 2015: a pruned node no longer has their blocks, nor the bytes of
+the transactions that made them, and those bytes would come from the same node anyway.) A node that is not trusted could hide coins,
+report spent ones, or give a value too low: a node of someone else is not supported, and 8.2 is the way without a node of one's own.
+Every reply is still read as hostile input: it is refused, never read past its buffers, when it is malformed.
+
+On the main chain:
+
+- Credentials: `--rpc HOST:PORT --rpc-cookie FILE` takes them from the `.cookie` that bitcoind writes in its data directory when it has
+  no `rpcpassword` (its default; `~/.bitcoin/.cookie` on the main chain, `~/.bitcoin/testnet3/.cookie`, `signet/`, `regtest/`), and no
+  password goes on the command line, where the list of processes shows it. Only the user of bitcoind reads the file, unless bitcoind
+  runs with `-rpccookieperms=group` (Bitcoin Core 28). bitcoind writes a new cookie each time it starts: the client reads the file
+  again when the node refuses it. `--rpc HOST:PORT:USER:PASSWORD` still works (the password is the rest of the text; `[::1]:8332`
+  for IPv6). `pzpeer run` checks the option when it starts and says where the node is; a node that is not running yet (no cookie)
+  only delays the sessions.
+- A node that is behind: a session starts only on a node of the chain of the network file (`chain` of `getblockchaininfo`, where
+  `testnet4` counts as `test`), out of its initial download, with its blocks at most one behind the headers it knows
+  (`chain_rpc_ready`). A node on another chain stops `pzpeer run` at its start; one still syncing only delays the sessions.
+- The scan reads the whole set of unspent outputs, minutes on the main chain, and the node runs one at a time: a session waits for the
+  scan of another (the partner on the same node, a wallet) as long as a scan may take (30 minutes). A scan it gives up on is aborted:
+  the node would go on with it, and refuse the next one meanwhile.
+- Thousands of tiny coins may be sent to a puzzle address. The scan keeps the 64 largest (equal values by outpoint, the order of
+  `payout_first`, so that both homes keep the same), not the first 64 the node lists: it lists them in the order of their txids,
+  where the prize may come last.
+- When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
+  would cancel at once.
+
+Not yet handled: a puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON
+reader, and no session starts. It would cost an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a
+prize. The prizes of the network file (`prize=txid:vout:sats`) can each be checked with `gettxout`, with no scan: the session does not
+use them yet.
+
+### 8.2 Without a node of one's own (to come)
+
+The light verification of project 4.4: the coins come from several servers, and nothing they say is believed without a proof. The
+shortest sound design is on the Electrum protocol, which the servers of most wallets speak; plain TCP is enough, as every answer is
+proven (and TLS would be a new dependency).
+
+1. **Headers.** A checkpoint (the height and hash of a block, a line of the signed network file), and every header after it from 3 or
+   more servers chosen at random among the `electrum=` lines of the file and those of the user. Each header is checked: the hash of the
+   one before, its proof of work below its target, the target of every 2016 blocks, its time above the median of the 11 before. The
+   valid chain with the most work is kept on disk, 80 bytes a block; a server that sends an invalid header is dropped. It is also the
+   clock of the session: the blocks F waits count on it, and no server can make them come faster without the work.
+2. **Coins.** `blockchain.scripthash.listunspent` of the puzzle address from each server, and the union of what they list. For each
+   coin, the transaction that made it (`blockchain.transaction.get`), whose hash must be its txid (`btc_prevout`: its value and its
+   script), and its Merkle branch (`blockchain.transaction.get_merkle`) to the header of its height in the kept chain: then it is
+   confirmed, as deep as that header. A "transaction" of 64 bytes is refused, as it could be an inner node of the tree passed off
+   as a leaf (CVE-2017-12842).
+3. What a lying server can still do: hide a coin, which is taken later by another session, or list a coin already spent, which makes
+   the first transaction invalid: it is refused, and the session starts again with other servers. The two homes compare the hash of
+   the first transaction as they do now, so different views stop the session before any signing.
+4. **Our transactions** go to every server, and are confirmed when a Merkle branch of their txid links to the kept chain. For the wait
+   of F, the prize has moved only when a transaction that spends it is confirmed that way (the second, or the same with another
+   encoding of a signature): a server that just stops listing the prize proves nothing, and the partner could run it. Servers that
+   hide a confirmed second transaction only make F send a cancel that is invalid, its coin being spent already.
+5. **Fee rate:** the median of `blockchain.estimatefee` of the servers, under the cap of the file.
+
+The code: the headers and their rules (a few hundred lines), the Merkle branch (twenty), a client of the Electrum JSON-RPC over TCP (one
+JSON object per line: simpler than `btc_rpc.c`), and `chain_electrum.c`, a second `session_chain` beside `chain_rpc.c`. The main chain
+first: the minimum difficulty of testnet and the signed blocks of signet are more rules for little use.
 
 ## 9. Status
 
@@ -421,12 +607,12 @@ in `t_session` with `PZ_REGTEST`.
 | pzsolve in network mode (section 6) | done; `tests/e2e.sh`, `kstat net` (rete-06 measured on the curve) |
 | pzcore: ChaCha20-Poly1305, the generator of the home seed (section 4.1) | done (`t_aead`: RFC 8439 vectors; `t_seed`); the GPU source of the seed to come |
 | `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
-| `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 30 nodes in one process); POSIX only (the Windows shim is to come); no limit of contacts per address block yet (project 4.2), no UPnP or NAT-PMP |
-| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1) |
+| `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; POSIX only (the Windows shim is to come); what a public network still needs is in 7.8 |
+| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node); the light verification of section 8.2 to come |
 | pzfirma, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
-| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
+| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4, section 8.2); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
 
 ## 10. A test network on one machine
 
@@ -445,7 +631,10 @@ into `PZNET_TRUST`, and every home runs
 pzpeer run --network FILE --dir HOME --payout ADDRESS --rpc 127.0.0.1:18443:pz:pz --listen PORT --peer 127.0.0.1:OTHER -- -t 2 --no-gpu
 ```
 
+With a bitcoind of its own and no `rpcpassword`, `--rpc 127.0.0.1:8332 --rpc-cookie ~/.bitcoin/.cookie` takes its credentials from its
+cookie file instead (section 8.1).
+
 The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); pzpeer refuses a seed
-file that others may read, or a link. `HOME/start.key` is the start key pzpeer gives to pzsolve, written at every start through a new
-file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is in `HOME/campaigns/net-NAME`, its
-output in `HOME/pzsolve.out`.
+file that others may read, or a link, and a home folder that others can open. `HOME/start.key` is the start key pzpeer gives to pzsolve,
+written at every start through a new file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
+in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
