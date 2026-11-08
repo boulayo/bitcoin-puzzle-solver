@@ -3,6 +3,7 @@
 /* main.c - pzpeer, the daemon of the shared kangaroo network (docs/en/NETWORK.md). */
 #include "dht.h"
 #include "dpfeed.h"
+#include "home.h"
 #include "trust.h"
 #include "../netfile.h"             /* the reader of the network file is the one of pzsolve */
 #include <pzcore/seal.h>
@@ -18,6 +19,10 @@ static int usage(void)
                     "       pzpeer dpcheck NETWORK_FILE DP_BIN   recompute every point of a campaign's dp.bin and check its tag\n"
                     "       pzpeer netcheck NETWORK_FILE         the values, the fingerprint and the signatures of a network file\n"
                     "       pzpeer netsign KEY_FILE NETWORK_FILE the signature line of a maintainer (KEY_FILE: 64 hex digits)\n"
+                    "       pzpeer run --network FILE --dir DIR --payout ADDRESS --rpc HOST:PORT:USER:PASSWORD [--listen PORT] [--bind ADDR]\n"
+                    "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzfirma PATH] [--id-bits N] [--exit-when-done] [--verbose]\n"
+                    "                  [-- PZSOLVE OPTIONS]\n"
+                    "                    the home: pzsolve on the network, its points published, sessions paid through bitcoind\n"
                     "       pzpeer node --network FILE --seed-hex HEX --dir DIR [--listen PORT] [--bind ADDR] [--peer HOST:PORT]... [--verbose]\n"
                     "                    a node of the network until interrupted: it keeps the records of others and alerts their owners\n"
                     "                    (it publishes nothing of its own yet); without --listen it only dials out\n");
@@ -228,6 +233,41 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     return n < 0;
 }
 
+static int cmd_run(int argc, char **argv)
+{
+    home_cfg cfg = {.pzsolve = "pzsolve", .pzfirma = "pzfirma", .id_bits = NODE_ID_ZERO_BITS};
+    const char *peers[32];
+    for (int i = 2; i < argc; i++) {
+        const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+        if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt */
+            cfg.pzsolve_args = (const char *const *)argv + i + 1, cfg.nargs = argc - i - 1;
+            break;
+        }
+        if (!strcmp(a, "--verbose")) { cfg.verbose = true; continue; }
+        if (!strcmp(a, "--exit-when-done")) { cfg.exit_when_done = true; continue; }
+        if (!v) return usage();
+        if (!strcmp(a, "--network")) cfg.network = v;
+        else if (!strcmp(a, "--dir")) cfg.dir = v;
+        else if (!strcmp(a, "--payout")) cfg.payout = v;
+        else if (!strcmp(a, "--rpc")) cfg.rpc = v;
+        else if (!strcmp(a, "--bind")) cfg.listen_host = v;
+        else if (!strcmp(a, "--pzsolve")) cfg.pzsolve = v;
+        else if (!strcmp(a, "--pzfirma")) cfg.pzfirma = v;
+        else if (!strcmp(a, "--peer") && cfg.npeers < 32) peers[cfg.npeers++] = v;
+        else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits")) {
+            char *end;
+            const long n = strtol(v, &end, 10);
+            if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : 32)) return usage();
+            if (!strcmp(a, "--listen")) cfg.listen_port = (int)n;
+            else cfg.id_bits = (unsigned)n;
+        } else return usage();
+        i++;
+    }
+    cfg.peers = peers;
+    if (!cfg.network || !cfg.dir || !cfg.payout || !cfg.rpc) return usage();
+    return home_run(&cfg);
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 2 && !strcmp(argv[1], "version")) {
@@ -239,6 +279,7 @@ int main(int argc, char **argv)
                  : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(ctx, argv[2])
                  : argc == 4 && !strcmp(argv[1], "netsign")  ? cmd_netsign(ctx, argv[2], argv[3])
                  : argc >= 2 && !strcmp(argv[1], "node")     ? cmd_node(ctx, argc, argv)
+                 : argc >= 2 && !strcmp(argv[1], "run")      ? cmd_run(argc, argv)
                                                              : usage();
     secp256k1_context_destroy(ctx);
     return rc;

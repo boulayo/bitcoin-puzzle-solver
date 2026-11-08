@@ -45,17 +45,21 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `json.c` | a small JSON reader and writer (bitcoind, pzfirma) |
 | `btc.c` | Bitcoin transactions: serialization, txid, legacy signature hash, scripts of addresses, DER |
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
-| `netfile.c` | the signatures of the maintainers over the network file (the parsing is `src/netfile.c`) |
-| `keys.c` | the keys derived from the home seed |
 | `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 and the frames after it: a state machine, no I/O |
-| `net.c` | TCP: one connection per exchange, the handshake, frames, timeouts. The only file that calls the sockets of the system |
+| `keys.c` | the keys derived from the home seed |
 | `record.c` | the record of a distinguished point, its signature, the proof of possession |
-| `store.c` | the custodian: records by key, on disk, coincidence detection |
+| `net.c` | TCP: one connection per exchange, the handshake, frames, timeouts. The only file that calls the sockets of the system |
+| `store.c` | the custodian: records by key, on disk, coincidence detection, mailboxes |
 | `dht.c` | Kademlia: routing table, lookups, store, alerts, bootstrap |
 | `dpfeed.c` | reads the campaign's `dp.bin` and turns its records into points |
+| `pieces.c` | the two pieces of the key of a coincidence |
 | `signer.c` | starts pzfirma and relays its frames |
-| `session.c` | the session of a coincidence: channel, proofs, pieces, the two transactions |
-| `main.c` | the daemon (event loop) and the commands |
+| `payout.c` | the transactions of the pair: the first, the second, the cancel |
+| `session.c` | the session of a coincidence, from the hello to the payout (section 7.5) |
+| `chain_rpc.c` | the chain of a session on bitcoind |
+| `trust.c` | the signatures of the maintainers on the network file (the parsing is `src/netfile.c`) |
+| `home.c` | the daemon of a home: seed and keys, pzsolve, the feed of `dp.bin`, a session for every useful coincidence |
+| `main.c` | the commands |
 
 ## 3. Conventions
 
@@ -366,14 +370,40 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 
 ## 9. Status
 
+Everything below works and is tested; `tests/peer/e2e_net.sh` runs the whole of it on one machine with a bitcoind in regtest: a custodian
+node and two homes (`pzpeer run`, each with its pzsolve), a puzzle of 48 bits funded with 1 BTC. With Bitcoin Core 28.1 a coincidence
+between the two homes ended in the payout: 0.49999366 and 0.49989366 BTC (the difference is F's tiny coin, back to F), nothing left on the
+puzzle address. With two homes only, a home often finds the key on its own first (its own walkers meet too): the script then starts a new
+try with a new puzzle.
+
 | Part | State |
 |---|---|
-| build of pzpeer, libsecp256k1 | done |
-| `json.c`, `btc.c`, `btc_rpc.c` | done, with unit tests (`tests/peer/t_json.c`, `t_btc.c`, `t_btc_rpc.c`); the test against a real node on regtest is to come |
-| generator of the home seed (`lib/pzcore/src/seed.c`, section 4.1) | done; the GPU source of pzsolve and pzpeer to come |
-| TCP and the channel (`net.c`): one exchange per connection, timeouts, IPv4 and IPv6 | done (`tests/peer/t_net.c`); POSIX only, the Windows shim is to come |
-| custody (`store.c`): records on disk, index, duplicates, sequence numbers, coincidences, mailbox | done (`tests/peer/t_store.c`) |
-| Kademlia (`dht.c`): table, lookups, bootstrap, `peers.txt`, publish and republish, alerts, mailboxes, proofs | done (`tests/peer/t_dht.c`: 30 nodes in one process); no limit of contacts per address block yet (project 4.2), no UPnP or NAT-PMP |
-| `pzpeer node` | a node with no points of its own (custodian and mailbox only), for manual tests |
-| the daemon: `dp.bin` fed to `dht_publish`, alerts to sessions over `dht_dial` and `on_session` | to do |
-| everything else | in progress |
+| pzsolve in network mode (section 6) | done; `tests/e2e.sh`, `kstat net` (rete-06 measured on the curve) |
+| pzcore: ChaCha20-Poly1305, the generator of the home seed (section 4.1) | done (`t_aead`: RFC 8439 vectors; `t_seed`); the GPU source of the seed to come |
+| `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
+| `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 30 nodes in one process); POSIX only (the Windows shim is to come); no limit of contacts per address block yet (project 4.2), no UPnP or NAT-PMP |
+| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1) |
+| pzfirma, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
+| `trust.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
+| `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
+| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
+
+## 10. A test network on one machine
+
+```sh
+make && make peer && make signer            # pzsolve, pzpeer, pzfirma (Rust: cargo builds GMP the first time)
+make peer-primes && make peer-test          # the unit tests, the signing ones with the real pzfirma
+bitcoind -regtest -daemon -rpcuser=pz -rpcpassword=pz -fallbackfee=0.0002
+PZ_REGTEST=127.0.0.1:18443:pz:pz build/peer/t_session    # the session on the node (with PZFIRMA and the primes, as make peer-test sets them)
+PZ_REGTEST=127.0.0.1:18443:pz:pz tests/peer/e2e_net.sh   # the whole network: a custodian, two homes, a payout
+```
+
+By hand, a network file (section 5) is signed with a key of 64 hex digits (`pzpeer netsign KEY FILE >> FILE`), that key's x-only form goes
+into `PZNET_TRUST`, and every home runs
+
+```sh
+pzpeer run --network FILE --dir HOME --payout ADDRESS --rpc 127.0.0.1:18443:pz:pz --listen PORT --peer 127.0.0.1:OTHER -- -t 2 --no-gpu
+```
+
+The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); `HOME/start.key` is
+the start key pzpeer gives to pzsolve; the campaign is in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
