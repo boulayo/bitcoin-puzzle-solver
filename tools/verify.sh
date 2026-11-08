@@ -93,8 +93,8 @@ if git describe --tags --exact-match --match "v$VER" HEAD >/dev/null 2>&1; then 
 [ "$BV" = "$WANTV" ] && [ "$(make -s print-version)" = "$WANTV" ] && echo "  OK build/pzsolve reports $BV, as make print-version says" || { echo "  FAIL build/pzsolve reports '$BV', expected '$WANTV'"; fail=$((fail+1)); }
 # the Makefile alone in a folder of its own: first outside git (a source archive), then as a commit of a new repository, untagged,
 # tagged with another version, and tagged vVERSION (lightweight, as the release workflow makes it, and annotated, as tools/release.sh)
-VT="$T/version"; mkdir -p "$VT/tools" "$VT/src/kernels/ptx"
-cp Makefile VERSION "$VT/"; cp tools/ptx_table.awk "$VT/tools/"; cp src/kernels/ptx/modules.txt "$VT/src/kernels/ptx/"
+VT="$T/version"; mkdir -p "$VT/tools" "$VT/src/kernels/ptx" "$VT/src/peer"
+cp Makefile VERSION "$VT/"; cp tools/ptx_table.awk "$VT/tools/"; cp src/kernels/ptx/modules.txt "$VT/src/kernels/ptx/"; cp src/peer/peer.mk "$VT/src/peer/"
 vgit() { git -C "$VT" -c user.name=verify -c user.email=verify@localhost -c commit.gpgsign=false -c tag.gpgsign=false "$@" >/dev/null 2>&1; }
 vmake() { GIT_CEILING_DIRECTORIES="$T" make -s -C "$VT" print-version 2>/dev/null; }
 vcase() { local got; got=$(vmake); [ "$got" = "$2" ] && echo "  OK $1: $got" || { echo "  FAIL $1: '$got', expected '$2'"; fail=$((fail+1)); }; }
