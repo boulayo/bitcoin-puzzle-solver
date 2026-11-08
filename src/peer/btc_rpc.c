@@ -3,6 +3,7 @@
 /* btc_rpc.c - the JSON-RPC client of bitcoind (btc_rpc.h). */
 #include "btc_rpc.h"
 #include <pzcore/seal.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -32,8 +33,10 @@ static bool fail(btc_rpc *c, btc_rpc_kind kind, int code, const char *fmt, ...)
     c->err.code = code;
     vsnprintf(c->err.msg, sizeof c->err.msg, fmt, ap);
     va_end(ap);
-    for (char *p = c->err.msg; *p; p++)   /* the text may come from the server: nothing that would act on a terminal */
-        if ((unsigned char)*p < 0x20 || *p == 0x7f) *p = '?';
+    /* The text may come from the server: nothing that would act on a terminal. Printable ASCII only, as bitcoind writes its messages:
+     * a UTF-8 control of the C1 range (U+009B is CSI, the start of an escape sequence for xterm) is two bytes above 0x7f. */
+    for (char *p = c->err.msg; *p; p++)
+        if ((unsigned char)*p < 0x20 || (unsigned char)*p >= 0x7f) *p = '?';
     return false;
 }
 
@@ -60,10 +63,14 @@ static bool set_auth(btc_rpc *c, const char *userpass, size_t n)
     return true;
 }
 
+/* The host goes into the Host header as it is: only what a name or an address has (an IPv6 address and its zone, without brackets),
+ * so that no CR or LF can end the line. */
 static bool init_common(btc_rpc *c, const char *host, unsigned port)
 {
     memset(c, 0, sizeof *c);
     if (!host || !host[0] || strlen(host) >= sizeof c->host || !port || port > 65535) return false;
+    for (const char *p = host; *p; p++)
+        if (!isalnum((unsigned char)*p) && !strchr(".-_:%", *p)) return false;
     strcpy(c->host, host);
     snprintf(c->port, sizeof c->port, "%u", port);
     c->timeout_ms = 30000;
@@ -208,51 +215,17 @@ static int hex_digit(unsigned c)
     return -1;
 }
 
-/* A body in the chunked transfer coding (RFC 9112 7.1): 1 when it is complete, its decoded length in *n and the data in out when out
- * is not NULL; 0 when more is to come; -1 when it is malformed. */
-static int dechunk(const char *p, size_t len, char *out, size_t *n)
-{
-    size_t i = 0, o = 0;
-    for (;;) {
-        size_t size = 0, digits = 0;
-        for (int d; i < len && (d = hex_digit((unsigned char)p[i])) >= 0; i++, digits++) {
-            if (size > JSON_MAX_SIZE) return -1;
-            size = size << 4 | (size_t)d;
-        }
-        if (i == len) return 0;
-        if (!digits || (p[i] != ';' && p[i] != '\r')) return -1;
-        const char *lf = memchr(p + i, '\n', len - i);   /* after the size, an extension (ignored) up to the end of the line */
-        if (!lf) return len - i > 4096 ? -1 : 0;
-        if (lf[-1] != '\r') return -1;
-        i = (size_t)(lf - p) + 1;
-        if (!size) {   /* the last chunk, then the trailer lines up to an empty one */
-            for (;;) {
-                const char *e = memchr(p + i, '\n', len - i);
-                if (!e) return len - i > 4096 ? -1 : 0;
-                const size_t ll = (size_t)(e - (p + i));
-                if (!ll || p[i + ll - 1] != '\r') return -1;
-                i += ll + 1;
-                if (ll == 1) {
-                    *n = o;
-                    return 1;
-                }
-            }
-        }
-        if (len - i < size + 2) return 0;
-        if (p[i + size] != '\r' || p[i + size + 1] != '\n') return -1;
-        if (out) memmove(out + o, p + i, size);   /* out may be p itself: the decoded data never passes the coded */
-        o += size;
-        i += size + 2;
-        if (o > JSON_MAX_SIZE) return -1;
-    }
-}
-
+/* A reply as it comes. It is read as it arrives, each byte once: the search for the end of the head goes on where it stopped, and a
+ * chunked body is decoded in place, chunk by chunk, as each one is whole (the data moves back over the framing before it). */
 typedef struct {
     char *p;
     size_t len, cap;
     size_t head;      /* the length of the status line and the headers with the empty line, once they are all in; 0 before */
+    size_t at;        /* where the reading goes on: in the head, then at the next chunk */
+    size_t body;      /* the length of the body (decoded) once it is complete; it starts at p + head */
     int status;
     bool chunked;
+    bool trailer;     /* the last chunk has come: the trailer lines follow, up to an empty one */
     long long clen;   /* Content-Length, or -1 */
 } reply;
 
@@ -279,40 +252,70 @@ static const char *header(const char *h, size_t n, const char *name, size_t *vl)
  * malformed. */
 static int parse_head(reply *r)
 {
-    if (!r->head) {
-        const char *e = NULL;
-        for (size_t i = 0; i + 3 < r->len && i < HEAD_MAX; i++)
-            if (r->p[i] == '\r' && !memcmp(r->p + i, "\r\n\r\n", 4)) {
-                e = r->p + i + 4;
-                break;
-            }
-        if (!e) return r->len >= HEAD_MAX ? -1 : 0;
-        r->head = (size_t)(e - r->p);
-        const char *p = r->p;
-        if (r->head < 14 || (memcmp(p, "HTTP/1.1 ", 9) && memcmp(p, "HTTP/1.0 ", 9))) return -1;
-        r->status = 0;
-        for (int k = 9; k < 12; k++) {
-            if (p[k] < '0' || p[k] > '9') return -1;
-            r->status = r->status * 10 + (p[k] - '0');
+    if (r->head) return 1;
+    for (; r->at + 4 <= r->len && r->at < HEAD_MAX; r->at++)
+        if (r->p[r->at] == '\r' && !memcmp(r->p + r->at, "\r\n\r\n", 4)) break;
+    if (r->at + 4 > r->len) return 0;
+    if (r->at >= HEAD_MAX) return -1;
+    r->head = r->at += 4;
+    const char *p = r->p;
+    if (r->head < 14 || (memcmp(p, "HTTP/1.1 ", 9) && memcmp(p, "HTTP/1.0 ", 9))) return -1;
+    r->status = 0;
+    for (int k = 9; k < 12; k++) {
+        if (p[k] < '0' || p[k] > '9') return -1;
+        r->status = r->status * 10 + (p[k] - '0');
+    }
+    if (p[12] != ' ' && p[12] != '\r') return -1;
+    size_t vl;
+    const char *v = header(p, r->head, "Transfer-Encoding", &vl);
+    r->chunked = v && vl >= 7 && !strncasecmp(v + vl - 7, "chunked", 7);   /* the last coding is the one that frames the body */
+    r->clen = -1;
+    v = header(p, r->head, "Content-Length", &vl);
+    if (v && !r->chunked) {   /* with both, the chunked coding frames the body (RFC 9112 6.3) */
+        long long n = 0;
+        if (!vl || vl > 10) return -1;
+        for (size_t k = 0; k < vl; k++) {
+            if (v[k] < '0' || v[k] > '9') return -1;
+            n = n * 10 + (v[k] - '0');
         }
-        if (p[12] != ' ' && p[12] != '\r') return -1;
-        size_t vl;
-        const char *v = header(p, r->head, "Transfer-Encoding", &vl);
-        r->chunked = v && vl >= 7 && !strncasecmp(v + vl - 7, "chunked", 7);   /* the last coding is the one that frames the body */
-        r->clen = -1;
-        v = header(p, r->head, "Content-Length", &vl);
-        if (v && !r->chunked) {   /* with both, the chunked coding frames the body (RFC 9112 6.3) */
-            long long n = 0;
-            if (!vl || vl > 10) return -1;
-            for (size_t k = 0; k < vl; k++) {
-                if (v[k] < '0' || v[k] > '9') return -1;
-                n = n * 10 + (v[k] - '0');
-            }
-            if (n > JSON_MAX_SIZE) return -1;
-            r->clen = n;
-        }
+        if (n > JSON_MAX_SIZE) return -1;
+        r->clen = n;
     }
     return 1;
+}
+
+/* The chunks that are whole (RFC 9112 7.1), from r->at: 1 when the last one and the trailer have come, 0 when more is to come, -1
+ * when malformed. A line (the size of a chunk with its extension, which is ignored, or a trailer) ends with CRLF and is at most 4 kB. */
+static int dechunk(reply *r)
+{
+    for (;;) {
+        const char *p = r->p + r->at, *lf = memchr(p, '\n', r->len - r->at);
+        if (!lf) return r->len - r->at > 4096 ? -1 : 0;
+        const size_t ll = (size_t)(lf - p);   /* the line without its LF */
+        if (!ll || p[ll - 1] != '\r') return -1;
+        if (r->trailer) {
+            r->at += ll + 1;
+            if (ll == 1) return 1;
+            continue;
+        }
+        size_t size = 0, k = 0;
+        for (int d; k < ll - 1 && (d = hex_digit((unsigned char)p[k])) >= 0; k++) {
+            if (size > JSON_MAX_SIZE) return -1;
+            size = size << 4 | (size_t)d;
+        }
+        if (!k || (k < ll - 1 && p[k] != ';')) return -1;
+        const size_t data = r->at + ll + 1;
+        if (!size) {
+            r->trailer = true;
+            r->at = data;
+            continue;
+        }
+        if (r->len - data < size + 2) return 0;
+        if (r->p[data + size] != '\r' || r->p[data + size + 1] != '\n' || r->body + size > JSON_MAX_SIZE) return -1;
+        memmove(r->p + r->head + r->body, r->p + data, size);
+        r->body += size;
+        r->at = data + size + 2;
+    }
 }
 
 /* whether the body is all in: 1 yes, 0 not yet, -1 malformed; at eof, 0 means it was cut short */
@@ -320,13 +323,11 @@ static int body_done(reply *r, bool eof)
 {
     const int h = parse_head(r);
     if (h <= 0) return h;
+    if (r->chunked) return dechunk(r);
     const size_t have = r->len - r->head;
-    if (r->chunked) {
-        size_t n;
-        return dechunk(r->p + r->head, have, NULL, &n);
-    }
-    if (r->clen >= 0) return have >= (size_t)r->clen;
-    return eof;   /* neither: the body ends where the server closes */
+    if (r->clen >= 0 ? have < (size_t)r->clen : !eof) return 0;
+    r->body = r->clen >= 0 ? (size_t)r->clen : have;   /* without a length, the body ends where the server closes */
+    return 1;
 }
 
 static bool recv_reply(btc_rpc *c, int fd, int64_t deadline, reply *r)
@@ -357,6 +358,31 @@ static bool recv_reply(btc_rpc *c, int fd, int64_t deadline, reply *r)
     }
 }
 
+/* One request and its reply, on a connection of its own. */
+static bool exchange(btc_rpc *c, bool wallet, const char *body, size_t bl, int timeout_ms, reply *r)
+{
+    /* the head carries the credentials: wiped once sent */
+    char head[sizeof c->auth + sizeof c->host + sizeof c->wallet + 256];
+    const bool v6 = strchr(c->host, ':') != NULL;
+    const int hl = snprintf(head, sizeof head,
+                            "POST %s HTTP/1.1\r\nHost: %s%s%s:%s\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\n"
+                            "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+                            wallet && c->wallet[0] ? c->wallet : "/", v6 ? "[" : "", c->host, v6 ? "]" : "", c->port, c->auth, bl);
+    *r = (reply){0};
+    bool ok = hl > 0 && (size_t)hl < sizeof head;
+    if (!ok) fail(c, BTC_RPC_EPROTO, 0, "cannot build the request");
+    const int64_t deadline = now_ms() + (timeout_ms > 0 ? timeout_ms : 1);
+    const int fd = ok ? tcp_connect(c, deadline) : -1;
+    ok = fd >= 0 && send_all(c, fd, head, (size_t)hl, deadline) && send_all(c, fd, body, bl, deadline) && recv_reply(c, fd, deadline, r);
+    if (fd >= 0) close(fd);
+    pz_secure_zero(head, sizeof head);
+    if (!ok) {
+        free(r->p);
+        *r = (reply){0};
+    }
+    return ok;
+}
+
 /* ---- JSON-RPC ---- */
 
 static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int timeout_ms, json_doc *doc, const json_val **result)
@@ -382,40 +408,13 @@ static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int
     jw_end(&w);
     size_t bl;
     const char *body = jw_done(&w, &bl);
-    if (!body) {
-        jw_free(&w);
-        return fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
-    }
-    /* the head carries the credentials: wiped once sent */
-    char head[sizeof c->auth + sizeof c->host + sizeof c->wallet + 256];
-    const bool v6 = strchr(c->host, ':') != NULL;
-    const int hl = snprintf(head, sizeof head,
-                            "POST %s HTTP/1.1\r\nHost: %s%s%s:%s\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\n"
-                            "Content-Length: %zu\r\nConnection: close\r\n\r\n",
-                            wallet && c->wallet[0] ? c->wallet : "/", v6 ? "[" : "", c->host, v6 ? "]" : "", c->port, c->auth, bl);
-    if (hl <= 0 || (size_t)hl >= sizeof head) {
-        jw_free(&w);
-        return fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
-    }
-    const int64_t deadline = now_ms() + (timeout_ms > 0 ? timeout_ms : 1);
-    reply r = {0};
-    bool ok = false;
-    const int fd = tcp_connect(c, deadline);
-    if (fd >= 0) {
-        ok = send_all(c, fd, head, (size_t)hl, deadline) && send_all(c, fd, body, bl, deadline) && recv_reply(c, fd, deadline, &r);
-        close(fd);
-    }
-    pz_secure_zero(head, sizeof head);
+    reply r;
+    const bool ok = body && exchange(c, wallet, body, bl, timeout_ms, &r);
+    if (!body) fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
     jw_free(&w);
-    if (!ok) {
-        free(r.p);
-        return false;
-    }
-    /* the body, decoded in place when chunked (the decoded form is never longer) */
-    char *b = r.p + r.head;
-    size_t n = r.len - r.head;
-    if (r.chunked) dechunk(b, n, b, &n);
-    else if (r.clen >= 0) n = (size_t)r.clen;
+    if (!ok) return false;
+    const char *b = r.p + r.head;
+    const size_t n = r.body;
     const int status = r.status;
     if (!n || !json_parse(doc, b, n)) {
         free(r.p);

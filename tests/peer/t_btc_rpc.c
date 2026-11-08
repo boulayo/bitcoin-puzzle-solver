@@ -553,10 +553,30 @@ static void test_http(void)
         served();
     }
     /* the message of the server cannot reach a terminal with control characters */
-    serve(ok_body("{\"result\":null,\"error\":{\"code\":-1,\"message\":\"a\\nb\\u001b[31m\"},\"id\":@ID@}"));
+    serve(ok_body("{\"result\":null,\"error\":{\"code\":-1,\"message\":\"a\\nb\\u001b[31m \\u009b31m \xc2\x9b" "1m\"},\"id\":@ID@}"));
     CHECK(!btc_rpc_getblockcount(&C, &h));
-    CHECK_STR(C.err.msg, "getblockcount: a?b?[31m");
+    CHECK_STR(C.err.msg, "getblockcount: a?b?[31m ??31m ??1m");   /* C0, and C1 in UTF-8 (CSI, U+009B) */
     served();
+
+    /* a body of 60 kB in chunks of one byte, as they come: each chunk is decoded once, when it is whole */
+    {
+        const size_t hexn = 30000;
+        char *body = malloc(2 * hexn + 64), *wire = malloc(6 * (2 * hexn + 64) + 256);
+        int bo = sprintf(body, "{\"result\":\"");
+        for (size_t i = 0; i < hexn; i++) bo += sprintf(body + bo, "%02x", (unsigned)(i & 0xff));
+        bo += sprintf(body + bo, "\",\"error\":null,\"id\":%llu}", (unsigned long long)C.id + 1);   /* @ID@ would be cut in chunks */
+        int wo = sprintf(wire, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+        for (int i = 0; i < bo; i++) wo += sprintf(wire + wo, "1\r\n%c\r\n", body[i]);
+        sprintf(wire + wo, "0\r\n\r\n");
+        uint8_t *raw = NULL, txid[32] = {0};
+        size_t len = 0;
+        serve((reply_case){0, NULL, 0, ALL, wire});
+        CHECK(btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && len == hexn && raw[hexn - 1] == (uint8_t)(hexn - 1));
+        served();
+        free(raw);
+        free(body);
+        free(wire);
+    }
 
     /* a server that never answers: the call ends at its time limit */
     C.timeout_ms = 300;
@@ -633,6 +653,10 @@ static void test_auth(void)
     CHECK(!btc_rpc_init(&C, "", 8332, "u", "p") && !btc_rpc_init(&C, "h", 0, "u", "p") && !btc_rpc_init(&C, "h", 65536, "u", "p"));
     CHECK(!btc_rpc_init(&C, "h", 8332, "a:b", "p") && !btc_rpc_init(&C, "h", 8332, "u", longpass) && !btc_rpc_init(&C, NULL, 1, "u", "p"));
     CHECK(btc_rpc_init(&C, "::1", 18443, "u", "") && C.timeout_ms == 30000);
+    btc_rpc_done(&C);
+    /* the host goes into the Host header: nothing that could end its line, or that no name has */
+    CHECK(!btc_rpc_init(&C, "127.0.0.1\r\nX-Injected: 1", 8332, "u", "p") && !btc_rpc_init(&C, "a b", 8332, "u", "p"));
+    CHECK(!btc_rpc_init(&C, "[::1]", 8332, "u", "p") && btc_rpc_init(&C, "fe80::1%eth0", 8332, "u", "p") && btc_rpc_init(&C, "node-1.lan", 1, "u", "p"));
     btc_rpc_done(&C);
 }
 

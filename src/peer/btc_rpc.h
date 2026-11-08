@@ -41,7 +41,8 @@ typedef struct {
     btc_rpc_err err;
 } btc_rpc;
 
-/* A client of the node at host:port (a name, an IPv4 or an IPv6 address). False when an argument is too long or empty. */
+/* A client of the node at host:port (a name, an IPv4 or an IPv6 address). False when an argument is too long or empty, or the host
+ * has a character no name or address has (it goes into the Host header). */
 bool btc_rpc_init(btc_rpc *c, const char *host, unsigned port, const char *user, const char *pass);
 /* The same with the credentials of the cookie file the node writes (.cookie in its data directory: "__cookie__:<password>"). */
 bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char *cookie_path);
