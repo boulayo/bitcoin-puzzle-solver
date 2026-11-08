@@ -3,6 +3,14 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.24.0] — unreleased
+
+### Added
+- `hunt --network FILE --start-key FILE`: the kangaroo of the shared network (docs/en/NETWORK.md). The network file sets target, range,
+  the public jump table and the bits of the distinguished points; the walkers follow the schema rete-06, and every start draws from a
+  generator of its own seeded with the secret start key of the home, which is never written in the campaign files or in the reports.
+  `dp.bin` keeps every point, also those the RAM limit leaves out of the table, for pzpeer to publish.
+
 ## [1.23.2] — 2026-11-08
 
 ### Added

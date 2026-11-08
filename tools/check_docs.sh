@@ -46,8 +46,10 @@ for what in "option --[a-z][a-z0-9-]*" "environment variable PZ_[A-Z0-9_]*"; do
 done
 
 # every relative link ("[text](path)" and "![alt](path)", not http(s):, mailto: or #fragment) of every .md file resolves from the file's folder
+# (not the vendored libraries: their README links to the parts of the upstream repository that were not copied)
 n=$bad; nl=0
-for f in $(find . -name '*.md' -not -path './build/*' -not -path './build_*' -not -path './dist-release/*' -not -path './.git/*' | sort); do
+for f in $(find . -name '*.md' -not -path './build/*' -not -path './build_*' -not -path './dist-release/*' -not -path './.git/*' \
+           -not -path './lib/secp256k1/*' | sort); do
     for link in $(grep -o '\]([^)]*)' "$f" | sed 's/^](//; s/)$//; s/ .*//' | grep -v -E '^(https?:|mailto:|#)' | sed 's/#.*//' | grep -v '^$' | sort -u); do
         nl=$((nl + 1))
         case $link in /*) target=$link ;; *) target=$(dirname "$f")/$link ;; esac

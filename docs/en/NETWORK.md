@@ -33,6 +33,7 @@ pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)    
 | `lib/secp256k1/` | libsecp256k1 0.7.1, the library of Bitcoin Core (MIT), with the ecdh, extrakeys and schnorrsig modules. Used for every operation on a secret key: BIP340 signatures, ECDH, ECDSA of the coins of the home |
 | `lib/pzcore/src/seed.c` | the generator of the home seed (several sources, health tests, HKDF) |
 | `lib/pzcore/src/aead.c` | ChaCha20-Poly1305 (RFC 8439) |
+| `src/netfile.c` | the network file: its lines, its fingerprint `F`, the values of the immutable part. libc and pzcore only: pzsolve and pzpeer link the same object |
 | `src/peer/` | pzpeer, one file per layer (below) |
 | `signer/` | pzfirma, a Rust crate |
 | `tests/peer/` | unit tests of pzpeer (`make peer-test`) and the end-to-end test on regtest |
@@ -44,7 +45,7 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `json.c` | a small JSON reader and writer (bitcoind, pzfirma) |
 | `btc.c` | Bitcoin transactions: serialization, txid, legacy signature hash, scripts of addresses, DER |
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
-| `netfile.c` | the network file: parsing, fingerprint, signatures of the maintainers |
+| `netfile.c` | the signatures of the maintainers over the network file (the parsing is `src/netfile.c`) |
 | `keys.c` | the keys derived from the home seed |
 | `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 over a socket |
 | `record.c` | the record of a distinguished point, its signature, the proof of possession |
@@ -96,18 +97,30 @@ signatures (`sig=<xonly pubkey hex>:<bip340 sig hex>`, over `SHA256("pznet1/sig"
 accepted when it has valid signatures from a threshold of the maintainer keys compiled into pzpeer; tests set their own keys with
 `PZNET_TRUST=hexkey,...` and `PZNET_THRESHOLD=n`.
 
-Canonical lines: the lines of the part, without comments and spaces at the ends, sorted, joined with `\n`.
+A line is `key=value`; from `#` on it is a comment, and spaces at the ends of the key and of the value do not count. Canonical lines: the
+lines of the part rebuilt as `key=value`, sorted bytewise, joined with `\n` (no `\n` at the end). An unknown or repeated key of the
+immutable part refuses the file. `puzzle=0` is a target of its own (tests); `dpbits` is 8 to 60; `schema` is `rete-06`.
 
 ## 6. pzsolve in network mode
 
-- `pzsolve hunt --network FILE --start-key FILE2` (pzpeer passes the second file; `hunt --network` alone asks pzpeer for it). The campaign
-  name is `net-<net>`.
-- **Jump table**: from `jumpseed`, not from the campaign seed. Everyone walks the same graph.
-- **Species**: the table `rete-06` (864 rows, in `src/kang_spec_net6.inc`). The species index of a walker is 16 bits.
-- **Starts**: the draws of a start come from HMAC-SHA256 of the start key with `(stream, walker, start number)`, a fresh value for each
-  start, instead of xoshiro: knowing one start says nothing about the others.
-- **dpbits** from the file; the memory limit never thins the table in network mode (a thinned point is a lost coincidence for someone).
+- `pzsolve hunt --network FILE --start-key FILE2`: pzpeer writes the start key (64 hex digits, the key *starts* of section 4) to `FILE2`
+  and starts pzsolve. The network file sets target, range, method and `--dp-bits`; the options that would change them are refused with it.
+  The campaign is `net-<net>`.
+- **campaign.conf** has `network=`, `jumpseed=`, `start_key_id=` (the `seed_to_id` of the start key) and `requires=1.24.0`; `seed=` is
+  empty. A resume needs `--network` with the same network and jump seed and a start key with the same id; the reports and `FOUND.txt`
+  show the seed as not written.
+- **Jump table**: from `jumpseed` (`krng_seed(jumpseed, "jumps4")`), not from the campaign seed. Everyone walks the same graph.
+- **Species**: the table `rete-06` (864 rows, `src/kang_spec_net6.inc`, made by `tools/research/kspec_table.py` from
+  `tools/research/kang_net6.txt`). As with schema 3 the rows are grouped by (coefficient, residue mod 12): a walker belongs to a group for
+  its life, and every start draws a band of the group by its share, so the index of a walker stays one byte (at most 64 groups).
+- **Starts**: each start draws from a generator of its own, a xoshiro state set to `HMAC-SHA256(start key, "pznet1/s" || session || n)`
+  (session: 8 bytes, the session number of the campaign and `--node` above it; n: 8 bytes, a counter of the starts of the session). A
+  record shows the point and the type of a start, never the state of a generator that made another one.
+- **Distinguished points**: `dpbits` of the file, whatever the walkers and the memory of this home would pick. A point the table leaves
+  out (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
+  of the network.
 - `dp.bin` is the usual log of the campaign. pzpeer reads it.
+- `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network (section 9).
 
 ## 7. pzpeer
 

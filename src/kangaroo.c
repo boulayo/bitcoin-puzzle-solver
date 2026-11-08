@@ -187,11 +187,21 @@ static void table_thin(kang_state *ks)
            "when memory sets dp-bits: the search goes on with a slightly later collision; a larger --mem helps only if the RAM is there", ks->thin_level);
 }
 
+/* A point the table leaves out: counted, and in a network campaign still written to the log, which pzpeer publishes from (a point the
+ * network never sees is a coincidence lost for someone; the table here only serves the coincidences of this home). */
+static int table_skip(kang_state *ks, const dp_rec *rec, u64 at)
+{
+    atomic_fetch_add(&ks->dropped, 1);
+    u64 idx;
+    if (ks->net && at == KANG_AT_NEW) (void)kang_log_push(ks, rec, &idx);
+    return -1;
+}
+
 /* mu held. Returns 1 inserted, 0 duplicate of same kind, 2 solved, -1 skipped (thinned out). at: KANG_AT_NEW for a new point (it goes to the log),
  * or the index of the record in the log it was read from. */
 int kang_table_insert(kang_state *ks, const dp_rec *rec, u64 at)
 {
-    if (ks->thin_mask && ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask)) { atomic_fetch_add(&ks->dropped, 1); return -1; }
+    if (ks->thin_mask && ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask)) return table_skip(ks, rec, at);
     const u64 spilled = ks->nspill * sizeof(dp_rec), lim = ks->r->mem_limit;
     if (ks->count * 10 >= ks->cap * 8 || spilled > lim / 2) {
         const u64 max_entries = (lim > spilled ? lim - spilled : 0) / sizeof(dp_ent);
@@ -200,10 +210,10 @@ int kang_table_insert(kang_state *ks, const dp_rec *rec, u64 at)
         const bool grown = ks->count * 10 >= ks->cap * 8 && ks->cap * 3 <= max_entries && table_grow(ks);
         if (!grown && (ks->count * 100 >= ks->cap * 93 || spilled > lim / 2)) {
             table_thin(ks);
-            if ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask) { atomic_fetch_add(&ks->dropped, 1); return -1; }
+            if ((rec->tagk >> KANG_KSHIFT) & ks->thin_mask) return table_skip(ks, rec, at);
         }
     }
-    if (ks->count + 1 >= ks->cap) { atomic_fetch_add(&ks->dropped, 1); return -1; }      /* never fill the last slot: the probe below must end */
+    if (ks->count + 1 >= ks->cap) return table_skip(ks, rec, at);                         /* never fill the last slot: the probe below must end */
     u64 s = slot_of(ks, rec->tagk);
     for (;;) {
         dp_ent *e = &ks->tab[s];
@@ -252,10 +262,44 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
 static const kang_species KSPEC3[] = {
 #include "kang_spec3.inc"
 };
+/* The species of a network campaign, rete-06 (docs/en/NETWORK.md 6 and the project document, 2.3): tame walkers on all twelve residues in
+ * [-0.6, 0.6] W, wild ones on Q on all twelve residues in [-1.1, 0.1] W, no wild ones on 3Q. Wider zones cost about 11 % more steps than
+ * schema 3, and in exchange a partner who meets one of these walkers learns too little about its start to steal its share cheaply. From
+ * tools/research/kang_net6.txt by tools/research/kspec_table.py. */
+static const kang_species KSPEC_NET6[] = {
+#include "kang_spec_net6.inc"
+};
 
-_Static_assert(sizeof KSPEC3 / sizeof *KSPEC3 <= 255, "the species index of a walker is a byte");
+_Static_assert(sizeof KSPEC3 / sizeof *KSPEC3 <= KANG_SPEC_MAX && sizeof KSPEC_NET6 / sizeof *KSPEC_NET6 <= KANG_SPEC_MAX, "a table of species too large");
 
-#define NKSPEC3 ((int)(sizeof KSPEC3 / sizeof *KSPEC3))
+/* Picks the table of the campaign and groups its bands (kang_state, grp_*): the walkers belong to a group, the group of a walker is a
+ * byte. */
+static void spec_groups(kang_state *ks)
+{
+    ks->spec = ks->net ? KSPEC_NET6 : KSPEC3;
+    ks->nspec = ks->net ? (int)(sizeof KSPEC_NET6 / sizeof *KSPEC_NET6) : (int)(sizeof KSPEC3 / sizeof *KSPEC3);
+    ks->ngrp = 0;
+    int ng = 0, nb = 0;
+    for (int g0 = 0; g0 < ks->nspec; g0++) {
+        const kang_species *a = &ks->spec[g0];
+        bool seen = false;
+        for (int g = 0; g < ng && !seen; g++) seen = ks->grp_coef[g] == a->coef && ks->spec[ks->grp_band[ks->grp_first[g]]].res == a->res;
+        if (seen) continue;
+        if (ng == KANG_GRP_MAX) pz_die("internal error: too many groups of species");
+        ks->grp_coef[ng] = a->coef;
+        ks->grp_first[ng] = (uint16_t)nb;
+        u64 cum = 0;
+        for (int b = g0; b < ks->nspec; b++)
+            if (ks->spec[b].coef == a->coef && ks->spec[b].res == a->res) {
+                cum += ks->spec[b].w;
+                ks->grp_band[nb] = (uint16_t)b;
+                ks->grp_cum[nb++] = cum;
+            }
+        ks->grp_n[ng] = (uint16_t)(nb - ks->grp_first[ng]);
+        ks->grp_w[ng++] = cum;
+    }
+    ks->ngrp = ng;
+}
 
 /* floor(sqrt(n)) with integers only: the jump table must come out the same on every architecture (long double is
  * 80 bits on x86, 64 on Apple arm64 and 128 on Linux arm64, so a table computed with it could differ between computers). */
@@ -309,6 +353,8 @@ kang_state *kang_create(run_ctx *r)
     if (rerr) pz_die("%s", rerr);
     ks->sqrtW = sqrtl(pz_u256_to_ld(&ks->W));
     ks->epoch = (u64)r->sessions | (u64)r->node << 32;   /* node 0 keeps the streams of the single-computer campaigns */
+    ks->net = r->cfg.net;
+    spec_groups(ks);
 
     int nthr = r->use_cpu ? r->nthreads : 0;
     int k_gpu = 0;
@@ -358,6 +404,7 @@ static int pick_dp_bits(kang_state *ks, u64 max_entries)
     int dp = dp_ov > dp_mem ? dp_ov : dp_mem;
     if (dp < 2) dp = 2;
     if (dp > 60) dp = 60;
+    if (ks->net) return (int)r->cfg.dp_bits;   /* the network's, whatever this home's walkers and memory would pick: every home logs the same points */
     if (r->cfg.dp_bits) {
         /* a walker reaches a distinguished point every 2^dp steps: after the collision every walker still has to get
          * there, so K * 2^dp must stay well below sqrt(W), otherwise the search costs many times its expected effort */
@@ -398,7 +445,7 @@ static long double make_jump_table(kang_state *ks)
         if (mean3 < 2 * KANG_MOD) mean3 = 2 * KANG_MOD;
     }
     u64 rg[4];
-    krng_seed(rg, r->cfg.seed, "jumps4", 0, 0);
+    krng_seed(rg, r->cfg.net ? r->cfg.net_jumpseed : r->cfg.seed, "jumps4", 0, 0);   /* a network walks the graph of its public seed */
     pz_u256 bound = pz_u256_from_u128(mean3 / 3 * 2 + 1);
     const pz_u256 low = pz_u256_from_u128(mean3 / 3 * 2);
     pz_ge pts[KANG_R + KANG_NESC];
@@ -534,29 +581,18 @@ kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream)
     w->vstale = pz_xcalloc((size_t)K, 1);
     w->spec = pz_xcalloc((size_t)K, 1);
     krng_seed(w->rng, ks->r->cfg.seed, "herd", ks->epoch, stream);
-    /* the shares of the species, as exact as K allows: walker i takes the species at (i + 1/2) / K of the cumulated shares. The
-     * species here is the group of bands with the same coefficient and residue (the first band of the group stands for it), and
-     * every start draws the band at random by the shares: with a few dozen walkers and 50 bands, a fixed band per walker would
-     * leave some residues without walkers, and the keys that only those could reach without a solution */
-    const int ns = NKSPEC3;
-    const kang_species *sp = KSPEC3;
-    u64 gw[256] = {0}, tot = 0;
-    int first[256];
-    for (int s = 0; s < ns; s++) {
-        int g = s;
-        for (int t = 0; t < s; t++)
-            if (sp[t].coef == sp[s].coef && sp[t].res == sp[s].res) { g = t; break; }
-        first[s] = g;
-        gw[g] += sp[s].w;
-        tot += sp[s].w;
-    }
+    /* the shares of the groups of species, as exact as K allows: walker i takes the group at (i + 1/2) / K of the cumulated shares, and
+     * every start draws the band of its group at random by the shares: with a few dozen walkers and 50 bands, a fixed band per walker
+     * would leave some residues without walkers, and the keys that only those could reach without a solution */
+    u64 tot = 0;
+    for (int g = 0; g < ks->ngrp; g++) tot += ks->grp_w[g];
     for (int i = 0; i < K; i++) {
         const u64 pos = ((u64)(2 * i + 1) * tot) / (2 * (u64)K);
         u64 acc = 0;
-        int s = 0;
-        while (s < ns - 1 && (first[s] != s || pos >= acc + gw[s])) acc += first[s] == s ? gw[s] : 0, s++;
-        w->spec[i] = (u8)s;
-        w->kind[i] = sp[s].coef;
+        int g = 0;
+        while (g < ks->ngrp - 1 && pos >= acc + ks->grp_w[g]) acc += ks->grp_w[g++];
+        w->spec[i] = (u8)g;
+        w->kind[i] = ks->grp_coef[g];
     }
     return w;
 }
@@ -635,21 +671,33 @@ static void start_at_infinity(kang_state *ks, const kang_species *sp, const i192
     run_submit_key(ks->r, &key, "kangaroo (start)");
 }
 
-/* The band of a new start of walker i: one of the bands of its group, by their shares. */
-static const kang_species *start_band(const kang_worker *w, int i, u64 rng[4])
+/* The band of a new start of walker i: one of the bands of its group, by their shares (the first whose cumulated share is above the
+ * draw: the bands in the order of the table, as a scan subtracting the shares one by one would find it). */
+static const kang_species *start_band(const kang_state *ks, const kang_worker *w, int i, u64 rng[4])
 {
-    const int ns = NKSPEC3;
-    const kang_species *sp = KSPEC3, *band = &sp[w->spec[i]];
-    u64 tot = 0;
-    for (int s = 0; s < ns; s++)
-        if (sp[s].coef == band->coef && sp[s].res == band->res) tot += sp[s].w;
-    u64 pick = krng_next(rng) % tot;
-    for (int s = 0; s < ns; s++)
-        if (sp[s].coef == band->coef && sp[s].res == band->res) {
-            if (pick < sp[s].w) return &sp[s];
-            pick -= sp[s].w;
-        }
-    return band;
+    const int g = w->spec[i];
+    const u64 *cum = ks->grp_cum + ks->grp_first[g];
+    const u64 pick = krng_next(rng) % ks->grp_w[g];
+    int lo = 0, hi = ks->grp_n[g] - 1;
+    while (lo < hi) {
+        const int mid = (lo + hi) / 2;
+        if (pick < cum[mid]) hi = mid; else lo = mid + 1;
+    }
+    return &ks->spec[ks->grp_band[ks->grp_first[g] + lo]];
+}
+
+/* The generator of one start of a network campaign. Its starts are the secret shares of the home (docs/en/NETWORK.md 6), and the
+ * outputs of xoshiro would give its state away: so every start draws from a generator of its own, seeded with HMAC-SHA256 of the start key
+ * (the campaign seed, never written anywhere) with the session and the number of the start. Knowing one start tells nothing about another. */
+static void net_start_rng(kang_state *ks, u64 rng[4])
+{
+    const u64 n = atomic_fetch_add_explicit(&ks->net_starts, 1, memory_order_relaxed);
+    u8 msg[24] = {'p', 'z', 'n', 'e', 't', '1', '/', 's'}, h[32];
+    for (int b = 0; b < 8; b++) msg[8 + b] = (u8)(ks->epoch >> (56 - 8 * b)), msg[16 + b] = (u8)(n >> (56 - 8 * b));
+    pz_hmac_sha256_oneshot(ks->r->cfg.seed, 32, msg, sizeof msg, h);
+    memcpy(rng, h, 32);
+    pz_secure_zero(h, sizeof h);
+    if (!(rng[0] | rng[1] | rng[2] | rng[3])) rng[0] = 1;
 }
 
 /* Walker i starts at the affine point p (normalized) with distance d. */
@@ -674,8 +722,13 @@ static void start_set(kang_worker *w, int i, pz_ge *p, i192 d)
 
 static void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
 {
+    u64 own[4];
+    if (ks->net) {
+        net_start_rng(ks, own);
+        rng = own;
+    }
     for (;;) {
-        const kang_species *band = start_band(w, i, rng);
+        const kang_species *band = start_band(ks, w, i, rng);
         pz_gej pj;
         pz_ge p;
         i192 d;
@@ -702,12 +755,15 @@ static void kang_start_range(kang_state *ks, kang_worker *w, int from, int to, u
         const int n = to - i0 < KANG_START_BATCH ? to - i0 : KANG_START_BATCH;
         u64 saved[4];
         memcpy(saved, rng, sizeof saved);
-        for (int k = 0; k < n; k++)
-            while (!start_species(ks, start_band(w, i0 + k, rng), rng, &pj[k], &d[k])) {}
+        for (int k = 0; k < n; k++) {
+            u64 own[4], *g = rng;
+            if (ks->net) net_start_rng(ks, g = own);              /* a generator of its own for each start (net_start_rng) */
+            while (!start_species(ks, start_band(ks, w, i0 + k, g), g, &pj[k], &d[k])) {}
+        }
         if (pz_gej_to_ge_batch(p, pj, (size_t)n)) {
             for (int k = 0; k < n; k++) start_set(w, i0 + k, &p[k], d[k]);
-        } else {
-            memcpy(rng, saved, sizeof saved);
+        } else {                                                  /* a start at infinity (practically never): one walker at a time, */
+            memcpy(rng, saved, sizeof saved);                     /* each with a new draw (a network start takes a new number) */
             for (int k = 0; k < n; k++) kang_restart_rng(ks, w, i0 + k, rng);
         }
     }

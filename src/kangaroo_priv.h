@@ -102,6 +102,8 @@ typedef struct { u64 tagk, ref; } dp_ent;
 /* A species of walkers: E = coef*x + u, u = res (mod KANG_MOD) uniform in [lo, hi] thousandths of W,
  * share w millionths of the herd (each zone is split into bands with their own shares). */
 typedef struct { u8 coef, res; int16_t lo, hi; uint32_t w; } kang_species;
+#define KANG_SPEC_MAX 1024       /* bands in a table of species (rete-06 has 864) */
+#define KANG_GRP_MAX 64          /* groups of bands with the same coefficient and residue (at most 3 coefficients x 12 residues) */
 
 typedef struct {
     unsigned R;
@@ -158,6 +160,17 @@ typedef struct kang_state {
     _Atomic u64 dups, restarts, rejected, dropped;
     u64 loaded;
     u64 epoch;
+    /* The table of species (schema 3, or rete-06 for a network campaign, docs/en/NETWORK.md 6) and its groups: the bands with the same
+     * coefficient and residue form a group, numbered in the order of their first band. A walker belongs to a group for life, and each start
+     * draws a band of its group by the shares: grp_band lists the bands of group g from grp_first[g] (grp_n[g] of them), grp_cum their shares
+     * summed up to and including each one. */
+    bool net;                    /* a campaign of the shared network: public jump seed, secret starts, every point logged */
+    const kang_species *spec;
+    int nspec, ngrp;
+    u8 grp_coef[KANG_GRP_MAX];
+    uint16_t grp_first[KANG_GRP_MAX], grp_n[KANG_GRP_MAX], grp_band[KANG_SPEC_MAX];
+    u64 grp_w[KANG_GRP_MAX], grp_cum[KANG_SPEC_MAX];
+    _Atomic u64 net_starts;      /* starts drawn so far in this session (network campaigns: the number in the HMAC of a start) */
     long double expected_steps;
     /* The size of the table as the progress line shows it. The plain fields above are written under mu, and a rebuild of the table (growth,
      * thinning) holds mu for as long as it takes (seconds, for a table of GiB): the reporter reads these copies instead, so that it does not
@@ -172,7 +185,7 @@ typedef struct kang_worker {
     pz_fe *x, *y;
     i192 *d;
     u8 *kind;                    /* 0 tame, 1 wild (wild on 3Q: 3; the steps only test kind != 0) */
-    u8 *spec;                    /* species of each walker (index in the table of kangaroo.c) */
+    u8 *spec;                    /* group of species of each walker (index in ks->grp_*: one coefficient and one residue) */
     int8_t *sigma;
     u32 *prev, *prev2;           /* tags of the points one and two steps back */
     u64 *lastdp;                 /* value of `round` at the last distinguished point (or restart) of each walker */

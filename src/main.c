@@ -132,6 +132,12 @@ static const char *hunt_text(void)
 "                          PZ_FOUND_ADDRESS, PZ_FOUND_PUZZLE, PZ_FOUND_CAMPAIGN and PZ_FOUND_FILE set, never the key. Not\n"
 "                          stored: give it again at every start\n"
 "\n"
+"SHARED NETWORK (docs/en/NETWORK.md; pzpeer starts pzsolve with these two options)\n"
+"      --network FILE      kangaroo on the network of FILE: it sets target, range, method, jump table and --dp-bits, so -p, -r,\n"
+"                          -a, -k, -m, -s, --dp-bits and --part are not given with it. The campaign is net-NAME\n"
+"      --start-key FILE    the secret key of the starting points of this home (64 hex digits), given by pzpeer: kept in\n"
+"                          memory only, never in the campaign files; a resumed campaign takes only the same key\n"
+"\n"
 "DISPLAY\n"
 "      --ui U              auto | full (multi-line panel updated in place) | line (one line) | log (one line per minute, suited\n"
 "                          to files)   [auto: full on a terminal]\n"
@@ -225,7 +231,9 @@ static const struct { const char *cmd, *text; } short_help[] = {
     {"devices", "pzsolve devices - list the detected CPU, SIMD instructions, RAM and GPUs\n\nUSAGE\n  pzsolve devices\n"},
     {"selftest", "pzsolve selftest - run the built-in correctness checks (CPU engines, kangaroo, BSGS, GPUs)\n\nUSAGE\n  pzsolve selftest\n"},
     {"kstat", "pzsolve kstat - statistics of the kangaroo cost over intervals of 2^BITS keys (cycle study)\n\nUSAGE\n"
-              "  pzsolve kstat BITS TRIALS [THREADS [R [DP]]]\n\nARGUMENTS\n  BITS                    size of the intervals, 2^BITS keys (4..64)\n"
+              "  pzsolve kstat [net] BITS TRIALS [THREADS [R [DP]]]\n\nARGUMENTS\n  net                     the walk of a network campaign (schema rete-06, see\n"
+              "                          docs/en/NETWORK.md) instead of the walk of a campaign of this computer\n"
+              "  BITS                    size of the intervals, 2^BITS keys (4..64)\n"
               "  TRIALS                  number of keys to find\n  THREADS                 CPU threads [1]\n"
               "  R, DP                   number of jumps and bits of the distinguished points (then the kangaroos without\n"
               "                          distinguished points are not restarted)\n"},
@@ -297,7 +305,7 @@ void pz_usage_error(const char *cmd, const char *fmt, ...)
 
 static const char *g_cmd = "";
 
-enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND };
+enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_NETWORK, O_STARTKEY };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"pubkey", 1, 0, 'k'},
@@ -307,7 +315,8 @@ static const struct option long_opts[] = {
     {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN},
     {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
-    {"on-found", 1, 0, O_ONFOUND}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
+    {"on-found", 1, 0, O_ONFOUND}, {"network", 1, 0, O_NETWORK}, {"start-key", 1, 0, O_STARTKEY}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
+    {0, 0, 0, 0}};
 
 /* The options removed in 1.23.0 and what takes their place: each one is refused with its own message, not as an unknown option. The
  * names are those of the command line, between blanks; dropping an entry makes that option an unknown one. */
@@ -491,6 +500,8 @@ void parse_opts(int argc, char **argv, opts_t *o)
         case O_ENCPUB: opt_copy("--encrypt-pubkey", o->encrypt_pubkey, sizeof o->encrypt_pubkey, optarg); break;
         case O_ENCPW: o->encrypt_password = true; break;
         case O_ONFOUND: opt_copy("--on-found", o->on_found, sizeof o->on_found, optarg); break;
+        case O_NETWORK: opt_copy("--network", o->network, sizeof o->network, optarg); break;
+        case O_STARTKEY: opt_copy("--start-key", o->start_key, sizeof o->start_key, optarg); break;
         case O_KEY: opt_copy("--key", o->key, sizeof o->key, optarg); break;
         case O_TABLE: opt_copy("--table", o->table, sizeof o->table, optarg); break;
         case O_BSGSN: o->bsgs_entries = opt_u64("--bsgs-entries", optarg, 1, BS_MAX_T); break;

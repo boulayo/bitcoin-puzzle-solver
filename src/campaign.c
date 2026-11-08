@@ -200,10 +200,19 @@ int cfg_save(const campaign_cfg *c, const char *path)
     pz_u256_to_hex(&c->range_start, start_hex);
     pz_u256_to_hex(&c->range_end, end_hex);
     pz_hex_encode(c->target_h160, 20, hash160_hex);
-    pz_hex_encode(c->seed, 32, seed_hex);
+    if (c->net) seed_hex[0] = 0;           /* the start key of a network campaign stays in memory: pzpeer gives it at every start */
+    else pz_hex_encode(c->seed, 32, seed_hex);
     pubkey_hex[0] = 0;
     if (c->has_pubkey) pz_hex_encode(c->pubkey33, 33, pubkey_hex);
     if (c->has_encrypt) pz_hex_encode(c->encrypt_pubkey33, 33, encrypt_pubkey_hex);
+    char net_lines[160] = "";
+    if (c->net) {
+        char js[65];
+        pz_hex_encode(c->net_jumpseed, 32, js);
+        snprintf(net_lines, sizeof net_lines, "network=%s\njumpseed=%s\nstart_key_id=%s\n", c->net_name, js, c->net_keyid);
+    }
+    /* the lines below part= are there only when they are used: the file of a campaign without them is as before */
+    const char *req = c->net ? PZ_REQUIRES_NET : c->has_encrypt ? PZ_REQUIRES_ENCRYPT : NULL;
     int n = snprintf(buf, sizeof buf,
         "# pzsolve campaign (do not edit by hand)\n"
         "format=%u\n"
@@ -222,11 +231,11 @@ int cfg_save(const campaign_cfg *c, const char *path)
         "dp_bits=%u\n"
         "bsgs_entries=%llu\n"
         "part=%s\n"
-        "%s%s%s",
+        "%s%s%s%s%s%s%s",
         c->format_version, c->created_with, c->created_at, c->name, c->puzzle, start_hex, end_hex,
         c->address, hash160_hex, pubkey_hex, mode_name(c->mode), seed_hex, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part,
-        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex,   /* the two lines are there only when they are used: the file of a campaign without them is as before */
-        c->has_encrypt ? "\nrequires=" PZ_REQUIRES_ENCRYPT "\n" : "");
+        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex, c->has_encrypt ? "\n" : "", net_lines,
+        req ? "requires=" : "", req ? req : "", req ? "\n" : "");
     return pz_write_file_atomic(path, buf, (size_t)n, 0644);
 }
 
@@ -238,7 +247,9 @@ int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path)
     pz_hex_encode(c->encrypt_pubkey33, 33, hx);
     const size_t l = strlen(text), cap = l + 100;
     char *out = pz_xmalloc(cap);
-    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\nrequires=" PZ_REQUIRES_ENCRYPT "\n", text, l && text[l - 1] != '\n' ? "\n" : "", hx);
+    const bool has_req = pz_kv_find(text, "requires", '=', 0) != NULL;   /* a network campaign already needs a later version */
+    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\n%s", text, l && text[l - 1] != '\n' ? "\n" : "", hx,
+                           has_req ? "" : "requires=" PZ_REQUIRES_ENCRYPT "\n");
     const int rc = pz_write_file_atomic(path, out, (size_t)n, 0644);
     free(out);
     free(text);
@@ -334,7 +345,14 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
         free(text);
         return -1;
     }
-    GET("seed") if (pz_hex_decode(v, c->seed, 32) != 32) { snprintf(err, errlen, "invalid seed"); free(text); return -1; }
+    if (cfg_val(text, "network", v, sizeof v) && v[0]) {                             /* a network campaign: no seed on disk (cfg_save) */
+        c->net = true;
+        pz_strlcpy(c->net_name, v, sizeof c->net_name);
+        GET("jumpseed") if (pz_hex_decode(v, c->net_jumpseed, 32) != 32) { snprintf(err, errlen, "invalid jumpseed"); free(text); return -1; }
+        GET("start_key_id") pz_strlcpy(c->net_keyid, v, sizeof c->net_keyid);
+    } else {
+        GET("seed") if (pz_hex_decode(v, c->seed, 32) != 32) { snprintf(err, errlen, "invalid seed"); free(text); return -1; }
+    }
     GET("chunk_bits") c->chunk_bits = (unsigned)pz_strtou64(v);
     GET("dp_bits") c->dp_bits = (unsigned)pz_strtou64(v);
     if (cfg_val(text, "bsgs_entries", v, sizeof v)) c->bsgs_t = pz_strtou64(v);   /* absent in campaigns created by 1.0.x */

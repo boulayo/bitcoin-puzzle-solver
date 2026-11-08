@@ -715,6 +715,29 @@ python3 -I tests/pty_seal.py "$BIN" "$DIR" > "$DIR/pty.out" 2>&1; PRC=$?
 grep -E "^  (OK|FAIL)" "$DIR/pty.out"
 [ $PRC -eq 0 ] || fail=$((fail+1))
 unset PZ_TEST_SEAL_LOG2N
+echo "== shared network: hunt --network with a start key (docs/en/NETWORK.md 6)"
+NK=$(rndkey 40 77); NPUB=$(field "$NK" pub); NJ=$(python3 -c "print('5a'*32)"); SK=$(python3 -c "print('3c'*32)")
+mkdir -p "$DIR/net"
+printf '# test network\nnet=e2e\npuzzle=0\npubkey=%s\nrange=8000000000:ffffffffff\njumpseed=%s  # public\nschema=rete-06\ndpbits=8\nchain=regtest\n' \
+  "$NPUB" "$NJ" > "$DIR/net/n.txt"
+echo "$SK" > "$DIR/net/sk.txt"
+OUT=$($BIN hunt --network "$DIR/net/n.txt" --start-key "$DIR/net/sk.txt" -d "$DIR/net" --ui log --no-gpu 2>&1)
+echo "$OUT" | grep -q "key (hex): *$NK" && ok "network campaign: key found" || bad "network campaign: key not found: $(echo "$OUT" | tail -3)"
+C="$DIR/net/net-e2e"
+grep -q "^network=e2e$" "$C/campaign.conf" && grep -q "^seed=$" "$C/campaign.conf" && grep -q "^start_key_id=$(seedid "$SK")$" "$C/campaign.conf" \
+  && grep -q "^requires=1.24.0$" "$C/campaign.conf" && ok "network campaign.conf: network, empty seed, start key id" || bad "network campaign.conf: $(tr '\n' ' ' < "$C/campaign.conf")"
+grep -rlq "$SK" "$C" && bad "the start key is written in the campaign folder" || ok "the start key is in no file of the campaign"
+nchk() { local frag=$1 out; shift; out=$($BIN hunt "$@" -d "$DIR/net" --ui log 2>&1) && bad "accepted: $*" || { echo "$out" | grep -q -- "$frag" && ok "refused: $frag" || bad "$frag: $(echo "$out" | head -2)"; }; }
+echo "$(python3 -c "print('3d'*32)")" > "$DIR/net/sk2.txt"
+nchk "another start key" --network "$DIR/net/n.txt" --start-key "$DIR/net/sk2.txt"
+nchk "pzpeer resumes it" -c net-e2e
+nchk "needs --start-key" --network "$DIR/net/n.txt"
+nchk "are not given with it" --network "$DIR/net/n.txt" --start-key "$DIR/net/sk.txt" -p 40
+nchk "only with --network" --start-key "$DIR/net/sk.txt" -p 40
+sed 's/^schema=.*/schema=rete-05/' "$DIR/net/n.txt" > "$DIR/net/b.txt"; nchk "unknown schema" --network "$DIR/net/b.txt" --start-key "$DIR/net/sk.txt"
+printf 'net=e2e\nnet=x\n' > "$DIR/net/b.txt"; nchk "repeated key 'net'" --network "$DIR/net/b.txt" --start-key "$DIR/net/sk.txt"
+OUT=$($BIN kstat net 30 4 2>&1); echo "$OUT" | grep -q "walk of the network" && ok "kstat net" || bad "kstat net: $OUT"
+
 
 echo "== line width: nothing printed is longer than 128 columns"
 chk_width() {   # chk_width LABEL COMMAND...: the longest line of stdout and stderr; log records ("[12:00:00] INFO ...") are one line each in a pipe

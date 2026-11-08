@@ -16,6 +16,7 @@
 #include "envopts.h"
 #include "encrypt.h"
 #include "onfound.h"
+#include "netfile.h"
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -282,7 +283,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     set_target(o, c);
 
     if (o->seed[0] && strcmp(o->seed, "auto") != 0) seed_from_text(o->seed, c->seed);
-    else seed_generate(c->seed);
+    else if (!o->network[0]) seed_generate(c->seed);   /* a network campaign takes the start key (net_bind) */
 
     pz_u256 rsz = cfg_range_size(c);
     c->chunk_bits = effective_chunk_bits(&rsz, o->chunk_bits);
@@ -530,7 +531,10 @@ static void print_resume_hint(const run_ctx *r, const char *dir)
     char byp[32];
     snprintf(byp, sizeof byp, "p%d", r->cfg.puzzle);
     const bool other_dir = strcmp(dir, "campaigns") != 0;
-    if (r->cfg.puzzle && !strcmp(r->cfg.name, byp))
+    if (r->cfg.net)                                 /* its seed is not on disk: only the start key brings it back */
+        printf("\nCampaign interrupted. pzpeer resumes it, or:  pzsolve hunt --network FILE --start-key FILE%s%s\n", other_dir ? " -d " : "",
+               other_dir ? dir : "");
+    else if (r->cfg.puzzle && !strcmp(r->cfg.name, byp))
         printf("\nCampaign interrupted. Resume with:  pzsolve hunt -p %d%s%s\n", r->cfg.puzzle, other_dir ? " -d " : "", other_dir ? dir : "");
     else
         printf("\nCampaign interrupted. Resume with:  pzsolve hunt -c %s%s%s\n", r->cfg.name, other_dir ? " -d " : "", other_dir ? dir : "");
@@ -542,6 +546,72 @@ static bool campaign_completed(const run_ctx *r)
 {
     char st[32];
     return file_exists(r->path_state) && !strcmp(campaign_state(r->cfg.dir, st, sizeof st), "COMPLETED");
+}
+
+/* ---- the shared network (hunt --network, docs/en/NETWORK.md 6) ---- */
+
+/* The network of the command and the start key of this home. The key is the seed of the campaign in memory, and only there. */
+static struct { netfile nf; u8 key[32]; } g_net;
+
+/* --network: the options of the campaign from the network file and the start key from its file, before anything else. */
+static void net_options(opts_t *o)
+{
+    if (!o->network[0]) {
+        if (o->start_key[0]) pz_die("--start-key is used only with --network");
+        return;
+    }
+    char err[300];
+    if (!netfile_load(o->network, &g_net.nf, err, sizeof err)) pz_die("%s (%s)", err, o->network);
+    if (o->puzzle || o->range[0] || o->address[0] || o->pubkey[0] || o->seed[0] || o->dp_bits >= 0 || o->part[0] || o->chunk_bits > 0 ||
+        o->table[0] || o->bsgs_entries || (strcmp(o->mode, "auto") && strcmp(o->mode, "kangaroo")))
+        pz_die("--network sets target, range, method, seed and --dp-bits: -p, -r, -a, -k, -m, -s, --dp-bits, --part, --chunk-bits, --table "
+               "and --bsgs-entries are not given with it");
+    if (!o->start_key[0]) pz_die("--network needs --start-key FILE (pzpeer gives it when it starts pzsolve)");
+    char *text = pz_read_file(o->start_key, NULL);
+    if (!text) pz_die("cannot read the start key %s: %s", o->start_key, strerror(errno));
+    const size_t tl = strlen(text);
+    char *b = text + strspn(text, " \t\r\n");
+    const size_t n = strcspn(b, " \t\r\n");
+    const bool blank_after = b[n + strspn(b + n, " \t\r\n")] == 0;
+    b[n] = 0;
+    const bool ok = n == 64 && blank_after && pz_hex_decode(b, g_net.key, 32) == 32;
+    pz_secure_zero(text, tl);
+    free(text);
+    if (!ok) pz_die("the start key %s must hold 64 hex digits and nothing else", o->start_key);
+    const netfile *nf = &g_net.nf;
+    char a[PZ_U256_HEX_BUF], z[PZ_U256_HEX_BUF];
+    snprintf(o->range, sizeof o->range, "%s:%s", pz_u256_to_hex(&nf->start, a), pz_u256_to_hex(&nf->end, z));
+    pz_hex_encode(nf->pubkey33, 33, o->pubkey);
+    o->puzzle = nf->puzzle;
+    snprintf(o->mode, sizeof o->mode, "kangaroo");
+    o->dp_bits = (int)nf->dpbits;
+    if (!o->campaign[0]) snprintf(o->campaign, sizeof o->campaign, "net-%s", nf->net);
+}
+
+/* The network part of the campaign: set on a new one, checked on one that resumes (the same network and the same start key, whose id
+ * campaign.conf keeps); then the start key becomes the seed. A network campaign is never resumed without --network: its seed is not on
+ * disk. */
+static void net_bind(const opts_t *o, campaign_cfg *c, bool fresh)
+{
+    if (!o->network[0]) {
+        if (c->net) pz_die("campaign '%s' belongs to the shared network '%s': pzpeer resumes it (hunt --network)", c->name, c->net_name);
+        return;
+    }
+    char id[17];
+    seed_to_id(g_net.key, id);
+    if (fresh) {
+        c->net = true;
+        pz_strlcpy(c->net_name, g_net.nf.net, sizeof c->net_name);
+        memcpy(c->net_jumpseed, g_net.nf.jumpseed, 32);
+        pz_strlcpy(c->net_keyid, id, sizeof c->net_keyid);
+    } else if (!c->net) {
+        pz_die("campaign '%s' is not a campaign of the shared network: give the network campaign another name with -c", c->name);
+    } else if (strcmp(c->net_name, g_net.nf.net) || memcmp(c->net_jumpseed, g_net.nf.jumpseed, 32)) {
+        pz_die("campaign '%s' belongs to network '%s' with another jump table: give another name with -c", c->name, c->net_name);
+    } else if (strcmp(c->net_keyid, id)) {
+        pz_die("campaign '%s' was started with another start key (id %s, given %s): its points belong to that key", c->name, c->net_keyid, id);
+    }
+    memcpy(c->seed, g_net.key, 32);
 }
 
 /* The campaign of the command: opened when it exists, otherwise created (its folder and campaign.conf, under its lock), with the options
@@ -556,6 +626,7 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
     *locked = false;
     if (!resuming) {
         build_new_cfg(o, &r->cfg);
+        net_bind(o, &r->cfg, true);
         check_options_for_campaign(o, &r->cfg, r, true);
         warn_solved(o, &r->cfg);
         encrypt_from_options(o, &r->cfg);              /* last of the checks: it may ask for a password, and nothing is created yet */
@@ -574,6 +645,7 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
     if (resuming) {
         char err[256];
         if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
+        net_bind(o, &r->cfg, false);
         check_resume_consistency(o, &r->cfg);
         check_options_for_campaign(o, &r->cfg, r, false);
         pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
@@ -662,6 +734,8 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
         say(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);
     else if (r->cfg.mode == MODE_BSGS)
         say(PZ_LOG_INFO, "mode: bsgs (known public key) | seed id %s | random order of the giant steps determined by the seed", idb);
+    else if (r->cfg.net)
+        say(PZ_LOG_INFO, "mode: kangaroo of the shared network '%s' | start key id %s | the jumps of the network, the starts of this home", r->cfg.net_name, idb);
     else
         say(PZ_LOG_INFO, "mode: kangaroo (known public key) | seed id %s | the seed determines jumps and starting positions", idb);
     if (r->cfg.part[0]) {
@@ -739,6 +813,7 @@ int cmd_hunt(int argc, char **argv)
 {
     opts_t o;
     parse_opts(argc, argv, &o);
+    net_options(&o);
     pz_log_set_quiet(o.quiet);
     pz_log_set_verbose(o.verbose);
     isa_forced();                                       /* PZ_ISA: an unknown or unsupported name stops here */

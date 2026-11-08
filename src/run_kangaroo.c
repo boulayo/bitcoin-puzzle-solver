@@ -208,7 +208,7 @@ static void synth_free(run_ctx *r)
 
 /* Runs the CPU kangaroo on [lo, lo + 2^wbits) until `key` is found; returns the steps used or -1. Test overrides: R jumps
  * instead of 256 (R > 0, a power of two), dp_bits (dp > 0) and no restart of walkers without distinguished points. */
-typedef struct { unsigned R, dp; bool no_watchdog; } kang_try_opts;
+typedef struct { unsigned R, dp; bool no_watchdog, net; } kang_try_opts;   /* net: the walk of a network campaign (rete-06, starts by HMAC) */
 
 static double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
 {
@@ -217,6 +217,10 @@ static double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, in
     pz_hash160(r->cfg.pubkey33, 33, r->cfg.target_h160);
     u64 s = seedn * 0x9E3779B97F4A7C15ULL + 1;
     for (int i = 0; i < 4; i++) memcpy(r->cfg.seed + 8 * i, &(u64){st_rnd(&s)}, 8);
+    if (o && o->net) {
+        r->cfg.net = true;
+        for (int i = 0; i < 4; i++) memcpy(r->cfg.net_jumpseed + 8 * i, &(u64){st_rnd(&s)}, 8);
+    }
     r->nthreads = nthreads;
     r->use_gpu = false;
     r->silent_setup = true;
@@ -426,14 +430,21 @@ static int cmp_double(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-/* 'pzsolve kstat BITS TRIALS [THREADS [R [DP]]]': the mean cost of the kangaroo in units of sqrt(W), measured on random keys. */
+/* 'pzsolve kstat [net] BITS TRIALS [THREADS [R [DP]]]': the mean cost of the kangaroo in units of sqrt(W), measured on random keys; net: the
+ * walk of a network campaign (schema rete-06, docs/en/NETWORK.md 6). */
 int kangaroo_stats(int argc, char **argv)
 {
-    if (argc < 4) pz_die("usage: pzsolve kstat BITS TRIALS [THREADS [R [DP]]]  (see 'pzsolve help kstat')");
+    const bool net = argc > 2 && !strcmp(argv[2], "net");
+    if (net) {
+        argv++;
+        argc--;
+    }
+    if (argc < 4) pz_die("usage: pzsolve kstat [net] BITS TRIALS [THREADS [R [DP]]]  (see 'pzsolve help kstat')");
     const unsigned bits = (unsigned)pz_arg_int("kstat BITS", argv[2], 4, 64);
     const int runs = (int)pz_arg_int("kstat TRIALS", argv[3], 1, 1000000);
     const int thr = argc > 4 ? (int)pz_arg_int("kstat THREADS", argv[4], 1, RUN_MAX_THREADS) : 1;
-    kang_try_opts o = {argc > 5 ? (unsigned)pz_arg_int("kstat R", argv[5], 0, KANG_R) : 0, argc > 6 ? (unsigned)pz_arg_int("kstat DP", argv[6], 0, 40) : 0, argc > 5};
+    kang_try_opts o = {argc > 5 ? (unsigned)pz_arg_int("kstat R", argv[5], 0, KANG_R) : 0, argc > 6 ? (unsigned)pz_arg_int("kstat DP", argv[6], 0, 40) : 0, argc > 5,
+                       net};
     if (o.R && (o.R < 2 || (o.R & (o.R - 1)))) pz_die("kstat R: invalid value '%s' (expected a power of 2 between 2 and %d)", argv[5], KANG_R);
     pz_log_set_quiet(1);
     u64 s = 0xABCDEF987ULL;
@@ -456,7 +467,8 @@ int kangaroo_stats(int argc, char **argv)
     }
     if (n == 0) { free(v); printf("W = 2^%u: none of the %d trials succeeded\n", bits, runs); return 1; }
     qsort(v, (size_t)n, sizeof(double), cmp_double);
-    printf("kangaroo cost over %d trial%s on W = 2^%u (%d thread%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits, thr, thr == 1 ? "" : "s");
+    printf("kangaroo cost over %d trial%s on W = 2^%u (%d thread%s%s), in steps / sqrt(W)\n", n, n == 1 ? "" : "s", bits, thr, thr == 1 ? "" : "s",
+           net ? ", walk of the network" : "");
     pz_prop_line("mean", "%.3f", sum / n);
     if (n > 1) pz_prop_line("std. error", "%.4f", sqrt((sumsq / n - (sum / n) * (sum / n)) / (n - 1)));
     pz_prop_line("median", "%.3f", v[n / 2]);

@@ -222,6 +222,13 @@ bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
 }
 
 /* the file of a campaign that does not encrypt the key; false if it could not be written */
+/* The seed as the reports show it: a network campaign's is the start key of the home, which stays in memory (docs/en/NETWORK.md 6). */
+static void seed_text(const campaign_cfg *c, char out[65])
+{
+    if (c->net) snprintf(out, 65, "(start key of the network: not written)");
+    else pz_hex_encode(c->seed, 32, out);
+}
+
 static bool write_found_plain(run_ctx *r)
 {
     char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80], pz[48] = "";
@@ -235,7 +242,7 @@ static bool write_found_plain(run_ctx *r)
     pz_hex_encode(pub, 33, pk);
     pz_hash160(pub, 33, h);
     pz_hash160_to_address(h, addr, sizeof addr);
-    pz_hex_encode(r->cfg.seed, 32, seed);
+    seed_text(&r->cfg, seed);
     time_t t = (time_t)r->found_time;
     char ts[40];
     struct tm tmv;
@@ -278,7 +285,7 @@ static bool write_found_encrypted(run_ctx *r)
     r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, r->found_sealed, sizeof r->found_sealed);
     pz_secure_zero(kb, sizeof kb);
     enc_key_id(&r->cfg.encrypt_pubkey, id);
-    pz_hex_encode(r->cfg.seed, 32, seed);
+    seed_text(&r->cfg, seed);
     struct tm tmv;
     pz_localtime((time_t)r->found_time, &tmv);
     strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
@@ -394,7 +401,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     struct tm tmv;
     pz_localtime(now, &tmv);
     strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tmv);
-    pz_hex_encode(r->cfg.seed, 32, seedhex);
+    seed_text(&r->cfg, seedhex);
     seed_to_id(r->cfg.seed, idb);
     pz_u256_to_hex(&r->cfg.range_start, rs);
     pz_u256_to_hex(&r->cfg.range_end, re);

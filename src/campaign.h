@@ -12,6 +12,9 @@
  * older than it does not know the line and would write the key in plain. Raise it when a line is added that older versions must not
  * ignore either. (1.21.0 and 1.21.1 know encrypt_pubkey but not requires: they still ignore the line.) */
 #define PZ_REQUIRES_ENCRYPT "1.21.0"
+/* The version a campaign of the shared network needs (network=, jumpseed=): an older version would walk its own jump table with a seed it
+ * does not have (seed= is empty: the start key of a network campaign is never written). */
+#define PZ_REQUIRES_NET "1.24.0"
 
 typedef enum { MODE_LINEAR = 0, MODE_KANGAROO = 1, MODE_BSGS = 2 } search_mode;
 
@@ -55,6 +58,10 @@ typedef struct {
     bool has_encrypt;            /* the key is encrypted to encrypt_pubkey when it is found (hunt --encrypt-pubkey / --encrypt-password); public data */
     u8 encrypt_pubkey33[33];
     pz_ge encrypt_pubkey;
+    bool net;                    /* a campaign of the shared network (hunt --network, docs/en/NETWORK.md 6): seed is the start key, in memory only */
+    char net_name[32];           /* net= of the network file */
+    u8 net_jumpseed[32];         /* jumpseed= of the network file: the public seed of the jump table */
+    char net_keyid[17];          /* seed_to_id of the start key: a resume with another key is refused */
 } campaign_cfg;
 
 const char *mode_name(search_mode m);
