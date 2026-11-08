@@ -6,7 +6,8 @@
  * session); a partner S that keeps the second transaction (and its last signing message) to itself, which F answers by spending its tiny
  * coin after 3 blocks; a partner F that stops, or sends garbage, instead of its last signing message, and gets nothing for it; a fee rate
  * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzfirma that
- * hangs while the other floods it. Needs PZFIRMA, PZFIRMA_PRIMES0 and PZFIRMA_PRIMES1; without them it says it was skipped. */
+ * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
+ * Needs PZFIRMA, PZFIRMA_PRIMES0 and PZFIRMA_PRIMES1; without them it says it was skipped. */
 #include "peertest.h"
 #include "chain_rpc.h"
 #include "session.h"
@@ -109,24 +110,56 @@ static uint64_t ch_height(void *c)
     return h;
 }
 
+/* a prize of the network file, looked up alone */
+static int ch_coin(void *c, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
+{
+    (void)c;
+    pthread_mutex_lock(&chain.mu);
+    const utxo *u = find(txid, vout);
+    const bool ok = u && !u->spent && u->height && u->spk_len == BTC_P2PKH_LEN && !memcmp(u->spk, spk, BTC_P2PKH_LEN);
+    if (ok) memcpy(out->txid, txid, 32), out->vout = vout, out->value = u->value;
+    pthread_mutex_unlock(&chain.mu);
+    return ok;
+}
+
 static uint64_t g_fee[2] = {2000, 3000};                     /* the two homes propose different rates: the higher is taken */
 static uint64_t ch_feerate(void *c) { return g_fee[c != NULL]; }
 
-/* a chain whose first answers about the height are lost (0): a wait must not count its blocks from there */
+/* a chain whose first answers about the height are lost (0): a wait must not count its blocks from there; whose scan of an address
+ * fails (the answer of a node to an address with thousands of coins of dust is too long); or that stops (the height stays, and nothing
+ * gets confirmed) */
 typedef struct {
     session_chain in;
     int lost;
+    bool scan_fails, frozen;
+    uint64_t at;
 } flaky;
 
-static int fl_coins(void *c, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max) { flaky *f = c; return f->in.coins(f->in.ctx, spk, out, max); }
+static int fl_coins(void *c, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
+{
+    flaky *f = c;
+    return f->scan_fails ? -1 : f->in.coins(f->in.ctx, spk, out, max);
+}
 static bool fl_broadcast(void *c, const btc_tx *tx) { flaky *f = c; return f->in.broadcast(f->in.ctx, tx); }
-static int fl_conf(void *c, const uint8_t txid[32], uint32_t vout) { flaky *f = c; return f->in.confirmations(f->in.ctx, txid, vout); }
+static int fl_conf(void *c, const uint8_t txid[32], uint32_t vout)
+{
+    flaky *f = c;
+    const int k = f->in.confirmations(f->in.ctx, txid, vout);
+    return f->frozen && k > 0 ? 0 : k;
+}
 static uint64_t fl_feerate(void *c) { flaky *f = c; return f->in.feerate(f->in.ctx); }
 static uint64_t fl_height(void *c)
 {
     flaky *f = c;
     if (f->lost > 0) return f->lost--, 0;
-    return f->in.height(f->in.ctx);
+    const uint64_t h = f->in.height(f->in.ctx);
+    if (f->frozen && !f->at) f->at = h;
+    return f->frozen ? f->at : h;
+}
+static int fl_coin(void *c, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
+{
+    flaky *f = c;
+    return f->in.coin ? f->in.coin(f->in.ctx, txid, vout, spk, out) : -1;
 }
 
 /* ---- or a bitcoind on regtest (PZ_REGTEST=host:port:user:password): the same cases on a real node, through chain_rpc ---- */
@@ -356,7 +389,7 @@ static void p2pkh_of(const uint8_t sec[32], uint8_t spk[BTC_P2PKH_LEN])
     btc_script_p2pkh(h, spk);
 }
 
-enum { PAYOUT, CANCEL, NOTHING };     /* what the chain must show at the end */
+enum { PAYOUT, CANCEL, NOTHING, FIRST };   /* what the chain must show at the end (FIRST: the first transaction alone) */
 
 typedef struct {
     const char *name;
@@ -371,6 +404,9 @@ typedef struct {
     const char *bin[2];               /* the pzfirma of each home (NULL: the real one) */
     const char *why;                  /* in the reason of both homes, when not NULL */
     bool before_proofs;               /* the session stops before the proofs of possession */
+    bool scan_fails;                  /* the scan of the puzzle address fails: the prize of the network file is given */
+    bool frozen;                      /* the chain stops, and a wait gives up after a while of block_ms a block */
+    int block_ms;
 } tcase;
 
 /* a puzzle, its coin on the chain, two homes whose records meet on the same point; then the session of both */
@@ -454,8 +490,14 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
             CHECK(rpc_client(&rpcs[i]));
             crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = i && tc->fee ? tc->fee : g_fee[i]};
             chn[i].in = chain_rpc_iface(&crpc[i]);
-        } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate};
-        chn[i].lost = tc->lost_heights;
+        } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin};
+        chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0;
+        g->block_ms = tc->block_ms;
+        if (tc->scan_fails) {                                   /* the prize, as a line of the network file gives it */
+            payout_coin pc[64];
+            CHECK(chn[i].in.coins(chn[i].in.ctx, puzzle_spk, pc, 64) == 1);
+            g->prizes[0] = pc[0], g->nprizes = 1;
+        }
         g->chan = &chan[i];
         g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3, g->alive_ms = 1;
         /* each home its limit, in a file of the case */
@@ -475,7 +517,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
     }
     session_chain ifc[2];
     for (int i = 0; i < 2; i++) {
-        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate};
+        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin};
         h[i].cfg.chain = &ifc[i];
     }
     if (tc->fee) g_fee[1] = tc->fee;
@@ -510,6 +552,9 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         CHECK(h[F_home].res == SESSION_CANCELLED && h[S_home].res == SESSION_FAILED);
         CHECK(at_puzzle > 99900000 && pay[S_home] == 0);                           /* the prize is still under the joint key */
         CHECK(pay[F_home] > 0 && pay[F_home] < PAYOUT_TINY && !coin_left[F_home]);  /* F spent its tiny coin: the held transaction is void */
+    } else if (tc->expect == FIRST) {
+        CHECK(h[0].res == SESSION_FAILED && h[1].res == SESSION_FAILED);
+        CHECK(at_puzzle > 99900000 && at_puzzle < 100000000 && pay[0] == 0 && pay[1] == 0 && coin_left[0] && coin_left[1]);
     } else {
         CHECK(h[0].res == SESSION_FAILED && h[1].res == SESSION_FAILED);
         CHECK(at_puzzle == 100000000 && pay[0] == 0 && pay[1] == 0 && !coin_left[0] && !coin_left[1]);   /* nothing was signed */
@@ -564,7 +609,7 @@ static void run_copied(const char *bin)
     queue q[2] = {{.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}, {.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}};
     end e[2] = {{.in = &q[0], .out = &q[1]}, {.in = &q[1], .out = &q[0]}};
     session_chan chan = {&e[0], q_send, q_recv};
-    session_chain chn = {NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate};
+    session_chain chn = {NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin};
     session_cfg *g = &h.cfg;
     memset(g, 0, sizeof *g);
     g->ctx = ctx, g->net = &net, g->identity = &h.id, g->mine = mine, g->theirs = theirs;
@@ -637,6 +682,10 @@ int main(void)
         {.name = "limit of the network reached", .expect = NOTHING, .limit = {10, 0}, .why = "failed signings on this network"},
         {.name = "limit of the pair reached", .expect = NOTHING, .limit = {0, 3}, .why = "failed signings of this pair"},
         {.name = "a pzfirma that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1},
+        /* the scan fails (dust): the prize of the network file is paid all the same (before, no coin of the puzzle to spend) */
+        {.name = "the scan fails", .expect = PAYOUT, .scan_fails = true},
+        /* the chain stops after the first transaction: the wait for its block ends (before, never) */
+        {.name = "the chain stops", .expect = FIRST, .frozen = true, .block_ms = 10, .why = "not confirmed"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) run_case(&cases[i], bin, primes);
     run_copied(maker);

@@ -370,9 +370,9 @@ relays do not cut the channel as idle, and the reader skips it):
 
 1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
-   about the same pair. The fee rate is the higher of the two, refused above the home's limit and above the rate at which F's cancel
-   would leave less than 546 satoshis of its tiny coin (about 50 sat/vB: above it S could hold the second transaction back with nothing to
-   fear); the payout scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
+   about the same pair. The fee rate is the higher of the two (each the node's estimate for a confirmation within 2 blocks), refused above
+   the home's limit and above the rate at which F's cancel would leave less than 546 satoshis of its tiny coin (about 50 sat/vB: above
+   it S could hold the second transaction back with nothing to fear); the payout scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
    proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
@@ -395,7 +395,9 @@ relays do not cut the channel as idle, and the reader skips it):
    check failed (project 4.6); the `S_SIGNED` that follows stops the partner as well.
 6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
    address, and the transaction S may be holding is worth nothing. F also sends the second transaction itself when it got the whole
-   signature, and then does not cancel.
+   signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
+   (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the session ends instead of waiting for
+   ever, and F, then, tries its cancel.
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of F or of an eid> <failures>`: every run of pzfirma counts as failed
@@ -418,8 +420,9 @@ payout (half each, F's tiny coin back to F, S keeps its own; with a chain that l
 made by the session); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
 under the joint key; a partner F that stops, or sends garbage, in place of its last message, which gets nothing and cancels; a fee rate
 too high for the cancel, and the limit of failed signings, both refused before anything is signed; a partner that copied the x of a
-record and cannot prove it, for which no primes are made; a pzfirma that stops reading while the other floods it. The counts of the
-limit are checked in every case.
+record and cannot prove it, for which no primes are made; a pzfirma that stops reading while the other floods it; a scan of the puzzle
+address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
+The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
 for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are);
@@ -559,10 +562,13 @@ On the main chain:
 - When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
   would cancel at once.
 
-Not yet handled: a puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON
-reader, and no session starts. It would cost an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a
-prize. The prizes of the network file (`prize=txid:vout:sats`) can each be checked with `gettxout`, with no scan: the session does not
-use them yet.
+- A puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON reader: it would cost
+  an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a prize. So the session also takes the prizes of
+  the network file (`prize=txid:vout:sats`, at most 16; the txid as explorers show it), each checked with `gettxout` without the
+  mempool: unspent, confirmed (mature for a coinbase), of the puzzle's script, with the node's value; `sats` is not used. The largest 48
+  coins of the scan, when it works, and the prizes not among them make the coins of the first transaction. Two homes whose network files
+  list different prizes may build different transactions when the scan fails: the plan stops them, until their files agree.
+- Fee rates are asked for a confirmation within 2 blocks (project 4.5), the higher of the two homes' taken (7.5).
 
 ### 8.2 Without a node of one's own (to come)
 

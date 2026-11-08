@@ -29,6 +29,7 @@
 #define LIMIT_LINES 1024                    /* lines of the file of the limit: one per network, one per pair that failed */
 #define LIMIT_WAIT_S 120                    /* the longest wait for the turn of a signing (a partner waits 300 s for a message) */
 #define ALIVE_MS 60000                      /* S_ALIVE while waiting for blocks: an idle channel is cut by NATs and relays */
+#define BLOCK_MS (20 * 60000)               /* twice the mean time of a block: the measure of a wait when the chain stops */
 
 typedef struct {
     const session_cfg *c;
@@ -462,15 +463,6 @@ static void pause_ms(int ms)
     nanosleep(&ts, NULL);
 }
 
-/* the height of the tip, asked until the chain answers (0 is no answer): a wait measured from 0 would end at once */
-static uint64_t height_now(sess *s)
-{
-    const session_chain *ch = s->c->chain;
-    uint64_t h;
-    while (!(h = ch->height(ch->ctx))) pause_ms(s->c->poll_ms);
-    return h;
-}
-
 static int64_t now_ms(void)
 {
     struct timespec ts;
@@ -478,21 +470,42 @@ static int64_t now_ms(void)
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* waits until output vout of txid has at least `conf` confirmations (or, conf < 0, until it is spent), for at most `blocks` new blocks;
- * meanwhile an S_ALIVE now and then keeps the channel from being cut as idle (the partner may have closed it: that is no error) */
+/* Waits until output vout of txid has at least `conf` confirmations (or, conf < 0, until it is spent), for at most `blocks` new blocks
+ * counted from the first height the chain gives (0 is no answer: a wait counted from it would end at once), and at most (blocks + 6)
+ * times block_ms: a node that stops would keep the session for ever. Meanwhile an S_ALIVE now and then keeps the channel from being cut
+ * as idle (the partner may have closed it: that is no error). */
 static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, uint64_t blocks)
 {
     const session_chain *ch = s->c->chain;
-    const uint64_t until = height_now(s) + blocks;
     const int every = s->c->alive_ms > 0 ? s->c->alive_ms : ALIVE_MS;
+    const int64_t end = now_ms() + (int64_t)(blocks + 6) * (s->c->block_ms > 0 ? s->c->block_ms : BLOCK_MS);
     int64_t alive = now_ms() + every;
+    uint64_t until = 0;
     for (;;) {
+        const uint64_t h = ch->height(ch->ctx);
+        if (h && !until) until = h + blocks;
         const int k = ch->confirmations(ch->ctx, txid, vout);   /* -2: the chain did not answer, which says nothing */
         if (k != -2 && (conf < 0 ? k == -1 : k >= conf)) return true;
-        if (ch->height(ch->ctx) >= until) return false;
+        if ((until && h >= until) || now_ms() >= end) return false;
         if (now_ms() >= alive) (void)send_msg(s, S_ALIVE, NULL, 0), alive = now_ms() + every;
         pause_ms(s->c->poll_ms);
     }
+}
+
+/* The coins of the puzzle: the largest of a scan of its address, and the prizes of the network file (project 4.4). A scan can fail:
+ * thousands of coins of dust sent to the address make the node's answer too long to read, and the prizes are still found one by one. */
+static int puzzle_coins(sess *s, payout_coin coins[64])
+{
+    const session_chain *ch = s->c->chain;
+    int n = ch->coins(ch->ctx, s->t.puzzle_spk, coins, 64 - SESSION_PRIZES_MAX);
+    if (n < 0) n = 0;
+    for (int i = 0; i < s->c->nprizes && i < SESSION_PRIZES_MAX && ch->coin; i++) {
+        const payout_coin *p = &s->c->prizes[i];
+        bool have = false;
+        for (int j = 0; j < n && !have; j++) have = !memcmp(coins[j].txid, p->txid, 32) && coins[j].vout == p->vout;
+        if (!have && ch->coin(ch->ctx, p->txid, p->vout, s->t.puzzle_spk, &coins[n]) == 1) n++;
+    }
+    return n;
 }
 
 session_result session_run(const session_cfg *c, char *why, size_t whylen)
@@ -504,9 +517,9 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     const session_chain *ch = c->chain;
     /* the first transaction: the coins of the puzzle back to its address, and the tiny coins */
     payout_coin coins[64];
-    const int nc = ch->coins(ch->ctx, s.t.puzzle_spk, coins, 64);
     btc_tx a, b, x;
     size_t used;
+    const int nc = puzzle_coins(&s, coins);
     if (nc <= 0 || !payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "no coin of the puzzle to spend"), SESSION_FAILED;
     if (!limit_ok(&s) || !plan(&s, &a)) return SESSION_FAILED;
     if (access(c->primes, R_OK) != 0 && !signer_primes(c->pzfirma, c->primes)) return fail(&s, "pzfirma could not make its primes"), SESSION_FAILED;

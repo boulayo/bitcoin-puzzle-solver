@@ -80,6 +80,8 @@ typedef struct {
     int ended;                      /* sessions that ended, and how: for exit_when_done */
     bool paid;
     session_limit limit;            /* the failed signings, counted in the home folder */
+    payout_coin prizes[SESSION_PRIZES_MAX];   /* the prize= lines of the network file */
+    int nprizes;
     char limitpath[1200];
 } home;
 
@@ -309,7 +311,7 @@ static void *session_main(void *arg)
             snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
             goto done;
         }
-        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 6, .fallback_feerate = 2000};
+        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};   /* within 2 blocks (project 4.5) */
         if (chain_rpc_ready(&crpc, why, sizeof why) != 1) {   /* a node that is behind would report coins that are not those of the chain */
             btc_rpc_done(&rpc);
             goto done;
@@ -320,6 +322,7 @@ static void *session_main(void *arg)
                           .chan = &chan, .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
         memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
         memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
+        memcpy(sc.prizes, h->prizes, sizeof sc.prizes), sc.nprizes = h->nprizes;
         const uint32_t n = (uint32_t)s->eid[0] << 24 | (uint32_t)s->eid[1] << 16 | (uint32_t)s->eid[2] << 8 | s->eid[3];
         if (!own_distance(h, s->mine.x, s->mine.t, sc.d) || !keys_coin(h->ctx, h->seed, h->nf.fp, n, sc.coin_sec))
             snprintf(why, sizeof why, "the distance of the own point is not in dp.bin");
@@ -490,6 +493,19 @@ int home_run(const home_cfg *cfg)
         p += l + (e != NULL);
     }
     for (int i = 0; i < cfg->npeers && nb < 64; i++) boot[nb++] = cfg->peers[i];
+    /* the prizes, prize=txid:vout:sats (the txid as explorers show it; the value is the node's): a session finds them even when the
+     * scan of the puzzle address fails (session.c) */
+    for (const char *p = h->nf.upd; *p;) {
+        const char *e = strchr(p, '\n');
+        const size_t l = e ? (size_t)(e - p) : strlen(p);
+        char tx[65];
+        unsigned vout;
+        unsigned long long sats;
+        if (!strncmp(p, "prize=", 6) && h->nprizes < SESSION_PRIZES_MAX && sscanf(p, "prize=%64[0-9a-fA-F]:%u:%llu", tx, &vout, &sats) == 3 &&
+            btc_hash_from_hex(tx, h->prizes[h->nprizes].txid))
+            h->prizes[h->nprizes++].vout = vout;
+        p += l + (e != NULL);
+    }
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", cfg->dir);
     mkdir(nodedir, 0700);

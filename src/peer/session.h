@@ -32,7 +32,12 @@ typedef struct {
     int (*confirmations)(void *ctx, const uint8_t txid[32], uint32_t vout);
     uint64_t (*height)(void *ctx);
     uint64_t (*feerate)(void *ctx);         /* satoshis per 1000 virtual bytes for a confirmation within a few blocks */
+    /* one output of a P2PKH script (a prize of the network file): 1 when it is confirmed, unspent and spendable, with its value in out;
+     * 0 when it is not; -1 when the chain cannot be asked. NULL: not offered */
+    int (*coin)(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out);
 } session_chain;
+
+#define SESSION_PRIZES_MAX 16
 
 /* The limit of failed signings of a home (docs/en/NETWORK.md 7.5, project 4.6). A bug of the two-party signer could leak a bit of a piece
  * through each signing that fails, so every run of pzfirma counts as failed, in a file, before it starts, and is taken off once it gave valid
@@ -59,6 +64,8 @@ typedef struct {
     uint8_t pay_spk[BTC_SPK_MAX];           /* the payout address of this home */
     size_t pay_len;
     uint64_t max_feerate;                   /* the highest fee rate this home accepts (satoshis per 1000 virtual bytes) */
+    payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
+    int nprizes;
     const char *pzfirma, *primes;           /* the signer and the primes file of this session (made by the session when it is missing) */
     session_limit *limit;                   /* NULL: no limit (tests) */
     bool *proved;                           /* set when the partner has proved its distance (NULL: not wanted) */
@@ -67,6 +74,7 @@ typedef struct {
     int timeout_ms;                         /* the longest wait for one message of the partner */
     int poll_ms;                            /* how often the chain is asked while waiting for a block */
     int alive_ms;                           /* how often S_ALIVE goes to the partner while waiting for a block (0: every minute) */
+    int block_ms;                           /* a wait for n blocks gives up after (n + 6) times this, if the chain stops (0: 20 minutes) */
     int cancel_blocks;                      /* the blocks F waits for the second transaction before it cancels (3) */
     bool withhold;                          /* tests only: as S, do not send the second transaction (the test channel also drops S's last message) */
 } session_cfg;
