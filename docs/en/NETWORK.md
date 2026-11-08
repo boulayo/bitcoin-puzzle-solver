@@ -120,7 +120,9 @@ immutable part refuses the file. `puzzle=0` is a target of its own (tests); `dpb
   out (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
   of the network.
 - `dp.bin` is the usual log of the campaign. pzpeer reads it.
-- `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network (section 9).
+- `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network. On the curve, W = 2^40, 3000 trials each, one thread:
+  schema 3 1.061 ± 0.011, rete-06 1.182 ± 0.012 steps per √W: rete-06 costs 11.4 % more, as the simulator predicted (+11 %), the price
+  of the schema that makes a theft pay only above 51 % of the power of the network (project 2.3).
 
 ## 7. pzpeer
 
