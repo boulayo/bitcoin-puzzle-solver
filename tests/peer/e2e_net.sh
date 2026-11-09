@@ -5,7 +5,9 @@
 # puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, half each,
 # read back from the node. With three equal homes two coincidences in three are between homes; a home that finds the key on its own
 # first (its own walkers meet too) starts a new try with a new puzzle, up to 6.
-# Usage: PZ_REGTEST=host:port:user:password tests/peer/e2e_net.sh    (build/pzsolve, build/pzpeer and build/pzsign built)
+# With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
+# bitcoind) and check every answer themselves (chain_spv.c).
+# Usage: PZ_REGTEST=host:port:user:password [PZ_E2E_LIGHT=1] tests/peer/e2e_net.sh    (build/pzsolve, build/pzpeer and build/pzsign built)
 set -u
 IFS=: read -r RH RP RU RW <<< "${PZ_REGTEST:?set PZ_REGTEST=host:port:user:password of a bitcoind in regtest}"
 BIN=$(pwd)/build
@@ -22,6 +24,14 @@ MINE=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"')
 case $MINE in ERROR*|"") echo "E2E NET FAILED: the node gives no address: $MINE"; exit 1;; esac
 rpc generatetoaddress "[101, \"$MINE\"]" >/dev/null
 ( while sleep 1; do rpc generatetoaddress "[1, \"$MINE\"]" >/dev/null; done ) &
+
+CHAIN=(--rpc "$PZ_REGTEST")
+if [ -n "${PZ_E2E_LIGHT:-}" ]; then
+    EP=$((${PZ_E2E_PORT:-30000} + 900))
+    for i in 0 1; do python3 tests/peer/electrum_bridge.py $((EP + i)) "$PZ_REGTEST" > "$DIR/bridge$i.log" 2>&1 & done
+    CHAIN=(--electrum 127.0.0.1:$EP --electrum 127.0.0.1:$((EP + 1)))
+    sleep 1
+fi
 
 python3 -c "import os; print(os.urandom(32).hex())" > "$DIR/maint.key"
 for try in 1 2 3 4 5 6; do
@@ -50,7 +60,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     port=$PORT
     for h in a b c; do
         port=$((port + 1))
-        timeout 600 "$BIN/pzpeer" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" --rpc "$PZ_REGTEST" --listen $port \
+        timeout 600 "$BIN/pzpeer" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" --listen $port \
             --pzsolve "$BIN/pzsolve" --pzsign "$BIN/pzsign" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
     done

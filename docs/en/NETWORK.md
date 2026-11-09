@@ -57,6 +57,9 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `payout.c` | the transactions of the pair: the first, the second, the cancel |
 | `session.c` | the session of a coincidence, from the hello to the payout (section 7.5) |
 | `chain_rpc.c` | the chain of a session on bitcoind |
+| `spv.c` | block headers checked by their proof of work, Merkle branches |
+| `electrum.c` | a client of the Electrum protocol (plain TCP) |
+| `chain_spv.c` | the chain of a session without a node: several Electrum servers, every answer proven |
 | `home.c` | the daemon of a home: seed and keys, pzsolve, the feed of `dp.bin`, a session for every useful coincidence |
 | `main.c` | the commands |
 
@@ -157,7 +160,8 @@ dpbits=30
 chain=main                   # main, test, signet or regtest
 ```
 
-The updatable part (`prize=txid:vout:sats`, one per line; `feecap=sats`; `entry=host:port`, one per line; `minversion=`) and the
+The updatable part (`prize=txid:vout:sats`, one per line; `feecap=sats`; `entry=host:port`, one per line; `minversion=`; `electrum=host:port`, one per
+line, and `checkpoint=HEIGHT:HASH`, section 8.2) and the
 signatures (`sig=<xonly pubkey hex>:<bip340 sig hex>`, over `SHA256("pznet1/sig" || F || canonical updatable lines)`). A file is
 accepted when it has valid signatures from a threshold of the maintainer keys compiled into pzpeer; tests set their own keys with
 `PZNET_TRUST=hexkey,...` and `PZNET_THRESHOLD=n`.
@@ -570,34 +574,42 @@ On the main chain:
   list different prizes may build different transactions when the scan fails: the plan stops them, until their files agree.
 - Fee rates are asked for a confirmation within 2 blocks (project 4.5), the higher of the two homes' taken (7.5).
 
-### 8.2 Without a node of one's own (to come)
+### 8.2 Without a node of one's own
 
-The light verification of project 4.4: the coins come from several servers, and nothing they say is believed without a proof. The
-shortest sound design is on the Electrum protocol, which the servers of most wallets speak; plain TCP is enough, as every answer is
-proven (and TLS would be a new dependency).
+`pzpeer run` without `--rpc` reads the chain from Electrum servers: the `electrum=host:port` lines of the network file and those of
+`--electrum HOST:PORT`, 8 at most. None is trusted: nothing a server says is believed without a proof, and what a lying server can
+still do is hide things, which is a delay and never a wrong payment. The connection is plain TCP, one JSON object a line; as every
+answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
+client) and `chain_spv.c`, a second `session_chain` beside `chain_rpc.c`; a node of one's own stays the stronger choice, as it also
+checks the rules that the proof of work alone does not (below).
 
-1. **Headers.** A checkpoint (the height and hash of a block, a line of the signed network file), and every header after it from 3 or
-   more servers chosen at random among the `electrum=` lines of the file and those of the user. Each header is checked: the hash of the
-   one before, its proof of work below its target, the target of every 2016 blocks, its time above the median of the 11 before. The
-   valid chain with the most work is kept on disk, 80 bytes a block; a server that sends an invalid header is dropped. It is also the
-   clock of the session: the blocks F waits count on it, and no server can make them come faster without the work.
+1. **Headers.** They start from a checkpoint, `checkpoint=HEIGHT:HASH` of the signed network file (the hash as explorers show it; on
+   the main chain it is required and its height is a multiple of 2016; another chain may start from its first block). Every header
+   after it is asked of every server and checked: the hash of the one before, its proof of work below its target, on the main chain
+   the target of every 2016 blocks, its time above the median of the 11 before and no more than two hours ahead. Of a batch with an
+   invalid header the valid ones before it are kept. A branch replaces the kept one only with more work. The chain is kept in
+   `headers.bin` of the home's folder, 80 bytes a block, and is the clock of the session: the blocks F waits count on it, and no
+   server can make them come faster without the work. A chain whose last block is more than six hours old is not ready (regtest:
+   any), and a session waits.
 2. **Coins.** `blockchain.scripthash.listunspent` of the puzzle address from each server, and the union of what they list. For each
-   coin, the transaction that made it (`blockchain.transaction.get`), whose hash must be its txid (`btc_prevout`: its value and its
-   script), and its Merkle branch (`blockchain.transaction.get_merkle`) to the header of its height in the kept chain: then it is
-   confirmed, as deep as that header. A "transaction" of 64 bytes is refused, as it could be an inner node of the tree passed off
-   as a leaf (CVE-2017-12842).
-3. What a lying server can still do: hide a coin, which is taken later by another session, or list a coin already spent, which makes
-   the first transaction invalid: it is refused, and the session starts again with other servers. The two homes compare the hash of
-   the first transaction as they do now, so different views stop the session before any signing.
-4. **Our transactions** go to every server, and are confirmed when a Merkle branch of their txid links to the kept chain. For the wait
-   of F, the prize has moved only when a transaction that spends it is confirmed that way (the second, or the same with another
-   encoding of a signature): a server that just stops listing the prize proves nothing, and the partner could run it. Servers that
-   hide a confirmed second transaction only make F send a cancel that is invalid, its coin being spent already.
-5. **Fee rate:** the median of `blockchain.estimatefee` of the servers, under the cap of the file.
+   coin, the transaction that made it (`blockchain.transaction.get`), whose hash must be its txid, and its Merkle branch
+   (`blockchain.transaction.get_merkle`) to the header of its height in the kept chain: then it is confirmed, as deep as that header.
+   A "transaction" of 64 bytes is refused, as it could be an inner node of the tree passed off as a leaf (CVE-2017-12842).
+3. **Spent** is proven too. A coin a server lists is dropped only when another shows the transaction that spends it, confirmed with
+   its branch. For the wait of F and the confirmations of our own transactions, an output is spent when such a transaction is
+   confirmed or, while it waits in the mempool, when all its inputs are outputs of the transaction asked about and every signature is
+   valid: a server that just stops listing the prize proves nothing, and the partner could run it.
+4. **Our transactions** go to every server; the broadcast holds when a server then serves the transaction back.
+5. **Fee rate:** the median of `blockchain.estimatefee` of the servers that answer, under the cap of the file.
 
-The code: the headers and their rules (a few hundred lines), the Merkle branch (twenty), a client of the Electrum JSON-RPC over TCP (one
-JSON object per line: simpler than `btc_rpc.c`), and `chain_electrum.c`, a second `session_chain` beside `chain_rpc.c`. The main chain
-first: the minimum difficulty of testnet and the signed blocks of signet are more rules for little use.
+What it does not check: that the transactions of a block are valid. A coin that does not exist needs a block with real work that
+holds an invalid transaction: on the main chain that costs a block's reward for each block, and it only makes the two homes sign a
+first transaction the network refuses. On testnet and signet only the proof of work against the header's own target is checked
+(their rules of minimum difficulty and of signed blocks are not): good for tests, not for money.
+
+`t_spv` checks the rules on real headers of the main chain; `t_chain_spv` runs the sessions' calls against servers that hide a coin,
+list a spent one, give false proofs, add blocks without work, drop a broadcast or do not see the mempool; `PZ_E2E_LIGHT=1
+tests/peer/e2e_net.sh` pays a coincidence with three homes that have no node. Not tried yet against a public server.
 
 ## 9. Status
 
@@ -614,11 +626,12 @@ in `t_session` with `PZ_REGTEST`.
 | pzcore: ChaCha20-Poly1305, the generator of the home seed (section 4.1) | done (`t_aead`: RFC 8439 vectors; `t_seed`); the GPU source of the seed to come |
 | `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; POSIX only (the Windows shim is to come); what a public network still needs is in 7.8 |
-| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node); the light verification of section 8.2 to come |
+| `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node) |
+| `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
-| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the light verification of the chain without a node of one's own (project 4.4, section 8.2); the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
+| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
 
 ## 10. A test network on one machine
 

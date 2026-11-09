@@ -16,26 +16,27 @@ Il file di una rete vale solo se è firmato da una soglia di chiavi scritte dent
 - **Consiglio:** 2 di 3, con almeno una chiave tenuta scollegata da Internet. Con una sola chiave, chi la ruba può pubblicare una rete falsa.
 - **Blocca:** tutto ciò che non è prova.
 
-### A2. Nodi d'ingresso
-- **Da decidere:** se affittare 2 o 3 piccoli server (pochi euro al mese l'uno) che fanno da primo contatto e da custodi.
-- **Consiglio:** sì, su fornitori e paesi diversi. Senza, la rete dipende dal fatto che qualche partecipante sia raggiungibile.
-- **Blocca:** la prova pubblica.
+### A2. Nodi d'ingresso: deciso, nessun server tuo
+Hai deciso di non avere server tuoi per il primo contatto. La rete funziona lo stesso se si verificano due cose: i nodi si trovano attraverso la rete BitTorrent (A3) e almeno qualche partecipante è raggiungibile dall'esterno (A4, o chi ha già un server).
 
-### A3. Trovarsi attraverso la rete BitTorrent
-- **Da decidere:** se scrivere la ricerca dei nodi sulla tabella distribuita di BitTorrent (circa 600 righe in pzpeer, nessuna libreria esterna).
-- **Pro:** chi scarica il programma trova la rete anche se i nostri server sono spenti.
-- **Contro:** codice in più da mantenere; in alcune reti aziendali è bloccata.
-- **Consiglio:** sì, insieme ad A2.
+- **Resta da sapere:** finché la rete è piccola, chi entra per primo non trova nessuno. È normale: basta che i primi due o tre partecipanti raggiungibili restino accesi.
 
-### A4. Apertura automatica della porta del router (UPnP)
-- **Da decidere:** se scriverla. Va provata su router veri, che io non ho: servirebbero prove tue o di volontari.
-- **Consiglio:** sì, ma dopo A2 e A3. Più case raggiungibili vuol dire più custodi.
+### A3. Trovarsi attraverso la rete BitTorrent: deciso, da scrivere
+Con la decisione A2 non è più una scelta: è l'unico modo di trovarsi senza server. È il prossimo lavoro.
 
-### A5. Revisione esterna del firmatore
-È il rischio tecnico più grave (ipotesi I4 del progetto): un errore nella firma a due può far perdere il premio.
+- **Limite:** in alcune reti aziendali BitTorrent è bloccato. Lì serve indicare a mano un nodo conosciuto (`--peer`).
 
-- **Da decidere:** se pagare una revisione di `signer/` e dell'uso che fa di cggmp21 prima di usare bitcoin veri.
-- **Consiglio:** sì prima del #140. Per le prove su reti di test non serve.
+### A4. Apertura automatica della porta del router (UPnP): deciso, da scrivere
+Senza server nostri servono più case raggiungibili, quindi va fatta. Va provata su router veri, che io non ho.
+
+- **Da fare tu:** quando è pronta, provarla sul tuo router con il comando che ti darò.
+- **È pericoloso avere la porta aperta?** Su quella porta risponde solo pzpeer. Ogni messaggio è cifrato, firmato e limitato in dimensione e frequenza, e il programma è provato con dati casuali e ostili. Il rischio che resta è quello di qualunque programma raggiungibile da Internet: un errore non ancora scoperto. Chi non vuole correrlo partecipa lo stesso senza aprire nulla (cerca, pubblica e firma attraverso il relay); solo non fa da custode.
+
+### A5. Revisione del firmatore: la faccio io, con un limite
+Mi hai chiesto di controllare io la libreria della firma a due. Lo faccio: leggo come `signer/` usa cggmp21 e provo un partner che bara in tutti i modi che riesco a costruire.
+
+- **Limite da conoscere:** una mia revisione abbassa il rischio, non lo azzera. La libreria è lunga e matematicamente delicata; i suoi difetti passati sono stati trovati da gruppi specializzati dopo mesi. Con premi di questa grandezza, una revisione esterna prima del #140 resta consigliabile.
+- **Da decidere:** se farla comunque più avanti, prima di usare bitcoin veri.
 
 ### A6. Quale libreria per la firma
 - **Scelte:**
@@ -44,11 +45,11 @@ Il file di una rete vale solo se è firmato da una soglia di chiavi scritte dent
   3. valutare DKLs23: niente numeri primi (oggi 20–45 secondi per sessione), messaggi molto più piccoli; va verificata la licenza e la maturità delle librerie disponibili.
 - **Consiglio:** 1 per le prove; decidere fra 2 e 3 insieme a chi fa la revisione (A5).
 
-### A7. Serve un nodo Bitcoin proprio?
-Oggi sì (anche potato, bastano pochi GB).
+### A7. Nodo Bitcoin proprio: deciso, non serve
+Fatto. Senza `--rpc`, pzpeer legge la catena da più server Electrum pubblici e non si fida di nessuno: ogni blocco deve avere il suo lavoro, ogni moneta la sua prova. Un server bugiardo può solo far perdere tempo. Chi ha un nodo proprio lo usa con `--rpc` ed è più protetto.
 
-- **Da decidere:** se accettarlo per la prima versione o aspettare la verifica leggera (senza nodo, con più server Electrum e prove verificate; il disegno è in NETWORK.md 8.2).
-- **Consiglio:** prima versione con il nodo; verifica leggera dopo.
+- **Da decidere:** quali server Electrum mettere nel file della rete (ne servono almeno 3 o 4, di gestori diversi, che accettino connessioni senza cifratura), e quale blocco usare come punto di partenza (`checkpoint=`).
+- **Da fare tu:** una prova con un server pubblico vero, che da qui non posso raggiungere. Ti do il comando.
 
 ---
 

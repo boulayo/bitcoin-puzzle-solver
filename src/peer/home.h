@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* home.h - the daemon of a home (pzpeer run, docs/en/NETWORK.md 7): the home seed and the keys, pzsolve on the network with the start key,
  * the points of its dp.bin published, a node of the table that keeps the records of others, and a session for every useful coincidence,
- * paid through bitcoind. */
+ * paid through a bitcoind of its own or, without one, through Electrum servers whose answers are checked (chain_spv.h). */
 #ifndef PZPEER_HOME_H
 #define PZPEER_HOME_H
 
@@ -15,6 +15,8 @@ typedef struct {
     const char *payout;             /* the payout address of this home */
     const char *rpc;                /* bitcoind: host:port:user:password, or host:port with rpc_cookie (btc_rpc_init_arg) */
     const char *rpc_cookie;         /* the cookie file of bitcoind, or NULL */
+    const char *const *electrum;    /* without rpc: Electrum servers host:port, besides the electrum lines of the network file (chain_spv.h) */
+    int nelectrum;
     const char *listen_host;        /* NULL: every address */
     int listen_port;                /* 0: do not listen (dial out only) */
     const char *const *peers;       /* host:port, besides the entry lines of the network file */

@@ -17,7 +17,7 @@
 #define MAX_LINES    96
 
 static const char *const IMMUTABLE[] = {"net", "puzzle", "pubkey", "range", "jumpseed", "schema", "dpbits", "chain"};
-static const char *const UPDATABLE[] = {"prize", "feecap", "entry", "minversion"};
+static const char *const UPDATABLE[] = {"prize", "feecap", "entry", "minversion", "electrum", "checkpoint"};
 #define NIMM (sizeof IMMUTABLE / sizeof *IMMUTABLE)
 
 static int key_index(const char *k, const char *const *list, size_t n)

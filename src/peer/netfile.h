@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #define NETFILE_MAX_SIGS 8
-#define NETFILE_UPD_MAX 4096     /* the canonical updatable lines: prizes, entry nodes, fee cap, minimum version */
+#define NETFILE_UPD_MAX 4096     /* the canonical updatable lines: prizes, entry nodes, fee cap, minimum version, Electrum servers, checkpoint */
 
 typedef struct {
     /* the immutable part */

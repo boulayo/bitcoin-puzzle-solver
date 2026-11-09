@@ -15,6 +15,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   the other home a two-party ECDSA signing (cggmp21) and the two-step payout, half each, through bitcoind. Test networks only for now:
   no maintainer keys are compiled in. Homes behind a router reach each other through a relay; the node of the home can be pruned and
   is reached with its cookie file (`--rpc-cookie`).
+- pzpeer needs no Bitcoin node of one's own: without `--rpc` it reads the chain from several Electrum servers (`--electrum HOST:PORT`
+  and the `electrum=` lines of the network file) and trusts none. Block headers count only with their proof of work from the
+  `checkpoint=` of the network file, a coin only with its transaction and Merkle proof, a spend only when proven: a lying server can
+  delay a payout, never misdirect it. A node of one's own stays the stronger choice.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08

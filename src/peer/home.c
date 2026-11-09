@@ -10,6 +10,7 @@
  * slots of the pairs the table alerted. */
 #include "home.h"
 #include "chain_rpc.h"
+#include "chain_spv.h"
 #include "dht.h"
 #include "dpfeed.h"
 #include "keys.h"
@@ -68,6 +69,8 @@ typedef struct {
     uint8_t base[32], seed[32], pay_spk[BTC_SPK_MAX];
     size_t pay_len;
     btc_chain chain;
+    chain_spv spv;                  /* the chain without a node of one's own (no --rpc); its headers are shared by the sessions */
+    char hdrpath[4200];
     home_identity id;
     dht *d;
     char dpbin[1200], logpath[1200];
@@ -306,17 +309,18 @@ static void *session_main(void *arg)
         conn_chan cc = {c, c == s->conn ? s->first : NULL, s->first_len, 0};
         pthread_mutex_unlock(&h->mu);
         session_chan chan = {&cc, cc_send, cc_recv};
-        btc_rpc rpc;
-        if (!btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) {
+        btc_rpc rpc = {0};
+        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};   /* within 2 blocks (project 4.5) */
+        if (cfg->rpc && !btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) {
             snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
             goto done;
         }
-        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};   /* within 2 blocks (project 4.5) */
-        if (chain_rpc_ready(&crpc, why, sizeof why) != 1) {   /* a node that is behind would report coins that are not those of the chain */
-            btc_rpc_done(&rpc);
+        /* a chain that is behind would report coins that are not those of the chain */
+        if ((cfg->rpc ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&h->spv, why, sizeof why)) != 1) {
+            if (cfg->rpc) btc_rpc_done(&rpc);
             goto done;
         }
-        const session_chain chain = chain_rpc_iface(&crpc);
+        const session_chain chain = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                           .max_feerate = 200000, .pzsign = cfg->pzsign, .primes = primes, .limit = &h->limit, .proved = &proved,
                           .chan = &chan, .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
@@ -328,7 +332,7 @@ static void *session_main(void *arg)
             snprintf(why, sizeof why, "the distance of the own point is not in dp.bin");
         else res = session_run(&sc, why, sizeof why);
         pz_secure_zero(&sc, sizeof sc);
-        btc_rpc_done(&rpc);
+        if (cfg->rpc) btc_rpc_done(&rpc);
     }
 done:
     remove(primes);                                             /* the Paillier key of this session: a secret, of no use after it */
@@ -431,6 +435,39 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 
 /* ---- the run ---- */
 
+/* The chain without a node: the Electrum servers of the network file and of the command line, the headers from the checkpoint of the file
+ * (checkpoint=HEIGHT:HASH, the hash as explorers show it; a chain other than the main one may start from its first block). */
+static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
+{
+    static char servers[CHAIN_SPV_SERVERS][256];
+    const char *list[CHAIN_SPV_SERVERS];
+    uint8_t cp[32];
+    unsigned long long cph = 0;
+    bool has_cp = false;
+    int n = 0;
+    for (int i = 0; i < cfg->nelectrum && n < CHAIN_SPV_SERVERS; i++) list[n++] = cfg->electrum[i];
+    for (const char *p = h->nf.upd; *p;) {
+        const char *e = strchr(p, '\n');
+        const size_t l = e ? (size_t)(e - p) : strlen(p);
+        char hex[65];
+        if (l > 9 && l - 9 < sizeof servers[0] && !strncmp(p, "electrum=", 9) && n < CHAIN_SPV_SERVERS)
+            memcpy(servers[n], p + 9, l - 9), servers[n][l - 9] = 0, list[n] = servers[n], n++;
+        else if (!strncmp(p, "checkpoint=", 11) && sscanf(p, "checkpoint=%llu:%64[0-9a-fA-F]", &cph, hex) == 2 && btc_hash_from_hex(hex, cp))
+            has_cp = true;                                      /* of several, the last */
+        p += l + (e != NULL);
+    }
+    if (!n) return snprintf(err, cap, "no chain: give --rpc (a bitcoind of your own) or --electrum HOST:PORT (public servers, checked)"), false;
+    if (!has_cp && h->chain == BTC_MAIN) return snprintf(err, cap, "the network file gives no checkpoint for the headers: use --rpc"), false;
+    snprintf(h->hdrpath, sizeof h->hdrpath, "%s/headers.bin", cfg->dir);
+    if (!chain_spv_init(&h->spv, h->chain, has_cp ? cph : 0, has_cp ? cp : NULL, list, n, h->hdrpath))
+        return snprintf(err, cap, "the checkpoint of the network file is not a block of the chain to start from"), false;
+    h->spv.fallback_feerate = 2000;
+    if (h->chain != BTC_REGTEST) h->spv.max_tip_age = 6 * 3600;   /* six hours without a block: the servers are behind, or lie */
+    const int ready = chain_spv_ready(&h->spv, err, cap);
+    say(h, "chain: %d Electrum server%s, %s%s", n, n == 1 ? "" : "s", err, ready ? "" : " (a session waits for it)");
+    return true;
+}
+
 int home_run(const home_cfg *cfg)
 {
     static home hs;
@@ -469,7 +506,7 @@ int home_run(const home_cfg *cfg)
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;
     h->pay_len = cfg->payout ? btc_address_script(h->chain, cfg->payout, h->pay_spk) : 0;
     if (!h->pay_len) return fprintf(stderr, "--payout: not an address of the %s chain\n", h->nf.chain), 1;
-    {                                                           /* the node: a wrong --rpc or chain now, not at the first session */
+    if (cfg->rpc) {                                             /* the node: a wrong --rpc or chain now, not at the first session */
         btc_rpc rpc;
         chain_rpc crpc = {.rpc = &rpc, .chain = h->chain};
         int ready = 0;
@@ -479,7 +516,7 @@ int home_run(const home_cfg *cfg)
         btc_rpc_done(&rpc);
         if (ready < 0) return fprintf(stderr, "bitcoind: %s\n", err), 1;
         say(h, "bitcoind: %s%s", err, ready ? "" : " (a session waits for it)");
-    }
+    } else if (!light_chain(h, cfg, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!home_seed(h, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!keys_identity(h->ctx, h->seed, h->nf.fp, cfg->id_bits, &h->id)) return fprintf(stderr, "no identity\n"), 1;
     /* the table: the entry lines of the file and the peers given */
@@ -589,6 +626,7 @@ int home_run(const home_cfg *cfg)
         dht_stop(h->d);
         dpfeed_close(&df);
         if (h->dpr) fclose(h->dpr);
+        if (!cfg->rpc) chain_spv_free(&h->spv);
         pz_secure_zero(h->seed, sizeof h->seed);
         pz_secure_zero(&h->id, sizeof h->id);
         secp256k1_context_destroy(h->ctx);

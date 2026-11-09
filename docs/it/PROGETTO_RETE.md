@@ -82,6 +82,7 @@ Tutto il codice è nel ramo `rete-condivisa`. Niente è stato rilasciato.
 | sessione completa, compreso il partner che trattiene la firma | in memoria e su regtest |
 | rete intera: un custode e tre case su una macchina | premio diviso 0,49999366 e 0,49989366 BTC, indirizzo del puzzle vuoto |
 | nodo Bitcoin potato, file cookie, nodo non sincronizzato | test |
+| nessun nodo Bitcoin proprio: catena letta da più server Electrum, ogni risposta verificata (server che nascondono, mentono, danno prove false) | test e prova completa con tre case |
 | firme dei manutentori sul file della rete | test |
 
 Controlli generali: tutti i test passano anche con AddressSanitizer, UBSan e ThreadSanitizer; un fuzzer ha provato 26 milioni di ingressi malformati sui lettori di dati senza trovare errori.
@@ -113,9 +114,8 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | Manca | Effetto |
 |---|---|
 | chiavi dei manutentori nel programma | oggi girano solo reti di prova |
-| primo contatto senza server nostri (rete BitTorrent) e apertura della porta del router (UPnP) | servono nodi d'ingresso, vedi 6.2 |
+| primo contatto senza server nostri (rete BitTorrent) e apertura della porta del router (UPnP) | chi entra deve indicare a mano un nodo conosciuto, vedi 6.2 |
 | pzpeer per Windows e macOS | oggi solo Linux |
-| verifica della blockchain senza un nodo proprio | oggi serve bitcoind |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
 | sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
@@ -138,6 +138,7 @@ Sono le cose su cui il progetto si regge e che non ho potuto dimostrare. Se una 
 | I5 | La vulnerabilità CVE-2025-66017 di cggmp21 non ci riguarda perché non usiamo prefirme | lo dice l'avviso pubblico; non l'ho verificato sul codice della libreria |
 | I6 | Il computer di casa non è compromesso | chi legge il seme o `dp.bin` ha le distanze: perde quella casa |
 | I7 | Il proprio nodo Bitcoin dice il vero | un nodo bugiardo può far firmare una transazione su monete inesistenti: perdita di tempo, non del premio |
+| I7b | Senza nodo proprio: almeno uno dei server Electrum usati è onesto e raggiungibile, e nessuno spende il lavoro di interi blocchi per ingannare | se tutti mentono o tacciono la sessione aspetta o fallisce: ritardo, non furto. Un blocco falso con lavoro vero costa quanto il premio di un blocco |
 | I8 | Gli orologi delle case differiscono di pochi secondi | il relay non fa incontrare le due case; la sessione riprova |
 | I9 | Nella rete c'è sempre almeno qualche nodo raggiungibile da fuori | senza, nessuno custodisce i punti e la rete non funziona |
 | I10 | Una GPU fa 5–10 miliardi di passi al secondo con pzsolve | i tempi di 5.3 si allungano in proporzione. Misurato: 0,92 miliardi su una A2000 portatile |
@@ -194,7 +195,7 @@ L'elettricità totale non dipende dal numero di partecipanti: 12–25 GWh per il
 |---|---|---|
 | chi garantisce il file della rete | una chiave data con una variabile d'ambiente | chiavi dei manutentori dentro il programma |
 | catena | regtest | Bitcoin vero |
-| primo contatto | indirizzi dati a mano | nodi d'ingresso, rete BitTorrent |
+| primo contatto | indirizzi dati a mano | rete BitTorrent, nessun server nostro |
 | indirizzi privati | ammessi | rifiutati |
 | identità dei nodi | costo ridotto | costo pieno (qualche secondo di calcolo) |
 
@@ -208,7 +209,7 @@ Sì, a due condizioni.
 
 | Strada | Pro | Contro |
 |---|---|---|
-| nodi d'ingresso nostri: 2 o 3 piccoli server, il cui indirizzo sta nel file firmato | semplice, già funziona | costano qualche euro al mese; se cadono tutti, i nuovi non entrano |
+| nodi d'ingresso nostri: 2 o 3 piccoli server, il cui indirizzo sta nel file firmato | semplice, già funziona | **scartata**: hai deciso di non avere server tuoi |
 | la tabella distribuita di BitTorrent (Mainline DHT): i nodi si annunciano sotto l'impronta della rete e si trovano lì | milioni di nodi, sempre accesa, nessun server nostro | da scrivere (circa 600 righe); qualche rete la blocca |
 | contatti salvati dalla volta prima | già funziona | non aiuta chi entra per la prima volta |
 
@@ -221,7 +222,7 @@ Ho valutato anche libp2p (troppo grande come dipendenza) e Nostr (comodo per tro
 ### 6.3 I passi, in ordine
 
 1. Decidere manutentori e soglia; mettere le chiavi nel programma.
-2. Nodi d'ingresso, e ricerca dei nodi via BitTorrent.
+2. Ricerca dei nodi via BitTorrent e apertura automatica della porta (nessun server nostro).
 3. Prova pubblica su una rete di test di Bitcoin (signet o testnet) con un puzzle piccolo e volontari.
 4. Revisione esterna del firmatore.
 5. Parametri del #140: seme dei salti da una fonte pubblica verificabile, bit dei punti distinti, monete del premio, tetto delle commissioni.
