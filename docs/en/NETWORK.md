@@ -183,7 +183,9 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
   its life, and every start draws a band of the group by its share, so the index of a walker stays one byte (at most 64 groups).
 - **Starts**: each start draws from a generator of its own, a xoshiro state set to `HMAC-SHA256(start key, "pznet1/s" || session || n)`
   (session: 8 bytes, the session number of the campaign and `--node` above it; n: 8 bytes, a counter of the starts of the session). A
-  record shows the point and the type of a start, never the state of a generator that made another one.
+  record shows the point and the type of a start, never the state of a generator that made another one. The session number is saved
+  when the session starts, not at its first checkpoint: a run cut before that would leave its number to the next, which would draw the
+  same starts again.
 - **Distinguished points**: exactly `--dp-bits`, whatever the walkers and the memory of this home would pick. A point the table leaves out
   (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
   of the network.
@@ -208,7 +210,7 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
   - Both sides check that the node ID of the other's static key has the 16 zero bits. An initiator that dials a known contact also
     checks that the responder is that identity, before it sends the third message (the one that shows its own key).
   - After the handshake, frames of at most 65 535 bytes: a 2-byte encrypted length and the encrypted body, each with its own nonce, as in
-    BOLT 8; keys rotate every 1000 messages.
+    BOLT 8; a key rotates after 1000 encryptions (500 frames).
   - One TCP connection per exchange: connect, handshake, one request frame, one answer frame, close. A session (messages 16–31) keeps its
     connection. The connect has a deadline (10 s by default), the whole handshake one more (a peer that sends a byte now and then gains
     nothing: before, each of its three messages had a deadline of its own), and each frame one: a peer that stops talking costs a
@@ -363,34 +365,70 @@ Between the two homes, over a Noise channel between their identities (`src/peer/
 chain given as interfaces). Party 0 is the owner with the smaller identity; `eid = SHA256("pznet1/eid" || F || record_0 || record_1)`;
 F, the party whose tiny coin goes into the second transaction, is the last bit of `eid`, S the other. Every step is a message both sides
 send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`; an `S_ABORT` with its
-reason can come instead of any of them):
+reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so that NATs and
+relays do not cut the channel as idle, and the reader skips it):
 
 1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
-   about the same pair. The fee rate is the higher of the two, refused above the home's limit; the payout scripts must be of standard
-   addresses. The nonce is `SHA256("pznet1/nonce" || coin key || eid)`: unpredictable to the partner, no randomness needed.
+   about the same pair. The fee rate is the higher of the two (each the node's estimate for a confirmation within 2 blocks), refused above
+   the home's limit and above the rate at which F's cancel would leave less than 546 satoshis of its tiny coin (about 50 sat/vB: above
+   it S could hold the second transaction back with nothing to fear); the payout scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
+   proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
-   computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`.
+   computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`. The hello and the proof of the partner are awaited 30 s at
+   most (it makes them at once); every later message 5 minutes.
 3. `S_PLAN`: `SHA256("pznet1/plan" || the first transaction)`, which each side built on its own from the confirmed coins of the puzzle
-   (section 8); a different hash stops the session. Then the two-party signing of its inputs (step 5), the broadcast by both, and one
-   confirmation.
+   (section 8); a different hash stops the session. Then the primes of pzfirma (`pzfirma primes`, seconds to a minute of CPU: only now, when
+   the partner has proved its distance and builds the same transaction), the two-party signing of its inputs (step 5), the broadcast by
+   both, and one confirmation.
 4. `S_PLAN` again for the second transaction, built from the first; then F sends `S_TINYSIG`, the scriptSig of its tiny coin, which S checks.
 5. The two-party signing: pzfirma on each side, its messages (0x81) relayed as `S_SIGNER(more, bytes)` in pieces of at most 65 000 bytes,
-   `more` = 1 on all but the last piece; `S_SIGNED(status)` ends the messages of a side. **S sends its k-th message only after the k-th of F
-   has arrived**: F's last message reaches S before S's reaches F, so S has the whole signature first, and F, whose tiny coin is in the
-   transaction, holds the cancel. Each signing has its id `SHA256("pznet1/run/" || 'A' or 'B' || eid)`; both use the primes file of the
-   session.
+   `more` = 1 on all but the last piece; `S_SIGNED(status)` ends the messages of a side. Each signing has its id
+   `SHA256("pznet1/run/" || 'A' or 'B' || eid || nonce_0 || nonce_1)` (the nonces of party 0 and party 1); both use the primes file of the
+   session. In the signing of the second transaction **S holds each of its messages until F's message of the same rank has reached its
+   pzfirma and its pzfirma has gone on past it**, with its next message or with the signatures: F's last message reaches S before S's
+   last leaves, and S's leaves only once S has the whole signature. A last message of F that is garbage, or the end of F's messages instead
+   of it, gets nothing in exchange (counting messages is not enough: any bytes, or an `S_ABORT`, in place of F's last would get S's). So S has the whole
+   signature first, and F, whose tiny coin is in the transaction, holds the cancel. The first transaction only gives the prize back to the
+   puzzle: there both send at once. pzpeer never relays the envelope with which pzfirma tells why it gave up: its reason would say which
+   check failed (project 4.6); the `S_SIGNED` that follows stops the partner as well.
 6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
    address, and the transaction S may be holding is worth nothing. F also sends the second transaction itself when it got the whole
-   signature.
+   signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
+   (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the session ends instead of waiting for
+   ever, and F, then, tries its cancel.
+
+**The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
+failure), so the home counts them in `HOME/failed-signings`, lines `<hex of F or of an eid> <failures>`: every run of pzfirma counts as failed
+before it starts (written through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash
+or a kill in the middle counts. At 10 failures on a network, with any partner, or 3 for one pair, the home signs no more on it, and says so
+before the plan of the first transaction, so that the partner's pzfirma does not start (it would count a failure of its own). Runs are one
+at a time; a session that does not get its turn within 2 minutes gives up without a run. Not done yet: the count published in the network
+and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
+
+**The daemon** (`src/peer/home.c`). A session starts on the alert of the table (both proofs checked there) or on a hello that names the
+pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
+the proofs (the primes come after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
+they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. A pair
+that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day.
+The primes file of a session is removed when it ends, and at the start of the daemon those left by a crash (a Paillier key: with the
+messages of the session the partner could find the piece).
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzfirma and a chain in memory that checks every input: the
-payout (half each, F's tiny coin back to F, S keeps its own), and a partner that keeps the second transaction and its last message, which
-ends with F's cancel and the prize still under the joint key.
+payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height, and the primes
+made by the session); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
+under the joint key; a partner F that stops, or sends garbage, in place of its last message, which gets nothing and cancels; a fee rate
+too high for the cancel, and the limit of failed signings, both refused before anything is signed; a partner that copied the x of a
+record and cannot prove it, for which no primes are made; a pzfirma that stops reading while the other floods it; a scan of the puzzle
+address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
+The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
-for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are).
+for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are);
+F takes a spend of the prize in its node's mempool for the payout (chain_rpc asks `gettxout` with the mempool), so a second transaction
+that S sends and that then leaves the mempools unconfirmed would be S's to hold again; two sessions of one puzzle at once build their
+first transactions from the same coins, and the one that loses waits its 144 blocks.
 
 ### 7.6 pzfirma
 
@@ -412,13 +450,16 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
 `SHA256("pznet1/aux" || eid)`, then one signing per digest with `SHA256("pznet1/eid" || eid || u32_be(index))`; no presignatures.
 
 - The messages between the two pzfirma are an envelope (version, sender, phase, broadcast flag, the library's message) that pzpeer
-  relays as it is. On a failure pzfirma first sends an envelope of phase *abort* with the reason, then its 0x83: the other side stops at
-  once instead of waiting. 0x82 or 0x83 is always the last frame.
+  relays as it is. On a failure pzfirma first sends an envelope of phase *abort* with the reason, then its 0x83; pzpeer does not relay
+  that envelope (section 7.5, step 5) and ends the messages of its side with `S_SIGNED`, which stops the other side at once instead of
+  waiting. 0x82 or 0x83 is always the last frame.
 - `blame` lists the parties the library names as culprits, or the other party when its message is malformed. It can be empty (no culprit
   is known) and, when a broadcast was not reliable, each side blames the other.
 - The last message can be lost after one side already has the signatures: one side ends with 0x82 and the other with 0x83. This is the
   case of the cancel lever of step 6 of section 7.5.
-- pzfirma has no timeouts: pzpeer ends a process that does not answer.
+- pzfirma has no timeouts: pzpeer ends a process that does not answer, and kills it once its last frame came or did not come in time
+  (a pzfirma that stopped reading would otherwise keep the relay of the partner's messages waiting for ever). Its pipes are not
+  inherited by any other program pzpeer starts, nor are dp.bin and the sockets.
 
 ### 7.7 The relay
 
@@ -521,10 +562,13 @@ On the main chain:
 - When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
   would cancel at once.
 
-Not yet handled: a puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON
-reader, and no session starts. It would cost an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a
-prize. The prizes of the network file (`prize=txid:vout:sats`) can each be checked with `gettxout`, with no scan: the session does not
-use them yet.
+- A puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON reader: it would cost
+  an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a prize. So the session also takes the prizes of
+  the network file (`prize=txid:vout:sats`, at most 16; the txid as explorers show it), each checked with `gettxout` without the
+  mempool: unspent, confirmed (mature for a coinbase), of the puzzle's script, with the node's value; `sats` is not used. The largest 48
+  coins of the scan, when it works, and the prizes not among them make the coins of the first transaction. Two homes whose network files
+  list different prizes may build different transactions when the scan fails: the plan stops them, until their files agree.
+- Fee rates are asked for a confirmation within 2 blocks (project 4.5), the higher of the two homes' taken (7.5).
 
 ### 8.2 Without a node of one's own (to come)
 
@@ -596,5 +640,7 @@ pzpeer run --network FILE --dir HOME --payout ADDRESS --rpc 127.0.0.1:18443:pz:p
 With a bitcoind of its own and no `rpcpassword`, `--rpc 127.0.0.1:8332 --rpc-cookie ~/.bitcoin/.cookie` takes its credentials from its
 cookie file instead (section 8.1).
 
-The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); `HOME/start.key` is
-the start key pzpeer gives to pzsolve; the campaign is in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
+The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); pzpeer refuses a seed
+file that others may read, or a link, and a home folder that others can open. `HOME/start.key` is the start key pzpeer gives to pzsolve,
+written at every start through a new file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
+in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.

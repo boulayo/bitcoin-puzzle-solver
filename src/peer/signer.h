@@ -25,8 +25,12 @@ bool signer_send(signer *s, uint8_t type, const uint8_t *payload, size_t len);
 /* The next frame; *payload is malloc'ed (len + 1 bytes, NUL after the payload) and is the caller's to free. False at the end of its output,
  * on a malformed frame, or when nothing comes within timeout_ms (the caller then stops the process). */
 bool signer_recv(signer *s, uint8_t *type, uint8_t **payload, size_t *len, int timeout_ms);
+/* Kills the process and nothing else: a thread blocked writing to it (it stopped reading) gets an error. */
+void signer_kill(signer *s);
 /* Ends the process (killed if still running) and closes the pipes. */
 void signer_stop(signer *s);
+/* `path primes file`: the primes of a session, made ahead (seconds to a minute of CPU). True when it ended well. */
+bool signer_primes(const char *path, const char *file);
 
 /* The JSON job of a session: party i, session id, own piece, the two public pieces and the key (compressed), the primes file and the digests.
  * malloc'ed; it holds the secret piece, so the caller wipes it (pz_secure_zero over its length) before free. NULL for a primes path that

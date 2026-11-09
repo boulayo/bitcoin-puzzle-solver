@@ -840,6 +840,9 @@ int cmd_hunt(int argc, char **argv)
 
     run_session_load(r);
     r->sessions++;
+    /* saved at once: the number of the session seeds the streams of the walkers (and the starts of a shared walk), and a run cut before
+     * its first checkpoint would leave it to the next one, which would draw the same starts again */
+    (void)run_session_save(r, r->elapsed_prev, r->prev_units_total);
     r->t_start = pz_mono();
     if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
 

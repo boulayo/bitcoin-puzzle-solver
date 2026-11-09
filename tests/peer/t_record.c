@@ -8,6 +8,8 @@
 #include <pzcore/hash.h>
 #include <secp256k1_schnorrsig.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 
 static secp256k1_context *ctx;
@@ -47,6 +49,49 @@ static void test_keys(void)
     CHECK(keys_identity(ctx, seed, FP, 4, &few) && keys_id_ok(few.id, 4) && few.j <= id.j);
     CHECK(few.j == id.j || !keys_id_ok(few.id, NODE_ID_ZERO_BITS));
     CHECK(!keys_identity(ctx, seed, FP, 33, &few));
+}
+
+static mode_t mode_of(const char *path)
+{
+    struct stat st;
+    return lstat(path, &st) == 0 ? st.st_mode : 0;
+}
+
+/* the files of the secrets: only this user reads them, whatever was at their place before */
+static void test_key_files(void)
+{
+    char dir[] = "/tmp/t_record.XXXXXX", path[64], other[64], tmp[80], err[400];
+    uint8_t v[32], got[32];
+    hashed("a secret", v);
+    CHECK(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof path, "%s/home.seed", dir);
+    snprintf(other, sizeof other, "%s/elsewhere", dir);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    CHECK(keys_file_read(path, got, err, sizeof err) == 0);                                  /* none yet */
+    CHECK(keys_file_write(path, v) && (mode_of(path) & 0777) == 0600);
+    CHECK(keys_file_read(path, got, err, sizeof err) == 1 && !memcmp(got, v, 32) && access(tmp, F_OK) != 0);
+    /* a file that others can read: refused, and replaced by a private one when written (O_TRUNC kept its mode) */
+    CHECK(chmod(path, 0644) == 0 && keys_file_read(path, got, err, sizeof err) == -1 && strstr(err, "chmod 600"));
+    CHECK(keys_file_write(path, v) && (mode_of(path) & 0777) == 0600 && keys_file_read(path, got, err, sizeof err) == 1);
+    /* a link: never followed, replaced by the file itself (the place it pointed to is left alone) */
+    FILE *f = fopen(other, "w");
+    CHECK(f && fputs("not touched\n", f) >= 0);
+    if (f) fclose(f);
+    CHECK(chmod(other, 0600) == 0 && remove(path) == 0 && symlink(other, path) == 0);
+    CHECK(keys_file_read(path, got, err, sizeof err) == -1);
+    CHECK(keys_file_write(path, v) && S_ISREG(mode_of(path)) && keys_file_read(path, got, err, sizeof err) == 1);
+    char back[32] = "";
+    f = fopen(other, "r");
+    CHECK(f && fgets(back, sizeof back, f) && !strcmp(back, "not touched\n"));
+    if (f) fclose(f);
+    /* a leftover temporary file, even a link, does not stop a write nor receive the secret */
+    CHECK(symlink(other, tmp) == 0 && keys_file_write(path, v) && access(tmp, F_OK) != 0 && keys_file_read(path, got, err, sizeof err) == 1);
+    /* not 64 hex digits */
+    f = fopen(path, "w");
+    CHECK(f && fputs("-1 not a key\n", f) >= 0);
+    if (f) fclose(f);
+    CHECK(keys_file_read(path, got, err, sizeof err) == -1 && strstr(err, "64 hex digits"));
+    CHECK(remove(path) == 0 && remove(other) == 0 && rmdir(dir) == 0);
 }
 
 /* a network with a known key: P = k*G, base, dpbits 0 (every point is distinguished) */
@@ -201,7 +246,7 @@ static void test_dpfeed(void)
     uint8_t hdr[DPBIN_HDR] = "PZDP5\n", rec[3][DPBIN_REC], x[32], h[32];
     fwrite(hdr, 1, sizeof hdr, f);
     for (int i = 0; i < 3; i++) {
-        char label[16];
+        char label[24];
         snprintf(label, sizeof label, "file %d", i);
         hashed(label, h);
         dp_record(&net, (unsigned)i, 1, h, rec[i], x);
@@ -226,6 +271,7 @@ int main(void)
 {
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     test_keys();
+    test_key_files();
     test_record();
     test_dpfeed();
     secp256k1_context_destroy(ctx);

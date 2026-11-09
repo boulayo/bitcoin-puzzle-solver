@@ -221,7 +221,6 @@ bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
     return run_submit_key(r, key, source);
 }
 
-/* the file of a campaign that does not encrypt the key; false if it could not be written */
 /* The seed as the reports show it: a shared walk's is its start key, which stays in memory (docs/en/NETWORK.md 6). */
 static void seed_text(const campaign_cfg *c, char out[65])
 {
@@ -229,6 +228,7 @@ static void seed_text(const campaign_cfg *c, char out[65])
     else pz_hex_encode(c->seed, 32, out);
 }
 
+/* the file of a campaign that does not encrypt the key; false if it could not be written */
 static bool write_found_plain(run_ctx *r)
 {
     char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80], pz[48] = "";

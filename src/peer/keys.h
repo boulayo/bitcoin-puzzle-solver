@@ -8,6 +8,7 @@
 #include <secp256k1.h>
 #include <secp256k1_extrakeys.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define NODE_ID_ZERO_BITS 16       /* leading zero bits of a node ID on a real network (docs/en/NETWORK.md 7.1); tests use fewer */
@@ -31,5 +32,13 @@ bool keys_coin(const secp256k1_context *ctx, const uint8_t seed[32], const uint8
 /* The node ID of an x-only identity, and whether it has the leading zero bits: one hash, the check of a peer that claims it. */
 void keys_node_id(const uint8_t xonly[32], uint8_t id[32]);
 bool keys_id_ok(const uint8_t id[32], unsigned zero_bits);
+
+/* The files of the secrets of a home (home.seed, start.key): 64 hex digits and a newline. keys_file_read takes only a regular file of this
+ * user that no one else may read or write (not a link): a secret others could read may be known already, so the file is left for its owner
+ * to look at (chmod 600 it, if nobody else has read it). 1 read, 0 no such file, -1 refused or malformed, with the reason in err. */
+int keys_file_read(const char *path, uint8_t out[32], char *err, size_t errlen);
+/* Writes a secret to a new file of mode 0600 that then takes the place of path, synced with its folder: whatever was at path (a file
+ * others could read, a link) is replaced, never kept or followed. */
+bool keys_file_write(const char *path, const uint8_t v[32]);
 
 #endif

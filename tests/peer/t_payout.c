@@ -93,6 +93,15 @@ int main(void)
     payout_terms hot = t;
     hot.feerate = 60000;                                         /* 60 sat/vB: a cancel would leave less than dust */
     CHECK(!payout_cancel(&hot, &a, &c));
+    /* the session refuses such a rate at the hello: the highest one leaves 546 satoshis of the tiny coin after the fee of F's cancel to its
+     * P2WPKH address, 189 vbytes (10000 - 546 = 9454 = 189 * 50.021) */
+    CHECK(payout_can_cancel(&t) && !payout_can_cancel(&hot));
+    hot.feerate = 50021;
+    CHECK(payout_can_cancel(&hot) && payout_cancel(&hot, &a, &c) && c.out[0].value == 546);
+    hot.feerate = 50022;
+    CHECK(!payout_can_cancel(&hot));
+    hot.first = 2;
+    CHECK(!payout_can_cancel(&hot));
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_payout");
 }

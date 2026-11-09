@@ -3,6 +3,7 @@
 /* dpfeed.c - the points of dp.bin (see dpfeed.h). */
 #include "dpfeed.h"
 #include <pzcore/seal.h>
+#include <fcntl.h>
 #include <string.h>
 #include <sys/types.h>
 
@@ -78,6 +79,7 @@ bool dpfeed_open(dpfeed *df, const char *path)
     uint8_t hdr[DPBIN_HDR];
     df->f = fopen(path, "rb");
     if (!df->f) return false;
+    (void)fcntl(fileno(df->f), F_SETFD, FD_CLOEXEC);           /* the distances of the home: not for the programs pzpeer starts */
     if (fread(hdr, 1, sizeof hdr, df->f) != sizeof hdr || memcmp(hdr, "PZDP5\n", 6) != 0) {
         dpfeed_close(df);
         return false;

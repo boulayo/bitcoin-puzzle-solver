@@ -114,4 +114,18 @@ static uint64_t feerate(void *ctx)
     return f;
 }
 
-session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate}; }
+/* a prize of the network file: an output of the puzzle in the node's set, confirmed (the mempool does not count) and mature */
+static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
+{
+    chain_rpc *c = ctx;
+    bool found;
+    btc_utxo u;
+    if (!btc_rpc_gettxout(c->rpc, txid, vout, false, &found, &u)) return -1;
+    if (!found || !u.confirmations || (u.coinbase && u.confirmations < COINBASE_MATURITY) || u.spk_len != BTC_P2PKH_LEN ||
+        memcmp(u.spk, spk, BTC_P2PKH_LEN))
+        return 0;
+    memcpy(out->txid, txid, 32), out->vout = vout, out->value = u.value;
+    return 1;
+}
+
+session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin}; }
