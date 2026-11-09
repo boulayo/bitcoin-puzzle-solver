@@ -10,6 +10,7 @@
  * slots of the pairs the table alerted. */
 #include "home.h"
 #include "chain_rpc.h"
+#include "bt.h"
 #include "chain_spv.h"
 #include "dht.h"
 #include "dpfeed.h"
@@ -546,10 +547,11 @@ int home_run(const home_cfg *cfg)
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", cfg->dir);
     mkdir(nodedir, 0700);
-    const dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
-                           .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
-                           .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose,
-                           .allow_private = h->chain != BTC_MAIN || cfg->allow_private};
+    dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
+                     .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
+                     .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .upnp = cfg->upnp,
+                     .allow_private = h->chain != BTC_MAIN || cfg->allow_private};
+    dc.bt_routers = bt_routers(h->chain == BTC_MAIN, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);

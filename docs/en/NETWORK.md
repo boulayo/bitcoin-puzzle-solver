@@ -56,6 +56,8 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `signer.c` | starts pzsign and relays its frames |
 | `payout.c` | the transactions of the pair: the first, the second, the cancel |
 | `session.c` | the session of a coincidence, from the hello to the payout (section 7.5) |
+| `bt.c` | the rendezvous in the Mainline DHT of BitTorrent: announce and lookup of the network's key |
+| `upnp.c` | the request to the home router to let the listening port in |
 | `chain_rpc.c` | the chain of a session on bitcoind |
 | `spv.c` | block headers checked by their proof of work, Merkle branches |
 | `electrum.c` | a client of the Electrum protocol (plain TCP) |
@@ -525,16 +527,54 @@ relays at once, the bytes.
 
 | Missing | Why it is not done |
 |---|---|
-| UPnP and NAT-PMP (project 4.2): a home behind a router opens its own port | protocol code (SSDP over UDP multicast and SOAP over HTTP; NAT-PMP or PCP over UDP) against routers that each do it their way, which needs real routers to test. The relay makes sessions work without it; custody needs reachable nodes, so it would raise their number |
+| NAT-PMP and PCP, the other two ways a home opens its own port | UPnP is done (7.9) and covers most home routers; these two are for the routers that only speak them |
 | IPv6 as a way out of NAT | addresses, listening (`::` takes IPv4 too) and NODES carry IPv6 already, but a home does not learn or announce a public IPv6 address of its own: a responder keeps the address it sees. There is no IPv6 on the test machine |
 | Tor, optional (project 2.5) | a SOCKS5 client in `net.c`, and onion addresses in NODES, which has 16 bytes for an address: a new format. A node behind Tor cannot be a custodian, like one that does not listen |
-| The BitTorrent DHT as a source of first contacts (project 4.2) | a second DHT (BEP 5, bencoded KRPC over UDP), or the library of Transmission, a new dependency. The `entry=` lines, `--peer` and `peers.txt` serve the tests; the DNS names of 4.2 are not done either |
+| A defence of the rendezvous key in the BitTorrent DHT | nodes that sit close to the key there can hide the announces (7.9). The rule that ties a node ID of that table to its address (BEP 42) would make it dear; many nodes of that table do not follow it yet |
 | Spot checks of the walks (project 4.2) | they need the previous distinguished point of a walk from its owner, so pzsolve and `dp.bin` would have to keep the chain of each walker; a check costs minutes of a core and needs a protocol of its own (ask, walk, revoke a machine) |
 | A republish that scales | every day each home sends all its records again: at the end of a campaign with 10 000 GPUs that is about 8·10^7 records a home a day, far above the traffic of project 4.3. A custodian should get only what it lacks (a digest of what it holds, or the republish only to the nodes that became custodians) |
 | Open connections instead of polls | a home that does not listen polls its mailboxes every minute (a lookup and 5 connections); the project wants it to keep a few connections open to reachable nodes and get its alerts on them |
 | More than one relay at a time | a pair tries one relay per slot; two homes that cannot reach the same node in any slot (a network that blocks part of the Internet) get no channel |
 | The cost of an identity | 16 zero bits cost seconds, so thousands of identities are cheap: the limits by block bound what one network can do, not what many networks (a botnet, a cloud) can |
 | An index that fits a home | 2^28 records take about 4.5 GB of RAM for the index; a larger store needs its index on disk |
+
+### 7.9 Finding the network with no server of its own
+
+The owner of the network runs no server. Three things make the first contact, used together:
+
+- `peers.txt`: the contacts that answered in an earlier run.
+- `--peer HOST:PORT`: an address from someone who is already in.
+- **The Mainline DHT of BitTorrent** (`bt.c`, BEP 5), for who has neither. Every node that listens announces its port there under the
+  key `SHA256("pznet1/bt" || F)` cut to 20 bytes, and every node looks the key up: a round when it starts, then every half hour (every
+  two minutes while it has no contact). A round is a lookup with `get_peers`, eight questions at a time, until the eight closest nodes
+  that answered are closer than any node not asked yet (96 questions and 20 seconds at most), then `announce_peer` to those eight.
+  pzpeer asks and never answers: it is a guest of that table for some tens of packets every half hour, over UDP and IPv4. A network of
+  the main chain starts from the well-known routers of that table (`router.bittorrent.com:6881`, `dht.transmissionbt.com:6881`,
+  `router.utorrent.com:6881`, `dht.libtorrent.org:25401`), unless `--no-bt`; `--bt-router HOST:PORT` gives others, and is the only
+  way a test network uses it.
+
+Only addresses pass through that table, and none is believed: each is a candidate for the next bootstrap, which dials it with Noise
+and takes it only when it is a node of this network with a valid node ID; an address that is not public is dropped on a network of
+the main chain. The records, the alerts and the sessions never go there. That table takes an announce only for the address it comes
+from (the token of BEP 5), so nobody can announce a third party to make the nodes dial it.
+
+What an attacker can do there: put nodes close to the key, take the announces and give back nothing or only its own nodes. A node
+that enters for the first time then finds nobody, or only the attacker, who can hide records from it and delay its alerts (section
+7.4 says what the table does against that) and can steal nothing: records are signed, a coincidence is proven by both owners, and
+the payout needs both signatures. `peers.txt` and `--peer` do not depend on that table. A packet from that table counts only when it
+comes from the address asked, with the number of the question, and is read within its bounds (`t_bt` runs nodes that send random
+bytes, answers to other questions, nodes that do not exist, and peers without end).
+
+**The port.** A node behind a home router is dialled only when the router lets its port in. `--upnp` asks the router for it (`upnp.c`,
+UPnP IGD): a search on the LAN (SSDP), the description of the router, and `AddPortMapping` for the `--listen` port over TCP, for two
+hours, asked again every hour; a router that only takes mappings without end gets one. Nothing the router says is followed out of the
+LAN: its description and its control address must be at the address its answer came from, and that address must not be a public
+one. It is off unless asked: a program should not open a port of the house without being told. A node that does not listen still
+searches, publishes and signs (through the relay, 7.7); it is not a custodian.
+
+`t_bt` and `t_upnp` run against a table and a router made in the tests; `tests/peer/e2e_meet.sh` starts three nodes that are given
+no address and find each other through `tests/peer/bt_table.py`. Not tried yet against the real table of BitTorrent nor a real
+router: the machine of the tests reaches neither.
 
 ## 8. Transactions
 
@@ -648,6 +688,7 @@ in `t_session` with `PZ_REGTEST`.
 | `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; POSIX only (the Windows shim is to come); what a public network still needs is in 7.8 |
 | `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node) |
+| `bt.c`, `upnp.c` | done (`t_bt`, `t_upnp`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |

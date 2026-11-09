@@ -19,6 +19,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   and the `electrum=` lines of the network file) and trusts none. Block headers count only with their proof of work from the
   `checkpoint=` of the network file, a coin only with its transaction and Merkle proof, a spend only when proven: a lying server can
   delay a payout, never misdirect it. A node of one's own stays the stronger choice.
+- pzpeer finds the other nodes with no server of the network: each node announces its port in the Mainline DHT of BitTorrent under
+  a key made from the network's fingerprint and looks the others up there (`--bt-router`, `--no-bt`). Only addresses pass through it,
+  each dialled and checked as any other. `--upnp` asks the home router to let the listening port in.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08

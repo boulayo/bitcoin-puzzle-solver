@@ -3,6 +3,8 @@
 /* dht.c - the node (see dht.h, and dht_priv.h for its files): its life (create, start, stop), its threads (accept, handlers, jobs,
  * maintenance), the answers to requests, and the limits by address block. */
 #include "dht_priv.h"
+#include "upnp.h"
+#include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -345,6 +347,48 @@ static void *handler_main(void *arg)
     return NULL;
 }
 
+/* The way in without a server of this network: every so often the node announces its port in the table of BitTorrent under the key of
+ * the network and takes the addresses announced there (bt.h); they are candidates, dialled and checked by the next bootstrap as any
+ * other. The same thread keeps the port open on the router of the LAN, when asked (upnp.h). */
+static void *meet_main(void *arg)
+{
+    dht *d = arg;
+    static const char TAG[] = "pznet1/bt";
+    uint8_t m[sizeof TAG - 1 + 32], h[32];
+    bt_config bc = {.port = d->port, .routers = d->cfg.bt_routers, .nrouters = d->cfg.nbt_routers, .stop = &d->stop};
+    memcpy(m, TAG, sizeof TAG - 1), memcpy(m + sizeof TAG - 1, d->cfg.net->fp, 32);
+    pz_sha256(m, sizeof m, h);
+    memcpy(bc.infohash, h, 20);
+    const int64_t period = (int64_t)(d->cfg.rendezvous_s ? d->cfg.rendezvous_s : 1800) * 1000;
+    int64_t next_meet = 0, next_map = 0;
+    while (!stopping(d)) {
+        const int64_t now = now_ms();
+        if (d->cfg.upnp && d->port && now >= next_map) {       /* a lease of two hours, asked again every hour */
+            char why[200];
+            const bool ok = upnp_map(d->port, 7200, d->cfg.upnp_ssdp, why, sizeof why);
+            dlog(d, "upnp: %s", why);
+            next_map = now + (ok ? 3600000 : 600000);
+        }
+        if (d->cfg.nbt_routers && now >= next_meet) {
+            net_addr peers[BT_PEERS_MAX];
+            int took = 0, fresh = 0;
+            const int n = bt_rendezvous(&bc, peers, BT_PEERS_MAX, &took);
+            pthread_mutex_lock(&d->f_mu);
+            for (int i = 0; i < n; i++)
+                if (addr_ok(d, &peers[i]) && fresh < BT_PEERS_MAX) d->found[fresh++] = peers[i];
+            if (n >= 0) d->nfound = fresh;
+            pthread_mutex_unlock(&d->f_mu);
+            dlog(d, "rendezvous: %s, %d addresses, announced to %d nodes", n < 0 ? "no node of the table of BitTorrent answered" : "done",
+                 fresh, took);
+            if (fresh && rt_count(d) < DHT_K) (void)bootstrap(d);
+            next_meet = now_ms() + (rt_count(d) ? period : period < 120000 ? period : 120000);
+        }
+        struct timespec ts = {.tv_nsec = 200 * 1000000};
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+
 static void *maint_main(void *arg)
 {
     dht *d = arg;
@@ -446,6 +490,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     pthread_cond_init(&d->r_cv, NULL);
     pthread_mutex_init(&d->p_mu, NULL);
     pthread_mutex_init(&d->m_mu, NULL);
+    pthread_mutex_init(&d->f_mu, NULL);
     pthread_cond_init(&d->m_cv, NULL);
     const int64_t now = now_ms();
     for (int i = 0; i < DHT_BUCKETS; i++) d->b[i].looked = now;
@@ -500,6 +545,7 @@ int dht_start(dht *d)
     const int n = bootstrap(d);
     if (n) (void)dht_mbox_poll(d);                             /* the alerts that came while this node was away */
     d->has_maint = spawn(&d->th_maint, maint_main, d, HANDLER_STACK, false);
+    if (d->cfg.nbt_routers || (d->cfg.upnp && d->port)) d->has_meet = spawn(&d->th_meet, meet_main, d, HANDLER_STACK, false);
     dlog(d, "started, %s, %d contacts", d->port ? "listening" : "not listening", n);
     return d->has_maint ? n : -1;
 }
@@ -523,6 +569,7 @@ void dht_stop(dht *d)
     for (; d->qn; d->qn--, d->qhead = (d->qhead + 1) % QUEUE_MAX) net_close_fd(d->q[d->qhead].fd);
     if (d->has_jobs) pthread_join(d->th_jobs, NULL);
     if (d->has_maint) pthread_join(d->th_maint, NULL);
+    if (d->has_meet) pthread_join(d->th_meet, NULL);
     pthread_mutex_lock(&d->r_mu);                              /* the relays see the stop within a slice of their wait */
     while (d->nactive > 0) pthread_cond_wait(&d->r_cv, &d->r_mu);
     for (int i = 0; i < RELAY_WAITING; i++)
@@ -551,6 +598,7 @@ void dht_stop(dht *d)
     pthread_cond_destroy(&d->r_cv);
     pthread_mutex_destroy(&d->p_mu);
     pthread_mutex_destroy(&d->m_mu);
+    pthread_mutex_destroy(&d->f_mu);
     pthread_cond_destroy(&d->m_cv);
     free(d);
 }

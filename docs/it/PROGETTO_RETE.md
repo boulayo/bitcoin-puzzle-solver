@@ -1,6 +1,6 @@
 # Rete condivisa per i puzzle Bitcoin: progetto
 
-Versione 8, 9 novembre 2026. Sostituisce le versioni precedenti.
+Versione 9, 9 novembre 2026. Sostituisce le versioni precedenti.
 Documenti collegati: [DA_FARE.md](DA_FARE.md) (le decisioni che spettano a te) e [NETWORK.md](../en/NETWORK.md) (la specifica tecnica, in inglese, per chi lavora sul codice).
 
 Come leggere questo documento:
@@ -82,6 +82,7 @@ Tutto il codice è nel ramo `rete-condivisa`. Niente è stato rilasciato.
 | sessione completa, compreso il partner che trattiene la firma | in memoria e su regtest |
 | rete intera: un custode e tre case su una macchina | premio diviso 0,49999366 e 0,49989366 BTC, indirizzo del puzzle vuoto |
 | nodo Bitcoin potato, file cookie, nodo non sincronizzato | test |
+| primo contatto senza server nostri: i nodi si annunciano e si cercano nella tabella di BitTorrent; apertura della porta del router con `--upnp` | test con nodi bugiardi e router non conformi; tre nodi che si trovano da soli |
 | nessun nodo Bitcoin proprio: catena letta da più server Electrum, ogni risposta verificata (server che nascondono, mentono, danno prove false) | test e prova completa con tre case |
 | firme dei manutentori sul file della rete | test |
 
@@ -114,7 +115,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | Manca | Effetto |
 |---|---|
 | chiavi dei manutentori nel programma | oggi girano solo reti di prova |
-| primo contatto senza server nostri (rete BitTorrent) e apertura della porta del router (UPnP) | chi entra deve indicare a mano un nodo conosciuto, vedi 6.2 |
+| prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
 | pzpeer per Windows e macOS | oggi solo Linux |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
 | sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia |
@@ -139,6 +140,7 @@ Sono le cose su cui il progetto si regge e che non ho potuto dimostrare. Se una 
 | I6 | Il computer di casa non è compromesso | chi legge il seme o `dp.bin` ha le distanze: perde quella casa |
 | I7 | Il proprio nodo Bitcoin dice il vero | un nodo bugiardo può far firmare una transazione su monete inesistenti: perdita di tempo, non del premio |
 | I7b | Senza nodo proprio: almeno uno dei server Electrum usati è onesto e raggiungibile, e nessuno spende il lavoro di interi blocchi per ingannare | se tutti mentono o tacciono la sessione aspetta o fallisce: ritardo, non furto. Un blocco falso con lavoro vero costa quanto il premio di un blocco |
+| I7c | Nella tabella di BitTorrent nessuno occupa in modo stabile i posti vicini alla chiave della nostra rete | chi entra per la prima volta non trova nessuno o trova solo l'attaccante: ritardo e record nascosti, mai un pagamento sbagliato. Restano i contatti salvati e `--peer` |
 | I8 | Gli orologi delle case differiscono di pochi secondi | il relay non fa incontrare le due case; la sessione riprova |
 | I9 | Nella rete c'è sempre almeno qualche nodo raggiungibile da fuori | senza, nessuno custodisce i punti e la rete non funziona |
 | I10 | Una GPU fa 5–10 miliardi di passi al secondo con pzsolve | i tempi di 5.3 si allungano in proporzione. Misurato: 0,92 miliardi su una A2000 portatile |
@@ -210,19 +212,19 @@ Sì, a due condizioni.
 | Strada | Pro | Contro |
 |---|---|---|
 | nodi d'ingresso nostri: 2 o 3 piccoli server, il cui indirizzo sta nel file firmato | semplice, già funziona | **scartata**: hai deciso di non avere server tuoi |
-| la tabella distribuita di BitTorrent (Mainline DHT): i nodi si annunciano sotto l'impronta della rete e si trovano lì | milioni di nodi, sempre accesa, nessun server nostro | da scrivere (circa 600 righe); qualche rete la blocca |
+| la tabella distribuita di BitTorrent (Mainline DHT): i nodi si annunciano sotto l'impronta della rete e si trovano lì | milioni di nodi, sempre accesa, nessun server nostro | **fatta**; qualche rete la blocca; chi mette molti nodi vicino alla nostra chiave può nascondere gli annunci (ritardo, non furto) |
 | contatti salvati dalla volta prima | già funziona | non aiuta chi entra per la prima volta |
 
 BitTorrent serve solo a **trovarsi**. I punti non si possono mettere lì: sono troppi (centinaia di miliardi) e quella rete non rileva coincidenze. Per i punti resta la nostra tabella Kademlia, che è fatta apposta.
 
-**Essere raggiungibili.** Quasi tutti i computer di casa stanno dietro un router. Chi non è raggiungibile partecipa comunque (cerca, pubblica, firma, anche attraverso il relay), ma non può fare da custode. Servono quindi alcuni nodi raggiungibili: i nodi d'ingresso, chi ha un server, chi apre la porta. L'apertura automatica della porta (UPnP) aumenterebbe molto il loro numero ed è da scrivere.
+**Essere raggiungibili.** Quasi tutti i computer di casa stanno dietro un router. Chi non è raggiungibile partecipa comunque (cerca, pubblica, firma, anche attraverso il relay), ma non può fare da custode. Servono quindi alcuni nodi raggiungibili: i nodi d'ingresso, chi ha un server, chi apre la porta. L'apertura automatica della porta (`--upnp`) aumenta il loro numero: è fatta, e resta spenta finché l'utente non la chiede.
 
 Ho valutato anche libp2p (troppo grande come dipendenza) e Nostr (comodo per trovarsi, ma richiede TLS e passa da server altrui). Restano scartati.
 
 ### 6.3 I passi, in ordine
 
 1. Decidere manutentori e soglia; mettere le chiavi nel programma.
-2. Ricerca dei nodi via BitTorrent e apertura automatica della porta (nessun server nostro).
+2. Prova del ritrovo sulla rete BitTorrent vera, dell'apertura della porta su un router vero e di un server Electrum pubblico.
 3. Prova pubblica su una rete di test di Bitcoin (signet o testnet) con un puzzle piccolo e volontari.
 4. Revisione esterna del firmatore.
 5. Parametri del #140: seme dei salti da una fonte pubblica verificabile, bit dei punti distinti, monete del premio, tetto delle commissioni.

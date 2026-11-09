@@ -84,6 +84,12 @@ typedef struct {
     uint64_t relay_bytes;          /* bytes of one relay, both ways together; 0: 32 MiB */
     unsigned relay_s;              /* the life of one relay; 0: 4 hours */
     unsigned relay_slot_s;         /* the slot of time that picks the relay of a pair (docs/en/NETWORK.md 7.7); 0: 60 */
+    const char *const *bt_routers; /* "host:port" of nodes of the table of BitTorrent: the node announces itself there and looks for the others
+                                    * (bt.h), with no server of this network. They must stay valid while the node runs. NULL: not used */
+    int nbt_routers;
+    unsigned rendezvous_s;         /* between two rounds there; 0: 1800 (120 while the node has no contact) */
+    bool upnp;                     /* ask the router of the LAN to let the listening port in (upnp.h) */
+    const char *upnp_ssdp;         /* tests: where the search for the router goes; NULL: the multicast address */
     bool verbose;                  /* what the node does, on stderr */
 } dht_config;
 

@@ -13,6 +13,7 @@
 #define PZPEER_DHT_PRIV_H
 
 #include "dht.h"
+#include "bt.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -111,9 +112,12 @@ struct dht {
     uint64_t seq;
     pthread_mutex_t m_mu;          /* the sleep of the maintenance thread */
     pthread_cond_t m_cv;
-    pthread_t th_accept, th_jobs, th_maint, *th_handlers;
+    pthread_mutex_t f_mu;          /* the addresses found in the table of BitTorrent, for the next bootstrap */
+    net_addr found[BT_PEERS_MAX];
+    int nfound;
+    pthread_t th_accept, th_jobs, th_maint, th_meet, *th_handlers;
     int nhandlers;
-    bool has_accept, has_jobs, has_maint, started;
+    bool has_accept, has_jobs, has_maint, has_meet, started;
 };
 
 static inline int64_t now_ms(void)

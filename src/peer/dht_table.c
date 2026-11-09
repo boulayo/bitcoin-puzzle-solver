@@ -482,6 +482,9 @@ static int boot_list(dht *d, boot_addr *out, int max)
         if (net_parse_addr(d->boot[i], &out[n].a)) out[n++].has_id = false;
         else dlog(d, "bootstrap: cannot resolve %s", d->boot[i]);
     }
+    pthread_mutex_lock(&d->f_mu);
+    for (int i = 0; i < d->nfound && n < max; i++) out[n].a = d->found[i], out[n++].has_id = false;
+    pthread_mutex_unlock(&d->f_mu);
     char path[4096], line[256];
     path_of(d, "peers.txt", path, sizeof path);
     FILE *f = fopen(path, "r");

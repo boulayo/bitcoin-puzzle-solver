@@ -21,6 +21,10 @@ typedef struct {
     int listen_port;                /* 0: do not listen (dial out only) */
     const char *const *peers;       /* host:port, besides the entry lines of the network file */
     int npeers;
+    const char *const *bt_routers;  /* nodes of the table of BitTorrent to find the others through (bt.h); none given: the well-known ones */
+    int nbt_routers;                /*   on a network of the main chain, none on a test network */
+    bool no_bt;                     /* do not use that table */
+    bool upnp;                      /* ask the router of the LAN to let the listening port in */
     unsigned id_bits;               /* leading zero bits of node IDs (NODE_ID_ZERO_BITS; fewer on a test network) */
     const char *const *pzsolve_args; /* more options for pzsolve hunt (for example -t 2 --no-gpu) */
     int nargs;

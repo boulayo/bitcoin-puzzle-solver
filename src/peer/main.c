@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* main.c - pzpeer, the daemon of the shared kangaroo network (docs/en/NETWORK.md). */
+#include "bt.h"
 #include "dht.h"
 #include "dpfeed.h"
 #include "home.h"
@@ -20,7 +21,8 @@ static int usage(void)
                     "       pzpeer netsign KEY_FILE NETWORK_FILE the signature line of a maintainer (KEY_FILE: 64 hex digits)\n"
                     "       pzpeer run --network FILE --dir DIR --payout ADDRESS [--rpc HOST:PORT:USER:PASSWORD] [--electrum HOST:PORT]...\n"
                     "                  [--listen PORT] [--bind ADDR]\n"
-                    "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzsign PATH] [--id-bits N] [--allow-private] [--exit-when-done]\n"
+                    "                  [--peer HOST:PORT]... [--bt-router HOST:PORT]... [--no-bt] [--upnp] [--pzsolve PATH] [--pzsign PATH]\n"
+                    "                  [--id-bits N] [--allow-private] [--exit-when-done]\n"
                     "                  [--verbose]\n"
                     "                  [-- PZSOLVE OPTIONS]\n"
                     "                    the home: pzsolve on the network, its points published, sessions paid through a bitcoind of\n"
@@ -28,10 +30,14 @@ static int usage(void)
                     "                    no password) or, without --rpc, through the Electrum servers of the network file and of\n"
                     "                    --electrum (plain TCP): none is trusted, every answer is checked against the proof of work\n"
                     "       pzpeer node --network FILE --seed-hex HEX --dir DIR [--listen PORT] [--bind ADDR] [--peer HOST:PORT]...\n"
-                    "                  [--store-gb N] [--allow-private] [--verbose]\n"
+                    "                  [--bt-router HOST:PORT]... [--no-bt] [--upnp] [--store-gb N] [--allow-private] [--verbose]\n"
                     "                    a node of the network until interrupted: it keeps the records of others and alerts their owners,\n"
                     "                    and relays the sessions of homes that cannot dial each other (it publishes nothing of its own);\n"
                     "                    without --listen it only dials out\n"
+                    "  --bt-router H:P   a node of the table of BitTorrent to find the other nodes through, in place of the well-known ones\n"
+                    "                    (a network of the main chain uses that table unless --no-bt; a test network only with --bt-router)\n"
+                    "  --no-bt           do not announce this node in the table of BitTorrent nor look for the others there\n"
+                    "  --upnp            ask the router of this LAN to let the --listen port in, so that the node can be dialled\n"
                     "  --allow-private   take loopback and private addresses on a main-chain network (a network of another chain takes them)\n"
                     "  --store-gb N      the records this node keeps for others, in GB of disk (default 37; the index takes about 1/8 of it in RAM)\n");
     return 2;
@@ -158,22 +164,23 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     char entries[16][256];
     int nb = 0, npeer = 0;
     long port = 0, store_gb = 0;
-    bool verbose = false, allow_private = false;
-    const char *peers[32];
+    bool verbose = false, allow_private = false, no_bt = false, upnp = false;
+    const char *peers[32], *routers[8];
+    int nrouters = 0;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         char *end;
-        if (!strcmp(a, "--verbose") || !strcmp(a, "--allow-private")) {
-            if (!strcmp(a, "--verbose")) verbose = true;
-            else allow_private = true;
-            continue;
-        }
+        if (!strcmp(a, "--verbose")) { verbose = true; continue; }
+        if (!strcmp(a, "--allow-private")) { allow_private = true; continue; }
+        if (!strcmp(a, "--no-bt")) { no_bt = true; continue; }
+        if (!strcmp(a, "--upnp")) { upnp = true; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) network = v;
         else if (!strcmp(a, "--seed-hex")) seedhex = v;
         else if (!strcmp(a, "--dir")) dir = v;
         else if (!strcmp(a, "--bind")) bind = v;
         else if (!strcmp(a, "--peer") && npeer < 32) peers[npeer++] = v;
+        else if (!strcmp(a, "--bt-router") && nrouters < 8) routers[nrouters++] = v;
         else if (!strcmp(a, "--listen")) {
             port = strtol(v, &end, 10);
             if (*end || port < 0 || port > 65535) return usage();
@@ -211,10 +218,11 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         p += l + (e != NULL);
     }
     for (int i = 0; i < npeer; i++) boot[nb++] = peers[i];
-    const dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
-                            .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose,
-                            .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
-                            .store_max = (uint64_t)store_gb * 1000000000ull / RECORD_LEN};
+    dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
+                      .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .upnp = upnp,
+                      .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
+                      .store_max = (uint64_t)store_gb * 1000000000ull / RECORD_LEN};
+    cfg.bt_routers = bt_routers(!strcmp(nf.chain, "main"), no_bt, routers, nrouters, &cfg.nbt_routers);
     char err[300], idhex[65];
     dht *d = dht_create(&cfg, err, sizeof err);
     if (!d) {
@@ -250,7 +258,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
 static int cmd_run(int argc, char **argv)
 {
     home_cfg cfg = {.pzsolve = "pzsolve", .pzsign = "pzsign", .id_bits = NODE_ID_ZERO_BITS};
-    const char *peers[32], *electrum[8];
+    const char *peers[32], *electrum[8], *routers[8];
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt */
@@ -260,6 +268,8 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--verbose")) { cfg.verbose = true; continue; }
         if (!strcmp(a, "--exit-when-done")) { cfg.exit_when_done = true; continue; }
         if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
+        if (!strcmp(a, "--no-bt")) { cfg.no_bt = true; continue; }
+        if (!strcmp(a, "--upnp")) { cfg.upnp = true; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) cfg.network = v;
         else if (!strcmp(a, "--dir")) cfg.dir = v;
@@ -271,6 +281,7 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--pzsign")) cfg.pzsign = v;
         else if (!strcmp(a, "--peer") && cfg.npeers < 32) peers[cfg.npeers++] = v;
         else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) electrum[cfg.nelectrum++] = v;
+        else if (!strcmp(a, "--bt-router") && cfg.nbt_routers < 8) routers[cfg.nbt_routers++] = v;
         else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits")) {
             char *end;
             const long n = strtol(v, &end, 10);
@@ -280,7 +291,7 @@ static int cmd_run(int argc, char **argv)
         } else return usage();
         i++;
     }
-    cfg.peers = peers, cfg.electrum = electrum;
+    cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
     if (!cfg.network || !cfg.dir || !cfg.payout) return usage();
     return home_run(&cfg);
 }

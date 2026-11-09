@@ -17,19 +17,21 @@ Il file di una rete vale solo se è firmato da una soglia di chiavi scritte dent
 - **Blocca:** tutto ciò che non è prova.
 
 ### A2. Nodi d'ingresso: deciso, nessun server tuo
-Hai deciso di non avere server tuoi per il primo contatto. La rete funziona lo stesso se si verificano due cose: i nodi si trovano attraverso la rete BitTorrent (A3) e almeno qualche partecipante è raggiungibile dall'esterno (A4, o chi ha già un server).
+Hai deciso di non avere server tuoi per il primo contatto. La rete funziona lo stesso: i nodi si trovano attraverso la rete BitTorrent (A3), e basta che qualche partecipante sia raggiungibile dall'esterno (A4, o chi ha già un server).
 
 - **Resta da sapere:** finché la rete è piccola, chi entra per primo non trova nessuno. È normale: basta che i primi due o tre partecipanti raggiungibili restino accesi.
 
-### A3. Trovarsi attraverso la rete BitTorrent: deciso, da scrivere
-Con la decisione A2 non è più una scelta: è l'unico modo di trovarsi senza server. È il prossimo lavoro.
+### A3. Trovarsi attraverso la rete BitTorrent: fatto
+Ogni nodo si annuncia nella tabella distribuita di BitTorrent sotto una chiave ricavata dall'impronta della rete, e lì trova gli altri. Passano solo indirizzi, e ognuno viene poi verificato come qualsiasi altro. Provato qui con una tabella finta e con tre nodi che si trovano senza conoscere alcun indirizzo.
 
-- **Limite:** in alcune reti aziendali BitTorrent è bloccato. Lì serve indicare a mano un nodo conosciuto (`--peer`).
+- **Da fare tu:** la prova sulla rete BitTorrent vera, che da qui non raggiungo. Ti do il comando.
+- **Limite:** in alcune reti aziendali BitTorrent è bloccato: lì serve indicare a mano un nodo conosciuto (`--peer`). Inoltre chi mette molti nodi vicino alla nostra chiave in quella tabella può nascondere gli annunci: chi entra per la prima volta non trova nessuno, o trova solo lui. È un ritardo, non un furto.
 
-### A4. Apertura automatica della porta del router (UPnP): deciso, da scrivere
-Senza server nostri servono più case raggiungibili, quindi va fatta. Va provata su router veri, che io non ho.
+### A4. Apertura automatica della porta del router (UPnP): fatto, spento se non lo chiedi
+Con `--upnp` pzpeer chiede al router di casa di far entrare la porta. Provato qui contro un router finto.
 
-- **Da fare tu:** quando è pronta, provarla sul tuo router con il comando che ti darò.
+- **Da decidere:** se lasciarlo spento finché l'utente non lo chiede (oggi) o accenderlo da solo. Consiglio: spento. Un programma non dovrebbe aprire una porta di casa senza che gli venga detto.
+- **Da fare tu:** provarlo sul tuo router con il comando che ti do.
 - **È pericoloso avere la porta aperta?** Su quella porta risponde solo pzpeer. Ogni messaggio è cifrato, firmato e limitato in dimensione e frequenza, e il programma è provato con dati casuali e ostili. Il rischio che resta è quello di qualunque programma raggiungibile da Internet: un errore non ancora scoperto. Chi non vuole correrlo partecipa lo stesso senza aprire nulla (cerca, pubblica e firma attraverso il relay); solo non fa da custode.
 
 ### A5. Revisione del firmatore: la faccio io, con un limite
