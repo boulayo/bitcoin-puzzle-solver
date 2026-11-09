@@ -7,9 +7,10 @@
  * mailboxes, and its partner, which gets that owner's proof in an ALERT. Then a session over dht_dial, malformed requests (and records
  * refused: of another owner, far from the custodian), a node stopped and started again (its store, its peers and its sequence number come
  * back), the eviction of the oldest contact of a full bucket. The limits: a public network refuses loopback, a NODES answer aimed at one
- * address or block is refused, the table keeps few contacts per block, idle connections hold few handlers, a flood of alerts that will
- * never be proved does not shut out a real one. The relay: two homes that do not listen get their alerts through their mailboxes and run
- * a stand-in session through a relay; a relay's limits (a wait without partner, a third party, relays at once, bytes). */
+ * address or block is refused, the table keeps few contacts per block and answers an address once, idle connections hold few handlers,
+ * a flood of alerts that will never be proved does not shut out a real one. The relay: two homes that do not listen get their alerts
+ * through their mailboxes and run a stand-in session through a relay; a relay's limits (a wait without partner, a third party, relays
+ * at once, bytes); a relay stopped while it copies. */
 #include "dht.h"
 #include "store.h"
 #include <pzcore/hash.h>
@@ -740,6 +741,34 @@ static void test_policy(void)
     if (b) scratch_end(b, "s-boot");
 }
 
+/* A table with two identities at one address (a node gone, and the one now at its address, until the old one has failed three times):
+ * the NODES answer gives that address once, the nearer of the two. Before, it gave both, and every asker refused the whole answer (one
+ * address, two identities) and counted it as a failure of this node. */
+static void test_nodes_answer(void)
+{
+    home_identity sid, cid, ids[3];
+    dht *sd = scratch("s-nodes", true, DHT_ANY_PORT, -1, &sid);
+    CHECK(sd != NULL);
+    if (!sd) return;
+    make_id("nodes 0", &ids[0]), make_id("nodes 1", &ids[1]), make_id("nodes 2", &ids[2]);
+    seen_at(sd, &ids[0], "127.0.0.1:7000");
+    seen_at(sd, &ids[1], "127.0.0.1:7000");
+    seen_at(sd, &ids[2], "127.0.0.1:7001");
+    make_id("nodes client", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(sd);
+    uint8_t req[33] = {DHT_FIND_NODE}, ans[2 + 82 * DHT_K];
+    dht_contact out[DHT_K];
+    size_t n;
+    memcpy(req + 1, ids[1].id, 32);
+    CHECK(net_exchange(&cli, &a, sid.xonly, req, sizeof req, ans, sizeof ans, &n, NULL));
+    CHECK(dht_parse_nodes(sd, ans, n, out) == 2 && !memcmp(out[0].id, ids[1].id, 32) && !memcmp(out[1].id, ids[2].id, 32));
+    scratch_end(sd, "s-nodes");
+}
+
 static int raw_connect(uint16_t port)
 {
     struct sockaddr_in a;
@@ -1092,6 +1121,32 @@ static void test_relay_limits(void)
     CHECK(act == 0 && dn == done0 + 2);
 }
 
+/* A node stopped while it relays a pair: the relay ends within a slice of its copy, both homes see the end, and dht_stop returns. Before,
+ * the thread of the relay still read the node after it had told dht_stop it was done, when dht_stop may have freed it (the thread
+ * sanitizer reported it). */
+static void test_relay_stop(void)
+{
+    node r;
+    joiner a, b;
+    pthread_t th;
+    memset(&r, 0, sizeof r);
+    r.d = scratch("s-relay", true, DHT_ANY_PORT, -1, &r.id);
+    CHECK(r.d != NULL);
+    if (!r.d) return;
+    joiner_init(&a, &r, "stop a", "stop pair", NULL);
+    joiner_init(&b, &r, "stop b", "stop pair", &a);
+    CHECK(pthread_create(&th, NULL, join_main, &a) == 0);
+    join_main(&b);
+    pthread_join(th, NULL);
+    CHECK(a.relayed && b.relayed);
+    const int64_t t0 = ms();
+    scratch_end(r.d, "s-relay");
+    CHECK(ms() - t0 < 2000);
+    if (a.c) CHECK(closed_within(a.c->fd, 1000));
+    if (b.c) CHECK(closed_within(b.c->fd, 1000));
+    net_close(a.c), net_close(b.c);
+}
+
 int main(void)
 {
     const int64_t t_start = ms();
@@ -1141,12 +1196,14 @@ int main(void)
     test_restart();
     test_eviction();
     test_policy();
+    test_nodes_answer();
     test_slowloris();
     test_alert_flood();
     test_seq();
     t0 = ms();
     test_relay_session();
     test_relay_limits();
+    test_relay_stop();
     printf("t_dht: the relay in %.1f s\n", (double)(ms() - t0) / 1000);
     t0 = ms();
     all(stop_main, NODES);

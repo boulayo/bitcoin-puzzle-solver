@@ -26,7 +26,7 @@ $(SECP_LIB): $(SECP_OBJ)
 	$(AR) rcs $@ $^
 
 # The modules of pzpeer, in the order of the layers (docs/en/NETWORK.md 2): main is the daemon and its commands.
-PEER_SRC   := json btc btc_rpc netfile noise keys record net store dht dpfeed pieces signer payout session chain_rpc home main
+PEER_SRC   := json btc btc_rpc netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay dpfeed pieces signer payout session chain_rpc home main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
