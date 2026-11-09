@@ -291,3 +291,86 @@ fn a_malformed_job_is_refused() {
         assert!(!child.wait().unwrap().success());
     }
 }
+
+/// The answers of a session with a partner that cheats: no party may hold a signature unless it is a valid one over its own digest.
+fn no_bad_signature(answers: &[Answer; 2], key: &Point<Secp256k1>, digests: [&[u8; 32]; 2]) {
+    for (answer, digest) in answers.iter().zip(digests) {
+        if let Ok(result) = answer {
+            let sigs = result["sigs"].as_array().unwrap();
+            assert!(sigs.len() == 1 && verifies(key, digest, &sigs[0]), "a signature that is not over the own digest left a party");
+        }
+    }
+}
+
+#[test]
+fn a_partner_with_another_digest_or_session_gets_nothing() {
+    // the partner asks for a signature over another digest: nobody signs, neither its digest nor ours
+    let (mut jobs, key) = jobs(&[[7u8; 32]]);
+    jobs[1]["digests"] = json!([hex::encode([8u8; 32])]);
+    let (answers, _) = session(&jobs, |_, _| {});
+    assert!(answers.iter().all(Result::is_err), "{answers:?}");
+    no_bad_signature(&answers, &key, [&[7u8; 32], &[8u8; 32]]);
+
+    // the partner runs under another execution id: the proofs of one do not hold for the other
+    let (mut jobs, _) = self::jobs(&[[7u8; 32]]);
+    jobs[1]["eid"] = json!(hex::encode([9u8; 32]));
+    let (answers, _) = session(&jobs, |_, _| {});
+    assert!(answers.iter().all(Result::is_err), "{answers:?}");
+}
+
+#[test]
+fn every_message_counts() {
+    // One byte changed in the middle of one message of party 1, for every message it sends in a session of one signature: the session
+    // always ends without a signature for party 0, which is the one that received the changed message.
+    let digest = [7u8; 32];
+    let (jobs, key) = jobs(&[digest]);
+    let mut total = 0;
+    let _ = session(&jobs, |from, _| total += usize::from(from == 1));
+    assert!(total >= 8, "party 1 sent only {total} messages");
+    for target in 0..total {
+        let mut seen = 0;
+        let (answers, _) = session(&jobs, |from, msg| {
+            if from == 1 {
+                if seen == target {
+                    let middle = msg.len() / 2;
+                    msg[middle] ^= 0x10;
+                }
+                seen += 1;
+            }
+        });
+        assert!(answers[0].is_err(), "party 0 signed after message {target} of {total} was changed");
+        no_bad_signature(&answers, &key, [&digest, &digest]);
+    }
+}
+
+#[test]
+fn a_replayed_session_gets_nothing() {
+    // Party 1 does not run the protocol: it sends again, message by message, what an honest party 1 sent in an earlier session with
+    // the same key. Party 0 has new random values (and, the second time, a new execution id): it never signs.
+    let digest = [7u8; 32];
+    let (mut jobs, key) = jobs(&[digest]);
+    let mut tape = Vec::new();
+    let ([first, _], _) = session(&jobs, |from, msg| {
+        if from == 1 {
+            tape.push(msg.clone());
+        }
+    });
+    assert!(first.is_ok(), "the session to replay: {first:?}");
+    for new_eid in [false, true] {
+        if new_eid {
+            jobs[0]["eid"] = json!(hex::encode([9u8; 32]));
+            jobs[1]["eid"] = json!(hex::encode([9u8; 32]));
+        }
+        let mut next = 0;
+        let (answers, _) = session(&jobs, |from, msg| {
+            if from == 1 {
+                if let Some(old) = tape.get(next) {
+                    *msg = old.clone();
+                }
+                next += 1;
+            }
+        });
+        assert!(answers[0].is_err(), "party 0 signed with a replayed partner (new eid: {new_eid})");
+        no_bad_signature(&answers, &key, [&digest, &digest]);
+    }
+}

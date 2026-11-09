@@ -465,6 +465,27 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
   (a pzsign that stopped reading would otherwise keep the relay of the partner's messages waiting for ever). Its pipes are not
   inherited by any other program pzpeer starts, nor are dp.bin and the sockets.
 
+**The review of how pzsign uses the library** (by the author of pzsign, not an outside audit). What was read: the whole of
+`signer/src`, and in cggmp21 0.6.3 the auxiliary data generation and the interactive signing.
+
+- The key share is built from the two additive pieces only after `x_i·G` equals the own public piece and the two pieces add up to
+  the puzzle key; the partner's piece is not taken from the partner (pzpeer computes it, section 7.5).
+- The auxiliary data of the partner is taken only with a modulus of the full size and its three proofs (ring-Pedersen parameters,
+  Paillier-Blum modulus, no small factor), all bound to the execution id and to the party; the own primes are checked to be two
+  different safe primes of 1536 bits and are used for one session.
+- Signing is the interactive protocol with the reliable broadcast on (the default); pzsign calls no presignature and no key
+  derivation function, so CVE-2025-66017 (presignatures) has no code path here. Every execution id comes from the session id, which
+  two homes never repeat (section 7.5).
+- A signature leaves pzsign only after it verifies against the puzzle key and the own digest, with code that is not the library's
+  in the tests.
+- `signer/tests/session.rs` plays the partner that cheats: one byte changed in each message it sends, in turn; a session sent again
+  message by message, under the same and under a new execution id; another digest; another execution id; a share that is not its
+  piece; pieces that are not the key. In every case the honest party ends without a signature.
+
+What this does not give: a proof that the library has no flaw. Its protocol has a published security proof, but an implementation
+can differ from it (CVE-2025-66016 was such a case, fixed in 0.6.3), and finding that kind of flaw is the work of an outside audit.
+The limit of failed signings (section 7.5) bounds what a flaw that leaks a little at each abort can give.
+
 ### 7.7 The relay
 
 Most homes are behind a router that takes no connection from outside, and a session needs a channel between the two homes of a pair. When

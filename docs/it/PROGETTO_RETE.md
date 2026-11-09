@@ -120,7 +120,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
 | ripubblicazione che regge a campagna avanzata | traffico troppo alto verso la fine |
-| revisione esterna del firmatore | vedi ipotesi I4 |
+| revisione esterna della libreria di firma | la revisione dell'uso che ne facciamo è fatta; quella dell'interno no, vedi ipotesi I4 |
 | prova pubblica con persone vere | i numeri di 5 sono stime |
 
 ---
@@ -134,8 +134,8 @@ Sono le cose su cui il progetto si regge e che non ho potuto dimostrare. Se una 
 | I1 | Il creatore dei puzzle non sposta i fondi e non conosce in anticipo chi vince | il premio sparisce: nessuna difesa possibile |
 | I2 | La chiave pubblica dei puzzle 140, 145, ... 160 è nota (è così oggi) | senza chiave pubblica il canguro non si può usare |
 | I3 | Il premio vale meno di circa 7 volte l'elettricità di tutta la campagna | sopra questa soglia a un partner con oltre metà della potenza conviene tentare il furto (5.1) |
-| I4 | La libreria cggmp21 0.6.3 e il modo in cui importo i due pezzi sono corretti | è il rischio tecnico più grave: un errore può far trapelare un pezzo. Mitigato dal limite di firme fallite, non eliminato |
-| I5 | La vulnerabilità CVE-2025-66017 di cggmp21 non ci riguarda perché non usiamo prefirme | lo dice l'avviso pubblico; non l'ho verificato sul codice della libreria |
+| I4 | La libreria cggmp21 0.6.3 non ha difetti nascosti | è il rischio tecnico più grave: un errore può far trapelare un pezzo. Ho controllato il modo in cui la usiamo e provato un partner che bara in ogni messaggio (nessuna firma esce mai); l'interno della libreria resta affidato ai suoi autori. Mitigato dal limite di firme fallite, non eliminato |
+| I5 | La vulnerabilità CVE-2025-66017 di cggmp21 non ci riguarda perché non usiamo prefirme | verificato sul codice: pzsign non chiama nessuna funzione di prefirma |
 | I6 | Il computer di casa non è compromesso | chi legge il seme o `dp.bin` ha le distanze: perde quella casa |
 | I7 | Il proprio nodo Bitcoin dice il vero | un nodo bugiardo può far firmare una transazione su monete inesistenti: perdita di tempo, non del premio |
 | I7b | Senza nodo proprio: almeno uno dei server Electrum usati è onesto e raggiungibile, e nessuno spende il lavoro di interi blocchi per ingannare | se tutti mentono o tacciono la sessione aspetta o fallisce: ritardo, non furto. Un blocco falso con lavoro vero costa quanto il premio di un blocco |
