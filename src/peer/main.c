@@ -19,7 +19,7 @@ static int usage(void)
                     "       pzpeer netcheck NETWORK_FILE         the values, the fingerprint and the signatures of a network file\n"
                     "       pzpeer netsign KEY_FILE NETWORK_FILE the signature line of a maintainer (KEY_FILE: 64 hex digits)\n"
                     "       pzpeer run --network FILE --dir DIR --payout ADDRESS --rpc HOST:PORT:USER:PASSWORD [--listen PORT] [--bind ADDR]\n"
-                    "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzfirma PATH] [--id-bits N] [--allow-private] [--exit-when-done]\n"
+                    "                  [--peer HOST:PORT]... [--pzsolve PATH] [--pzsign PATH] [--id-bits N] [--allow-private] [--exit-when-done]\n"
                     "                  [--verbose]\n"
                     "                  [-- PZSOLVE OPTIONS]\n"
                     "                    the home: pzsolve on the network, its points published, sessions paid through bitcoind\n"
@@ -246,7 +246,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
 
 static int cmd_run(int argc, char **argv)
 {
-    home_cfg cfg = {.pzsolve = "pzsolve", .pzfirma = "pzfirma", .id_bits = NODE_ID_ZERO_BITS};
+    home_cfg cfg = {.pzsolve = "pzsolve", .pzsign = "pzsign", .id_bits = NODE_ID_ZERO_BITS};
     const char *peers[32];
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -265,7 +265,7 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--rpc-cookie")) cfg.rpc_cookie = v;
         else if (!strcmp(a, "--bind")) cfg.listen_host = v;
         else if (!strcmp(a, "--pzsolve")) cfg.pzsolve = v;
-        else if (!strcmp(a, "--pzfirma")) cfg.pzfirma = v;
+        else if (!strcmp(a, "--pzsign")) cfg.pzsign = v;
         else if (!strcmp(a, "--peer") && cfg.npeers < 32) peers[cfg.npeers++] = v;
         else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits")) {
             char *end;

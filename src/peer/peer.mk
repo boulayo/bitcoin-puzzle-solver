@@ -6,8 +6,8 @@
 #   make peer        build/pzpeer
 #   make peer-test   the unit tests of src/peer (tests/peer/t_*.c)
 #   make peer-fuzz   the mutation fuzzer of the readers of hostile input, FUZZ_SECONDS long (60)
-#   make signer      build/pzfirma, the two-party signer (signer/, Rust: needs cargo, and builds GMP from source the first time)
-#   make signer-test its tests: two pzfirma sessions relayed by the test (signer/tests/session.rs)
+#   make signer      build/pzsign, the two-party signer (signer/, Rust: needs cargo, and builds GMP from source the first time)
+#   make signer-test its tests: two pzsign sessions relayed by the test (signer/tests/session.rs)
 
 SECP_DIR   := lib/secp256k1
 SECP_FLAGS  = -std=c99 $(OPT) -g $(DEPLOY) -I$(SECP_DIR) -I$(SECP_DIR)/include -w \
@@ -57,28 +57,28 @@ $(BUILD)/peer/fuzz_peer$(EXE): tests/peer/fuzz_peer.c src/peer/btc_rpc.c tests/p
 peer-fuzz: $(BUILD)/peer/fuzz_peer$(EXE)
 	$(RUN) ./$(BUILD)/peer/fuzz_peer$(EXE) $(FUZZ_SECONDS)
 
-# The tests of the two-party signing (t_pieces, t_session) run the real pzfirma when it and two primes files are there: `make signer peer-primes`
+# The tests of the two-party signing (t_pieces, t_session) run the real pzsign when it and two primes files are there: `make signer peer-primes`
 # once (the primes take seconds to a minute), then every `make peer-test` uses them; without them those tests say they were skipped.
 PEER_PRIMES := $(BUILD)/peer/primes0.json $(BUILD)/peer/primes1.json
 peer-primes: | $(BUILD)/peer
-	@for f in $(PEER_PRIMES); do [ -f $$f ] || ./$(BUILD)/pzfirma$(EXE) primes $$f || exit 1; done
+	@for f in $(PEER_PRIMES); do [ -f $$f ] || ./$(BUILD)/pzsign$(EXE) primes $$f || exit 1; done
 
 peer-test: $(PEER) $(addsuffix $(EXE),$(addprefix $(BUILD)/peer/,$(PEERTESTS)))
-	@if [ -x $(BUILD)/pzfirma$(EXE) ] && [ -f $(BUILD)/peer/primes0.json ] && [ -f $(BUILD)/peer/primes1.json ]; then \
-	    export PZFIRMA=$(BUILD)/pzfirma$(EXE) PZFIRMA_PRIMES0=$(BUILD)/peer/primes0.json PZFIRMA_PRIMES1=$(BUILD)/peer/primes1.json; fi; \
+	@if [ -x $(BUILD)/pzsign$(EXE) ] && [ -f $(BUILD)/peer/primes0.json ] && [ -f $(BUILD)/peer/primes1.json ]; then \
+	    export PZSIGN=$(BUILD)/pzsign$(EXE) PZSIGN_PRIMES0=$(BUILD)/peer/primes0.json PZSIGN_PRIMES1=$(BUILD)/peer/primes1.json; fi; \
 	for t in $(PEERTESTS); do $(RUN) ./$(BUILD)/peer/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(PEER) version
 
-# pzfirma is a Rust crate with its own build: cargo decides what to rebuild, so the rule always runs it. --locked keeps the versions
+# pzsign is a Rust crate with its own build: cargo decides what to rebuild, so the rule always runs it. --locked keeps the versions
 # of signer/Cargo.lock. It is built for the machine that runs make (not with a MinGW cross compiler: GMP would need one too).
-SIGNER      := $(BUILD)/pzfirma$(EXE)
+SIGNER      := $(BUILD)/pzsign$(EXE)
 CARGO       ?= cargo
 SIGNER_CARGO = $(CARGO) build --release --locked --manifest-path signer/Cargo.toml
 
 signer:
 	$(SIGNER_CARGO)
 	@mkdir -p $(BUILD)
-	cp signer/target/release/pzfirma$(EXE) $(SIGNER)
+	cp signer/target/release/pzsign$(EXE) $(SIGNER)
 
 signer-test:
 	$(CARGO) test --release --locked --manifest-path signer/Cargo.toml

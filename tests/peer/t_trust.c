@@ -14,7 +14,7 @@ static const char BODY[] =
     "net=t1\npuzzle=0\n"
     "pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\n"
     "range=1000:ffff\njumpseed=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\n"
-    "schema=rete-06\ndpbits=8\nchain=regtest\n"
+    "schema=net-06\ndpbits=8\nchain=regtest\n"
     "entry=127.0.0.1:9735\nprize=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0:100000000\n";
 
 static void key(const char *label, uint8_t sec[32], char xhex[65])

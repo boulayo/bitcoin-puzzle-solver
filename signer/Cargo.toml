@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
-# pzfirma, the two-party ECDSA signer of the shared kangaroo network (docs/en/NETWORK.md 7.6). Every dependency is pinned and
+# pzsign, the two-party ECDSA signer of the shared kangaroo network (docs/en/NETWORK.md 7.6). Every dependency is pinned and
 # Cargo.lock is committed: the build is `cargo build --release --locked`.
 
 [package]
-name = "pzfirma"
+name = "pzsign"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 publish = false
 
 [[bin]]
-name = "pzfirma"
+name = "pzsign"
 path = "src/main.rs"
 
 [dependencies]

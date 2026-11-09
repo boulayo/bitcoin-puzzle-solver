@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* signer.c - the pzfirma process (see signer.h). POSIX: posix_spawn and pipes. */
+/* signer.c - the pzsign process (see signer.h). POSIX: posix_spawn and pipes. */
 #include "signer.h"
 #include <pzcore/seal.h>
 #include <errno.h>
@@ -16,8 +16,8 @@
 
 extern char **environ;
 
-/* a pipe whose ends no other child inherits: a pzfirma that held a copy of the stdin of another session's would keep that one from seeing
- * the end of its input, and pzfirma has no business with any other descriptor of pzpeer (dp.bin, sockets) */
+/* a pipe whose ends no other child inherits: a pzsign that held a copy of the stdin of another session's would keep that one from seeing
+ * the end of its input, and pzsign has no business with any other descriptor of pzpeer (dp.bin, sockets) */
 static bool pipe_cloexec(int p[2])
 {
     if (pipe(p) != 0) return false;
@@ -27,7 +27,7 @@ static bool pipe_cloexec(int p[2])
 }
 
 /* a process group of its own: a Ctrl-C at the terminal stops pzpeer, which lets the sessions under way end, and must not kill their
- * pzfirma in the middle of a signing */
+ * pzsign in the middle of a signing */
 static int spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *fa, char *const argv[])
 {
     posix_spawnattr_t at;
@@ -69,7 +69,7 @@ bool signer_start(signer *s, const char *path)
         return false;
     }
     s->to = in[1], s->from = out[0];
-    signal(SIGPIPE, SIG_IGN);                                  /* a pzfirma that died is an error of the write, not of pzpeer */
+    signal(SIGPIPE, SIG_IGN);                                  /* a pzsign that died is an error of the write, not of pzpeer */
     return true;
 }
 

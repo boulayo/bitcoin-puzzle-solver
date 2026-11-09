@@ -262,7 +262,7 @@ bool kang_insert_dps(kang_state *ks, const dp_rec *recs, int n, bool *dup_out)
 static const kang_species KSPEC3[] = {
 #include "kang_spec3.inc"
 };
-/* The species of a network campaign, rete-06 (docs/en/NETWORK.md 6 and the project document, 2.3): tame walkers on all twelve residues in
+/* The species of a network campaign, net-06 (docs/en/NETWORK.md 6 and the project document, 2.3): tame walkers on all twelve residues in
  * [-0.6, 0.6] W, wild ones on Q on all twelve residues in [-1.1, 0.1] W, no wild ones on 3Q. Wider zones cost about 11 % more steps than
  * schema 3, and in exchange a partner who meets one of these walkers learns too little about its start to steal its share cheaply. From
  * tools/research/kang_net6.txt by tools/research/kspec_table.py. */

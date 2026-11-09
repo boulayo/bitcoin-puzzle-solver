@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_pieces.c - the pieces of the key of a coincidence, for the three kinds of pair (tame with wild +, tame with wild -, wild + with wild -),
- * and, when PZFIRMA names a pzfirma binary and PZFIRMA_PRIMES0 / PZFIRMA_PRIMES1 two primes files, a whole two-party signing driven
+ * and, when PZSIGN names a pzsign binary and PZSIGN_PRIMES0 / PZSIGN_PRIMES1 two primes files, a whole two-party signing driven
  * through signer.c with the pieces of a coincidence, the signatures checked with libsecp256k1. */
 #include "peertest.h"
 #include "pieces.h"
@@ -185,7 +185,7 @@ static void test_signing(const char *bin, const char *primes0, const char *prime
         CHECK(secp256k1_ecdsa_verify(ctx, &sig, digests[i], &P));   /* low s too: libsecp256k1 refuses a high one */
     }
     for (int i = 0; i < 2; i++) signer_stop(&s[i]), free(r[i].answer);
-    printf("  two-party signing through pzfirma: %s\n", g_fails ? "failed" : "two valid signatures");
+    printf("  two-party signing through pzsign: %s\n", g_fails ? "failed" : "two valid signatures");
 }
 
 int main(void)
@@ -195,9 +195,9 @@ int main(void)
     test_pieces(0, -1, "tame and wild -");
     test_pieces(1, -1, "wild + and wild -");
     test_pieces(-1, 0, "wild - and tame");
-    const char *bin = getenv("PZFIRMA"), *p0 = getenv("PZFIRMA_PRIMES0"), *p1 = getenv("PZFIRMA_PRIMES1");
+    const char *bin = getenv("PZSIGN"), *p0 = getenv("PZSIGN_PRIMES0"), *p1 = getenv("PZSIGN_PRIMES1");
     if (bin && p0 && p1) test_signing(bin, p0, p1);
-    else printf("  two-party signing skipped (set PZFIRMA, PZFIRMA_PRIMES0 and PZFIRMA_PRIMES1)\n");
+    else printf("  two-party signing skipped (set PZSIGN, PZSIGN_PRIMES0 and PZSIGN_PRIMES1)\n");
     secp256k1_context_destroy(ctx);
     printf(g_fails ? "t_pieces: %d FAILED\n" : "t_pieces: OK\n", g_fails);
     return g_fails != 0;

@@ -5,7 +5,7 @@
  * (the smaller identity) when it finds the partner or by a side that does not listen, the partner's own connection, or a relay.
  *
  * A hello can start a session before this home has the alert of its pair, and anyone can copy the x of a published record into one of
- * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzfirma only after that), at
+ * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzsign only after that), at
  * most HELLO_SESSIONS of them run at a time, one per partner, and a slot whose partner proved nothing is given back: they never take the
  * slots of the pairs the table alerted. */
 #include "home.h"
@@ -318,7 +318,7 @@ static void *session_main(void *arg)
         }
         const session_chain chain = chain_rpc_iface(&crpc);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
-                          .max_feerate = 200000, .pzfirma = cfg->pzfirma, .primes = primes, .limit = &h->limit, .proved = &proved,
+                          .max_feerate = 200000, .pzsign = cfg->pzsign, .primes = primes, .limit = &h->limit, .proved = &proved,
                           .chan = &chan, .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
         memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
         memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
@@ -535,7 +535,7 @@ int home_run(const home_cfg *cfg)
         if (!df.f && dpfeed_open(&df, h->dpbin)) {
             pthread_mutex_lock(&h->mu);
             h->dpr = fopen(h->dpbin, "rb");
-            if (h->dpr) (void)fcntl(fileno(h->dpr), F_SETFD, FD_CLOEXEC);   /* the distances of the home: not for pzfirma */
+            if (h->dpr) (void)fcntl(fileno(h->dpr), F_SETFD, FD_CLOEXEC);   /* the distances of the home: not for pzsign */
             pthread_mutex_unlock(&h->mu);
         }
         own_point p[DHT_STORE_MAX];

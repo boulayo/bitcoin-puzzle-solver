@@ -40,7 +40,7 @@ bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx);
  * could hold the second transaction back with nothing to fear, so the session refuses such a rate before anything is signed. */
 bool payout_can_cancel(const payout_terms *t);
 /* The digests of the first n inputs of tx, which spend the puzzle address (all the inputs of the first transaction, input 0 of the second):
- * what pzfirma signs, in this order. */
+ * what pzsign signs, in this order. */
 bool payout_digests(const btc_tx *tx, const uint8_t puzzle_spk[BTC_P2PKH_LEN], size_t n, uint8_t (*digests)[32]);
 
 #endif

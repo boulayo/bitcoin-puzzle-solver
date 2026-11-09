@@ -44,7 +44,7 @@ pub fn run(job: &Job, primes: PregeneratedPrimes<SecurityLevel128>, link: &mut i
     let aux_eid = tagged(b"pznet1/aux", &[&job.eid]);
     let aux_gen = cggmp21::aux_info_gen(ExecutionId::new(&aux_eid), me, 2, primes);
     let aux = drive(aux_gen.into_state_machine(&mut OsRng), link, me, Phase::Aux)?;
-    eprintln!("pzfirma[{me}]: auxiliary data in {:.1} s", started.elapsed().as_secs_f64());
+    eprintln!("pzsign[{me}]: auxiliary data in {:.1} s", started.elapsed().as_secs_f64());
     let share = KeyShare::from_parts((core, aux)).map_err(|e| Fail::new(format!("key share: {e}")))?;
 
     let mut sigs = Vec::with_capacity(job.digests.len());
@@ -62,7 +62,7 @@ pub fn run(job: &Job, primes: PregeneratedPrimes<SecurityLevel128>, link: &mut i
         let mut rs = [0u8; 64];
         sig.write_to_slice(&mut rs);
         sigs.push(Sig { r: rs[..32].try_into().unwrap(), s: rs[32..].try_into().unwrap() });
-        eprintln!("pzfirma[{me}]: signature {index} in {:.2} s", started.elapsed().as_secs_f64());
+        eprintln!("pzsign[{me}]: signature {index} in {:.2} s", started.elapsed().as_secs_f64());
     }
     Ok(sigs)
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Leonardo Boulay
-//! The envelope of a message between the two pzfirma (the payload of frames 0x81 and 0x02, opaque to pzpeer).
+//! The envelope of a message between the two pzsign (the payload of frames 0x81 and 0x02, opaque to pzpeer).
 //!
 //! A header, then the message of the library, both in postcard (serde, varints, no field names):
 //!

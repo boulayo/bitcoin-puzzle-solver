@@ -552,7 +552,7 @@ static bool campaign_completed(const run_ctx *r)
 static u8 g_start_key[32];
 
 /* --jump-seed and --start-key: a walk others can share (pzpeer starts pzsolve with them). The jumps come from the public seed, the starts
- * from the secret key, the walkers from the schema rete-06, and the distinguished points are exactly those of --dp-bits. Checked first. */
+ * from the secret key, the walkers from the schema net-06, and the distinguished points are exactly those of --dp-bits. Checked first. */
 static void shared_options(opts_t *o)
 {
     if (!o->jump_seed[0] && !o->start_key[0]) return;
@@ -721,7 +721,7 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
     else if (r->cfg.mode == MODE_BSGS)
         say(PZ_LOG_INFO, "mode: bsgs (known public key) | seed id %s | random order of the giant steps determined by the seed", idb);
     else if (r->cfg.net)
-        say(PZ_LOG_INFO, "mode: kangaroo, shared walk (rete-06) | start key id %s | public jumps, secret starts", idb);
+        say(PZ_LOG_INFO, "mode: kangaroo, shared walk (net-06) | start key id %s | public jumps, secret starts", idb);
     else
         say(PZ_LOG_INFO, "mode: kangaroo (known public key) | seed id %s | the seed determines jumps and starting positions", idb);
     if (r->cfg.part[0]) {

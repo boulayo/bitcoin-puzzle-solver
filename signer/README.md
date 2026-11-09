@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- SPDX-FileCopyrightText: 2026 Leonardo Boulay -->
-# pzfirma
+# pzsign
 
 The two-party ECDSA signer of the shared kangaroo network ([NETWORK.md](../docs/en/NETWORK.md), section 7.6). When two homes find a
 coincidence, each holds an additive piece of the puzzle key, `k = x0 + x1`, and neither may learn the other's. pzpeer starts one
-`pzfirma session` on each side; the two run the CGGMP21 protocol (the `cggmp21` crate) through pzpeer and both get the same
+`pzsign session` on each side; the two run the CGGMP21 protocol (the `cggmp21` crate) through pzpeer and both get the same
 standard ECDSA signatures of the transaction digests, with `k` never assembled anywhere.
 
 ```
-make signer          # build/pzfirma (cargo build --release --locked; GMP is built from source the first time)
+make signer          # build/pzsign (cargo build --release --locked; GMP is built from source the first time)
 make signer-test     # the tests below
 ```
 
@@ -16,12 +16,12 @@ make signer-test     # the tests below
 
 | Command | What it does |
 |---|---|
-| `pzfirma session` | one signing session, framed on stdin and stdout |
-| `pzfirma primes FILE` | pregenerates the two safe primes (1536 bits) of a session into FILE, mode 0600, through `FILE.tmp` |
-| `pzfirma selftest [P0 P1]` | both parties in one process: a random key split in two, the auxiliary data, three digests, the same verified signatures on both sides; with primes from P0 and P1, or fresh ones |
-| `pzfirma version` | version and license |
+| `pzsign session` | one signing session, framed on stdin and stdout |
+| `pzsign primes FILE` | pregenerates the two safe primes (1536 bits) of a session into FILE, mode 0600, through `FILE.tmp` |
+| `pzsign selftest [P0 P1]` | both parties in one process: a random key split in two, the auxiliary data, three digests, the same verified signatures on both sides; with primes from P0 and P1, or fresh ones |
+| `pzsign version` | version and license |
 
-The primes are the party's Paillier secret key. A file is for one session: pzfirma only reads it, pzpeer removes it once used.
+The primes are the party's Paillier secret key. A file is for one session: pzsign only reads it, pzpeer removes it once used.
 
 ## The session
 
@@ -30,16 +30,16 @@ frames; logs go to stderr.
 
 | Type | Direction | Payload |
 |---|---|---|
-| 0x01 | pzpeer → pzfirma | the job, JSON, first frame and only once |
-| 0x02 | pzpeer → pzfirma | a message of the other party |
-| 0x81 | pzfirma → pzpeer | a message for the other party |
-| 0x82 | pzfirma → pzpeer | `{"sigs": [{"r": hex32, "s": hex32}, ...]}`, last frame |
-| 0x83 | pzfirma → pzpeer | `{"error": "...", "blame": [i...]}`, last frame |
+| 0x01 | pzpeer → pzsign | the job, JSON, first frame and only once |
+| 0x02 | pzpeer → pzsign | a message of the other party |
+| 0x81 | pzsign → pzpeer | a message for the other party |
+| 0x82 | pzsign → pzpeer | `{"sigs": [{"r": hex32, "s": hex32}, ...]}`, last frame |
+| 0x83 | pzsign → pzpeer | `{"error": "...", "blame": [i...]}`, last frame |
 
 Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex33], "key": hex33, "primes": path, "digests": [hex32, ...]}`
 (unknown fields are refused, 1 to 64 digests). Then:
 
-1. **Key share.** pzfirma checks that `share·G = pub[i]` and `pub[0] + pub[1] = key`, and builds the library's key share from the pieces:
+1. **Key share.** pzsign checks that `share·G = pub[i]` and `pub[0] + pub[1] = key`, and builds the library's key share from the pieces:
    `DirtyCoreKeyShare { i, key_info: { shared_public_key: key, public_shares: pub, vss_setup: None }, x: share }`. Without a VSS setup
    the library validates it as an additive 2-of-2 sharing. There is no dealer and no key generation.
 2. **Auxiliary data**, `aux_info_gen` with the primes of the file and the execution id `SHA256("pznet1/aux" || eid)`. It gives the
@@ -49,8 +49,8 @@ Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex3
    each signature is verified against `key` before it is reported. No presignatures.
 
 Any malformed input (a frame, the job, a message, a frame of an unexpected type, the end of stdin) ends the session with 0x83.
-Before it, pzfirma sends the partner an abort message (0x81), so that the other side stops at once. `blame` lists the parties that
-the library names as culprits, or the partner when its message does not decode; it is empty otherwise. pzfirma has no timeout:
+Before it, pzsign sends the partner an abort message (0x81), so that the other side stops at once. `blame` lists the parties that
+the library names as culprits, or the partner when its message does not decode; it is empty otherwise. pzsign has no timeout:
 pzpeer kills it when the session is over.
 
 The last message of each run reaches one side before the other: if it is lost or damaged, one side may report its signatures (0x82)
@@ -78,7 +78,7 @@ a signing is about 45 KB per party, the largest message 31 KB. pzpeer must split
 
 ## Tests
 
-`cargo test --release` (or `make signer-test`) runs `tests/session.rs`: two `pzfirma session` processes with the test as their
+`cargo test --release` (or `make signer-test`) runs `tests/session.rs`: two `pzsign session` processes with the test as their
 pzpeer, which relays the 0x81 frames of each to the other as 0x02. It checks that both sides return the same signatures, valid for
 `key` (verified there with curve operations only) and with a low `s`; that a damaged envelope, a corrupted proof and a corrupted
 broadcast make both sides abort, with the blame on the sender where the library names it; that a share that does not match its
@@ -90,7 +90,7 @@ in 0.7 s.
 
 ## Licenses
 
-pzfirma is AGPL-3.0-or-later. Its main dependencies: `cggmp21`, `key-share`, `paillier-zk`, `fast-paillier`, `generic-ec`,
+pzsign is AGPL-3.0-or-later. Its main dependencies: `cggmp21`, `key-share`, `paillier-zk`, `fast-paillier`, `generic-ec`,
 `round-based` (the protocol, MIT OR Apache-2.0); `rug` and `gmp-mpfr-sys` (LGPL-3.0-or-later), which bring GMP (LGPL-3.0-or-later or
 GPL-2.0-or-later), linked statically; `postcard`, `serde`, `serde_json`, `sha2`, `hex`, `zeroize`, `rand_core` (MIT OR Apache-2.0).
 The rest of the tree is MIT, Apache-2.0, BSD-3-Clause or similar permissive licenses. All are compatible with the AGPL; a binary

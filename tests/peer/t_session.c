@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* t_session.c - two homes run the session of a coincidence against each other, in two threads, with the real pzfirma, over a channel in
+/* t_session.c - two homes run the session of a coincidence against each other, in two threads, with the real pzsign, over a channel in
  * memory and a chain in memory that checks every input of every transaction it is given (a standard P2PKH spend of an unspent output) and
  * mines a block every 200 ms. The cases: the payout, half each (with a chain that does not answer at first, and the primes made by the
  * session); a partner S that keeps the second transaction (and its last signing message) to itself, which F answers by spending its tiny
  * coin after 3 blocks; a partner F that stops, or sends garbage, instead of its last signing message, and gets nothing for it; a fee rate
- * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzfirma that
+ * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzsign that
  * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
- * Needs PZFIRMA, PZFIRMA_PRIMES0 and PZFIRMA_PRIMES1; without them it says it was skipped. */
+ * Needs PZSIGN, PZSIGN_PRIMES0 and PZSIGN_PRIMES1; without them it says it was skipped. */
 #include "peertest.h"
 #include "chain_rpc.h"
 #include "session.h"
@@ -401,7 +401,7 @@ typedef struct {
     bool make_primes;                 /* home 0 has no primes: its session makes them */
     unsigned limit[2];                /* failures already counted on the network by home 0, and for the pair by home 1 */
     unsigned fails_F, fails_S;        /* the failed signings F and S count in the case */
-    const char *bin[2];               /* the pzfirma of each home (NULL: the real one) */
+    const char *bin[2];               /* the pzsign of each home (NULL: the real one) */
     const char *why;                  /* in the reason of both homes, when not NULL */
     bool before_proofs;               /* the session stops before the proofs of possession */
     bool scan_fails;                  /* the scan of the puzzle address fails: the prize of the network file is given */
@@ -484,7 +484,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         uint8_t ps[32];
         hashed(l, ps);
         p2pkh_of(ps, g->pay_spk), g->pay_len = BTC_P2PKH_LEN;
-        g->max_feerate = 200000, g->pzfirma = tc->bin[i] ? tc->bin[i] : bin, g->primes = primes[i];
+        g->max_feerate = 200000, g->pzsign = tc->bin[i] ? tc->bin[i] : bin, g->primes = primes[i];
         chan[i] = (session_chan){&e[i], q_send, q_recv};
         if (regtest) {                                          /* each home its own client of the node */
             CHECK(rpc_client(&rpcs[i]));
@@ -579,7 +579,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
 }
 
 /* A partner that copied the x of home 0's record into a record of its own type, under its own identity, and cannot prove it: home 0 makes
- * no primes and runs no pzfirma for it (the primes file it would make stays missing). */
+ * no primes and runs no pzsign for it (the primes file it would make stays missing). */
 static void run_copied(const char *bin)
 {
     static record_net net;
@@ -616,7 +616,7 @@ static void run_copied(const char *bin)
     memcpy(g->base, base, 32), memcpy(g->pubkey33, p33, 33), memcpy(g->partner, xo[1], 32), memcpy(g->d, d0, 32);
     hashed("copied coin", g->coin_sec);
     p2pkh_of(g->coin_sec, g->pay_spk), g->pay_len = BTC_P2PKH_LEN;
-    g->max_feerate = 200000, g->pzfirma = bin, g->primes = in_dir("primes-copied", prim, sizeof prim);
+    g->max_feerate = 200000, g->pzsign = bin, g->primes = in_dir("primes-copied", prim, sizeof prim);
     remove(prim);
     g->chan = &chan, g->chain = &chn, g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3;
     bool proved = false;
@@ -641,9 +641,9 @@ static void run_copied(const char *bin)
 
 int main(void)
 {
-    const char *bin = getenv("PZFIRMA"), *primes[2] = {getenv("PZFIRMA_PRIMES0"), getenv("PZFIRMA_PRIMES1")};
+    const char *bin = getenv("PZSIGN"), *primes[2] = {getenv("PZSIGN_PRIMES0"), getenv("PZSIGN_PRIMES1")};
     if (!bin || !primes[0] || !primes[1]) {
-        printf("t_session: skipped (set PZFIRMA, PZFIRMA_PRIMES0 and PZFIRMA_PRIMES1)\n");
+        printf("t_session: skipped (set PZSIGN, PZSIGN_PRIMES0 and PZSIGN_PRIMES1)\n");
         return 0;
     }
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
@@ -654,13 +654,19 @@ int main(void)
         regtest = sscanf(rt, "%63[^:]:%u:%63[^:]:%63s", node.host, &node.port, node.user, node.pass) == 4;
         btc_rpc c;
         CHECK(regtest && rpc_client(&c));
-        (void)btc_rpc_createwallet(&c, "pz");                   /* or loaded already */
+        if (!btc_rpc_createwallet(&c, "pz")) {                  /* it is there already: loaded, or to load after a restart of the node */
+            json_w w;
+            json_doc d;
+            const json_val *res;
+            jw_init(&w), jw_arr(&w), jw_str(&w, "pz"), jw_end(&w);
+            if (btc_rpc_call(&c, false, "loadwallet", &w, &d, &res)) json_free(&d);   /* the call frees w */
+        }
         CHECK(btc_rpc_set_wallet(&c, "pz") && btc_rpc_getnewaddress(&c, "legacy", mine_addr, sizeof mine_addr));
         mine(&c, 101);                                          /* coinbase coins mature after 100 blocks */
         btc_rpc_done(&c);
         printf("  on the regtest node %s:%u\n", node.host, node.port);
     }
-    /* the programs of some cases: a pzfirma whose primes come from a copy, one that hangs and reads nothing, one that floods */
+    /* the programs of some cases: a pzsign whose primes come from a copy, one that hangs and reads nothing, one that floods */
     char maker[96], hang[96], flood[96], text[1200];
     snprintf(text, sizeof text, "#!/bin/sh\nif [ \"$1\" = primes ]; then cp '%s' \"$2\" && chmod 600 \"$2\"; exit $?; fi\nexec '%s' \"$@\"\n", primes[0], bin);
     write_text(in_dir("maker", maker, sizeof maker), text, true);
@@ -681,7 +687,7 @@ int main(void)
         /* one home at its limit (on the network, or for the pair): it stops before the plan, and the other counts no failure */
         {.name = "limit of the network reached", .expect = NOTHING, .limit = {10, 0}, .why = "failed signings on this network"},
         {.name = "limit of the pair reached", .expect = NOTHING, .limit = {0, 3}, .why = "failed signings of this pair"},
-        {.name = "a pzfirma that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1},
+        {.name = "a pzsign that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1},
         /* the scan fails (dust): the prize of the network file is paid all the same (before, no coin of the puzzle to spend) */
         {.name = "the scan fails", .expect = PAYOUT, .scan_fails = true},
         /* the chain stops after the first transaction: the wait for its block ends (before, never) */

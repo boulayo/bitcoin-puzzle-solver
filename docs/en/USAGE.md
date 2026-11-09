@@ -63,7 +63,7 @@ line of the help:
 * `--encrypt-pubkey`, `--encrypt-password` and `--on-found` encrypt the key that is found and run a command when it is: section 11.
 * `--jump-seed HEX` and `--start-key FILE` make a shared walk, the kangaroo of the shared network ([NETWORK.md](NETWORK.md), in
   development): pzpeer starts pzsolve with them, with `-r`, `-k` and `--dp-bits` from the network file. The jumps come from the public seed,
-  so that every computer walks the same graph; the walkers follow the schema rete-06; the distinguished points are exactly those of
+  so that every computer walks the same graph; the walkers follow the schema net-06; the distinguished points are exactly those of
   `--dp-bits`. The start key is the secret of the starting points and stays in memory: `campaign.conf` keeps only its id, the reports say
   it is not written, and the campaign resumes only with the same key. `-s`, `-m` and `--part` are not given with them.
 

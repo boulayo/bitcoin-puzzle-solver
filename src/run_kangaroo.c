@@ -208,7 +208,7 @@ static void synth_free(run_ctx *r)
 
 /* Runs the CPU kangaroo on [lo, lo + 2^wbits) until `key` is found; returns the steps used or -1. Test overrides: R jumps
  * instead of 256 (R > 0, a power of two), dp_bits (dp > 0) and no restart of walkers without distinguished points. */
-typedef struct { unsigned R, dp; bool no_watchdog, net; } kang_try_opts;   /* net: the walk of a network campaign (rete-06, starts by HMAC) */
+typedef struct { unsigned R, dp; bool no_watchdog, net; } kang_try_opts;   /* net: the walk of a network campaign (net-06, starts by HMAC) */
 
 static double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, int nthreads, double timeout, u64 seedn, const kang_try_opts *o)
 {
@@ -431,7 +431,7 @@ static int cmp_double(const void *a, const void *b)
 }
 
 /* 'pzsolve kstat [net] BITS TRIALS [THREADS [R [DP]]]': the mean cost of the kangaroo in units of sqrt(W), measured on random keys; net: the
- * walk of a network campaign (schema rete-06, docs/en/NETWORK.md 6). */
+ * walk of a network campaign (schema net-06, docs/en/NETWORK.md 6). */
 int kangaroo_stats(int argc, char **argv)
 {
     const bool net = argc > 2 && !strcmp(argv[2], "net");

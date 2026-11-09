@@ -199,7 +199,7 @@ static int tcp_connect(btc_rpc *c, int64_t deadline)
             why = errno;
             continue;
         }
-        /* not inherited by pzfirma; non-blocking, so that every wait has the deadline */
+        /* not inherited by pzsign; non-blocking, so that every wait has the deadline */
         fcntl(fd, F_SETFD, FD_CLOEXEC);
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 #ifdef SO_NOSIGPIPE

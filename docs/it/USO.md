@@ -63,7 +63,7 @@ Quello che richiede più di una riga dell'aiuto:
 * `--encrypt-pubkey`, `--encrypt-password` e `--on-found` cifrano la chiave trovata ed eseguono un comando quando viene trovata: sezione 11.
 * `--jump-seed HEX` e `--start-key FILE` fanno un cammino condiviso, il canguro della rete condivisa ([NETWORK.md](../en/NETWORK.md),
   in sviluppo): li passa pzpeer quando avvia pzsolve, con `-r`, `-k` e `--dp-bits` presi dal file della rete. I salti vengono dal seme
-  pubblico, così tutti i computer camminano sullo stesso grafo; i canguri seguono lo schema rete-06; i punti distinti sono esattamente
+  pubblico, così tutti i computer camminano sullo stesso grafo; i canguri seguono lo schema net-06; i punti distinti sono esattamente
   quelli di `--dp-bits`. La chiave di partenza è il segreto dei punti di partenza e resta in memoria: `campaign.conf` ne tiene solo
   l'identificativo, i rapporti dicono che non è scritta, e la campagna riprende solo con la stessa chiave. `-s`, `-m` e `--part` non si
   danno insieme.

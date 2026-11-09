@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Leonardo Boulay
-//! pzfirma, the two-party ECDSA signer of the shared kangaroo network (docs/en/NETWORK.md 7.6).
+//! pzsign, the two-party ECDSA signer of the shared kangaroo network (docs/en/NETWORK.md 7.6).
 //!
-//! pzpeer starts one `pzfirma session` per signing session and relays its messages to the partner's pzfirma. stdout carries only
+//! pzpeer starts one `pzsign session` per signing session and relays its messages to the partner's pzsign. stdout carries only
 //! frames; everything for people goes to stderr.
 
 mod envelope;
@@ -43,10 +43,10 @@ impl Fail {
     }
 }
 
-const USAGE: &str = "usage: pzfirma session          a signing session, framed on stdin and stdout (docs/en/NETWORK.md 7.6)
-       pzfirma primes FILE      pregenerate the primes of a session into FILE (seconds to minutes)
-       pzfirma selftest [P0 P1] both parties in one process, with primes from P0 and P1 or fresh ones
-       pzfirma version";
+const USAGE: &str = "usage: pzsign session          a signing session, framed on stdin and stdout (docs/en/NETWORK.md 7.6)
+       pzsign primes FILE      pregenerate the primes of a session into FILE (seconds to minutes)
+       pzsign selftest [P0 P1] both parties in one process, with primes from P0 and P1 or fresh ones
+       pzsign version";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,7 +57,7 @@ fn main() -> ExitCode {
         ["selftest"] => selftest(None),
         ["selftest", p0, p1] => selftest(Some([p0, p1])),
         ["version"] => {
-            println!("pzfirma {}", env!("CARGO_PKG_VERSION"));
+            println!("pzsign {}", env!("CARGO_PKG_VERSION"));
             println!("Copyright (C) 2026 Leonardo Boulay");
             println!("License AGPL-3.0-or-later: GNU Affero General Public License version 3 or later (LICENSE, NOTICE).");
             println!("This is free software: you are free to change and redistribute it.");
@@ -103,13 +103,13 @@ fn session() -> ExitCode {
             match frame::write(&mut io.output, frame::RESULT, result.as_bytes()) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("pzfirma: stdout: {e}");
+                    eprintln!("pzsign: stdout: {e}");
                     ExitCode::FAILURE
                 }
             }
         }
         Err(fail) => {
-            eprintln!("pzfirma{}: {} (blame {:?})", me.map(|i| format!("[{i}]")).unwrap_or_default(), fail.error, fail.blame);
+            eprintln!("pzsign{}: {} (blame {:?})", me.map(|i| format!("[{i}]")).unwrap_or_default(), fail.error, fail.blame);
             // the partner first, so it stops at once; then the error, which is always the last frame
             if let Some(i) = me {
                 if let Ok(abort) = envelope::abort(i, &fail.error) {
@@ -141,10 +141,10 @@ fn make_primes(path: &Path) -> ExitCode {
     let started = Instant::now();
     let (p, q) = primes::generate();
     if let Err(e) = primes::write(path, &p, &q) {
-        eprintln!("pzfirma: {}: {e}", path.display());
+        eprintln!("pzsign: {}: {e}", path.display());
         return ExitCode::FAILURE;
     }
-    eprintln!("pzfirma: primes in {:.1} s, written to {}", started.elapsed().as_secs_f64(), path.display());
+    eprintln!("pzsign: primes in {:.1} s, written to {}", started.elapsed().as_secs_f64(), path.display());
     ExitCode::SUCCESS
 }
 
@@ -176,14 +176,14 @@ fn selftest(files: Option<[&str; 2]>) -> ExitCode {
                 let own = primes::generate();
                 [own, other.join().expect("prime generation thread")]
             });
-            eprintln!("pzfirma: two sets of primes in {:.1} s", started.elapsed().as_secs_f64());
+            eprintln!("pzsign: two sets of primes in {:.1} s", started.elapsed().as_secs_f64());
             primes.map(|(p, q)| cggmp21::PregeneratedPrimes::new(p, q).ok_or(Fail::new("primes too small")))
         }
     };
     let [primes0, primes1] = match primes {
         [Ok(a), Ok(b)] => [a, b],
         [Err(e), _] | [_, Err(e)] => {
-            eprintln!("pzfirma: {}", e.error);
+            eprintln!("pzsign: {}", e.error);
             return ExitCode::FAILURE;
         }
     };
@@ -207,7 +207,7 @@ fn selftest(files: Option<[&str; 2]>) -> ExitCode {
         job::parse(text.to_string().as_bytes())
     });
     let [Ok(job0), Ok(job1)] = jobs else {
-        eprintln!("pzfirma: selftest: the jobs do not parse");
+        eprintln!("pzsign: selftest: the jobs do not parse");
         return ExitCode::FAILURE;
     };
 
@@ -222,12 +222,12 @@ fn selftest(files: Option<[&str; 2]>) -> ExitCode {
     let (sigs0, sigs1) = match (sigs0, sigs1) {
         (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => {
-            eprintln!("pzfirma: selftest: {} (blame {:?})", e.error, e.blame);
+            eprintln!("pzsign: selftest: {} (blame {:?})", e.error, e.blame);
             return ExitCode::FAILURE;
         }
     };
     if sigs0 != sigs1 || sigs0.len() != digests.len() {
-        eprintln!("pzfirma: selftest: the two parties have different signatures");
+        eprintln!("pzsign: selftest: the two parties have different signatures");
         return ExitCode::FAILURE;
     }
     println!("key {}", hex::encode(key.to_bytes(true)));

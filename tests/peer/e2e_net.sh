@@ -5,7 +5,7 @@
 # puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, half each,
 # read back from the node. With three equal homes two coincidences in three are between homes; a home that finds the key on its own
 # first (its own walkers meet too) starts a new try with a new puzzle, up to 6.
-# Usage: PZ_REGTEST=host:port:user:password tests/peer/e2e_net.sh    (build/pzsolve, build/pzpeer and build/pzfirma built)
+# Usage: PZ_REGTEST=host:port:user:password tests/peer/e2e_net.sh    (build/pzsolve, build/pzpeer and build/pzsign built)
 set -u
 IFS=: read -r RH RP RU RW <<< "${PZ_REGTEST:?set PZ_REGTEST=host:port:user:password of a bitcoind in regtest}"
 BIN=$(pwd)/build
@@ -37,7 +37,7 @@ while n: n,r=divmod(n,58); s=a[r]+s
 print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     rpc wallet sendtoaddress "[\"$PADDR\", 1]" >/dev/null
     PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
-    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=rete-06\ndpbits=14\nchain=regtest\nentry=127.0.0.1:%d\n' \
+    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\nentry=127.0.0.1:%d\n' \
         "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" "$PORT" > "$T/net.txt"
     "$BIN/pzpeer" netsign "$DIR/maint.key" "$T/net.txt" >> "$T/net.txt"
     export PZNET_TRUST=$(tail -1 "$T/net.txt" | cut -c5-68)
@@ -51,7 +51,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     for h in a b c; do
         port=$((port + 1))
         timeout 600 "$BIN/pzpeer" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" --rpc "$PZ_REGTEST" --listen $port \
-            --pzsolve "$BIN/pzsolve" --pzfirma "$BIN/pzfirma" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
+            --pzsolve "$BIN/pzsolve" --pzsign "$BIN/pzsign" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
     done
     wait "${PID[a]}" "${PID[b]}" "${PID[c]}"

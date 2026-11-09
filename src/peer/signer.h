@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* signer.h - one pzfirma process for one signing session (docs/en/NETWORK.md 7.6): started with "session", spoken to with frames of a
+/* signer.h - one pzsign process for one signing session (docs/en/NETWORK.md 7.6): started with "session", spoken to with frames of a
  * 4-byte big-endian length and a type byte on its stdin and stdout. pzpeer relays the opaque messages (0x81 out, 0x02 in) to the partner. */
 #ifndef PZPEER_SIGNER_H
 #define PZPEER_SIGNER_H
@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#define SIGNER_FRAME_MAX (1u << 20)     /* the limit of pzfirma */
+#define SIGNER_FRAME_MAX (1u << 20)     /* the limit of pzsign */
 
 enum { SIGNER_JOB = 0x01, SIGNER_IN = 0x02, SIGNER_OUT = 0x81, SIGNER_RESULT = 0x82, SIGNER_ERROR = 0x83 };
 

@@ -3,7 +3,7 @@
 /* session.c - the session of a coincidence (see session.h). The steps, each a message both sides send and then read:
  *   hello   the pair, a nonce, the fee rate proposed, the tiny-coin and payout scripts;
  *   proof   the proof of possession of the own record, over the partner's nonce (it shows the distance, hence the piece);
- *   plan    the hash of the first transaction each side built on its own; then the primes of pzfirma (only now: they cost a minute of
+ *   plan    the hash of the first transaction each side built on its own; then the primes of pzsign (only now: they cost a minute of
  *           CPU, and a partner has proved its distance), the two-party signing, the broadcast, one confirmation;
  *   plan    the hash of the second; F gives the signature of its tiny coin, then the two-party signing in which S gets the whole signature
  *           first; then S broadcasts, and F waits cancel_blocks blocks for the prize to move and else cancels.
@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 #define HELLO_FIXED (2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 1)
-#define CHUNK 65000                         /* a piece of a pzfirma message in one S_SIGNER */
+#define CHUNK 65000                         /* a piece of a pzsign message in one S_SIGNER */
 #define HELLO_MS 30000                      /* the longest wait for the hello and the proof of the partner, which it makes at once */
 #define LIMIT_LINES 1024                    /* lines of the file of the limit: one per network, one per pair that failed */
 #define LIMIT_WAIT_S 120                    /* the longest wait for the turn of a signing (a partner waits 300 s for a message) */
@@ -247,7 +247,7 @@ static bool limit_add(const sess *s, int d, char *why, size_t whylen)
     return limit_write(l->path, key, count, n) || (snprintf(why, whylen, "cannot write the count of failed signings to %.200s", l->path), false);
 }
 
-/* whether this home may still sign for the pair: asked before the plan, so that a home at its limit stops before the partner's pzfirma
+/* whether this home may still sign for the pair: asked before the plan, so that a home at its limit stops before the partner's pzsign
  * starts, which would then count a failure of its own */
 static bool limit_ok(sess *s)
 {
@@ -260,7 +260,7 @@ static bool limit_ok(sess *s)
     return ok || fail(s, "%s", why);
 }
 
-/* before a run of pzfirma: its turn (one at a time), and counted as failed until it gives valid signatures. The wait is bounded: two homes
+/* before a run of pzsign: its turn (one at a time), and counted as failed until it gives valid signatures. The wait is bounded: two homes
  * with two pairs could each wait for the other's turn, and the partner of a session that waits too long gives up anyway. */
 static bool limit_begin(sess *s)
 {
@@ -290,7 +290,7 @@ static void limit_end(sess *s, bool ok)
     pthread_mutex_unlock(&l->mu);
 }
 
-/* ---- the two-party signing: pzfirma here, its messages relayed to the partner's ---- */
+/* ---- the two-party signing: pzsign here, its messages relayed to the partner's ---- */
 
 typedef struct {
     sess *s;
@@ -298,9 +298,9 @@ typedef struct {
     bool hold;                              /* S in the signing of the second transaction: see relay_out */
     pthread_mutex_t mu;
     pthread_cond_t cv;
-    int in_count;                           /* whole messages of the partner given to pzfirma */
+    int in_count;                           /* whole messages of the partner given to pzsign */
     bool in_done, failed;
-    uint8_t *result;                        /* the JSON result of pzfirma (0x82), when it gave one */
+    uint8_t *result;                        /* the JSON result of pzsign (0x82), when it gave one */
 } relay;
 
 static bool send_chunks(relay *r, const uint8_t *p, size_t len)
@@ -316,12 +316,12 @@ static bool send_chunks(relay *r, const uint8_t *p, size_t len)
     return true;
 }
 
-/* The envelope with which pzfirma tells its partner why it gave up (signer/src/envelope.rs: version 1, the sender, phase 2): never relayed.
+/* The envelope with which pzsign tells its partner why it gave up (signer/src/envelope.rs: version 1, the sender, phase 2): never relayed.
  * Its reason would tell the partner which check failed, and a failure must say nothing of where it happened (project 4.6); the S_SIGNED
  * that follows stops the partner as well. */
 static bool is_abort(const uint8_t *p, size_t n) { return n >= 3 && p[0] == 1 && p[2] == 2; }
 
-/* whether the k-th message of the partner was given to pzfirma; false when the partner's messages ended before it */
+/* whether the k-th message of the partner was given to pzsign; false when the partner's messages ended before it */
 static bool partner_gave(relay *r, int k)
 {
     pthread_mutex_lock(&r->mu);
@@ -331,8 +331,8 @@ static bool partner_gave(relay *r, int k)
     return ok;
 }
 
-/* pzfirma to the partner. In the signing of the second transaction S holds each of its messages until F's message of the same rank has
- * reached its pzfirma and its pzfirma went on past it, with its next message or with the signatures: F's last message reaches S before
+/* pzsign to the partner. In the signing of the second transaction S holds each of its messages until F's message of the same rank has
+ * reached its pzsign and its pzsign went on past it, with its next message or with the signatures: F's last message reaches S before
  * S's last one leaves, and S's leaves only once S has the whole signature. A last message of F that is not one (garbage, an abort, the end
  * of F's stream) gets nothing in exchange. So S has the whole signature first, and F, whose tiny coin is in the transaction, holds the
  * cancel. In the first transaction, which only gives the prize back to the puzzle, both send at once. */
@@ -362,7 +362,7 @@ static void *relay_out(void *arg)
     return NULL;
 }
 
-/* the partner to pzfirma: pieces joined into whole messages */
+/* the partner to pzsign: pieces joined into whole messages */
 static void *relay_in(void *arg)
 {
     relay *r = arg;
@@ -396,7 +396,7 @@ static void *relay_in(void *arg)
     r->in_done = true;
     pthread_cond_signal(&r->cv);
     pthread_mutex_unlock(&r->mu);
-    close(r->sg.to), r->sg.to = -1;                             /* nothing more for pzfirma: at the end of its input it gives its answer */
+    close(r->sg.to), r->sg.to = -1;                             /* nothing more for pzsign: at the end of its input it gives its answer */
     return NULL;
 }
 
@@ -427,7 +427,7 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
     relay r = {.s = s, .hold = tag == 'B' && s->me != s->F};
     pthread_mutex_init(&r.mu, NULL);
     pthread_cond_init(&r.cv, NULL);
-    bool ok = job && signer_start(&r.sg, c->pzfirma) && signer_send(&r.sg, SIGNER_JOB, (const uint8_t *)job, strlen(job));
+    bool ok = job && signer_start(&r.sg, c->pzsign) && signer_send(&r.sg, SIGNER_JOB, (const uint8_t *)job, strlen(job));
     if (job) pz_secure_zero(job, strlen(job)), free(job);
     if (ok) {
         pthread_t a, b;
@@ -522,7 +522,7 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     const int nc = puzzle_coins(&s, coins);
     if (nc <= 0 || !payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "no coin of the puzzle to spend"), SESSION_FAILED;
     if (!limit_ok(&s) || !plan(&s, &a)) return SESSION_FAILED;
-    if (access(c->primes, R_OK) != 0 && !signer_primes(c->pzfirma, c->primes)) return fail(&s, "pzfirma could not make its primes"), SESSION_FAILED;
+    if (access(c->primes, R_OK) != 0 && !signer_primes(c->pzsign, c->primes)) return fail(&s, "pzsign could not make its primes"), SESSION_FAILED;
     if (!sign_jointly(&s, &a, a.n_in, 'A')) return SESSION_FAILED;
     uint8_t aid[32];
     btc_tx_txid(&a, aid);

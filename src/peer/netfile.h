@@ -23,7 +23,7 @@ typedef struct {
     uint8_t pubkey33[33];        /* compressed public key of the puzzle */
     pz_u256 start, end;          /* the range, inclusive */
     uint8_t jumpseed[32];        /* public seed of the jump table */
-    char schema[16];             /* the table of species: "rete-06" */
+    char schema[16];             /* the table of species: "net-06" */
     unsigned dpbits;
     char chain[8];               /* main, test, signet or regtest */
     uint8_t fp[32];              /* F = SHA256("pznet1/file" || canonical immutable lines) */

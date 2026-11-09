@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Leonardo Boulay
-//! Two `pzfirma session` processes with this test as their pzpeer: it gives each one its job, relays the frames 0x81 of each to the
+//! Two `pzsign session` processes with this test as their pzpeer: it gives each one its job, relays the frames 0x81 of each to the
 //! other as 0x02 (changing some of them on purpose), and checks the answers. Run with `cargo test --release`: the primes are made
-//! once, by `pzfirma primes`, and kept in the target directory.
+//! once, by `pzsign primes`, and kept in the target directory.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -17,7 +17,7 @@ use cggmp21::supported_curves::Secp256k1;
 use rand_core::{OsRng, RngCore};
 use serde_json::{json, Value};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pzfirma");
+const BIN: &str = env!("CARGO_BIN_EXE_pzsign");
 
 /// (n - 1) / 2 of secp256k1: a low `s` is at most this.
 const HALF_ORDER: &str = "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0";
@@ -34,11 +34,11 @@ fn primes() -> &'static [PathBuf; 2] {
         let makers: Vec<_> = files
             .iter()
             .filter(|f| !f.exists())
-            .map(|f| Command::new(BIN).arg("primes").arg(f).spawn().expect("pzfirma primes"))
+            .map(|f| Command::new(BIN).arg("primes").arg(f).spawn().expect("pzsign primes"))
             .collect();
         let made = makers.len();
         for mut maker in makers {
-            assert!(maker.wait().unwrap().success(), "pzfirma primes failed");
+            assert!(maker.wait().unwrap().success(), "pzsign primes failed");
         }
         if made > 0 {
             eprintln!("test: {made} primes files in {:.1} s", started.elapsed().as_secs_f64());
@@ -94,7 +94,7 @@ fn peek(msg: &[u8]) -> (u8, u8, u8) {
 /// two answers and the largest message of each kind (phase, variant).
 fn session(jobs: &[Value; 2], mut tamper: impl FnMut(usize, &mut Vec<u8>)) -> ([Answer; 2], BTreeMap<(u8, u8), usize>) {
     let mut children: Vec<_> = (0..2)
-        .map(|_| Command::new(BIN).arg("session").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("pzfirma session"))
+        .map(|_| Command::new(BIN).arg("session").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("pzsign session"))
         .collect();
     let mut stdins: Vec<_> = children.iter_mut().map(|c| c.stdin.take()).collect();
     for (stdin, job) in stdins.iter_mut().zip(jobs) {

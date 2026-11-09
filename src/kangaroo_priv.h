@@ -102,7 +102,7 @@ typedef struct { u64 tagk, ref; } dp_ent;
 /* A species of walkers: E = coef*x + u, u = res (mod KANG_MOD) uniform in [lo, hi] thousandths of W,
  * share w millionths of the herd (each zone is split into bands with their own shares). */
 typedef struct { u8 coef, res; int16_t lo, hi; uint32_t w; } kang_species;
-#define KANG_SPEC_MAX 1024       /* bands in a table of species (rete-06 has 864) */
+#define KANG_SPEC_MAX 1024       /* bands in a table of species (net-06 has 864) */
 #define KANG_GRP_MAX 64          /* groups of bands with the same coefficient and residue (at most 3 coefficients x 12 residues) */
 
 typedef struct {
@@ -160,7 +160,7 @@ typedef struct kang_state {
     _Atomic u64 dups, restarts, rejected, dropped;
     u64 loaded;
     u64 epoch;
-    /* The table of species (schema 3, or rete-06 for a network campaign, docs/en/NETWORK.md 6) and its groups: the bands with the same
+    /* The table of species (schema 3, or net-06 for a network campaign, docs/en/NETWORK.md 6) and its groups: the bands with the same
      * coefficient and residue form a group, numbered in the order of their first band. A walker belongs to a group for life, and each start
      * draws a band of its group by the shares: grp_band lists the bands of group g from grp_first[g] (grp_n[g] of them), grp_cum their shares
      * summed up to and including each one. */

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* fuzz_peer.c - a mutation fuzzer of the readers of hostile input in pzpeer, for a given number of seconds (make peer-fuzz, best under
- * the sanitizers). Seeds: replies of bitcoind and results of pzfirma, transactions of the main chain and of the vectors, HTTP replies.
+ * the sanitizers). Seeds: replies of bitcoind and results of pzsign, transactions of the main chain and of the vectors, HTTP replies.
  * Mutations: bytes changed, inserted, removed, cut, repeated, spliced from another seed, and tokens of each grammar (escapes,
  * surrogates, long numbers, CompactSize lengths at their limits, chunk sizes). Besides staying in their buffers, the readers must agree:
  *   JSON: a document that parses is written again with the writer and parses to the same tree;

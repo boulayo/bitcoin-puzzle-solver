@@ -134,7 +134,7 @@ static const char *hunt_text(void)
 "\n"
 "SHARED WALK (the shared network, docs/en/NETWORK.md: pzpeer starts pzsolve with these two options)\n"
 "      --jump-seed HEX     kangaroo whose jumps come from this public seed (64 hex digits), with the walkers of the schema\n"
-"                          rete-06 and exactly --dp-bits; it needs -k and --dp-bits, and -s, -m and --part are not given with it\n"
+"                          net-06 and exactly --dp-bits; it needs -k and --dp-bits, and -s, -m and --part are not given with it\n"
 "      --start-key FILE    the secret key of the starting points (64 hex digits): kept in memory only, never in the campaign\n"
 "                          files; a resumed campaign takes only the same key\n"
 "\n"
@@ -231,7 +231,7 @@ static const struct { const char *cmd, *text; } short_help[] = {
     {"devices", "pzsolve devices - list the detected CPU, SIMD instructions, RAM and GPUs\n\nUSAGE\n  pzsolve devices\n"},
     {"selftest", "pzsolve selftest - run the built-in correctness checks (CPU engines, kangaroo, BSGS, GPUs)\n\nUSAGE\n  pzsolve selftest\n"},
     {"kstat", "pzsolve kstat - statistics of the kangaroo cost over intervals of 2^BITS keys (cycle study)\n\nUSAGE\n"
-              "  pzsolve kstat [net] BITS TRIALS [THREADS [R [DP]]]\n\nARGUMENTS\n  net                     the walk of a network campaign (schema rete-06, see\n"
+              "  pzsolve kstat [net] BITS TRIALS [THREADS [R [DP]]]\n\nARGUMENTS\n  net                     the walk of a network campaign (schema net-06, see\n"
               "                          docs/en/NETWORK.md) instead of the walk of a campaign of this computer\n"
               "  BITS                    size of the intervals, 2^BITS keys (4..64)\n"
               "  TRIALS                  number of keys to find\n  THREADS                 CPU threads [1]\n"

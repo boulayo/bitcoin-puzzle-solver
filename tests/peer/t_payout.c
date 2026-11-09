@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_payout.c - the transactions of a pair: which coins go in, the amounts, and that the signed transactions are valid spends (signed here
- * with the whole key of a test puzzle and the coin keys, as pzfirma and each home would sign them). */
+ * with the whole key of a test puzzle and the coin keys, as pzsign and each home would sign them). */
 #include "peertest.h"
 #include "payout.h"
 #include <pzcore/hash.h>
@@ -61,7 +61,7 @@ int main(void)
     CHECK(fee_a < 4000);                                         /* about 1.3 kB at 2 sat/vB */
     uint8_t dg[8][32];
     CHECK(payout_digests(&a, t.puzzle_spk, a.n_in, dg));
-    for (size_t i = 0; i < a.n_in; i++) {                        /* signed as pzfirma would: the digest by the whole key */
+    for (size_t i = 0; i < a.n_in; i++) {                        /* signed as pzsign would: the digest by the whole key */
         CHECK(btc_sign_p2pkh(&a, i, puzzle) && btc_verify_p2pkh(&a, i, t.puzzle_spk, BTC_P2PKH_LEN));
         uint8_t again[32];
         CHECK(btc_sighash_legacy(&a, i, t.puzzle_spk, BTC_P2PKH_LEN, again) && !memcmp(again, dg[i], 32));

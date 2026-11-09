@@ -123,7 +123,7 @@ static bool set_immutable(netfile *nf, int k, const char *v, char *err, size_t e
         if (!hex_exact(v, nf->jumpseed, 32)) return fail(err, errlen, "jumpseed must be 64 hex digits, not", v);
         return true;
     case 5:
-        if (strcmp(v, "rete-06")) return fail(err, errlen, "unknown schema (this version knows rete-06)", v);
+        if (strcmp(v, "net-06")) return fail(err, errlen, "unknown schema (this version knows net-06)", v);
         strcpy(nf->schema, v);
         return true;
     case 6:

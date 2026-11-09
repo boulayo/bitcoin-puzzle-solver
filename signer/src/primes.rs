@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Leonardo Boulay
 //! The pregenerated primes of the auxiliary data: two safe primes of 1536 bits whose product is the party's Paillier modulus, so
 //! they are a secret key. Finding them takes from seconds to a minute or two (it is a matter of luck, and of the machine), so pzpeer
-//! has them made ahead with `pzfirma primes FILE`. A file is for one session: pzfirma only reads it, pzpeer removes it once used.
+//! has them made ahead with `pzsign primes FILE`. A file is for one session: pzsign only reads it, pzpeer removes it once used.
 //!
 //! The file is JSON, `{"p": hex, "q": hex}`, readable by its owner only.
 

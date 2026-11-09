@@ -744,7 +744,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pzfirma"
+name = "pzsign"
 version = "0.1.0"
 dependencies = [
  "cggmp21",

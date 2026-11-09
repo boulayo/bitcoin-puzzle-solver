@@ -11,7 +11,7 @@
 typedef struct {
     const char *network;            /* the network file */
     const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files */
-    const char *pzsolve, *pzfirma;  /* the programs */
+    const char *pzsolve, *pzsign;  /* the programs */
     const char *payout;             /* the payout address of this home */
     const char *rpc;                /* bitcoind: host:port:user:password, or host:port with rpc_cookie (btc_rpc_init_arg) */
     const char *rpc_cookie;         /* the cookie file of bitcoind, or NULL */

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* json.h - a small JSON reader (RFC 8259, into a tree of nodes) and writer, for the JSON-RPC of bitcoind and the jobs of pzfirma.
+/* json.h - a small JSON reader (RFC 8259, into a tree of nodes) and writer, for the JSON-RPC of bitcoind and the jobs of pzsign.
  *
  * The reader takes untrusted text. Anything outside the grammar is refused: bad escapes, lone surrogates, invalid UTF-8, control
  * characters inside strings, leading zeros, trailing commas, text after the value, and also a document deeper than JSON_MAX_DEPTH,
