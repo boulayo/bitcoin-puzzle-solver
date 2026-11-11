@@ -202,6 +202,11 @@ folder list every worker one by one at all times.
 * In BSGS, while the table is being built, the panel shows phase 1 of 2 and how many giant steps will follow.
 * When the key is found the panel ends with `KEY FOUND`, and a box below it gives the key (`key (hex): 0x…`) and the path of `FOUND.txt`.
   Under the box, a few lines congratulate the finder and give the donation addresses of the [README](../../README.md#support-the-project).
+* **Before you spend a key found by a linear search** (a puzzle whose public key was not known): do not use a wallet. A transaction
+  that waits in the public mempool shows the public key, and programs watch for it: from the public key a key this short is found in
+  seconds, and your transaction is replaced with theirs. The box says so when it applies. Give the transaction straight to a mining pool
+  that takes private transactions; `pzpeer sweep --to ADDRESS`, with the key on its standard input, makes and signs that transaction and
+  sends nothing. With a known public key (the kangaroo and BSGS) there is nothing to hide, and any wallet will do.
 
 Modes: `--ui full` (panel), `--ui line` (a single dynamic line), `--ui log` (one summary line per minute in the log,
 suited to files and `nohup`), `--ui auto` (default: panel on a terminal, log otherwise). The single line looks like this (the campaign name

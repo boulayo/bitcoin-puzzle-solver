@@ -7,6 +7,7 @@
 #include "dpfeed.h"
 #include "home.h"
 #include "netfile.h"
+#include "sweep.h"
 #include <pzcore/seal.h>
 #include <signal.h>
 #include <stdio.h>
@@ -23,6 +24,8 @@ static int usage(void)
                     "         coincidence with another home the prize paid half each to the two payout addresses\n"
                     "       pzpeer node --network FILE --seed-hex HEX --dir DIR [options]\n"
                     "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions\n"
+                    "       pzpeer sweep --to ADDRESS [options]  the transaction that moves the coins of a found key, signed and NOT sent,\n"
+                    "                                            to give to a mining pool in private (the key on the standard input)\n"
                     "       pzpeer netcheck NETWORK_FILE         the values and the fingerprint of a network file\n"
                     "       pzpeer dpcheck NETWORK_FILE DP_BIN   recompute every point of a campaign's dp.bin and check its tag\n"
                     "       pzpeer version\n"
@@ -299,6 +302,7 @@ int main(int argc, char **argv)
                  : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2])
                  : argc >= 2 && !strcmp(argv[1], "node")     ? cmd_node(ctx, argc, argv)
                  : argc >= 2 && !strcmp(argv[1], "run")      ? cmd_run(argc, argv)
+                 : argc >= 2 && !strcmp(argv[1], "sweep")    ? sweep_main(argc, argv)
                                                              : usage();
     secp256k1_context_destroy(ctx);
     return rc;

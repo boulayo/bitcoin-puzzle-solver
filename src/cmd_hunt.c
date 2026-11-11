@@ -478,6 +478,17 @@ static void print_found_thanks(void)
            "  Check them against the README of https://github.com/boulayo/bitcoin-puzzle-solver\n\n");
 }
 
+/* Printed under the box when the public key of the address was not known (a linear search): how not to lose the prize while spending it.
+ * Until the first spend nobody has that public key, and with a key this short whoever sees it finds the private key in seconds. */
+static void print_spend_warning(const run_ctx *r)
+{
+    if (r->cfg.has_pubkey) return;
+    printf("\n  BEFORE YOU SPEND IT: do not use a wallet. A transaction that waits in the public mempool shows the public key of\n"
+           "  this address, and programs watch for it: from the public key they find a key this short in seconds and replace your\n"
+           "  transaction with theirs. Give the transaction straight to a mining pool that takes private transactions.\n"
+           "  `pzpeer sweep` makes and signs it without sending it.\n");
+}
+
 /* The banner printed when the key is found (by 'hunt' or by 'merge'). */
 void print_found_banner(const run_ctx *r)
 {
@@ -499,7 +510,7 @@ void print_found_banner(const run_ctx *r)
             printf("  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->found_sealed);
         }
         printf("=========================================================\n");
-        if (!r->found_seal_failed) print_found_thanks();
+        if (!r->found_seal_failed) print_spend_warning(r), print_found_thanks();
         return;
     }
     char hx[80], wif[80];
@@ -511,6 +522,7 @@ void print_found_banner(const run_ctx *r)
     if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the key from this screen now\n", r->path_found);
     else printf("  saved in:       %s\n", r->path_found);
     printf("=========================================================\n");
+    print_spend_warning(r);
     print_found_thanks();
 }
 

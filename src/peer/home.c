@@ -443,14 +443,6 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 
 /* ---- the run ---- */
 
-/* For a network of the main chain: public Electrum servers that take plain TCP, of different operators (from the list the Electrum wallet
- * ships; none is trusted, chain_spv.h), and the block the headers start from, the first of a difficulty period. */
-static const char *const MAIN_ELECTRUM[] = {"electrum.blockstream.info:50001", "electrum.bitaroo.net:50001", "bitcoin.aranguren.org:50001",
-                                            "bitcoin.lu.ke:50001",             "electrum.qtornado.com:50001", "e.keff.org:50001",
-                                            "tardis.bauerj.eu:50001",          "xtrum.com:50001"};
-#define MAIN_CHECKPOINT 969696
-#define MAIN_CHECKPOINT_HASH "000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b"
-
 /* The chain without a node: the Electrum servers of the network file and of the command line, the headers from the checkpoint of the file
  * (checkpoint=HEIGHT:HASH, the hash as explorers show it; a chain other than the main one may start from its first block). */
 static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
@@ -473,9 +465,11 @@ static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
         p += l + (e != NULL);
     }
     if (h->chain == BTC_MAIN) {                                 /* what the file and the command line leave out */
-        for (size_t i = 0; !n && i < sizeof MAIN_ELECTRUM / sizeof *MAIN_ELECTRUM; i++) list[i] = MAIN_ELECTRUM[i];
-        if (!n) n = (int)(sizeof MAIN_ELECTRUM / sizeof *MAIN_ELECTRUM);
-        if (!has_cp) has_cp = btc_hash_from_hex(MAIN_CHECKPOINT_HASH, cp), cph = MAIN_CHECKPOINT;
+        uint64_t dh;
+        uint8_t dcp[32];
+        const int dn = chain_spv_defaults(n ? NULL : list, &dh, dcp);
+        if (!n) n = dn;
+        if (!has_cp) has_cp = true, cph = dh, memcpy(cp, dcp, 32);
     }
     if (!n) return snprintf(err, cap, "no chain: give --rpc (a bitcoind of your own) or --electrum HOST:PORT (public servers, checked)"), false;
     snprintf(h->hdrpath, sizeof h->hdrpath, "%s/headers.bin", h->dir);

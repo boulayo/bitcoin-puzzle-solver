@@ -63,6 +63,7 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `spv.c` | block headers checked by their proof of work, Merkle branches |
 | `electrum.c` | a client of the Electrum protocol (plain TCP) |
 | `chain_spv.c` | the chain of a session without a node: several Electrum servers, every answer proven |
+| `sweep.c` | `pzpeer sweep`: the transaction that moves the coins of a key found by a linear search, signed and not sent |
 | `home.c` | the daemon of a home: seed and keys, pzsolve, the feed of `dp.bin`, a session for every useful coincidence |
 | `main.c` | the commands |
 
@@ -698,6 +699,7 @@ in `t_session` with `PZ_REGTEST`.
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; POSIX only (the Windows shim is to come); what a public network still needs is in 7.8 |
 | `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node) |
 | `bt.c`, `upnp.c` | done (`t_bt`, `t_upnp`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
+| `sweep.c` | done (`tests/peer/e2e_sweep.sh`: the node would take the transaction, and pzpeer did not send it) |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |

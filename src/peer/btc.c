@@ -492,6 +492,18 @@ bool btc_put_sig_p2pkh(btc_tx *tx, size_t i, const uint8_t r[32], const uint8_t 
     return true;
 }
 
+bool btc_key_script(const uint8_t seckey[32], uint8_t spk[BTC_P2PKH_LEN])
+{
+    secp256k1_pubkey pk;
+    uint8_t pub[33], h160[20];
+    size_t pl = sizeof pub;
+    if (!secp256k1_ec_pubkey_create(ctx(), &pk, seckey)) return false;
+    secp256k1_ec_pubkey_serialize(ctx(), pub, &pl, &pk, SECP256K1_EC_COMPRESSED);
+    pz_hash160(pub, sizeof pub, h160);
+    btc_script_p2pkh(h160, spk);
+    return true;
+}
+
 bool btc_sign_p2pkh(btc_tx *tx, size_t i, const uint8_t seckey[32])
 {
     const secp256k1_context *c = ctx();

@@ -457,6 +457,18 @@ int chain_spv_ready(chain_spv *c, char *why, size_t cap)
     return 1;
 }
 
+int chain_spv_defaults(const char **out, uint64_t *cp_height, uint8_t cp_hash[32])
+{
+    static const char *const MAIN[] = {"electrum.blockstream.info:50001", "electrum.bitaroo.net:50001", "bitcoin.aranguren.org:50001",
+                                       "bitcoin.lu.ke:50001",             "electrum.qtornado.com:50001", "e.keff.org:50001",
+                                       "tardis.bauerj.eu:50001",          "xtrum.com:50001"};
+    const int n = (int)(sizeof MAIN / sizeof *MAIN);
+    for (int i = 0; out && i < n; i++) out[i] = MAIN[i];
+    *cp_height = 969696;
+    (void)btc_hash_from_hex("000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b", cp_hash);
+    return n;
+}
+
 bool chain_spv_init(chain_spv *c, btc_chain chain, uint64_t cp_height, const uint8_t *cp_hash, const char *const *srv, int nservers,
                     const char *headers_path)
 {

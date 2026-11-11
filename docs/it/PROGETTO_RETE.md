@@ -281,12 +281,23 @@ Esempio sul #71 (stima: 6 miliardi di chiavi al secondo per GPU):
 
 **Un pericolo che vale anche per chi cerca da solo.** Quando si spende un puzzle senza chiave pubblica nota, la transazione la rivela. Con intervalli così piccoli chiunque veda la transazione ricava la chiave in secondi e la sostituisce con una sua. Chi trova la chiave deve mandare la transazione direttamente a un pool di mining, non alla rete pubblica.
 
-### 8.3 Cosa richiede
+### 8.3 Come si costruisce
 
-- in pzpeer: il registro (un tipo di record in più) e le prove di frode;
-- in pzsolve: riportare le chiavi "con gli zeri" di ogni blocco. È una modifica ai motori di ricerca CPU e GPU, piccola ma nel cuore del programma: va decisa (DA_FARE).
+Deciso: si fa, senza transazioni automatiche. La chiave resta a chi la trova, che la spende in modo riservato (vedi sotto).
 
-Non è ancora scritto niente di questa parte.
+**In pzsolve, il minimo.** Ogni motore di ricerca (le varianti per CPU e i programmi per le schede video) oggi segnala solo la chiave giusta. Deve segnalare anche le "quasi giuste": le chiavi il cui hash comincia con gli stessi 32 bit del bersaglio, una ogni 4 miliardi circa. Sono la prova di lavoro: chi non ha provato tutte le chiavi di un blocco non le conosce, e chiunque le verifica in un istante. Nient'altro cambia in pzsolve: l'ordine di ricerca, i file, le opzioni restano quelli.
+
+**In pzpeer:**
+- la rete divide l'intervallo in blocchi uguali per tutti (indicativamente 2^44 chiavi: poco meno di un'ora di una scheda video veloce);
+- pzpeer sceglie a caso un blocco che nella rete non risulta fatto, e avvia pzsolve su quel solo blocco con le opzioni che ha già (`hunt -r`);
+- finito il blocco, lo dichiara nella stessa tabella dei punti, con una parte delle chiavi quasi giuste (quelle con 40 bit uguali, una quindicina per blocco); le altre le tiene, per rispondere a chi controlla;
+- chi riceve una dichiarazione ne verifica le chiavi prima di crederci;
+- ogni tanto un nodo rifà un pezzetto a caso di un blocco altrui: se trova una chiave quasi giusta che il dichiarante non ha, ha una prova di frode che tutti verificano, e i blocchi di quell'identità tornano da fare;
+- quando non restano blocchi liberi si ripassano quelli dichiarati da altri, a partire dai meno documentati: una dichiarazione falsa ritarda, non nasconde la chiave per sempre.
+
+**Quando la chiave viene trovata.** pzsolve avvisa di non spenderla con un portafoglio, e `pzpeer sweep` prepara e firma la transazione senza inviarla: la si consegna a un pool di mining che accetta transazioni riservate. Questa parte c'è già.
+
+**Stato:** l'avviso e `pzpeer sweep` sono fatti. Il registro dei blocchi e la modifica ai motori sono da fare; da misurare se segnalare le chiavi quasi giuste rallenta i motori (non dovrebbe: confrontano già per primi quei 32 bit).
 
 ---
 

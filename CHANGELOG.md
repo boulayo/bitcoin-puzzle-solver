@@ -27,6 +27,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   chain have defaults. `--debug FILE` logs every message, step and answer of the chain, with no secret, for reading afterwards.
 - The fee of the payout is twice the estimate of the chain, 20 to 1000 sat/vB, and the tiny coins grow with it, so that the party
   that can cancel always can.
+- A key found for an address whose public key was not known (a linear search) comes with a warning: spending it through the public
+  mempool shows the public key, from which a key this short is found in seconds. `pzpeer sweep --to ADDRESS` makes and signs the
+  transaction that moves its coins and sends nothing, for the finder to give to a mining pool in private.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08

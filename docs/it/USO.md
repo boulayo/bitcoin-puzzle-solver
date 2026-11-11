@@ -203,6 +203,12 @@ elencano sempre ogni worker uno per uno.
 * Nel BSGS, durante la costruzione della tabella, il pannello mostra la fase 1 di 2 e quanti passi giganti seguiranno.
 * Quando la chiave viene trovata il pannello finisce con `KEY FOUND`, e un riquadro sotto dà la chiave (`key (hex): 0x…`) e il percorso di
   `FOUND.txt`. Sotto il riquadro, qualche riga di congratulazioni e gli indirizzi per le donazioni del [README](../../README.md#support-the-project).
+* **Prima di spendere una chiave trovata con la ricerca lineare** (un puzzle di cui non si conosceva la chiave pubblica): non usare un
+  portafoglio. Una transazione che aspetta nella mempool pubblica mostra la chiave pubblica, e ci sono programmi che la aspettano: dalla
+  chiave pubblica una chiave così corta si ricava in pochi secondi, e la tua transazione viene sostituita con la loro. Il riquadro lo dice
+  quando è il caso. Dai la transazione direttamente a un pool di mining che accetta transazioni riservate; `pzpeer sweep --to INDIRIZZO`,
+  con la chiave sul suo ingresso standard, prepara e firma quella transazione e non invia nulla. Con una chiave pubblica già nota (canguro
+  e BSGS) non c'è niente da nascondere, e va bene qualsiasi portafoglio.
 
 Modalità: `--ui full` (pannello), `--ui line` (una sola riga dinamica), `--ui log` (una riga di riepilogo al minuto nel log,
 adatta a file e `nohup`), `--ui auto` (predefinito: pannello su un terminale, altrimenti log). La riga singola è così (il nome della campagna

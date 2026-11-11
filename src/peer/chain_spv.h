@@ -32,6 +32,10 @@ typedef struct {
 /* cp_hash NULL: the genesis block of the chain (cp_height 0). False for a checkpoint of the main chain that is not on a period boundary. */
 bool chain_spv_init(chain_spv *c, btc_chain chain, uint64_t cp_height, const uint8_t *cp_hash, const char *const *servers, int nservers,
                     const char *headers_path);
+/* What a network of the main chain uses when nothing else is given: public Electrum servers that take plain TCP, of different operators
+ * (from the list the Electrum wallet ships; none is trusted), into servers (CHAIN_SPV_SERVERS entries; NULL: not wanted), and the block the
+ * headers start from, the first of a difficulty period. The number of servers. */
+int chain_spv_defaults(const char **servers, uint64_t *cp_height, uint8_t cp_hash[32]);
 void chain_spv_free(chain_spv *c);
 session_chain chain_spv_iface(chain_spv *c);
 /* Brings the headers up to what the servers have. 1: ready; 0: not now (no server answers, or the chain they give ends too long ago),

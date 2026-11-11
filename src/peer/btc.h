@@ -77,6 +77,8 @@ size_t btc_address_script(btc_chain chain, const char *addr, uint8_t spk[BTC_SPK
 void btc_script_p2pkh(const uint8_t h160[20], uint8_t spk[BTC_P2PKH_LEN]);
 /* whether spk is that script; its hash160 goes to h160 when it is not NULL */
 bool btc_script_is_p2pkh(const uint8_t *spk, size_t len, uint8_t h160[20]);
+/* The P2PKH script of the compressed public key of a secret key; false for a key that is not one. */
+bool btc_key_script(const uint8_t seckey[32], uint8_t spk[BTC_P2PKH_LEN]);
 
 /* ---- transactions ---- */
 
