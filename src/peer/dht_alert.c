@@ -104,8 +104,8 @@ static own_alert *alert_add_locked(dht *d, const record *m, const record *t, con
     memcpy(e->h, h, 32);
     e->mine = *m, e->theirs = *t;
     e->state = AL_WAIT;
-    e->until = now_ms() + ALERT_TTL_MS;
-    e->next = now_ms() + d->retry_ms;
+    e->until = sys_now_ms() + ALERT_TTL_MS;
+    e->next = sys_now_ms() + d->retry_ms;
     *fresh = true;
     return e;
 }
@@ -169,7 +169,7 @@ void job_alert_out(dht *d, const record *a, const record *b)
 static bool own_proof(dht *d, const record *r)
 {
     uint8_t dd[32], nonce[32], sig[64];
-    const bool ok = d->cfg.own_distance && net_random(nonce, sizeof nonce) && d->cfg.own_distance(d->cfg.user, r->x, r->t, dd) &&
+    const bool ok = d->cfg.own_distance && sys_random(nonce, sizeof nonce) && d->cfg.own_distance(d->cfg.user, r->x, r->t, dd) &&
                     record_prove(d->cfg.ctx, d->cfg.net, r, dd, d->me.xonly, nonce, sig) &&
                     record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, nonce, sig);
     pz_secure_zero(dd, sizeof dd);
@@ -183,7 +183,7 @@ int dht_proof_on(dht *d, net_conn *c, const record *r)
     size_t n;
     req[0] = DHT_POSSESS;
     record_encode(r, req + 1);
-    if (!net_random(req + 1 + RECORD_LEN, 32) || !net_send(c, req, sizeof req) || !net_recv(c, ans, sizeof ans, &n)) return -1;
+    if (!sys_random(req + 1 + RECORD_LEN, 32) || !net_send(c, req, sizeof req) || !net_recv(c, ans, sizeof ans, &n)) return -1;
     return n == sizeof ans && ans[0] == DHT_PROOF && record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, req + 1 + RECORD_LEN, ans + 1);
 }
 
@@ -239,7 +239,7 @@ void job_alert_own(dht *d, const record *a, const record *b)
     pthread_mutex_unlock(&d->a_mu);
     if (!go) return;                                           /* done already, or a job on it now */
     if (!e.mine_ok) e.mine_ok = own_proof(d, &e.mine);
-    if (e.mine_ok && (!e.posted || now_ms() - e.posted >= POST_MS) && post_proof(d, &e)) e.posted = now_ms();
+    if (e.mine_ok && (!e.posted || sys_now_ms() - e.posted >= POST_MS) && post_proof(d, &e)) e.posted = sys_now_ms();
     const int asked = e.mine_ok && !e.theirs_ok ? dht_ask_proof(d, &e.theirs) : -2;
     int st = AL_WAIT;
     pthread_mutex_lock(&d->a_mu);
@@ -249,7 +249,7 @@ void job_alert_own(dht *d, const record *a, const record *b)
         p->theirs_ok = p->theirs_ok || asked == 1;             /* or its proof came while this job asked */
         if (asked == 0) p->state = AL_REFUSED;
         else if (p->mine_ok && p->theirs_ok) p->state = AL_DONE;
-        else p->tries++, p->next = now_ms() + backoff_ms(d, p->tries);
+        else p->tries++, p->next = sys_now_ms() + backoff_ms(d, p->tries);
         st = p->state;
         e = *p;
     }
@@ -265,7 +265,7 @@ void retry_alerts(dht *d)
 {
     record pairs[16][2];
     int n = 0;
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     pthread_mutex_lock(&d->a_mu);
     for (int i = 0; i < d->nalerts; i++) {
         own_alert *e = &d->alerts[i];

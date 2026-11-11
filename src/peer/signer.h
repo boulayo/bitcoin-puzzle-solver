@@ -8,20 +8,22 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
+#include "sys.h"
 
 #define SIGNER_FRAME_MAX (1u << 20)     /* the limit of pzsign */
 
 enum { SIGNER_JOB = 0x01, SIGNER_IN = 0x02, SIGNER_OUT = 0x81, SIGNER_RESULT = 0x82, SIGNER_ERROR = 0x83 };
 
 typedef struct {
-    pid_t pid;
+    sys_proc proc;
     int to, from;                       /* its stdin and stdout */
 } signer;
 
 /* Starts `path session`; its stderr is that of pzpeer. */
 bool signer_start(signer *s, const char *path);
 bool signer_send(signer *s, uint8_t type, const uint8_t *payload, size_t len);
+/* Closes its input: at the end of its input pzsign gives its answer. */
+void signer_end_input(signer *s);
 /* The next frame; *payload is malloc'ed (len + 1 bytes, NUL after the payload) and is the caller's to free. False at the end of its output,
  * on a malformed frame, or when nothing comes within timeout_ms (the caller then stops the process). */
 bool signer_recv(signer *s, uint8_t *type, uint8_t **payload, size_t *len, int timeout_ms);

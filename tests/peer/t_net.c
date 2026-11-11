@@ -6,16 +6,11 @@
  * network refuses, and their blocks. A relay: two connections spliced, a handshake end to end over them that checks both identities,
  * megabytes both ways, and the limit of bytes. Identities with few zero bits, so that they are quick. */
 #include "net.h"
+#include "sys.h"
 #include <pzcore/hash.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
@@ -27,12 +22,7 @@ static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0x5e, 0x70};
 static home_identity ida, idb, idc, nobits;   /* nobits: an identity whose node ID lacks the BITS zero bits */
 
-static int64_t ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
+static int64_t ms(void) { return sys_now_ms(); }
 
 static void identity(const char *label, unsigned bits, home_identity *out)
 {
@@ -113,7 +103,7 @@ static void test_addr(void)
     CHECK(!net_parse_addr("127.0.0.1", &a) && !net_parse_addr("127.0.0.1:0", &a) && !net_parse_addr("127.0.0.1:65536", &a));
     CHECK(!net_parse_addr("::1:80", &a) && !net_parse_addr("[::1]80", &a) && !net_parse_addr(":80", &a) && !net_parse_addr("1.2.3.4:8x", &a));
     uint8_t r1[32], r2[32];
-    CHECK(net_random(r1, 32) && net_random(r2, 32) && memcmp(r1, r2, 32) != 0);
+    CHECK(sys_random(r1, 32) && sys_random(r2, 32) && memcmp(r1, r2, 32) != 0);
     /* the addresses a public network refuses (dialled from a NODES answer they would reach the user's own network) */
     static const char *const NOT_PUBLIC[] = {"0.1.2.3:1", "10.0.0.1:1", "100.64.0.1:1", "100.127.255.255:1", "127.0.0.1:1", "169.254.1.1:1",
         "172.16.0.1:1", "172.31.9.9:1", "192.168.1.1:1", "192.0.2.5:1", "198.18.0.1:1", "198.51.100.7:1", "203.0.113.9:1", "224.0.0.1:1",
@@ -225,7 +215,7 @@ static void test_refusals(void)
                 uint8_t f[NOISE_HEAD + 10 + NOISE_TAG];
                 const size_t fl = noise_frame_seal(&c->tx, big, 10, f);
                 f[NOISE_HEAD + 3] ^= 0x20;
-                CHECK(write(c->fd, f, fl) == (ssize_t)fl);
+                CHECK(sys_send_all(c->fd, f, fl, ms() + 3000));
             }
             CHECK(!net_recv(c, ans, sizeof ans, &n));         /* no answer: the server closed */
             net_close(c);
@@ -245,12 +235,7 @@ static int raw_connect(const net_addr *a)
     s.sin_family = AF_INET;
     s.sin_port = htons(a->port);
     memcpy(&s.sin_addr, a->ip + 12, 4);
-    const int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd >= 0 && connect(fd, (const struct sockaddr *)&s, sizeof s) != 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
+    return sys_connect((const struct sockaddr *)&s, sizeof s, ms() + 3000);
 }
 
 static void test_timeouts(void)
@@ -267,11 +252,11 @@ static void test_timeouts(void)
             uint8_t junk[NET_HS1 + NET_HS3];
             memset(junk, 0x41, sizeof junk);
             junk[0] = 2;
-            CHECK(write(fd, junk, sizeof junk) == (ssize_t)sizeof junk);
+            CHECK(sys_send_all(fd, junk, sizeof junk, ms() + 3000));
         }
         finish(&s, th);
         CHECK(!s.hs_ok && s.took < 3 * SHORT_MS + 1500);
-        if (fd >= 0) close(fd);
+        sys_close(fd);
     }
     /* a server that listens and never answers (the kernel accepts the connection): the dialler gives up within its timeout */
     uint16_t port;
@@ -294,16 +279,6 @@ static void test_timeouts(void)
     net_close_fd(l2);
 }
 
-static bool read_all(int fd, uint8_t *p, size_t n)
-{
-    while (n) {
-        const ssize_t r = read(fd, p, n);
-        if (r <= 0) return false;
-        p += r, n -= (size_t)r;
-    }
-    return true;
-}
-
 /* An initiator that sends each handshake message just within one timeout of the last: before, each message had a timeout of its own and
  * this held a handler for about three; now the whole handshake has one. */
 static void test_drip(void)
@@ -320,16 +295,15 @@ static void test_drip(void)
     memcpy(prologue, "pznet1", 6), memcpy(prologue + 6, FP, 32);
     memset(e, 7, sizeof e);
     CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, e));
-    const struct timespec wait = {0, 2 * SHORT_MS * 1000000L};
-    nanosleep(&wait, NULL);
+    sys_sleep_ms(2 * SHORT_MS);
     n = noise_hs_write(&hs, NULL, 0, m);
-    CHECK(fd >= 0 && write(fd, m, n) == (ssize_t)n && read_all(fd, m, NET_HS2) && noise_hs_read(&hs, m, NET_HS2, pl, &plen));
-    nanosleep(&wait, NULL);                                    /* 4 * SHORT_MS since the connection: past the one deadline */
+    CHECK(fd >= 0 && sys_send_all(fd, m, n, ms() + 3000) && sys_recv_all(fd, m, NET_HS2, ms() + 3000) && noise_hs_read(&hs, m, NET_HS2, pl, &plen));
+    sys_sleep_ms(2 * SHORT_MS);                                /* 4 * SHORT_MS since the connection: past the one deadline */
     n = noise_hs_write(&hs, port, 2, m);
-    if (fd >= 0) (void)!write(fd, m, n);
+    (void)sys_send_all(fd, m, n, ms() + 3000);
     finish(&s, th);
     CHECK(!s.hs_ok && s.took < 4 * SHORT_MS + 500);
-    if (fd >= 0) close(fd);
+    sys_close(fd);
 }
 
 /* ---- a relay: R accepts two connections, reads a join from each, says go to both and splices them ---- */

@@ -50,7 +50,7 @@ static void relay_count(dht *d, const uint8_t blk[16], const uint8_t id[32], int
 /* the waits that are over, closed (r_mu held) */
 void relay_sweep(dht *d)
 {
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     for (int i = 0; i < RELAY_WAITING; i++)
         if (d->waiting[i].used && now >= d->waiting[i].until) {
             net_close(d->waiting[i].c);
@@ -112,7 +112,7 @@ bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
             memcpy(w->name, name, 32), memcpy(w->from, c->remote, 32), memcpy(w->to, to, 32), memcpy(w->block[0], blk, 16);
             w->limited[0] = lim;
             w->c = c;
-            w->until = now_ms() + d->slot_ms + d->slot_ms / 4;  /* a slot, and a quarter for clocks a little apart */
+            w->until = sys_now_ms() + d->slot_ms + d->slot_ms / 4;  /* a slot, and a quarter for clocks a little apart */
         }
     }
     pthread_mutex_unlock(&d->r_mu);
@@ -183,7 +183,7 @@ static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[
     req[0] = DHT_RELAY;
     memcpy(req + 1, name, 32), memcpy(req + 33, partner, 32);
     bool ok = net_send(c, req, sizeof req);
-    while (ok && !stopping(d) && now_ms() < until && !net_readable(c, until - now_ms() < 200 ? (int)(until - now_ms()) : 200)) {}
+    while (ok && !stopping(d) && sys_now_ms() < until && !net_readable(c, until - sys_now_ms() < 200 ? (int)(until - sys_now_ms()) : 200)) {}
     ok = ok && !stopping(d) && net_readable(c, 0) && net_recv(c, ans, sizeof ans, &n) && n == 1 && ans[0] == DHT_RELAYED &&
          net_rehandshake(&d->ncfg, c, memcmp(d->me.xonly, partner, 32) < 0, partner);
     if (!ok) {
@@ -197,13 +197,13 @@ static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[
 static net_conn *await(void *arg, dht_wait_fn wait, int64_t ms, bool *give_up)
 {
     if (wait) return wait(arg, (int)ms, give_up);
-    nap(ms);
+    sys_sleep_ms((int)ms);
     return NULL;
 }
 
 net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32], int wait_ms, dht_wait_fn wait, void *arg)
 {
-    const int64_t until = now_ms() + wait_ms;
+    const int64_t until = sys_now_ms() + wait_ms;
     bool give_up = false;
     dht_contact pc;
     /* direct: party 0 dials the partner it finds, and so does a side that does not listen (nobody can dial it) */
@@ -212,16 +212,16 @@ net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32],
         if (c) return c;
         rt_failed(d, pc.id);
     }
-    for (int round = 0; !stopping(d) && now_ms() < until; round++) {
+    for (int round = 0; !stopping(d) && sys_now_ms() < until; round++) {
         /* the partner's own connection: a side that listens gives it the first slot, then looks between the tries of the relay */
-        net_conn *c = await(arg, wait, round == 0 && d->port ? (d->slot_ms < until - now_ms() ? d->slot_ms : until - now_ms()) : 0, &give_up);
+        net_conn *c = await(arg, wait, round == 0 && d->port ? (d->slot_ms < until - sys_now_ms() ? d->slot_ms : until - sys_now_ms()) : 0, &give_up);
         if (c || give_up) return c;
         const uint64_t wall = wall_us() / 1000, slot = wall / (uint64_t)d->slot_ms;
-        const int64_t left = (int64_t)((slot + 1) * (uint64_t)d->slot_ms - wall), end = now_ms() + left < until ? now_ms() + left : until;
+        const int64_t left = (int64_t)((slot + 1) * (uint64_t)d->slot_ms - wall), end = sys_now_ms() + left < until ? sys_now_ms() + left : until;
         dht_contact r;
         if (relay_of(d, name, partner, slot, &r) && (c = relay_join(d, &r, partner, name, end))) return c;
-        while (!stopping(d) && now_ms() < end) {               /* this slot's relay did not serve: the next slot has another */
-            if ((c = await(arg, wait, end - now_ms() < 200 ? end - now_ms() : 200, &give_up)) || give_up) return c;
+        while (!stopping(d) && sys_now_ms() < end) {               /* this slot's relay did not serve: the next slot has another */
+            if ((c = await(arg, wait, end - sys_now_ms() < 200 ? end - sys_now_ms() : 200, &give_up)) || give_up) return c;
         }
     }
     return NULL;

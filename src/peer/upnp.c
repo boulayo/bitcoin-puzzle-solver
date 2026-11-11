@@ -6,15 +6,10 @@
  * at the very address the answer came from, which must not be a public one. */
 #include "upnp.h"
 #include "net.h"
-#include <arpa/inet.h>
-#include <poll.h>
-#include <stdio.h>
+#include "sys.h"
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
 
 #define TIMEOUT_S 3
 #define BODY_MAX 262144            /* the longest description read */
@@ -29,29 +24,28 @@ static bool fail(char *why, size_t cap, const char *msg)
  * of the connection into local (the address the router sees this machine at). */
 static bool http(const struct sockaddr_in *to, const char *req, size_t rl, char *ans, size_t cap, struct in_addr *local)
 {
-    const struct timeval tv = {.tv_sec = TIMEOUT_S};
+    const int64_t deadline = sys_now_ms() + TIMEOUT_S * 1000;
     struct sockaddr_in me;
     socklen_t ml = sizeof me;
     size_t n = 0;
-    const int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return false;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv), setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-    bool ok = connect(fd, (const struct sockaddr *)to, sizeof *to) == 0 && getsockname(fd, (struct sockaddr *)&me, &ml) == 0;
-#ifdef MSG_NOSIGNAL
-    ok = ok && send(fd, req, rl, MSG_NOSIGNAL) == (ssize_t)rl;
-#else
-    ok = ok && send(fd, req, rl, 0) == (ssize_t)rl;
-#endif
-    while (ok && n < cap - 1) {
-        const ssize_t r = recv(fd, ans + n, cap - 1 - n, 0);
-        if (r < 0) ok = false;
-        if (r <= 0) break;
-        n += (size_t)r;
-    }
-    close(fd);
+    long r = 1;
+    const int fd = sys_connect((const struct sockaddr *)to, sizeof *to, deadline);
+    bool ok = fd >= 0 && getsockname(fd, (struct sockaddr *)&me, &ml) == 0 && sys_send_all(fd, req, rl, deadline);
+    while (ok && r > 0 && n < cap - 1)
+        if ((r = sys_recv(fd, ans + n, cap - 1 - n, deadline)) > 0) n += (size_t)r;
+    sys_close(fd);
     ans[n] = 0;
     if (ok) *local = me.sin_addr;
-    return ok && n > 12 && n < cap - 1;                        /* a full buffer: longer than anything a router says */
+    return ok && r == 0 && n > 12;                             /* to the end, within the time and the buffer */
+}
+
+/* whether the n bytes at p hold word */
+static bool holds(const char *p, size_t n, const char *word)
+{
+    const size_t wl = strlen(word);
+    for (size_t i = 0; i + wl <= n; i++)
+        if (!memcmp(p + i, word, wl)) return true;
+    return false;
 }
 
 /* "http://a.b.c.d[:port]/path" at the address of `at` (and its port into it): the path, or NULL */
@@ -97,7 +91,6 @@ static bool map_with(char *body, uint16_t port, unsigned lease_s, const char *ss
     char pkt[2048], req[2048], soap[1024], desc[512], type[128], ctl[256];
     net_addr to, seen = {.ip = {[10] = 0xff, [11] = 0xff}};
     struct sockaddr_in dst = {.sin_family = AF_INET}, from, router;
-    socklen_t fl = sizeof from;
     struct in_addr local;
     const char *loc = NULL, *path = NULL;
     size_t ll = 0;
@@ -105,13 +98,13 @@ static bool map_with(char *body, uint16_t port, unsigned lease_s, const char *ss
     /* 1. the search */
     if (!net_parse_addr(ssdp ? ssdp : "239.255.255.250:1900", &to) || to.ip[10] != 0xff) return fail(why, cap, "no IPv4 address to search at");
     memcpy(&dst.sin_addr, to.ip + 12, 4), dst.sin_port = htons(to.port);
-    const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    const int fd = sys_socket(AF_INET, SOCK_DGRAM);
     if (fd < 0) return fail(why, cap, "no socket");
-    (void)sendto(fd, SEARCH, sizeof SEARCH - 1, 0, (const struct sockaddr *)&dst, sizeof dst);
-    struct pollfd p = {.fd = fd, .events = POLLIN};
-    for (int tries = 0; !path && tries < 8 && poll(&p, 1, TIMEOUT_S * 1000) > 0; tries++) {
-        const ssize_t n = recvfrom(fd, pkt, sizeof pkt - 1, 0, (struct sockaddr *)&from, &fl);
-        if (n <= 0 || fl != sizeof from) continue;
+    (void)sys_sendto(fd, SEARCH, sizeof SEARCH - 1, &dst);
+    const int64_t deadline = sys_now_ms() + TIMEOUT_S * 1000;
+    for (int tries = 0; !path && tries < 8 && sys_wait(fd, false, deadline) > 0; tries++) {
+        const long n = sys_recvfrom(fd, pkt, sizeof pkt - 1, &from);
+        if (n <= 0) continue;
         pkt[n] = 0;
         memcpy(seen.ip + 12, &from.sin_addr, 4), seen.port = 1;
         if (net_addr_public(&seen)) continue;                  /* a router is on the LAN */
@@ -127,7 +120,7 @@ static bool map_with(char *body, uint16_t port, unsigned lease_s, const char *ss
         if (pp && pl < sizeof desc && !memchr(pp, ' ', pl)) memcpy(desc, pp, pl), desc[pl] = 0, path = desc;
         loc = NULL;
     }
-    close(fd);
+    sys_close(fd);
     if (!path) return fail(why, cap, "no router answered the search (UPnP off, or none on this network)");
 
     /* 2. the description: the control address of the WAN connection service */
@@ -141,7 +134,7 @@ static bool map_with(char *body, uint16_t port, unsigned lease_s, const char *ss
         size_t tl, cl;
         if (!end) break;
         if (!(t = element(s, end, "serviceType", &tl)) || !(c = element(s, end, "controlURL", &cl)) || tl >= sizeof type || cl >= sizeof ctl) continue;
-        if (!memmem(t, tl, ":WANIPConnection:", 17) && !memmem(t, tl, ":WANPPPConnection:", 18)) continue;
+        if (!holds(t, tl, ":WANIPConnection:") && !holds(t, tl, ":WANPPPConnection:")) continue;
         memcpy(type, t, tl), type[tl] = 0;
         struct sockaddr_in at = router;
         const char *cp = cl > 7 && !strncasecmp(c, "http://", 7) ? url_path(c, cl, &at) : c;

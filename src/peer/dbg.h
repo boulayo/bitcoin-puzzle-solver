@@ -6,12 +6,10 @@
 #ifndef PZPEER_DBG_H
 #define PZPEER_DBG_H
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include "sys.h"
 
 bool dbg_open(const char *path);   /* appends to the file; false when it cannot be opened */
-void dbg(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void dbg(const char *fmt, ...) __attribute__((format(SYS_PRINTF, 1, 2)));
 /* the first bytes of p as hex text (8 at most), for a line: a static buffer of the calling thread */
 const char *dbg_hex(const uint8_t *p, size_t n);
 

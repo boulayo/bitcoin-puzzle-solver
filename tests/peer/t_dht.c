@@ -13,16 +13,12 @@
  * at once, bytes); a relay stopped while it copies. */
 #include "dht.h"
 #include "store.h"
+#include "sys.h"
 #include <pzcore/hash.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -64,18 +60,8 @@ static uint8_t qp[32];             /* q' = k - base, the scalar of Q' (the tests
 static node nodes[NODES];
 static record recs[RECS];
 
-static int64_t ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-static void nap(int msec)
-{
-    const struct timespec ts = {msec / 1000, (long)(msec % 1000) * 1000000};
-    nanosleep(&ts, NULL);
-}
+static int64_t ms(void) { return sys_now_ms(); }
+static void nap(int msec) { sys_sleep_ms(msec); }
 
 static void hashed(const char *s, uint8_t out[32]) { pz_sha256((const uint8_t *)s, strlen(s), out); }
 
@@ -321,13 +307,13 @@ static void test_records(void)
     int by_count[DHT_KSTORE + 1] = {0};
     for (int i = 0; i < RECS; i++) {
         uint8_t k[32];
-        int near[DHT_KSTORE], held = 0;
+        int who[DHT_KSTORE], held = 0;
         store_key(recs[i].x, k);
         CHECK(record_check(ctx, &net, &recs[i]));               /* dht_publish signed it */
-        const int m = brute(k, DHT_KSTORE, near);
+        const int m = brute(k, DHT_KSTORE, who);
         for (int j = 0; j < m; j++) {
             record got[4];
-            const int g = dht_local_records(nodes[near[j]].d, recs[i].x, got, 4);
+            const int g = dht_local_records(nodes[who[j]].d, recs[i].x, got, 4);
             for (int h = 0; h < g; h++) held += same(&got[h], &recs[i]);
         }
         by_count[held]++;
@@ -341,12 +327,12 @@ static void test_records(void)
 static int in_mailboxes(const uint8_t owner[32], const record *a, const record *b)
 {
     uint8_t k[32];
-    int near[DHT_KSTORE], n = 0;
+    int who[DHT_KSTORE], n = 0;
     dht_mbox_key(owner, k);
-    const int m = brute(k, DHT_KSTORE, near);
+    const int m = brute(k, DHT_KSTORE, who);
     for (int j = 0; j < m; j++) {
         mbox_pair pairs[8];
-        const int g = dht_local_mbox(nodes[near[j]].d, owner, pairs, 8);
+        const int g = dht_local_mbox(nodes[who[j]].d, owner, pairs, 8);
         bool has = false;
         for (int h = 0; h < g; h++) has = has || (same(&pairs[h].r[0], a) && same(&pairs[h].r[1], b)) || (same(&pairs[h].r[0], b) && same(&pairs[h].r[1], a));
         n += has;
@@ -776,20 +762,14 @@ static int raw_connect(uint16_t port)
     a.sin_family = AF_INET;
     a.sin_port = htons(port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    const int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd >= 0 && connect(fd, (const struct sockaddr *)&a, sizeof a) != 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
+    return sys_connect((const struct sockaddr *)&a, sizeof a, ms() + 3000);
 }
 
 /* whether the other side closed fd within ms */
 static bool closed_within(int fd, int msec)
 {
-    struct pollfd p = {.fd = fd, .events = POLLIN};
     uint8_t b;
-    return poll(&p, 1, msec) == 1 && recv(fd, &b, 1, 0) <= 0;
+    return sys_recv(fd, &b, 1, ms() + msec) == 0;
 }
 
 /* Connections that open and say nothing, from one address, on a node of a public network (whose limits apply to loopback, as to any
@@ -818,8 +798,8 @@ static void test_slowloris(void)
     int64_t t0 = ms();
     CHECK(!net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && ms() - t0 < 500);
     for (int i = 0; i < 4; i++)
-        if (idle[i] >= 0) close(idle[i]);
-    if (fifth >= 0) close(fifth);
+        sys_close(idle[i]);
+    sys_close(fifth);
     nap(300);
     CHECK(net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG);
     scratch_end(sv, "s-slow");
@@ -1161,8 +1141,7 @@ int main(void)
     CHECK(record_net_init(ctx, &net, FP, 0, p, base));
     memcpy(qp, k, 32), memcpy(nb, base, 32);
     CHECK(secp256k1_ec_seckey_negate(ctx, nb) && secp256k1_ec_seckey_tweak_add(ctx, qp, nb));
-    mkdir("build/peer", 0755);
-    mkdir(ROOT, 0755);
+    CHECK(sys_mkdir("build") && sys_mkdir("build/peer") && sys_mkdir(ROOT));
     for (int i = 0; i < NODES; i++) {
         char label[32];
         uint8_t seed[32];

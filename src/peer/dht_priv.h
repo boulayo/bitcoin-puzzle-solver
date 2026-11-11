@@ -13,6 +13,7 @@
 #define PZPEER_DHT_PRIV_H
 
 #include "dht.h"
+#include "sys.h"
 #include "bt.h"
 #include <pthread.h>
 #include <stdatomic.h>
@@ -120,24 +121,11 @@ struct dht {
     bool has_accept, has_jobs, has_maint, has_meet, started;
 };
 
-static inline int64_t now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
 static inline uint64_t wall_us(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000000 + (uint64_t)ts.tv_nsec / 1000;
-}
-
-static inline void nap(int64_t ms)
-{
-    const struct timespec ts = {(time_t)(ms / 1000), (long)(ms % 1000) * 1000000L};
-    if (ms > 0) nanosleep(&ts, NULL);
 }
 
 static inline bool stopping(dht *d) { return atomic_load(&d->stop); }
@@ -155,7 +143,7 @@ static inline bool addr_ok(const dht *d, const net_addr *a) { return a->port != 
 static inline bool limited(const dht *d, const net_addr *a) { return !d->cfg.allow_private || net_addr_public(a); }
 
 /* dht.c */
-void dlog(const dht *d, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void dlog(const dht *d, const char *fmt, ...) __attribute__((format(SYS_PRINTF, 2, 3)));
 bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool detached);
 bool lim_take(dht *d, const net_addr *a, int kind, double n);
 void path_of(const dht *d, const char *name, char *out, size_t cap);

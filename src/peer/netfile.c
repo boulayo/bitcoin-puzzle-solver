@@ -180,7 +180,7 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen)
     }
     for (size_t i = 0; i < NIMM; i++) if (!seen[i]) return fail(err, errlen, "missing key", DEFINING[i]);
     char canon_imm[NIMM * LINE_MAX_LEN];
-    size_t li;
+    size_t li = 0;
     (void)join_sorted(imm, nimm, canon_imm, sizeof canon_imm, &li);   /* fits: NIMM lines of LINE_MAX_LEN at most */
     uint8_t *m = malloc(sizeof TAG - 1 + li);
     if (!m) return fail(err, errlen, "out of memory", NULL);

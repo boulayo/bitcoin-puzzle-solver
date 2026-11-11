@@ -12,6 +12,7 @@
 #include "../../src/peer/btc_rpc.c"
 #include "btc_vectors.h"
 #include "peertest.h"
+#include <time.h>
 
 #define NV(a) (sizeof (a) / sizeof (a)[0])
 

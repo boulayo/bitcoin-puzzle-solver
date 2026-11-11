@@ -7,6 +7,7 @@
 #include "peertest.h"
 #include <netinet/in.h>
 #include <poll.h>
+#include <signal.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -781,6 +782,7 @@ static void test_auth(void)
 
 int main(void)
 {
+    signal(SIGPIPE, SIG_IGN);                                  /* a client that gave up is an error of the send, not the end of the test */
     S.lfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
     socklen_t al = sizeof a;

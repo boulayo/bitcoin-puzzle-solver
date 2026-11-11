@@ -3,6 +3,7 @@
 /* main.c - pzpeer, the daemon of the shared kangaroo network (docs/en/NETWORK.md). */
 #include "bt.h"
 #include "dbg.h"
+#include "sys.h"
 #include "dht.h"
 #include "dpfeed.h"
 #include "home.h"
@@ -15,6 +16,11 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#define DIR_SEP '\\'
+#else
+#define DIR_SEP '/'
+#endif
 #define DEFAULT_PORT 28140         /* the TCP port a node listens on when --listen says nothing */
 
 static int usage(void)
@@ -213,11 +219,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         pz_secure_zero(&id, sizeof id);
         return 1;
     }
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_signal;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    sys_on_stop(on_signal);
     const int n = dht_start(d);
     hex_of(id.xonly, 32, idhex);
     if (n < 0) fprintf(stderr, "cannot listen on port %ld\n", port);
@@ -225,8 +227,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     else printf("node %s, not listening, %d contacts\n", idhex, n);
     fflush(stdout);
     for (int tick = 1; n >= 0 && !interrupted; tick++) {
-        const struct timespec ts = {0, 200 * 1000000};
-        nanosleep(&ts, NULL);
+        sys_sleep_ms(200);
         if (tick % 300 == 0) {                                 /* every minute */
             dht_contact cs[64];
             printf("%d contacts, %llu records held\n", dht_contacts(d, cs, 64), (unsigned long long)dht_local_count(d));
@@ -241,8 +242,10 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
 /* name beside this program when it was started by a path, else name alone, for PATH */
 static const char *beside(const char *self, const char *name, char out[4096])
 {
-    const char *slash = strrchr(self, '/');
-    snprintf(out, 4096, "%.*s%s", slash ? (int)(slash + 1 - self) : 0, self, name);
+    size_t dir = 0;
+    for (size_t i = 0; self[i]; i++)
+        if (self[i] == '/' || (DIR_SEP != '/' && self[i] == DIR_SEP)) dir = i + 1;
+    snprintf(out, 4096, "%.*s%s", (int)dir, self, name);
     return out;
 }
 

@@ -5,6 +5,7 @@
 #include "peertest.h"
 #include "dpfeed.h"
 #include "keys.h"
+#include "sys.h"
 #include <pzcore/hash.h>
 #include <secp256k1_schnorrsig.h>
 #include <string.h>
@@ -51,32 +52,44 @@ static void test_keys(void)
     CHECK(!keys_identity(ctx, seed, FP, 33, &few));
 }
 
+static bool exists(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f) fclose(f);
+    return f != NULL;
+}
+
+#ifndef _WIN32
 static mode_t mode_of(const char *path)
 {
     struct stat st;
     return lstat(path, &st) == 0 ? st.st_mode : 0;
 }
+#endif
 
 /* the files of the secrets: only this user reads them, whatever was at their place before */
 static void test_key_files(void)
 {
-    char dir[] = "/tmp/t_record.XXXXXX", path[64], other[64], tmp[80], err[400];
+    char dir[200], path[240], other[240], tmp[260], err[400];
     uint8_t v[32], got[32];
     hashed("a secret", v);
-    CHECK(mkdtemp(dir) != NULL);
+    CHECK(pt_tmpdir("t_record", dir, sizeof dir));
     snprintf(path, sizeof path, "%s/home.seed", dir);
     snprintf(other, sizeof other, "%s/elsewhere", dir);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     CHECK(keys_file_read(path, got, err, sizeof err) == 0);                                  /* none yet */
-    CHECK(keys_file_write(path, v) && (mode_of(path) & 0777) == 0600);
-    CHECK(keys_file_read(path, got, err, sizeof err) == 1 && !memcmp(got, v, 32) && access(tmp, F_OK) != 0);
+    CHECK(keys_file_write(path, v) && keys_file_read(path, got, err, sizeof err) == 1 && !memcmp(got, v, 32) && !exists(tmp));
+    hashed("another secret", v);                                                             /* over the file that is there */
+    CHECK(keys_file_write(path, v) && keys_file_read(path, got, err, sizeof err) == 1 && !memcmp(got, v, 32) && !exists(tmp));
+    FILE *f = fopen(other, "w");
+    CHECK(f && fputs("not touched\n", f) >= 0);
+    if (f) fclose(f);
+#ifndef _WIN32                                                 /* who may read a file, and links: on Windows the folder decides (sys.h) */
+    CHECK((mode_of(path) & 0777) == 0600);
     /* a file that others can read: refused, and replaced by a private one when written (O_TRUNC kept its mode) */
     CHECK(chmod(path, 0644) == 0 && keys_file_read(path, got, err, sizeof err) == -1 && strstr(err, "chmod 600"));
     CHECK(keys_file_write(path, v) && (mode_of(path) & 0777) == 0600 && keys_file_read(path, got, err, sizeof err) == 1);
     /* a link: never followed, replaced by the file itself (the place it pointed to is left alone) */
-    FILE *f = fopen(other, "w");
-    CHECK(f && fputs("not touched\n", f) >= 0);
-    if (f) fclose(f);
     CHECK(chmod(other, 0600) == 0 && remove(path) == 0 && symlink(other, path) == 0);
     CHECK(keys_file_read(path, got, err, sizeof err) == -1);
     CHECK(keys_file_write(path, v) && S_ISREG(mode_of(path)) && keys_file_read(path, got, err, sizeof err) == 1);
@@ -85,7 +98,8 @@ static void test_key_files(void)
     CHECK(f && fgets(back, sizeof back, f) && !strcmp(back, "not touched\n"));
     if (f) fclose(f);
     /* a leftover temporary file, even a link, does not stop a write nor receive the secret */
-    CHECK(symlink(other, tmp) == 0 && keys_file_write(path, v) && access(tmp, F_OK) != 0 && keys_file_read(path, got, err, sizeof err) == 1);
+    CHECK(symlink(other, tmp) == 0 && keys_file_write(path, v) && !exists(tmp) && keys_file_read(path, got, err, sizeof err) == 1);
+#endif
     /* not 64 hex digits */
     f = fopen(path, "w");
     CHECK(f && fputs("-1 not a key\n", f) >= 0);

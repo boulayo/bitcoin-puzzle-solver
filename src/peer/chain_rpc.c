@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* chain_rpc.c - session_chain on bitcoind (see chain_rpc.h). */
 #include "chain_rpc.h"
+#include "sys.h"
 #include <pzcore/address.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,19 +10,6 @@
 
 #define COINBASE_MATURITY 100
 #define SCAN_MAX 64
-
-static void pause_s(void)
-{
-    const struct timespec ts = {1, 0};
-    nanosleep(&ts, NULL);
-}
-
-static int64_t now_ms(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
 
 /* the address of a P2PKH script on the chain, for the descriptor of scantxoutset */
 static bool p2pkh_address(btc_chain chain, const uint8_t spk[BTC_P2PKH_LEN], char *out, size_t cap)
@@ -58,10 +46,10 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     if (max <= 0 || !p2pkh_address(c->chain, spk, addr, sizeof addr) || chain_rpc_ready(c, why, sizeof why) != 1) return -1;
     /* the node runs one scan at a time and answers another one (the partner on the same node, a wallet) with an error, not in a queue:
      * on the main chain a scan takes minutes, so the wait is as long as a scan may be */
-    const int64_t until = now_ms() + c->rpc->scan_timeout_ms;
+    const int64_t until = sys_now_ms() + c->rpc->scan_timeout_ms;
     while (!btc_rpc_scan(c->rpc, addrs, 1, u, max < SCAN_MAX ? (size_t)max : SCAN_MAX, &n, &tip)) {
-        if (c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress") || now_ms() > until) return -1;
-        pause_s();
+        if (c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress") || sys_now_ms() > until) return -1;
+        sys_sleep_ms(1000);
     }
     if (n > SCAN_MAX) n = SCAN_MAX;
     int k = 0;
@@ -101,7 +89,7 @@ static uint64_t height(void *ctx)
     uint64_t h;
     for (int tries = 0; tries < 10; tries++) {
         if (btc_rpc_getblockcount(c->rpc, &h)) return c->tip = h;
-        pause_s();
+        sys_sleep_ms(1000);
     }
     return c->tip;
 }

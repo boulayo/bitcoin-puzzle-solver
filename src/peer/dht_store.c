@@ -14,7 +14,7 @@
 /* whether a custodian may alert this pair now: not within RESEND_MS of the last time */
 static bool sent_check(dht *d, const uint8_t h[32])
 {
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     bool ok = true;
     int slot = -1, oldest = 0;
     pthread_mutex_lock(&d->a_mu);

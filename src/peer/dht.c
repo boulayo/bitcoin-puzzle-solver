@@ -10,7 +10,6 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
 
 #define ANS_MAX MBOX_LEN           /* the longest answer */
 #define JOBS_MAX 4096
@@ -83,13 +82,13 @@ static lim_entry *lim_get(dht *d, const net_addr *a)
     memcpy(best->block, blk, 16);
     best->used = true;
     for (int k = 0; k < LIM_KINDS; k++) best->tok[k] = LIM_BURST[k];
-    best->at = now_ms();
+    best->at = sys_now_ms();
     return best;
 }
 
 static void lim_refill(lim_entry *e)
 {
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     const double dt = (double)(now - e->at) / 1000;
     for (int k = 0; k < LIM_KINDS; k++) e->tok[k] = e->tok[k] + dt * LIM_RATE[k] < LIM_BURST[k] ? e->tok[k] + dt * LIM_RATE[k] : LIM_BURST[k];
     e->at = now;
@@ -305,7 +304,7 @@ static void *accept_main(void *arg)
     while (!stopping(d)) {
         net_addr from;
         const int fd = net_accept(d->lfd, 100, &from);
-        if (fd == -2) nap(50);                                 /* out of descriptors: let the handlers close some */
+        if (fd == -2) sys_sleep_ms(50);                                      /* out of descriptors: let the handlers close some */
         if (fd < 0) continue;
         if (!lim_conn_open(d, &from)) {                        /* its block has its share of the handlers, or of the rate */
             net_close_fd(fd);
@@ -363,7 +362,7 @@ static void *meet_main(void *arg)
     const int64_t period = (int64_t)(d->cfg.rendezvous_s ? d->cfg.rendezvous_s : 1800) * 1000;
     int64_t next_meet = 0, next_map = 0;
     while (!stopping(d)) {
-        const int64_t now = now_ms();
+        const int64_t now = sys_now_ms();
         if (d->cfg.upnp && d->port && now >= next_map) {       /* a lease of two hours, asked again every hour */
             char why[200];
             const bool ok = upnp_map(d->port, 7200, d->cfg.upnp_ssdp, why, sizeof why);
@@ -382,10 +381,9 @@ static void *meet_main(void *arg)
             dlog(d, "rendezvous: %s, %d addresses, announced to %d nodes", n < 0 ? "no node of the table of BitTorrent answered" : "done",
                  fresh, took);
             if (fresh && rt_count(d) < DHT_K) (void)bootstrap(d);
-            next_meet = now_ms() + (rt_count(d) ? period : period < 120000 ? period : 120000);
+            next_meet = sys_now_ms() + (rt_count(d) ? period : period < 120000 ? period : 120000);
         }
-        struct timespec ts = {.tv_nsec = 200 * 1000000};
-        nanosleep(&ts, NULL);
+        sys_sleep_ms(200);
     }
     return NULL;
 }
@@ -393,7 +391,7 @@ static void *meet_main(void *arg)
 static void *maint_main(void *arg)
 {
     dht *d = arg;
-    const int64_t t0 = now_ms();
+    const int64_t t0 = sys_now_ms();
     int64_t next_poll = t0 + d->poll_ms, next_refresh = t0 + 60000, next_repub = t0 + d->republish_ms, next_save = t0 + SAVE_MS,
             next_boot = t0 + BOOT_RETRY_MS, next_retry = t0 + 1000;
     if (next_refresh > t0 + d->refresh_ms) next_refresh = t0 + d->refresh_ms;
@@ -406,10 +404,10 @@ static void *maint_main(void *arg)
         (void)pthread_cond_timedwait(&d->m_cv, &d->m_mu, &ts);
         if (stopping(d)) break;
         pthread_mutex_unlock(&d->m_mu);
-        const int64_t now = now_ms();
+        const int64_t now = sys_now_ms();
         if (now >= next_boot) {
             if (!rt_count(d)) (void)bootstrap(d);                /* alone: the bootstrap list and peers.txt again */
-            next_boot = now_ms() + BOOT_RETRY_MS;
+            next_boot = sys_now_ms() + BOOT_RETRY_MS;
         }
         if (now >= next_retry) {
             retry_alerts(d);
@@ -420,11 +418,11 @@ static void *maint_main(void *arg)
         }
         if (now >= next_poll) {
             (void)dht_mbox_poll(d);
-            next_poll = now_ms() + d->poll_ms;
+            next_poll = sys_now_ms() + d->poll_ms;
         }
         if (now >= next_refresh) {
             refresh(d, false);
-            next_refresh = now_ms() + (d->refresh_ms < 60000 ? d->refresh_ms : 60000);
+            next_refresh = sys_now_ms() + (d->refresh_ms < 60000 ? d->refresh_ms : 60000);
         }
         if (now >= next_save) {
             save_peers(d);
@@ -432,7 +430,7 @@ static void *maint_main(void *arg)
         }
         if (now >= next_repub) {
             republish(d);
-            next_repub = now_ms() + d->republish_ms;
+            next_repub = sys_now_ms() + d->republish_ms;
         }
         pthread_mutex_lock(&d->m_mu);
     }
@@ -493,7 +491,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     pthread_mutex_init(&d->m_mu, NULL);
     pthread_mutex_init(&d->f_mu, NULL);
     pthread_cond_init(&d->m_cv, NULL);
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     for (int i = 0; i < DHT_BUCKETS; i++) d->b[i].looked = now;
     net_cfg_init(&d->ncfg, cfg->ctx, cfg->self, cfg->net->fp, cfg->id_bits, 0, cfg->timeout_ms);
     if (!(d->lim = calloc(LIM_SLOTS, sizeof *d->lim)) || !(d->active = calloc((size_t)d->cfg.relay_max, sizeof *d->active))) {
@@ -501,13 +499,10 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         dht_stop(d);
         return NULL;
     }
-    if (mkdir(d->dir, 0700) != 0) {
-        struct stat sb;
-        if (stat(d->dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
-            snprintf(err, errlen, "%s: cannot make the data folder", d->dir);
-            dht_stop(d);
-            return NULL;
-        }
+    if (!sys_mkdir(d->dir)) {
+        snprintf(err, errlen, "%s: cannot make the data folder", d->dir);
+        dht_stop(d);
+        return NULL;
     }
     path_of(d, "store.bin", path, sizeof path);
     if (!(d->custody = store_open(path, cfg->ctx, cfg->net, err, errlen))) {

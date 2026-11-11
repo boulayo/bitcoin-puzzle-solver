@@ -4,6 +4,7 @@
 #ifndef PZPEER_PEERTEST_H
 #define PZPEER_PEERTEST_H
 
+#include "sys.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,17 @@ static PT_UNUSED const char *pt_hex(const uint8_t *p, size_t n, char *out)
     for (size_t i = 0; i < n; i++) sprintf(out + 2 * i, "%02x", p[i]);
     out[2 * n] = 0;
     return out;
+}
+
+/* a new folder for the files of a test, where the system keeps temporary files: its path into out */
+static PT_UNUSED bool pt_tmpdir(const char *name, char *out, size_t cap)
+{
+    uint8_t r[4];
+    const char *base = getenv("TMPDIR");
+    if (!base) base = getenv("TEMP");                          /* Windows */
+    if (!sys_random(r, sizeof r)) return false;
+    snprintf(out, cap, "%s/%s.%02x%02x%02x%02x", base ? base : "/tmp", name, r[0], r[1], r[2], r[3]);
+    return sys_mkdir(out);
 }
 
 #endif

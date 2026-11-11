@@ -2,8 +2,8 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* dpfeed.c - the points of dp.bin (see dpfeed.h). */
 #include "dpfeed.h"
+#include "sys.h"
 #include <pzcore/seal.h>
-#include <fcntl.h>
 #include <string.h>
 #include <sys/types.h>
 
@@ -77,9 +77,8 @@ bool dpfeed_open(dpfeed *df, const char *path)
 {
     memset(df, 0, sizeof *df);
     uint8_t hdr[DPBIN_HDR];
-    df->f = fopen(path, "rb");
+    df->f = sys_fopen(path, "rb");                             /* the distances of the home: not for the programs pzpeer starts */
     if (!df->f) return false;
-    (void)fcntl(fileno(df->f), F_SETFD, FD_CLOEXEC);           /* the distances of the home: not for the programs pzpeer starts */
     if (fread(hdr, 1, sizeof hdr, df->f) != sizeof hdr || memcmp(hdr, "PZDP5\n", 6) != 0) {
         dpfeed_close(df);
         return false;

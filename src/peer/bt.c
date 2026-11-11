@@ -4,15 +4,8 @@
  * answered. It asks and never answers: it is a guest of that table, for a few packets every half hour. Every packet that comes is from
  * a stranger: it counts only when it comes from the address asked, with the transaction number given, and is read within its bounds. */
 #include "bt.h"
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netdb.h>
-#include <poll.h>
-#include <stdio.h>
+#include "sys.h"
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
 
 #define NODES_MAX 256              /* nodes of that table kept in a round */
 #define WAVE 8                     /* questions at a time, and the nodes announced to */
@@ -102,13 +95,6 @@ typedef struct {
     int nout, max;
 } round_t;
 
-static int64_t now_ms(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
-
 /* whether a is closer to the key than b */
 static bool closer(const round_t *r, const uint8_t *a, const uint8_t *b)
 {
@@ -165,7 +151,7 @@ static void send_query(round_t *r, int i, bool announce)
     l += (size_t)snprintf((char *)m + l, sizeof m - l, "e1:q%s1:t2:", announce ? "13:announce_peer" : "9:get_peers");
     m[l++] = (uint8_t)(i >> 8), m[l++] = (uint8_t)i;
     l += (size_t)snprintf((char *)m + l, sizeof m - l, "1:y1:qe");
-    (void)sendto(r->fd, m, l, 0, (const struct sockaddr *)&n->a, sizeof n->a);
+    (void)sys_sendto(r->fd, m, l, &n->a);
 }
 
 /* One packet. An answer counts when its transaction ID is the number of a node asked and it comes from that node's address. Returns the
@@ -203,15 +189,13 @@ static int listen_until(round_t *r, int64_t deadline, int want)
 {
     int got = 0;
     while (got < want) {
-        const int64_t left = deadline - now_ms();
-        struct pollfd p = {.fd = r->fd, .events = POLLIN};
-        if (left <= 0 || (r->cfg->stop && atomic_load(r->cfg->stop))) break;
-        if (poll(&p, 1, left < 200 ? (int)left : 200) <= 0) continue;
+        const int64_t now = sys_now_ms();                      /* in slices: the stop flag is looked at */
+        if (now >= deadline || (r->cfg->stop && atomic_load(r->cfg->stop))) break;
+        if (sys_wait(r->fd, false, deadline - now < 200 ? deadline : now + 200) <= 0) continue;
         uint8_t m[2048];
         struct sockaddr_in from;
-        socklen_t fl = sizeof from;
-        const ssize_t l = recvfrom(r->fd, m, sizeof m, 0, (struct sockaddr *)&from, &fl);
-        if (l > 0 && fl == sizeof from && take(r, m, (size_t)l, &from) >= 0) got++;
+        const long l = sys_recvfrom(r->fd, m, sizeof m, &from);
+        if (l > 0 && take(r, m, (size_t)l, &from) >= 0) got++;
     }
     return got;
 }
@@ -239,7 +223,7 @@ int bt_rendezvous(const bt_config *cfg, net_addr *out, int max, int *announced)
     round_t r = {0};                                           /* about 30 KB */
     r.cfg = cfg, r.out = out, r.max = max < BT_PEERS_MAX ? max : BT_PEERS_MAX;
     if (announced) *announced = 0;
-    if (!net_random(r.me, sizeof r.me) || (r.fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) return -1;
+    if (!sys_random(r.me, sizeof r.me) || (r.fd = sys_socket(AF_INET, SOCK_DGRAM)) < 0) return -1;
     for (int i = 0; i < cfg->nrouters; i++) {
         char host[256];
         const char *colon = strrchr(cfg->routers[i], ':');
@@ -250,10 +234,10 @@ int bt_rendezvous(const bt_config *cfg, net_addr *out, int max, int *announced)
         add_node(&r, (const struct sockaddr_in *)res->ai_addr, NULL);
         freeaddrinfo(res);
     }
-    const int64_t end = now_ms() + (cfg->budget_ms ? cfg->budget_ms : 20000);
+    const int64_t end = sys_now_ms() + (cfg->budget_ms ? cfg->budget_ms : 20000);
     const int wave_ms = cfg->wave_ms ? cfg->wave_ms : 1500;
     int answers = 0, pick[WAVE];
-    while (r.asked < ASK_MAX && now_ms() < end && !(cfg->stop && atomic_load(cfg->stop))) {              /* until the closest nodes known have all been asked */
+    while (r.asked < ASK_MAX && sys_now_ms() < end && !(cfg->stop && atomic_load(cfg->stop))) {              /* until the closest nodes known have all been asked */
         const int n = closest(&r, true, pick);
         int best[WAVE], sent = 0;
         const int nb = closest(&r, false, best);
@@ -264,15 +248,15 @@ int bt_rendezvous(const bt_config *cfg, net_addr *out, int max, int *announced)
             send_query(&r, pick[i], false);
         }
         if (!sent) break;
-        const int64_t until = now_ms() + wave_ms;
+        const int64_t until = sys_now_ms() + wave_ms;
         answers += listen_until(&r, until < end ? until : end, sent);
     }
     if (answers && cfg->port) {
         const int n = closest(&r, false, pick);
         for (int i = 0; i < n; i++) send_query(&r, pick[i], true);
-        const int took = listen_until(&r, now_ms() + wave_ms, n);
+        const int took = listen_until(&r, sys_now_ms() + wave_ms, n);
         if (announced) *announced = took;
     }
-    close(r.fd);
+    sys_close(r.fd);
     return answers ? r.nout : -1;
 }

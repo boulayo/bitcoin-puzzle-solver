@@ -3,25 +3,14 @@
 /* btc_rpc.c - the JSON-RPC client of bitcoind (btc_rpc.h). */
 #include "dbg.h"
 #include "btc_rpc.h"
+#include "sys.h"
 #include <pzcore/seal.h>
 #include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <netdb.h>
-#include <poll.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
-
-#ifndef MSG_NOSIGNAL   /* macOS: SO_NOSIGPIPE on the socket instead */
-#define MSG_NOSIGNAL 0
-#endif
 
 #define HEAD_MAX  (64u << 10)                     /* the status line and the headers of a reply */
 #define REPLY_MAX (JSON_MAX_SIZE + (1u << 20))    /* a whole reply, with the framing of a chunked body */
@@ -164,84 +153,17 @@ void btc_rpc_done(btc_rpc *c) { pz_secure_zero(c, sizeof *c); }
 
 /* ---- transport ---- */
 
-static int64_t now_ms(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
-
-/* 1 when fd is ready for ev, 0 at the deadline, -1 on an error of poll */
-static int wait_fd(int fd, short ev, int64_t deadline)
-{
-    for (;;) {
-        const int64_t left = deadline - now_ms();
-        if (left <= 0) return 0;
-        struct pollfd p = {.fd = fd, .events = ev};
-        const int r = poll(&p, 1, left > INT_MAX ? INT_MAX : (int)left);
-        if (r > 0) return 1;   /* an error or a hang-up shows in the read or write that follows */
-        if (r == 0) return 0;
-        if (errno != EINTR) return -1;
-    }
-}
-
 static int tcp_connect(btc_rpc *c, int64_t deadline)
 {
-    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM}, *res;
-    const int rc = getaddrinfo(c->host, c->port, &hints, &res);
-    if (rc) {
-        fail(c, BTC_RPC_ENET, 0, "%s: %s", c->host, gai_strerror(rc));
-        return -1;
-    }
-    int fd = -1, why = 0;
-    for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) {
-            why = errno;
-            continue;
-        }
-        /* not inherited by pzsign; non-blocking, so that every wait has the deadline */
-        fcntl(fd, F_SETFD, FD_CLOEXEC);
-        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-#ifdef SO_NOSIGPIPE
-        const int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
-        why = errno;
-        if (why == EINPROGRESS) {
-            const int w = wait_fd(fd, POLLOUT, deadline);
-            socklen_t l = sizeof why;
-            if (w > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &why, &l) == 0 && why == 0) break;
-            if (w == 0) why = ETIMEDOUT;
-            else if (w < 0) why = errno;
-        }
-        close(fd);
-        fd = -1;
-    }
-    freeaddrinfo(res);
-    if (fd < 0) fail(c, BTC_RPC_ENET, 0, "cannot connect to %s port %s: %s", c->host, c->port, strerror(why));
+    const int fd = sys_connect_host(c->host, c->port, deadline);
+    if (fd < 0) fail(c, BTC_RPC_ENET, 0, "cannot connect to %s port %s: %s", c->host, c->port, fd == -2 ? "no such host" : sys_net_why());
     return fd;
 }
 
 static bool send_all(btc_rpc *c, int fd, const char *p, size_t n, int64_t deadline)
 {
-    while (n) {
-        const ssize_t k = send(fd, p, n, MSG_NOSIGNAL);
-        if (k > 0) {
-            p += k;
-            n -= (size_t)k;
-            continue;
-        }
-        if (k < 0 && errno == EINTR) continue;
-        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            const int w = wait_fd(fd, POLLOUT, deadline);
-            if (w > 0) continue;
-            return fail(c, BTC_RPC_ENET, 0, w ? "sending the request: %s" : "timeout sending the request", strerror(errno));
-        }
-        return fail(c, BTC_RPC_ENET, 0, "sending the request: %s", strerror(errno));
-    }
-    return true;
+    return sys_send_all(fd, p, n, deadline) ||
+           fail(c, BTC_RPC_ENET, 0, sys_now_ms() >= deadline ? "timeout sending the request" : "sending the request: %s", sys_net_why());
 }
 
 /* ---- HTTP ---- */
@@ -381,14 +303,9 @@ static bool recv_reply(btc_rpc *c, int fd, int64_t deadline, reply *r)
             r->p = p;
             r->cap = cap;
         }
-        const ssize_t k = recv(fd, r->p + r->len, r->cap - r->len, 0);
-        if (k < 0 && errno == EINTR) continue;
-        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            const int w = wait_fd(fd, POLLIN, deadline);
-            if (w > 0) continue;
-            return fail(c, BTC_RPC_ENET, 0, w ? "reading the reply: %s" : "timeout waiting for the reply", strerror(errno));
-        }
-        if (k < 0) return fail(c, BTC_RPC_ENET, 0, "reading the reply: %s", strerror(errno));
+        const long k = sys_recv(fd, r->p + r->len, r->cap - r->len, deadline);
+        if (k == SYS_AGAIN) return fail(c, BTC_RPC_ENET, 0, "timeout waiting for the reply");
+        if (k < 0) return fail(c, BTC_RPC_ENET, 0, "reading the reply: %s", sys_net_why());
         r->len += (size_t)k;
         const int d = body_done(r, k == 0);
         if (d < 0) return fail(c, BTC_RPC_EPROTO, 0, "the reply is not valid HTTP");
@@ -410,10 +327,10 @@ static bool exchange(btc_rpc *c, bool wallet, const char *body, size_t bl, int t
     *r = (reply){0};
     bool ok = hl > 0 && (size_t)hl < sizeof head;
     if (!ok) fail(c, BTC_RPC_EPROTO, 0, "cannot build the request");
-    const int64_t deadline = now_ms() + (timeout_ms > 0 ? timeout_ms : 1);
+    const int64_t deadline = sys_now_ms() + (timeout_ms > 0 ? timeout_ms : 1);
     const int fd = ok ? tcp_connect(c, deadline) : -1;
     ok = fd >= 0 && send_all(c, fd, head, (size_t)hl, deadline) && send_all(c, fd, body, bl, deadline) && recv_reply(c, fd, deadline, r);
-    if (fd >= 0) close(fd);
+    sys_close(fd);
     pz_secure_zero(head, sizeof head);
     if (!ok) {
         free(r->p);

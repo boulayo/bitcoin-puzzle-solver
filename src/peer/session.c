@@ -13,6 +13,7 @@
 #include "json.h"
 #include "net.h"
 #include "signer.h"
+#include "sys.h"
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <errno.h>
@@ -21,8 +22,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
 
 #define HELLO_FIXED (2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 1)
 #define CHUNK 65000                         /* a piece of a pzsign message in one S_SIGNER */
@@ -138,7 +137,7 @@ static bool hello(sess *s)
     size_t n;
     /* the nonce: the partner's proof is made over it, and with the partner's it makes the ids of the signings of this session, which
      * must never repeat (cggmp21: an execution id is assumed never to repeat, and a pair can have more than one session) */
-    if (!net_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
+    if (!sys_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
     if (!p2pkh_of(c->ctx, c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
     /* twice what the chain estimates, and never little: these transactions move a prize, and no fee is large beside it */
     uint64_t fr = 2 * c->chain->feerate(c->chain->ctx);
@@ -235,9 +234,9 @@ static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *co
     FILE *f = fopen(tmp, "w");
     bool ok = f != NULL;
     for (int i = 0; ok && i < n; i++) btc_hex(key[i], 32, hex), ok = fprintf(f, "%s %u\n", hex, count[i]) > 0;
-    ok = ok && fflush(f) == 0 && fsync(fileno(f)) == 0;
+    ok = ok && fflush(f) == 0 && sys_sync(fileno(f));
     if (f) ok = fclose(f) == 0 && ok;
-    return ok && rename(tmp, path) == 0;
+    return ok && sys_replace(tmp, path);
 }
 
 /* d (+1 or -1) to the failures of the network and of the pair; +1 is refused at either limit, and 0 only checks them. False with the
@@ -416,7 +415,7 @@ static void *relay_in(void *arg)
     r->in_done = true;
     pthread_cond_signal(&r->cv);
     pthread_mutex_unlock(&r->mu);
-    close(r->sg.to), r->sg.to = -1;                             /* nothing more for pzsign: at the end of its input it gives its answer */
+    signer_end_input(&r->sg);                                   /* nothing more for pzsign: at the end of its input it gives its answer */
     return NULL;
 }
 
@@ -477,19 +476,6 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
 
 /* ---- the chain ---- */
 
-static void pause_ms(int ms)
-{
-    struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
-    nanosleep(&ts, NULL);
-}
-
-static int64_t now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
 /* Waits until output vout of txid has at least `conf` confirmations (or, conf < 0, until it is spent), for at most `blocks` new blocks
  * counted from the first height the chain gives (0 is no answer: a wait counted from it would end at once), and at most (blocks + 6)
  * times block_ms: a node that stops would keep the session for ever. Meanwhile an S_ALIVE now and then keeps the channel from being cut
@@ -498,8 +484,8 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
 {
     const session_chain *ch = s->c->chain;
     const int every = s->c->alive_ms > 0 ? s->c->alive_ms : ALIVE_MS;
-    const int64_t end = now_ms() + (int64_t)(blocks + 6) * (s->c->block_ms > 0 ? s->c->block_ms : BLOCK_MS);
-    int64_t alive = now_ms() + every;
+    const int64_t end = sys_now_ms() + (int64_t)(blocks + 6) * (s->c->block_ms > 0 ? s->c->block_ms : BLOCK_MS);
+    int64_t alive = sys_now_ms() + every;
     uint64_t until = 0, last_h = 0;
     int last_k = -3;
     for (;;) {
@@ -509,9 +495,9 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
         if (k != last_k || h != last_h) dbg("session %s wait: height %llu, output %s...:%u is %d (wanted %d)", s->tag, (unsigned long long)h,
                                             dbg_hex(txid, 32), vout, k, conf), last_k = k, last_h = h;
         if (k != -2 && (conf < 0 ? k == -1 : k >= conf)) return true;
-        if ((until && h >= until) || now_ms() >= end) return false;
-        if (now_ms() >= alive) (void)send_msg(s, S_ALIVE, NULL, 0), alive = now_ms() + every;
-        pause_ms(s->c->poll_ms);
+        if ((until && h >= until) || sys_now_ms() >= end) return false;
+        if (sys_now_ms() >= alive) (void)send_msg(s, S_ALIVE, NULL, 0), alive = sys_now_ms() + every;
+        sys_sleep_ms(s->c->poll_ms);
     }
 }
 
@@ -546,7 +532,9 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     const int nc = puzzle_coins(&s, coins);
     if (nc <= 0 || !payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "no coin of the puzzle to spend"), SESSION_FAILED;
     if (!limit_ok(&s) || !plan(&s, &a)) return SESSION_FAILED;
-    if (access(c->primes, R_OK) != 0 && !signer_primes(c->pzsign, c->primes)) return fail(&s, "pzsign could not make its primes"), SESSION_FAILED;
+    FILE *made = fopen(c->primes, "rb");                        /* the primes made ahead, or made now */
+    if (made) fclose(made);
+    else if (!signer_primes(c->pzsign, c->primes)) return fail(&s, "pzsign could not make its primes"), SESSION_FAILED;
     if (!sign_jointly(&s, &a, a.n_in, 'A')) return SESSION_FAILED;
     uint8_t aid[32];
     btc_tx_txid(&a, aid);

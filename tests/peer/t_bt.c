@@ -7,12 +7,9 @@
  * and the reader of bencoding on damaged input. */
 #include "peertest.h"
 #include "bt.h"
-#include <arpa/inet.h>
-#include <poll.h>
+#include "sys.h"
 #include <pthread.h>
 #include <stdatomic.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #define NODES 40
 enum { HONEST, GARBAGE, WRONG_TID, GHOSTS, FLOOD };
@@ -47,21 +44,19 @@ static void *fake_main(void *arg)
 {
     fake *f = arg;
     while (!atomic_load(&g_stop)) {
-        struct pollfd p = {.fd = f->fd, .events = POLLIN};
         uint8_t m[1024], out[4096], tok[4];
         const uint8_t *a, *v, *s, *tid, *q;
         size_t an, vn, sn, tn, qn, l = 0;
         struct sockaddr_in from;
-        socklen_t fl = sizeof from;
-        if (poll(&p, 1, 100) <= 0) continue;
-        const ssize_t n = recvfrom(f->fd, m, sizeof m, 0, (struct sockaddr *)&from, &fl);
+        if (sys_wait(f->fd, false, sys_now_ms() + 100) <= 0) continue;
+        const long n = sys_recvfrom(f->fd, m, sizeof m, &from);
         if (n <= 0 || !bt_dict_get(m, (size_t)n, "a", &a, &an) || !bt_dict_get(m, (size_t)n, "t", &v, &vn) || !bt_string(v, vn, &tid, &tn) ||
             tn != 2 || !bt_dict_get(m, (size_t)n, "q", &v, &vn) || !bt_string(v, vn, &q, &qn))
             continue;
         token_for(f, &from, tok);
         if (f->kind == GARBAGE) {
             for (size_t i = 0; i < 200; i++) out[i] = (uint8_t)rand();
-            (void)sendto(f->fd, out, 200, 0, (struct sockaddr *)&from, fl);
+            (void)sys_sendto(f->fd, out, 200, &from);
             continue;
         }
         l += (size_t)sprintf((char *)out + l, "d1:rd2:id20:");
@@ -114,7 +109,7 @@ static void *fake_main(void *arg)
         l += (size_t)sprintf((char *)out + l, "e1:t2:");
         out[l++] = tid[0], out[l++] = (uint8_t)(tid[1] ^ (f->kind == WRONG_TID));
         l += (size_t)sprintf((char *)out + l, "1:y1:re");
-        (void)sendto(f->fd, out, l, 0, (struct sockaddr *)&from, fl);
+        (void)sys_sendto(f->fd, out, l, &from);
     }
     return NULL;
 }
@@ -125,7 +120,7 @@ static void table_start(void)
     for (int i = 0; i < NODES; i++) {
         struct sockaddr_in a = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
         socklen_t al = sizeof a;
-        F[i] = (fake){.fd = socket(AF_INET, SOCK_DGRAM, 0)};
+        F[i] = (fake){.fd = sys_socket(AF_INET, SOCK_DGRAM)};
         if (F[i].fd < 0 || bind(F[i].fd, (struct sockaddr *)&a, sizeof a) || getsockname(F[i].fd, (struct sockaddr *)&a, &al)) exit(1);
         F[i].port = a.sin_port;
         for (int j = 0; j < 20; j++) F[i].id[j] = (uint8_t)rand();
@@ -140,7 +135,7 @@ static void table_run(void)
 static void table_stop(void)
 {
     atomic_store(&g_stop, true);
-    for (int i = 0; i < NODES; i++) pthread_join(F[i].th, NULL), close(F[i].fd);
+    for (int i = 0; i < NODES; i++) pthread_join(F[i].th, NULL), sys_close(F[i].fd);
 }
 
 static bool has(const net_addr *p, int n, uint16_t port)

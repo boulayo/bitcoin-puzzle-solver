@@ -4,6 +4,7 @@
  * all of them and keeps what is proven; the servers that do not answer are left out of that operation. */
 #include "chain_spv.h"
 #include "electrum.h"
+#include "sys.h"
 #include <pzcore/hash.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,13 +14,6 @@
 #define COINBASE_MATURITY 100
 #define HISTORY_MAX 256            /* the newest transactions of a script that are looked at */
 #define COINS_MAX 256
-
-static int64_t now_ms(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
 
 #define RETRY_MS 600000            /* a server that did not answer is tried again after ten minutes */
 
@@ -162,7 +156,7 @@ static void open_all(servers *s, chain_spv *c)
     s->c = c, s->e = c->conn, s->nup = 0;
     uint64_t before = 0, after = 0;
     const bool had = tip_of(c, &before);
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     for (int i = 0; i < c->nservers; i++) {
         for (int attempt = 0; attempt < 2; attempt++) {
             const bool kept = s->e[i].fd >= 0;

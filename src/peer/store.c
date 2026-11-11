@@ -4,9 +4,9 @@
  * x-only key), grown at 70% load. A record is read back from the file only when its 8-byte key matches: that is, for a duplicate or a
  * coincidence, or one time in 2^64 otherwise. */
 #include "store.h"
+#include "sys.h"
 #include <pzcore/hash.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -119,7 +119,7 @@ static void owner_saw(store *st, const record *r)
 static bool read_at(store *st, uint64_t i, record *r)
 {
     uint8_t b[RECORD_LEN];
-    return pread(st->fd, b, RECORD_LEN, (off_t)(STORE_HDR + i * RECORD_LEN)) == RECORD_LEN && record_decode(b, r);
+    return sys_pread(st->fd, b, RECORD_LEN, STORE_HDR + i * RECORD_LEN) == RECORD_LEN && record_decode(b, r);
 }
 
 /* the records with x: the slots of its 8-byte key, read back and compared */
@@ -154,30 +154,30 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
     pthread_mutex_init(&st->mu, NULL);
     st->ctx = ctx;
     st->net = *net;
-    st->fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    st->fd = sys_open_rw(path);
     if (st->fd < 0) return fail(st, err, errlen, strerror(errno), path);
-    const off_t size = lseek(st->fd, 0, SEEK_END);
+    const int64_t size = sys_size(st->fd);
     uint8_t hdr[STORE_HDR];
     memcpy(hdr, MAGIC, sizeof MAGIC);
     memcpy(hdr + sizeof MAGIC, net->fp, 32);
     if (size < 0) return fail(st, err, errlen, strerror(errno), path);
     if (size == 0) {
-        if (pwrite(st->fd, hdr, STORE_HDR, 0) != STORE_HDR) return fail(st, err, errlen, "cannot write the header", path);
+        if (sys_pwrite(st->fd, hdr, STORE_HDR, 0) != STORE_HDR) return fail(st, err, errlen, "cannot write the header", path);
     } else {
         uint8_t got[STORE_HDR];
-        if (size < STORE_HDR || pread(st->fd, got, STORE_HDR, 0) != STORE_HDR || memcmp(got, MAGIC, sizeof MAGIC))
+        if (size < STORE_HDR || sys_pread(st->fd, got, STORE_HDR, 0) != STORE_HDR || memcmp(got, MAGIC, sizeof MAGIC))
             return fail(st, err, errlen, "not a store of records", path);
         if (memcmp(got + sizeof MAGIC, net->fp, 32)) return fail(st, err, errlen, "a store of another network", path);
     }
     st->count = size > STORE_HDR ? (uint64_t)(size - STORE_HDR) / RECORD_LEN : 0;
-    if (size > STORE_HDR && (uint64_t)(size - STORE_HDR) % RECORD_LEN != 0 && ftruncate(st->fd, (off_t)(STORE_HDR + st->count * RECORD_LEN)) != 0)
+    if (size > STORE_HDR && (uint64_t)(size - STORE_HDR) % RECORD_LEN != 0 && !sys_truncate(st->fd, STORE_HDR + st->count * RECORD_LEN))
         return fail(st, err, errlen, "cannot cut the torn record at the end", path);   /* a write cut by a crash */
     if (st->count >= EMPTY) return fail(st, err, errlen, "too many records", path);
     uint8_t *buf = malloc((size_t)LOAD_CHUNK * RECORD_LEN);
     if (!buf) return fail(st, err, errlen, "out of memory", path);
     for (uint64_t i = 0; i < st->count; i += LOAD_CHUNK) {
         const size_t n = st->count - i < LOAD_CHUNK ? (size_t)(st->count - i) : LOAD_CHUNK;
-        if (pread(st->fd, buf, n * RECORD_LEN, (off_t)(STORE_HDR + i * RECORD_LEN)) != (ssize_t)(n * RECORD_LEN)) {
+        if (sys_pread(st->fd, buf, n * RECORD_LEN, STORE_HDR + i * RECORD_LEN) != (long)(n * RECORD_LEN)) {
             free(buf);
             return fail(st, err, errlen, "cannot read the records", path);
         }
@@ -210,7 +210,7 @@ void store_close(store *st)
 {
     if (!st) return;
     if (st->fd >= 0) {
-        (void)fsync(st->fd);
+        (void)sys_sync(st->fd);
         close(st->fd);
     }
     free(st->keys);
@@ -243,7 +243,7 @@ store_status store_put(store *st, const record *r, record *mine, record *others,
         uint8_t enc[RECORD_LEN];
         record_encode(r, enc);
         s = STORE_FAIL;
-        if (st->count + 1 < EMPTY && index_grow(st) && pwrite(st->fd, enc, RECORD_LEN, (off_t)(STORE_HDR + st->count * RECORD_LEN)) == RECORD_LEN) {
+        if (st->count + 1 < EMPTY && index_grow(st) && sys_pwrite(st->fd, enc, RECORD_LEN, STORE_HDR + st->count * RECORD_LEN) == RECORD_LEN) {
             index_add(st, key8(r->x), (uint32_t)st->count++);
             owner_saw(st, r);
             s = STORE_OK;

@@ -11,7 +11,7 @@
 
 SECP_DIR   := lib/secp256k1
 SECP_FLAGS  = -std=c99 $(OPT) -g $(DEPLOY) -I$(SECP_DIR) -I$(SECP_DIR)/include -w \
-              -DENABLE_MODULE_ECDH=1 -DENABLE_MODULE_EXTRAKEYS=1 -DENABLE_MODULE_SCHNORRSIG=1
+              -DENABLE_MODULE_ECDH=1 -DENABLE_MODULE_EXTRAKEYS=1 -DENABLE_MODULE_SCHNORRSIG=1 -DSECP256K1_STATIC
 SECP_OBJ   := $(addprefix $(BUILD)/secp256k1/,secp256k1.o precomputed_ecmult.o precomputed_ecmult_gen.o)
 SECP_LIB   := $(BUILD)/libsecp256k1.a
 
@@ -26,22 +26,34 @@ $(SECP_LIB): $(SECP_OBJ)
 	$(AR) rcs $@ $^
 
 # The modules of pzpeer, in the order of the layers (docs/en/NETWORK.md 2): main is the daemon and its commands.
-PEER_SRC   := dbg json btc btc_rpc spv electrum netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay bt upnp dpfeed pieces signer payout session chain_rpc chain_spv sweep block home main
+# sys.h has one implementation per system (sys_posix.c, sys_win.c) and sys.c for what the two share
+ifeq ($(WIN),1)
+PEER_SYS   := sys sys_win
+PEER_LIBS   = $(LIBLDLIBS) -lws2_32
+else
+PEER_SYS   := sys sys_posix
+PEER_LIBS   = $(LIBLDLIBS)
+endif
+PEER_SRC   := $(PEER_SYS) dbg json btc btc_rpc spv electrum netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay bt upnp dpfeed pieces signer payout session chain_rpc chain_spv sweep block home main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
-PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include
+PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include -DSECP256K1_STATIC
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  := t_json t_btc t_btc_rpc t_chain_rpc t_spv t_chain_spv t_noise t_record t_net t_store t_bt t_upnp t_dht t_pieces t_payout t_session t_netfile t_block
+PEERTESTS  := t_sys t_json t_btc t_spv t_chain_spv t_noise t_record t_net t_store t_bt t_upnp t_dht t_pieces t_payout t_netfile t_block
+# the tests whose stand-ins for bitcoind and pzsign are written for POSIX (sockets used directly, shell scripts): Linux and macOS
+ifneq ($(WIN),1)
+PEERTESTS  += t_btc_rpc t_chain_rpc t_session
+endif
 DEPS       += $(PEER_OBJ:.o=.d)
 
 $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
 	$(CC) $(PEER_FLAGS) -MMD -MP -c $< -o $@
 
 $(PEER): $(PEER_OBJ) $(LIB) $(SECP_LIB)
-	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
+	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
 
 $(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c tests/peer/peertest.h $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
-	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
+	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
 # the expected values of t_btc, written by tests/peer/gen_btc_vectors.py (python3 gen_btc_vectors.py > btc_vectors.h)
 $(BUILD)/peer/t_btc$(EXE): tests/peer/btc_vectors.h
 
@@ -52,7 +64,7 @@ peer: $(PEER)
 FUZZ_SECONDS ?= 60
 FUZZ_OBJ    = $(filter-out $(BUILD)/peer/btc_rpc.o,$(PEER_LIBOBJ))
 $(BUILD)/peer/fuzz_peer$(EXE): tests/peer/fuzz_peer.c src/peer/btc_rpc.c tests/peer/peertest.h tests/peer/btc_vectors.h $(FUZZ_OBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
-	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(FUZZ_OBJ) $(LIB) $(SECP_LIB) $(LIBLDLIBS)
+	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(FUZZ_OBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
 
 peer-fuzz: $(BUILD)/peer/fuzz_peer$(EXE)
 	$(RUN) ./$(BUILD)/peer/fuzz_peer$(EXE) $(FUZZ_SECONDS)

@@ -1,30 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* net.c - TCP and the encrypted channel (see net.h). The sockets are non-blocking and every read, write and connect waits in poll() until
- * a deadline, so no peer can hold a thread for longer than the timeout of one step. */
+/* net.c - TCP and the encrypted channel (see net.h). The sockets are non-blocking and every read, write and connect waits until a
+ * deadline (sys.h), so no peer can hold a thread for longer than the timeout of one step. */
 #include "dbg.h"
 #include "net.h"
+#include "sys.h"
 #include <pzcore/seal.h>
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
-#if defined(__linux__)
-#include <sys/random.h>
-#endif
-
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0             /* macOS: SO_NOSIGPIPE on the socket instead */
-#endif
 
 static const uint8_t V4MAPPED[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
 
@@ -34,13 +17,6 @@ typedef union {
     struct sockaddr_in6 v6;
     struct sockaddr_storage ss;
 } sockaddr_any;
-
-static int64_t now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
 
 void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identity *self, const uint8_t fp[32], unsigned id_bits,
                   uint16_t port, int timeout_ms)
@@ -53,24 +29,6 @@ void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identit
     cfg->id_bits = id_bits;
     cfg->port = port;
     cfg->timeout_ms = timeout_ms > 0 ? timeout_ms : NET_TIMEOUT_MS;
-}
-
-bool net_random(uint8_t *out, size_t n)
-{
-    size_t got = 0;
-#if defined(__linux__)
-    while (got < n) {
-        const ssize_t r = getrandom(out + got, n - got, 0);
-        if (r > 0) got += (size_t)r;
-        else if (r < 0 && errno != EINTR) break;               /* ENOSYS on an old kernel: the device below */
-    }
-    if (got == n) return true;
-#endif
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (!f) return false;
-    got = fread(out, 1, n, f);
-    fclose(f);
-    return got == n;
 }
 
 /* ---- addresses ---- */
@@ -191,63 +149,7 @@ void net_addr_block(const net_addr *a, uint8_t block[16])
 
 /* ---- sockets ---- */
 
-/* non-blocking, closed on exec, no Nagle (a request is one small write and its answer one small read), no SIGPIPE */
-static bool prepare(int fd)
-{
-    const int one = 1;
-    const int fl = fcntl(fd, F_GETFL);
-    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) return false;
-    (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-#ifdef SO_NOSIGPIPE
-    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
-    return true;
-}
-
-static bool wait_fd(int fd, short ev, int64_t deadline)
-{
-    for (;;) {
-        const int64_t left = deadline - now_ms();
-        if (left <= 0) return false;
-        struct pollfd p = {.fd = fd, .events = ev};
-        const int r = poll(&p, 1, (int)left);
-        if (r > 0) return true;                                /* readable, writable or an error: the next call tells */
-        if (r == 0 || errno != EINTR) return false;
-    }
-}
-
-static bool read_full(int fd, uint8_t *p, size_t n, int64_t deadline)
-{
-    while (n) {
-        const ssize_t r = recv(fd, p, n, 0);
-        if (r > 0) {
-            p += r, n -= (size_t)r;
-        } else if (r == 0) {
-            return false;                                      /* closed before the end */
-        } else if (errno != EINTR && ((errno != EAGAIN && errno != EWOULDBLOCK) || !wait_fd(fd, POLLIN, deadline))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool write_full(int fd, const uint8_t *p, size_t n, int64_t deadline)
-{
-    while (n) {
-        const ssize_t r = send(fd, p, n, MSG_NOSIGNAL);
-        if (r > 0) {
-            p += r, n -= (size_t)r;
-        } else if (r < 0 && errno != EINTR && ((errno != EAGAIN && errno != EWOULDBLOCK) || !wait_fd(fd, POLLOUT, deadline))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-void net_close_fd(int fd)
-{
-    if (fd >= 0) close(fd);
-}
+void net_close_fd(int fd) { sys_close(fd); }
 
 int net_listen(const char *host, uint16_t port, uint16_t *bound)
 {
@@ -255,29 +157,28 @@ int net_listen(const char *host, uint16_t port, uint16_t *bound)
     socklen_t len;
     memset(&s, 0, sizeof s);
     int fd = -1;
-    const int one = 1, zero = 0;
     if (!host || !*host) {                                     /* every address: IPv6 with IPv4 mapped, or IPv4 alone */
-        fd = socket(AF_INET6, SOCK_STREAM, 0);
+        fd = sys_socket(AF_INET6, SOCK_STREAM);
         if (fd >= 0) {
-            (void)setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof zero);
+            sys_setopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, 0);
             s.v6.sin6_family = AF_INET6;
             s.v6.sin6_addr = in6addr_any;
             s.v6.sin6_port = htons(port);
             len = sizeof s.v6;
         } else {
-            fd = socket(AF_INET, SOCK_STREAM, 0);
+            fd = sys_socket(AF_INET, SOCK_STREAM);
             s.v4.sin_family = AF_INET;
             s.v4.sin_addr.s_addr = htonl(INADDR_ANY);
             s.v4.sin_port = htons(port);
             len = sizeof s.v4;
         }
     } else if (inet_pton(AF_INET, host, &s.v4.sin_addr) == 1) {
-        fd = socket(AF_INET, SOCK_STREAM, 0);
+        fd = sys_socket(AF_INET, SOCK_STREAM);
         s.v4.sin_family = AF_INET;
         s.v4.sin_port = htons(port);
         len = sizeof s.v4;
     } else if (inet_pton(AF_INET6, host, &s.v6.sin6_addr) == 1) {
-        fd = socket(AF_INET6, SOCK_STREAM, 0);
+        fd = sys_socket(AF_INET6, SOCK_STREAM);
         s.v6.sin6_family = AF_INET6;
         s.v6.sin6_port = htons(port);
         len = sizeof s.v6;
@@ -285,16 +186,16 @@ int net_listen(const char *host, uint16_t port, uint16_t *bound)
         return -1;
     }
     if (fd < 0) return -1;
-    /* SO_REUSEADDR: a node that restarts gets its port back while the connections of its last run are in TIME_WAIT */
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one) < 0 || bind(fd, &s.sa, len) < 0 || listen(fd, 128) < 0 || !prepare(fd)) {
-        close(fd);
-        return -1;
-    }
+    /* SO_REUSEADDR: a node that restarts gets its port back while the connections of its last run are in TIME_WAIT (on Windows the
+     * option means something else: two programs on one port) */
+#ifndef _WIN32
+    sys_setopt(fd, SOL_SOCKET, SO_REUSEADDR, 1);
+#endif
     sockaddr_any got;
     socklen_t gl = sizeof got;
     net_addr a;
-    if (getsockname(fd, &got.sa, &gl) < 0 || !from_sa(&got, &a)) {
-        close(fd);
+    if (bind(fd, &s.sa, len) != 0 || listen(fd, 128) != 0 || getsockname(fd, &got.sa, &gl) != 0 || !from_sa(&got, &a)) {
+        sys_close(fd);
         return -1;
     }
     if (bound) *bound = a.port;
@@ -303,13 +204,13 @@ int net_listen(const char *host, uint16_t port, uint16_t *bound)
 
 int net_accept(int lfd, int timeout_ms, net_addr *from)
 {
-    if (!wait_fd(lfd, POLLIN, now_ms() + timeout_ms)) return -1;
+    if (sys_wait(lfd, false, sys_now_ms() + timeout_ms) <= 0) return -1;
     sockaddr_any s;
     socklen_t len = sizeof s;
-    const int fd = accept(lfd, &s.sa, &len);
-    if (fd < 0) return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ECONNABORTED ? -1 : -2;
-    if (!prepare(fd) || !from_sa(&s, from)) {
-        close(fd);
+    const int fd = sys_accept(lfd, &s.sa, &len);
+    if (fd < 0) return fd == SYS_AGAIN ? -1 : -2;
+    if (!from_sa(&s, from)) {
+        sys_close(fd);
         return -1;
     }
     return fd;
@@ -319,22 +220,7 @@ static int dial_fd(const net_addr *to, int timeout_ms)
 {
     sockaddr_any s;
     const socklen_t len = to_sa(to, &s);
-    const int fd = socket(s.sa.sa_family, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    if (!prepare(fd)) {
-        close(fd);
-        return -1;
-    }
-    if (connect(fd, &s.sa, len) < 0) {
-        int err = 0;
-        socklen_t el = sizeof err;
-        if ((errno != EINPROGRESS && errno != EINTR) || !wait_fd(fd, POLLOUT, now_ms() + timeout_ms) ||
-            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) < 0 || err != 0) {
-            close(fd);
-            return -1;
-        }
-    }
-    return fd;
+    return sys_connect(&s.sa, len, sys_now_ms() + timeout_ms);
 }
 
 /* ---- the handshake ---- */
@@ -364,20 +250,20 @@ static bool handshake(const net_cfg *cfg, net_conn *c, bool initiator, const uin
     size_t n, plen;
     bool ok = false;
     for (int tries = 0;; tries++) {                            /* a random value that is not a valid key: practically never */
-        if (tries == 4 || !net_random(e, sizeof e)) goto out;
+        if (tries == 4 || !sys_random(e, sizeof e)) goto out;
         if (noise_hs_init(&hs, cfg->ctx, initiator, cfg->prologue, sizeof cfg->prologue, cfg->self->sec, e)) break;
     }
-    const int64_t until = now_ms() + c->timeout_ms;            /* the whole handshake: a peer that drips its bytes gains nothing */
+    const int64_t until = sys_now_ms() + c->timeout_ms;            /* the whole handshake: a peer that drips its bytes gains nothing */
     if (initiator) {
         const uint8_t port[2] = {(uint8_t)(cfg->port >> 8), (uint8_t)cfg->port};
-        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS1 || !write_full(c->fd, m, n, until)) goto out;
-        if (!read_full(c->fd, m, NET_HS2, until) || !noise_hs_read(&hs, m, NET_HS2, pl, &plen) || plen != 0) goto out;
+        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS1 || !sys_send_all(c->fd, m, n, until)) goto out;
+        if (!sys_recv_all(c->fd, m, NET_HS2, until) || !noise_hs_read(&hs, m, NET_HS2, pl, &plen) || plen != 0) goto out;
         if (!peer_ok(cfg, hs.rs, expect)) goto out;            /* before this side shows its own key */
-        if ((n = noise_hs_write(&hs, port, 2, m)) != NET_HS3 || !write_full(c->fd, m, n, until)) goto out;
+        if ((n = noise_hs_write(&hs, port, 2, m)) != NET_HS3 || !sys_send_all(c->fd, m, n, until)) goto out;
     } else {
-        if (!read_full(c->fd, m, NET_HS1, until) || !noise_hs_read(&hs, m, NET_HS1, pl, &plen) || plen != 0) goto out;
-        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS2 || !write_full(c->fd, m, n, until)) goto out;
-        if (!read_full(c->fd, m, NET_HS3, until) || !noise_hs_read(&hs, m, NET_HS3, pl, &plen) || plen != 2) goto out;
+        if (!sys_recv_all(c->fd, m, NET_HS1, until) || !noise_hs_read(&hs, m, NET_HS1, pl, &plen) || plen != 0) goto out;
+        if ((n = noise_hs_write(&hs, NULL, 0, m)) != NET_HS2 || !sys_send_all(c->fd, m, n, until)) goto out;
+        if (!sys_recv_all(c->fd, m, NET_HS3, until) || !noise_hs_read(&hs, m, NET_HS3, pl, &plen) || plen != 2) goto out;
         if (!peer_ok(cfg, hs.rs, expect)) goto out;
         c->addr.port = (uint16_t)(pl[0] << 8 | pl[1]);
     }
@@ -397,7 +283,7 @@ net_conn *net_dial(const net_cfg *cfg, const net_addr *to, const uint8_t expect[
     if (fd < 0) return NULL;
     net_conn *c = conn_new(fd, cfg);
     if (!c) {
-        close(fd);
+        sys_close(fd);
         return NULL;
     }
     c->addr = *to;
@@ -412,7 +298,7 @@ net_conn *net_handshake(const net_cfg *cfg, int fd, const net_addr *from)
 {
     net_conn *c = conn_new(fd, cfg);
     if (!c) {
-        close(fd);
+        sys_close(fd);
         return NULL;
     }
     c->addr = *from;
@@ -447,17 +333,17 @@ bool net_send(net_conn *c, const uint8_t *body, size_t len)
 {
     if (len > NOISE_FRAME_MAX) return false;
     const size_t n = noise_frame_seal(&c->tx, body, len, c->sbuf);
-    const bool ok = write_full(c->fd, c->sbuf, n, now_ms() + c->timeout_ms);
+    const bool ok = sys_send_all(c->fd, c->sbuf, n, sys_now_ms() + c->timeout_ms);
     trace(c, '>', body, len, ok);
     return ok;
 }
 
 bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len)
 {
-    const int64_t deadline = now_ms() + c->timeout_ms;         /* the head and the body together */
+    const int64_t deadline = sys_now_ms() + c->timeout_ms;         /* the head and the body together */
     size_t l;
-    if (!read_full(c->fd, c->rbuf, NOISE_HEAD, deadline) || !noise_frame_head(&c->rx, c->rbuf, &l) || l > cap ||
-        !read_full(c->fd, c->rbuf, l + NOISE_TAG, deadline) || !noise_frame_body(&c->rx, c->rbuf, l, body))
+    if (!sys_recv_all(c->fd, c->rbuf, NOISE_HEAD, deadline) || !noise_frame_head(&c->rx, c->rbuf, &l) || l > cap ||
+        !sys_recv_all(c->fd, c->rbuf, l + NOISE_TAG, deadline) || !noise_frame_body(&c->rx, c->rbuf, l, body))
         return trace(c, '<', NULL, 0, false), false;
     *len = l;
     trace(c, '<', body, l, true);
@@ -466,24 +352,15 @@ bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len)
 
 void net_set_timeout(net_conn *c, int timeout_ms) { c->timeout_ms = timeout_ms > 0 ? timeout_ms : NET_TIMEOUT_MS; }
 
-bool net_readable(net_conn *c, int ms)
-{
-    struct pollfd p = {.fd = c->fd, .events = POLLIN};
-    return poll(&p, 1, ms > 0 ? ms : 0) > 0;                   /* an interrupted wait says no: the caller waits again */
-}
+bool net_readable(net_conn *c, int ms) { return sys_wait(c->fd, false, sys_now_ms() + ms) > 0; }
 
-bool net_alive(net_conn *c)
-{
-    struct pollfd p = {.fd = c->fd, .events = POLLIN};
-    uint8_t b;
-    if (poll(&p, 1, 0) == 0) return true;                      /* nothing to read: still there */
-    return !(p.revents & (POLLERR | POLLHUP | POLLNVAL)) && recv(c->fd, &b, 1, MSG_PEEK) < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
-}
+/* Nothing to read is what an idle connection looks like: its end, an error and a byte it should not have sent all make it readable. */
+bool net_alive(net_conn *c) { return sys_wait(c->fd, false, 0) == 0; }
 
 void net_close(net_conn *c)
 {
     if (!c) return;
-    close(c->fd);
+    sys_close(c->fd);
     pz_secure_zero(c, offsetof(net_conn, sbuf));
     free(c);
 }
@@ -496,33 +373,33 @@ uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms
     size_t len[2] = {0, 0}, off[2] = {0, 0};
     bool eof[2] = {false, false};
     uint64_t moved = 0;
-    const int64_t until = now_ms() + max_ms;
+    const int64_t until = sys_now_ms() + max_ms;
     pz_secure_zero(&a->tx, sizeof a->tx), pz_secure_zero(&a->rx, sizeof a->rx);
     pz_secure_zero(&b->tx, sizeof b->tx), pz_secure_zero(&b->rx, sizeof b->rx);
     while (!(stop && atomic_load(stop))) {
-        const int64_t left = until - now_ms();
+        const int64_t left = until - sys_now_ms();
         if (left <= 0 || (eof[0] && off[0] == len[0]) || (eof[1] && off[1] == len[1])) break;   /* one side is done and delivered */
-        struct pollfd p[2] = {{.fd = fd[0]}, {.fd = fd[1]}};
+        struct pollfd p[2] = {{.fd = -1}, {.fd = -1}};       /* an end with nothing to wait for is left out */
         for (int i = 0; i < 2; i++) {
-            if (off[i] < len[i]) p[1 - i].events |= POLLOUT;
-            else p[i].events |= POLLIN;
+            const int at = off[i] < len[i] ? 1 - i : i;
+            p[at].fd = fd[at], p[at].events |= off[i] < len[i] ? POLLOUT : POLLIN;
         }
-        const int r = poll(p, 2, left < 200 ? (int)left : 200);  /* in slices: the stop flag is looked at */
-        if (r < 0 && errno != EINTR) break;
-        if (r <= 0) continue;
+        const int r = sys_poll(p, 2, left < 200 ? (int)left : 200);  /* in slices: the stop flag is looked at */
+        if (r < 0) break;
+        if (r == 0) continue;
         bool broken = false;
         for (int i = 0; i < 2 && !broken; i++) {
             const int o = 1 - i;
             if (off[i] == len[i] && (p[i].revents & (POLLIN | POLLHUP | POLLERR))) {
-                const ssize_t n = recv(fd[i], buf[i], sizeof a->rbuf, 0);
+                const long n = sys_recv_now(fd[i], buf[i], sizeof a->rbuf);
                 if (n > 0 && moved + (uint64_t)n <= max_bytes) off[i] = 0, len[i] = (size_t)n, moved += (uint64_t)n;
                 else if (n == 0) eof[i] = true;
-                else if (n > 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) broken = true;   /* over the limit, or an error */
+                else if (n != SYS_AGAIN) broken = true;          /* over the limit, or an error */
             }
             if (off[i] < len[i] && (p[o].revents & (POLLOUT | POLLHUP | POLLERR))) {
-                const ssize_t n = send(fd[o], buf[i] + off[i], len[i] - off[i], MSG_NOSIGNAL);
+                const long n = sys_send_now(fd[o], buf[i] + off[i], len[i] - off[i]);
                 if (n > 0) off[i] += (size_t)n;
-                else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) broken = true;
+                else if (n != SYS_AGAIN) broken = true;
                 if (off[i] == len[i]) off[i] = len[i] = 0;
             }
         }

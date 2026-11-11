@@ -8,13 +8,11 @@
 #include "peertest.h"
 #include "chain_spv.h"
 #include "json.h"
+#include "sys.h"
 #include <pzcore/hash.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <secp256k1.h>
-#include <sys/socket.h>
+#include <stdatomic.h>
 #include <time.h>
-#include <unistd.h>
 
 /* ---- the world: a chain and a mempool ---- */
 
@@ -138,6 +136,7 @@ typedef struct {
     int lfd;
     uint16_t port;
     pthread_t th;
+    atomic_bool stop;
     char addr[32];
     int broadcasts;
 } server;
@@ -305,14 +304,15 @@ static void *serve(void *arg)
     server *s = arg;
     static const size_t CAP = 1 << 20;
     char *in = malloc(CAP), *out = malloc(CAP), *msg = malloc(CAP + 200);
-    for (;;) {
-        const int fd = accept(s->lfd, NULL, NULL);
-        if (fd < 0) break;
+    while (!atomic_load(&s->stop)) {                           /* every wait in slices: the stop is looked at */
+        const int fd = sys_wait(s->lfd, false, sys_now_ms() + 100) > 0 ? sys_accept(s->lfd, NULL, NULL) : -1;
+        if (fd < 0) continue;
         size_t len = 0;
-        for (;;) {
+        while (!atomic_load(&s->stop)) {
             char *nl = memchr(in, '\n', len);
             if (!nl) {
-                const ssize_t r = len < CAP ? recv(fd, in + len, CAP - len, 0) : 0;
+                const long r = len < CAP ? sys_recv(fd, in + len, CAP - len, sys_now_ms() + 100) : 0;
+                if (r == SYS_AGAIN) continue;
                 if (r <= 0) break;
                 len += (size_t)r;
                 continue;
@@ -330,9 +330,9 @@ static void *serve(void *arg)
             if (ok) snprintf(msg, CAP + 200, "{\"jsonrpc\": \"2.0\", \"id\": %llu, \"result\": %s}\n", (unsigned long long)id, out);
             else snprintf(msg, CAP + 200, "{\"jsonrpc\": \"2.0\", \"id\": %llu, \"error\": {\"code\": 1, \"message\": \"no\"}}\n", (unsigned long long)id);
             json_free(&d);
-            if (send(fd, msg, strlen(msg), MSG_NOSIGNAL) < 0) break;
+            if (!sys_send_all(fd, msg, strlen(msg), sys_now_ms() + 5000)) break;
         }
-        close(fd);
+        sys_close(fd);
     }
     free(in), free(out), free(msg);
     return NULL;
@@ -344,7 +344,7 @@ static void start(server *s, lies l)
     socklen_t al = sizeof a;
     memset(s, 0, sizeof *s);
     s->l = l;
-    s->lfd = socket(AF_INET, SOCK_STREAM, 0);
+    s->lfd = sys_socket(AF_INET, SOCK_STREAM);
     CHECK(s->lfd >= 0 && bind(s->lfd, (struct sockaddr *)&a, sizeof a) == 0 && listen(s->lfd, 8) == 0 &&
           getsockname(s->lfd, (struct sockaddr *)&a, &al) == 0);
     s->port = ntohs(a.sin_port);
@@ -354,9 +354,9 @@ static void start(server *s, lies l)
 
 static void stop(server *s)
 {
-    shutdown(s->lfd, SHUT_RDWR);
-    close(s->lfd);
+    atomic_store(&s->stop, true);
     pthread_join(s->th, NULL);
+    sys_close(s->lfd);
 }
 
 /* the chain of a session on the given servers (at most 3) */

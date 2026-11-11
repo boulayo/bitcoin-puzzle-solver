@@ -3,13 +3,10 @@
 /* keys.c - the keys of a home (see keys.h). */
 #include "keys.h"
 #include "btc.h"
+#include "sys.h"
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 /* HKDF(salt "pznet1", seed, use || F || counter (4 bytes, big-endian, when has_n)) */
@@ -77,17 +74,13 @@ bool keys_coin(const secp256k1_context *ctx, const uint8_t seed[32], const uint8
 
 int keys_file_read(const char *path, uint8_t out[32], char *err, size_t errlen)
 {
-    const int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0 && errno == ENOENT) return 0;
-    if (fd < 0) return snprintf(err, errlen, "%.300s: %s", path, strerror(errno)), -1;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 077)) {
-        close(fd);
+    const int fd = sys_open_secret(path);
+    if (fd == -1) return 0;
+    if (fd < 0)
         return snprintf(err, errlen, "%.300s must be a file of this user that only this user can read (chmod 600 it, if nobody else has read it)",
                         path), -1;
-    }
     char hex[80];
-    const ssize_t n = read(fd, hex, sizeof hex - 1);
+    const long n = read(fd, hex, sizeof hex - 1);
     close(fd);
     hex[n > 0 ? n : 0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;
@@ -96,23 +89,19 @@ int keys_file_read(const char *path, uint8_t out[32], char *err, size_t errlen)
     return ok ? 1 : (snprintf(err, errlen, "%.300s is not a secret of 64 hex digits: it is left as it is", path), -1);
 }
 
+/* through a new file, synced, that takes the place of the old one: a crash leaves either */
 bool keys_file_write(const char *path, const uint8_t v[32])
 {
     char tmp[1100], hex[66];
     if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp) return false;
-    (void)unlink(tmp);                                         /* a leftover of a crash, or a link put there */
-    const int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    (void)remove(tmp);                                         /* a leftover of a crash, or a link put there */
+    const int fd = sys_create_secret(tmp);
     if (fd < 0) return false;
     btc_hex(v, 32, hex);
     hex[64] = '\n';
-    bool ok = write(fd, hex, 65) == 65 && fsync(fd) == 0;
+    bool ok = write(fd, hex, 65) == 65 && sys_sync(fd);
     ok = close(fd) == 0 && ok;
     pz_secure_zero(hex, sizeof hex);
-    if (!ok || rename(tmp, path) != 0) return unlink(tmp), false;
-    const char *slash = strrchr(path, '/');                    /* the rename itself survives a crash once the folder is synced */
-    char dir[1100];
-    snprintf(dir, sizeof dir, "%.*s", slash ? (int)(slash - path) + (slash == path) : 1, slash ? path : ".");
-    const int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dfd >= 0) (void)fsync(dfd), close(dfd);
+    if (!ok || !sys_replace(tmp, path)) return remove(tmp), false;
     return true;
 }

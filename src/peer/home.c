@@ -17,25 +17,16 @@
 #include "dpfeed.h"
 #include "keys.h"
 #include "session.h"
+#include "sys.h"
 #include "netfile.h"
 #include <pzcore/seal.h>
 #include <pzcore/seed.h>
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
-#include <spawn.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
-
-extern char **environ;
 
 #define MAX_SESSIONS 64
 #define HELLO_SESSIONS 16          /* sessions started by a hello alone, without an alert of the table (the others always have room) */
@@ -80,7 +71,7 @@ typedef struct {
     char dpbin[1200], logpath[1200];
     FILE *dpr;                      /* dp.bin for the reads back */
     own_index own;
-    pid_t pzsolve;
+    sys_proc pzsolve;
     pthread_mutex_t mu;             /* own, dpr, the sessions */
     pthread_cond_t cv;
     session_slot s[MAX_SESSIONS];
@@ -92,12 +83,7 @@ typedef struct {
     char limitpath[1200];
 } home;
 
-static int64_t mono_s(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec;
-}
+static int64_t mono_s(void) { return sys_now_ms() / 1000; }
 
 static volatile sig_atomic_t g_stop;                            /* 1: stop; 2 (a second signal): do not wait for the sessions */
 static void on_signal(int sig) { (void)sig, g_stop = g_stop < 2 ? g_stop + 1 : 2; }
@@ -129,7 +115,7 @@ static bool home_seed(home *h, char *err, size_t errlen)
     if (got) return got > 0;
     pz_seed_report rep;
     if (pz_seed_generate(h->seed, NULL, &rep) != PZ_SEED_OK) return snprintf(err, errlen, "no home seed: %s", rep.error), false;
-    if (!keys_file_write(path, h->seed)) return snprintf(err, errlen, "cannot write %.300s: %s", path, strerror(errno)), false;
+    if (!keys_file_write(path, h->seed)) return snprintf(err, errlen, "cannot write %.300s", path), false;
     say(h, "a new home seed in %s: keep a copy of it, it is the key of every point of this home", path);
     return true;
 }
@@ -218,16 +204,9 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     for (int i = 0; i < h->cfg->nargs && n < 62; i++) argv[n++] = h->cfg->pzsolve_args[i];
     argv[n] = NULL;
     snprintf(h->logpath, sizeof h->logpath, "%s/pzsolve.out", h->dir);
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addopen(&fa, 1, h->logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    posix_spawn_file_actions_adddup2(&fa, 1, 2);
-    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-    const int rc = posix_spawnp(&h->pzsolve, h->cfg->pzsolve, &fa, NULL, (char *const *)argv, environ);
-    posix_spawn_file_actions_destroy(&fa);
-    if (rc != 0) return snprintf(err, errlen, "cannot start %s: %s", h->cfg->pzsolve, strerror(rc)), false;
+    if (!(h->pzsolve = sys_spawn(argv, h->logpath, NULL, NULL))) return snprintf(err, errlen, "cannot start %s", h->cfg->pzsolve), false;
     snprintf(h->dpbin, sizeof h->dpbin, "%s/net-%s/dp.bin", camp, h->nf.net);
-    say(h, "pzsolve started (pid %d), its output in %s", (int)h->pzsolve, h->logpath);
+    say(h, "pzsolve started, its output in %s", h->logpath);
     return true;
 }
 
@@ -497,18 +476,9 @@ int home_run(const home_cfg *cfg)
     h->dir = cfg->dir ? cfg->dir : h->dirname;
     /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0644 by pzsolve), the primes of the sessions
      * and the output of pzsolve, which shows a key it finds: nobody else may go in */
-    struct stat ds;
-    if ((mkdir(h->dir, 0700) != 0 && errno != EEXIST) || stat(h->dir, &ds) != 0 || !S_ISDIR(ds.st_mode) || ds.st_uid != geteuid() ||
-        (ds.st_mode & 077))
+    if (!sys_mkdir(h->dir) || !sys_private(h->dir))
         return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", h->dir), 1;
-    DIR *dir = opendir(h->dir);                               /* the primes of sessions cut by a crash: secrets of no further use */
-    for (struct dirent *e; dir && (e = readdir(dir));)
-        if (!strncmp(e->d_name, "primes-", 7)) {
-            char p[1400];
-            snprintf(p, sizeof p, "%s/%s", h->dir, e->d_name);
-            remove(p);
-        }
-    if (dir) closedir(dir);
+    sys_remove_prefixed(h->dir, "primes-");                     /* the primes of sessions cut by a crash: secrets of no further use */
     snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", h->dir);
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);
@@ -557,18 +527,13 @@ int home_run(const home_cfg *cfg)
     }
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
-    mkdir(nodedir, 0700);
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
                      .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
                      .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .upnp = cfg->upnp,
                      .allow_private = h->chain != BTC_MAIN || cfg->allow_private};
     dc.bt_routers = bt_routers(h->chain == BTC_MAIN, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_signal;
-    sigaction(SIGINT, &sa, NULL), sigaction(SIGTERM, &sa, NULL);
-    signal(SIGPIPE, SIG_IGN);
+    sys_on_stop(on_signal);
     const int nc = dht_start(h->d);
     char idhex[17];
     hex8(h->id.xonly, idhex);
@@ -580,12 +545,10 @@ int home_run(const home_cfg *cfg)
     uint64_t published = 0;
     bool solved_alone = false;
     while (!rc && !g_stop) {
-        const struct timespec ts2 = {0, 500000000};
-        nanosleep(&ts2, NULL);
+        sys_sleep_ms(500);
         if (!df.f && dpfeed_open(&df, h->dpbin)) {
             pthread_mutex_lock(&h->mu);
-            h->dpr = fopen(h->dpbin, "rb");
-            if (h->dpr) (void)fcntl(fileno(h->dpr), F_SETFD, FD_CLOEXEC);   /* the distances of the home: not for pzsign */
+            h->dpr = sys_fopen(h->dpbin, "rb");                 /* the distances of the home: not for pzsign */
             pthread_mutex_unlock(&h->mu);
         }
         own_point p[DHT_STORE_MAX];
@@ -603,8 +566,8 @@ int home_run(const home_cfg *cfg)
             published += (uint64_t)dht_publish(h->d, recs, n);
         }
         int st;
-        if (h->pzsolve > 0 && waitpid(h->pzsolve, &st, WNOHANG) == h->pzsolve) {
-            solved_alone = WIFEXITED(st) && WEXITSTATUS(st) == 0;   /* pzsolve ends with 0 only when it found the key itself */
+        if (h->pzsolve && sys_proc_ended(h->pzsolve, false, &st)) {
+            solved_alone = st == 0;                             /* pzsolve ends with 0 only when it found the key itself */
             say(h, "pzsolve ended (%s); %llu points published", solved_alone ? "it found the key on its own" : "status not 0",
                 (unsigned long long)published);
             h->pzsolve = 0;
@@ -621,7 +584,8 @@ int home_run(const home_cfg *cfg)
         pthread_mutex_unlock(&h->mu);
         if (done && !busy) break;
     }
-    if (h->pzsolve > 0) kill(h->pzsolve, SIGINT), waitpid(h->pzsolve, NULL, 0);
+    int st;
+    if (h->pzsolve) sys_proc_interrupt(h->pzsolve), (void)sys_proc_ended(h->pzsolve, true, &st);   /* it saves its state and ends */
     if (!g_stop) g_stop = 1;                                    /* a session that waits for its channel gives up now */
     bool busy = true, paid = false;
     for (int wait = 0; busy && wait < 600; wait++) {            /* sessions under way end on their own: a payout is not cut in half */
@@ -631,7 +595,7 @@ int home_run(const home_cfg *cfg)
         for (int i = 0; i < MAX_SESSIONS; i++) busy |= h->s[i].running;
         paid = h->paid;
         pthread_mutex_unlock(&h->mu);
-        if (busy && g_stop < 2) sleep(1);
+        if (busy && g_stop < 2) sys_sleep_ms(1000);
         else break;
     }
     say(h, "home stopped: %llu points published, %s", (unsigned long long)published, paid ? "a session paid" : solved_alone ? "pzsolve found the key" : "no payout");

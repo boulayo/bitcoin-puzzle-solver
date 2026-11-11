@@ -658,7 +658,8 @@ int main(void)
             json_doc d;
             const json_val *res;
             jw_init(&w), jw_arr(&w), jw_str(&w, "pz"), jw_end(&w);
-            if (btc_rpc_call(&c, false, "loadwallet", &w, &d, &res)) json_free(&d);   /* the call frees w */
+            if (btc_rpc_call(&c, false, "loadwallet", &w, &d, &res)) json_free(&d);
+            jw_free(&w);
         }
         CHECK(btc_rpc_set_wallet(&c, "pz") && btc_rpc_getnewaddress(&c, "legacy", mine_addr, sizeof mine_addr));
         mine(&c, 101);                                          /* coinbase coins mature after 100 blocks */

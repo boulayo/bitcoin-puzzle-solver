@@ -373,7 +373,7 @@ int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
     const int bk = bucket_of(d->me.id, target);
     if (bk < DHT_BUCKETS) {
         pthread_mutex_lock(&d->rt_mu);
-        d->b[bk].looked = now_ms();
+        d->b[bk].looked = sys_now_ms();
         pthread_mutex_unlock(&d->rt_mu);
     }
     query q[DHT_ALPHA];
@@ -561,13 +561,13 @@ void refresh(dht *d, bool all)
         looked[i] = d->b[i].looked;
     }
     pthread_mutex_unlock(&d->rt_mu);
-    const int64_t now = now_ms();
+    const int64_t now = sys_now_ms();
     const int last = deepest + 1 < DHT_BUCKETS ? deepest + 1 : DHT_BUCKETS - 1;
     for (int i = (int)d->cfg.id_bits; deepest >= 0 && i <= last && !stopping(d); i++) {
         uint8_t t[32];
         dht_contact out[DHT_K];
         if (!all && now - looked[i] < d->refresh_ms) continue;
-        if (!net_random(t, sizeof t)) return;
+        if (!sys_random(t, sizeof t)) return;
         for (int b = 0; b <= i; b++) {                         /* the first i bits of this node, then bit i flipped */
             const uint8_t mask = (uint8_t)(0x80 >> (b % 8)), bit = (uint8_t)((d->me.id[b / 8] & mask) ^ (b == i ? mask : 0));
             t[b / 8] = (uint8_t)((t[b / 8] & ~mask) | bit);

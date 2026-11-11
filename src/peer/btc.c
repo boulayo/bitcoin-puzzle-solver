@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* btc.c - Bitcoin transactions (btc.h). */
 #include "btc.h"
+#include "sys.h"
 #include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
@@ -9,7 +10,6 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
 
 /* ---- libsecp256k1 ---- */
 
@@ -23,7 +23,7 @@ static void ctx_make(void)
 {
     uint8_t seed[32];
     g_ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
-    if (getentropy(seed, sizeof seed) == 0) (void)!secp256k1_context_randomize(g_ctx, seed);
+    if (sys_random(seed, sizeof seed)) (void)!secp256k1_context_randomize(g_ctx, seed);
     pz_secure_zero(seed, sizeof seed);
 }
 

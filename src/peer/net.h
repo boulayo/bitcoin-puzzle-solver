@@ -56,8 +56,6 @@ typedef struct {
 
 void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identity *self, const uint8_t fp[32], unsigned id_bits,
                   uint16_t port, int timeout_ms);
-/* n bytes from the random source of the system (ephemeral keys, nonces); false when it cannot be read. */
-bool net_random(uint8_t *out, size_t n);
 
 /* "host:port", "[ipv6]:port"; a host name is resolved (the first address). False for a port outside 1..65535 or a name that does not resolve. */
 bool net_parse_addr(const char *hostport, net_addr *out);
