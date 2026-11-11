@@ -18,7 +18,7 @@ Servono un computer con la rete di casa vera. Per ognuna basta guardare una riga
 | server Electrum pubblici | `pzpeer run --network FILE --payout INDIRIZZO --electrum electrum.blockstream.info:50001 --debug prova.log` su una rete della catena principale | la riga `chain:` e, in `prova.log`, le righe `electrum` |
 
 ### 1.1b Windows e Mac veri
-pzpeer e pzsign per Windows sono provati solo con l'emulatore. **Da fare tu:** avviare `pzpeer.exe run --network FILE --payout INDIRIZZO --debug prova.log` su un Windows vero e guardare se parte e trova gli altri. Per il Mac la prima risposta arriva dalla CI.
+Sulle macchine Windows e macOS della CI i test di pzpeer passano (su Windows anche la firma a due). Manca la prova di una rete intera. **Da fare tu:** avviare `pzpeer.exe run --network FILE --payout INDIRIZZO --debug prova.log` su un Windows vero, insieme a un altro computer, e guardare se parte e trova l'altro.
 
 ### 1.2 Revisione esterna della firma a due
 La mia revisione non sostituisce quella di specialisti. **Da decidere:** se farla fare prima di usare bitcoin veri. **Consiglio:** sì, prima del #140.
@@ -79,7 +79,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 
 | | Decisione | Stato |
 |---|---|---|
-| D1 | Linux, Windows e macOS | Linux: fatto. Windows: pzpeer.exe e pzsign.exe compilati e provati con l'emulatore Wine (test e prova completa con tre case), mai su un Windows vero. macOS: il codice è pronto, non è mai stato compilato lì. La CI li prova entrambi a ogni invio, per ora senza bloccare |
+| D1 | Linux, Windows e macOS | Linux: fatto. Windows: `pzpeer.exe` e `pzsign.exe` passano i test sulla macchina Windows della CI, e la prova completa con tre case passa con l'emulatore Wine. macOS: compilazione e test passano sulla CI. Manca una rete intera provata su un Windows vero e su un Mac |
 | D2 | pzsign già compilato, nello stesso archivio di pzsolve e pzpeer | È in Rust e contiene la libreria GMP (licenza LGPL): chiunque può ricompilarlo dai sorgenti, che è ciò che quella licenza chiede. Per chi riceve una licenza commerciale va scritto nella licenza (domanda per il legale) |
 | D3 | Tutto resta nel ramo `rete-condivisa`. Nel repository niente italiano fuori da `docs/it` | controllato: non ce n'è |
 | D4 | Prova pubblica fatta da te, con il registro dettagliato `--debug FILE` | il registro c'è |

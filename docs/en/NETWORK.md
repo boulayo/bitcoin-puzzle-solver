@@ -705,9 +705,9 @@ in `t_session` with `PZ_REGTEST`.
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |
-| `sys.c`, `sys_posix.c`, `sys_win.c` | done on Linux (`t_sys`). Windows: `make windows winsigner` builds `pzpeer.exe` and `pzsign.exe` with MinGW-w64, and under Wine the unit tests pass (`make wintest`; all but `t_btc_rpc`, `t_chain_rpc` and `t_session`, whose stand-ins are POSIX programs), three nodes find each other (`PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh`) and `t_pieces` signs with `pzsign.exe`; not run on a real Windows, and Wine does not deliver the Ctrl-Break by which pzpeer stops pzsolve there. macOS: written for it, not built or run yet |
+| `sys.c`, `sys_posix.c`, `sys_win.c` | done on Linux (`t_sys`). Windows: `make windows winsigner` builds `pzpeer.exe` and `pzsign.exe` with MinGW-w64, and under Wine the unit tests pass (`make wintest`; all but `t_btc_rpc`, `t_chain_rpc` and `t_session`, whose stand-ins are POSIX programs), three nodes find each other (`PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh`) and `t_pieces` signs with `pzsign.exe`; on the Windows machine of the CI the same unit tests pass, `t_sys` with the Ctrl-Break by which pzpeer stops pzsolve (Wine does not deliver it) and `t_pieces` signing with `pzsign.exe`. macOS: the CI builds pzpeer and passes its unit tests on both architectures, and on arm64 pzsign and the tests of the signing. A whole network (pzsolve, the session, a payout) has not been run on a real Windows or on a Mac |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
-| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); pzpeer on a real Windows and on macOS; the public test |
+| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); a whole network on a real Windows and on a Mac; the public test |
 
 ## 10. A test network on one machine
 

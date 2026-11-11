@@ -118,7 +118,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 |---|---|
 | il file della rete del #140 dentro il programma | oggi il file si dà con `--network`; i parametri del #140 si fissano al rilascio |
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
-| prova di pzpeer e pzsign su un Windows vero e su un Mac | per Windows sono compilati e provati con l'emulatore Wine (test unitari e prova completa con tre case); per macOS il codice è pronto ma non è mai stato compilato lì: lo dirà la CI |
+| prova di una rete intera su un Windows vero e su un Mac | sulle macchine Windows e macOS della CI passano i test di pzpeer (su Windows anche la firma a due con `pzsign.exe`); la prova completa con tre case è fatta su Linux e, per i programmi Windows, con l'emulatore Wine |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
 | sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
@@ -225,7 +225,7 @@ Ho valutato anche libp2p (troppo grande come dipendenza) e Nostr (comodo per tro
 
 ### 6.3 I passi, in ordine
 
-1. Prova di pzpeer e pzsign su un Windows vero e su un Mac.
+1. Prova di una rete intera su un Windows vero e su un Mac.
 2. Prova del ritrovo sulla rete BitTorrent vera, dell'apertura della porta su un router vero e di un server Electrum pubblico.
 3. Prova pubblica su una rete di test di Bitcoin (signet o testnet) con un puzzle piccolo e volontari.
 4. Revisione esterna del firmatore.

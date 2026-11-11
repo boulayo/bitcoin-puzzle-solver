@@ -36,7 +36,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - pzpeer and pzsign for Windows: `make windows winsigner` cross-compiles `pzpeer.exe` and `pzsign.exe` with MinGW-w64 beside
   `pzsolve.exe`. What pzpeer asks of the operating system is in one place (`src/peer/sys.h`), with an implementation for Linux and
   macOS and one for Windows. Under Wine the unit tests pass and three homes pay a coincidence (`PZ_E2E_WIN=1 tests/peer/e2e_net.sh`);
-  not yet run on a real Windows, nor built on macOS.
+  the CI runs the unit tests on a real Windows machine, the two-party signing with `pzsign.exe` among them, and builds and tests
+  pzpeer on macOS. A whole network has not been run on those systems yet.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08
