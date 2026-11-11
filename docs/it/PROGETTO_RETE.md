@@ -85,6 +85,7 @@ Tutto il codice è nel ramo `rete-condivisa`. Niente è stato rilasciato.
 | primo contatto senza server nostri: i nodi si annunciano e si cercano nella tabella di BitTorrent; apertura della porta del router con `--upnp` | test con nodi bugiardi e router non conformi; tre nodi che si trovano da soli |
 | nessun nodo Bitcoin proprio: catena letta da più server Electrum, ogni risposta verificata (server che nascondono, mentono, danno prove false) | test e prova completa con tre case |
 | la rete è l'impronta del suo file: nessuna firma, nessuna chiave da custodire | test |
+| pzpeer e pzsign per Windows: uno strato unico sopra il sistema operativo, che ha anche accorciato il codice | test unitari e prova completa con tre case sotto Wine |
 | avvio senza configurare nulla (cartella, porta, router, primi contatti, blockchain) e registro dettagliato `--debug` | prova completa con tre case |
 
 Controlli generali: tutti i test passano anche con AddressSanitizer, UBSan e ThreadSanitizer; un fuzzer ha provato 26 milioni di ingressi malformati sui lettori di dati senza trovare errori.
@@ -117,7 +118,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 |---|---|
 | il file della rete del #140 dentro il programma | oggi il file si dà con `--network`; i parametri del #140 si fissano al rilascio |
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
-| pzpeer per Windows e macOS | oggi solo Linux |
+| prova di pzpeer e pzsign su un Windows vero e su un Mac | per Windows sono compilati e provati con l'emulatore Wine (test unitari e prova completa con tre case); per macOS il codice è pronto ma non è mai stato compilato lì: lo dirà la CI |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
 | sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
@@ -224,7 +225,7 @@ Ho valutato anche libp2p (troppo grande come dipendenza) e Nostr (comodo per tro
 
 ### 6.3 I passi, in ordine
 
-1. Porting di pzpeer su Windows e macOS.
+1. Prova di pzpeer e pzsign su un Windows vero e su un Mac.
 2. Prova del ritrovo sulla rete BitTorrent vera, dell'apertura della porta su un router vero e di un server Electrum pubblico.
 3. Prova pubblica su una rete di test di Bitcoin (signet o testnet) con un puzzle piccolo e volontari.
 4. Revisione esterna del firmatore.
