@@ -161,7 +161,7 @@ static void test_chain(void)
     CHECK(!memcmp(spv_header(&c, 119), h[19], 80) && !spv_header(&c, 131) && !spv_header(&c, 99));
     /* the file: read back whole; one that belongs to another checkpoint or is damaged is not taken */
     const char *path = "build/peer/t_spv_headers.bin";
-    CHECK(spv_save(&c, path));
+    CHECK(spv_save(&c, path) && spv_save(&c, path));          /* the second over the file of the first */
     spv_chain d;
     CHECK(spv_init(&d, BTC_REGTEST, 100, cp) && spv_load(&d, path, NOW) && d.n == c.n && !memcmp(d.hdr, c.hdr, c.n * 80));
     spv_free(&d);

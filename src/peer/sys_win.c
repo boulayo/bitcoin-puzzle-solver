@@ -159,7 +159,7 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
 {
     char cmd[8192];
     SECURITY_ATTRIBUTES inherit = {sizeof inherit, NULL, TRUE};
-    HANDLE made[4] = {NULL, NULL, NULL, NULL}, std[3], list[3], me = GetCurrentProcess();
+    HANDLE made[4] = {NULL, NULL, NULL, NULL}, std[3] = {NULL, NULL, NULL}, list[3], me = GetCurrentProcess();
     HANDLE in_w = NULL, out_r = NULL;
     PROCESS_INFORMATION pi = {0};
     STARTUPINFOEXA si = {.StartupInfo = {.cb = sizeof si, .dwFlags = STARTF_USESTDHANDLES}};
@@ -168,7 +168,6 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     bool ok = command_line(argv, cmd, sizeof cmd);
     /* the three standard handles of the child: the pipes, the log, or copies of those of pzpeer that the child can inherit */
     for (int i = 0; ok && i < 3; i++) {
-        std[i] = NULL;
         if (to && i == 0) ok = CreatePipe(&std[0], &in_w, &inherit, 0) && SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
         else if (to && i == 1) ok = CreatePipe(&out_r, &std[1], &inherit, 0) && SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
         else if (log && i == 0) std[0] = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, NULL);

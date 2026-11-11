@@ -76,7 +76,7 @@ static void save_seq(dht *d)
     FILE *f = fopen(tmp, "w");
     if (!f) return;
     const bool ok = fprintf(f, "%" PRIu64 "\n", d->seq) > 0;
-    if (fclose(f) == 0 && ok) (void)rename(tmp, path);
+    if (fclose(f) == 0 && ok) (void)sys_replace(tmp, path);
     else (void)remove(tmp);
 }
 

@@ -469,7 +469,7 @@ void save_peers(dht *d)
             hex32(cs[i].xonly, h);
             fprintf(f, "%s %s\n", a, h);
         }
-        if (fclose(f) == 0) (void)rename(tmp, path);
+        if (fclose(f) == 0) (void)sys_replace(tmp, path);
         else (void)remove(tmp);
     }
     free(cs);

@@ -5,6 +5,7 @@
  * have rules of their own for the target (blocks of minimum difficulty, signed blocks), so there only the proof of work of a header against
  * its own target is checked: the light verification protects a payment on the main chain, the test chains serve to try it. */
 #include "spv.h"
+#include "sys.h"
 #include <pzcore/hash.h>
 #include <pzcore/u256.h>
 #include <math.h>
@@ -230,7 +231,7 @@ bool spv_save(const spv_chain *c, const char *path)
     for (int b = 0; b < 8; b++) head[9 + b] = (uint8_t)(c->base >> (8 * b));
     memcpy(head + 17, c->cp, 32);
     const bool ok = fwrite(head, 1, sizeof head, f) == sizeof head && fwrite(c->hdr, SPV_HEADER, c->n, f) == c->n;
-    return (fclose(f) == 0) && ok && rename(tmp, path) == 0;
+    return (fclose(f) == 0) && ok && sys_replace(tmp, path);
 }
 
 bool spv_load(spv_chain *c, const char *path, uint64_t now)
