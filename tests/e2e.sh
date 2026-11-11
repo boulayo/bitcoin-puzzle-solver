@@ -133,6 +133,14 @@ for K in $LO $HI $((LO+54321)); do
   GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/cus/FOUND.txt" 2>/dev/null)
   [ "$GOT" = "${KH#0x}" ] && ok "linear on an interval of 100000 keys: $KH" || bad "custom interval $KH (found '$GOT')"
 done
+# --near: the one near miss of this interval (a key whose hash160 has bytes 8 to 11 of the target's, checked with tools/ref.py) is written to
+# near.txt, and the interval ends without the key
+NA=12pdKoL4t5dCPGAvrUnACpnBaMYyyWST2N; NK=100000076b8e3
+[ "$(field 0x$NK h160 | cut -c17-24)" = "$(field 0x9a7b3 h160 | cut -c17-24)" ] || bad "the near miss of the test is not one"
+$BIN hunt -a $NA -r 1000000700000:10000007fffff -c near -d "$DIR" --near --ui log -q --no-gpu >/dev/null 2>&1
+[ $? = 1 ] && [ "$(cat "$DIR/near/near.txt" 2>/dev/null)" = "$NK" ] && ok "--near: the near miss of an interval is in near.txt" || bad "--near: near.txt holds '$(cat "$DIR/near/near.txt" 2>/dev/null)'"
+$BIN hunt -a $NA -r 1000000700000:10000007fffff -c nonear -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+[ ! -e "$DIR/nonear/near.txt" ] && ok "without --near no near.txt" || bad "near.txt without --near"
 LO=$((0x7000000000+12345)); W=1000003; HI=$((LO+W-1))
 for K in $LO $HI $((LO+W/2)) $((LO+777777)); do
   KH=$(printf '0x%x' $K); P=$(field $KH pub); A=$(field $KH addr); rm -rf "$DIR/cusk"

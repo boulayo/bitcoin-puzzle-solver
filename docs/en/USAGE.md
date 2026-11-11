@@ -59,6 +59,10 @@ line of the help:
 * The default `--chunk-bits` makes the blocks as large as the range allows while each share keeps 16 of them, at most 2^36 keys (a range of
   2^36 keys gets blocks of 2^32). A smaller value slows down the CPU and above all the GPUs, since a launch cannot cross a block: with blocks
   of 2^24 keys a GPU loses about a fifth of its speed.
+* `--near` (linear search) writes every **near miss** to `near.txt` of the campaign, one key a line: a key whose hash160 has bytes 8 to 11
+  of the target's. One key in 2^32 is one, the engines find them on their way at no cost, and only whoever tried every key of a range
+  knows them all: they are the proof, for whoever checks them, that the range was scanned. A block scanned again after a stop writes
+  its near misses again.
 
 * `--encrypt-pubkey`, `--encrypt-password` and `--on-found` encrypt the key that is found and run a command when it is: section 11.
 * `--jump-seed HEX` and `--start-key FILE` make a shared walk, the kangaroo of the shared network ([NETWORK.md](NETWORK.md), in
@@ -132,6 +136,7 @@ campaigns/NAME/
   status.json     state for external programs (includes time left and probabilities), rewritten with report.txt
   stats.csv       time series, one row per minute (the file appears after the first minute)
   log.txt         timestamped events (also the error that ended a run)
+  near.txt        linear search with --near: the near misses, one key a line (section 3)
   FOUND.txt       only when the key is found (permissions 0600 on Linux and macOS; on Windows it inherits the folder's rights); with --encrypt-pubkey it holds the encrypted line, not the key (section 11)
 ```
 

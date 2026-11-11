@@ -212,13 +212,33 @@ bool run_key_in_range(const run_ctx *r, const pz_u256 *key)
     return pz_u256_cmp(key, &r->cfg.range_start) >= 0 && pz_u256_cmp(key, &r->cfg.range_end) <= 0;
 }
 
-bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source)
+/* A key that a linear engine or kernel reports: its hash160 has word SCAN_FILTER_WORD of the target's. The key of the campaign comes this
+ * way; the others, one key in 2^32, are near misses, and with --near each is a line of near.txt. Whoever scanned a range knows them and
+ * nobody else, so they prove the scan to whom checks them. True when it is the key. */
+bool run_scan_candidate(run_ctx *r, const pz_u256 *key, const char *source)
 {
+    pz_ge p;
+    u8 pub[33], h[20];
     if (!run_key_in_range(r, key)) {
-        pz_log(PZ_LOG_DEBUG, "hit from %s beyond the end of the range ignored (the last block is scanned in whole lanes)", source);
+        pz_log(PZ_LOG_DEBUG, "candidate from %s beyond the end of the range ignored (the last block is scanned in whole lanes)", source);
         return false;
     }
-    return run_submit_key(r, key, source);
+    if (!pz_ec_mul_g(&p, key)) return false;
+    pz_ge_to_pub33(pub, &p);
+    pz_hash160(pub, 33, h);
+    if (memcmp(h + 4 * SCAN_FILTER_WORD, r->cfg.target_h160 + 4 * SCAN_FILTER_WORD, 4) != 0) {
+        atomic_fetch_add(&r->hits_bad, 1);
+        pz_log(PZ_LOG_WARN, "candidate from %s discarded: the independent CPU check failed", source);
+        return false;
+    }
+    if (r->near) {
+        char hx[80];
+        pthread_mutex_lock(&r->found_mu);
+        fprintf(r->near, "%s\n", pz_u256_to_hex(key, hx));
+        fflush(r->near);
+        pthread_mutex_unlock(&r->found_mu);
+    }
+    return memcmp(h, r->cfg.target_h160, 20) == 0 && run_submit_key(r, key, source);
 }
 
 /* The seed as the reports show it: a shared walk's is its start key, which stays in memory (docs/en/NETWORK.md 6). */

@@ -51,7 +51,8 @@ typedef struct run_ctx {
     _Atomic int *worker_stop;        /* linear CPU workers: per-slot flag that idles the worker and interrupts its scan (bench only; NULL: r->stop) */
     _Atomic int cpu_cap;             /* kangaroo CPU workers with a slot >= cpu_cap sleep (run_init: no limit; 'bench --together' varies it) */
     _Atomic int found;
-    pthread_mutex_t found_mu;
+    pthread_mutex_t found_mu;        /* the found key, and the lines of near.txt */
+    FILE *near;                      /* linear search with --near: near.txt of the campaign, a line for every near miss (run_scan_candidate) */
     pz_u256 found_key;
     bool found_valid;
     double found_time;
@@ -143,7 +144,7 @@ bool run_key_in_range(const run_ctx *r, const pz_u256 *key);
 /* A hit of the linear search. The engines scan whole lanes, so the last block of a range can reach a few keys past its end; a hit there is the
  * right key, but this campaign was not asked for it and whether its scan gets there depends on how the end of the range falls on the lanes. It
  * is ignored (false) with a line in the debug log, which does not show the key. Any other hit goes to run_submit_key. */
-bool run_submit_scan_hit(run_ctx *r, const pz_u256 *key, const char *source);
+bool run_scan_candidate(run_ctx *r, const pz_u256 *key, const char *source);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);

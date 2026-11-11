@@ -59,6 +59,10 @@ Quello che richiede più di una riga dell'aiuto:
 * Il `--chunk-bits` predefinito fa i blocchi grandi quanto l'intervallo permette, con almeno 16 blocchi per quota e al massimo 2^36 chiavi
   (un intervallo di 2^36 chiavi ha blocchi da 2^32). Un valore più piccolo rallenta la CPU e soprattutto le GPU, perché un lancio non può
   attraversare un blocco: con blocchi da 2^24 chiavi una GPU perde circa un quinto della velocità.
+* `--near` (ricerca lineare) scrive ogni **quasi giusta** in `near.txt` della campagna, una chiave per riga: una chiave il cui hash160 ha
+  i byte da 8 a 11 uguali a quelli del bersaglio. Lo è una chiave su 2^32, i motori le incontrano comunque senza costo, e le conosce tutte
+  solo chi ha provato ogni chiave di un intervallo: sono la prova, per chi le controlla, che l'intervallo è stato cercato. Un blocco
+  rifatto dopo un'interruzione riscrive le sue.
 
 * `--encrypt-pubkey`, `--encrypt-password` e `--on-found` cifrano la chiave trovata ed eseguono un comando quando viene trovata: sezione 11.
 * `--jump-seed HEX` e `--start-key FILE` fanno un cammino condiviso, il canguro della rete condivisa ([NETWORK.md](../en/NETWORK.md),
@@ -133,6 +137,7 @@ campaigns/NOME/
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto con report.txt
   stats.csv       serie storica, una riga al minuto (il file compare dopo il primo minuto)
   log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
+  near.txt        ricerca lineare con --near: le chiavi quasi giuste, una per riga (sezione 3)
   FOUND.txt       solo a chiave trovata (permessi 0600 su Linux e macOS; su Windows eredita i diritti della cartella); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
 ```
 

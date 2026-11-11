@@ -106,6 +106,9 @@ static const char *hunt_text(void)
 "                          accordingly [off]. It does not use or update the machine tuning; with -t the X%% is computed on the\n"
 "                          given threads\n"
 "      --keep-awake        Windows and macOS: prevent the system from going to sleep while the campaign runs\n"
+"      --near              linear search: write every near miss to near.txt of the campaign, one key a line. A near miss is a key\n"
+"                          whose hash160 has bytes 8 to 11 of the target's, one key in 2^32: whoever scanned a range knows its\n"
+"                          near misses and nobody else does, so they prove the scan to whoever checks them [off]\n"
 "\n"
 "SEVERAL COMPUTERS (same -s, range and public key on all of them)\n"
 "      --part Q/T          linear search: the blocks of the visit order are divided into T shares and this computer scans share Q\n"
@@ -305,7 +308,7 @@ void pz_usage_error(const char *cmd, const char *fmt, ...)
 
 static const char *g_cmd = "";
 
-enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY };
+enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"pubkey", 1, 0, 'k'},
@@ -313,7 +316,7 @@ static const struct option long_opts[] = {
     {"no-cpu", 0, 0, O_NOCPU}, {"no-gpu", 0, 0, O_NOGPU}, {"gpu", 1, 0, O_GPU},
     {"chunk-bits", 1, 0, O_CHUNK}, {"dp-bits", 1, 0, O_DP}, {"mem", 1, 0, O_MEM}, {"quiet", 0, 0, 'q'}, {"verbose", 0, 0, 'v'},
     {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN},
-    {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"node", 1, 0, O_NODE},
+    {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"near", 0, 0, O_NEAR}, {"node", 1, 0, O_NODE},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
     {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
     {0, 0, 0, 0}};
@@ -473,6 +476,7 @@ void parse_opts(int argc, char **argv, opts_t *o)
         case O_NOGPU: o->no_gpu = true; break;
         case O_RETUNE: o->retune = true; break;
         case O_AWAKE: o->keep_awake = true; break;
+        case O_NEAR: o->near = true; break;
         case O_PART: {
             part_spec ps;
             char perr[300];

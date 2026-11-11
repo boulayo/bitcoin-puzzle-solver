@@ -164,6 +164,9 @@ step "GPU: CUDA path with a simulated driver (same API as the NVIDIA driver, ker
 $MOCK build/pzsolve selftest 2>&1 | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU" && echo "  OK GPU self-test via CUDA" || { echo "  FAIL GPU self-test via CUDA"; fail=$((fail+1)); }
 rm -rf "$T/c1"; run $MOCK PZ_GPU_TUNE=1 build/pzsolve hunt -p 26 -a "$A" -m linear -c c -d "$T/c1" --no-cpu --ui log -q
 check_found "$T/c1/c" "$K" && echo "  OK linear via CUDA" || { echo "  FAIL linear via CUDA"; fail=$((fail+1)); }
+# the kernel reports the near misses too (tests/e2e.sh has the same interval on the CPU)
+rm -rf "$T/c1n"; $MOCK build/pzsolve hunt -a 12pdKoL4t5dCPGAvrUnACpnBaMYyyWST2N -r 1000000700000:10000007fffff -c c -d "$T/c1n" --near --no-cpu --ui log -q >/dev/null 2>&1
+[ "$(cat "$T/c1n/c/near.txt" 2>/dev/null)" = 100000076b8e3 ] && ! grep -q "discarded" "$T/c1n/c/log.txt" && echo "  OK linear via CUDA: the near miss of an interval" || { echo "  FAIL near miss via CUDA"; fail=$((fail+1)); }
 rm -rf "$T/c2"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c c -d "$T/c2" --no-cpu --ui log -q
 check_found "$T/c2/c" "$KK" && echo "  OK kangaroo via CUDA" || { echo "  FAIL kangaroo via CUDA"; fail=$((fail+1)); }
 # the compiled kernel of the kangaroo is built once and kept by the start-up tests (a module load is a JIT compilation by the real driver): the

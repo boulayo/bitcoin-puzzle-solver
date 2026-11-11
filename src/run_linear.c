@@ -19,7 +19,7 @@ typedef struct {
 
 static void on_cpu_hit(void *user, const pz_u256 *key)
 {
-    run_submit_scan_hit((run_ctx *)user, key, "CPU");
+    run_scan_candidate((run_ctx *)user, key, "CPU");
 }
 
 static void *cpu_worker(void *p)
@@ -32,7 +32,7 @@ static void *cpu_worker(void *p)
     _Atomic int *flag = r->worker_stop ? &r->worker_stop[a->slot] : &r->stop;   /* bench: idles and interrupts this worker alone */
     job.stop = flag;
     job.progress = &r->ws[a->widx].units;
-    job.on_hit = on_cpu_hit;
+    job.on_near = on_cpu_hit;
     job.user = r;
     u64 want = 1u << 22;
     while (!atomic_load(&r->stop)) {

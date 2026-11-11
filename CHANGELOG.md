@@ -30,6 +30,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - A key found for an address whose public key was not known (a linear search) comes with a warning: spending it through the public
   mempool shows the public key, from which a key this short is found in seconds. `pzpeer sweep --to ADDRESS` makes and signs the
   transaction that moves its coins and sends nothing, for the finder to give to a mining pool in private.
+- `hunt --near` (linear search) writes the near misses of the scan to `near.txt`: the keys whose hash160 has four bytes of the
+  target's, one in 2^32. The CPU engines and the GPU kernels report them to one function of the host, which checks each and takes
+  the key of the campaign from among them; they are the proof of work of the shared linear search to come (docs/en/NETWORK.md).
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08

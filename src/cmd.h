@@ -25,7 +25,7 @@ typedef struct {
     char range[200], address[80], pubkey[160], campaign[96], dir[400], seed[200], mode[16], gpu[128];
     int threads, chunk_bits, dp_bits;
     double mem_gb;
-    bool no_cpu, no_gpu, quiet, verbose, retune, keep_awake;
+    bool no_cpu, no_gpu, quiet, verbose, retune, keep_awake, near;
     char part[PART_TEXT];
     int node, nfiles;
     bool node_given;              /* --node was given, 0 included */

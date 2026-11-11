@@ -856,6 +856,11 @@ int cmd_hunt(int argc, char **argv)
      * its first checkpoint would leave it to the next one, which would draw the same starts again */
     (void)run_session_save(r, r->elapsed_prev, r->prev_units_total);
     r->t_start = pz_mono();
+    if (o.near && r->cfg.mode == MODE_LINEAR) {
+        char path[700];
+        snprintf(path, sizeof path, "%s/near.txt", r->cfg.dir);
+        if (!(r->near = fopen(path, "ab"))) pz_die("cannot write %s: %s", path, strerror(errno));
+    }
     if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
 
     int rc = r->cfg.mode == MODE_KANGAROO ? run_kangaroo(r) : r->cfg.mode == MODE_BSGS ? run_bsgs(r) : run_linear(r);

@@ -39,11 +39,13 @@ static void ctx_verify(ctx_t *c, int lane)
         pub[3 + 4 * i] = (u8)(w >> 8);  pub[4 + 4 * i] = (u8)w;
     }
     pz_hash160(pub, 33, h);
-    if (memcmp(h, c->job->target_h160, 20) != 0) return;
+    const bool hit = memcmp(h, c->job->target_h160, 20) == 0;
+    if (!hit && !c->job->on_near) return;
     pz_u256 key;
     pz_u256 d = pz_u256_from_u64(c->koff[lane]);
     pz_u256_add(&key, &c->base, &d);
-    if (c->job->on_hit) c->job->on_hit(c->job->user, &key);
+    if (c->job->on_near) c->job->on_near(c->job->user, &key);
+    if (hit && c->job->on_hit) c->job->on_hit(c->job->user, &key);
 }
 
 static inline void ctx_flush(ctx_t *c)
@@ -53,6 +55,7 @@ static inline void ctx_flush(ctx_t *c)
     return;
 #endif
     PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
+    _Static_assert(PZ_HASH_FILTER_WORD == SCAN_FILTER_WORD, "the word of a near miss");
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     for (int l = 0; l < c->n; l++)
         if (UNLIKELY(c->out[0][l] == t0)) ctx_verify(c, l);

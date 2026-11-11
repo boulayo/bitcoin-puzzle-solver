@@ -10,11 +10,16 @@
 #define CPU_HALF 256                 /* group = 2*HALF consecutive keys per batch inversion */
 #define CPU_GRP (2 * CPU_HALF)
 
+#define SCAN_FILTER_WORD 2           /* the word of the hash160 every engine and kernel compares first: a near miss has the target's */
+
 typedef struct scan_job {
     u32 target_w[5];                 /* RIPEMD-160 digest as little-endian words */
     u8 target_h160[20];
     _Atomic int *stop;               /* non-zero asks the engine to return */
     void (*on_hit)(void *user, const pz_u256 *key);   /* called for every full 160-bit match */
+    /* optional: called for every near miss, a key whose hash160 has word PZ_HASH_FILTER_WORD of the target's (one key in 2^32, a
+     * full match included, before on_hit). Whoever scanned a range knows its near misses, and nobody else: its proof of work */
+    void (*on_near)(void *user, const pz_u256 *key);
     void *user;
     _Atomic u64 *progress;           /* optional: keys scanned, updated in batches */
 } scan_job;

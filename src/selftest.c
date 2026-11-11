@@ -427,14 +427,14 @@ static void t_scan_hits(void)
     const pz_u256 k0 = pz_u256_from_u64(0), k1 = pz_u256_from_u64(1), kf = pz_u256_from_u64(0xfff), kg = pz_u256_from_u64(0x1000);
     CHECK(!run_key_in_range(r, &k0) && run_key_in_range(r, &k1) && run_key_in_range(r, &kf) && !run_key_in_range(r, &kg));
     set_target(r, 0x1000);                                                           /* the key is one past the end */
-    CHECK(!run_submit_scan_hit(r, &kg, "test"));
+    CHECK(!run_scan_candidate(r, &kg, "test"));
     CHECK(!atomic_load(&r->found) && atomic_load(&r->hits_bad) == 0 && !have_file(r->path_found));
     CHECK(run_submit_key(r, &kg, "test") && atomic_load(&r->found));                  /* the plain submission does not look at the range */
     atomic_store(&r->found, 0);
     r->found_valid = false;
     remove(r->path_found);
     set_target(r, 0xfff);                                                            /* the last key of the range is taken */
-    CHECK(run_submit_scan_hit(r, &kf, "test") && atomic_load(&r->found) && have_file(r->path_found));
+    CHECK(run_scan_candidate(r, &kf, "test") && atomic_load(&r->found) && have_file(r->path_found));
     atomic_store(&r->found, 0);
     r->found_valid = false;
     remove(r->path_found);
@@ -442,7 +442,7 @@ static void t_scan_hits(void)
     r->cfg.range_end = pz_secp256k1_n;
     pz_u256_sub(&r->cfg.range_end, &r->cfg.range_end, &k1);                          /* the largest range: up to n - 1 */
     set_target(r, 0x1000);
-    CHECK(run_submit_scan_hit(r, &kg, "test") && atomic_load(&r->found));
+    CHECK(run_scan_candidate(r, &kg, "test") && atomic_load(&r->found));
     CHECK(!run_key_in_range(r, &kf) && run_key_in_range(r, &r->cfg.range_end) && !run_key_in_range(r, &pz_secp256k1_n));
     free(r);
     pz_remove_tree(dir);

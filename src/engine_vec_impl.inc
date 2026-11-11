@@ -70,11 +70,13 @@ static PZ_VABI void vctx_verify(vctx_t *c, const vbatch_t *b, int lane)
         pub[3 + 4 * i] = (u8)(w >> 8);  pub[4 + 4 * i] = (u8)w;
     }
     pz_hash160(pub, 33, h);
-    if (memcmp(h, c->job->target_h160, 20) != 0) return;
+    const bool hit = memcmp(h, c->job->target_h160, 20) == 0;
+    if (!hit && !c->job->on_near) return;
     pz_u256 key;
     pz_u256 d = pz_u256_from_u64(b->koff[lane]);
     pz_u256_add(&key, &c->base, &d);
-    if (c->job->on_hit) c->job->on_hit(c->job->user, &key);
+    if (c->job->on_near) c->job->on_near(c->job->user, &key);
+    if (hit && c->job->on_hit) c->job->on_hit(c->job->user, &key);
 }
 
 static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
@@ -83,6 +85,7 @@ static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
     c->n = 0;
     return;
 #endif
+    _Static_assert(PZ_HASH_FILTER_WORD == SCAN_FILTER_WORD, "the word of a near miss");
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     const pz_vu t = pz_v_set(t0);
     for (int k = 0; k * PZ_LANES < c->n; k++) {

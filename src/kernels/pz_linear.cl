@@ -8,7 +8,8 @@
  * order: the inverses come out of the backward pass from the last one).
  *
  * prm layout (uints): P0.x[8] P0.y[8] D.x[8] D.y[8] GS.x[8] GS.y[8] target[5] ngroups
- * hits: [0] = number of hits, [1] = error flag, then pairs (koff_lo, koff_hi); a hit matches the whole target hash160
+ * hits: [0] = number of hits, [1] = error flag, then pairs (koff_lo, koff_hi); a hit is a key whose hash160 has word 2 of the target's
+ * (one in 2^32: the key, and the near misses the host keeps as the proof of the scan). The host compares the rest
  * (word 2 first, the other words only for the keys that pass it) and is re-verified by the host  */
 
 #ifndef HALF
@@ -21,18 +22,14 @@ inline void load_ge_c(ge *p, __constant const uint *q)
     for (int i = 0; i < 8; i++) { p->x.v[i] = q[i]; p->y.v[i] = q[8 + i]; }
 }
 
-/* the key at offset ko with public point (xn, y), xn normalized: compared with the target on word 2 of its hash160, then in full */
+/* the key at offset ko with public point (xn, y), xn normalized: compared with the target on word 2 of its hash160 */
 inline void check_key(const fe *xn, const fe *y, ulong ko, const uint tw[5], __global uint *hits, const uint max_hits)
 {
     const uint par = fe_parity(y);
     const fe xv = *xn;
     if (hash160_w2(&xv, par) != tw[2]) return;
-    uint h[5];
-    hash160_words(&xv, par, h);
-    if (h[0] == tw[0] && h[1] == tw[1] && h[3] == tw[3] && h[4] == tw[4]) {
-        uint k = atomic_inc(&hits[0]);
-        if (k < max_hits) { hits[2 + 2 * k] = (uint)ko; hits[3 + 2 * k] = (uint)(ko >> 32); }
-    }
+    uint k = atomic_inc(&hits[0]);
+    if (k < max_hits) { hits[2 + 2 * k] = (uint)ko; hits[3 + 2 * k] = (uint)(ko >> 32); }
 }
 
 __kernel void pz_search(__constant const uint *prm, __constant const uint *gtab, __global uint *hits, const uint max_hits, const uint pz_n)

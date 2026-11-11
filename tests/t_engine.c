@@ -101,6 +101,29 @@ static void engine_check_group_edges(const cpu_engine *e)
     }
 }
 
+/* Near misses: a key whose hash160 has word SCAN_FILTER_WORD of the target's is reported to on_near, at every position of a batch and of
+ * the group edges, and is a hit only when the whole hash is the target's */
+static void engine_check_near(const cpu_engine *e)
+{
+    const int L = e->lanes;
+    const u64 G = e->granule;
+    pz_u256 st = pz_u256_from_u64(700000);
+    const u64 edges[] = {0, 1, (u64)L - 1, (u64)L, CPU_HALF, CPU_GRP - 1, CPU_GRP, G - 1, G, 3 * G - 1};
+    for (size_t i = 0; i < sizeof edges / sizeof *edges; i++)
+        for (int other = 0; other < 5; other++) {             /* the word that differs from the target's; 2: none does, the key itself */
+            pz_u256 key = st; pz_u256_add_u64(&key, &key, edges[i]);
+            u8 h[20]; h160_of_key(&key, h);
+            if (other != SCAN_FILTER_WORD) h[4 * other] ^= 1;
+            scan_job job; scan_job_init(&job, h);
+            hitrec hit = {0, pz_u256_zero()}, near = {0, pz_u256_zero()};
+            job.on_hit = on_hit; job.user = &hit;
+            CHECK(e->scan(&job, &st, 3 * G) == 3 * G && hit.hits == (other == SCAN_FILTER_WORD));   /* without on_near: hits only */
+            job.on_near = on_hit; job.user = &near;                                              /* both to one record: near, then the hit */
+            CHECK(e->scan(&job, &st, 3 * G) == 3 * G);
+            CHECK(near.hits == 1 + (other == SCAN_FILTER_WORD) && !pz_u256_cmp(&near.key, &key));
+        }
+}
+
 /* Every window of a round (a lane of the vector engines): edges, centre and the quarter points of each window */
 static void engine_check_windows(const cpu_engine *e)
 {
@@ -230,6 +253,7 @@ static void test_engine(const cpu_engine *e)
     engine_check_hash160(e);
     if (!engine_check_scans(e)) return;
     engine_check_group_edges(e);
+    engine_check_near(e);
     engine_check_windows(e);
     engine_check_zero_denominators(e);
     engine_check_group_order(e);

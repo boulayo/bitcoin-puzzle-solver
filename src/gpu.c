@@ -228,7 +228,7 @@ bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
     uint32_t hdr[2];
     if (!rt_read(s->c, s->b_hits, 0, hdr, 8)) return false;
     L->nhits = hdr[0] > 64 ? 64 : hdr[0];
-    L->err = hdr[1];
+    L->err = hdr[1] | (hdr[0] > 64);                          /* more hits than the buffer holds: the block is scanned again on the CPU */
     if (L->nhits) {
         uint32_t pairs[128];
         if (!rt_read(s->c, s->b_hits, 8, pairs, L->nhits * 8u)) return false;
@@ -384,7 +384,7 @@ static int open_sessions(run_ctx *r, gpu_session **out, bool for_kangaroo)
 
 /* ---------------- linear worker ---------------- */
 
-static void cpu_support_hit(void *user, const pz_u256 *key) { run_submit_scan_hit((run_ctx *)user, key, "CPU (GPU support)"); }
+static void cpu_support_hit(void *user, const pz_u256 *key) { run_scan_candidate((run_ctx *)user, key, "CPU (GPU support)"); }
 
 static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
 {
@@ -392,7 +392,7 @@ static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
     scan_job_init(&job, r->cfg.target_h160);
     job.stop = &r->stop;
     job.user = r;
-    job.on_hit = cpu_support_hit;
+    job.on_near = cpu_support_hit;
     const cpu_engine *e = r->engine ? r->engine : cpu_engine_by_name("baseline");
     *covered = e->scan(&job, &c->key_start, c->nkeys);
 }
@@ -528,7 +528,7 @@ static void *gpu_linear_thread(void *p)
         for (uint32_t i = 0; i < L.nhits; i++) {
             pz_u256 k = c.key_start;
             pz_u256_add_u64(&k, &k, L.hits[i]);
-            run_submit_scan_hit(r, &k, "GPU");
+            run_scan_candidate(r, &k, "GPU");
         }
         sched_complete(r->sched, &c, covered);
         GPU_UNITS_STAMP(&r->ws[s->widx], c.nkeys);
