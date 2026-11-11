@@ -230,6 +230,7 @@ jobs:
             ./pzsign.exe primes p0.json && ./pzsign.exe primes p1.json
             export PZSIGN=./pzsign.exe PZSIGN_PRIMES0=p0.json PZSIGN_PRIMES1=p1.json
           fi
+          mkdir -p build/win/peer                                 # where the tests write their files (PZ_TEST_DIR)
           for t in peer/t_*.exe; do echo "== $t"; "$t" || exit 1; done
 
   macos:

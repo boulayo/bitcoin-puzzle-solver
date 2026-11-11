@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
 done
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "verify: -j needs a number of sections (1 or more), not '$JOBS'"; exit 2; }
 step() { echo; echo "######## $*"; }
-run()  { "$@" || { echo "!!!! FAILED: $*"; fail=$((fail+1)); }; }
+run()  { "$@" || { echo "!!!! FAILED: $*"; fail=$((fail+1)); return 1; }; }
 ROOT=$(mktemp -d /tmp/pzverify.XXXXXX)
 RUNNING=()   # the PIDs of the sections running: stopped with the script
 trap 'for p in ${RUNNING[@]+"${RUNNING[@]}"}; do kill "$p" 2>/dev/null; done; rm -rf "$ROOT"' EXIT

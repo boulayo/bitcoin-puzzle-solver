@@ -33,7 +33,7 @@ static int fails;
 #define NODES (N + 3)
 #define OWNERS 4
 #define RECS 2000
-#define ROOT "build/peer/t_dht_data"
+#define ROOT PZ_TEST_DIR "/t_dht_data"
 
 typedef struct {
     uint8_t x[32], d[32];
@@ -1141,7 +1141,7 @@ int main(void)
     CHECK(record_net_init(ctx, &net, FP, 0, p, base));
     memcpy(qp, k, 32), memcpy(nb, base, 32);
     CHECK(secp256k1_ec_seckey_negate(ctx, nb) && secp256k1_ec_seckey_tweak_add(ctx, qp, nb));
-    CHECK(sys_mkdir("build") && sys_mkdir("build/peer") && sys_mkdir(ROOT));
+    CHECK(sys_mkdir(ROOT));
     for (int i = 0; i < NODES; i++) {
         char label[32];
         uint8_t seed[32];

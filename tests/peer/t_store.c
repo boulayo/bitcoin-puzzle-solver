@@ -6,7 +6,6 @@
  * end (not indexed, its sequence number not taken) and in the middle (never reported as a coincidence); then the mailbox, its limit per
  * owner and its proofs. The records are built here on points k*G of the test network. */
 #include "store.h"
-#include "sys.h"
 #include "keys.h"
 #include <pzcore/hash.h>
 #include <stdio.h>
@@ -20,7 +19,7 @@ static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0x57, 0x0e};
 static record_net net;
 static home_identity ida, idb, idc, idd;
-static const char *PATH = "build/peer/t_store.bin";
+static const char *PATH = PZ_TEST_DIR "/t_store.bin";
 
 static void hashed(const char *s, uint8_t out[32]) { pz_sha256((const uint8_t *)s, strlen(s), out); }
 
@@ -333,7 +332,6 @@ static void test_mbox(void)
 
 int main(void)
 {
-    CHECK(sys_mkdir("build") && sys_mkdir("build/peer"));       /* where the files of the test go: not there in a build for Windows alone */
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     uint8_t k[32], base[32] = {0}, p[33], seed[32];
     secp256k1_pubkey pk;

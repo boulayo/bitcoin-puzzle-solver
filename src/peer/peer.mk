@@ -52,8 +52,9 @@ $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
 $(PEER): $(PEER_OBJ) $(LIB) $(SECP_LIB)
 	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
 
+# PZ_TEST_DIR: where a test writes its files, its own build folder
 $(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c tests/peer/peertest.h $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer
-	$(CC) $(PEER_FLAGS) -Itests/peer -o $@ $< $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
+	$(CC) $(PEER_FLAGS) -Itests/peer -DPZ_TEST_DIR=\"$(BUILD)/peer\" -o $@ $< $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
 # the expected values of t_btc, written by tests/peer/gen_btc_vectors.py (python3 gen_btc_vectors.py > btc_vectors.h)
 $(BUILD)/peer/t_btc$(EXE): tests/peer/btc_vectors.h
 
