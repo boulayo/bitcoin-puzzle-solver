@@ -21,6 +21,13 @@ static const struct { unsigned height; const char *hash, *header; } REAL[] = {
      "0100000049c1daab3b6536ff1b2633c3a316a6e06ec287676cdeec4ca7baae6b00000000ac10b36b8f354b3353207de15940a5edbc05bb8364af75b4b5409e7823f2b48923ec3a4bffff001dbd5fa412"},
     {32256, "000000004f2886a170adb7204cb0c7a824217dd24d11a74423d564c4e0904967",
      "010000004b0360d834a330ec7833e30e1f523ee05a0793361e29a73421964f980000000027b64a020af294e903feed93768705336a20090612a043f47af462a2f5e5b564f8ee3a4b6ad8001dd3a43707"},
+    /* the checkpoint pzpeer ships for the main chain, the last block of its period and the first of the next */
+    {969696, "000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b",
+     "00e00020ea7409145abed3693b6aa5e269dea055406e0962804301000000000000000000a8f40cc468f3aa4518fdc368e37fc7aff01eb12b293885f847517602a96e3a93d4abc06af01e021779d3a409"},
+    {971711, "0000000000000000000051aed6d87a76a4f2387ce41455b61f3cd64cd7a95e2e",
+     "008000209818aca2f44b68ac8382c3849cbf224c9cedd66b51d9010000000000000000007ed241313648e28d9143a78f2065402e3222a2de61c480061edadb3c75a14ee79e18d26af01e0217883f947a"},
+    {971712, "00000000000000000000c185f0906690a08d62d6fe842682a888d5560217e467",
+     "006005202e5ea9d74cd63c1fb65514e47c38f2a4767ad8d6ae51000000000000000000003d63f20e90eb3b43e72ea91858f41d1d92103442acfa6106400e04e08f4d94df8b1ad26a930002176d7224e8"},
 };
 
 static uint32_t le32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -62,6 +69,11 @@ static void test_main_chain(void)
     uint8_t bad[80];
     memcpy(bad, b, 80), memcpy(bad + 4, hc, 32);                                  /* linked, but its work is for another header */
     CHECK(!spv_add(&ch, 32257, bad, 1, NOW));
+    spv_free(&ch);
+    /* the same at today's difficulty: block 971712 from the times of 969696 and 971711; and 969696 starts a chain by its hash */
+    real(969696, a, ha), real(971711, b, hb), real(971712, c, hc);
+    CHECK(le32(c + 72) == 0x17020093u && spv_retarget(le32(b + 72), (int64_t)le32(b + 68) - (int64_t)le32(a + 68)) == le32(c + 72));
+    CHECK(spv_init(&ch, BTC_MAIN, 969696, ha) && spv_add(&ch, 969696, a, 1, NOW) && !spv_add(&ch, 969697, c, 1, NOW));
     spv_free(&ch);
     uint8_t g[32];
     spv_genesis(BTC_MAIN, g);
