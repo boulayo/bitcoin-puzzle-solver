@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pzsolve - Makefile
 # Targets: all (default), test, test-shani, asan, tsan, windows, wintest, clean, print-version (the version the build reports)
-#   make windows   cross-compiles build/win/pzsolve.exe with MinGW-w64 (static, no DLLs needed)
-#   make wintest   builds the Windows unit tests and runs them (and the self-test) under Wine
+#   make windows   cross-compiles build/win/pzsolve.exe and pzpeer.exe with MinGW-w64 (static, no DLLs needed)
+#   make wintest   builds the Windows unit tests of both and runs them (and the self-test) under Wine
 #   make test-shani   runs the library tests, the shani engine test and the self-test under qemu-x86_64 -cpu max, which executes the SHA
 #                  extensions on any x86-64 Linux machine (skipped when qemu-x86_64 is not installed; see the rule below)
 #
@@ -360,10 +360,10 @@ endif
 
 WINCC ?= x86_64-w64-mingw32-gcc-posix
 windows:
-	$(MAKE) CC=$(WINCC) BUILD=build/win all
+	$(MAKE) CC=$(WINCC) BUILD=build/win all peer
 
 wintest:
-	$(MAKE) CC=$(WINCC) BUILD=build/win test
+	$(MAKE) CC=$(WINCC) BUILD=build/win test peer-test
 
 e2e: $(BIN)
 	tests/e2e.sh $(BIN)

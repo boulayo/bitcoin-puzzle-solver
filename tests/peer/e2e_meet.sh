@@ -4,9 +4,10 @@
 # Three nodes that are given no address of each other: a network file without entry lines, no --peer. Each announces itself in a table
 # like that of BitTorrent (tests/peer/bt_table.py, one node on the loopback) and finds the others there. It passes when every node has
 # the two others as contacts.
-# Usage: tests/peer/e2e_meet.sh    (build/pzpeer built; PZ_E2E_PORT: another base port)
+# Usage: tests/peer/e2e_meet.sh    (build/pzpeer built; PZ_E2E_PORT: another base port; PZPEER: another pzpeer, as a command:
+# PZPEER="wine build/win/pzpeer.exe" runs the Windows program under Wine)
 set -u
-BIN=$(pwd)/build
+PEER=${PZPEER:-$(pwd)/build/pzpeer}                             # the program under test, as a command
 DIR=$(mktemp -d /tmp/pzmeet.XXXXXX)
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$DIR"' EXIT
 PORT=${PZ_E2E_PORT:-31000}
@@ -17,7 +18,7 @@ printf 'net=meet\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\nju
     "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$DIR/net.txt"
 sleep 1
 for i in 1 2 3; do
-    "$BIN/pzpeer" node --network "$DIR/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$DIR/n$i" \
+    $PEER node --network "$DIR/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$DIR/n$i" \
         --listen $((PORT + i)) --no-upnp --bt-router 127.0.0.1:$PORT --verbose > "$DIR/n$i.log" 2>&1 &
     sleep 3
 done

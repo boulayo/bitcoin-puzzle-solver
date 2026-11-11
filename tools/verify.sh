@@ -484,7 +484,11 @@ if command -v x86_64-w64-mingw32-gcc-posix >/dev/null && command -v wine >/dev/n
   export WINEDEBUG=-all
   run make windows -j"$(nproc)" >/dev/null
   run make wintest >"$T/wintest.log" 2>&1 && echo "  OK unit tests and self-test of the exe" || tail -20 "$T/wintest.log"
-  if r=$(tools/check_binary.sh windows build/win/pzsolve.exe 2>&1); then echo "  OK the exe $r"; else echo "  FAIL $r"; fail=$((fail+1)); fi
+  for exe in pzsolve pzpeer; do
+    if r=$(tools/check_binary.sh windows build/win/$exe.exe 2>&1); then echo "  OK $exe.exe $r"; else echo "  FAIL $r"; fail=$((fail+1)); fi
+  done
+  PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh >"$T/winmeet.log" 2>&1 && echo "  OK three pzpeer.exe nodes find each other" ||
+    { tail -5 "$T/winmeet.log"; echo "  FAIL the rendezvous of pzpeer.exe"; fail=$((fail+1)); }
   run make winmockcuda >/dev/null
   W="$T/win"; rm -rf "$W"; mkdir -p "$W"; cp build/win/pzsolve.exe build/win/mockcuda/nvcuda.dll "$W/"
   (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
