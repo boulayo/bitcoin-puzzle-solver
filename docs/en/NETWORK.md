@@ -43,13 +43,14 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 |---|---|
 | `json.c` | a small JSON reader and writer (bitcoind, pzsign) |
 | `netfile.c` | the network file: its lines, its fingerprint `F`, its values |
+| `sys.c`, `sys_posix.c`, `sys_win.c` | what pzpeer asks of the operating system (`sys.h`): the clock, randomness, sockets, child processes, the files of secrets, the stop signals. One implementation for Linux and macOS, one for Windows; every other file is the same code on the three |
 | `dbg.c` | the debug log (`--debug FILE`) |
 | `btc.c` | Bitcoin transactions: serialization, txid, legacy signature hash, scripts of addresses, DER |
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
 | `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 and the frames after it: a state machine, no I/O |
 | `keys.c` | the keys derived from the home seed |
 | `record.c` | the record of a distinguished point, its signature, the proof of possession |
-| `net.c` | TCP: one connection per exchange, the handshake, frames, timeouts. The only file that calls the sockets of the system |
+| `net.c` | TCP: one connection per exchange, the handshake, frames, timeouts |
 | `store.c` | the custodian: records by key, on disk, coincidence detection, mailboxes |
 | `dht.c` | Kademlia: routing table, lookups, store, alerts, bootstrap |
 | `dpfeed.c` | reads the campaign's `dp.bin` and turns its records into points |
@@ -697,15 +698,16 @@ in `t_session` with `PZ_REGTEST`.
 | pzsolve in network mode (section 6) | done; `tests/e2e.sh`, `kstat net` (net-06 measured on the curve) |
 | pzcore: ChaCha20-Poly1305, the generator of the home seed (section 4.1) | done (`t_aead`: RFC 8439 vectors; `t_seed`); the GPU source of the seed to come |
 | `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
-| `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; POSIX only (the Windows shim is to come); what a public network still needs is in 7.8 |
+| `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; what a public network still needs is in 7.8 |
 | `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node) |
 | `bt.c`, `upnp.c` | done (`t_bt`, `t_upnp`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
 | `sweep.c` | done (`tests/peer/e2e_sweep.sh`: the node would take the transaction, and pzpeer did not send it) |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |
+| `sys.c`, `sys_posix.c`, `sys_win.c` | done on Linux (`t_sys`). Windows: `make windows winsigner` builds `pzpeer.exe` and `pzsign.exe` with MinGW-w64, and under Wine the unit tests pass (`make wintest`; all but `t_btc_rpc`, `t_chain_rpc` and `t_session`, whose stand-ins are POSIX programs), three nodes find each other (`PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh`) and `t_pieces` signs with `pzsign.exe`; not run on a real Windows, and Wine does not deliver the Ctrl-Break by which pzpeer stops pzsolve there. macOS: written for it, not built or run yet |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
-| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
+| to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); pzpeer on a real Windows and on macOS; the public test |
 
 ## 10. A test network on one machine
 

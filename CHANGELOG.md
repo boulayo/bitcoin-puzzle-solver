@@ -33,6 +33,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - `hunt --near` (linear search) writes the near misses of the scan to `near.txt`: the keys whose hash160 has four bytes of the
   target's, one in 2^32. The CPU engines and the GPU kernels report them to one function of the host, which checks each and takes
   the key of the campaign from among them; they are the proof of work of the shared linear search to come (docs/en/NETWORK.md).
+- pzpeer and pzsign for Windows: `make windows winsigner` cross-compiles `pzpeer.exe` and `pzsign.exe` with MinGW-w64 beside
+  `pzsolve.exe`. What pzpeer asks of the operating system is in one place (`src/peer/sys.h`), with an implementation for Linux and
+  macOS and one for Windows. Under Wine the unit tests pass and three homes pay a coincidence (`PZ_E2E_WIN=1 tests/peer/e2e_net.sh`);
+  not yet run on a real Windows, nor built on macOS.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08

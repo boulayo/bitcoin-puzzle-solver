@@ -16,6 +16,12 @@
 # when a job stays queued or fails with "label not found", check the current labels at https://github.com/actions/runner-images and
 # update them here and in release.yml. The ubuntu-22.04-arm label is free only for public repositories.
 #
+# pzpeer, the daemon of the shared network (docs/en/NETWORK.md), is built and tested after pzsolve in the same jobs: its unit tests on
+# Linux (with pzsign, built by cargo, on the gcc job, where the tests of the two-party signing run too), the Windows program and its
+# tests built with pzsolve.exe and run on the real Windows machine, and the build and the tests on macOS. The Windows and macOS steps
+# are informational (continue-on-error) until they have been seen green there: the code was written on Linux and the Windows program
+# has only run under Wine.
+#
 # Compiler errors: the build step runs `make -k` (keeps compiling the other files after an error, so one run shows every error),
 # the diagnostics become annotations through .github/problem-matchers/cc.json, and a failed build prints an error summary and
 # uploads the whole log as an artifact.
@@ -97,6 +103,13 @@ jobs:
       - name: Unit tests
         continue-on-error: ${{ !(matrix.name == 'linux-x86_64' && matrix.variant == 'gcc') }}
         run: make test CC=${{ matrix.cc }} ${{ matrix.args }}
+      # pzpeer and its unit tests; on the gcc job also pzsign (cargo builds GMP from source the first time: some minutes), its primes
+      # and with them the tests of the two-party signing and of the session
+      - name: pzsign (the two-party signer)
+        if: matrix.name == 'linux-x86_64' && matrix.variant == 'gcc'
+        run: make signer peer-primes
+      - name: pzpeer (build and unit tests)
+        run: make peer-test CC=${{ matrix.cc }} ${{ matrix.args }}
       # Once per push, on the gcc build: src/puzzles_data.c is what tools/gen_puzzles.py makes of data/puzzles.csv (the generator
       # re-verifies every row with the independent implementation in tools/ref.py), and the CUDA code path (device selection, module
       # loading, launches, the kernels run on the CPU behind the driver API) passes the built-in self-test. The mock build takes
@@ -156,12 +169,18 @@ jobs:
         run: |
           echo "::add-matcher::.github/problem-matchers/cc.json"
           make windows -k -j"$(nproc)" 2>&1 | tee build.log
-      - name: The exe imports only system DLLs
-        run: tools/check_binary.sh windows build/win/pzsolve.exe
+          make CC=x86_64-w64-mingw32-gcc-posix BUILD=build/win peer-tests -k -j"$(nproc)" 2>&1 | tee -a build.log
+      - name: The exes import only system DLLs
+        run: |
+          tools/check_binary.sh windows build/win/pzsolve.exe
+          tools/check_binary.sh windows build/win/pzpeer.exe
       - uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64-exe
-          path: build/win/pzsolve.exe
+          path: |
+            build/win/pzsolve.exe
+            build/win/pzpeer.exe
+            build/win/peer/t_*.exe
           if-no-files-found: error
           retention-days: 7
       - name: Compiler errors
@@ -193,6 +212,14 @@ jobs:
         run: |
           ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --ui log -q --no-gpu
           grep -qi d2c55 campaigns/ci20/FOUND.txt
+      # Informational until seen green on a real Windows: under Wine every test passes but one check of t_sys, the stop request to a
+      # child (a Ctrl-Break to its process group), which Wine does not deliver.
+      - name: pzpeer (unit tests)
+        continue-on-error: true
+        shell: bash
+        run: |
+          ./pzpeer.exe version
+          for t in peer/t_*.exe; do echo "== $t"; "$t" || exit 1; done
 
   macos:
     name: ${{ matrix.name }}
@@ -265,6 +292,18 @@ jobs:
         if: steps.rosetta.outputs.skip != '1'
         continue-on-error: true
         run: PZ_NO_OPENCL=1 make test -k ${{ matrix.make }}
+      # Informational until seen green on a Mac: pzpeer was written and run on Linux. pzsign is built by cargo for the machine itself,
+      # so the tests of the two-party signing run on the native build only.
+      - name: pzpeer (build and unit tests)
+        if: steps.rosetta.outputs.skip != '1'
+        continue-on-error: true
+        run: make peer-test -k ${{ matrix.make }}
+      - name: pzsign and the tests of the two-party signing
+        if: matrix.arch == 'arm64'
+        continue-on-error: true
+        run: |
+          make signer peer-primes
+          make peer-test
       - name: Compiler errors
         if: failure()
         run: grep -nE 'error:|Error [0-9]+|undefined (reference|symbol)' build.log | head -100 || true
