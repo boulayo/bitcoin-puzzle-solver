@@ -56,6 +56,11 @@ static void *reader_thread(void *p)
         for (size_t i = 1; i < n && uniform; i++) uniform = t[i] == t[0];
         if (!uniform) atomic_fetch_add(&g_wr_bad, 1);
         free(t);
+#ifdef _WIN32
+        /* Windows does not replace a file that is open, and the writers give up after two seconds of trying (pz_rename_replace_ex):
+         * a reader that opened it again at once, as no real one does, could keep it open the whole time */
+        pz_sleep(0.001);
+#endif
     }
     return NULL;
 }
