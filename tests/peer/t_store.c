@@ -6,6 +6,7 @@
  * end (not indexed, its sequence number not taken) and in the middle (never reported as a coincidence); then the mailbox, its limit per
  * owner and its proofs. The records are built here on points k*G of the test network. */
 #include "store.h"
+#include "sys.h"
 #include "keys.h"
 #include <pzcore/hash.h>
 #include <stdio.h>
@@ -332,6 +333,7 @@ static void test_mbox(void)
 
 int main(void)
 {
+    CHECK(sys_mkdir("build") && sys_mkdir("build/peer"));       /* where the files of the test go: not there in a build for Windows alone */
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     uint8_t k[32], base[32] = {0}, p[33], seed[32];
     secp256k1_pubkey pk;

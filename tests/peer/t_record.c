@@ -283,6 +283,7 @@ static void test_dpfeed(void)
 
 int main(void)
 {
+    CHECK(sys_mkdir("build") && sys_mkdir("build/peer"));       /* where the files of the test go: not there in a build for Windows alone */
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     test_keys();
     test_key_files();
