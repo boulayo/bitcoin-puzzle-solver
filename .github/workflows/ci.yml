@@ -20,7 +20,7 @@
 # Linux (with pzsign, built by cargo, on the gcc job, where the tests of the two-party signing run too), the Windows program and its
 # tests built with pzsolve.exe and run on the real Windows machine, and the build and the tests on macOS. The Windows and macOS steps
 # are informational (continue-on-error) until they have been seen green there: the code was written on Linux and the Windows program
-# has only run under Wine.
+# has only run under Wine. pzsign.exe is cross-compiled by cargo in the Windows build job.
 #
 # Compiler errors: the build step runs `make -k` (keeps compiling the other files after an error, so one run shows every error),
 # the diagnostics become annotations through .github/problem-matchers/cc.json, and a failed build prints an error summary and
@@ -174,12 +174,19 @@ jobs:
         run: |
           tools/check_binary.sh windows build/win/pzsolve.exe
           tools/check_binary.sh windows build/win/pzpeer.exe
+      # cargo cross-compiles pzsign.exe, GMP included (some minutes). Informational, like the steps that use it on the Windows machine.
+      - name: pzsign.exe
+        continue-on-error: true
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          make winsigner
       - uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64-exe
           path: |
             build/win/pzsolve.exe
             build/win/pzpeer.exe
+            build/win/pzsign.exe
             build/win/peer/t_*.exe
           if-no-files-found: error
           retention-days: 7
@@ -219,6 +226,10 @@ jobs:
         shell: bash
         run: |
           ./pzpeer.exe version
+          if [ -f pzsign.exe ]; then                              # with it t_pieces signs for real, two processes and their pipes
+            ./pzsign.exe primes p0.json && ./pzsign.exe primes p1.json
+            export PZSIGN=./pzsign.exe PZSIGN_PRIMES0=p0.json PZSIGN_PRIMES1=p1.json
+          fi
           for t in peer/t_*.exe; do echo "== $t"; "$t" || exit 1; done
 
   macos:
