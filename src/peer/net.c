@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* net.c - TCP and the encrypted channel (see net.h). The sockets are non-blocking and every read, write and connect waits in poll() until
  * a deadline, so no peer can hold a thread for longer than the timeout of one step. */
+#include "dbg.h"
 #include "net.h"
 #include <pzcore/seal.h>
 #include <arpa/inet.h>
@@ -433,11 +434,22 @@ bool net_rehandshake(const net_cfg *cfg, net_conn *c, bool initiator, const uint
 
 /* ---- frames ---- */
 
+/* a frame in the debug log: the other side, the direction, the type (the first byte) and the length; never the content */
+static void trace(const net_conn *c, char dir, const uint8_t *body, size_t len, bool ok)
+{
+    char a[64];
+    net_addr_str(&c->addr, a, sizeof a);
+    if (ok) dbg("net %c %s type %u len %zu", dir, a, len ? body[0] : 0u, len);
+    else dbg("net %c %s failed", dir, a);
+}
+
 bool net_send(net_conn *c, const uint8_t *body, size_t len)
 {
     if (len > NOISE_FRAME_MAX) return false;
     const size_t n = noise_frame_seal(&c->tx, body, len, c->sbuf);
-    return write_full(c->fd, c->sbuf, n, now_ms() + c->timeout_ms);
+    const bool ok = write_full(c->fd, c->sbuf, n, now_ms() + c->timeout_ms);
+    trace(c, '>', body, len, ok);
+    return ok;
 }
 
 bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len)
@@ -446,8 +458,9 @@ bool net_recv(net_conn *c, uint8_t *body, size_t cap, size_t *len)
     size_t l;
     if (!read_full(c->fd, c->rbuf, NOISE_HEAD, deadline) || !noise_frame_head(&c->rx, c->rbuf, &l) || l > cap ||
         !read_full(c->fd, c->rbuf, l + NOISE_TAG, deadline) || !noise_frame_body(&c->rx, c->rbuf, l, body))
-        return false;
+        return trace(c, '<', NULL, 0, false), false;
     *len = l;
+    trace(c, '<', body, l, true);
     return true;
 }
 

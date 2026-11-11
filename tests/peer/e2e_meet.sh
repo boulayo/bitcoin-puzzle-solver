@@ -11,17 +11,14 @@ DIR=$(mktemp -d /tmp/pzmeet.XXXXXX)
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$DIR"' EXIT
 PORT=${PZ_E2E_PORT:-31000}
 python3 tests/peer/bt_table.py $PORT > "$DIR/table.log" 2>&1 &
-python3 -c "import os; print(os.urandom(32).hex())" > "$DIR/maint.key"
 K=$(python3 -c "import random; print(hex(random.SystemRandom().randrange(2**57, 2**58)))")
 PUB=$(python3 tools/ref.py "$K" | awk '$1=="pub"{print $2}')
 printf 'net=meet\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\n' \
     "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$DIR/net.txt"
-"$BIN/pzpeer" netsign "$DIR/maint.key" "$DIR/net.txt" >> "$DIR/net.txt"
-export PZNET_TRUST=$(tail -1 "$DIR/net.txt" | cut -c5-68)
 sleep 1
 for i in 1 2 3; do
     "$BIN/pzpeer" node --network "$DIR/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$DIR/n$i" \
-        --listen $((PORT + i)) --bt-router 127.0.0.1:$PORT --verbose > "$DIR/n$i.log" 2>&1 &
+        --listen $((PORT + i)) --no-upnp --bt-router 127.0.0.1:$PORT --verbose > "$DIR/n$i.log" 2>&1 &
     sleep 3
 done
 for wait in $(seq 1 150); do                                   # a node alone looks again every two minutes

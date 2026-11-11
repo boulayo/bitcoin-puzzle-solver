@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* electrum.c - the client of the Electrum protocol (see electrum.h). POSIX sockets, non-blocking, every wait with the deadline of the call. */
+#include "dbg.h"
 #include "electrum.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -138,6 +139,7 @@ bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *do
     ok = ok && body && send_all(e->fd, body, bl, deadline) && send_all(e->fd, "\n", 1, deadline);
     jw_free(&w);
     if (params) jw_free(params);
+    bool answered = false;
     while (ok) {                                               /* the answer to this call: notifications and stale answers are skipped */
         char *line;
         size_t len;
@@ -153,6 +155,7 @@ bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *do
             const json_val *err = json_get(doc->v, "error");
             *result = json_get(doc->v, "result");
             ok = *result && (!err || err->type == JSON_NULL);
+            answered = true;
             break;
         }
         json_free(doc);
@@ -161,6 +164,8 @@ bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *do
         json_free(doc);
         *result = NULL;
     }
+    dbg("electrum fd %d %s: %s", e->fd, method, ok ? "ok" : answered ? "error" : "no answer");
+    if (!answered) electrum_close(e);                          /* nothing more can be asked on a connection that lost an answer */
     return ok;
 }
 
@@ -176,6 +181,7 @@ bool electrum_open(electrum *e, const char *hostport, int timeout_ms)
     if (hl >= sizeof host) return false;
     memcpy(host, h, hl), host[hl] = 0;
     e->fd = tcp_connect(host, colon + 1, now_ms() + timeout_ms);
+    dbg("electrum %s: %s (fd %d)", hostport, e->fd < 0 ? "no connection" : "connected", e->fd);
     if (e->fd < 0) return false;
     json_w w;
     json_doc d;

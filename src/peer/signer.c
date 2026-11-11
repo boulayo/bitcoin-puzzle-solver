@@ -34,7 +34,7 @@ static int spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t 
     posix_spawnattr_init(&at);
     posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
     posix_spawnattr_setpgroup(&at, 0);
-    const int rc = posix_spawn(pid, path, fa, &at, argv, environ);
+    const int rc = posix_spawnp(pid, path, fa, &at, argv, environ);
     posix_spawnattr_destroy(&at);
     return rc;
 }

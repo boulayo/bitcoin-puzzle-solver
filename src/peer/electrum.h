@@ -22,7 +22,7 @@ bool electrum_open(electrum *e, const char *hostport, int timeout_ms);
 void electrum_close(electrum *e);
 /* One call: params is the JSON array of the parameters (a writer after jw_end; NULL for none; freed here). True with the result in *result
  * (a node of doc, which the caller frees with json_free); false, with doc empty, when the server sent an error, something that is not an
- * answer, or nothing in time. */
+ * answer, or nothing in time; in the last two cases the connection is closed (fd < 0), and every later call on it is false. */
 bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *doc, const json_val **result);
 
 #endif

@@ -63,7 +63,8 @@ typedef struct {
     uint8_t coin_sec[32];                   /* the key of the tiny coin of this home for this session */
     uint8_t pay_spk[BTC_SPK_MAX];           /* the payout address of this home */
     size_t pay_len;
-    uint64_t max_feerate;                   /* the highest fee rate this home accepts (satoshis per 1000 virtual bytes) */
+    uint64_t min_feerate, max_feerate;      /* the fee rate this home proposes is twice the estimate of its chain, within these (satoshis
+                                             * per 1000 virtual bytes); the higher of the two homes is taken, and one above max ends the session */
     payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
     int nprizes;
     const char *pzsign, *primes;           /* the signer and the primes file of this session (made by the session when it is missing) */

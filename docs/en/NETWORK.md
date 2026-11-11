@@ -42,7 +42,8 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | File | Layer |
 |---|---|
 | `json.c` | a small JSON reader and writer (bitcoind, pzsign) |
-| `netfile.c` | the network file: its lines, its fingerprint `F`, the values of the immutable part, the signatures of the maintainers |
+| `netfile.c` | the network file: its lines, its fingerprint `F`, its values |
+| `dbg.c` | the debug log (`--debug FILE`) |
 | `btc.c` | Bitcoin transactions: serialization, txid, legacy signature hash, scripts of addresses, DER |
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
 | `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 and the frames after it: a state machine, no I/O |
@@ -148,8 +149,7 @@ pzsolve uses it for the seed of every new campaign.
 
 ## 5. The network file
 
-A text file of `key=value` lines. The immutable part, whose fingerprint `F = SHA256("pznet1/file" || canonical lines)` binds keys and
-records:
+A text file of `key=value` lines. The lines that define the network:
 
 ```
 net=p140
@@ -162,15 +162,18 @@ dpbits=30
 chain=main                   # main, test, signet or regtest
 ```
 
-The updatable part (`prize=txid:vout:sats`, one per line; `feecap=sats`; `entry=host:port`, one per line; `minversion=`; `electrum=host:port`, one per
-line, and `checkpoint=HEIGHT:HASH`, section 8.2) and the
-signatures (`sig=<xonly pubkey hex>:<bip340 sig hex>`, over `SHA256("pznet1/sig" || F || canonical updatable lines)`). A file is
-accepted when it has valid signatures from a threshold of the maintainer keys compiled into pzpeer; tests set their own keys with
-`PZNET_TRUST=hexkey,...` and `PZNET_THRESHOLD=n`.
+Their fingerprint `F = SHA256("pznet1/file" || canonical lines)` **is** the network: every key, record, message and the rendezvous key
+are bound to it, so two nodes are on the same network exactly when their files have the same `F`. Nobody signs a file. Whoever changes
+one of those lines is on another network, as a torrent with another hash is another torrent; the file of a public network comes with
+the program, as the parameters of a chain come with a node of that chain.
+
+The other lines are settings of the node that reads them, and each is checked where it is used: `entry=host:port` (a node to start
+from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a coin of the puzzle, found even when
+the scan of its address fails; its value and script are read from the chain). Any number of each.
 
 A line is `key=value`; from `#` on it is a comment, and spaces at the ends of the key and of the value do not count. Canonical lines: the
-lines of the part rebuilt as `key=value`, sorted bytewise, joined with `\n` (no `\n` at the end). An unknown or repeated key of the
-immutable part refuses the file. `puzzle=0` is a target of its own (tests); `dpbits` is 8 to 60; `schema` is `net-06`.
+defining lines rebuilt as `key=value`, sorted bytewise, joined with `\n` (no `\n` at the end). An unknown key, or a repeated or missing
+defining key, refuses the file. `puzzle=0` is a target of its own (tests); `dpbits` is 8 to 60; `schema` is `net-06`.
 
 ## 6. pzsolve in network mode
 
@@ -376,9 +379,11 @@ relays do not cut the channel as idle, and the reader skips it):
 
 1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
-   about the same pair. The fee rate is the higher of the two (each the node's estimate for a confirmation within 2 blocks), refused above
-   the home's limit and above the rate at which F's cancel would leave less than 546 satoshis of its tiny coin (about 50 sat/vB: above
-   it S could hold the second transaction back with nothing to fear); the payout scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
+   about the same pair. The fee rate is the higher of the two. Each proposes twice the estimate of its chain for a confirmation within 2 blocks, at
+   least 20 and at most 1000 sat/vB: these transactions move a prize, and no such fee is large beside it. A rate above the home's
+   limit ends the session. The tiny coins grow with the rate: each is twice the fee of F's cancel and the dust limit, 10 000 satoshis
+   at least, so F can cancel at any rate (were its coin worth less than that fee, S could hold the second transaction back with
+   nothing to fear); the payout scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
    proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
@@ -424,8 +429,8 @@ messages of the session the partner could find the piece).
 `tests/peer/t_session.c` runs both homes against each other with the real pzsign and a chain in memory that checks every input: the
 payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height, and the primes
 made by the session); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
-under the joint key; a partner F that stops, or sends garbage, in place of its last message, which gets nothing and cancels; a fee rate
-too high for the cancel, and the limit of failed signings, both refused before anything is signed; a partner that copied the x of a
+under the joint key; a partner F that stops, or sends garbage, in place of its last message, which gets nothing and cancels; the same at a
+high fee rate, where the tiny coins are larger and F still cancels; the limit of failed signings, refused before anything is signed; a partner that copied the x of a
 record and cannot prove it, for which no primes are made; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
 The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
@@ -565,11 +570,13 @@ the payout needs both signatures. `peers.txt` and `--peer` do not depend on that
 comes from the address asked, with the number of the question, and is read within its bounds (`t_bt` runs nodes that send random
 bytes, answers to other questions, nodes that do not exist, and peers without end).
 
-**The port.** A node behind a home router is dialled only when the router lets its port in. `--upnp` asks the router for it (`upnp.c`,
+**The port.** A node listens on TCP port 28140 unless `--listen` says otherwise (`--listen 0`: it only dials out). Behind a home
+router it is dialled only when the router lets the port in, and pzpeer asks the router for it unless `--no-upnp` (`upnp.c`,
 UPnP IGD): a search on the LAN (SSDP), the description of the router, and `AddPortMapping` for the `--listen` port over TCP, for two
 hours, asked again every hour; a router that only takes mappings without end gets one. Nothing the router says is followed out of the
 LAN: its description and its control address must be at the address its answer came from, and that address must not be a public
-one. It is off unless asked: a program should not open a port of the house without being told. A node that does not listen still
+one. It is on by default so that a home takes its part of the custody without its owner doing anything; the mapping lasts two hours
+after pzpeer stops. A node that does not listen still
 searches, publishes and signs (through the relay, 7.7); it is not a custodian.
 
 `t_bt` and `t_upnp` run against a table and a router made in the tests; `tests/peer/e2e_meet.sh` starts three nodes that are given
@@ -638,14 +645,16 @@ On the main chain:
 ### 8.2 Without a node of one's own
 
 `pzpeer run` without `--rpc` reads the chain from Electrum servers: the `electrum=host:port` lines of the network file and those of
-`--electrum HOST:PORT`, 8 at most. None is trusted: nothing a server says is believed without a proof, and what a lying server can
+`--electrum HOST:PORT`, 8 at most; a network of the main chain with none of either uses a built-in list of eight public servers of
+different operators, and the block 969696 as its checkpoint. The connections stay open from one question to the next (a session asks
+every 15 seconds while it waits for a block), and a server that does not answer is left alone for ten minutes. None is trusted: nothing a server says is believed without a proof, and what a lying server can
 still do is hide things, which is a delay and never a wrong payment. The connection is plain TCP, one JSON object a line; as every
 answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
 client) and `chain_spv.c`, a second `session_chain` beside `chain_rpc.c`; a node of one's own stays the stronger choice, as it also
 checks the rules that the proof of work alone does not (below).
 
-1. **Headers.** They start from a checkpoint, `checkpoint=HEIGHT:HASH` of the signed network file (the hash as explorers show it; on
-   the main chain it is required and its height is a multiple of 2016; another chain may start from its first block). Every header
+1. **Headers.** They start from a checkpoint, `checkpoint=HEIGHT:HASH` of the network file (the hash as explorers show it; on
+   the main chain its height is a multiple of 2016, and a built-in one is used when the file has none; another chain may start from its first block). Every header
    after it is asked of every server and checked: the hash of the one before, its proof of work below its target, on the main chain
    the target of every 2016 blocks, its time above the median of the 11 before and no more than two hours ahead. Of a batch with an
    invalid header the valid ones before it are kept. A branch replaces the kept one only with more work. The chain is kept in
@@ -691,7 +700,7 @@ in `t_session` with `PZ_REGTEST`.
 | `bt.c`, `upnp.c` | done (`t_bt`, `t_upnp`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
-| `netfile.c`, `pzpeer netsign`, `netcheck` | done (`t_trust`); no maintainer keys compiled in yet: only test networks run (`PZNET_TRUST`) |
+| `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
 | to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); the Windows and macOS builds of pzpeer; the public test |
 
@@ -705,12 +714,18 @@ PZ_REGTEST=127.0.0.1:18443:pz:pz build/peer/t_session    # the session on the no
 PZ_REGTEST=127.0.0.1:18443:pz:pz tests/peer/e2e_net.sh   # the whole network: a custodian, two homes, a payout
 ```
 
-By hand, a network file (section 5) is signed with a key of 64 hex digits (`pzpeer netsign KEY FILE >> FILE`), that key's x-only form goes
-into `PZNET_TRUST`, and every home runs
+By hand, every home runs, with the same network file (section 5),
 
 ```sh
-pzpeer run --network FILE --dir HOME --payout ADDRESS --rpc 127.0.0.1:18443:pz:pz --listen PORT --peer 127.0.0.1:OTHER -- -t 2 --no-gpu
+pzpeer run --network FILE --payout ADDRESS
 ```
+
+and has pzsolve hunting, its points published, the records of others kept and its coincidences paid. What it adds on its own: the
+folder `pznet-NAME` (`--dir`), pzsolve and pzsign beside pzpeer, port 28140 opened on the router, the other nodes found in the table
+of BitTorrent and the chain read from Electrum servers (on the main chain a built-in list and checkpoint; on a test chain
+`--electrum`, `--bt-router` or `--peer`, and `--rpc` for a node of one's own). `--debug FILE` writes every message, step and answer
+of the chain with its time, and no secret: the file to read when something went wrong. Options after `--` go to pzsolve
+(`-- -t 2 --no-gpu`).
 
 With a bitcoind of its own and no `rpcpassword`, `--rpc 127.0.0.1:8332 --rpc-cookie ~/.bitcoin/.cookie` takes its credentials from its
 cookie file instead (section 8.1).

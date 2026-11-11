@@ -1,6 +1,6 @@
 # Rete condivisa per i puzzle Bitcoin: progetto
 
-Versione 9, 9 novembre 2026. Sostituisce le versioni precedenti.
+Versione 10, 11 novembre 2026. Sostituisce le versioni precedenti.
 Documenti collegati: [DA_FARE.md](DA_FARE.md) (le decisioni che spettano a te) e [NETWORK.md](../en/NETWORK.md) (la specifica tecnica, in inglese, per chi lavora sul codice).
 
 Come leggere questo documento:
@@ -52,7 +52,7 @@ Anna e Bruno firmano insieme una transazione senza mai ricostruire la chiave (pr
 
 Resta un problema: nell'ultimo scambio uno dei due riceve la firma completa per primo, e potrebbe tenerla da parte mentre prova a rubare. La difesa, senza depositi:
 
-1. **Primo passaggio.** La coppia firma una transazione che rimanda il premio sullo stesso indirizzo del puzzle e dà a ciascuno una moneta minuscola (10 000 satoshi) su una chiave solo sua. Trattenere questa firma non serve a niente.
+1. **Primo passaggio.** La coppia firma una transazione che rimanda il premio sullo stesso indirizzo del puzzle e dà a ciascuno una moneta minuscola (10 000 satoshi o più, secondo la commissione) su una chiave solo sua. Trattenere questa firma non serve a niente.
 2. **Secondo passaggio**, dopo una conferma. La transazione metà e metà spende il premio e anche la moneta minuscola di uno dei due, che chiamo F. L'altro, S, riceve la firma completa per primo e la spedisce.
 3. **Se dopo 3 blocchi il premio non si è mosso**, F spende la sua moneta minuscola. La transazione che S teneva da parte non vale più.
 
@@ -84,7 +84,8 @@ Tutto il codice è nel ramo `rete-condivisa`. Niente è stato rilasciato.
 | nodo Bitcoin potato, file cookie, nodo non sincronizzato | test |
 | primo contatto senza server nostri: i nodi si annunciano e si cercano nella tabella di BitTorrent; apertura della porta del router con `--upnp` | test con nodi bugiardi e router non conformi; tre nodi che si trovano da soli |
 | nessun nodo Bitcoin proprio: catena letta da più server Electrum, ogni risposta verificata (server che nascondono, mentono, danno prove false) | test e prova completa con tre case |
-| firme dei manutentori sul file della rete | test |
+| la rete è l'impronta del suo file: nessuna firma, nessuna chiave da custodire | test |
+| avvio senza configurare nulla (cartella, porta, router, primi contatti, blockchain) e registro dettagliato `--debug` | prova completa con tre case |
 
 Controlli generali: tutti i test passano anche con AddressSanitizer, UBSan e ThreadSanitizer; un fuzzer ha provato 26 milioni di ingressi malformati sui lettori di dati senza trovare errori.
 
@@ -114,7 +115,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 
 | Manca | Effetto |
 |---|---|
-| chiavi dei manutentori nel programma | oggi girano solo reti di prova |
+| il file della rete del #140 dentro il programma | oggi il file si dà con `--network`; i parametri del #140 si fissano al rilascio |
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
 | pzpeer per Windows e macOS | oggi solo Linux |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
@@ -146,7 +147,7 @@ Sono le cose su cui il progetto si regge e che non ho potuto dimostrare. Se una 
 | I10 | Una GPU fa 5–10 miliardi di passi al secondo con pzsolve | i tempi di 5.3 si allungano in proporzione. Misurato: 0,92 miliardi su una A2000 portatile |
 | I11 | I numeri dello schema `net-06` (costo +11 %, soglie del furto) valgono anche a 140 bit | il costo è misurato a 40 bit; le soglie vengono dal simulatore |
 | I12 | Spazio e traffico per nodo sono quelli stimati (20–30 GB, decine di KB/s) | mai misurati con migliaia di nodi |
-| I13 | Chi firma i rilasci e il file della rete è onesto | un rilascio malevolo ruba i semi |
+| I13 | Chi pubblica il programma è onesto, e chi lo scarica lo prende dal repository ufficiale | un programma malevolo ruba i semi. È la stessa fiducia che si dà a qualsiasi programma, Bitcoin Core compreso |
 | I14 | Le fonti di casualità del seme (sistema, CPU, tempi di calcolo) non sono tutte prevedibili insieme | seme prevedibile: perde quella casa |
 | I15 | I miner non riscrivono la catena per poche decine di blocchi per rubare | caso estremo, come per qualsiasi pagamento |
 
@@ -175,8 +176,8 @@ Per il #140 l'ipotesi I3 vale finché il bitcoin costa meno di circa 1,2 milioni
 | riempire dischi, tabelle, caselle | quote per proprietario e per blocco di indirizzi |
 | isolare un nodo | al massimo 2 contatti per blocco di indirizzi in ogni cella, 4 in tutto |
 | spiare il traffico | canale cifrato fra identità; il relay vede solo dati cifrati |
-| file della rete falso | firme di una soglia di manutentori; l'impronta del file lega chiavi e record |
-| bloccare il pagamento con monete di polvere | le monete del premio sono nel file firmato |
+| file della rete falso | l'impronta del file lega chiavi e record: chi cambia una riga che definisce la rete è su un'altra rete, da solo. Il file ufficiale sta nel programma |
+| bloccare il pagamento con monete di polvere | le monete del premio sono elencate nel file della rete |
 
 ### 5.3 Tempi e costi (stime, ipotesi I10)
 
@@ -195,7 +196,7 @@ L'elettricità totale non dipende dal numero di partecipanti: 12–25 GWh per il
 
 | | Rete di prova (oggi) | Rete vera |
 |---|---|---|
-| chi garantisce il file della rete | una chiave data con una variabile d'ambiente | chiavi dei manutentori dentro il programma |
+| il file della rete | dato con `--network` | dentro il programma |
 | catena | regtest | Bitcoin vero |
 | primo contatto | indirizzi dati a mano | rete BitTorrent, nessun server nostro |
 | indirizzi privati | ammessi | rifiutati |
@@ -223,7 +224,7 @@ Ho valutato anche libp2p (troppo grande come dipendenza) e Nostr (comodo per tro
 
 ### 6.3 I passi, in ordine
 
-1. Decidere manutentori e soglia; mettere le chiavi nel programma.
+1. Porting di pzpeer su Windows e macOS.
 2. Prova del ritrovo sulla rete BitTorrent vera, dell'apertura della porta su un router vero e di un server Electrum pubblico.
 3. Prova pubblica su una rete di test di Bitcoin (signet o testnet) con un puzzle piccolo e volontari.
 4. Revisione esterna del firmatore.
@@ -299,5 +300,5 @@ Non è ancora scritto niente di questa parte.
 | coincidenza | due case sullo stesso punto, con tipi diversi |
 | pezzo | la parte di chiave che ogni casa ricava dalla coincidenza |
 | custode | un nodo che conserva punti altrui e avvisa delle coincidenze |
-| file della rete | il file firmato che descrive una rete: puzzle, intervallo, seme dei salti |
+| file della rete | il file che descrive una rete: puzzle, intervallo, seme dei salti. La sua impronta è la rete |
 | F e S | nel secondo passaggio: F può annullare, S riceve la firma per primo |

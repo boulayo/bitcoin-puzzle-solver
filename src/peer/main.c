@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* main.c - pzpeer, the daemon of the shared kangaroo network (docs/en/NETWORK.md). */
 #include "bt.h"
+#include "dbg.h"
 #include "dht.h"
 #include "dpfeed.h"
 #include "home.h"
@@ -13,33 +14,38 @@
 #include <string.h>
 #include <time.h>
 
+#define DEFAULT_PORT 28140         /* the TCP port a node listens on when --listen says nothing */
+
 static int usage(void)
 {
-    fprintf(stderr, "usage: pzpeer version\n"
+    fprintf(stderr, "usage: pzpeer run --network FILE --payout ADDRESS [options] [-- PZSOLVE OPTIONS]\n"
+                    "         the home: pzsolve on the network, its points published, the records of others kept, and for every\n"
+                    "         coincidence with another home the prize paid half each to the two payout addresses\n"
+                    "       pzpeer node --network FILE --seed-hex HEX --dir DIR [options]\n"
+                    "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions\n"
+                    "       pzpeer netcheck NETWORK_FILE         the values and the fingerprint of a network file\n"
                     "       pzpeer dpcheck NETWORK_FILE DP_BIN   recompute every point of a campaign's dp.bin and check its tag\n"
-                    "       pzpeer netcheck NETWORK_FILE         the values, the fingerprint and the signatures of a network file\n"
-                    "       pzpeer netsign KEY_FILE NETWORK_FILE the signature line of a maintainer (KEY_FILE: 64 hex digits)\n"
-                    "       pzpeer run --network FILE --dir DIR --payout ADDRESS [--rpc HOST:PORT:USER:PASSWORD] [--electrum HOST:PORT]...\n"
-                    "                  [--listen PORT] [--bind ADDR]\n"
-                    "                  [--peer HOST:PORT]... [--bt-router HOST:PORT]... [--no-bt] [--upnp] [--pzsolve PATH] [--pzsign PATH]\n"
-                    "                  [--id-bits N] [--allow-private] [--exit-when-done]\n"
-                    "                  [--verbose]\n"
-                    "                  [-- PZSOLVE OPTIONS]\n"
-                    "                    the home: pzsolve on the network, its points published, sessions paid through a bitcoind of\n"
-                    "                    one's own (--rpc; or --rpc HOST:PORT --rpc-cookie FILE: the .cookie of the node's data directory,\n"
-                    "                    no password) or, without --rpc, through the Electrum servers of the network file and of\n"
-                    "                    --electrum (plain TCP): none is trusted, every answer is checked against the proof of work\n"
-                    "       pzpeer node --network FILE --seed-hex HEX --dir DIR [--listen PORT] [--bind ADDR] [--peer HOST:PORT]...\n"
-                    "                  [--bt-router HOST:PORT]... [--no-bt] [--upnp] [--store-gb N] [--allow-private] [--verbose]\n"
-                    "                    a node of the network until interrupted: it keeps the records of others and alerts their owners,\n"
-                    "                    and relays the sessions of homes that cannot dial each other (it publishes nothing of its own);\n"
-                    "                    without --listen it only dials out\n"
-                    "  --bt-router H:P   a node of the table of BitTorrent to find the other nodes through, in place of the well-known ones\n"
-                    "                    (a network of the main chain uses that table unless --no-bt; a test network only with --bt-router)\n"
-                    "  --no-bt           do not announce this node in the table of BitTorrent nor look for the others there\n"
-                    "  --upnp            ask the router of this LAN to let the --listen port in, so that the node can be dialled\n"
-                    "  --allow-private   take loopback and private addresses on a main-chain network (a network of another chain takes them)\n"
-                    "  --store-gb N      the records this node keeps for others, in GB of disk (default 37; the index takes about 1/8 of it in RAM)\n");
+                    "       pzpeer version\n"
+                    "options of run and node:\n"
+                    "  --dir DIR            the folder of the home (run: pznet-<name of the network> when not given)\n"
+                    "  --listen PORT        the TCP port other nodes dial (default 28140; 0: do not listen, only dial out)\n"
+                    "  --bind ADDR          listen on this address only\n"
+                    "  --no-upnp            do not ask the router of this LAN to let the port in\n"
+                    "  --peer HOST:PORT     a node to start from, besides those found on their own\n"
+                    "  --bt-router H:P      a node of the table of BitTorrent to find the other nodes through, in place of the well-known\n"
+                    "                       ones (a network of the main chain uses that table; a test network only with this option)\n"
+                    "  --no-bt              do not announce this node in the table of BitTorrent nor look for the others there\n"
+                    "  --allow-private      take loopback and private addresses on a main-chain network (other chains take them)\n"
+                    "  --verbose            what the node does, on stderr\n"
+                    "  --debug FILE         every message, step and answer of the chain, with its time, into FILE (no secret is written)\n"
+                    "options of run:\n"
+                    "  --rpc H:P:USER:PASSWORD   a bitcoind of one's own (or --rpc H:P --rpc-cookie FILE, the .cookie of its data directory)\n"
+                    "  --electrum HOST:PORT      without --rpc the chain comes from Electrum servers (plain TCP): those of the network file,\n"
+                    "                            these, or a built-in list on the main chain. None is trusted: every answer is proven\n"
+                    "  --pzsolve PATH, --pzsign PATH   the two programs (default: beside pzpeer, or in PATH)\n"
+                    "  --id-bits N, --exit-when-done   for tests\n"
+                    "options of node:\n"
+                    "  --store-gb N         the records kept for others, in GB of disk (default 37; the index takes about 1/8 of it in RAM)\n");
     return 2;
 }
 
@@ -80,10 +86,9 @@ static int cmd_dpcheck(secp256k1_context *ctx, const char *netpath, const char *
     return df.bad ? 1 : 0;
 }
 
-static int cmd_netcheck(secp256k1_context *ctx, const char *path)
+static int cmd_netcheck(const char *path)
 {
     netfile nf;
-    trust_set t;
     char err[300];
     if (!netfile_load(path, &nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, path), 1;
     char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF];
@@ -91,33 +96,6 @@ static int cmd_netcheck(secp256k1_context *ctx, const char *path)
            pz_u256_to_hex(&nf.end, b), nf.schema, nf.dpbits, nf.chain);
     for (int i = 0; i < 32; i++) printf("%02x", nf.fp[i]);
     printf("\n");
-    int valid = 0;
-    if (!trust_load(&t, err, sizeof err)) return printf("signatures: %d, not checked: %s\n", nf.nsig, err), 1;
-    const bool ok = trust_check(ctx, &t, &nf, &valid);
-    printf("signatures: %d valid of trusted keys, %d needed: %s\n", valid, t.threshold, ok ? "accepted" : "NOT accepted");
-    return ok ? 0 : 1;
-}
-
-static int cmd_netsign(secp256k1_context *ctx, const char *keypath, const char *path)
-{
-    netfile nf;
-    char err[300], line[200], hex[80] = "";
-    uint8_t sec[32];
-    FILE *f = fopen(keypath, "r");
-    const bool read = f && fgets(hex, sizeof hex, f);
-    if (f) fclose(f);
-    hex[strcspn(hex, " \t\r\n")] = 0;
-    bool ok = read && strlen(hex) == 64;
-    for (int i = 0; ok && i < 32; i++) {
-        unsigned v;
-        ok = sscanf(hex + 2 * i, "%2x", &v) == 1, sec[i] = (uint8_t)v;
-    }
-    pz_secure_zero(hex, sizeof hex);
-    if (!ok) return fprintf(stderr, "%s: expected a key of 64 hex digits\n", keypath), 1;
-    ok = netfile_load(path, &nf, err, sizeof err) && trust_sign(ctx, sec, &nf, line);
-    pz_secure_zero(sec, sizeof sec);
-    if (!ok) return fprintf(stderr, "%s (%s)\n", err[0] ? err : "invalid key", path), 1;
-    printf("%s\n", line);
     return 0;
 }
 
@@ -163,9 +141,9 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     const char *network = NULL, *seedhex = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
     char entries[16][256];
     int nb = 0, npeer = 0;
-    long port = 0, store_gb = 0;
-    bool verbose = false, allow_private = false, no_bt = false, upnp = false;
-    const char *peers[32], *routers[8];
+    long port = DEFAULT_PORT, store_gb = 0;
+    bool verbose = false, allow_private = false, no_bt = false, upnp = true;
+    const char *peers[32], *routers[8], *debug = NULL;
     int nrouters = 0;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -173,7 +151,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         if (!strcmp(a, "--verbose")) { verbose = true; continue; }
         if (!strcmp(a, "--allow-private")) { allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { no_bt = true; continue; }
-        if (!strcmp(a, "--upnp")) { upnp = true; continue; }
+        if (!strcmp(a, "--no-upnp")) { upnp = false; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) network = v;
         else if (!strcmp(a, "--seed-hex")) seedhex = v;
@@ -181,6 +159,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         else if (!strcmp(a, "--bind")) bind = v;
         else if (!strcmp(a, "--peer") && npeer < 32) peers[npeer++] = v;
         else if (!strcmp(a, "--bt-router") && nrouters < 8) routers[nrouters++] = v;
+        else if (!strcmp(a, "--debug")) debug = v;
         else if (!strcmp(a, "--listen")) {
             port = strtol(v, &end, 10);
             if (*end || port < 0 || port > 65535) return usage();
@@ -191,6 +170,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         i++;
     }
     if (!network || !seedhex || !dir) return usage();
+    if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     netfile nf;
     record_net net;
     uint8_t seed[32];
@@ -206,7 +186,7 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
         fprintf(stderr, "no identity from this seed\n");
         return 1;
     }
-    for (const char *p = nf.upd; *p && nb < 16;) {             /* the entry= lines of the network file, then --peer */
+    for (const char *p = nf.opts; *p && nb < 16;) {             /* the entry= lines of the network file, then --peer */
         const char *e = strchr(p, '\n');
         const size_t l = e ? (size_t)(e - p) : strlen(p);
         if (l > 6 && l - 6 < sizeof entries[0] && !strncmp(p, "entry=", 6)) {
@@ -255,10 +235,20 @@ static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
     return n < 0;
 }
 
+/* name beside this program when it was started by a path, else name alone, for PATH */
+static const char *beside(const char *self, const char *name, char out[4096])
+{
+    const char *slash = strrchr(self, '/');
+    snprintf(out, 4096, "%.*s%s", slash ? (int)(slash + 1 - self) : 0, self, name);
+    return out;
+}
+
 static int cmd_run(int argc, char **argv)
 {
-    home_cfg cfg = {.pzsolve = "pzsolve", .pzsign = "pzsign", .id_bits = NODE_ID_ZERO_BITS};
-    const char *peers[32], *electrum[8], *routers[8];
+    char solve[4096], sign[4096];
+    home_cfg cfg = {.pzsolve = beside(argv[0], "pzsolve", solve), .pzsign = beside(argv[0], "pzsign", sign), .id_bits = NODE_ID_ZERO_BITS,
+                    .listen_port = DEFAULT_PORT, .upnp = true};
+    const char *peers[32], *electrum[8], *routers[8], *debug = NULL;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt */
@@ -269,7 +259,7 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--exit-when-done")) { cfg.exit_when_done = true; continue; }
         if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { cfg.no_bt = true; continue; }
-        if (!strcmp(a, "--upnp")) { cfg.upnp = true; continue; }
+        if (!strcmp(a, "--no-upnp")) { cfg.upnp = false; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) cfg.network = v;
         else if (!strcmp(a, "--dir")) cfg.dir = v;
@@ -282,6 +272,7 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--peer") && cfg.npeers < 32) peers[cfg.npeers++] = v;
         else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) electrum[cfg.nelectrum++] = v;
         else if (!strcmp(a, "--bt-router") && cfg.nbt_routers < 8) routers[cfg.nbt_routers++] = v;
+        else if (!strcmp(a, "--debug")) debug = v;
         else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits")) {
             char *end;
             const long n = strtol(v, &end, 10);
@@ -292,7 +283,8 @@ static int cmd_run(int argc, char **argv)
         i++;
     }
     cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
-    if (!cfg.network || !cfg.dir || !cfg.payout) return usage();
+    if (!cfg.network || !cfg.payout) return usage();
+    if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     return home_run(&cfg);
 }
 
@@ -304,8 +296,7 @@ int main(int argc, char **argv)
     }
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     const int rc = argc == 4 && !strcmp(argv[1], "dpcheck")  ? cmd_dpcheck(ctx, argv[2], argv[3])
-                 : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(ctx, argv[2])
-                 : argc == 4 && !strcmp(argv[1], "netsign")  ? cmd_netsign(ctx, argv[2], argv[3])
+                 : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2])
                  : argc >= 2 && !strcmp(argv[1], "node")     ? cmd_node(ctx, argc, argv)
                  : argc >= 2 && !strcmp(argv[1], "run")      ? cmd_run(argc, argv)
                                                              : usage();

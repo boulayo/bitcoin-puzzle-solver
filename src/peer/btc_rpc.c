@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* btc_rpc.c - the JSON-RPC client of bitcoind (btc_rpc.h). */
+#include "dbg.h"
 #include "btc_rpc.h"
 #include <pzcore/seal.h>
 #include <ctype.h>
@@ -496,7 +497,9 @@ static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int
 
 bool btc_rpc_call(btc_rpc *c, bool wallet, const char *method, json_w *params, json_doc *doc, const json_val **result)
 {
-    return rpc(c, wallet, method, params, c->timeout_ms, doc, result);
+    const bool ok = rpc(c, wallet, method, params, c->timeout_ms, doc, result);
+    dbg("bitcoind %s: %s", method, ok ? "ok" : c->err.msg);
+    return ok;
 }
 
 /* ---- the calls ---- */
@@ -505,6 +508,7 @@ bool btc_rpc_call(btc_rpc *c, bool wallet, const char *method, json_w *params, j
 static bool call(btc_rpc *c, bool wallet, const char *method, json_w *w, json_doc *doc, const json_val **res)
 {
     const bool ok = rpc(c, wallet, method, w, c->timeout_ms, doc, res);
+    dbg("bitcoind %s: %s", method, ok ? "ok" : c->err.msg);
     if (w) jw_free(w);
     return ok;
 }

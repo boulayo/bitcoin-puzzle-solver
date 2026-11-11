@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* dht.c - the node (see dht.h, and dht_priv.h for its files): its life (create, start, stop), its threads (accept, handlers, jobs,
  * maintenance), the answers to requests, and the limits by address block. */
+#include "dbg.h"
 #include "dht_priv.h"
 #include "upnp.h"
 #include <pzcore/hash.h>
@@ -37,13 +38,13 @@ struct lim_entry {
 
 void dlog(const dht *d, const char *fmt, ...)
 {
-    if (!d->cfg.verbose) return;
     char line[256];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
-    fprintf(stderr, "pzpeer %02x%02x%02x%02x: %s\n", d->me.id[2], d->me.id[3], d->me.id[4], d->me.id[5], line);
+    dbg("node %s", line);
+    if (d->cfg.verbose) fprintf(stderr, "pzpeer %02x%02x%02x%02x: %s\n", d->me.id[2], d->me.id[3], d->me.id[4], d->me.id[5], line);
 }
 
 bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool detached)

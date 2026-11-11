@@ -10,6 +10,7 @@
  * slots of the pairs the table alerted. */
 #include "home.h"
 #include "chain_rpc.h"
+#include "dbg.h"
 #include "bt.h"
 #include "chain_spv.h"
 #include "dht.h"
@@ -70,6 +71,8 @@ typedef struct {
     uint8_t base[32], seed[32], pay_spk[BTC_SPK_MAX];
     size_t pay_len;
     btc_chain chain;
+    const char *dir;                /* the folder of the home */
+    char dirname[48];               /* its name when the user gave none */
     chain_spv spv;                  /* the chain without a node of one's own (no --rpc); its headers are shared by the sessions */
     char hdrpath[4200];
     home_identity id;
@@ -109,6 +112,7 @@ static void say(const home *h, const char *fmt, ...)
     time_t t = time(NULL);
     struct tm tm;
     localtime_r(&t, &tm);
+    dbg("home %s", line);
     fprintf(stdout, "[%02d:%02d:%02d] %s\n", tm.tm_hour, tm.tm_min, tm.tm_sec, line);
     fflush(stdout);
     (void)h;
@@ -120,7 +124,7 @@ static void say(const home *h, const char *fmt, ...)
 static bool home_seed(home *h, char *err, size_t errlen)
 {
     char path[1100];
-    snprintf(path, sizeof path, "%s/home.seed", h->cfg->dir);
+    snprintf(path, sizeof path, "%s/home.seed", h->dir);
     const int got = keys_file_read(path, h->seed, err, errlen);
     if (got) return got > 0;
     pz_seed_report rep;
@@ -194,8 +198,8 @@ static bool own_distance(void *user, const uint8_t x[32], int t, uint8_t d[32])
 static bool start_pzsolve(home *h, char *err, size_t errlen)
 {
     char key[1100], camp[1100];
-    snprintf(key, sizeof key, "%s/start.key", h->cfg->dir);
-    snprintf(camp, sizeof camp, "%s/campaigns", h->cfg->dir);
+    snprintf(key, sizeof key, "%s/start.key", h->dir);
+    snprintf(camp, sizeof camp, "%s/campaigns", h->dir);
     uint8_t sk[32];
     keys_starts(h->seed, h->nf.fp, sk);
     const bool wrote = keys_file_write(key, sk);
@@ -213,13 +217,13 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     int n = 18;
     for (int i = 0; i < h->cfg->nargs && n < 62; i++) argv[n++] = h->cfg->pzsolve_args[i];
     argv[n] = NULL;
-    snprintf(h->logpath, sizeof h->logpath, "%s/pzsolve.out", h->cfg->dir);
+    snprintf(h->logpath, sizeof h->logpath, "%s/pzsolve.out", h->dir);
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addopen(&fa, 1, h->logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     posix_spawn_file_actions_adddup2(&fa, 1, 2);
     posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-    const int rc = posix_spawn(&h->pzsolve, h->cfg->pzsolve, &fa, NULL, (char *const *)argv, environ);
+    const int rc = posix_spawnp(&h->pzsolve, h->cfg->pzsolve, &fa, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     if (rc != 0) return snprintf(err, errlen, "cannot start %s: %s", h->cfg->pzsolve, strerror(rc)), false;
     snprintf(h->dpbin, sizeof h->dpbin, "%s/net-%s/dp.bin", camp, h->nf.net);
@@ -286,7 +290,7 @@ static void *session_main(void *arg)
     char tag[17], primes[1200], why[300] = "";
     hex8(s->eid, tag);
     const int me = memcmp(s->mine.owner, s->theirs.owner, 32) < 0 ? 0 : 1;
-    snprintf(primes, sizeof primes, "%s/primes-%s.json", cfg->dir, tag);
+    snprintf(primes, sizeof primes, "%s/primes-%s.json", h->dir, tag);
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
     bool proved = false;
@@ -311,7 +315,7 @@ static void *session_main(void *arg)
         pthread_mutex_unlock(&h->mu);
         session_chan chan = {&cc, cc_send, cc_recv};
         btc_rpc rpc = {0};
-        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};   /* within 2 blocks (project 4.5) */
+        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};
         if (cfg->rpc && !btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) {
             snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
             goto done;
@@ -323,8 +327,11 @@ static void *session_main(void *arg)
         }
         const session_chain chain = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
-                          .max_feerate = 200000, .pzsign = cfg->pzsign, .primes = primes, .limit = &h->limit, .proved = &proved,
-                          .chan = &chan, .chain = &chain, .timeout_ms = 300000, .poll_ms = 1000, .cancel_blocks = 3};
+                          .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
+                          .pzsign = cfg->pzsign, .primes = primes, .limit = &h->limit, .proved = &proved,
+                          .chan = &chan, .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3,
+                          /* how often the chain is asked: public servers are not to be hammered */
+                          .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
         memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
         memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
         memcpy(sc.prizes, h->prizes, sizeof sc.prizes), sc.nprizes = h->nprizes;
@@ -436,6 +443,14 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 
 /* ---- the run ---- */
 
+/* For a network of the main chain: public Electrum servers that take plain TCP, of different operators (from the list the Electrum wallet
+ * ships; none is trusted, chain_spv.h), and the block the headers start from, the first of a difficulty period. */
+static const char *const MAIN_ELECTRUM[] = {"electrum.blockstream.info:50001", "electrum.bitaroo.net:50001", "bitcoin.aranguren.org:50001",
+                                            "bitcoin.lu.ke:50001",             "electrum.qtornado.com:50001", "e.keff.org:50001",
+                                            "tardis.bauerj.eu:50001",          "xtrum.com:50001"};
+#define MAIN_CHECKPOINT 969696
+#define MAIN_CHECKPOINT_HASH "000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b"
+
 /* The chain without a node: the Electrum servers of the network file and of the command line, the headers from the checkpoint of the file
  * (checkpoint=HEIGHT:HASH, the hash as explorers show it; a chain other than the main one may start from its first block). */
 static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
@@ -447,7 +462,7 @@ static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
     bool has_cp = false;
     int n = 0;
     for (int i = 0; i < cfg->nelectrum && n < CHAIN_SPV_SERVERS; i++) list[n++] = cfg->electrum[i];
-    for (const char *p = h->nf.upd; *p;) {
+    for (const char *p = h->nf.opts; *p;) {
         const char *e = strchr(p, '\n');
         const size_t l = e ? (size_t)(e - p) : strlen(p);
         char hex[65];
@@ -457,9 +472,13 @@ static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
             has_cp = true;                                      /* of several, the last */
         p += l + (e != NULL);
     }
+    if (h->chain == BTC_MAIN) {                                 /* what the file and the command line leave out */
+        for (size_t i = 0; !n && i < sizeof MAIN_ELECTRUM / sizeof *MAIN_ELECTRUM; i++) list[i] = MAIN_ELECTRUM[i];
+        if (!n) n = (int)(sizeof MAIN_ELECTRUM / sizeof *MAIN_ELECTRUM);
+        if (!has_cp) has_cp = btc_hash_from_hex(MAIN_CHECKPOINT_HASH, cp), cph = MAIN_CHECKPOINT;
+    }
     if (!n) return snprintf(err, cap, "no chain: give --rpc (a bitcoind of your own) or --electrum HOST:PORT (public servers, checked)"), false;
-    if (!has_cp && h->chain == BTC_MAIN) return snprintf(err, cap, "the network file gives no checkpoint for the headers: use --rpc"), false;
-    snprintf(h->hdrpath, sizeof h->hdrpath, "%s/headers.bin", cfg->dir);
+    snprintf(h->hdrpath, sizeof h->hdrpath, "%s/headers.bin", h->dir);
     if (!chain_spv_init(&h->spv, h->chain, has_cp ? cph : 0, has_cp ? cp : NULL, list, n, h->hdrpath))
         return snprintf(err, cap, "the checkpoint of the network file is not a block of the chain to start from"), false;
     h->spv.fallback_feerate = 2000;
@@ -479,29 +498,27 @@ int home_run(const home_cfg *cfg)
     pthread_mutex_init(&h->mu, NULL);
     pthread_cond_init(&h->cv, NULL);
     h->ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
-    trust_set ts;
-    int valid;
+    if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
+    snprintf(h->dirname, sizeof h->dirname, "pznet-%.31s", h->nf.net);
+    h->dir = cfg->dir ? cfg->dir : h->dirname;
     /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0644 by pzsolve), the primes of the sessions
      * and the output of pzsolve, which shows a key it finds: nobody else may go in */
     struct stat ds;
-    if ((mkdir(cfg->dir, 0700) != 0 && errno != EEXIST) || stat(cfg->dir, &ds) != 0 || !S_ISDIR(ds.st_mode) || ds.st_uid != geteuid() ||
+    if ((mkdir(h->dir, 0700) != 0 && errno != EEXIST) || stat(h->dir, &ds) != 0 || !S_ISDIR(ds.st_mode) || ds.st_uid != geteuid() ||
         (ds.st_mode & 077))
-        return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", cfg->dir), 1;
-    DIR *dir = opendir(cfg->dir);                               /* the primes of sessions cut by a crash: secrets of no further use */
+        return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", h->dir), 1;
+    DIR *dir = opendir(h->dir);                               /* the primes of sessions cut by a crash: secrets of no further use */
     for (struct dirent *e; dir && (e = readdir(dir));)
         if (!strncmp(e->d_name, "primes-", 7)) {
             char p[1400];
-            snprintf(p, sizeof p, "%s/%s", cfg->dir, e->d_name);
+            snprintf(p, sizeof p, "%s/%s", h->dir, e->d_name);
             remove(p);
         }
     if (dir) closedir(dir);
-    snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", cfg->dir);
+    snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", h->dir);
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);
     h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX;
-    if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
-    if (!trust_load(&ts, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
-    if (!trust_check(h->ctx, &ts, &h->nf, &valid)) return fprintf(stderr, "%s: %d valid signatures of maintainers, %d needed\n", cfg->network, valid, ts.threshold), 1;
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;
@@ -524,7 +541,7 @@ int home_run(const home_cfg *cfg)
     const char *boot[64];
     char entries[16][256];
     int nb = 0;
-    for (const char *p = h->nf.upd; *p && nb < 16;) {
+    for (const char *p = h->nf.opts; *p && nb < 16;) {
         const char *e = strchr(p, '\n');
         const size_t l = e ? (size_t)(e - p) : strlen(p);
         if (l > 6 && l - 6 < sizeof entries[0] && !strncmp(p, "entry=", 6)) memcpy(entries[nb], p + 6, l - 6), entries[nb][l - 6] = 0, boot[nb] = entries[nb], nb++;
@@ -533,7 +550,7 @@ int home_run(const home_cfg *cfg)
     for (int i = 0; i < cfg->npeers && nb < 64; i++) boot[nb++] = cfg->peers[i];
     /* the prizes, prize=txid:vout:sats (the txid as explorers show it; the value is the node's): a session finds them even when the
      * scan of the puzzle address fails (session.c) */
-    for (const char *p = h->nf.upd; *p;) {
+    for (const char *p = h->nf.opts; *p;) {
         const char *e = strchr(p, '\n');
         const size_t l = e ? (size_t)(e - p) : strlen(p);
         char tx[65];
@@ -545,7 +562,7 @@ int home_run(const home_cfg *cfg)
         p += l + (e != NULL);
     }
     char nodedir[1100];
-    snprintf(nodedir, sizeof nodedir, "%s/node", cfg->dir);
+    snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
     mkdir(nodedir, 0700);
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
                      .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,

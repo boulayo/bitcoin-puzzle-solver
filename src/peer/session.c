@@ -8,6 +8,7 @@
  *   plan    the hash of the second; F gives the signature of its tiny coin, then the two-party signing in which S gets the whole signature
  *           first; then S broadcasts, and F waits cancel_blocks blocks for the prize to move and else cancels.
  * Party 0 owns the smaller identity; F (the party whose tiny coin goes into the second transaction) is the last bit of the session id. */
+#include "dbg.h"
 #include "session.h"
 #include "json.h"
 #include "net.h"
@@ -41,6 +42,7 @@ typedef struct {
     payout_terms t;
     char *why;
     size_t whylen;
+    char tag[17];
 } sess;
 
 static bool fail(sess *s, const char *fmt, ...)
@@ -49,6 +51,7 @@ static bool fail(sess *s, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(s->why, s->whylen, fmt, ap);
     va_end(ap);
+    dbg("session %s stops: %s", s->tag, s->why);
     uint8_t m[1 + 200] = {S_ABORT};
     const size_t n = strlen(s->why) < 200 ? strlen(s->why) : 200;
     memcpy(m + 1, s->why, n);
@@ -62,6 +65,7 @@ static bool send_msg(sess *s, uint8_t type, const uint8_t *p, size_t len)
     if (len + 1 > sizeof m) return false;
     m[0] = type;
     if (len) memcpy(m + 1, p, len);
+    if (type != S_ALIVE) dbg("session %s > type %u len %zu", s->tag, type, len);
     return s->c->chan->send(s->c->chan->ctx, m, len + 1);
 }
 
@@ -79,11 +83,13 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
         for (size_t i = 1; i < n && k < 200; i++) r[k++] = m[i] >= 0x20 && m[i] < 0x7f ? (char)m[i] : '?';
         r[k] = 0;
         snprintf(s->why, s->whylen, "the partner stopped: %s", r);
+        dbg("session %s < abort: %s", s->tag, r);
         return false;
     }
     if (m[0] != type || n - 1 > cap) return fail(s, "an unexpected message (type %d)", m[0]);
     memcpy(p, m + 1, n - 1);
     *len = n - 1;
+    dbg("session %s < type %u len %zu", s->tag, type, n - 1);
     return true;
 }
 
@@ -134,7 +140,10 @@ static bool hello(sess *s)
      * must never repeat (cggmp21: an execution id is assumed never to repeat, and a pair can have more than one session) */
     if (!net_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
     if (!p2pkh_of(c->ctx, c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
-    const uint64_t fr = c->chain->feerate(c->chain->ctx);
+    /* twice what the chain estimates, and never little: these transactions move a prize, and no fee is large beside it */
+    uint64_t fr = 2 * c->chain->feerate(c->chain->ctx);
+    if (fr < c->min_feerate) fr = c->min_feerate;
+    if (fr > c->max_feerate) fr = c->max_feerate;
     record_encode(&c->mine, m);
     record_encode(&c->theirs, m + RECORD_LEN);
     memcpy(m + 2 * RECORD_LEN, s->nonce[s->me], 32);
@@ -160,9 +169,9 @@ static bool hello(sess *s)
     const uint64_t theirs = be64(in + 2 * RECORD_LEN + 32);
     t->feerate = fr > theirs ? fr : theirs;
     t->first = s->F;
+    dbg("session %s terms: party %d, F is party %d, fee rate mine %llu theirs %llu sat/kvB, tiny coin %llu sat", s->tag, s->me, s->F,
+        (unsigned long long)fr, (unsigned long long)theirs, (unsigned long long)payout_tiny(t));
     if (t->feerate > c->max_feerate) return fail(s, "fee rate %llu above the limit %llu", (unsigned long long)t->feerate, (unsigned long long)c->max_feerate);
-    /* at a rate whose fee would eat F's tiny coin F could not cancel, and S could hold the second transaction back for free */
-    if (!payout_can_cancel(t)) return fail(s, "fee rate %llu: too high for the cancel of the tiny coin", (unsigned long long)t->feerate);
     /* the proofs of possession: each over the nonce of the other */
     uint8_t proof[64], their_proof[64];
     if (!record_prove(c->ctx, c->net, &c->mine, c->d, c->partner, s->nonce[you], proof)) return fail(s, "the distance does not fit the record");
@@ -174,6 +183,16 @@ static bool hello(sess *s)
 
 /* ---- the plan of a transaction: both build it, both compare its hash ---- */
 
+/* a transaction in the debug log, whole: it is public as soon as it is sent */
+static void dbg_tx(const sess *s, const char *what, const btc_tx *tx)
+{
+    uint8_t raw[BTC_TX_MAX_SIZE];
+    static _Thread_local char hex[2 * BTC_TX_MAX_SIZE + 1];
+    const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
+    btc_hex(raw, n, hex);
+    dbg("session %s tx %s: %s", s->tag, what, hex);
+}
+
 static bool plan(sess *s, const btc_tx *tx)
 {
     uint8_t raw[BTC_TX_MAX_SIZE], m[11 + BTC_TX_MAX_SIZE], h[32], theirs[32];
@@ -182,6 +201,7 @@ static bool plan(sess *s, const btc_tx *tx)
     memcpy(m, "pznet1/plan", 11);
     memcpy(m + 11, raw, n);
     pz_sha256(m, 11 + n, h);
+    dbg_tx(s, "plan", tx);
     if (!n || !send_msg(s, S_PLAN, h, 32) || !recv_msg(s, S_PLAN, theirs, 32, &got)) return false;
     return got == 32 && !memcmp(h, theirs, 32) ? true : fail(s, "the two homes built different transactions");
 }
@@ -480,11 +500,14 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
     const int every = s->c->alive_ms > 0 ? s->c->alive_ms : ALIVE_MS;
     const int64_t end = now_ms() + (int64_t)(blocks + 6) * (s->c->block_ms > 0 ? s->c->block_ms : BLOCK_MS);
     int64_t alive = now_ms() + every;
-    uint64_t until = 0;
+    uint64_t until = 0, last_h = 0;
+    int last_k = -3;
     for (;;) {
         const uint64_t h = ch->height(ch->ctx);
         if (h && !until) until = h + blocks;
         const int k = ch->confirmations(ch->ctx, txid, vout);   /* -2: the chain did not answer, which says nothing */
+        if (k != last_k || h != last_h) dbg("session %s wait: height %llu, output %s...:%u is %d (wanted %d)", s->tag, (unsigned long long)h,
+                                            dbg_hex(txid, 32), vout, k, conf), last_k = k, last_h = h;
         if (k != -2 && (conf < 0 ? k == -1 : k >= conf)) return true;
         if ((until && h >= until) || now_ms() >= end) return false;
         if (now_ms() >= alive) (void)send_msg(s, S_ALIVE, NULL, 0), alive = now_ms() + every;
@@ -512,6 +535,7 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
 {
     sess s = {.c = c, .why = why, .whylen = whylen, .wait_ms = c->timeout_ms < HELLO_MS ? c->timeout_ms : HELLO_MS};
     why[0] = 0;
+    snprintf(s.tag, sizeof s.tag, "%s", dbg_hex(c->mine.x, 32));   /* the x of the own point names the session in the debug log */
     if (!hello(&s)) return SESSION_FAILED;
     s.wait_ms = c->timeout_ms;
     const session_chain *ch = c->chain;
@@ -526,7 +550,8 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     if (!sign_jointly(&s, &a, a.n_in, 'A')) return SESSION_FAILED;
     uint8_t aid[32];
     btc_tx_txid(&a, aid);
-    (void)ch->broadcast(ch->ctx, &a);                           /* both send it: the second to arrive is a duplicate */
+    dbg_tx(&s, "first, signed", &a);
+    dbg("session %s broadcast of the first: %s", s.tag, ch->broadcast(ch->ctx, &a) ? "taken" : "not taken");   /* both send it: the second to arrive is a duplicate */
     if (!wait_for(&s, aid, 0, 1, 144)) return fail(&s, "the first transaction was not confirmed"), SESSION_FAILED;
     /* the second: F gives the signature of its tiny coin, then the joint signature, which S gets first */
     if (!payout_second(&s.t, &a, &b) || !plan(&s, &b)) return SESSION_FAILED;
@@ -542,7 +567,8 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     const bool signed_b = sign_jointly(&s, &b, 1, 'B');
     if (signed_b && c->withhold && s.me != s.F) return snprintf(why, whylen, "withheld the second transaction"), SESSION_FAILED;
     if (signed_b) {                                             /* S, and F when S sent its last message: either may send it */
-        (void)ch->broadcast(ch->ctx, &b);
+        dbg_tx(&s, "second, signed", &b);
+        dbg("session %s broadcast of the second: %s", s.tag, ch->broadcast(ch->ctx, &b) ? "taken" : "not taken");
         return wait_for(&s, aid, 0, -1, 144) ? (snprintf(why, whylen, "paid"), SESSION_PAID)
                                             : (snprintf(why, whylen, "the second transaction did not go through"), SESSION_FAILED);
     }

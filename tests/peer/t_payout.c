@@ -57,7 +57,7 @@ int main(void)
         CHECK(a.in[i].prev_vout >= 2);                           /* no dust */
     }
     const uint64_t fee_a = in - sum_out(&a);
-    CHECK(a.out[1].value == PAYOUT_TINY && a.out[2].value == PAYOUT_TINY && fee_a >= btc_fee(btc_tx_size(&a) + 8 * 107, 2000));
+    CHECK(a.out[1].value == PAYOUT_TINY_MIN && a.out[2].value == PAYOUT_TINY_MIN && fee_a >= btc_fee(btc_tx_size(&a) + 8 * 107, 2000));
     CHECK(fee_a < 4000);                                         /* about 1.3 kB at 2 sat/vB */
     uint8_t dg[8][32];
     CHECK(payout_digests(&a, t.puzzle_spk, a.n_in, dg));
@@ -76,32 +76,29 @@ int main(void)
     CHECK(btc_tx_txid(&a, aid));
     CHECK(payout_second(&t, &a, &b) && b.n_in == 2 && b.n_out == 2);
     CHECK(!memcmp(b.in[0].prev_txid, aid, 32) && b.in[0].prev_vout == 0 && b.in[1].prev_vout == 2);
-    const uint64_t fee_b = a.out[0].value + PAYOUT_TINY - sum_out(&b);
-    CHECK(b.out[1].value - PAYOUT_TINY - b.out[0].value <= 1 && fee_b < 1000);
+    const uint64_t fee_b = a.out[0].value + PAYOUT_TINY_MIN - sum_out(&b);
+    CHECK(b.out[1].value - PAYOUT_TINY_MIN - b.out[0].value <= 1 && fee_b < 1000);
     CHECK(btc_sign_p2pkh(&b, 0, puzzle) && btc_sign_p2pkh(&b, 1, coin[1]));
     CHECK(btc_verify_p2pkh(&b, 0, t.puzzle_spk, BTC_P2PKH_LEN) && btc_verify_p2pkh(&b, 1, t.coin_spk[1], BTC_P2PKH_LEN));
     CHECK(!btc_verify_p2pkh(&b, 1, t.coin_spk[0], BTC_P2PKH_LEN));
     /* the cancel spends the same tiny coin: the two cannot both be in the chain */
     CHECK(payout_cancel(&t, &a, &c) && c.n_in == 1 && c.n_out == 1 && c.in[0].prev_vout == b.in[1].prev_vout);
-    CHECK(!memcmp(c.out[0].script, t.pay_spk[1], t.pay_len[1]) && c.out[0].value > PAYOUT_TINY - 1000);
+    CHECK(!memcmp(c.out[0].script, t.pay_spk[1], t.pay_len[1]) && c.out[0].value > PAYOUT_TINY_MIN - 1000);
     CHECK(btc_sign_p2pkh(&c, 0, coin[1]) && btc_verify_p2pkh(&c, 0, t.coin_spk[1], BTC_P2PKH_LEN));
-    /* refusals: nothing worth spending, a first transaction that is not one, a fee rate that leaves dust */
+    /* refusals: nothing worth spending, a first transaction that is not one */
     CHECK(!payout_first(&t, coins, 2, &a2, &used));
     btc_tx bad = a;
     bad.out[1].value++;
     CHECK(!payout_second(&t, &bad, &b) && !payout_cancel(&t, &bad, &c));
+    /* a high fee rate makes the tiny coins larger: F's cancel always leaves at least its own fee and the dust limit */
     payout_terms hot = t;
-    hot.feerate = 60000;                                         /* 60 sat/vB: a cancel would leave less than dust */
-    CHECK(!payout_cancel(&hot, &a, &c));
-    /* the session refuses such a rate at the hello: the highest one leaves 546 satoshis of the tiny coin after the fee of F's cancel to its
-     * P2WPKH address, 189 vbytes (10000 - 546 = 9454 = 189 * 50.021) */
-    CHECK(payout_can_cancel(&t) && !payout_can_cancel(&hot));
-    hot.feerate = 50021;
-    CHECK(payout_can_cancel(&hot) && payout_cancel(&hot, &a, &c) && c.out[0].value == 546);
-    hot.feerate = 50022;
-    CHECK(!payout_can_cancel(&hot));
+    hot.feerate = 500000;                                        /* 500 sat/vB */
+    btc_tx ha, hc;
+    CHECK(payout_tiny(&t) == PAYOUT_TINY_MIN && payout_tiny(&hot) > 150000);
+    CHECK(payout_first(&hot, coins, 10, &ha, &used) && ha.out[1].value == payout_tiny(&hot) && ha.out[2].value == payout_tiny(&hot));
+    CHECK(payout_cancel(&hot, &ha, &hc) && hc.out[0].value > payout_tiny(&hot) / 2 && !payout_cancel(&hot, &a, &hc));
     hot.first = 2;
-    CHECK(!payout_can_cancel(&hot));
+    CHECK(!payout_first(&hot, coins, 10, &ha, &used) && !payout_cancel(&hot, &ha, &hc));
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_payout");
 }

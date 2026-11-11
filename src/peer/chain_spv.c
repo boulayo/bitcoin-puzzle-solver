@@ -14,9 +14,19 @@
 #define HISTORY_MAX 256            /* the newest transactions of a script that are looked at */
 #define COINS_MAX 256
 
+static int64_t now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+#define RETRY_MS 600000            /* a server that did not answer is tried again after ten minutes */
+
+/* the servers of one operation: e is the connections of the chain, held until close_all */
 typedef struct {
     chain_spv *c;
-    electrum e[CHAIN_SPV_SERVERS];
+    electrum *e;
     bool up[CHAIN_SPV_SERVERS];
     int nup;
 } servers;
@@ -144,16 +154,28 @@ static void sync_headers(chain_spv *c, electrum *e)
 
 /* ---- all the servers ---- */
 
+/* Takes the connections for one operation: those that are down and due are opened, and each brings the headers up to date. A connection
+ * left from an earlier operation may have been closed by its server meanwhile: it is opened again once. */
 static void open_all(servers *s, chain_spv *c)
 {
-    s->c = c, s->nup = 0;
+    pthread_mutex_lock(&c->io);
+    s->c = c, s->e = c->conn, s->nup = 0;
     uint64_t before = 0, after = 0;
     const bool had = tip_of(c, &before);
+    const int64_t now = now_ms();
     for (int i = 0; i < c->nservers; i++) {
-        s->up[i] = electrum_open(&s->e[i], c->servers[i], c->timeout_ms ? c->timeout_ms : 20000);
-        if (!s->up[i]) continue;
-        s->nup++;
-        sync_headers(c, &s->e[i]);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const bool kept = s->e[i].fd >= 0;
+            if (!kept && now < c->retry[i]) break;
+            if (!kept && !electrum_open(&s->e[i], c->servers[i], c->timeout_ms ? c->timeout_ms : 10000)) {
+                c->retry[i] = now + RETRY_MS;
+                break;
+            }
+            sync_headers(c, &s->e[i]);
+            if (s->e[i].fd >= 0 || !kept) break;
+        }
+        s->up[i] = s->e[i].fd >= 0;
+        s->nup += s->up[i];
     }
     if (c->headers_path && tip_of(c, &after) && (!had || after != before)) {
         pthread_mutex_lock(&c->mu);
@@ -162,11 +184,7 @@ static void open_all(servers *s, chain_spv *c)
     }
 }
 
-static void close_all(servers *s)
-{
-    for (int i = 0; i < s->c->nservers; i++)
-        if (s->up[i]) electrum_close(&s->e[i]);
-}
+static void close_all(servers *s) { pthread_mutex_unlock(&s->c->io); }
 
 static bool is_coinbase(const uint8_t *raw, size_t len)
 {
@@ -448,14 +466,17 @@ bool chain_spv_init(chain_spv *c, btc_chain chain, uint64_t cp_height, const uin
     if (!cp_hash) spv_genesis(chain, g);
     if (!spv_init(&c->headers, chain, cp_height, cp_hash ? cp_hash : g)) return false;
     c->chain = chain, c->nservers = nservers, c->headers_path = headers_path;
-    for (int i = 0; i < nservers; i++) c->servers[i] = srv[i];
+    for (int i = 0; i < nservers; i++) c->servers[i] = srv[i], c->conn[i].fd = -1;
     pthread_mutex_init(&c->mu, NULL);
+    pthread_mutex_init(&c->io, NULL);
     if (headers_path && !spv_load(&c->headers, headers_path, (uint64_t)time(NULL)) && c->headers.n == 0) spv_free(&c->headers);
     return true;
 }
 
 void chain_spv_free(chain_spv *c)
 {
+    for (int i = 0; i < c->nservers; i++) electrum_close(&c->conn[i]);
     spv_free(&c->headers);
     pthread_mutex_destroy(&c->mu);
+    pthread_mutex_destroy(&c->io);
 }

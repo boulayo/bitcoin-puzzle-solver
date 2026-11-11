@@ -7,6 +7,7 @@
 #ifndef PZPEER_CHAIN_SPV_H
 #define PZPEER_CHAIN_SPV_H
 
+#include "electrum.h"
 #include "session.h"
 #include "spv.h"
 #include <pthread.h>
@@ -17,11 +18,14 @@ typedef struct {
     btc_chain chain;
     const char *servers[CHAIN_SPV_SERVERS];   /* "host:port" */
     int nservers;
+    electrum conn[CHAIN_SPV_SERVERS];         /* the connections, kept from one operation to the next */
+    int64_t retry[CHAIN_SPV_SERVERS];         /* a server that did not answer is left alone until this time */
+    pthread_mutex_t io;                       /* one operation at a time on them */
     spv_chain headers;
     pthread_mutex_t mu;                       /* the headers: sessions share them */
     const char *headers_path;                 /* where they are kept between runs (NULL: nowhere) */
     uint64_t fallback_feerate;                /* when no server gives an estimate: satoshis per 1000 virtual bytes */
-    int timeout_ms;                           /* of one call to a server */
+    int timeout_ms;                           /* of one call to a server; 0: 10000 */
     unsigned max_tip_age;                     /* a chain whose last block is older than this many seconds is not ready (0: any) */
 } chain_spv;
 

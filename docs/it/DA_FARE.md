@@ -1,116 +1,82 @@
-# Da fare: le decisioni che spettano a te
+# Da fare: decisioni prese e decisioni aperte
 
-9 novembre 2026. Si riferisce a [PROGETTO_RETE.md](PROGETTO_RETE.md).
+11 novembre 2026. Si riferisce a [PROGETTO_RETE.md](PROGETTO_RETE.md).
 
-Ogni voce dice cosa va deciso, le scelte possibili, cosa consiglio e cosa resta fermo finché non decidi. Sono in ordine di urgenza.
-
----
-
-## A. Decisioni che bloccano la rete vera
-
-### A1. Chi sono i manutentori
-Il file di una rete vale solo se è firmato da una soglia di chiavi scritte dentro pzpeer. Oggi non ce n'è nessuna, quindi girano solo reti di prova.
-
-- **Da decidere:** quante chiavi, di chi, e quante firme servono.
-- **Scelte:** tu solo (1 di 1); tu con due chiavi su dispositivi diversi (2 di 2); tu più persone di fiducia (per esempio 2 di 3).
-- **Consiglio:** 2 di 3, con almeno una chiave tenuta scollegata da Internet. Con una sola chiave, chi la ruba può pubblicare una rete falsa.
-- **Blocca:** tutto ciò che non è prova.
-
-### A2. Nodi d'ingresso: deciso, nessun server tuo
-Hai deciso di non avere server tuoi per il primo contatto. La rete funziona lo stesso: i nodi si trovano attraverso la rete BitTorrent (A3), e basta che qualche partecipante sia raggiungibile dall'esterno (A4, o chi ha già un server).
-
-- **Resta da sapere:** finché la rete è piccola, chi entra per primo non trova nessuno. È normale: basta che i primi due o tre partecipanti raggiungibili restino accesi.
-
-### A3. Trovarsi attraverso la rete BitTorrent: fatto
-Ogni nodo si annuncia nella tabella distribuita di BitTorrent sotto una chiave ricavata dall'impronta della rete, e lì trova gli altri. Passano solo indirizzi, e ognuno viene poi verificato come qualsiasi altro. Provato qui con una tabella finta e con tre nodi che si trovano senza conoscere alcun indirizzo.
-
-- **Da fare tu:** la prova sulla rete BitTorrent vera, che da qui non raggiungo. Ti do il comando.
-- **Limite:** in alcune reti aziendali BitTorrent è bloccato: lì serve indicare a mano un nodo conosciuto (`--peer`). Inoltre chi mette molti nodi vicino alla nostra chiave in quella tabella può nascondere gli annunci: chi entra per la prima volta non trova nessuno, o trova solo lui. È un ritardo, non un furto.
-
-### A4. Apertura automatica della porta del router (UPnP): fatto, spento se non lo chiedi
-Con `--upnp` pzpeer chiede al router di casa di far entrare la porta. Provato qui contro un router finto.
-
-- **Da decidere:** se lasciarlo spento finché l'utente non lo chiede (oggi) o accenderlo da solo. Consiglio: spento. Un programma non dovrebbe aprire una porta di casa senza che gli venga detto.
-- **Da fare tu:** provarlo sul tuo router con il comando che ti do.
-- **È pericoloso avere la porta aperta?** Su quella porta risponde solo pzpeer. Ogni messaggio è cifrato, firmato e limitato in dimensione e frequenza, e il programma è provato con dati casuali e ostili. Il rischio che resta è quello di qualunque programma raggiungibile da Internet: un errore non ancora scoperto. Chi non vuole correrlo partecipa lo stesso senza aprire nulla (cerca, pubblica e firma attraverso il relay); solo non fa da custode.
-
-### A5. Revisione del firmatore: la faccio io, con un limite
-Mi hai chiesto di controllare io la libreria della firma a due. Lo faccio: leggo come `signer/` usa cggmp21 e provo un partner che bara in tutti i modi che riesco a costruire.
-
-- **Limite da conoscere:** una mia revisione abbassa il rischio, non lo azzera. La libreria è lunga e matematicamente delicata; i suoi difetti passati sono stati trovati da gruppi specializzati dopo mesi. Con premi di questa grandezza, una revisione esterna prima del #140 resta consigliabile.
-- **Da decidere:** se farla comunque più avanti, prima di usare bitcoin veri.
-
-### A6. Quale libreria per la firma
-- **Scelte:**
-  1. restare su cggmp21 0.6.3 (oggi): provata qui, una vulnerabilità pubblica corretta e una non corretta che riguarda una funzione che non usiamo;
-  2. passare a cggmp24 quando esce stabile: stesso protocollo, entrambe corrette;
-  3. valutare DKLs23: niente numeri primi (oggi 20–45 secondi per sessione), messaggi molto più piccoli; va verificata la licenza e la maturità delle librerie disponibili.
-- **Consiglio:** 1 per le prove; decidere fra 2 e 3 insieme a chi fa la revisione (A5).
-
-### A7. Nodo Bitcoin proprio: deciso, non serve
-Fatto. Senza `--rpc`, pzpeer legge la catena da più server Electrum pubblici e non si fida di nessuno: ogni blocco deve avere il suo lavoro, ogni moneta la sua prova. Un server bugiardo può solo far perdere tempo. Chi ha un nodo proprio lo usa con `--rpc` ed è più protetto.
-
-- **Da decidere:** quali server Electrum mettere nel file della rete (ne servono almeno 3 o 4, di gestori diversi, che accettino connessioni senza cifratura), e quale blocco usare come punto di partenza (`checkpoint=`).
-- **Da fare tu:** una prova con un server pubblico vero, che da qui non posso raggiungere. Ti do il comando.
+Prima le poche cose che aspettano te, poi l'elenco di ciò che è deciso, con il motivo.
 
 ---
 
-## B. Parametri della rete del #140
+## 1. Aspettano te
 
-### B1. Seme dei salti
-Deve essere pubblico e non scelto da nessuno. **Consiglio:** l'hash di un blocco Bitcoin di un'altezza futura annunciata prima.
+### 1.1 Le tre prove che da qui non posso fare
+Servono un computer con la rete di casa vera. Per ognuna basta guardare una riga dell'uscita.
 
-### B2. Zeri dei punti distinti
-Meno zeri: più punti da conservare. Più zeri: più lavoro sprecato. **Consiglio:** 30 con 10 000 GPU attese, 33 con 1000 (stime da misurare nella prova pubblica).
+| Prova | Comando | Cosa guardare |
+|---|---|---|
+| ritrovo sulla rete BitTorrent vera | su due computer: `pzpeer node --network FILE --seed-hex SEME --dir CARTELLA --bt-router router.bittorrent.com:6881 --verbose` | le righe `rendezvous:` e poi `contacts` |
+| apertura della porta sul router | lo stesso comando (la chiede da solo) | la riga `upnp:` |
+| server Electrum pubblici | `pzpeer run --network FILE --payout INDIRIZZO --electrum electrum.blockstream.info:50001 --debug prova.log` su una rete della catena principale | la riga `chain:` e, in `prova.log`, le righe `electrum` |
 
-### B3. Tetto delle commissioni e monete del premio
-Vanno nel file firmato. **Consiglio:** tetto a 50 satoshi per byte (oltre, chi può annullare non potrebbe più farlo).
+### 1.2 Revisione esterna della firma a due
+La mia revisione non sostituisce quella di specialisti. **Da decidere:** se farla fare prima di usare bitcoin veri. **Consiglio:** sì, prima del #140.
 
-### B4. Dimensione della moneta minuscola
-Oggi 10 000 satoshi. Va bene finché le commissioni restano sotto il tetto di B3.
+### 1.3 La prova pubblica con due o tre computer
+Quando vuoi farla: un puzzle di 60–64 bit creato da noi, con un premio piccolo, e `--debug FILE` su ogni computer. I file di debug non contengono segreti: me li puoi far leggere così come sono.
 
----
+### 1.4 Aspetti legali
+Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventuale tassazione. Da chiedere al legale insieme a NOTICE, CONTRIBUTING e licenza commerciale, che sono ancora in sospeso.
 
-## C. Migliorie da approvare
-
-### C1. Record corto
-Togliere la firma da ogni record (da 138 a circa 40 byte): un terzo dello spazio e del traffico. Cambia il formato, quindi va fatto prima della prova pubblica. **Consiglio:** sì.
-
-### C2. Ripubblicazione leggera
-Oggi ogni casa rimanda tutti i suoi punti ogni giorno: a campagna avanzata è troppo. **Consiglio:** sì, necessario prima del #140.
-
-### C3. Ricerca lineare condivisa (puzzle 71 e simili)
-Il disegno è nella sezione 8 del progetto. Il guadagno è un fattore 2 in media, e il premio non si può dividere.
-
-- **Da decidere:** se farla, e se accetti la modifica ai motori di ricerca di pzsolve che richiede (riportare le chiavi che servono da prova di lavoro).
-- **Consiglio:** dopo la rete del canguro. È utile ma rende meno, e tocca il cuore di pzsolve.
-
-### C4. Avviso a chi trova una chiave senza chiave pubblica nota
-Chi spende un puzzle come il #71 sulla rete pubblica rischia di farsi sostituire la transazione. **Da decidere:** se far dire a pzsolve, quando trova una chiave così, di mandare la transazione direttamente a un pool di mining. **Consiglio:** sì, è una riga di testo e protegge chi vince.
-
----
-
-## D. Rilascio
-
-### D1. Sistemi
-pzpeer oggi gira solo su Linux. **Da decidere:** l'ordine. **Consiglio:** Windows subito dopo Linux (è dove stanno le GPU), macOS dopo.
-
-### D2. Come distribuire pzsign
-È in Rust e include la libreria GMP (licenza LGPL). **Da decidere:** se distribuire il binario già compilato insieme a pzsolve. Chi riceve una licenza commerciale deve poter ricollegare GMP: va scritto nella licenza (domanda per il legale).
-
-### D3. Versione e ramo
-**Da decidere:** quando unire `rete-condivisa` a `main` e con che numero (1.24.0 o 2.0.0). **Consiglio:** unire solo la parte di pzsolve (il cammino condiviso) come 1.24.0, e tenere pzpeer nel ramo fino alla prova pubblica.
-
-### D4. Prova pubblica
-**Da decidere:** su quale rete di test di Bitcoin (signet o testnet), con quale puzzle (consiglio 60–70 bit, risolvibile in giorni da pochi volontari) e con quale premio simbolico.
-
-### D5. Aspetti legali
-Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventuale tassazione dei premi. Da chiedere al legale insieme a NOTICE, CONTRIBUTING e licenza commerciale, che sono ancora in sospeso.
-
----
-
-## E. Promemoria già aperti
-
+### 1.5 Promemoria già aperti
 - prova della cifratura su un Windows vero;
 - cancellare i rami di prova vecchi su GitHub (`test-122`, `test-123`, `test-1231`, `test-1232`, `test-gpu-*`, `fix-intel-cl`);
 - misurare la velocità di pzsolve su una RTX 4090 (ipotesi I10: tutti i tempi dipendono da questo numero).
+
+---
+
+## 2. Deciso
+
+### A. La rete
+
+| | Decisione | Motivo |
+|---|---|---|
+| A1 | **Nessuna firma sul file della rete.** La rete è l'impronta delle righe che la definiscono | È come fanno Bitcoin Core e BitTorrent: i parametri stanno nel programma, e chi li cambia è su un'altra rete. Niente chiavi da custodire, cento righe di codice in meno. La fiducia sta nel programma che si scarica dal tuo repository, come per qualsiasi programma |
+| A2 | Nessun server tuo. Un nodo sul NAS, se un giorno lo vorrai, è un partecipante come gli altri | Con Tailscale da solo il nodo è raggiungibile solo dai tuoi dispositivi: per servire la rete gli serve una porta aperta verso Internet |
+| A3 | I nodi si trovano attraverso la tabella di BitTorrent | fatto |
+| A4 | **Chi scarica il programma lo avvia e partecipa:** `pzpeer run --network FILE --payout INDIRIZZO`. Cartella, programmi, porta (28140), apertura sul router, primi contatti e blockchain hanno un valore predefinito | L'apertura della porta è accesa da sola (`--no-upnp` la spegne): senza, quasi nessuno farebbe da custode. L'indirizzo di pagamento resta l'unica cosa da scrivere: è dove va il premio. Quando i parametri del #140 saranno fissati il file sarà dentro il programma, e non servirà nemmeno `--network` |
+| A5 | La revisione della firma a due è fatta per la parte che ho potuto fare. Vedi 1.2 | |
+| A6 | Libreria: cggmp21 0.6.3. Passaggio a cggmp24 quando avrà un rilascio stabile | È l'unica libreria aperta, mantenuta e con licenza libera che dà anche il nome di chi bara. Il successore cggmp24 è ancora in versione alfa. Le librerie DKLs23 mature hanno licenze non libere. I protocolli a due più semplici hanno una storia di fughe a ogni interruzione |
+| A7 | Nessun nodo Bitcoin proprio: più server Electrum pubblici, ogni risposta verificata. Chi ha un nodo lo usa con `--rpc` | fatto |
+
+**La transazione parte sulla rete pubblica?** Sì, da sola, appena firmata. Per il #140 non è un rischio: la chiave pubblica è già nota a tutti, e la firma non rivela nulla. È diverso per i puzzle senza chiave pubblica nota (vedi C4).
+
+### B. Parametri della rete del #140
+
+| | Decisione | Motivo |
+|---|---|---|
+| B1 | Seme dei salti: l'hash dell'ultimo blocco Bitcoin al momento in cui pubblichiamo la rete. **Nessuna attesa** | Tutti devono avere lo stesso seme perché due canguri che arrivano sullo stesso punto devono poi fare gli stessi salti: solo così i cammini si fondono e la coincidenza si vede. Preso da un blocco appena uscito, nessuno (nemmeno tu) può aver cominciato a calcolare prima degli altri |
+| B2 | Zeri dei punti distinti: provvisoriamente 32, da fissare dopo la prova pubblica | Vedi sotto |
+| B3 | Commissione: il doppio della stima per i prossimi blocchi, mai sotto 20 e mai sopra 1000 satoshi per byte | Alta perché la transazione vale molto e deve passare subito; il tetto la tiene sotto lo 0,2 % del premio anche nel caso peggiore |
+| B4 | La "moneta minuscola" non ha più una dimensione fissa: cresce con la commissione | Così chi può annullare può farlo a qualunque commissione; prima c'era un tetto di 50 satoshi per byte |
+
+**B2 spiegato.** I canguri non pubblicano ogni punto che toccano, sarebbero troppi: pubblicano solo i punti "distinti", quelli il cui numero comincia con un certo numero di zeri. Con 32 zeri è un punto ogni 4 miliardi di passi.
+- **Meno zeri:** più punti da conservare e da spedire (con 30 zeri quattro volte quelli con 32).
+- **Più zeri:** ogni canguro spreca in media il lavoro fatto dopo il suo ultimo punto distinto; con tanti canguri lo spreco pesa.
+- Il numero giusto dipende da quanti partecipano, e deve essere lo stesso per tutti e per sempre. Per questo lo fisso dopo aver visto quanti partecipano alla prova: indicativamente 30 con 10 000 schede video, 33–34 con 1000.
+
+### C. Migliorie
+
+| | Decisione | Stato |
+|---|---|---|
+| C1 | Record corto (senza firma su ogni record, un terzo dello spazio): **sì, ma dopo la prima prova** | È un cambio di formato grosso; la prima prova serve a vedere che il resto regge. Va fatto prima del #140 |
+| C2 | Ripubblicazione leggera: sì | da fare insieme a C1, prima del #140 |
+| C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | da fare. Richiede che ogni motore di ricerca di pzsolve (CPU e schede video) riporti le chiavi che servono da prova di lavoro: senza quella prova chiunque potrebbe dichiarare fatti dei blocchi mai cercati |
+| C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare |
+
+### D. Rilascio
+
+| | Decisione | Stato |
+|---|---|---|
+| D1 | Linux, Windows e macOS | pzpeer oggi gira su Linux; il porting è il prossimo lavoro |
+| D2 | pzsign già compilato, nello stesso archivio di pzsolve e pzpeer | È in Rust e contiene la libreria GMP (licenza LGPL): chiunque può ricompilarlo dai sorgenti, che è ciò che quella licenza chiede. Per chi riceve una licenza commerciale va scritto nella licenza (domanda per il legale) |
+| D3 | Tutto resta nel ramo `rete-condivisa`. Nel repository niente italiano fuori da `docs/it` | controllato: non ce n'è |
+| D4 | Prova pubblica fatta da te, con il registro dettagliato `--debug FILE` | il registro c'è |

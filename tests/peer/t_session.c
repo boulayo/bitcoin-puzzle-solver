@@ -403,7 +403,6 @@ typedef struct {
     unsigned fails_F, fails_S;        /* the failed signings F and S count in the case */
     const char *bin[2];               /* the pzsign of each home (NULL: the real one) */
     const char *why;                  /* in the reason of both homes, when not NULL */
-    bool before_proofs;               /* the session stops before the proofs of possession */
     bool scan_fails;                  /* the scan of the puzzle address fails: the prize of the network file is given */
     bool frozen;                      /* the chain stops, and a wait gives up after a while of block_ms a block */
     int block_ms;
@@ -546,12 +545,12 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
     if (tc->expect == PAYOUT) {
         CHECK(h[0].res == SESSION_PAID && h[1].res == SESSION_PAID);
         CHECK(at_puzzle == 0 && pay[S_home] > 49985000);            /* half of 1 BTC less the two tiny coins and two small fees */
-        CHECK(pay[F_home] - PAYOUT_TINY - pay[S_home] <= 1);                       /* F also has its tiny coin back */
+        CHECK(pay[F_home] - PAYOUT_TINY_MIN - pay[S_home] <= 1);                       /* F also has its tiny coin back */
         CHECK(coin_left[S_home] && !coin_left[F_home]);                            /* S keeps its tiny coin for the next time */
     } else if (tc->expect == CANCEL) {
         CHECK(h[F_home].res == SESSION_CANCELLED && h[S_home].res == SESSION_FAILED);
-        CHECK(at_puzzle > 99900000 && pay[S_home] == 0);                           /* the prize is still under the joint key */
-        CHECK(pay[F_home] > 0 && pay[F_home] < PAYOUT_TINY && !coin_left[F_home]);  /* F spent its tiny coin: the held transaction is void */
+        CHECK(at_puzzle > 99800000 && pay[S_home] == 0);                           /* the prize is still under the joint key */
+        CHECK(pay[F_home] > 0 && pay[F_home] < 100000 && !coin_left[F_home]);      /* F spent its tiny coin: the held transaction is void */
     } else if (tc->expect == FIRST) {
         CHECK(h[0].res == SESSION_FAILED && h[1].res == SESSION_FAILED);
         CHECK(at_puzzle > 99900000 && at_puzzle < 100000000 && pay[0] == 0 && pay[1] == 0 && coin_left[0] && coin_left[1]);
@@ -561,7 +560,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
     }
     if (tc->why) CHECK(strstr(h[0].why, tc->why) || strstr(h[1].why, tc->why));
     if (tc->expect == CANCEL) CHECK(e[F_home].alives > 0);      /* sent while F waited its blocks */
-    CHECK(proved[0] == !tc->before_proofs && proved[1] == !tc->before_proofs);
+    CHECK(proved[0] && proved[1]);
     /* the limits: a failed signing counts for the network and the pair, a good one nothing, a refused one nothing */
     for (int i = 0; i < 2; i++) {
         const unsigned failed = i == F_home ? tc->fails_F : tc->fails_S;
@@ -681,9 +680,8 @@ int main(void)
         /* F stops, or sends garbage, instead of its last message: S's last one must not come back (it did before: F had the signature) */
         {.name = "F stops at its last message", .expect = CANCEL, .f_last = LAST_ABORT, .fails_F = 1, .fails_S = 1},
         {.name = "F damages its last message", .expect = CANCEL, .f_last = LAST_DAMAGED, .fails_F = 1, .fails_S = 1},
-        /* S proposes a rate at which F's cancel would be dust, and holds back: refused at the hello (before, F could not cancel) */
-        {.name = "fee rate too high to cancel", .expect = NOTHING, .s_last = LAST_DROPPED, .s_withholds = true, .fee = 60000, .why = "too high for the cancel",
-         .before_proofs = true},
+        /* S proposes a high rate and holds back: the tiny coins are larger, and F can still cancel (with coins of a fixed size it could not) */
+        {.name = "held back at a high fee rate", .expect = CANCEL, .s_last = LAST_DROPPED, .s_withholds = true, .fee = 60000, .fails_F = 1},
         /* one home at its limit (on the network, or for the pair): it stops before the plan, and the other counts no failure */
         {.name = "limit of the network reached", .expect = NOTHING, .limit = {10, 0}, .why = "failed signings on this network"},
         {.name = "limit of the pair reached", .expect = NOTHING, .limit = {0, 3}, .why = "failed signings of this pair"},

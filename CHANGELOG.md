@@ -12,8 +12,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   keeps every point, also those the RAM limit leaves out of the table, for pzpeer to publish. pzsolve knows nothing else of the network.
 - pzpeer, the daemon of the shared network, and pzsign, its two-party signer (docs/en/NETWORK.md): a home publishes the points of its
   pzsolve, keeps the records of others in a Kademlia table, and for every coincidence of a tame and a wild point of two homes runs with
-  the other home a two-party ECDSA signing (cggmp21) and the two-step payout, half each, through bitcoind. Test networks only for now:
-  no maintainer keys are compiled in. Homes behind a router reach each other through a relay; the node of the home can be pruned and
+  the other home a two-party ECDSA signing (cggmp21) and the two-step payout, half each. A network is its file: the fingerprint of the lines
+  that define it binds every key and record, and nobody signs it. Homes behind a router reach each other through a relay; the node of the home can be pruned and
   is reached with its cookie file (`--rpc-cookie`).
 - pzpeer needs no Bitcoin node of one's own: without `--rpc` it reads the chain from several Electrum servers (`--electrum HOST:PORT`
   and the `electrum=` lines of the network file) and trusts none. Block headers count only with their proof of work from the
@@ -21,7 +21,12 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   delay a payout, never misdirect it. A node of one's own stays the stronger choice.
 - pzpeer finds the other nodes with no server of the network: each node announces its port in the Mainline DHT of BitTorrent under
   a key made from the network's fingerprint and looks the others up there (`--bt-router`, `--no-bt`). Only addresses pass through it,
-  each dialled and checked as any other. `--upnp` asks the home router to let the listening port in.
+  each dialled and checked as any other. A node listens on port 28140 and asks the home router to let it in (`--no-upnp`,
+  `--listen 0`).
+- `pzpeer run --network FILE --payout ADDRESS` is all a home needs: the folder, the programs, the port, the first contacts and the
+  chain have defaults. `--debug FILE` logs every message, step and answer of the chain, with no secret, for reading afterwards.
+- The fee of the payout is twice the estimate of the chain, 20 to 1000 sat/vB, and the tiny coins grow with it, so that the party
+  that can cancel always can.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ## [1.23.2] — 2026-11-08

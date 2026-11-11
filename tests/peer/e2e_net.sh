@@ -33,7 +33,6 @@ if [ -n "${PZ_E2E_LIGHT:-}" ]; then
     sleep 1
 fi
 
-python3 -c "import os; print(os.urandom(32).hex())" > "$DIR/maint.key"
 for try in 1 2 3 4 5 6; do
     T="$DIR/try$try"; mkdir -p "$T"
     # a puzzle of 58 bits, its key from the independent reference, its P2PKH address on regtest funded with 1 BTC
@@ -49,19 +48,17 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
     printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\nentry=127.0.0.1:%d\n' \
         "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" "$PORT" > "$T/net.txt"
-    "$BIN/pzpeer" netsign "$DIR/maint.key" "$T/net.txt" >> "$T/net.txt"
-    export PZNET_TRUST=$(tail -1 "$T/net.txt" | cut -c5-68)
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
     "$BIN/pzpeer" node --network "$T/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$T/n" \
-        --listen $PORT > "$T/n.log" 2>&1 &
+        --listen $PORT --no-upnp > "$T/n.log" 2>&1 &
     NPID=$!
     sleep 3
     port=$PORT
     for h in a b c; do
         port=$((port + 1))
-        timeout 600 "$BIN/pzpeer" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" --listen $port \
-            --pzsolve "$BIN/pzsolve" --pzsign "$BIN/pzsign" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
+        timeout 600 "$BIN/pzpeer" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" --listen $port --no-upnp \
+            --pzsolve "$BIN/pzsolve" --pzsign "$BIN/pzsign" --debug "$T/$h.debug" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
     done
     wait "${PID[a]}" "${PID[b]}" "${PID[c]}"

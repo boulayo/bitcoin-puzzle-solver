@@ -10,12 +10,13 @@
 
 typedef struct {
     const char *network;            /* the network file */
-    const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files */
-    const char *pzsolve, *pzsign;  /* the programs */
+    const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files; NULL: pznet-<net> */
+    const char *pzsolve, *pzsign;   /* the programs: a path, or a name looked up in PATH */
     const char *payout;             /* the payout address of this home */
     const char *rpc;                /* bitcoind: host:port:user:password, or host:port with rpc_cookie (btc_rpc_init_arg) */
     const char *rpc_cookie;         /* the cookie file of bitcoind, or NULL */
-    const char *const *electrum;    /* without rpc: Electrum servers host:port, besides the electrum lines of the network file (chain_spv.h) */
+    const char *const *electrum;    /* without rpc: Electrum servers host:port, besides the electrum lines of the network file (chain_spv.h);
+                                     * a network of the main chain with none of either uses a built-in list */
     int nelectrum;
     const char *listen_host;        /* NULL: every address */
     int listen_port;                /* 0: do not listen (dial out only) */
