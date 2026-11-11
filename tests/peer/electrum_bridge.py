@@ -118,4 +118,5 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+view()                                                         # the whole chain is read before the first client comes: it takes a while
 Server(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()

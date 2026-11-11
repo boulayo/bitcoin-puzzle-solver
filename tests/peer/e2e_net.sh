@@ -30,7 +30,10 @@ if [ -n "${PZ_E2E_LIGHT:-}" ]; then
     EP=$((${PZ_E2E_PORT:-30000} + 900))
     for i in 0 1; do python3 tests/peer/electrum_bridge.py $((EP + i)) "$PZ_REGTEST" > "$DIR/bridge$i.log" 2>&1 & done
     CHAIN=(--electrum 127.0.0.1:$EP --electrum 127.0.0.1:$((EP + 1)))
-    sleep 1
+    for i in 0 1; do                                           # a bridge listens once it has read the chain: minutes on a long one
+        timeout 900 bash -c "until (exec 3<>/dev/tcp/127.0.0.1/$((EP + i))) 2>/dev/null; do sleep 1; done" ||
+            { echo "E2E NET FAILED: the Electrum bridge did not start (see $DIR/bridge$i.log)"; trap - EXIT; exit 1; }
+    done
 fi
 
 for try in 1 2 3 4 5 6; do
