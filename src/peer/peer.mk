@@ -4,7 +4,7 @@
 # of Bitcoin Core, version in lib/secp256k1/VERSION), which gives it the constant-time operations on secret keys that pzcore does not
 # promise: BIP340 signatures, ECDH and ECDSA.
 #   make peer        build/pzpeer
-#   make peer-test   the unit tests of src/peer (tests/peer/t_*.c)
+#   make peer-test   the unit tests of src/peer (tests/peer/t_*.c); make peer-tests only builds them
 #   make peer-fuzz   the mutation fuzzer of the readers of hostile input, FUZZ_SECONDS long (60)
 #   make signer      build/pzsign, the two-party signer (signer/, Rust: needs cargo, and builds GMP from source the first time)
 #   make signer-test its tests: two pzsign sessions relayed by the test (signer/tests/session.rs)
@@ -73,26 +73,34 @@ peer-fuzz: $(BUILD)/peer/fuzz_peer$(EXE)
 # once (the primes take seconds to a minute), then every `make peer-test` uses them; without them those tests say they were skipped.
 PEER_PRIMES := $(BUILD)/peer/primes0.json $(BUILD)/peer/primes1.json
 peer-primes: | $(BUILD)/peer
-	@for f in $(PEER_PRIMES); do [ -f $$f ] || ./$(BUILD)/pzsign$(EXE) primes $$f || exit 1; done
+	@for f in $(PEER_PRIMES); do [ -f $$f ] || $(RUN) ./$(BUILD)/pzsign$(EXE) primes $$f || exit 1; done
 
-peer-test: $(PEER) $(addsuffix $(EXE),$(addprefix $(BUILD)/peer/,$(PEERTESTS)))
+peer-tests: $(PEER) $(addsuffix $(EXE),$(addprefix $(BUILD)/peer/,$(PEERTESTS)))
+
+peer-test: peer-tests
 	@if [ -x $(BUILD)/pzsign$(EXE) ] && [ -f $(BUILD)/peer/primes0.json ] && [ -f $(BUILD)/peer/primes1.json ]; then \
 	    export PZSIGN=$(BUILD)/pzsign$(EXE) PZSIGN_PRIMES0=$(BUILD)/peer/primes0.json PZSIGN_PRIMES1=$(BUILD)/peer/primes1.json; fi; \
 	for t in $(PEERTESTS); do $(RUN) ./$(BUILD)/peer/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(PEER) version
 
 # pzsign is a Rust crate with its own build: cargo decides what to rebuild, so the rule always runs it. --locked keeps the versions
-# of signer/Cargo.lock. It is built for the machine that runs make (not with a MinGW cross compiler: GMP would need one too).
+# of signer/Cargo.lock. It is built for the machine that runs make, or, with the MinGW-w64 compiler (make winsigner), for Windows:
+# cargo then needs the target x86_64-pc-windows-gnu (rustup target add x86_64-pc-windows-gnu) and builds GMP with that compiler.
 SIGNER      := $(BUILD)/pzsign$(EXE)
 CARGO       ?= cargo
 SIGNER_CARGO = $(CARGO) build --release --locked --manifest-path signer/Cargo.toml
+SIGNER_OUT  := signer/target/release
+ifeq ($(WIN),1)
+SIGNER_CARGO := CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$(CC) CC_x86_64_pc_windows_gnu=$(CC) $(SIGNER_CARGO) --target x86_64-pc-windows-gnu
+SIGNER_OUT  := signer/target/x86_64-pc-windows-gnu/release
+endif
 
 signer:
 	$(SIGNER_CARGO)
 	@mkdir -p $(BUILD)
-	cp signer/target/release/pzsign$(EXE) $(SIGNER)
+	cp $(SIGNER_OUT)/pzsign$(EXE) $(SIGNER)
 
 signer-test:
 	$(CARGO) test --release --locked --manifest-path signer/Cargo.toml
 
-.PHONY: peer peer-test peer-fuzz peer-primes signer signer-test
+.PHONY: peer peer-tests peer-test peer-fuzz peer-primes signer signer-test

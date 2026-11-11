@@ -25,3 +25,7 @@ serde_json = "=1.0.154"
 sha2 = "=0.10.9"
 hex = "=0.4.3"
 zeroize = "=1.9.1"
+
+# pzsign.exe is built on Linux with MinGW-w64 (make winsigner): rug's GMP is then cross-compiled, which its crate does only when told.
+[target.x86_64-pc-windows-gnu.dependencies]
+gmp-mpfr-sys = { version = "=1.7.1", default-features = false, features = ["force-cross"] }

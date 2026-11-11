@@ -3,6 +3,7 @@
 # Targets: all (default), test, test-shani, asan, tsan, windows, wintest, clean, print-version (the version the build reports)
 #   make windows   cross-compiles build/win/pzsolve.exe and pzpeer.exe with MinGW-w64 (static, no DLLs needed)
 #   make wintest   builds the Windows unit tests of both and runs them (and the self-test) under Wine
+#   make winsigner cross-compiles build/win/pzsign.exe (cargo, with the Rust target x86_64-pc-windows-gnu installed)
 #   make test-shani   runs the library tests, the shani engine test and the self-test under qemu-x86_64 -cpu max, which executes the SHA
 #                  extensions on any x86-64 Linux machine (skipped when qemu-x86_64 is not installed; see the rule below)
 #
@@ -221,7 +222,7 @@ lib-cxx: $(LIB) lib/pzcore/tests/cxx_check.cpp
 lib-examples: $(addsuffix $(EXE),$(addprefix $(BUILD)/pzcore/ex_,$(LIBEXAMPLES)))
 	@for e in $(LIBEXAMPLES); do echo "== $$e"; $(RUN) ./$(BUILD)/pzcore/ex_$$e$(EXE) || exit 1; done
 
-.PHONY: all lib lib-test lib-cxx lib-examples test test-shani e2e asan tsan clean windows wintest mockcuda winmockcuda print-version
+.PHONY: all lib lib-test lib-cxx lib-examples test test-shani e2e asan tsan clean windows wintest winsigner mockcuda winmockcuda print-version
 
 all: $(BIN)
 
@@ -364,6 +365,9 @@ windows:
 
 wintest:
 	$(MAKE) CC=$(WINCC) BUILD=build/win test peer-test
+
+winsigner:
+	$(MAKE) CC=$(WINCC) BUILD=build/win signer
 
 e2e: $(BIN)
 	tests/e2e.sh $(BIN)

@@ -7,10 +7,12 @@
 # first (its own walkers meet too) starts a new try with a new puzzle, up to 6.
 # With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
 # bitcoind) and check every answer themselves (chain_spv.c).
-# Usage: PZ_REGTEST=host:port:user:password [PZ_E2E_LIGHT=1] tests/peer/e2e_net.sh    (build/pzsolve, build/pzpeer and build/pzsign built)
+# With PZ_E2E_WIN=1 the three programs are the Windows ones of build/win, run under Wine (the bitcoind stays the one of this machine).
+# Usage: PZ_REGTEST=host:port:user:password [PZ_E2E_LIGHT=1] [PZ_E2E_WIN=1] tests/peer/e2e_net.sh    (pzsolve, pzpeer and pzsign built)
 set -u
 IFS=: read -r RH RP RU RW <<< "${PZ_REGTEST:?set PZ_REGTEST=host:port:user:password of a bitcoind in regtest}"
-BIN=$(pwd)/build
+BIN=$(pwd)/build; EXE=; RUN=
+if [ -n "${PZ_E2E_WIN:-}" ]; then BIN=$BIN/win; EXE=.exe; RUN=wine; fi   # the Windows programs (make windows winsigner), under Wine
 DIR=$(mktemp -d /tmp/pznet.XXXXXX)
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$DIR"' EXIT
 rpc() {   # rpc [wallet] METHOD PARAMS_JSON: the result as JSON text
@@ -53,15 +55,15 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
         "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" "$PORT" > "$T/net.txt"
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
-    "$BIN/pzpeer" node --network "$T/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$T/n" \
+    $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$T/n" \
         --listen $PORT --no-upnp > "$T/n.log" 2>&1 &
     NPID=$!
     sleep 3
     port=$PORT
     for h in a b c; do
         port=$((port + 1))
-        timeout 600 "$BIN/pzpeer" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" --listen $port --no-upnp \
-            --pzsolve "$BIN/pzsolve" --pzsign "$BIN/pzsign" --debug "$T/$h.debug" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
+        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" --listen $port --no-upnp \
+            --pzsolve "$BIN/pzsolve$EXE" --pzsign "$BIN/pzsign$EXE" --debug "$T/$h.debug" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
     done
     wait "${PID[a]}" "${PID[b]}" "${PID[c]}"

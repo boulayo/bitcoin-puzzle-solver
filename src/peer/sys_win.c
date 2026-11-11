@@ -144,7 +144,7 @@ static bool command_line(const char *const argv[], char *out, size_t cap)
             for (size_t j = 0; j < (before_quote ? 2 * slashes : slashes); j++) out[o++] = '\\';
             if (!a[k]) break;
             if (a[k] == '"') out[o++] = '\\';
-            out[o++] = a[k];
+            out[o++] = !i && a[k] == '/' ? '\\' : a[k];        /* the program: its path as Windows writes it */
         }
         if (quote) out[o++] = '"';
     }
