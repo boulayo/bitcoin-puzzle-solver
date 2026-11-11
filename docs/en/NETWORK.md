@@ -64,6 +64,7 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `electrum.c` | a client of the Electrum protocol (plain TCP) |
 | `chain_spv.c` | the chain of a session without a node: several Electrum servers, every answer proven |
 | `sweep.c` | `pzpeer sweep`: the transaction that moves the coins of a key found by a linear search, signed and not sent |
+| `block.c` | the claim of a block of a shared linear search and its proof of work (section 11; not used by the daemon yet) |
 | `home.c` | the daemon of a home: seed and keys, pzsolve, the feed of `dp.bin`, a session for every useful coincidence |
 | `main.c` | the commands |
 
@@ -736,3 +737,40 @@ The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is t
 file that others may read, or a link, and a home folder that others can open. `HOME/start.key` is the start key pzpeer gives to pzsolve,
 written at every start through a new file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
 in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
+
+## 11. The shared linear search (under construction)
+
+A puzzle whose public key is not known is searched key by key, and the key is seen whole by whoever tries it: no prize can be split.
+What a network can do is keep two people from trying the same keys: a register of the blocks already tried. Tried once, the range
+ends for sure, and in half the keys on average; nothing more than that is gained.
+
+A register is worth what its entries are worth, so every entry carries a proof of work.
+
+**Near misses (done, in pzsolve).** Every CPU engine and GPU kernel compares bytes 8 to 11 of the hash160 of a key with the target's
+before the rest. A key that passes is a *near miss*: one key in 2^32. The engines report them (`scan_job.on_near`, the hits of the
+kernel), the host checks each on the CPU (`run_scan_candidate`, which also takes the key of the campaign from among them), and
+`hunt --near` writes them to `near.txt` of the campaign. Nothing else in pzsolve knows of a network.
+
+**The claim of a block (done, `block.c`, `t_block`).** The range is cut into blocks of 2^bits keys, 40 to 48. A *proof key* is a near
+miss with byte 12 of the target's too: one key in 2^40, about 16 in a block of 2^44. A claim is
+
+| Field | Bytes | |
+|---|---|---|
+| index | 8 | the block, big-endian |
+| owner | 32 | x-only identity of who scanned it |
+| n | 1 | proof keys, 64 at most |
+| offsets | 6 each | of the proof keys in the block, increasing |
+| signature | 64 | BIP340, by the owner, over `SHA256("pznet1/block" \|\| F \|\| the fields before it)` |
+
+and is valid with a good signature, increasing offsets inside the block, every key a proof key, and at least a quarter of the
+average number of them (an honest scan has fewer once in a thousand blocks, and that block is done again). Checking a claim costs
+some tens of hashes. A claim shows that most of the block was tried; it cannot show that no key was skipped.
+
+**To come.** The network file of a linear search (an address in place of the public key, the size of the blocks); the claims kept
+in the table like the records of the kangaroo; the home that picks a block nobody claimed, runs `pzsolve hunt -r BLOCK --near`,
+and publishes its claim; spot checks, where a node scans a random slice of a claimed block and asks the owner for its near misses
+of that slice (a near miss the owner cannot show is a proof of fraud that everyone can check); and a second pass over the claimed
+blocks when no free one is left, so that a false claim delays the key and does not hide it.
+
+**When the key is found** nothing is sent. pzsolve warns not to spend it through the public mempool, and `pzpeer sweep` makes and
+signs the transaction for the finder to give to a mining pool in private (`sweep.c`).
