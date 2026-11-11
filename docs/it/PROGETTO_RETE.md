@@ -298,7 +298,7 @@ Deciso: si fa, senza transazioni automatiche. La chiave resta a chi la trova, ch
 
 **Quando la chiave viene trovata.** pzsolve avvisa di non spenderla con un portafoglio, e `pzpeer sweep` prepara e firma la transazione senza inviarla: la si consegna a un pool di mining che accetta transazioni riservate. Questa parte c'è già.
 
-**Stato:** l'avviso e `pzpeer sweep` sono fatti. Il registro dei blocchi e la modifica ai motori sono da fare; da misurare se segnalare le chiavi quasi giuste rallenta i motori (non dovrebbe: confrontano già per primi quei 32 bit).
+**Stato:** fatti l'avviso, `pzpeer sweep`, la modifica ai motori (`hunt --near`, provata su tutti i motori CPU e sul percorso delle schede video con il driver simulato, mai su una scheda vera) e la dichiarazione di un blocco con la sua verifica. Da fare: il file di una rete lineare, il registro delle dichiarazioni nella tabella, la casa che cerca blocco per blocco, i controlli a campione.
 
 ---
 
