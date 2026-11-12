@@ -47,7 +47,8 @@ PEERTESTS  += t_btc_rpc t_chain_rpc t_session
 endif
 DEPS       += $(PEER_OBJ:.o=.d)
 
-$(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
+# a static pattern: the make of macOS (3.81) would take the first rule that matches, the Makefile's $(BUILD)/%.o, and its flags
+$(PEER_OBJ): $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
 	$(CC) $(PEER_FLAGS) -MMD -MP -c $< -o $@
 
 $(PEER): $(PEER_OBJ) $(LIB) $(SECP_LIB)
