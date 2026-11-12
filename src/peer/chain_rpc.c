@@ -51,7 +51,8 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
         if (c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress") || sys_now_ms() > until) return -1;
         sys_sleep_ms(1000);
     }
-    if (n > SCAN_MAX) n = SCAN_MAX;
+    const size_t got = max < SCAN_MAX ? (size_t)max : SCAN_MAX;  /* the scan reports every coin, and fills at most these */
+    if (n > got) n = got;
     int k = 0;
     for (size_t i = 0; i < n && k < max; i++) {
         if (!u[i].height || (u[i].coinbase && tip + 1 < u[i].height + COINBASE_MATURITY)) continue;   /* not spendable yet */
@@ -78,6 +79,7 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
     bool found;
     btc_utxo u;
     if (!btc_rpc_gettxout(c->rpc, txid, vout, true, &found, &u)) return -2;
+    if (!found && !btc_rpc_gettxout(c->rpc, txid, vout, false, &found, &u)) return -2;   /* spent in the mempool only: not yet */
     return found ? (int)u.confirmations : -1;
 }
 

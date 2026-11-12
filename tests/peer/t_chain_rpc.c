@@ -316,9 +316,9 @@ static answer ans_misc(const char *method, const char *params, int nth)
         if (nth == 0) return (answer){"\"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16\"", NULL};
         return (answer){NULL, e[(nth - 1) % 4]};
     }
-    if (!strcmp(method, "gettxout")) {
-        if (nth == 0) return (answer){"null", NULL};
-        if (nth == 1) return (answer){NULL, "{\"code\":-8,\"message\":\"x\"}"};
+    if (!strcmp(method, "gettxout")) {   /* spent in a block (none with the mempool nor without), a failure, spent in the mempool only */
+        if (nth <= 1 || (nth == 3 && strstr(params, "true"))) return (answer){"null", NULL};
+        if (nth == 2) return (answer){NULL, "{\"code\":-8,\"message\":\"x\"}"};
         return (answer){"{\"confirmations\":3,\"value\":1.0,\"scriptPubKey\":{\"hex\":\"51\"},\"coinbase\":false}", NULL};
     }
     if (!strcmp(method, "estimatesmartfee")) {
@@ -344,7 +344,8 @@ static void test_misc(void)
     /* sent; sent already (in a block, in the mempool); refused */
     CHECK(CH.broadcast(CH.ctx, &tx) && CH.broadcast(CH.ctx, &tx) && CH.broadcast(CH.ctx, &tx));
     CHECK(!CH.broadcast(CH.ctx, &tx) && !CH.broadcast(CH.ctx, &tx));
-    CHECK(CH.confirmations(CH.ctx, id, 0) == -1 && CH.confirmations(CH.ctx, id, 0) == -2 && CH.confirmations(CH.ctx, id, 0) == 3);
+    CHECK(CH.confirmations(CH.ctx, id, 0) == -1 && CH.confirmations(CH.ctx, id, 0) == -2);
+    CHECK(CH.confirmations(CH.ctx, id, 0) == 3);   /* spent in the mempool only: still there (the spend may leave the mempools) */
     CHECK(CH.feerate(CH.ctx) == 4321 && CH.feerate(CH.ctx) == 2000);   /* satoshis per 1000 virtual bytes; the fallback */
     btc_rpc_done(&R);
 }

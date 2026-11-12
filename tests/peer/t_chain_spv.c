@@ -168,7 +168,7 @@ static bool touches(const server *s, int i, const char *sh, int spent_by[16])
             spent_by[o] = -1;
             for (int j = 0; j < W.nt; j++) {
                 btc_tx sp;
-                if (j == i || (s->l.blind_mempool && W.t[j].height == 0) || !btc_tx_parse(&sp, W.t[j].raw, W.t[j].len)) continue;
+                if (j == i || W.t[j].height < 0 || (s->l.blind_mempool && W.t[j].height == 0) || !btc_tx_parse(&sp, W.t[j].raw, W.t[j].len)) continue;   /* gone: spends nothing */
                 for (size_t k = 0; k < sp.n_in; k++)
                     if (!memcmp(sp.in[k].prev_txid, W.t[i].txid, 32) && sp.in[k].prev_vout == o) spent_by[o] = j;
             }
@@ -490,15 +490,12 @@ int main(void)
     chain_spv_free(&c);
     view(&c, &ch, &keeper, &honest, NULL);
     CHECK(ch.broadcast(ch.ctx, &pay) && honest.broadcasts == 1 && ch.broadcast(ch.ctx, &pay));   /* and again: known already */
-    /* in the mempool, validly signed: the prize has moved. A server that does not show its mempool says it has not: next to the honest
-     * one, the spend is seen */
-    CHECK(ch.confirmations(ch.ctx, fid, 0) == -1);
-    chain_spv_free(&c);
-    view(&c, &ch, &blind, NULL, NULL);
+    /* in the mempool, validly signed: not spent yet, for every server. One server could show a transaction that was never sent (the
+     * second transaction a partner holds back), and F would not cancel: a spend counts once it is confirmed, by proof */
     CHECK(ch.confirmations(ch.ctx, fid, 0) == 4);
     chain_spv_free(&c);
     view(&c, &ch, &blind, &honest, NULL);
-    CHECK(ch.confirmations(ch.ctx, fid, 0) == -1 && ch.coins(ch.ctx, pspk, coins, 8) == 0);
+    CHECK(ch.confirmations(ch.ctx, fid, 0) == 4 && ch.coins(ch.ctx, pspk, coins, 8) == 1);
     /* confirmed: spent by proof; what it paid has one confirmation, then two; the headers grew by themselves */
     mine_block();
     uint8_t pid[32];

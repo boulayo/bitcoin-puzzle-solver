@@ -75,7 +75,8 @@ static bool get_proof(chain_spv *c, electrum *e, const uint8_t txid[32], uint64_
     if (!electrum_call(e, "blockchain.transaction.get_merkle", &w, &d, &res)) return false;
     const json_val *m = json_get(res, "merkle");
     bool ok = m && m->type == JSON_ARRAY && m->n <= SPV_BRANCH_MAX && json_u64(json_get(res, "pos"), &pos) && pos <= UINT32_MAX;
-    for (uint32_t i = 0; ok && i < m->n; i++) ok = btc_hash_from_hex(json_str(json_at(m, i)), branch[i]);
+    const json_val *b = m ? m + 1 : NULL;
+    for (uint32_t i = 0; ok && i < m->n; i++, b = json_next(b)) ok = btc_hash_from_hex(json_str(b), branch[i]);
     if (ok) {
         pthread_mutex_lock(&c->mu);
         ok = spv_proof(&c->headers, height, txid, (const uint8_t(*)[32])branch, m->n, (uint32_t)pos);
@@ -188,52 +189,48 @@ static bool is_coinbase(const uint8_t *raw, size_t len)
     return len >= o + 1 + 36 && raw[o] == 1 && !memcmp(raw + o + 1, ZERO, 32);
 }
 
-/* The history of a script on one server, looked at for the output txid:vout, whose transaction is raw. *height: where txid is confirmed,
- * by proof. True when the server shows the output spent: by a confirmed transaction with its proof, or by one in the mempool whose inputs
- * are all outputs of raw and all validly signed (the second transaction of a session, complete).
- * Transactions with more inputs or outputs than a btc_tx holds are not looked into: ours are small. */
-static bool scan_history(chain_spv *c, electrum *e, const uint8_t *spk, size_t spk_len, const uint8_t *raw, size_t rawlen,
-                         const uint8_t txid[32], uint32_t vout, uint64_t *height)
+/* The history of a script on one server, looked at for the output txid:vout. *height: where txid is confirmed, by proof. True when the
+ * server shows the output spent by a confirmed transaction, with its proof. A spend in the mempool counts for nothing: one server could
+ * show a transaction that was never sent (the second transaction a partner holds back), and F would not cancel. Of the confirmed
+ * transactions at or above txid's height, the oldest HISTORY_MAX are looked into: dust sent to the address later cannot hide the spend,
+ * which comes first. Transactions with more inputs or outputs than a btc_tx holds are not looked into: ours are small. */
+static bool scan_history(chain_spv *c, electrum *e, const uint8_t *spk, size_t spk_len, const uint8_t txid[32], uint32_t vout, uint64_t *height)
 {
     json_w w;
     json_doc d;
     const json_val *res;
     uint8_t sh[32];
     bool spent = false;
+    int64_t at = 0;                                            /* the height of txid in this history */
     script_hash(spk, spk_len, sh);
     jw_init(&w);
     jw_arr(&w), put_hash(&w, sh), jw_end(&w);
     if (!electrum_call(e, "blockchain.scripthash.get_history", &w, &d, &res)) return false;
     const uint32_t n = res->type == JSON_ARRAY ? res->n : 0;
-    for (uint32_t i = n > HISTORY_MAX ? n - HISTORY_MAX : 0; i < n && !spent; i++) {
-        const json_val *it = json_at(res, i);
+    const json_val *it = res + 1;
+    for (uint32_t i = 0; i < n; i++, it = json_next(it)) {     /* txid itself */
+        uint8_t id[32];
+        int64_t h;
+        if (btc_hash_from_hex(json_str(json_get(it, "tx_hash")), id) && !memcmp(id, txid, 32) && json_i64(json_get(it, "height"), &h) && h > 0) {
+            at = h;
+            if (get_proof(c, e, txid, (uint64_t)h)) *height = (uint64_t)h;
+        }
+    }
+    it = res + 1;
+    for (uint32_t i = 0, looked = 0; at && i < n && !spent && looked < HISTORY_MAX; i++, it = json_next(it)) {
         uint8_t id[32], *tr = NULL;
         size_t tl;
         int64_t h;
-        if (!btc_hash_from_hex(json_str(json_get(it, "tx_hash")), id) || !json_i64(json_get(it, "height"), &h)) continue;
-        if (!memcmp(id, txid, 32)) {
-            if (h > 0 && get_proof(c, e, txid, (uint64_t)h)) *height = (uint64_t)h;
+        if (!btc_hash_from_hex(json_str(json_get(it, "tx_hash")), id) || !json_i64(json_get(it, "height"), &h) || h < at || !memcmp(id, txid, 32))
             continue;
-        }
+        looked++;
         btc_tx *tx = malloc(sizeof *tx);
-        bool spends = tx && get_tx(e, id, &tr, &tl) && btc_tx_parse(tx, tr, tl), ours = spends;
+        bool spends = tx && get_tx(e, id, &tr, &tl) && btc_tx_parse(tx, tr, tl);
         if (spends) {
             spends = false;
-            for (size_t k = 0; k < tx->n_in; k++) {
-                spends |= !memcmp(tx->in[k].prev_txid, txid, 32) && tx->in[k].prev_vout == vout;
-                ours &= !memcmp(tx->in[k].prev_txid, txid, 32);
-            }
+            for (size_t k = 0; k < tx->n_in; k++) spends |= !memcmp(tx->in[k].prev_txid, txid, 32) && tx->in[k].prev_vout == vout;
         }
-        if (spends && h > 0) spent = get_proof(c, e, id, (uint64_t)h);
-        else if (spends && ours) {                             /* in the mempool: believed only when each signature is valid */
-            spent = true;
-            for (size_t k = 0; k < tx->n_in && spent; k++) {
-                uint64_t value;
-                const uint8_t *ps;
-                size_t pl;
-                spent = btc_prevout(raw, rawlen, txid, tx->in[k].prev_vout, &value, &ps, &pl) && btc_verify_p2pkh(tx, k, ps, pl);
-            }
-        }
+        if (spends) spent = get_proof(c, e, id, (uint64_t)h);
         free(tr);
         free(tx);
     }
@@ -245,6 +242,18 @@ typedef struct {
     payout_coin coin;
     unsigned listed;               /* a bit for each server that lists it */
 } found_coin;
+
+typedef struct {
+    uint8_t txid[32];
+    uint32_t vout;
+    uint64_t height, value;        /* the value the server claims */
+} listed;
+
+static int by_claimed_value(const void *a, const void *b)
+{
+    const listed *x = a, *y = b;
+    return (x->value < y->value) - (x->value > y->value);
+}
 
 /* The proven, confirmed coins of a P2PKH script: the union of what the servers list. A coin some server does not list is dropped when that
  * server proves it spent. -1 when no server answered. */
@@ -267,41 +276,49 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
         jw_arr(&w), put_hash(&w, sh), jw_end(&w);
         if (!electrum_call(&s.e[i], "blockchain.scripthash.listunspent", &w, &d, &res)) continue;
         answered |= 1u << i;
-        for (uint32_t k = 0; res->type == JSON_ARRAY && k < res->n; k++) {
-            const json_val *it = json_at(res, k);
-            uint8_t txid[32], *raw = NULL;
+        /* what the server lists, the largest first by what it says (proven below): dust sent to the address cannot push a prize out */
+        const uint32_t cnt = res->type == JSON_ARRAY ? res->n : 0;
+        listed *l = cnt ? malloc(cnt * sizeof *l) : NULL;
+        uint32_t m = 0;
+        const json_val *it = res + 1;
+        for (uint32_t k = 0; l && k < cnt; k++, it = json_next(it)) {
+            uint64_t vout, height;
+            if (btc_hash_from_hex(json_str(json_get(it, "tx_hash")), l[m].txid) && json_u64(json_get(it, "tx_pos"), &vout) &&
+                json_u64(json_get(it, "height"), &height) && json_u64(json_get(it, "value"), &l[m].value) && height && height <= tip &&
+                vout <= UINT32_MAX)
+                l[m].vout = (uint32_t)vout, l[m].height = height, m++;   /* not in the mempool, nor above what we have verified */
+        }
+        if (m) qsort(l, m, sizeof *l, by_claimed_value);
+        for (uint32_t k = 0; k < m && k < (uint32_t)max; k++) {
+            uint8_t *raw = NULL;
             const uint8_t *ps;
-            uint64_t vout, height, value;
+            uint64_t value;
             size_t len, pl;
-            int j = 0;
-            if (!btc_hash_from_hex(json_str(json_get(it, "tx_hash")), txid) || !json_u64(json_get(it, "tx_pos"), &vout) ||
-                !json_u64(json_get(it, "height"), &height) || height == 0 || height > tip || vout > UINT32_MAX)
-                continue;                                      /* in the mempool, or above what we have verified */
-            while (j < n && (memcmp(out[j].coin.txid, txid, 32) || out[j].coin.vout != vout)) j++;
+            int j = 0, low = 0;
+            while (j < n && (memcmp(out[j].coin.txid, l[k].txid, 32) || out[j].coin.vout != l[k].vout)) j++;
             if (j < n) {
                 out[j].listed |= 1u << i;
                 continue;
             }
-            if (n < max && get_tx(&s.e[i], txid, &raw, &len) && btc_prevout(raw, len, txid, (uint32_t)vout, &value, &ps, &pl) &&
-                pl == BTC_P2PKH_LEN && !memcmp(ps, spk, pl) && tip - height + 1 >= (is_coinbase(raw, len) ? COINBASE_MATURITY : 1) &&
-                get_proof(c, &s.e[i], txid, height)) {
-                memcpy(out[n].coin.txid, txid, 32);
-                out[n].coin.vout = (uint32_t)vout, out[n].coin.value = value, out[n].listed = 1u << i;
-                n++;
+            for (int q = 1; q < n; q++) low = out[q].coin.value < out[low].coin.value ? q : low;
+            if (n == max && l[k].value <= out[low].coin.value) continue;   /* full of larger coins */
+            if (get_tx(&s.e[i], l[k].txid, &raw, &len) && btc_prevout(raw, len, l[k].txid, l[k].vout, &value, &ps, &pl) &&
+                pl == BTC_P2PKH_LEN && !memcmp(ps, spk, pl) && tip - l[k].height + 1 >= (is_coinbase(raw, len) ? COINBASE_MATURITY : 1) &&
+                get_proof(c, &s.e[i], l[k].txid, l[k].height) && (n < max || value > out[low].coin.value)) {
+                const int at = n < max ? n++ : low;
+                memcpy(out[at].coin.txid, l[k].txid, 32);
+                out[at].coin.vout = l[k].vout, out[at].coin.value = value, out[at].listed = 1u << i;
             }
             free(raw);
         }
+        free(l);
         json_free(&d);
     }
     for (int j = 0; j < n; j++)                                /* listed by some, not by others: spent, if one of those proves it */
         for (int i = 0; i < c->nservers; i++) {
-            uint8_t *raw;
-            size_t len;
             uint64_t h = 0;
-            if (!(answered >> i & 1) || (out[j].listed >> i & 1) || !get_tx(&s.e[i], out[j].coin.txid, &raw, &len)) continue;
-            const bool spent = scan_history(c, &s.e[i], spk, BTC_P2PKH_LEN, raw, len, out[j].coin.txid, out[j].coin.vout, &h);
-            free(raw);
-            if (spent) {
+            if (!(answered >> i & 1) || (out[j].listed >> i & 1)) continue;
+            if (scan_history(c, &s.e[i], spk, BTC_P2PKH_LEN, out[j].coin.txid, out[j].coin.vout, &h)) {
                 out[j--] = out[--n];
                 break;
             }
@@ -387,7 +404,7 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
         return -2;                                             /* no server shows the transaction: that says nothing */
     }
     for (int i = 0; i < c->nservers && !spent; i++)
-        if (s.up[i]) spent = scan_history(c, &s.e[i], spk, spk_len, raw, len, txid, vout, &height);
+        if (s.up[i]) spent = scan_history(c, &s.e[i], spk, spk_len, txid, vout, &height);
     free(raw);
     close_all(&s);
     return spent ? -1 : height && height <= tip ? (int)(tip - height + 1) : 0;

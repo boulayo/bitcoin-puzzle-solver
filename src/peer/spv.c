@@ -109,15 +109,17 @@ static bool hdr_valid(btc_chain chain, const uint8_t *arr, uint64_t h0, size_t i
         }
         if (bits != want) return false;
     }
+    if (hdr_time(h) > now + FUTURE) return false;
+    if (i < 11) return true;                                   /* the 11 blocks before are not all kept: the rule of consensus cannot be checked,
+                                                                * and a stricter one would refuse the real chain (its times are not in order) */
     uint32_t t[11];                                            /* above the median time of the 11 blocks before */
-    size_t n = 0;
-    for (; n < 11 && n < i; n++) {
+    for (size_t n = 0; n < 11; n++) {
         uint32_t v = hdr_time(h - (n + 1) * SPV_HEADER);
         size_t k = n;
         for (; k > 0 && t[k - 1] > v; k--) t[k] = t[k - 1];
         t[k] = v;
     }
-    return hdr_time(h) > t[n / 2] && hdr_time(h) <= now + FUTURE;
+    return hdr_time(h) > t[5];
 }
 
 bool spv_init(spv_chain *c, btc_chain chain, uint64_t base, const uint8_t hash[32])
