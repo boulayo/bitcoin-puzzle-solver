@@ -327,7 +327,7 @@ static void test_cases(void)
         /* jitter and TPM short: the longer collection, then the end */
         {"jitter fails, no TPM: longer, then none", 0, 0, JF_ALTERNATE, 0, 0, 0, 150, PZ_SEED_E_SHORT, U, A, X, U, "rounds|another computer"},
         {"jitter timer dead, no TPM", 0, 0, JF_CONST, 0, 0, 0, 0, PZ_SEED_E_SHORT, U, A, X, U, "does not advance"},
-        {"jitter first round bad, no TPM", 0, 0, JF_FIRSTBAD, 0, 0, 0, 0, PZ_SEED_OK, U, A, U, U, "round 2"},
+        {"jitter first round bad, no TPM", 0, 0, JF_FIRSTBAD, 0, 0, 0, 60000, PZ_SEED_OK, U, A, U, U, "round 2"},      /* real rounds: time for the second on a slow machine */
         {"jitter fails, no TPM, degraded allowed", 0, 0, JF_ALTERNATE, 0, 0, PZ_SEED_ALLOW_DEGRADED, 50, PZ_SEED_OK, U, A, X, U, NULL},
         {"cpu-rng and jitter fail, no TPM", 0, HWF_ALLONES, JF_STEP, 0, 0, 0, 50, PZ_SEED_E_SHORT, X, A, X, U, "give 0 bits"},
         /* the caller's source */
