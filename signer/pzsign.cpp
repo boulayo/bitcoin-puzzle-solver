@@ -15,6 +15,13 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#else
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #endif
 
 #include <cbmpc/internal/core/strext.h>
@@ -70,6 +77,7 @@ static bool write_frame(uint8_t type, const uint8_t* p, size_t n) {
 struct link_t : coinbase::api::data_transport_i {
   int me;
   uint8_t phase = IMPORT;
+  size_t digests = 1;
   std::string why;  // the first failure of the channel or of the partner's messages: the library only sees an error code
   explicit link_t(int me) : me(me) {}
   virtual bool put(bytes&& envelope) = 0;
@@ -88,6 +96,10 @@ struct link_t : coinbase::api::data_transport_i {
     if (w.empty() && (e.size() < 3 || e[0] != VERSION || e[1] != 1 - me || e[2] != phase))
       w = "malformed message from the partner (" + strext::to_hex(mem_t(e.data(), int(e.size() < 3 ? e.size() : 3))) +
           ", phase " + std::to_string(phase) + " expected)";
+    // the largest a message of the phase can be (36 KB, then about 4 KB a digest): the library sizes its arrays by what a message says,
+    // and a partner would make it allocate hundreds of MB with a message of 1 MiB
+    const size_t cap = phase == IMPORT ? 65536 : phase == SIGN ? 16384 + 4608 * digests : 64 * digests;
+    if (w.empty() && e.size() - 3 > cap) w = "a message of " + std::to_string(e.size()) + " bytes from the partner";
     if (!w.empty()) {
       if (why.empty()) why = w;
       return E_FORMAT;
@@ -197,7 +209,7 @@ static bytes run(const job_t& j, link_t& l) {
   const auto t0 = std::chrono::steady_clock::now();
 
   ecdsa2pc::key_t key;
-  l.phase = IMPORT;
+  l.phase = IMPORT, l.digests = j.digests.size();
   check(import_piece(job, j.share, j.key, key), l, "the import of the pieces");
   // ECDSA uses the digest only as a number mod n, and the library takes it already reduced (in its proofs and in its verification): the
   // same signatures as for the digests as they came
@@ -244,10 +256,30 @@ static bytes run(const job_t& j, link_t& l) {
 
 // ---- the commands ----
 
+// No core file, and on Linux no other process of the user may read this one: it holds a piece of a key.
+static void harden() {
+#ifndef _WIN32
+  const struct rlimit none = {0, 0};
+  setrlimit(RLIMIT_CORE, &none);
+#ifdef __linux__
+  prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+#endif
+  // a standard descriptor that is closed is opened on the null device: else the copy of stdout below could take number 2, and the log
+  // lines would go into the frames
+  for (int fd = 0; fd <= 2; fd++)
+    if (fcntl(fd, F_GETFD) < 0) {
+      const int n = open("/dev/null", O_RDWR);
+      if (n >= 0 && n != fd) dup2(n, fd), close(n);
+    }
+#endif
+}
+
 static int session() {
+  harden();
 #ifdef _WIN32
   _setmode(_fileno(stdin), _O_BINARY);
 #endif
+  setvbuf(stdin, nullptr, _IONBF, 0);  // the job (and its piece) only in the vector that is wiped, not in a buffer of stdio
   // frames go to a copy of stdout, and stdout itself to stderr: nothing the library might print can break a frame
   frames_out = fdopen(dup(1), "wb");
   if (!frames_out || dup2(2, 1) < 0) return fputs("pzsign: stdout\n", stderr), 1;

@@ -56,9 +56,11 @@ P1 has the signatures before P2, and P2 has them only if P1 sends them: pzpeer m
 transaction, the party `first` (NETWORK.md 7.5, step 6). The library's signing makes P2 prove its last message well formed, so a P2
 that cheats gets nothing and learns nothing; there is no presignature and no state kept between sessions.
 
-Anything malformed (a frame, the job, a message, a frame of an unexpected type, the end of stdin) ends the session with 0x83. pzsign
-sends the partner nothing when it fails: pzpeer ends the partner's input instead (S_SIGNED with no signatures). pzsign has no timeout:
-pzpeer stops it when the session is over.
+Anything malformed (a frame, the job, a message, a frame of an unexpected type, the end of stdin) ends the session with 0x83, and so
+does a message of the partner larger than its phase allows (64 KiB in the import of the pieces, 16 KiB and 4.5 KiB a digest in the
+signing, 64 bytes a digest for the signatures), before the library reads it. pzsign sends the partner nothing when it fails: pzpeer ends
+the partner's input instead (S_SIGNED with no signatures). pzsign has no timeout: pzpeer stops it when the session is over. A session
+makes no core file and, on Linux, no other process of the user can attach to it or read its memory.
 
 ## The envelope
 

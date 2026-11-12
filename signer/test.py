@@ -170,6 +170,11 @@ def main():
     answers, _ = session(jobs, sides=(0,), script=list(sent[1]))
     check(signed([answers[0], (ERROR, b'')], k, digests) == [], 'replay')
 
+    print('a message far larger than its phase allows is refused before the library reads it')
+    jobs, k, digests = setup()
+    answers, _ = session(jobs, lambda s, i, env: env[:3] + bytes((1 << 20) - 16) if (s, i) == (0, 0) else env)
+    check(signed(answers, k, digests) == [] and answers[1] is not None and b'bytes from the partner' in answers[1][1], f'large message: {answers[1]}')
+
     print('a share that is not its piece, pieces that do not add up to the key, malformed jobs: refused')
     jobs, k, digests = setup()
     j = jobs[0]

@@ -19,7 +19,7 @@ Upstream supports Linux and macOS only. Two changes make it build and run on Win
 | File | Change |
 |---|---|
 | `include/cbmpc/core/precompiled.h` | on Windows, the Windows headers in place of the Unix ones (sockets, `mmap`, `termios` and the like, which the code that pzsign builds does not use) |
-| `src/cbmpc/crypto/base_bn256.cpp` | `support_x64_mulx()` is false on Windows: the two `mulx` routines in assembly take their arguments in the registers of the System V calling convention, not those of Windows, and would compute garbage there (seen: three tests of cb-mpc fail, then a crash) |
+| `src/cbmpc/crypto/base_bn256.cpp` | `support_x64_mulx()` is false on Windows: the four `mulx` routines in assembly that it switches on (`mul256` and `barrett_reduce256` here, the field product and square of `ec25519_core.cpp`) take their arguments in the registers of the System V calling convention, not those of Windows, and would compute garbage there (seen: three tests of cb-mpc fail, then a crash) |
 
 With these, all 1454 unit tests of cb-mpc pass under Wine as on Linux (1453 passed, 1 skipped on both: a file of test vectors that the
 repository keeps outside git).
