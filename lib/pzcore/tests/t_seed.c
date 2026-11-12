@@ -273,7 +273,8 @@ static bool reason_has(const pz_seed_report *r, const char *alts)
 static pz_seed_status run_case(const fcase *c, uint8_t seed[32], pz_seed_report *r)
 {
     reset();
-    g_fault.os = c->os, g_fault.hw = c->hw, g_fault.jit = c->jit, g_fault.key = 0x4141414141414141ULL;
+    g_fault.os = c->os, g_fault.jit = c->jit, g_fault.key = 0x4141414141414141ULL;
+    g_fault.hw = c->hw ? c->hw : HWF_GOOD;     /* a working CPU generator unless the case breaks it: the same results on every machine */
     if (c->jit && c->jit != JF_FIRSTBAD) g_fault.walk = 16;      /* simulated timers: the walk itself does not matter */
     fake_tpm(c->tpm);
     int kind = c->caller;
