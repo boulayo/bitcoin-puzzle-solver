@@ -57,6 +57,13 @@ int pz_pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(*fn)(voi
 int pz_open_read(const char *path) { return open(path, O_RDONLY | O_CLOEXEC); }
 int pz_open_rw(const char *path, bool create) { return open(path, O_RDWR | O_CLOEXEC | (create ? O_CREAT : 0), 0644); }
 int pz_open_trunc(const char *path, int mode) { return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, (mode_t)mode); }
+FILE *pz_fopen_append_private(const char *path)
+{
+    const int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "ab");
+    if (fd >= 0 && !f) close(fd);
+    return f;
+}
 
 int pz_create_temp(char *tmpl)
 {

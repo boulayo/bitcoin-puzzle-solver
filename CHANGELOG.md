@@ -18,7 +18,7 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   is reached with its cookie file (`--rpc-cookie`).
 - pzpeer needs no Bitcoin node of one's own: without `--rpc` it reads the chain from several Electrum servers (`--electrum HOST:PORT`
   and the `electrum=` lines of the network file) and trusts none. Block headers count only with their proof of work from the
-  `checkpoint=` of the network file, a coin only with its transaction and Merkle proof, a spend only when proven: a lying server can
+  `checkpoint=` of the network file, a coin only with its transaction and Merkle proof, a spend only when proven in a block: a lying server can
   delay a payout, never misdirect it. A node of one's own stays the stronger choice.
 - pzpeer finds the other nodes with no server of the network: each node announces its port in the Mainline DHT of BitTorrent under
   a key made from the network's fingerprint and looks the others up there (`--bt-router`, `--no-bt`). Only addresses pass through it,
@@ -33,13 +33,18 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   transaction that moves its coins and sends nothing, for the finder to give to a mining pool in private.
 - `hunt --near` (linear search) writes the near misses of the scan to `near.txt`: the keys whose hash160 has four bytes of the
   target's, one in 2^32. The CPU engines and the GPU kernels report them to one function of the host, which checks each and takes
-  the key of the campaign from among them; they are the proof of work of the shared linear search to come (docs/en/NETWORK.md).
+  the key of the campaign from among them; they are the proof of work of the shared linear search to come (docs/en/NETWORK.md). The
+  file is for the user alone (mode 0600), and the key itself never goes there, only to `FOUND.txt`.
 - pzpeer and pzsign for Windows: `make windows winsigner` cross-compiles `pzpeer.exe` and `pzsign.exe` with MinGW-w64 beside
   `pzsolve.exe`. What pzpeer asks of the operating system is in one place (`src/peer/sys.h`), with an implementation for Linux and
   macOS and one for Windows. Under Wine the unit tests pass and three homes pay a coincidence (`PZ_E2E_WIN=1 tests/peer/e2e_net.sh`);
   the CI runs the unit tests on a real Windows machine, the two-party signing with `pzsign.exe` among them, and builds and tests
   pzpeer on macOS. A whole network has not been run on those systems yet.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
+
+### Security
+- `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
+  already was.
 
 ## [1.23.2] — 2026-11-08
 

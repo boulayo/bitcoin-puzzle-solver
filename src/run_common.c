@@ -231,14 +231,15 @@ bool run_scan_candidate(run_ctx *r, const pz_u256 *key, const char *source)
         pz_log(PZ_LOG_WARN, "candidate from %s discarded: the independent CPU check failed", source);
         return false;
     }
-    if (r->near) {
+    const bool is_key = memcmp(h, r->cfg.target_h160, 20) == 0;
+    if (r->near && !is_key) {                     /* the key itself is FOUND.txt's, encrypted when the campaign asks */
         char hx[80];
         pthread_mutex_lock(&r->found_mu);
         fprintf(r->near, "%s\n", pz_u256_to_hex(key, hx));
         fflush(r->near);
         pthread_mutex_unlock(&r->found_mu);
     }
-    return memcmp(h, r->cfg.target_h160, 20) == 0 && run_submit_key(r, key, source);
+    return is_key && run_submit_key(r, key, source);
 }
 
 /* The seed as the reports show it: a shared walk's is its start key, which stays in memory (docs/en/NETWORK.md 6). */

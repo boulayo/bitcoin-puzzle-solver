@@ -41,7 +41,7 @@ static int log_resync(kang_state *ks)
     memmove(ks->wbuf, ks->wbuf + drop, (ks->nw - drop) * sizeof(dp_rec));
     ks->nw -= drop;
     ks->log_recs = whole;
-    ks->log = fopen(ks->log_path, "ab");
+    ks->log = pz_fopen_append_private(ks->log_path);   /* the distances of a shared walk are secrets */
     if (!ks->log) return -1;
     ks->log_broken = false;
     return 0;
@@ -360,7 +360,7 @@ int kang_load_log(kang_state *ks)
     }
     ks->loaded = (u64)n;
     ks->log_recs = whole;
-    ks->log = fopen(ks->log_path, "ab");
+    ks->log = pz_fopen_append_private(ks->log_path);
     ks->log_refs = ks->log != NULL;
     return ks->log ? 0 : -1;
 }

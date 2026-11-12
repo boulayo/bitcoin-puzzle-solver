@@ -34,6 +34,7 @@ static void krng_seed(u64 s[4], const u8 seed[32], const char *tag, u64 a, u64 b
     u8 h[32];
     pz_sha256(buf, 64, h);
     memcpy(s, h, 32);
+    pz_secure_zero(buf, sizeof buf), pz_secure_zero(h, sizeof h);   /* the seed: the start key in a shared walk */
     if (!(s[0] | s[1] | s[2] | s[3])) s[0] = 1;
     for (int i = 0; i < 8; i++) krng_next(s);
 }
@@ -738,6 +739,7 @@ static void kang_restart_rng(kang_state *ks, kang_worker *w, int i, u64 rng[4])
             continue;
         }
         start_set(w, i, &p, d);
+        pz_secure_zero(own, sizeof own);
         return;
     }
 }
@@ -759,6 +761,7 @@ static void kang_start_range(kang_state *ks, kang_worker *w, int from, int to, u
             u64 own[4], *g = rng;
             if (ks->net) net_start_rng(ks, g = own);              /* a generator of its own for each start (net_start_rng) */
             while (!start_species(ks, start_band(ks, w, i0 + k, g), g, &pj[k], &d[k])) {}
+            pz_secure_zero(own, sizeof own);
         }
         if (pz_gej_to_ge_batch(p, pj, (size_t)n)) {
             for (int k = 0; k < n; k++) start_set(w, i0 + k, &p[k], d[k]);

@@ -28,6 +28,13 @@ static int open_flags(const char *path, int flags)
 int pz_open_read(const char *path) { return open_flags(path, _O_RDONLY); }
 int pz_open_rw(const char *path, bool create) { return open_flags(path, _O_RDWR | (create ? _O_CREAT : 0)); }
 int pz_open_trunc(const char *path, int mode) { (void)mode; return open_flags(path, _O_WRONLY | _O_CREAT | _O_TRUNC); }   /* no POSIX modes: the folder decides who can read */
+FILE *pz_fopen_append_private(const char *path)
+{
+    const int fd = open_flags(path, _O_WRONLY | _O_CREAT | _O_APPEND);
+    FILE *f = fd < 0 ? NULL : _fdopen(fd, "ab");
+    if (fd >= 0 && !f) _close(fd);
+    return f;
+}
 
 int pz_create_temp(char *tmpl)
 {

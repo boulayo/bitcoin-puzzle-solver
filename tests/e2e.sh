@@ -139,6 +139,12 @@ NA=12pdKoL4t5dCPGAvrUnACpnBaMYyyWST2N; NK=100000076b8e3
 [ "$(field 0x$NK h160 | cut -c17-24)" = "$(field 0x9a7b3 h160 | cut -c17-24)" ] || bad "the near miss of the test is not one"
 $BIN hunt -a $NA -r 1000000700000:10000007fffff -c near -d "$DIR" --near --ui log -q --no-gpu >/dev/null 2>&1
 [ $? = 1 ] && [ "$(cat "$DIR/near/near.txt" 2>/dev/null)" = "$NK" ] && ok "--near: the near miss of an interval is in near.txt" || bad "--near: near.txt holds '$(cat "$DIR/near/near.txt" 2>/dev/null)'"
+# with the address of that key as the target the key is found: FOUND.txt has it, near.txt never (it was there, in plain text, before), and
+# near.txt is its owner's only
+$BIN hunt -a "$(field 0x$NK addr)" -r 1000000700000:10000007fffff -c nearkey -d "$DIR" --near --ui log -q --no-gpu >/dev/null 2>&1
+NM=$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$DIR/nearkey/near.txt" 2>/dev/null)
+grep -qi "$NK" "$DIR/nearkey/FOUND.txt" 2>/dev/null && ! grep -qi "$NK" "$DIR/nearkey/near.txt" && [ "$NM" = 0o600 ] \
+  && ok "--near: the key found is in FOUND.txt and not in near.txt, which is 0600" || bad "--near with the key: near.txt '$(cat "$DIR/nearkey/near.txt" 2>/dev/null)', mode $NM"
 $BIN hunt -a $NA -r 1000000700000:10000007fffff -c nonear -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ ! -e "$DIR/nonear/near.txt" ] && ok "without --near no near.txt" || bad "near.txt without --near"
 LO=$((0x7000000000+12345)); W=1000003; HI=$((LO+W-1))
