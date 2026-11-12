@@ -405,8 +405,12 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
     if (!s) {                                                   /* no alert yet: room for it, one per partner */
         int open = 0;
         bool busy = false;
-        for (int i = 0; i < MAX_SESSIONS; i++)
-            if (h->s[i].used && !h->s[i].alerted) open++, busy |= !memcmp(h->s[i].partner, a.owner, 32);
+        for (int i = 0; i < MAX_SESSIONS; i++) {
+            const session_slot *o = &h->s[i];
+            if (o->used && !o->alerted) open++, busy |= !memcmp(o->partner, a.owner, 32);
+            busy |= o->used && o->running && !memcmp(o->mine.x, b.x, 32);   /* one session on a point at a time: a partner proving there
+                                                                              * cannot open others under new identities meanwhile */
+        }
         if (!busy && open < HELLO_SESSIONS) s = slot_of(h, &b, &a, true, &fresh);
     }
     /* a session that runs takes the connection only while it waits for one */

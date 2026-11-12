@@ -38,11 +38,15 @@ typedef struct {
     uint8_t eid[32], my_x[32];
     uint8_t nonce[2][32];                   /* of party 0 and party 1: fresh in every session */
     int wait_ms;                            /* the wait for a message of the partner now */
+    bool proved;                            /* the partner proved its distance */
     payout_terms t;
     char *why;
     size_t whylen;
     char tag[17];
 } sess;
+
+/* the measure of a wait for blocks when the chain stops */
+static int64_t block_ms(const sess *s) { return s->c->block_ms > 0 ? s->c->block_ms : BLOCK_MS; }
 
 static bool fail(sess *s, const char *fmt, ...)
 {
@@ -73,10 +77,16 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
 {
     uint8_t m[SESSION_MSG_MAX];
     size_t n;
-    const int64_t until = sys_now_ms() + s->wait_ms;            /* S_ALIVE (sent while the partner waited for blocks) does not move it */
+    /* S_ALIVE, sent while the partner waits for blocks (its chain may be behind ours), gives another wait only once the partner proved
+     * its distance, and for 2 hours at most: before, anyone could hold a session with it. Each recv waits wait_ms, the same as for the
+     * relay of a signing (the timeout of the connection is not changed while two threads use it). */
+    const int64_t last = sys_now_ms() + (s->proved ? 6 * block_ms(s) : s->wait_ms);
+    int64_t until = sys_now_ms() + s->wait_ms;
     do {
-        const int64_t left = until - sys_now_ms();
-        if (left <= 0 || !s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, (int)left) || n == 0) return fail(s, "the partner did not answer");
+        if (sys_now_ms() > until || !s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, s->wait_ms) || n == 0)
+            return fail(s, "the partner did not answer");
+        const int64_t next = sys_now_ms() + s->wait_ms;
+        if (m[0] == S_ALIVE) until = next < last ? next : last;
     } while (m[0] == S_ALIVE);
     if (m[0] == S_ABORT) {                                      /* its words go into our log: printable characters only */
         char r[201];
@@ -178,6 +188,7 @@ static bool hello(sess *s)
     if (!record_prove(c->ctx, c->net, &c->mine, c->d, c->partner, s->nonce[you], proof)) return fail(s, "the distance does not fit the record");
     if (!send_msg(s, S_PROOF, proof, 64) || !recv_msg(s, S_PROOF, their_proof, 64, &n)) return false;
     if (n != 64 || !record_proof_ok(c->ctx, c->net, &c->theirs, s->my_x, s->nonce[s->me], their_proof)) return fail(s, "the partner did not prove its distance");
+    s->proved = true;
     if (c->proved) *c->proved = true;
     return true;
 }
@@ -346,7 +357,8 @@ static void *relay_out(void *arg)
     relay *r = arg;
     uint8_t *p = NULL, type = 0;
     size_t len;
-    while (signer_recv(&r->sg, &type, &p, &len, r->s->wait_ms) && type == SIGNER_OUT && send_chunks(r, p, len)) free(p), p = NULL;
+    bool up = true;                                             /* pzsign is read to its end even when the partner is gone: its answer is ours */
+    while (signer_recv(&r->sg, &type, &p, &len, r->s->wait_ms) && type == SIGNER_OUT) up = up && send_chunks(r, p, len), free(p), p = NULL;
     if (p && type == SIGNER_RESULT) r->result = p, r->result_len = len, p = NULL;
     free(p);
     const uint8_t st = r->result != NULL;
@@ -356,7 +368,7 @@ static void *relay_out(void *arg)
 
 /* the partner to pzsign: pieces joined into whole messages. Only a whole message is progress: keep-alives or pieces that never end a
  * message cannot hold this side here (the partner would keep the other side from its cancel, or from its signatures), and a signing
- * ends within SIGN_MS whatever comes. */
+ * ends within SIGN_MS whatever comes (each bound checked when a message comes, or at the end of a wait: one more wait at most). */
 static void *relay_in(void *arg)
 {
     relay *r = arg;
@@ -443,7 +455,7 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
 {
     const session_chain *ch = s->c->chain;
     const int every = s->c->alive_ms > 0 ? s->c->alive_ms : ALIVE_MS;
-    const int64_t end = sys_now_ms() + (int64_t)(blocks + 6) * (s->c->block_ms > 0 ? s->c->block_ms : BLOCK_MS);
+    const int64_t end = sys_now_ms() + (int64_t)(blocks + 6) * block_ms(s);
     int64_t alive = sys_now_ms() + every;
     uint64_t until = 0, last_h = 0;
     int last_k = -3;
@@ -522,8 +534,10 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     if (!payout_cancel(&s.t, &a, &x) || !btc_sign_p2pkh(&x, 0, c->coin_sec)) return fail(&s, "no cancel"), SESSION_FAILED;
     uint8_t xid[32];
     btc_tx_txid(&x, xid);
-    /* sent again at every block until it confirms, or the prize moves: a node or a server may refuse it for a while, or drop it */
-    for (int k = 0; k < 144; k++) {
+    /* sent again at every block until it confirms, or the prize moves: a node or a server may refuse it for a while, or drop it. For 144
+     * blocks, and as long as a wait for them may last when the chain stops */
+    const int64_t end = sys_now_ms() + (int64_t)(144 + 6) * block_ms(&s);
+    for (int k = 0; k < 144 && sys_now_ms() < end; k++) {
         dbg("session %s broadcast of the cancel: %s", s.tag, ch->broadcast(ch->ctx, &x) ? "taken" : "not taken");
         if (wait_for(&s, xid, 0, 1, 1)) {
             snprintf(why, whylen, "the partner held the second transaction back: cancelled with the tiny coin");

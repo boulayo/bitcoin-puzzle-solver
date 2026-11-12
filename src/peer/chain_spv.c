@@ -208,7 +208,7 @@ static bool scan_history(chain_spv *c, electrum *e, const uint8_t *spk, size_t s
     if (!electrum_call(e, "blockchain.scripthash.get_history", &w, &d, &res)) return false;
     const uint32_t n = res->type == JSON_ARRAY ? res->n : 0;
     const json_val *it = res + 1;
-    for (uint32_t i = 0; i < n; i++, it = json_next(it)) {     /* txid itself */
+    for (uint32_t i = 0; i < n && !at; i++, it = json_next(it)) {   /* txid itself, once: a server could list it a thousand times */
         uint8_t id[32];
         int64_t h;
         if (btc_hash_from_hex(json_str(json_get(it, "tx_hash")), id) && !memcmp(id, txid, 32) && json_i64(json_get(it, "height"), &h) && h > 0) {

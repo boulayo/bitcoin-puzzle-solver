@@ -391,7 +391,8 @@ relays do not cut the channel as idle, and the reader skips it):
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
    computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`. The hello and the proof of the partner are awaited 30 s at
-   most (it makes them at once); every later message 5 minutes. A wait counts from its start: `S_ALIVE` does not move it.
+   most (it makes them at once); every later message 5 minutes. Until the partner proved its distance a wait counts from its start,
+   and `S_ALIVE` does not move it; after, each `S_ALIVE` gives another wait, for 2 hours at most (the partner's chain may be behind).
 3. `S_PLAN`: `SHA256("pznet1/plan" || the first transaction)`, which each side built on its own from the confirmed coins of the puzzle
    (section 8); a different hash stops the session. Then the two-party signing of its inputs (step 5; only now, when the partner has
    proved its distance and builds the same transaction), the broadcast by both, and one confirmation.
@@ -404,8 +405,8 @@ relays do not cut the channel as idle, and the reader skips it):
    a last message of F that is garbage, or missing, leaves S without a signature, and F without one too. The first transaction, which
    only gives the prize back to the puzzle, is signed the same way. pzpeer never relays an error of pzsign: its reason would say which
    check failed (project 4.6); the `S_SIGNED` with no signatures that follows stops the partner. A signing ends when no whole message
-   of the partner came for 5 minutes, and after 15 minutes in all, whatever else comes on the channel; signatures that verify are kept
-   whatever the partner sends after them.
+   of the partner came for 5 minutes, and after 15 minutes in all, whatever else comes on the channel (one more wait at most);
+   signatures that verify are kept whatever the partner sends after them, or however it leaves.
 6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
    address, and the transaction S may be holding is worth nothing; it sends the cancel again at every block until it is in a block, or
    the prize moves. A spend counts only once it is in a block: one in the mempool can still leave it, and S hold the second transaction
@@ -428,7 +429,8 @@ and countersigned by the partner, so that it survives a restore of the seed; the
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
 the proofs (pzsign starts after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
 they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. Once a
-partner proved its distance on an own point, no other pair on that point gets a slot (its records named under other identities). A pair
+partner proved its distance on an own point, no other pair on that point gets a slot (its records named under other identities), and
+while a session runs on a point a hello for another pair on it is refused. A pair
 that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day.
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzsign and a chain in memory that checks every input: the
@@ -444,7 +446,8 @@ Not yet handled: a first transaction whose signature encoding a third party chan
 for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are);
 two sessions of one puzzle at once build their first transactions from the same coins, and the one that loses waits its 144 blocks;
 "paid" means that the prize output was spent in a block, by the second transaction or by anything else (another session of the same
-puzzle).
+puzzle); on a node of one's own, a reorganization that takes the first transaction back to the mempool while the second waits there too
+looks like a spend in a block (neither output is in the node's set).
 
 ### 7.6 pzsign
 
