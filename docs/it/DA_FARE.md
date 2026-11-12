@@ -34,7 +34,10 @@ del ramo. Restano questi punti di progetto, da chiudere prima del #140:
 - gli identificativi delle richieste verso BitTorrent sono prevedibili, e gli indirizzi IPv6 6to4 e Teredo non sono filtrati;
 - il tempo con cui P1 fallisce dice quale firma del lotto non andava (al più log2(n+1) bit);
 - i valori segreti possono restare nelle riserve di memoria dei numeri grandi di OpenSSL;
-- le azioni della CI non sono fissate per hash, e `check_binary.sh` ha una sola lista per tutti i programmi.
+- le azioni della CI non sono fissate per hash, e `check_binary.sh` ha una sola lista per tutti i programmi;
+- la regola "un punto, una coppia provata" vive in memoria e ricomincia a ogni riavvio della casa;
+- con un nodo proprio, un riordino di blocchi che riporta in mempool la prima transazione mentre anche la seconda è lì sembra una spesa
+  confermata.
 
 ### 1.3 La prova pubblica con due o tre computer
 Quando vuoi farla: un puzzle di 60–64 bit creato da noi, con un premio piccolo, e `--debug FILE` su ogni computer. I file di debug non contengono segreti: me li puoi far leggere così come sono.

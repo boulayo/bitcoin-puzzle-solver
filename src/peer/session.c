@@ -85,8 +85,8 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
     do {
         if (sys_now_ms() > until || !s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, s->wait_ms) || n == 0)
             return fail(s, "the partner did not answer");
-        const int64_t next = sys_now_ms() + s->wait_ms;
-        if (m[0] == S_ALIVE) until = next < last ? next : last;
+        const int64_t next = sys_now_ms() + s->wait_ms, more = next < last ? next : last;
+        if (m[0] == S_ALIVE && more > until) until = more;       /* never shorter */
     } while (m[0] == S_ALIVE);
     if (m[0] == S_ABORT) {                                      /* its words go into our log: printable characters only */
         char r[201];
