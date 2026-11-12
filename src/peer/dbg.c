@@ -2,17 +2,21 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* dbg.c - see dbg.h. */
 #include "dbg.h"
+#include "sys.h"
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 
 static FILE *g_log;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 bool dbg_open(const char *path)
 {
-    g_log = fopen(path, "a");
+    const int fd = sys_open_rw(path);                           /* made for this user alone: the log names partners and their addresses */
+    if (fd >= 0) close(fd);
+    g_log = sys_fopen(path, "a");
     if (g_log) dbg("---- pzpeer %s ----", PZ_VERSION);
     return g_log != NULL;
 }

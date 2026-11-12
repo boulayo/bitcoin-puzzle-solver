@@ -44,6 +44,7 @@ typedef struct {
 typedef struct session_slot {
     bool used, running, have_conn;
     bool alerted;                   /* the table alerted the pair, or its partner proved its distance in a session: the slot is kept */
+    bool proved;                    /* its partner proved its distance */
     bool waiting;                   /* its session waits for the partner to dial */
     int64_t retry_at;               /* when its session starts again (0: never), the seconds of mono_s */
     int tries;
@@ -326,7 +327,7 @@ done:
     if (c) net_close(c);
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
     s->running = false, s->have_conn = false, s->conn = NULL;
-    s->alerted |= proved;                                       /* an alert that comes after it starts no second session */
+    s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
     s->used = s->alerted;                                       /* a pair whose partner never proved anything gives its slot back */
     s->retry_at = s->alerted && res != SESSION_PAID && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
     h->ended++;
@@ -335,7 +336,8 @@ done:
     return NULL;
 }
 
-/* the slot of a pair (mu held): found, or (make) made; NULL when there is none, or no room */
+/* the slot of a pair (mu held): found, or (make) made; NULL when there is none, or no room. Once a partner proved its distance on an own
+ * point, no other pair on that point gets a slot: whoever knows that distance could name the point again under new identities. */
 static session_slot *slot_of(home *h, const record *mine, const record *theirs, bool make, bool *fresh)
 {
     record pair[2];
@@ -343,8 +345,10 @@ static session_slot *slot_of(home *h, const record *mine, const record *theirs, 
     *fresh = false;
     if (!pieces_order(mine, theirs, pair)) return NULL;
     pieces_eid(&h->net, pair, eid);
-    for (int i = 0; i < MAX_SESSIONS; i++)
+    for (int i = 0; i < MAX_SESSIONS; i++) {
         if (h->s[i].used && !memcmp(h->s[i].eid, eid, 32)) return &h->s[i];
+        make &= !(h->s[i].used && h->s[i].proved && !memcmp(h->s[i].mine.x, mine->x, 32));
+    }
     for (int i = 0; make && i < MAX_SESSIONS; i++)
         if (!h->s[i].used) {
             session_slot *s = &h->s[i];
@@ -472,7 +476,7 @@ int home_run(const home_cfg *cfg)
     if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
     snprintf(h->dirname, sizeof h->dirname, "pznet-%.31s", h->nf.net);
     h->dir = cfg->dir ? cfg->dir : h->dirname;
-    /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0644 by pzsolve) and the output of pzsolve,
+    /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0600 by pzsolve) and the output of pzsolve,
      * which shows a key it finds: nobody else may go in */
     if (!sys_mkdir(h->dir) || !sys_private(h->dir))
         return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", h->dir), 1;

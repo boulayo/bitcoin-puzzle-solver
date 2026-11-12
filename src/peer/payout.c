@@ -21,6 +21,14 @@ static uint64_t cancel_out(const payout_terms *t, btc_out *out)
     return btc_fee(btc_vsize_p2pkh(1, out, 1), t->feerate);
 }
 
+/* the fee of the second transaction */
+static uint64_t second_fee(const payout_terms *t)
+{
+    btc_out out[2] = {{0}};
+    for (int p = 0; p < 2; p++) out[p].script_len = (uint8_t)t->pay_len[p], memcpy(out[p].script, t->pay_spk[p], t->pay_len[p]);
+    return btc_fee(btc_vsize_p2pkh(2, out, 2), t->feerate);
+}
+
 uint64_t payout_tiny(const payout_terms *t)
 {
     btc_out out;
@@ -50,8 +58,9 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
         out[k].script_len = BTC_P2PKH_LEN;
         memcpy(out[k].script, k ? t->coin_spk[k - 1] : t->puzzle_spk, BTC_P2PKH_LEN);
     }
-    const uint64_t fee = btc_fee(btc_vsize_p2pkh(tx->n_in, out, 3), t->feerate);
-    if (!tx->n_in || total < fee + 3 * tiny) return false;     /* the prize must stay larger than a tiny coin */
+    const uint64_t fee = btc_fee(btc_vsize_p2pkh(tx->n_in, out, 3), t->feerate), second = second_fee(t) + 2 * 546;
+    if (!tx->n_in || total < fee + 2 * tiny + (second > tiny ? second : tiny)) return false;   /* the prize must stay larger than a tiny
+                                                                                               * coin, and pay for the second transaction */
     return btc_tx_add_out(tx, total - fee - 2 * tiny, t->puzzle_spk, BTC_P2PKH_LEN) &&
            btc_tx_add_out(tx, tiny, t->coin_spk[0], BTC_P2PKH_LEN) && btc_tx_add_out(tx, tiny, t->coin_spk[1], BTC_P2PKH_LEN);
 }
@@ -68,12 +77,7 @@ bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
     uint8_t txid[32];
     if (!first_ok(t, first) || !btc_tx_txid(first, txid)) return false;
     btc_tx_init(tx);
-    btc_out out[2] = {{0}};
-    for (int p = 0; p < 2; p++) {
-        out[p].script_len = (uint8_t)t->pay_len[p];
-        memcpy(out[p].script, t->pay_spk[p], t->pay_len[p]);
-    }
-    const uint64_t prize = first->out[0].value, fee = btc_fee(btc_vsize_p2pkh(2, out, 2), t->feerate);
+    const uint64_t prize = first->out[0].value, fee = second_fee(t);
     if (prize < fee + 2 * 546) return false;                    /* each half above the dust limit */
     const uint64_t half = (prize - fee) / 2, other = prize - fee - half;
     const uint64_t tiny = payout_tiny(t), v[2] = {t->first == 0 ? half + tiny : other, t->first == 1 ? half + tiny : other};

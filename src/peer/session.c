@@ -29,6 +29,7 @@
 #define LIMIT_WAIT_S 120                    /* the longest wait for the turn of a signing (a partner waits 300 s for a message) */
 #define ALIVE_MS 60000                      /* S_ALIVE while waiting for blocks: an idle channel is cut by NATs and relays */
 #define BLOCK_MS (20 * 60000)               /* twice the mean time of a block: the measure of a wait when the chain stops */
+#define SIGN_MS (15 * 60000)                /* the longest relay of a signing (one takes seconds) */
 
 typedef struct {
     const session_cfg *c;
@@ -72,9 +73,11 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
 {
     uint8_t m[SESSION_MSG_MAX];
     size_t n;
-    do
-        if (!s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, s->wait_ms) || n == 0) return fail(s, "the partner did not answer");
-    while (m[0] == S_ALIVE);                                    /* sent while the partner waited for blocks */
+    const int64_t until = sys_now_ms() + s->wait_ms;            /* S_ALIVE (sent while the partner waited for blocks) does not move it */
+    do {
+        const int64_t left = until - sys_now_ms();
+        if (left <= 0 || !s->c->chan->recv(s->c->chan->ctx, m, sizeof m, &n, (int)left) || n == 0) return fail(s, "the partner did not answer");
+    } while (m[0] == S_ALIVE);
     if (m[0] == S_ABORT) {                                      /* its words go into our log: printable characters only */
         char r[201];
         size_t k = 0;
@@ -225,14 +228,14 @@ static bool limit_read(const char *path, uint8_t (*key)[32], unsigned *count, in
     return ok;
 }
 
-/* through a new file, synced, that replaces the old one: a crash leaves either */
+/* through a new file, synced, that replaces the old one: a crash leaves either. Lines at 0 are left out */
 static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *count, int n)
 {
     char tmp[1100], hex[65];
     if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp) return false;
     FILE *f = fopen(tmp, "w");
     bool ok = f != NULL;
-    for (int i = 0; ok && i < n; i++) btc_hex(key[i], 32, hex), ok = fprintf(f, "%s %u\n", hex, count[i]) > 0;
+    for (int i = 0; ok && i < n; i++) btc_hex(key[i], 32, hex), ok = !count[i] || fprintf(f, "%s %u\n", hex, count[i]) > 0;
     ok = ok && fflush(f) == 0 && sys_sync(fileno(f));
     if (f) ok = fclose(f) == 0 && ok;
     return ok && sys_replace(tmp, path);
@@ -247,7 +250,12 @@ static bool limit_add(const sess *s, int d, char *why, size_t whylen)
     unsigned count[LIMIT_LINES];
     int n;
     if (!limit_read(l->path, key, count, &n)) return snprintf(why, whylen, "the count of failed signings in %.200s cannot be read", l->path), false;
-    const uint8_t *which[2] = {s->c->net->fp, s->eid};
+    /* the pair by the own point, on this network: the piece of this home is that of its point, and the partner can change any byte of
+     * its own record (a new session id each time) */
+    uint8_t m[11 + 64], pair[32];
+    memcpy(m, "pznet1/fail", 11), memcpy(m + 11, s->c->net->fp, 32), memcpy(m + 43, s->c->mine.x, 32);
+    pz_sha256(m, sizeof m, pair);
+    const uint8_t *which[2] = {s->c->net->fp, pair};
     const unsigned max[2] = {l->max, l->pair_max};
     int at[2];
     for (int w = 0; w < 2; w++) {
@@ -313,7 +321,6 @@ static void limit_end(sess *s, bool ok)
 typedef struct {
     sess *s;
     signer sg;
-    bool failed;
     uint8_t *result;                        /* the answer of pzsign (0x82), when it gave one */
     size_t result_len;
 } relay;
@@ -347,21 +354,23 @@ static void *relay_out(void *arg)
     return NULL;
 }
 
-/* the partner to pzsign: pieces joined into whole messages */
+/* the partner to pzsign: pieces joined into whole messages. Only a whole message is progress: keep-alives or pieces that never end a
+ * message cannot hold this side here (the partner would keep the other side from its cancel, or from its signatures), and a signing
+ * ends within SIGN_MS whatever comes. */
 static void *relay_in(void *arg)
 {
     relay *r = arg;
     uint8_t *msg = NULL, m[SESSION_MSG_MAX];
     size_t len = 0;
+    const int64_t start = sys_now_ms();
+    int64_t progress = start;
     for (;;) {
         size_t n;
-        if (!r->s->c->chan->recv(r->s->c->chan->ctx, m, sizeof m, &n, r->s->wait_ms) || n < 1) break;
+        const bool got = r->s->c->chan->recv(r->s->c->chan->ctx, m, sizeof m, &n, r->s->wait_ms);
+        const int64_t now = sys_now_ms();
+        if (!got || n < 1 || now - progress > r->s->wait_ms || now - start > SIGN_MS) break;
         if (m[0] == S_ALIVE) continue;
-        if (m[0] == S_SIGNED || m[0] == S_ABORT) break;
-        if (m[0] != S_SIGNER || n < 2 || len + n - 2 > SIGNER_FRAME_MAX) {
-            r->failed = true;
-            break;
-        }
+        if (m[0] != S_SIGNER || n < 2 || len + n - 2 > SIGNER_FRAME_MAX) break;   /* S_SIGNED, S_ABORT, or anything else */
         uint8_t *grown = realloc(msg, len + n - 2 + 1);
         if (!grown) break;
         msg = grown;
@@ -369,7 +378,7 @@ static void *relay_in(void *arg)
         len += n - 2;
         if (m[1]) continue;                                     /* more pieces follow */
         const bool ok = signer_send(&r->sg, SIGNER_IN, msg, len);
-        len = 0;
+        len = 0, progress = now;
         if (!ok) break;
     }
     free(msg);
@@ -403,22 +412,24 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
     const size_t jl = signer_job(job, s->me, 1 - s->F, eid, piece, (const uint8_t(*)[33])pub, c->pubkey33, (const uint8_t(*)[32])digests, (int)n);
     pz_secure_zero(piece, sizeof piece);
     relay r = {.s = s};
-    bool ok = signer_start(&r.sg, c->pzsign) && signer_send(&r.sg, SIGNER_JOB, job, jl);
+    const bool started = signer_start(&r.sg, c->pzsign);
+    bool ok = started && signer_send(&r.sg, SIGNER_JOB, job, jl);
     pz_secure_zero(job, sizeof job);
     if (ok) {
         pthread_t a, b;
-        pthread_create(&a, NULL, relay_out, &r);
-        pthread_create(&b, NULL, relay_in, &r);
-        pthread_join(a, NULL);
+        const bool ta = pthread_create(&a, NULL, relay_out, &r) == 0, tb = pthread_create(&b, NULL, relay_in, &r) == 0;
+        if (ta) pthread_join(a, NULL);
         signer_kill(&r.sg);                                     /* it has nothing more to say: a write to it that waits (it stopped reading) ends */
-        pthread_join(b, NULL);
+        if (tb) pthread_join(b, NULL);
+        ok = ta && tb;
     }
     signer_stop(&r.sg);
-    ok = ok && r.result && !r.failed && r.result_len == 64 * n;
+    /* signatures that verify are kept whatever the partner sent after them */
+    ok = ok && r.result && r.result_len == 64 * n;
     for (size_t i = 0; ok && i < n; i++)
         ok = btc_put_sig_p2pkh(tx, i, r.result + 64 * i, r.result + 64 * i + 32, c->pubkey33) && btc_verify_p2pkh(tx, i, s->t.puzzle_spk, BTC_P2PKH_LEN);
     free(r.result);
-    limit_end(s, ok);
+    limit_end(s, ok || !started);                               /* a pzsign that did not start told nothing */
     return ok;
 }
 
@@ -508,9 +519,18 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     if (s.me != s.F) return snprintf(why, whylen, "the joint signature of the second transaction failed"), SESSION_FAILED;
     /* F without the whole signature: S may hold it. F waits for the prize to move, and else spends its tiny coin, which makes it worthless */
     if (wait_for(&s, aid, 0, -1, (uint64_t)c->cancel_blocks)) return snprintf(why, whylen, "paid"), SESSION_PAID;
-    if (!payout_cancel(&s.t, &a, &x) || !btc_sign_p2pkh(&x, 0, c->coin_sec) || !ch->broadcast(ch->ctx, &x))
-        return wait_for(&s, aid, 0, -1, 0) ? (snprintf(why, whylen, "paid"), SESSION_PAID)   /* it moved in the meantime */
-                                           : (snprintf(why, whylen, "the cancel could not be sent"), SESSION_FAILED);
-    snprintf(why, whylen, "the partner held the second transaction back: cancelled with the tiny coin");
-    return SESSION_CANCELLED;
+    if (!payout_cancel(&s.t, &a, &x) || !btc_sign_p2pkh(&x, 0, c->coin_sec)) return fail(&s, "no cancel"), SESSION_FAILED;
+    uint8_t xid[32];
+    btc_tx_txid(&x, xid);
+    /* sent again at every block until it confirms, or the prize moves: a node or a server may refuse it for a while, or drop it */
+    for (int k = 0; k < 144; k++) {
+        dbg("session %s broadcast of the cancel: %s", s.tag, ch->broadcast(ch->ctx, &x) ? "taken" : "not taken");
+        if (wait_for(&s, xid, 0, 1, 1)) {
+            snprintf(why, whylen, "the partner held the second transaction back: cancelled with the tiny coin");
+            return SESSION_CANCELLED;
+        }
+        if (wait_for(&s, aid, 0, -1, 0)) return snprintf(why, whylen, "paid"), SESSION_PAID;   /* it moved in the meantime */
+    }
+    snprintf(why, whylen, "the cancel did not confirm in 144 blocks");
+    return SESSION_FAILED;
 }

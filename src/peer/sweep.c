@@ -55,7 +55,10 @@ int sweep_main(int argc, char **argv)
     /* every confirmed coin of the key to the address, less a fee that passes at once */
     payout_coin coins[64];
     const int n = ch.coins(ch.ctx, spk, coins, 64);
-    if (!rate) rate = 2 * ch.feerate(ch.ctx) > 50000 ? 2 * ch.feerate(ch.ctx) : 50000;   /* twice the estimate, 50 sat/vB at least */
+    if (!rate) {                                                /* twice the estimate, 50 to 1000 sat/vB: no server sets the fee of a prize */
+        const uint64_t est = 2 * ch.feerate(ch.ctx);
+        rate = est < 50000 ? 50000 : est > 1000000 ? 1000000 : est;
+    }
     btc_tx tx;
     btc_out out = {.script_len = (uint8_t)to_len};
     uint64_t total = 0;

@@ -3,7 +3,8 @@
 /* t_session.c - two homes run the session of a coincidence against each other, in two threads, with the real pzsign, over a channel in
  * memory and a chain in memory that checks every input of every transaction it is given (a standard P2PKH spend of an unspent output) and
  * mines a block every 200 ms. The cases: the payout, half each (with a chain that does not answer at first); a partner S that keeps the second transaction (and its last signing message) to itself, which F answers by spending its tiny
- * coin after 3 blocks; a partner F that stops, or sends garbage, instead of its last signing message, and gets nothing for it; a fee rate
+ * coin after 3 blocks, also when S keeps the channel alive; a partner F that stops, or sends garbage, instead of its last signing message,
+ * and gets nothing for it, or sends garbage after it, which takes nothing from S; a fee rate
  * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzsign that
  * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
  * Needs PZSIGN; without it it says it was skipped. */
@@ -28,6 +29,7 @@ typedef struct {
     uint64_t value, height;            /* 0: in the mempool */
     size_t spk_len;
     bool spent;
+    uint8_t by[32];                    /* the txid of the transaction that spent it */
 } utxo;
 
 static struct {
@@ -69,7 +71,10 @@ static bool ch_broadcast(void *c, const btc_tx *tx)
         }
         for (size_t i = 0; i < tx->n_out; i++) out += tx->out[i].value;
         ok = ok && out <= in;
-        for (size_t i = 0; i < tx->n_in && ok; i++) find(tx->in[i].prev_txid, tx->in[i].prev_vout)->spent = true;
+        for (size_t i = 0; i < tx->n_in && ok; i++) {
+            utxo *u = find(tx->in[i].prev_txid, tx->in[i].prev_vout);
+            u->spent = true, memcpy(u->by, txid, 32);
+        }
         for (size_t i = 0; i < tx->n_out && ok; i++) add_utxo(txid, (uint32_t)i, tx->out[i].value, tx->out[i].script, tx->out[i].script_len, 0);
     }
     pthread_mutex_unlock(&chain.mu);
@@ -94,8 +99,8 @@ static int ch_conf(void *c, const uint8_t txid[32], uint32_t vout)
 {
     (void)c;
     pthread_mutex_lock(&chain.mu);
-    const utxo *u = find(txid, vout);
-    const int k = !u || u->spent ? -1 : u->height ? (int)(chain.tip - u->height + 1) : 0;
+    const utxo *u = find(txid, vout), *by = u && u->spent ? find(u->by, 0) : NULL;
+    const int k = !u || (by && by->height) ? -1 : u->height ? (int)(chain.tip - u->height + 1) : 0;   /* spent once the spend is mined */
     pthread_mutex_unlock(&chain.mu);
     return k;
 }
@@ -257,10 +262,12 @@ typedef struct {
     uint8_t *msg[4096];
     size_t len[4096];
     int head, tail;
+    bool pump;                         /* the sender keeps the channel alive and says nothing else: an S_ALIVE every 100 ms when it is empty */
 } queue;
 
-/* what an end does to its own messages of the second signing (the counts of the first tell which one is the last) */
-enum { LAST_SENT, LAST_DROPPED, LAST_ABORT, LAST_DAMAGED };
+/* what an end does to its own messages of the second signing (the counts of the first tell which one is the last): sends it, drops it (and
+ * its S_SIGNED), drops it and keeps the channel alive for ever, aborts instead, damages it, or sends it and then garbage and an abort */
+enum { LAST_SENT, LAST_DROPPED, LAST_PUMP, LAST_ABORT, LAST_DAMAGED, LAST_JUNK };
 
 typedef struct {
     queue *in, *out;
@@ -288,13 +295,23 @@ static bool q_send(void *c, const uint8_t *m, size_t len)
         } else if (m[0] == S_SIGNER && len >= 2 && m[1] == 0) {
             if (++e->msgs == e->msgs_a && e->plans == 2) {     /* the same count as the first signing: the last one */
                 if (e->last_b == LAST_DROPPED) return true;
+                if (e->last_b == LAST_PUMP) {
+                    pthread_mutex_lock(&e->out->mu);
+                    e->out->pump = true;
+                    pthread_cond_signal(&e->out->cv);
+                    pthread_mutex_unlock(&e->out->mu);
+                    return true;
+                }
                 if (e->last_b == LAST_ABORT) return q_put(e->out, (const uint8_t[]){S_ABORT, 'n', 'o'}, 3), true;
+                if (e->last_b == LAST_JUNK)
+                    return q_put(e->out, m, len), q_put(e->out, (const uint8_t[]){S_SIGNER, 0, 0xde, 0xad}, 4),
+                           q_put(e->out, (const uint8_t[]){S_ABORT, 'n', 'o'}, 3), true;
                 uint8_t *bad = malloc(len);
                 memcpy(bad, m, len), bad[len - 1] ^= 1;
                 q_put(e->out, bad, len);
                 return free(bad), true;
             }
-        } else if (m[0] == S_SIGNED && e->plans == 2 && e->last_b == LAST_DROPPED) return true;
+        } else if (m[0] == S_SIGNED && e->plans == 2 && (e->last_b == LAST_DROPPED || e->last_b == LAST_PUMP)) return true;
     }
     q_put(e->out, m, len);
     return true;
@@ -308,11 +325,17 @@ static bool q_recv(void *c, uint8_t *m, size_t cap, size_t *len, int timeout_ms)
     until.tv_sec += timeout_ms / 1000, until.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
     if (until.tv_nsec >= 1000000000L) until.tv_sec++, until.tv_nsec -= 1000000000L;
     pthread_mutex_lock(&q->mu);
-    while (q->head == q->tail)
+    while (q->head == q->tail) {
+        if (q->pump) {
+            pthread_mutex_unlock(&q->mu);
+            usleep(100000);
+            return m[0] = S_ALIVE, *len = 1, true;
+        }
         if (pthread_cond_timedwait(&q->cv, &q->mu, &until) != 0) {
             pthread_mutex_unlock(&q->mu);
             return false;
         }
+    }
     uint8_t *p = q->msg[q->head % 4096];
     const size_t n = q->len[q->head % 4096];
     q->head++;
@@ -467,6 +490,9 @@ static void run_case(const tcase *tc, const char *bin)
     uint8_t eid[32];
     CHECK(pieces_order(&r[0], &r[1], pair));
     pieces_eid(&net, pair, eid);
+    uint8_t fm[11 + 64], own[32];                               /* the key of the pair in the files of the limit: its point, the same for both */
+    memcpy(fm, "pznet1/fail", 11), memcpy(fm + 11, net.fp, 32), memcpy(fm + 43, r[0].x, 32);
+    pz_sha256(fm, sizeof fm, own);
     const int F_home = !memcmp(pair[eid[31] & 1].owner, xo[0], 32) ? 0 : 1, S_home = 1 - F_home;
     for (int i = 0; i < 2; i++) {
         session_cfg *g = &h[i].cfg;
@@ -507,7 +533,7 @@ static void run_case(const tcase *tc, const char *bin)
         g->limit = &lim[i], g->proved = &proved[i];
         if (tc->limit[i]) {
             char hex[65], text[200];
-            pt_hex(i ? eid : net.fp, 32, hex);
+            pt_hex(i ? own : net.fp, 32, hex);
             snprintf(text, sizeof text, "%s %u\n", hex, tc->limit[i]);
             write_text(limpath[i], text, false);
         }
@@ -562,7 +588,7 @@ static void run_case(const tcase *tc, const char *bin)
     for (int i = 0; i < 2; i++) {
         const unsigned failed = i == F_home ? tc->fails_F : tc->fails_S;
         CHECK(fails_of(limpath[i], net.fp) == (i ? 0 : tc->limit[0]) + failed);
-        CHECK(fails_of(limpath[i], eid) == (i ? tc->limit[1] : 0) + failed);
+        CHECK(fails_of(limpath[i], own) == (i ? tc->limit[1] : 0) + failed);
         pthread_mutex_destroy(&lim[i].mu);
         pthread_cond_destroy(&lim[i].cv);
         remove(limpath[i]);
@@ -670,6 +696,10 @@ int main(void)
     const tcase cases[] = {
         {.name = "payout", .expect = PAYOUT, .lost_heights = 1},
         {.name = "held back", .expect = CANCEL, .s_last = LAST_DROPPED, .s_withholds = true, .fails_F = 1},
+        /* S holds back and keeps the channel alive: F stops waiting all the same (before, every S_ALIVE gave it another wait, for ever) */
+        {.name = "held back, the channel kept alive", .expect = CANCEL, .s_last = LAST_PUMP, .s_withholds = true, .fails_F = 1},
+        /* F sends garbage after its last message: S keeps the signatures it has (before, it threw them away and F cancelled) */
+        {.name = "F sends garbage after its last message", .expect = PAYOUT, .f_last = LAST_JUNK},
         /* F stops, or sends garbage, instead of its last message: S's last one must not come back (it did before: F had the signature) */
         {.name = "F stops at its last message", .expect = CANCEL, .f_last = LAST_ABORT, .fails_F = 1, .fails_S = 1},
         {.name = "F damages its last message", .expect = CANCEL, .f_last = LAST_DAMAGED, .fails_F = 1, .fails_S = 1},

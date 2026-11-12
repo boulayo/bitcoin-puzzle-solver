@@ -99,6 +99,20 @@ int main(void)
     CHECK(payout_cancel(&hot, &ha, &hc) && hc.out[0].value > payout_tiny(&hot) / 2 && !payout_cancel(&hot, &a, &hc));
     hot.first = 2;
     CHECK(!payout_first(&hot, coins, 10, &ha, &used) && !payout_cancel(&hot, &ha, &hc));
+    /* a first transaction only when its prize pays for the second: at 25 sat/vB with P2PKH payouts the second needs more than a tiny coin
+     * (before, a prize of a few hundred satoshis more than the tiny coin had its first transaction and never a second) */
+    payout_terms w = t;
+    w.feerate = 25000, w.pay_len[1] = BTC_P2PKH_LEN, memcpy(w.pay_spk[1], w.pay_spk[0], BTC_P2PKH_LEN);
+    int built = 0;
+    for (uint64_t v = 30000; v < 60000; v += 7) {
+        payout_coin one = coins[3];
+        btc_tx f, s2;
+        one.value = v;
+        const bool first = payout_first(&w, &one, 1, &f, &used);
+        built += first;
+        CHECK(!first || payout_second(&w, &f, &s2));
+    }
+    CHECK(built > 0);
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_payout");
 }

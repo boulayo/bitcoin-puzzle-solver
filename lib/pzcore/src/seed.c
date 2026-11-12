@@ -941,7 +941,7 @@ static void mix(const uint8_t salt[32], const pz_seed_source *src, const chunk *
     pz_secure_zero(prk, sizeof prk);
 }
 
-static bool harden(void)
+bool pz_seed_harden(void)
 {
 #if defined(_WIN32)
     return false;
@@ -970,7 +970,7 @@ pz_seed_status pz_seed_generate(uint8_t seed[PZ_SEED_LEN], const pz_seed_opts *o
         snprintf(r->error, sizeof r->error, "the caller's source must give 1 to %d bytes", PZ_SEED_EXTRA_MAX);
         return PZ_SEED_E_ARG;
     }
-    if (o->flags & PZ_SEED_HARDEN) r->hardened = harden();
+    if (o->flags & PZ_SEED_HARDEN) r->hardened = pz_seed_harden();
     arena a = {NULL, OS_BYTES + HW_DRBG_WORDS * 8 + TPM_CALLS * TPM_CHUNK + JIT_SAMPLES * 4 + (o->extra ? o->extra_len : 0) + 5 * 64, 0, false};
     if (!(a.base = map_pages(a.size, true, &a.locked))) {
         snprintf(r->error, sizeof r->error, "no memory for the secrets");

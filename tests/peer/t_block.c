@@ -33,6 +33,15 @@ int main(void)
     key_of(0x80000068b69, keys[3]);                                                                  /* not a proof key */
     key_of(0x7ffffffffff, keys[4]), key_of((1ull << 43) + (1ull << 41) + 5, keys[5]);               /* before and after the block */
     CHECK(block_proof_key(ctx, &net, keys[0]) && block_proof_key(ctx, &net, keys[1]) && !block_proof_key(ctx, &net, keys[3]));
+    {                                                     /* the key of the prize itself is never a proof: it is never to be published */
+        block_net prize = net;
+        secp256k1_pubkey P;
+        uint8_t pub[33];
+        size_t pl = sizeof pub;
+        CHECK(secp256k1_ec_pubkey_create(ctx, &P, keys[0]) && secp256k1_ec_pubkey_serialize(ctx, pub, &pl, &P, SECP256K1_EC_COMPRESSED));
+        pz_hash160(pub, sizeof pub, prize.h160);
+        CHECK(!block_proof_key(ctx, &prize, keys[0]) && block_proof_key(ctx, &prize, keys[1]));
+    }
     CHECK(block_claim_make(ctx, &net, &id, 0, (const uint8_t(*)[32])keys, 6, &c));
     CHECK(c.n == 2 && c.off[0] == 0x68b68 && c.off[1] == 0x3d4338 && c.index == 0);
     CHECK(block_claim_check(ctx, &net, &c));

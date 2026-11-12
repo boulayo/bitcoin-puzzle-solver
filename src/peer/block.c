@@ -23,7 +23,7 @@ bool block_proof_key(const secp256k1_context *ctx, const block_net *net, const u
     if (!secp256k1_ec_pubkey_create(ctx, &p, key)) return false;
     secp256k1_ec_pubkey_serialize(ctx, pub, &n, &p, SECP256K1_EC_COMPRESSED);
     pz_hash160(pub, sizeof pub, h);
-    return !memcmp(h + 8, net->h160 + 8, 5);
+    return !memcmp(h + 8, net->h160 + 8, 5) && memcmp(h, net->h160, 20) != 0;   /* never the key of the prize itself */
 }
 
 /* the first key of a block; false when the block is past the order of the group */

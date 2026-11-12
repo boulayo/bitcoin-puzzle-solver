@@ -10,6 +10,7 @@
 #include "netfile.h"
 #include "sweep.h"
 #include <pzcore/seal.h>
+#include <pzcore/seed.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -300,6 +301,7 @@ int main(int argc, char **argv)
         printf("pzpeer %s (%s)\n", PZ_VERSION, PZ_BUILD_INFO);
         return 0;
     }
+    (void)pz_seed_harden();                                     /* the home seed, the pieces, the keys of the tiny coins: no core file */
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     const int rc = argc == 4 && !strcmp(argv[1], "dpcheck")  ? cmd_dpcheck(ctx, argv[2], argv[3])
                  : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2])

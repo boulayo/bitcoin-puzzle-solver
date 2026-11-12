@@ -27,8 +27,9 @@ typedef struct {
     /* the confirmed coins of a P2PKH script, their values verified from the transactions that made them; -1 when the chain cannot be asked */
     int (*coins)(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max);
     bool (*broadcast)(void *ctx, const btc_tx *tx);
-    /* the confirmations of an output: -1 spent or unknown, 0 in the mempool, n in the n-th block from the top; -2 when the chain did not
-     * answer (never taken for spent: F would not cancel) */
+    /* the confirmations of an output: -1 spent in a block or unknown, 0 in the mempool, n in the n-th block from the top; -2 when the chain
+     * did not answer (never taken for spent: F would not cancel). A spend that is not in a block does not count: it can still leave the
+     * mempools, and S hold the second transaction again */
     int (*confirmations)(void *ctx, const uint8_t txid[32], uint32_t vout);
     uint64_t (*height)(void *ctx);
     uint64_t (*feerate)(void *ctx);         /* satoshis per 1000 virtual bytes for a confirmation within a few blocks */
@@ -41,13 +42,13 @@ typedef struct {
 
 /* The limit of failed signings of a home (docs/en/NETWORK.md 7.5, project 4.6). A bug of the two-party signer could leak a bit of a piece
  * through each signing that fails, so every run of pzsign counts as failed, in a file, before it starts, and is taken off once it gave valid
- * signatures; at max failures on the network, or pair_max for one pair, there are no more signings. The file survives a restart and a crash
+ * signatures; at max failures on the network, or pair_max for one own point (with any partner), there are no more signings. The file survives a restart and a crash
  * in the middle of a run. Runs are one at a time (busy): a session that does not get its turn within two minutes gives up without one. */
 typedef struct {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     bool busy;                              /* a run of pzsign is under way */
-    const char *path;                       /* lines "<hex of F or of a session id> <failures>" */
+    const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point> <failures>" */
     unsigned max, pair_max;
 } session_limit;
 

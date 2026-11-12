@@ -106,6 +106,10 @@ typedef struct {
  * (no caller's source, default rules); rep may be NULL. */
 pz_seed_status pz_seed_generate(uint8_t seed[PZ_SEED_LEN], const pz_seed_opts *opts, pz_seed_report *rep);
 
+/* The hardening of PZ_SEED_HARDEN alone, for a process that holds secrets it did not make here; false when it did not take effect (always
+ * on Windows). */
+bool pz_seed_harden(void);
+
 PZ_END_DECLS
 
 #endif

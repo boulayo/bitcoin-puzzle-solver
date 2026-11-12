@@ -34,7 +34,8 @@ void signer_stop(signer *s);
 #define SIGNER_DIGESTS_MAX 64
 #define SIGNER_JOB_MAX (166 + 32 * SIGNER_DIGESTS_MAX)
 
-/* The job of a session (signer/README.md): party i, the party that gets the signatures first (and gives them to the other), the session
+/* The job of a session (signer/README.md): party i, the party that gets the signatures first (and gives them to the other: S, where the
+ * `first` of payout_terms is F), the session
  * id, the own piece, the two public pieces and the key (compressed), and 1 to SIGNER_DIGESTS_MAX digests. Written to out; returns its
  * length. It holds the secret piece: the caller wipes it (pz_secure_zero) once sent. The answer (0x82) is r || s of each digest. */
 size_t signer_job(uint8_t out[SIGNER_JOB_MAX], int i, int first, const uint8_t eid[32], const uint8_t share[32], const uint8_t pub[2][33],
