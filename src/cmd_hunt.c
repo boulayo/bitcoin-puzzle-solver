@@ -854,13 +854,13 @@ int cmd_hunt(int argc, char **argv)
     r->sessions++;
     /* saved at once: the number of the session seeds the streams of the walkers (and the starts of a shared walk), and a run cut before
      * its first checkpoint would leave it to the next one, which would draw the same starts again */
-    if (!run_session_save(r, r->elapsed_prev, r->prev_units_total) && r->cfg.net)
+    if (run_session_save(r, r->elapsed_prev, r->prev_units_total) != 0 && r->cfg.net)
         pz_die("cannot save the session in %s: a shared walk would draw the same starts again at the next run", r->cfg.dir);
     r->t_start = pz_mono();
     if (o.near && r->cfg.mode == MODE_LINEAR) {
         char path[700];
         snprintf(path, sizeof path, "%s/near.txt", r->cfg.dir);
-        if (!(r->near = pz_fopen_append_private(path))) pz_die("cannot write %s: %s", path, strerror(errno));
+        if (!(r->near = pz_fopen_private(path, true))) pz_die("cannot write %s: %s", path, strerror(errno));
     }
     if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
 

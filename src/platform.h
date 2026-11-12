@@ -29,7 +29,8 @@ int pz_pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(*fn)(voi
 int pz_open_read(const char *path);
 int pz_open_rw(const char *path, bool create);
 int pz_open_trunc(const char *path, int mode);            /* write only, created (with `mode` & ~umask; ignored on Windows) or truncated */
-FILE *pz_fopen_append_private(const char *path);         /* for appending; created 0600 (on Windows the folder decides who can read) */
+FILE *pz_fopen_private(const char *path, bool append);   /* to write, appended to or emptied; for this user alone (0600, also when it was
+                                                            * there already; on Windows the folder decides who can read) */
 int pz_create_temp(char *tmpl);                            /* tmpl ends in "XXXXXX", replaced in place; read/write */
 i64 pz_pread(int fd, void *buf, size_t n, u64 off);       /* bytes read, -1 on error (may be short) */
 i64 pz_pwrite(int fd, const void *buf, size_t n, u64 off);

@@ -105,6 +105,8 @@ K=$(rndkey 58 4242); PUB=$(field $K pub); A=$(field $K addr)
 run_until '[ "$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)" -gt 42 ]' $BIN hunt -p 58 -a "$A" -k "$PUB" -m kangaroo -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 SZ=$(stat -c %s "$DIR/kres/dp.bin" 2>/dev/null || echo 0)
 [ "$SZ" -gt 42 ] && ok "distinguished-point log written ($SZ bytes)" || bad "dp.bin empty"
+DM=$(stat -c %a "$DIR/kres/dp.bin" 2>/dev/null)
+[ "$DM" = 600 ] && ok "dp.bin is for the user alone (0600): its distances lead to the key" || bad "dp.bin mode $DM"
 $BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"

@@ -41,7 +41,7 @@ static int log_resync(kang_state *ks)
     memmove(ks->wbuf, ks->wbuf + drop, (ks->nw - drop) * sizeof(dp_rec));
     ks->nw -= drop;
     ks->log_recs = whole;
-    ks->log = pz_fopen_append_private(ks->log_path);   /* the distances of a shared walk are secrets */
+    ks->log = pz_fopen_private(ks->log_path, true);   /* the distances of a shared walk are secrets */
     if (!ks->log) return -1;
     ks->log_broken = false;
     return 0;
@@ -197,7 +197,7 @@ static void log_header(const kang_state *ks, const u8 fp[32], bool v4, u8 hdr[KA
  * the next start recognizes as an interrupted creation). */
 FILE *kang_log_create(kang_state *ks, const char *path, const u8 fp[32])
 {
-    FILE *f = fopen(path, "wb");
+    FILE *f = pz_fopen_private(path, false);                  /* the distances lead to the key */
     if (!f) {
         pz_log(PZ_LOG_ERR, "cannot create %s: %s", path, strerror(errno));
         return NULL;
@@ -360,7 +360,7 @@ int kang_load_log(kang_state *ks)
     }
     ks->loaded = (u64)n;
     ks->log_recs = whole;
-    ks->log = pz_fopen_append_private(ks->log_path);
+    ks->log = pz_fopen_private(ks->log_path, true);
     ks->log_refs = ks->log != NULL;
     return ks->log ? 0 : -1;
 }
