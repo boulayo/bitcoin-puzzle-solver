@@ -424,8 +424,9 @@ static void test_relay(void)
     c = (relay_home){.id = &idc, .expect = idb.xonly, .initiator = false, .frames = 1};
     CHECK(r.lfd >= 0 && net_parse_addr("127.0.0.1:1", &a.r));
     a.r.port = port, c.r = a.r;
-    CHECK(pthread_create(&tr, NULL, relay_main, &r) == 0 && pthread_create(&ta, NULL, relay_home_main, &a) == 0 &&
-          pthread_create(&tc, NULL, relay_home_main, &c) == 0);
+    CHECK(pthread_create(&tr, NULL, relay_main, &r) == 0);
+    CHECK(pthread_create(&ta, NULL, relay_home_main, &a) == 0);
+    CHECK(pthread_create(&tc, NULL, relay_home_main, &c) == 0);
     pthread_join(ta, NULL), pthread_join(tc, NULL), pthread_join(tr, NULL);
     net_close_fd(r.lfd);
     CHECK(!c.hs_ok && a.echoed == 0);

@@ -964,7 +964,8 @@ static void test_relay_session(void)
     chan_job ju = {Un->d, Wn->id.xonly, name, NULL, 0, 0}, jw = {Wn->d, Un->id.xonly, name, NULL, 0, 0};
     pthread_t tu, tw;
     t0 = ms();
-    CHECK(pthread_create(&tu, NULL, chan_main, &ju) == 0 && pthread_create(&tw, NULL, chan_main, &jw) == 0);
+    CHECK(pthread_create(&tu, NULL, chan_main, &ju) == 0);
+    CHECK(pthread_create(&tw, NULL, chan_main, &jw) == 0);
     pthread_join(tu, NULL), pthread_join(tw, NULL);
     CHECK(ju.c && jw.c);
     if (ju.c && jw.c) {
