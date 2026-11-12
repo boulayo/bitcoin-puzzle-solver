@@ -567,7 +567,8 @@ static void run_case(const tcase *tc, const char *bin)
            (unsigned long long)at_puzzle);
     if (tc->expect == PAYOUT) {
         CHECK(h[0].res == SESSION_PAID && h[1].res == SESSION_PAID);
-        CHECK(at_puzzle == 0 && pay[S_home] > 49985000);            /* half of 1 BTC less the two tiny coins and two small fees */
+        CHECK(at_puzzle == 0 && pay[S_home] > 49900000);            /* half of 1 BTC less the two tiny coins and two fees (on a regtest
+                                                                     * node with a history, at twice its own estimate) */
         CHECK(pay[F_home] - PAYOUT_TINY_MIN - pay[S_home] <= 1);                       /* F also has its tiny coin back */
         CHECK(coin_left[S_home] && !coin_left[F_home]);                            /* S keeps its tiny coin for the next time */
     } else if (tc->expect == CANCEL) {
