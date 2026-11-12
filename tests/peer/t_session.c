@@ -304,7 +304,7 @@ static bool q_send(void *c, const uint8_t *m, size_t len)
                 }
                 if (e->last_b == LAST_ABORT) return q_put(e->out, (const uint8_t[]){S_ABORT, 'n', 'o'}, 3), true;
                 if (e->last_b == LAST_JUNK)
-                    return q_put(e->out, m, len), q_put(e->out, (const uint8_t[]){S_SIGNER, 0, 0xde, 0xad}, 4),
+                    return q_put(e->out, m, len), q_put(e->out, (const uint8_t[]){0xee, 0xde, 0xad}, 3),   /* of no type */
                            q_put(e->out, (const uint8_t[]){S_ABORT, 'n', 'o'}, 3), true;
                 uint8_t *bad = malloc(len);
                 memcpy(bad, m, len), bad[len - 1] ^= 1;
