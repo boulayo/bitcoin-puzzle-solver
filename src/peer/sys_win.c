@@ -297,19 +297,6 @@ bool sys_truncate(int fd, uint64_t size) { return _chsize_s(fd, (__int64)size) =
 bool sys_sync(int fd) { return _commit(fd) == 0; }
 bool sys_replace(const char *from, const char *to) { return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0; }
 
-void sys_remove_prefixed(const char *dir, const char *prefix)
-{
-    char p[1400];
-    WIN32_FIND_DATAA f;
-    snprintf(p, sizeof p, "%s/%s*", dir, prefix);
-    const HANDLE h = FindFirstFileA(p, &f);
-    for (BOOL more = h != INVALID_HANDLE_VALUE; more; more = FindNextFileA(h, &f)) {
-        snprintf(p, sizeof p, "%s/%s", dir, f.cFileName);
-        DeleteFileA(p);
-    }
-    if (h != INVALID_HANDLE_VALUE) FindClose(h);
-}
-
 /* ---- the stop ---- */
 
 static void (*g_on_stop)(int);

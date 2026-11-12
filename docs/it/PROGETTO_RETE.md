@@ -27,7 +27,7 @@ Tre programmi:
 |---|---|---|
 | `pzsolve` | cerca, come oggi. Non sa niente della rete | C |
 | `pzpeer` | la rete: pubblica i punti di pzsolve, custodisce quelli degli altri, tratta la coincidenza e il pagamento | C |
-| `pzsign` | la firma a due, usata da pzpeer solo al momento del pagamento | Rust |
+| `pzsign` | la firma a due, usata da pzpeer solo al momento del pagamento | C++, sulla libreria cb-mpc di Coinbase |
 
 ---
 
@@ -48,7 +48,7 @@ Se il punto di Anna e il punto di Bruno coincidono, la chiave del puzzle è la s
 
 ### 2.3 La firma a due e il pagamento in due passaggi
 
-Anna e Bruno firmano insieme una transazione senza mai ricostruire la chiave (protocollo CGGMP21). Ognuno calcola da sé cosa sta firmando.
+Anna e Bruno firmano insieme una transazione senza mai ricostruire la chiave (la firma a due di Lindell, nella libreria cb-mpc). Ognuno calcola da sé cosa sta firmando.
 
 Resta un problema: nell'ultimo scambio uno dei due riceve la firma completa per primo, e potrebbe tenerla da parte mentre prova a rubare. La difesa, senza depositi:
 
@@ -137,8 +137,8 @@ Sono le cose su cui il progetto si regge e che non ho potuto dimostrare. Se una 
 | I1 | Il creatore dei puzzle non sposta i fondi e non conosce in anticipo chi vince | il premio sparisce: nessuna difesa possibile |
 | I2 | La chiave pubblica dei puzzle 140, 145, ... 160 è nota (è così oggi) | senza chiave pubblica il canguro non si può usare |
 | I3 | Il premio vale meno di circa 7 volte l'elettricità di tutta la campagna | sopra questa soglia a un partner con oltre metà della potenza conviene tentare il furto (5.1) |
-| I4 | La libreria cggmp21 0.6.3 non ha difetti nascosti | è il rischio tecnico più grave: un errore può far trapelare un pezzo. Ho controllato il modo in cui la usiamo e provato un partner che bara in ogni messaggio (nessuna firma esce mai); l'interno della libreria resta affidato ai suoi autori. Mitigato dal limite di firme fallite, non eliminato |
-| I5 | La vulnerabilità CVE-2025-66017 di cggmp21 non ci riguarda perché non usiamo prefirme | verificato sul codice: pzsign non chiama nessuna funzione di prefirma |
+| I4 | La firma a due di cb-mpc non ha difetti nascosti | è il rischio tecnico più grave: un errore può far trapelare un pezzo. Ho letto le parti che usiamo e provato un partner che bara in ogni messaggio (nessuna firma esce mai, se non a chi firma per primo quando è l'ultimo messaggio, le firme stesse, a essere rovinato); la libreria ha due revisioni esterne, ma l'interno resta affidato ai suoi autori. Mitigato dal limite di firme fallite, non eliminato |
+| I5 | Nessuno conserva i fattori del numero che Coinbase ha generato una volta per una prova della firma | chi li avesse potrebbe barare in quella prova facendo la parte di F, e ogni firma fallita potrebbe dargli un bit del pezzo di S: è ciò che il limite di firme fallite tiene basso |
 | I6 | Il computer di casa non è compromesso | chi legge il seme o `dp.bin` ha le distanze: perde quella casa |
 | I7 | Il proprio nodo Bitcoin dice il vero | un nodo bugiardo può far firmare una transazione su monete inesistenti: perdita di tempo, non del premio |
 | I7b | Senza nodo proprio: almeno uno dei server Electrum usati è onesto e raggiungibile, e nessuno spende il lavoro di interi blocchi per ingannare | se tutti mentono o tacciono la sessione aspetta o fallisce: ritardo, non furto. Un blocco falso con lavoro vero costa quanto il premio di un blocco |
@@ -242,7 +242,7 @@ Ho riguardato l'impianto chiedendomi, per ogni pezzo, se esiste un modo più sem
 |---|---|---|
 | dividere la chiave in due con la coincidenza | nessuna migliore: è ciò che rende impossibile il furto a terzi | resta |
 | firma a due | scambiarsi i pezzi: chi riceve per primo prende tutto. Un terzo garante: non lo vuoi | resta |
-| protocollo di firma CGGMP21 | DKLs23: niente numeri primi da generare (oggi 20–45 secondi), messaggi piccoli (oggi 200 KB) | da valutare, vedi DA_FARE |
+| protocollo di firma | CGGMP21 (la libreria cggmp21, usata prima): primi lenti da generare e messaggi da 200 KB. DKLs23: le librerie mature hanno licenze non libere | firma a due di Lindell nella libreria cb-mpc: niente primi lenti, messaggi sotto i 40 KB |
 | pagamento in due passaggi | deposito dell'utente: scartato. Blocco a tempo: non basta | resta |
 | tabella Kademlia per i punti | server centrale: più semplice, e non potrebbe rubare (non ha le distanze), ma può censurare e va mantenuto | resta la tabella; i "nodi grandi" di volontari sono già possibili |
 | record firmato da 138 byte | record corto da circa 40 byte: la firma su ogni record non serve più, perché un custode accetta solo record del nodo con cui sta parlando su un canale autenticato, e ogni effetto richiede comunque la prova di possesso | consigliato: 3 volte meno spazio e traffico |

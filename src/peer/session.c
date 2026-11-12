@@ -3,14 +3,13 @@
 /* session.c - the session of a coincidence (see session.h). The steps, each a message both sides send and then read:
  *   hello   the pair, a nonce, the fee rate proposed, the tiny-coin and payout scripts;
  *   proof   the proof of possession of the own record, over the partner's nonce (it shows the distance, hence the piece);
- *   plan    the hash of the first transaction each side built on its own; then the primes of pzsign (only now: they cost a minute of
- *           CPU, and a partner has proved its distance), the two-party signing, the broadcast, one confirmation;
+ *   plan    the hash of the first transaction each side built on its own; then the two-party signing, the broadcast, one confirmation;
  *   plan    the hash of the second; F gives the signature of its tiny coin, then the two-party signing in which S gets the whole signature
- *           first; then S broadcasts, and F waits cancel_blocks blocks for the prize to move and else cancels.
+ *           first (it plays the party of pzsign that gets the signatures and gives them to the other); then S broadcasts, and F waits
+ *           cancel_blocks blocks for the prize to move and else cancels.
  * Party 0 owns the smaller identity; F (the party whose tiny coin goes into the second transaction) is the last bit of the session id. */
 #include "dbg.h"
 #include "session.h"
-#include "json.h"
 #include "net.h"
 #include "signer.h"
 #include "sys.h"
@@ -136,7 +135,7 @@ static bool hello(sess *s)
     uint8_t m[HELLO_FIXED + BTC_SPK_MAX], in[sizeof m], coin_spk[BTC_P2PKH_LEN];
     size_t n;
     /* the nonce: the partner's proof is made over it, and with the partner's it makes the ids of the signings of this session, which
-     * must never repeat (cggmp21: an execution id is assumed never to repeat, and a pair can have more than one session) */
+     * must never repeat (a signing id names the parties of pzsign, and a pair can have more than one session) */
     if (!sys_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
     if (!p2pkh_of(c->ctx, c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
     /* twice what the chain estimates, and never little: these transactions move a prize, and no fee is large beside it */
@@ -314,14 +313,14 @@ static void limit_end(sess *s, bool ok)
 typedef struct {
     sess *s;
     signer sg;
-    bool hold;                              /* S in the signing of the second transaction: see relay_out */
-    pthread_mutex_t mu;
-    pthread_cond_t cv;
-    int in_count;                           /* whole messages of the partner given to pzsign */
-    bool in_done, failed;
-    uint8_t *result;                        /* the JSON result of pzsign (0x82), when it gave one */
+    bool failed;
+    uint8_t *result;                        /* the answer of pzsign (0x82), when it gave one */
+    size_t result_len;
 } relay;
 
+/* pzsign to the partner: its messages, in pieces of at most CHUNK; then the end of this side's messages, which says whether pzsign gave
+ * its answer. An error of pzsign is not relayed: its reason would tell the partner which check failed, and a failure must say nothing
+ * of where it happened (project 4.6). */
 static bool send_chunks(relay *r, const uint8_t *p, size_t len)
 {
     uint8_t m[1 + CHUNK];
@@ -335,49 +334,16 @@ static bool send_chunks(relay *r, const uint8_t *p, size_t len)
     return true;
 }
 
-/* The envelope with which pzsign tells its partner why it gave up (signer/src/envelope.rs: version 1, the sender, phase 2): never relayed.
- * Its reason would tell the partner which check failed, and a failure must say nothing of where it happened (project 4.6); the S_SIGNED
- * that follows stops the partner as well. */
-static bool is_abort(const uint8_t *p, size_t n) { return n >= 3 && p[0] == 1 && p[2] == 2; }
-
-/* whether the k-th message of the partner was given to pzsign; false when the partner's messages ended before it */
-static bool partner_gave(relay *r, int k)
-{
-    pthread_mutex_lock(&r->mu);
-    while (r->in_count < k && !r->in_done) pthread_cond_wait(&r->cv, &r->mu);
-    const bool ok = r->in_count >= k;
-    pthread_mutex_unlock(&r->mu);
-    return ok;
-}
-
-/* pzsign to the partner. In the signing of the second transaction S holds each of its messages until F's message of the same rank has
- * reached its pzsign and its pzsign went on past it, with its next message or with the signatures: F's last message reaches S before
- * S's last one leaves, and S's leaves only once S has the whole signature. A last message of F that is not one (garbage, an abort, the end
- * of F's stream) gets nothing in exchange. So S has the whole signature first, and F, whose tiny coin is in the transaction, holds the
- * cancel. In the first transaction, which only gives the prize back to the puzzle, both send at once. */
 static void *relay_out(void *arg)
 {
     relay *r = arg;
-    uint8_t *held = NULL, *p = NULL, type;
-    size_t held_len = 0, len;
-    int out_count = 0;
-    while (signer_recv(&r->sg, &type, &p, &len, r->s->wait_ms)) {
-        const bool more = type == SIGNER_OUT && !is_abort(p, len);
-        if (held && !((more || type == SIGNER_RESULT) && partner_gave(r, out_count) && send_chunks(r, held, held_len))) break;
-        free(held), held = NULL;
-        if (!more) {
-            if (type == SIGNER_RESULT) r->result = p, p = NULL;
-            break;
-        }
-        out_count++;
-        if (r->hold) held = p, held_len = len;
-        else if (!send_chunks(r, p, len)) break;
-        else free(p);
-        p = NULL;
-    }
-    free(held), free(p);
+    uint8_t *p = NULL, type = 0;
+    size_t len;
+    while (signer_recv(&r->sg, &type, &p, &len, r->s->wait_ms) && type == SIGNER_OUT && send_chunks(r, p, len)) free(p), p = NULL;
+    if (p && type == SIGNER_RESULT) r->result = p, r->result_len = len, p = NULL;
+    free(p);
     const uint8_t st = r->result != NULL;
-    (void)send_msg(r->s, S_SIGNED, &st, 1);                     /* the end of this side's messages */
+    (void)send_msg(r->s, S_SIGNED, &st, 1);
     return NULL;
 }
 
@@ -405,21 +371,11 @@ static void *relay_in(void *arg)
         const bool ok = signer_send(&r->sg, SIGNER_IN, msg, len);
         len = 0;
         if (!ok) break;
-        pthread_mutex_lock(&r->mu);
-        r->in_count++;
-        pthread_cond_signal(&r->cv);
-        pthread_mutex_unlock(&r->mu);
     }
     free(msg);
-    pthread_mutex_lock(&r->mu);
-    r->in_done = true;
-    pthread_cond_signal(&r->cv);
-    pthread_mutex_unlock(&r->mu);
     signer_end_input(&r->sg);                                   /* nothing more for pzsign: at the end of its input it gives its answer */
     return NULL;
 }
-
-static bool hex32(const char *h, uint8_t out[32]) { return h && strlen(h) == 64 && btc_unhex(h, 64, out); }
 
 /* signs the first n inputs of tx (which spend the puzzle address) with the partner; true when every one of them is a valid spend */
 static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
@@ -441,13 +397,14 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
     pz_sha256(run, sizeof run, eid);
     if (!pieces_secret(c->ctx, c->net, c->base, s->pair, s->me, c->d, piece)) return fail(s, "no piece");
     if (!limit_begin(s)) return pz_secure_zero(piece, sizeof piece), false;
-    char *job = signer_job(s->me, eid, piece, (const uint8_t(*)[33])pub, c->pubkey33, c->primes, (const uint8_t(*)[32])digests, (int)n);
+    /* S gets the signatures first: in the second transaction this is what matters, F (whose tiny coin is in it) holding the cancel; in the
+     * first, which only gives the prize back to the puzzle, it does not, and both signings run alike */
+    uint8_t job[SIGNER_JOB_MAX];
+    const size_t jl = signer_job(job, s->me, 1 - s->F, eid, piece, (const uint8_t(*)[33])pub, c->pubkey33, (const uint8_t(*)[32])digests, (int)n);
     pz_secure_zero(piece, sizeof piece);
-    relay r = {.s = s, .hold = tag == 'B' && s->me != s->F};
-    pthread_mutex_init(&r.mu, NULL);
-    pthread_cond_init(&r.cv, NULL);
-    bool ok = job && signer_start(&r.sg, c->pzsign) && signer_send(&r.sg, SIGNER_JOB, (const uint8_t *)job, strlen(job));
-    if (job) pz_secure_zero(job, strlen(job)), free(job);
+    relay r = {.s = s};
+    bool ok = signer_start(&r.sg, c->pzsign) && signer_send(&r.sg, SIGNER_JOB, job, jl);
+    pz_secure_zero(job, sizeof job);
     if (ok) {
         pthread_t a, b;
         pthread_create(&a, NULL, relay_out, &r);
@@ -457,18 +414,9 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
         pthread_join(b, NULL);
     }
     signer_stop(&r.sg);
-    pthread_mutex_destroy(&r.mu);
-    pthread_cond_destroy(&r.cv);
-    ok = ok && r.result && !r.failed;
-    json_doc doc = {0};
-    const json_val *sigs = ok && json_parse(&doc, (const char *)r.result, strlen((const char *)r.result)) ? json_get(doc.v, "sigs") : NULL;
-    for (size_t i = 0; ok && i < n; i++) {
-        const json_val *e = json_at(sigs, i);
-        uint8_t rr[32], ss[32];
-        ok = e && hex32(json_str(json_get(e, "r")), rr) && hex32(json_str(json_get(e, "s")), ss) && btc_put_sig_p2pkh(tx, i, rr, ss, c->pubkey33) &&
-             btc_verify_p2pkh(tx, i, s->t.puzzle_spk, BTC_P2PKH_LEN);
-    }
-    if (sigs || doc.v) json_free(&doc);
+    ok = ok && r.result && !r.failed && r.result_len == 64 * n;
+    for (size_t i = 0; ok && i < n; i++)
+        ok = btc_put_sig_p2pkh(tx, i, r.result + 64 * i, r.result + 64 * i + 32, c->pubkey33) && btc_verify_p2pkh(tx, i, s->t.puzzle_spk, BTC_P2PKH_LEN);
     free(r.result);
     limit_end(s, ok);
     return ok;
@@ -532,9 +480,6 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     const int nc = puzzle_coins(&s, coins);
     if (nc <= 0 || !payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "no coin of the puzzle to spend"), SESSION_FAILED;
     if (!limit_ok(&s) || !plan(&s, &a)) return SESSION_FAILED;
-    FILE *made = fopen(c->primes, "rb");                        /* the primes made ahead, or made now */
-    if (made) fclose(made);
-    else if (!signer_primes(c->pzsign, c->primes)) return fail(&s, "pzsign could not make its primes"), SESSION_FAILED;
     if (!sign_jointly(&s, &a, a.n_in, 'A')) return SESSION_FAILED;
     uint8_t aid[32];
     btc_tx_txid(&a, aid);

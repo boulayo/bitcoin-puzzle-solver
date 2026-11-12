@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_pieces.c - the pieces of the key of a coincidence, for the three kinds of pair (tame with wild +, tame with wild -, wild + with wild -),
- * and, when PZSIGN names a pzsign binary and PZSIGN_PRIMES0 / PZSIGN_PRIMES1 two primes files, a whole two-party signing driven
- * through signer.c with the pieces of a coincidence, the signatures checked with libsecp256k1. */
+ * and, when PZSIGN names a pzsign binary, a whole two-party signing driven through signer.c with the pieces of a coincidence, once with
+ * each party first, the signatures checked with libsecp256k1. */
 #include "peertest.h"
 #include "pieces.h"
 #include "signer.h"
@@ -116,8 +116,8 @@ static void test_pieces(int ta, int tb, const char *label)
     CHECK(memcmp(e1, e2, 32) != 0);
 }
 
-/* one direction of the relay: the frames of party `from` go to the other as messages; its final answer is kept */
-typedef struct { signer *s; int from; char *answer; bool ok; } relay;
+/* one direction of the relay: the frames of party `from` go to the other as messages; its final answer is kept, and ends the other's input */
+typedef struct { signer *s; int from; uint8_t *answer; size_t len; bool ok; } relay;
 
 static void *relay_main(void *arg)
 {
@@ -134,18 +134,19 @@ static void *relay_main(void *arg)
         }
         r->ok = type == SIGNER_RESULT;
         if (!r->ok) printf("  party %d: %s\n", r->from, (char *)p);
-        r->answer = (char *)p;
+        r->answer = p, r->len = len;
+        signer_end_input(&r->s[1 - r->from]);
         return NULL;
     }
 }
 
 /* both parties through signer.c, relayed by two threads (one per direction: a message of 200 KB fills a pipe, and a single relay that
  * writes to one party while the other waits to write would block both) */
-static void test_signing(const char *bin, const char *primes0, const char *primes1)
+static void test_signing(const char *bin, int first)
 {
     fixture f;
     make(&f, 0, 1, "signing");
-    uint8_t piece[2][32], pub[2][33], eid[32], digests[2][32];
+    uint8_t piece[2][32], pub[2][33], eid[32], digests[2][32], job[SIGNER_JOB_MAX];
     for (int i = 0; i < 2; i++) {
         secp256k1_pubkey X;
         size_t n = 33;
@@ -157,35 +158,23 @@ static void test_signing(const char *bin, const char *primes0, const char *prime
     memset(digests[1], 0xff, 32);                               /* above the order: signed as the number mod n */
     signer s[2];
     for (int i = 0; i < 2; i++) {
-        CHECK(signer_start(&s[i], bin));
-        char *job = signer_job(i, eid, piece[i], (const uint8_t(*)[33])pub, f.p33, i ? primes1 : primes0, (const uint8_t(*)[32])digests, 2);
-        CHECK(job && signer_send(&s[i], SIGNER_JOB, (const uint8_t *)job, strlen(job)));
-        free(job);
+        const size_t n = signer_job(job, i, first, eid, piece[i], (const uint8_t(*)[33])pub, f.p33, (const uint8_t(*)[32])digests, 2);
+        CHECK(signer_start(&s[i], bin) && signer_send(&s[i], SIGNER_JOB, job, n));
     }
-    relay r[2] = {{s, 0, NULL, false}, {s, 1, NULL, false}};
+    relay r[2] = {{s, 0, NULL, 0, false}, {s, 1, NULL, 0, false}};
     pthread_t th[2];
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, relay_main, &r[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
-    char *sigs = r[0].answer;
-    CHECK(r[0].ok && r[1].ok && sigs && r[1].answer && !strcmp(sigs, r[1].answer));   /* both have the same signatures */
-    for (int i = 0; i < 2 && r[0].ok; i++) {                   /* {"sigs": [{"r": "..", "s": ".."}, ...]} */
-        const char *rp = sigs, *sv = NULL;
-        for (int k = 0; k <= i && rp; k++) rp = strstr(rp + 1, "\"r\"");
-        CHECK(rp && (sv = strstr(rp, "\"s\"")));
-        if (!rp || !sv) break;
-        uint8_t rs[64];
-        for (int b = 0; b < 32; b++) {
-            unsigned v;
-            sscanf(strchr(rp + 3, '"') + 1 + 2 * b, "%2x", &v), rs[b] = (uint8_t)v;
-            sscanf(strchr(sv + 3, '"') + 1 + 2 * b, "%2x", &v), rs[32 + b] = (uint8_t)v;
-        }
+    /* both have the same signatures, r || s of each digest */
+    CHECK(r[0].ok && r[1].ok && r[0].len == 128 && r[1].len == 128 && !memcmp(r[0].answer, r[1].answer, 128));
+    for (int i = 0; i < 2 && r[0].ok && r[0].len == 128; i++) {
         secp256k1_ecdsa_signature sig;
         secp256k1_pubkey P;
-        CHECK(secp256k1_ecdsa_signature_parse_compact(ctx, &sig, rs) && secp256k1_ec_pubkey_parse(ctx, &P, f.p33, 33));
+        CHECK(secp256k1_ecdsa_signature_parse_compact(ctx, &sig, r[0].answer + 64 * i) && secp256k1_ec_pubkey_parse(ctx, &P, f.p33, 33));
         CHECK(secp256k1_ecdsa_verify(ctx, &sig, digests[i], &P));   /* low s too: libsecp256k1 refuses a high one */
     }
     for (int i = 0; i < 2; i++) signer_stop(&s[i]), free(r[i].answer);
-    printf("  two-party signing through pzsign: %s\n", g_fails ? "failed" : "two valid signatures");
+    printf("  two-party signing through pzsign, party %d first: %s\n", first, g_fails ? "failed" : "two valid signatures");
 }
 
 int main(void)
@@ -195,9 +184,9 @@ int main(void)
     test_pieces(0, -1, "tame and wild -");
     test_pieces(1, -1, "wild + and wild -");
     test_pieces(-1, 0, "wild - and tame");
-    const char *bin = getenv("PZSIGN"), *p0 = getenv("PZSIGN_PRIMES0"), *p1 = getenv("PZSIGN_PRIMES1");
-    if (bin && p0 && p1) test_signing(bin, p0, p1);
-    else printf("  two-party signing skipped (set PZSIGN, PZSIGN_PRIMES0 and PZSIGN_PRIMES1)\n");
+    const char *bin = getenv("PZSIGN");
+    if (bin) test_signing(bin, 0), test_signing(bin, 1);
+    else printf("  two-party signing skipped (set PZSIGN)\n");
     secp256k1_context_destroy(ctx);
     printf(g_fails ? "t_pieces: %d FAILED\n" : "t_pieces: OK\n", g_fails);
     return g_fails != 0;

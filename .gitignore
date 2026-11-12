@@ -6,4 +6,3 @@ build/
 build_*/
 campaigns/
 dist-release/
-signer/target/

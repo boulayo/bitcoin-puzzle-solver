@@ -17,10 +17,11 @@
 # update them here and in release.yml. The ubuntu-22.04-arm label is free only for public repositories.
 #
 # pzpeer, the daemon of the shared network (docs/en/NETWORK.md), is built and tested after pzsolve in the same jobs: its unit tests on
-# Linux (with pzsign, built by cargo, on the gcc job, where the tests of the two-party signing run too), the Windows program and its
+# Linux (with pzsign on the gcc job, where the tests of the two-party signing run too), the Windows program and its
 # tests built with pzsolve.exe and run on the real Windows machine, and the build and the tests on macOS. The Windows and macOS steps
 # are informational (continue-on-error) until they have been seen green there: the code was written on Linux and the Windows program
-# has only run under Wine. pzsign.exe is cross-compiled by cargo in the Windows build job.
+# has only run under Wine. pzsign.exe is cross-compiled in the Windows build job (signer/README.md: cb-mpc, and OpenSSL built from its
+# release the first time, some minutes).
 #
 # Compiler errors: the build step runs `make -k` (keeps compiling the other files after an error, so one run shows every error),
 # the diagnostics become annotations through .github/problem-matchers/cc.json, and a failed build prints an error summary and
@@ -103,11 +104,11 @@ jobs:
       - name: Unit tests
         continue-on-error: ${{ !(matrix.name == 'linux-x86_64' && matrix.variant == 'gcc') }}
         run: make test CC=${{ matrix.cc }} ${{ matrix.args }}
-      # pzpeer and its unit tests; on the gcc job also pzsign (cargo builds GMP from source the first time: some minutes), its primes
-      # and with them the tests of the two-party signing and of the session
+      # pzpeer and its unit tests; on the gcc job also pzsign (OpenSSL, cb-mpc and pzsign: a few minutes) and its tests, and with it the
+      # tests of the two-party signing and of the session
       - name: pzsign (the two-party signer)
         if: matrix.name == 'linux-x86_64' && matrix.variant == 'gcc'
-        run: make signer peer-primes
+        run: make -j"$(nproc)" signer-test
       - name: pzpeer (build and unit tests)
         run: make peer-test CC=${{ matrix.cc }} ${{ matrix.args }}
       # Once per push, on the gcc build: src/puzzles_data.c is what tools/gen_puzzles.py makes of data/puzzles.csv (the generator
@@ -163,7 +164,7 @@ jobs:
       - name: Install MinGW-w64
         run: |
           # a stalled mirror must not block the job for 45 minutes: the script limits each try and retries
-          tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix
+          tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix
           x86_64-w64-mingw32-gcc-posix --version | sed -n 1p
       - name: Build
         run: |
@@ -174,12 +175,12 @@ jobs:
         run: |
           tools/check_binary.sh windows build/win/pzsolve.exe
           tools/check_binary.sh windows build/win/pzpeer.exe
-      # cargo cross-compiles pzsign.exe, GMP included (some minutes). Informational, like the steps that use it on the Windows machine.
+      # pzsign.exe, OpenSSL for Windows included (some minutes). Informational, like the steps that use it on the Windows machine.
       - name: pzsign.exe
         continue-on-error: true
         run: |
-          rustup target add x86_64-pc-windows-gnu
-          make winsigner
+          make -j"$(nproc)" winsigner
+          tools/check_binary.sh windows build/win/pzsign.exe
       - uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64-exe
@@ -227,8 +228,8 @@ jobs:
         run: |
           ./pzpeer.exe version
           if [ -f pzsign.exe ]; then                              # with it t_pieces signs for real, two processes and their pipes
-            ./pzsign.exe primes p0.json && ./pzsign.exe primes p1.json
-            export PZSIGN=./pzsign.exe PZSIGN_PRIMES0=p0.json PZSIGN_PRIMES1=p1.json
+            ./pzsign.exe selftest
+            export PZSIGN=./pzsign.exe
           fi
           mkdir -p build/win/peer                                 # where the tests write their files (PZ_TEST_DIR)
           for t in peer/t_*.exe; do echo "== $t"; "$t" || exit 1; done
@@ -304,8 +305,8 @@ jobs:
         if: steps.rosetta.outputs.skip != '1'
         continue-on-error: true
         run: PZ_NO_OPENCL=1 make test -k ${{ matrix.make }}
-      # Informational until seen green on a Mac: pzpeer was written and run on Linux. pzsign is built by cargo for the machine itself,
-      # so the tests of the two-party signing run on the native build only.
+      # Informational until seen green on a Mac: pzpeer was written and run on Linux. pzsign is built for the machine itself, so the
+      # tests of the two-party signing run on the native build only.
       - name: pzpeer (build and unit tests)
         if: steps.rosetta.outputs.skip != '1'
         continue-on-error: true
@@ -314,7 +315,7 @@ jobs:
         if: matrix.arch == 'arm64'
         continue-on-error: true
         run: |
-          make signer peer-primes
+          make -j"$(sysctl -n hw.ncpu)" signer-test
           make peer-test
       - name: Compiler errors
         if: failure()

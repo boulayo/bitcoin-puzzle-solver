@@ -5,7 +5,7 @@
  * (the smaller identity) when it finds the partner or by a side that does not listen, the partner's own connection, or a relay.
  *
  * A hello can start a session before this home has the alert of its pair, and anyone can copy the x of a published record into one of
- * its own: such a session costs little until the partner proved its distance (session.c makes the primes of pzsign only after that), at
+ * its own: such a session costs little until the partner proved its distance (session.c starts pzsign only after that), at
  * most HELLO_SESSIONS of them run at a time, one per partner, and a slot whose partner proved nothing is given back: they never take the
  * slots of the pairs the table alerted. */
 #include "home.h"
@@ -266,10 +266,9 @@ static void *session_main(void *arg)
     session_slot *s = job->s;
     free(job);
     const home_cfg *cfg = h->cfg;
-    char tag[17], primes[1200], why[300] = "";
+    char tag[17], why[300] = "";
     hex8(s->eid, tag);
     const int me = memcmp(s->mine.owner, s->theirs.owner, 32) < 0 ? 0 : 1;
-    snprintf(primes, sizeof primes, "%s/primes-%s.json", h->dir, tag);
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
     bool proved = false;
@@ -307,7 +306,7 @@ static void *session_main(void *arg)
         const session_chain chain = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
         session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                           .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
-                          .pzsign = cfg->pzsign, .primes = primes, .limit = &h->limit, .proved = &proved,
+                          .pzsign = cfg->pzsign, .limit = &h->limit, .proved = &proved,
                           .chan = &chan, .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3,
                           /* how often the chain is asked: public servers are not to be hammered */
                           .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
@@ -322,7 +321,6 @@ static void *session_main(void *arg)
         if (cfg->rpc) btc_rpc_done(&rpc);
     }
 done:
-    remove(primes);                                             /* the Paillier key of this session: a secret, of no use after it */
     say(h, "session %s: %s (%s)", tag, res == SESSION_PAID ? "PAID" : res == SESSION_CANCELLED ? "cancelled" : "failed", why);
     pthread_mutex_lock(&h->mu);
     if (c) net_close(c);
@@ -474,11 +472,10 @@ int home_run(const home_cfg *cfg)
     if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
     snprintf(h->dirname, sizeof h->dirname, "pznet-%.31s", h->nf.net);
     h->dir = cfg->dir ? cfg->dir : h->dirname;
-    /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0644 by pzsolve), the primes of the sessions
-     * and the output of pzsolve, which shows a key it finds: nobody else may go in */
+    /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0644 by pzsolve) and the output of pzsolve,
+     * which shows a key it finds: nobody else may go in */
     if (!sys_mkdir(h->dir) || !sys_private(h->dir))
         return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", h->dir), 1;
-    sys_remove_prefixed(h->dir, "primes-");                     /* the primes of sessions cut by a crash: secrets of no further use */
     snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", h->dir);
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);

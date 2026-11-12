@@ -2,7 +2,6 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* sys_posix.c - sys.h on Linux and macOS. */
 #include "sys.h"
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
@@ -268,18 +267,6 @@ bool sys_replace(const char *from, const char *to)
     const int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dfd >= 0) (void)fsync(dfd), close(dfd);
     return true;
-}
-
-void sys_remove_prefixed(const char *dir, const char *prefix)
-{
-    DIR *d = opendir(dir);
-    for (struct dirent *e; d && (e = readdir(d));)
-        if (!strncmp(e->d_name, prefix, strlen(prefix))) {
-            char p[1400];
-            snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
-            remove(p);
-        }
-    if (d) closedir(d);
 }
 
 /* ---- the stop ---- */

@@ -3,7 +3,7 @@
 # Targets: all (default), test, test-shani, asan, tsan, windows, wintest, clean, print-version (the version the build reports)
 #   make windows   cross-compiles build/win/pzsolve.exe and pzpeer.exe with MinGW-w64 (static, no DLLs needed)
 #   make wintest   builds the Windows unit tests of both and runs them (and the self-test) under Wine
-#   make winsigner cross-compiles build/win/pzsign.exe (cargo, with the Rust target x86_64-pc-windows-gnu installed)
+#   make winsigner cross-compiles build/win/pzsign.exe (with the MinGW-w64 C++ compiler too, and OpenSSL built for Windows)
 #   make test-shani   runs the library tests, the shani engine test and the self-test under qemu-x86_64 -cpu max, which executes the SHA
 #                  extensions on any x86-64 Linux machine (skipped when qemu-x86_64 is not installed; see the rule below)
 #
@@ -360,6 +360,7 @@ test-shani:
 endif
 
 WINCC ?= x86_64-w64-mingw32-gcc-posix
+WINCXX ?= x86_64-w64-mingw32-g++-posix
 windows:
 	$(MAKE) CC=$(WINCC) BUILD=build/win all peer
 
@@ -367,7 +368,7 @@ wintest:
 	$(MAKE) CC=$(WINCC) BUILD=build/win test peer-test
 
 winsigner:
-	$(MAKE) CC=$(WINCC) BUILD=build/win signer
+	$(MAKE) CC=$(WINCC) CXX=$(WINCXX) BUILD=build/win signer
 
 e2e: $(BIN)
 	tests/e2e.sh $(BIN)

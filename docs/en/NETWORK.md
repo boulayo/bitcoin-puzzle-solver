@@ -9,7 +9,7 @@ Status: under construction on the branch `rete-condivisa`. Section 9 lists what 
 ## 1. What runs where
 
 ```
-pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)                 pzsign (Rust, cggmp21)
+pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)                 pzsign (C++, cb-mpc)
   hunt --jump-seed --start-key                  reads the network file and the home seed        the two-party ECDSA signer,
   walks net-06 kangaroos                       publishes the distinguished points             one process per signing session,
   writes dp.bin as today          ---------->   stores the records of others (custodian)   <-> spoken to over stdin/stdout
@@ -23,8 +23,8 @@ pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)    
   home seed. Nothing else changes in the search: the distinguished points go to `dp.bin` as in any campaign.
 - **pzpeer** reads `dp.bin` as it grows, recomputes each point from its kind and distance, signs a record and publishes it. It is also
   a custodian for the records of others, and the one that pays.
-- **pzsign** is started by pzpeer for a signing session and dies at its end. It never touches the network or the disk except for its
-  pregenerated primes: pzpeer relays its messages to the partner's pzsign.
+- **pzsign** is started by pzpeer for a signing session and dies at its end. It never touches the network or the disk: pzpeer relays
+  its messages to the partner's pzsign.
 
 ## 2. Source layout
 
@@ -34,7 +34,7 @@ pzsolve (unchanged deps: libc only)          pzpeer (pzcore + lib/secp256k1)    
 | `lib/pzcore/src/seed.c` | the generator of the home seed (several sources, health tests, HKDF) |
 | `lib/pzcore/src/aead.c` | ChaCha20-Poly1305 (RFC 8439) |
 | `src/peer/` | pzpeer, one file per layer (below) |
-| `signer/` | pzsign, a Rust crate |
+| `signer/` | pzsign: `pzsign.cpp`, the copy of cb-mpc it is built on (`vendor/`), the script that builds OpenSSL for it, its tests |
 | `tests/peer/` | unit tests of pzpeer (`make peer-test`) and the end-to-end test on regtest |
 
 Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
@@ -393,20 +393,17 @@ relays do not cut the channel as idle, and the reader skips it):
    computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`. The hello and the proof of the partner are awaited 30 s at
    most (it makes them at once); every later message 5 minutes.
 3. `S_PLAN`: `SHA256("pznet1/plan" || the first transaction)`, which each side built on its own from the confirmed coins of the puzzle
-   (section 8); a different hash stops the session. Then the primes of pzsign (`pzsign primes`, seconds to a minute of CPU: only now, when
-   the partner has proved its distance and builds the same transaction), the two-party signing of its inputs (step 5), the broadcast by
-   both, and one confirmation.
+   (section 8); a different hash stops the session. Then the two-party signing of its inputs (step 5; only now, when the partner has
+   proved its distance and builds the same transaction), the broadcast by both, and one confirmation.
 4. `S_PLAN` again for the second transaction, built from the first; then F sends `S_TINYSIG`, the scriptSig of its tiny coin, which S checks.
 5. The two-party signing: pzsign on each side, its messages (0x81) relayed as `S_SIGNER(more, bytes)` in pieces of at most 65 000 bytes,
    `more` = 1 on all but the last piece; `S_SIGNED(status)` ends the messages of a side. Each signing has its id
-   `SHA256("pznet1/run/" || 'A' or 'B' || eid || nonce_0 || nonce_1)` (the nonces of party 0 and party 1); both use the primes file of the
-   session. In the signing of the second transaction **S holds each of its messages until F's message of the same rank has reached its
-   pzsign and its pzsign has gone on past it**, with its next message or with the signatures: F's last message reaches S before S's
-   last leaves, and S's leaves only once S has the whole signature. A last message of F that is garbage, or the end of F's messages instead
-   of it, gets nothing in exchange (counting messages is not enough: any bytes, or an `S_ABORT`, in place of F's last would get S's). So S has the whole
-   signature first, and F, whose tiny coin is in the transaction, holds the cancel. The first transaction only gives the prize back to the
-   puzzle: there both send at once. pzpeer never relays the envelope with which pzsign tells why it gave up: its reason would say which
-   check failed (project 4.6); the `S_SIGNED` that follows stops the partner as well.
+   `SHA256("pznet1/run/" || 'A' or 'B' || eid || nonce_0 || nonce_1)` (the nonces of party 0 and party 1). **S is the party of pzsign
+   that gets the signatures first** (section 7.6): its pzsign has them at the end of the protocol, and F's only from S's last message,
+   which carries them. So in the second transaction S has the whole signature first, and F, whose tiny coin is in it, holds the cancel;
+   a last message of F that is garbage, or missing, leaves S without a signature, and F without one too. The first transaction, which
+   only gives the prize back to the puzzle, is signed the same way. pzpeer never relays an error of pzsign: its reason would say which
+   check failed (project 4.6); the `S_SIGNED` with no signatures that follows stops the partner.
 6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
    address, and the transaction S may be holding is worth nothing. F also sends the second transaction itself when it got the whole
    signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
@@ -423,18 +420,15 @@ and countersigned by the partner, so that it survives a restore of the seed; the
 
 **The daemon** (`src/peer/home.c`). A session starts on the alert of the table (both proofs checked there) or on a hello that names the
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
-the proofs (the primes come after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
+the proofs (pzsign starts after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
 they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. A pair
 that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day.
-The primes file of a session is removed when it ends, and at the start of the daemon those left by a crash (a Paillier key: with the
-messages of the session the partner could find the piece).
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzsign and a chain in memory that checks every input: the
-payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height, and the primes
-made by the session); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
+payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
 under the joint key; a partner F that stops, or sends garbage, in place of its last message, which gets nothing and cancels; the same at a
 high fee rate, where the tiny coins are larger and F still cancels; the limit of failed signings, refused before anything is signed; a partner that copied the x of a
-record and cannot prove it, for which no primes are made; a pzsign that stops reading while the other floods it; a scan of the puzzle
+record and cannot prove it, for which no pzsign runs; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
 The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
 
@@ -446,55 +440,54 @@ first transactions from the same coins, and the one that loses waits its 144 blo
 
 ### 7.6 pzsign
 
-Frames on stdin and stdout: a 4-byte big-endian length L, then L bytes: a type byte and its payload.
+pzsign runs the two-party ECDSA of cb-mpc, Coinbase's library (after Lindell 2017; MIT; a copy in `signer/vendor` with two changes
+for Windows). [signer/README.md](../../signer/README.md) has its frames, its job and its envelope byte by byte; in short:
 
 | Type | Direction | Payload |
 |---|---|---|
-| 0x01 | pzpeer → pzsign | JSON job |
+| 0x01 | pzpeer → pzsign | the job: party `i`, the party `first` that gets the signatures first, the signing id, the own piece, the two public pieces, the key, the digests |
 | 0x02 | pzpeer → pzsign | a message of the other party, opaque |
 | 0x81 | pzsign → pzpeer | a message for the other party, opaque |
-| 0x82 | pzsign → pzpeer | JSON result |
-| 0x83 | pzsign → pzpeer | JSON error, `{"error": "...", "blame": [i...]}` |
+| 0x82 | pzsign → pzpeer | `r` and `s` of each digest, `s` low, verified against the key; last frame |
+| 0x83 | pzsign → pzpeer | the reason it failed; last frame |
 
-Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex33], "key": hex33, "primes": path, "digests": [hex32, ...]}`.
-`share` is the own additive piece (party 0's includes `base`), `pub` the two public pieces, `key` the puzzle key. Result:
-`{"sigs": [{"r": hex32, "s": hex32}, ...]}`, `s` low and verified against `key` before it is given. Commands: `pzsign primes FILE`
-(pregenerates the two safe primes of a session: seconds to a minute; a file serves one session, and pzpeer deletes it after);
-`pzsign selftest` (both parties in one process). The session runs the auxiliary data generation with the execution id
-`SHA256("pznet1/aux" || eid)`, then one signing per digest with `SHA256("pznet1/eid" || eid || u32_be(index))`; no presignatures.
+The own piece of party 0 includes `base`; pzpeer computes both public pieces from the records (section 7.5). A session imports the two
+pieces through the key generation of the library (with each party's piece in place of a random one: the commitments, the proofs of
+knowledge of the pieces, a fresh Paillier key of `first` with the proofs that it and the encryption of its piece are well formed),
+the key must come out as the puzzle key, and then signs all the digests in one run. `first` (P1 in the library) gets the signatures and
+sends them to the other; each side verifies them before it gives them. The names of the parties carry the signing id, so that no proof
+counts in another session. No presignature, no state between sessions, nothing on disk.
 
-- The messages between the two pzsign are an envelope (version, sender, phase, broadcast flag, the library's message) that pzpeer
-  relays as it is. On a failure pzsign first sends an envelope of phase *abort* with the reason, then its 0x83; pzpeer does not relay
-  that envelope (section 7.5, step 5) and ends the messages of its side with `S_SIGNED`, which stops the other side at once instead of
-  waiting. 0x82 or 0x83 is always the last frame.
-- `blame` lists the parties the library names as culprits, or the other party when its message is malformed. It can be empty (no culprit
-  is known) and, when a broadcast was not reliable, each side blames the other.
-- The last message can be lost after one side already has the signatures: one side ends with 0x82 and the other with 0x83. This is the
-  case of the cancel lever of step 6 of section 7.5.
 - pzsign has no timeouts: pzpeer ends a process that does not answer, and kills it once its last frame came or did not come in time
   (a pzsign that stopped reading would otherwise keep the relay of the partner's messages waiting for ever). Its pipes are not
   inherited by any other program pzpeer starts, nor are dp.bin and the sockets.
+- The last message, the signatures, can be lost after `first` already has them: one side ends with 0x82 and the other with 0x83. This
+  is the case of the cancel lever of step 6 of section 7.5.
 
-**The review of how pzsign uses the library** (by the author of pzsign, not an outside audit). What was read: the whole of
-`signer/src`, and in cggmp21 0.6.3 the auxiliary data generation and the interactive signing.
+**The review of how pzsign uses the library** (by the author of pzsign, not an outside audit). What was read: `pzsign.cpp`, and in
+cb-mpc the two-party key generation and signing (`protocol/ecdsa_2p.cpp`, `protocol/ec_dkg.cpp`), the proofs they use about Paillier
+(`zk/zk_paillier.cpp`) and the commitments (`zk/zk_pedersen.cpp`, `protocol/int_commitment.cpp`, `zk/zk_unknown_order.cpp`).
 
-- The key share is built from the two additive pieces only after `x_i·G` equals the own public piece and the two pieces add up to
-  the puzzle key; the partner's piece is not taken from the partner (pzpeer computes it, section 7.5).
-- The auxiliary data of the partner is taken only with a modulus of the full size and its three proofs (ring-Pedersen parameters,
-  Paillier-Blum modulus, no small factor), all bound to the execution id and to the party; the own primes are checked to be two
-  different safe primes of 1536 bits and are used for one session.
-- Signing is the interactive protocol with the reliable broadcast on (the default); pzsign calls no presignature and no key
-  derivation function, so CVE-2025-66017 (presignatures) has no code path here. Every execution id comes from the session id, which
-  two homes never repeat (section 7.5).
-- A signature leaves pzsign only after it verifies against the puzzle key and the own digest, with code that is not the library's
-  in the tests.
-- `signer/tests/session.rs` plays the partner that cheats: one byte changed in each message it sends, in turn; a session sent again
-  message by message, under the same and under a new execution id; another digest; another execution id; a share that is not its
-  piece; pieces that are not the key. In every case the honest party ends without a signature.
+- The commitments of the key generation are in a fixed group whose parameters come from a hash: neither party chooses them. The proof
+  that the Paillier key of P1 is well formed takes its challenge from the other party (128 bits), so it cannot be retried offline.
+- The signing uses the default protocol of the library, which makes P2 prove its last message well formed: the variant without that
+  proof, whose failures can leak a bit of P1's piece, is not used. That proof uses commitments modulo a number whose factors Coinbase
+  generated once (its `SECURE_USAGE.md`); with the published proof that the parameters are related as they must be, the one trust
+  left is that nobody kept the factors: whoever did could cheat in that proof as F, which is what the limit of failed signings
+  (section 7.5) bounds.
+- The pieces are checked before anything else: each `x_i·G` equals its public piece, and the two add up to the puzzle key.
+- A signature leaves pzsign only after it verifies against the puzzle key, and pzpeer verifies each again with libsecp256k1 in the
+  transaction (section 8).
+- The digests are given to the library reduced mod n: ECDSA uses nothing else of them, and the library's proofs and its own check need
+  them so (a digest above the order failed there before; the tests sign one).
+- `signer/test.py` plays the partner that cheats: one byte changed in the middle or in the header of each message, in turn, or the
+  message dropped; the messages of an earlier session given again; another digest; another signing id; a piece that is not its public
+  piece; pieces that are not the key; malformed jobs. In every case no side gets a signature, but `first` when its own last message,
+  the signatures themselves, is the one damaged.
 
-What this does not give: a proof that the library has no flaw. Its protocol has a published security proof, but an implementation
-can differ from it (CVE-2025-66016 was such a case, fixed in 0.6.3), and finding that kind of flaw is the work of an outside audit.
-The limit of failed signings (section 7.5) bounds what a flaw that leaks a little at each abort can give.
+What this does not give: a proof that the library has no flaw. Its protocols have published specifications and proofs, and the library
+had two audits in 2024; an implementation can still differ from its proof, and finding that kind of flaw is the work of an outside
+audit of how this network uses it.
 
 ### 7.7 The relay
 
@@ -517,8 +510,8 @@ neither can dial the other, a node that listens joins their connections (`src/pe
   relay sees ephemeral keys and ciphertext only: it can stop or delay the channel, not read or change it. The session then runs on it as
   on a direct one.
 - **Limits at the relay:** 8 relays under way at once and 32 homes waiting; 2 relays (waiting or under way) per address block of the
-  homes and 2 waits per identity; 32 MiB per relay, both ways together (a session moves a few MB: the auxiliary data of pzsign is
-  about 200 KB a message); 4 hours per relay (the channel stays open while the session waits for the confirmation of its first
+  homes and 2 waits per identity; 32 MiB per relay, both ways together (a session moves about 100 KB, the largest message of pzsign
+  36 KB); 4 hours per relay (the channel stays open while the session waits for the confirmation of its first
   transaction). A relay under way is one thread that copies through the receive buffers of the two connections.
 - **The channel of a session:** `dht_channel(partner, eid)` gives the daemon one connection with the partner, whichever way it comes.
   Party 0 dials the partner it finds in the table, and so does a side that does not listen (nobody can dial it). A side that listens
@@ -703,7 +696,7 @@ in `t_session` with `PZ_REGTEST`.
 | `bt.c`, `upnp.c` | done (`t_bt`, `t_upnp`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
 | `sweep.c` | done (`tests/peer/e2e_sweep.sh`: the node would take the transaction, and pzpeer did not send it) |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
-| pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`cargo test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
+| pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`make signer-test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |
 | `sys.c`, `sys_posix.c`, `sys_win.c` | done on Linux (`t_sys`). Windows: `make windows winsigner` builds `pzpeer.exe` and `pzsign.exe` with MinGW-w64, and under Wine the unit tests pass (`make wintest`; all but `t_btc_rpc`, `t_chain_rpc` and `t_session`, whose stand-ins are POSIX programs), three nodes find each other (`PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh`) and `t_pieces` signs with `pzsign.exe`; on the Windows machine of the CI the same unit tests pass, `t_sys` with the Ctrl-Break by which pzpeer stops pzsolve (Wine does not deliver it) and `t_pieces` signing with `pzsign.exe`. macOS: the CI builds pzpeer and passes its unit tests on both architectures, and on arm64 pzsign and the tests of the signing. A whole network (pzsolve, the session, a payout) has not been run on a real Windows or on a Mac |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
@@ -712,10 +705,10 @@ in `t_session` with `PZ_REGTEST`.
 ## 10. A test network on one machine
 
 ```sh
-make && make peer && make signer            # pzsolve, pzpeer, pzsign (Rust: cargo builds GMP the first time)
-make peer-primes && make peer-test          # the unit tests, the signing ones with the real pzsign
+make && make peer && make signer            # pzsolve, pzpeer, pzsign (OpenSSL is fetched and built the first time)
+make peer-test                              # the unit tests, the signing ones with the real pzsign
 bitcoind -regtest -daemon -rpcuser=pz -rpcpassword=pz -fallbackfee=0.0002
-PZ_REGTEST=127.0.0.1:18443:pz:pz build/peer/t_session    # the session on the node (with PZSIGN and the primes, as make peer-test sets them)
+PZ_REGTEST=127.0.0.1:18443:pz:pz PZSIGN=build/pzsign build/peer/t_session    # the session on the node
 PZ_REGTEST=127.0.0.1:18443:pz:pz tests/peer/e2e_net.sh   # the whole network: a custodian, two homes, a payout
 ```
 

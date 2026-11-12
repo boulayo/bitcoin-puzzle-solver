@@ -12,7 +12,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   keeps every point, also those the RAM limit leaves out of the table, for pzpeer to publish. pzsolve knows nothing else of the network.
 - pzpeer, the daemon of the shared network, and pzsign, its two-party signer (docs/en/NETWORK.md): a home publishes the points of its
   pzsolve, keeps the records of others in a Kademlia table, and for every coincidence of a tame and a wild point of two homes runs with
-  the other home a two-party ECDSA signing (cggmp21) and the two-step payout, half each. A network is its file: the fingerprint of the lines
+  the other home a two-party ECDSA signing (the two-party ECDSA of Coinbase's cb-mpc, in signer/vendor, which pzsign builds for Linux,
+  Windows and macOS) and the two-step payout, half each. A network is its file: the fingerprint of the lines
   that define it binds every key and record, and nobody signs it. Homes behind a router reach each other through a relay; the node of the home can be pruned and
   is reached with its cookie file (`--rpc-cookie`).
 - pzpeer needs no Bitcoin node of one's own: without `--rpc` it reads the chain from several Electrum servers (`--electrum HOST:PORT`

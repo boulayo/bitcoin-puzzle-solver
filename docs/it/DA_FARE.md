@@ -47,7 +47,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | A3 | I nodi si trovano attraverso la tabella di BitTorrent | fatto |
 | A4 | **Chi scarica il programma lo avvia e partecipa:** `pzpeer run --network FILE --payout INDIRIZZO`. Cartella, programmi, porta (28140), apertura sul router, primi contatti e blockchain hanno un valore predefinito | L'apertura della porta è accesa da sola (`--no-upnp` la spegne): senza, quasi nessuno farebbe da custode. L'indirizzo di pagamento resta l'unica cosa da scrivere: è dove va il premio. Quando i parametri del #140 saranno fissati il file sarà dentro il programma, e non servirà nemmeno `--network` |
 | A5 | La revisione della firma a due è fatta per la parte che ho potuto fare. Vedi 1.2 | |
-| A6 | Libreria: cggmp21 0.6.3. Passaggio a cggmp24 quando avrà un rilascio stabile | È l'unica libreria aperta, mantenuta e con licenza libera che dà anche il nome di chi bara. Il successore cggmp24 è ancora in versione alfa. Le librerie DKLs23 mature hanno licenze non libere. I protocolli a due più semplici hanno una storia di fughe a ogni interruzione |
+| A6 | Libreria: la firma a due di cb-mpc, di Coinbase (licenza MIT), con due piccole modifiche nostre per Windows | È mantenuta, ha due revisioni esterne (Cure53, 2024) e un premio per chi trova falle. Il suo protocollo (Lindell 2017) è più semplice: una sola delle due parti ha una chiave Paillier, nessuna delle due sceglie parametri che l'altra deve accettare, e non ci sono numeri primi lenti da generare: importazione dei pezzi e firma in meno di un secondo, contro un minuto prima. Usiamo la variante con la prova finale, che non lascia trapelare nulla quando una firma fallisce. Le librerie DKLs23 mature hanno licenze non libere |
 | A7 | Nessun nodo Bitcoin proprio: più server Electrum pubblici, ogni risposta verificata. Chi ha un nodo lo usa con `--rpc` | fatto |
 
 **La transazione parte sulla rete pubblica?** Sì, da sola, appena firmata. Per il #140 non è un rischio: la chiave pubblica è già nota a tutti, e la firma non rivela nulla. È diverso per i puzzle senza chiave pubblica nota (vedi C4).
@@ -80,6 +80,6 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | | Decisione | Stato |
 |---|---|---|
 | D1 | Linux, Windows e macOS | Linux: fatto. Windows: `pzpeer.exe` e `pzsign.exe` passano i test sulla macchina Windows della CI, e la prova completa con tre case passa con l'emulatore Wine. macOS: compilazione e test passano sulla CI. Manca una rete intera provata su un Windows vero e su un Mac |
-| D2 | pzsign già compilato, nello stesso archivio di pzsolve e pzpeer | È in Rust e contiene la libreria GMP (licenza LGPL): chiunque può ricompilarlo dai sorgenti, che è ciò che quella licenza chiede. Per chi riceve una licenza commerciale va scritto nella licenza (domanda per il legale) |
+| D2 | pzsign già compilato, nello stesso archivio di pzsolve e pzpeer | È in C++ e contiene cb-mpc (MIT), una copia di libsecp256k1 (MIT) e OpenSSL (Apache-2.0): licenze compatibili con la nostra, nessun obbligo di ricompilazione come quello che dava la libreria GMP |
 | D3 | Tutto resta nel ramo `rete-condivisa`. Nel repository niente italiano fuori da `docs/it` | controllato: non ce n'è |
 | D4 | Prova pubblica fatta da te, con il registro dettagliato `--debug FILE` | il registro c'è |

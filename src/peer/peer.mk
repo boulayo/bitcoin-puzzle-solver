@@ -6,8 +6,9 @@
 #   make peer        build/pzpeer
 #   make peer-test   the unit tests of src/peer (tests/peer/t_*.c); make peer-tests only builds them
 #   make peer-fuzz   the mutation fuzzer of the readers of hostile input, FUZZ_SECONDS long (60)
-#   make signer      build/pzsign, the two-party signer (signer/, Rust: needs cargo, and builds GMP from source the first time)
-#   make signer-test its tests: two pzsign sessions relayed by the test (signer/tests/session.rs)
+#   make signer      build/pzsign, the two-party signer (signer/, C++ on cb-mpc: needs a C++ compiler, and fetches and builds OpenSSL
+#                    the first time)
+#   make signer-test its tests: two pzsign sessions relayed by the test (signer/test.py)
 
 SECP_DIR   := lib/secp256k1
 SECP_FLAGS  = -std=c99 $(OPT) -g $(DEPLOY) -I$(SECP_DIR) -I$(SECP_DIR)/include -w \
@@ -70,38 +71,54 @@ $(BUILD)/peer/fuzz_peer$(EXE): tests/peer/fuzz_peer.c src/peer/btc_rpc.c tests/p
 peer-fuzz: $(BUILD)/peer/fuzz_peer$(EXE)
 	$(RUN) ./$(BUILD)/peer/fuzz_peer$(EXE) $(FUZZ_SECONDS)
 
-# The tests of the two-party signing (t_pieces, t_session) run the real pzsign when it and two primes files are there: `make signer peer-primes`
-# once (the primes take seconds to a minute), then every `make peer-test` uses them; without them those tests say they were skipped.
-PEER_PRIMES := $(BUILD)/peer/primes0.json $(BUILD)/peer/primes1.json
-peer-primes: | $(BUILD)/peer
-	@for f in $(PEER_PRIMES); do [ -f $$f ] || $(RUN) ./$(BUILD)/pzsign$(EXE) primes $$f || exit 1; done
-
+# The tests of the two-party signing (t_pieces, t_session) run the real pzsign when it is there (`make signer` once); without it they say
+# they were skipped.
 peer-tests: $(PEER) $(addsuffix $(EXE),$(addprefix $(BUILD)/peer/,$(PEERTESTS)))
 
 peer-test: peer-tests
-	@if [ -x $(BUILD)/pzsign$(EXE) ] && [ -f $(BUILD)/peer/primes0.json ] && [ -f $(BUILD)/peer/primes1.json ]; then \
-	    export PZSIGN=$(BUILD)/pzsign$(EXE) PZSIGN_PRIMES0=$(BUILD)/peer/primes0.json PZSIGN_PRIMES1=$(BUILD)/peer/primes1.json; fi; \
+	@if [ -x $(SIGNER) ]; then export PZSIGN=$(SIGNER); fi; \
 	for t in $(PEERTESTS); do $(RUN) ./$(BUILD)/peer/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(PEER) version
 
-# pzsign is a Rust crate with its own build: cargo decides what to rebuild, so the rule always runs it. --locked keeps the versions
-# of signer/Cargo.lock. It is built for the machine that runs make, or, with the MinGW-w64 compiler (make winsigner), for Windows:
-# cargo then needs the target x86_64-pc-windows-gnu (rustup target add x86_64-pc-windows-gnu) and builds GMP with that compiler.
+# pzsign is C++ on the two-party ECDSA of cb-mpc (signer/vendor/cb-mpc, MIT, with the changes listed in signer/vendor/README.md), which
+# needs a static OpenSSL 3 with one change of its own: signer/openssl.sh fetches it (checked by its hash) and builds it once per build
+# folder, with $(CC). For the machine that runs make, or, with the MinGW-w64 compilers (make winsigner), for Windows. On macOS for the
+# machine only (not with MACOS_ARCH).
 SIGNER      := $(BUILD)/pzsign$(EXE)
-CARGO       ?= cargo
-SIGNER_CARGO = $(CARGO) build --release --locked --manifest-path signer/Cargo.toml
-SIGNER_OUT  := signer/target/release
+CBMPC       := signer/vendor/cb-mpc
+OSSL        := $(BUILD)/openssl
+CBMPC_OBJ   := $(patsubst $(CBMPC)/src/%.cpp,$(BUILD)/cbmpc/%.o,$(wildcard $(CBMPC)/src/cbmpc/*/*.cpp))
+SIGNER_CXXFLAGS = -std=c++17 -O2 -fno-operator-names -Wno-attributes -Wno-parentheses -DNDEBUG -DNO_DEPRECATED_OPENSSL -MMD -MP \
+              $(if $(filter 1,$(X86)),-mpclmul -maes -msse4.1) $(if $(filter 1,$(ARM64)),-march=armv8-a+crypto) \
+              -include $(CBMPC)/include/cbmpc/core/precompiled.h -I$(CBMPC)/vendors -I$(CBMPC)/include -I$(CBMPC)/include-internal -I$(OSSL)/include
 ifeq ($(WIN),1)
-SIGNER_CARGO := CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$(CC) CC_x86_64_pc_windows_gnu=$(CC) $(SIGNER_CARGO) --target x86_64-pc-windows-gnu
-SIGNER_OUT  := signer/target/x86_64-pc-windows-gnu/release
+SIGNER_LIBS := -static -lws2_32 -lcrypt32 -lbcrypt -luser32 -ladvapi32
+else ifeq ($(DARWIN),1)
+SIGNER_LIBS := -framework CoreServices -framework IOKit
+else
+SIGNER_LIBS := -static-libstdc++ -static-libgcc -lpthread -ldl
 endif
 
-signer:
-	$(SIGNER_CARGO)
-	@mkdir -p $(BUILD)
-	cp $(SIGNER_OUT)/pzsign$(EXE) $(SIGNER)
+$(OSSL)/lib/libcrypto.a: signer/openssl.sh
+	CC="$(CC)" signer/openssl.sh $(abspath $(OSSL))
 
-signer-test:
-	$(CARGO) test --release --locked --manifest-path signer/Cargo.toml
+$(BUILD)/cbmpc/%.o: $(CBMPC)/src/%.cpp $(OSSL)/lib/libcrypto.a
+	@mkdir -p $(@D)
+	$(CXX) $(SIGNER_CXXFLAGS) -c $< -o $@
 
-.PHONY: peer peer-tests peer-test peer-fuzz peer-primes signer signer-test
+$(BUILD)/libcbmpc.a: $(CBMPC_OBJ)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(SIGNER): signer/pzsign.cpp $(BUILD)/libcbmpc.a
+	$(CXX) $(SIGNER_CXXFLAGS) -DPZ_VERSION=\"$(PZ_VERSION)\" -o $@ $< $(BUILD)/libcbmpc.a $(OSSL)/lib/libcrypto.a $(SIGNER_LIBS)
+
+-include $(CBMPC_OBJ:.o=.d) $(SIGNER:$(EXE)=.d)
+
+signer: $(SIGNER)
+
+signer-test: $(SIGNER)
+	$(RUN) ./$(SIGNER) selftest
+	python3 -I signer/test.py $(if $(RUN),$(RUN) )./$(SIGNER)
+
+.PHONY: peer peer-tests peer-test peer-fuzz signer signer-test

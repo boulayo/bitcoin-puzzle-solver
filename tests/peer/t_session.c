@@ -2,12 +2,11 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_session.c - two homes run the session of a coincidence against each other, in two threads, with the real pzsign, over a channel in
  * memory and a chain in memory that checks every input of every transaction it is given (a standard P2PKH spend of an unspent output) and
- * mines a block every 200 ms. The cases: the payout, half each (with a chain that does not answer at first, and the primes made by the
- * session); a partner S that keeps the second transaction (and its last signing message) to itself, which F answers by spending its tiny
+ * mines a block every 200 ms. The cases: the payout, half each (with a chain that does not answer at first); a partner S that keeps the second transaction (and its last signing message) to itself, which F answers by spending its tiny
  * coin after 3 blocks; a partner F that stops, or sends garbage, instead of its last signing message, and gets nothing for it; a fee rate
  * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzsign that
  * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
- * Needs PZSIGN, PZSIGN_PRIMES0 and PZSIGN_PRIMES1; without them it says it was skipped. */
+ * Needs PZSIGN; without it it says it was skipped. */
 #include "peertest.h"
 #include "chain_rpc.h"
 #include "session.h"
@@ -398,7 +397,6 @@ typedef struct {
     bool s_withholds;                 /* S keeps the second transaction */
     uint64_t fee;                     /* the fee rate home 1 proposes (0: the usual) */
     int lost_heights;                 /* answers about the height each chain loses at first */
-    bool make_primes;                 /* home 0 has no primes: its session makes them */
     unsigned limit[2];                /* failures already counted on the network by home 0, and for the pair by home 1 */
     unsigned fails_F, fails_S;        /* the failed signings F and S count in the case */
     const char *bin[2];               /* the pzsign of each home (NULL: the real one) */
@@ -409,7 +407,7 @@ typedef struct {
 } tcase;
 
 /* a puzzle, its coin on the chain, two homes whose records meet on the same point; then the session of both */
-static void run_case(const tcase *tc, const char *bin, const char *const primes[2])
+static void run_case(const tcase *tc, const char *bin)
 {
     /* on a node that keeps its chain the keys are new at every run: coins left by an earlier run would change the first transaction (and
      * the count of messages some cases rely on) */
@@ -453,7 +451,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
     chain_rpc crpc[2];
     session_limit lim[2];
     bool proved[2] = {false, false};
-    char limpath[2][96], mine_primes[96];
+    char limpath[2][96];
     uint8_t xo[2][32];
     for (int i = 0; i < 2; i++) {
         uint8_t sec[32];
@@ -483,7 +481,7 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         uint8_t ps[32];
         hashed(l, ps);
         p2pkh_of(ps, g->pay_spk), g->pay_len = BTC_P2PKH_LEN;
-        g->max_feerate = 200000, g->pzsign = tc->bin[i] ? tc->bin[i] : bin, g->primes = primes[i];
+        g->max_feerate = 200000, g->pzsign = tc->bin[i] ? tc->bin[i] : bin;
         chan[i] = (session_chan){&e[i], q_send, q_recv};
         if (regtest) {                                          /* each home its own client of the node */
             CHECK(rpc_client(&rpcs[i]));
@@ -520,7 +518,6 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         h[i].cfg.chain = &ifc[i];
     }
     if (tc->fee) g_fee[1] = tc->fee;
-    if (tc->make_primes) remove(in_dir("primes-made", mine_primes, sizeof mine_primes)), h[0].cfg.primes = mine_primes;
     h[S_home].cfg.withhold = tc->s_withholds;
     e[S_home].last_b = tc->s_last, e[F_home].last_b = tc->f_last;
     pthread_t th[2];
@@ -570,20 +567,15 @@ static void run_case(const tcase *tc, const char *bin, const char *const primes[
         pthread_cond_destroy(&lim[i].cv);
         remove(limpath[i]);
     }
-    if (tc->make_primes) {
-        struct stat st;
-        CHECK(stat(mine_primes, &st) == 0 && (st.st_mode & 077) == 0);   /* made by the session, for its owner only */
-        remove(mine_primes);
-    }
 }
 
-/* A partner that copied the x of home 0's record into a record of its own type, under its own identity, and cannot prove it: home 0 makes
- * no primes and runs no pzsign for it (the primes file it would make stays missing). */
+/* A partner that copied the x of home 0's record into a record of its own type, under its own identity, and cannot prove it: home 0 runs
+ * no pzsign for it (the one it would run leaves a mark). */
 static void run_copied(const char *bin)
 {
     static record_net net;
     uint8_t base[32] = {0}, k[32] = {0}, p33[33], d0[32], c[33];
-    char prim[96];
+    char mark[96];
     base[23] = 0x80, k[20] = 1, k[31] = 7;
     secp256k1_pubkey P, R;
     size_t n = 33;
@@ -615,8 +607,8 @@ static void run_copied(const char *bin)
     memcpy(g->base, base, 32), memcpy(g->pubkey33, p33, 33), memcpy(g->partner, xo[1], 32), memcpy(g->d, d0, 32);
     hashed("copied coin", g->coin_sec);
     p2pkh_of(g->coin_sec, g->pay_spk), g->pay_len = BTC_P2PKH_LEN;
-    g->max_feerate = 200000, g->pzsign = bin, g->primes = in_dir("primes-copied", prim, sizeof prim);
-    remove(prim);
+    g->max_feerate = 200000, g->pzsign = bin;
+    remove(in_dir("copied-mark", mark, sizeof mark));
     g->chan = &chan, g->chain = &chn, g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3;
     bool proved = false;
     g->proved = &proved;
@@ -635,14 +627,14 @@ static void run_copied(const char *bin)
     q_drain(&q[0]), q_drain(&q[1]);
     printf("  copied x: %s (%s)\n", h.res == SESSION_FAILED ? "failed" : "not failed", h.why);
     CHECK(h.res == SESSION_FAILED && strstr(h.why, "did not prove") && !proved);
-    CHECK(access(prim, F_OK) != 0);
+    CHECK(access(mark, F_OK) != 0);
 }
 
 int main(void)
 {
-    const char *bin = getenv("PZSIGN"), *primes[2] = {getenv("PZSIGN_PRIMES0"), getenv("PZSIGN_PRIMES1")};
-    if (!bin || !primes[0] || !primes[1]) {
-        printf("t_session: skipped (set PZSIGN, PZSIGN_PRIMES0 and PZSIGN_PRIMES1)\n");
+    const char *bin = getenv("PZSIGN");
+    if (!bin) {
+        printf("t_session: skipped (set PZSIGN)\n");
         return 0;
     }
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
@@ -666,17 +658,17 @@ int main(void)
         btc_rpc_done(&c);
         printf("  on the regtest node %s:%u\n", node.host, node.port);
     }
-    /* the programs of some cases: a pzsign whose primes come from a copy, one that hangs and reads nothing, one that floods */
-    char maker[96], hang[96], flood[96], text[1200];
-    snprintf(text, sizeof text, "#!/bin/sh\nif [ \"$1\" = primes ]; then cp '%s' \"$2\" && chmod 600 \"$2\"; exit $?; fi\nexec '%s' \"$@\"\n", primes[0], bin);
-    write_text(in_dir("maker", maker, sizeof maker), text, true);
+    /* the programs of some cases: a pzsign that leaves a mark when it runs, one that hangs and reads nothing, one that floods */
+    char marker[96], hang[96], flood[96], text[1200], mark[96];
+    snprintf(text, sizeof text, "#!/bin/sh\ntouch '%s'\nexec '%s' \"$@\"\n", in_dir("copied-mark", mark, sizeof mark), bin);
+    write_text(in_dir("marker", marker, sizeof marker), text, true);
     write_text(in_dir("hang", hang, sizeof hang), "#!/bin/sh\nexec sleep 600\n", true);
     write_text(in_dir("flood", flood, sizeof flood),
                "#!/bin/sh\ni=0\nwhile [ $i -lt 5 ]; do printf '\\000\\000\\352\\141\\201'; head -c 60000 /dev/zero; i=$((i+1)); done\nexec sleep 600\n", true);
     pthread_t m;
     pthread_create(&m, NULL, miner, NULL);
     const tcase cases[] = {
-        {.name = "payout", .expect = PAYOUT, .lost_heights = 1, .make_primes = true, .bin = {maker}},
+        {.name = "payout", .expect = PAYOUT, .lost_heights = 1},
         {.name = "held back", .expect = CANCEL, .s_last = LAST_DROPPED, .s_withholds = true, .fails_F = 1},
         /* F stops, or sends garbage, instead of its last message: S's last one must not come back (it did before: F had the signature) */
         {.name = "F stops at its last message", .expect = CANCEL, .f_last = LAST_ABORT, .fails_F = 1, .fails_S = 1},
@@ -692,15 +684,15 @@ int main(void)
         /* the chain stops after the first transaction: the wait for its block ends (before, never) */
         {.name = "the chain stops", .expect = FIRST, .frozen = true, .block_ms = 10, .why = "not confirmed"},
     };
-    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) run_case(&cases[i], bin, primes);
-    run_copied(maker);
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) run_case(&cases[i], bin);
+    run_copied(marker);
     pthread_mutex_lock(&chain.mu);
     chain.stop = true;
     pthread_mutex_unlock(&chain.mu);
     pthread_join(m, NULL);
     char p[96];
-    const char *const files[] = {"maker", "hang", "flood"};
-    for (int i = 0; i < 3; i++) remove(in_dir(files[i], p, sizeof p));
+    const char *const files[] = {"marker", "hang", "flood", "copied-mark"};
+    for (int i = 0; i < 4; i++) remove(in_dir(files[i], p, sizeof p));
     CHECK(rmdir(g_dir) == 0);
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_session");

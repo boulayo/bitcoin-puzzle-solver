@@ -67,7 +67,7 @@ typedef struct {
                                              * per 1000 virtual bytes); the higher of the two homes is taken, and one above max ends the session */
     payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
     int nprizes;
-    const char *pzsign, *primes;           /* the signer and the primes file of this session (made by the session when it is missing) */
+    const char *pzsign;                    /* the signer */
     session_limit *limit;                   /* NULL: no limit (tests) */
     bool *proved;                           /* set when the partner has proved its distance (NULL: not wanted) */
     const session_chan *chan;

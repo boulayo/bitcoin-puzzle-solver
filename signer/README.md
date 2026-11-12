@@ -4,94 +4,91 @@
 
 The two-party ECDSA signer of the shared kangaroo network ([NETWORK.md](../docs/en/NETWORK.md), section 7.6). When two homes find a
 coincidence, each holds an additive piece of the puzzle key, `k = x0 + x1`, and neither may learn the other's. pzpeer starts one
-`pzsign session` on each side; the two run the CGGMP21 protocol (the `cggmp21` crate) through pzpeer and both get the same
-standard ECDSA signatures of the transaction digests, with `k` never assembled anywhere.
+`pzsign session` on each side; the two run the two-party ECDSA of [cb-mpc](vendor/README.md) (Coinbase's library, after Lindell 2017)
+through pzpeer, and both get the same standard ECDSA signatures of the transaction digests, with `k` never assembled anywhere.
 
 ```
-make signer          # build/pzsign (cargo build --release --locked; GMP is built from source the first time)
-make signer-test     # the tests below
+make signer          # build/pzsign: OpenSSL is fetched and built the first time (signer/openssl.sh), then cb-mpc and pzsign
+make signer-test     # the selftest and signer/test.py
+make winsigner       # build/win/pzsign.exe, with the MinGW-w64 compilers
 ```
+
+It needs a C++17 compiler, `curl` and `perl` (for OpenSSL). One file, [pzsign.cpp](pzsign.cpp).
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `pzsign session` | one signing session, framed on stdin and stdout |
-| `pzsign primes FILE` | pregenerates the two safe primes (1536 bits) of a session into FILE, mode 0600, through `FILE.tmp` |
-| `pzsign selftest [P0 P1]` | both parties in one process: a random key split in two, the auxiliary data, three digests, the same verified signatures on both sides; with primes from P0 and P1, or fresh ones |
+| `pzsign selftest` | both parties in one process, once with each of them first: a random key split in two, three digests, the same verified signatures on both sides |
 | `pzsign version` | version and license |
-
-The primes are the party's Paillier secret key. A file is for one session: pzsign only reads it, pzpeer removes it once used.
 
 ## The session
 
 Frames on stdin and stdout: a 4-byte big-endian length L (1 to 1 MiB), then L bytes, a type byte and its payload. stdout carries only
-frames; logs go to stderr.
+frames (pzsign keeps a copy of it for them and points stdout itself at stderr, so nothing a library prints can break one); logs go to
+stderr.
 
 | Type | Direction | Payload |
 |---|---|---|
-| 0x01 | pzpeer → pzsign | the job, JSON, first frame and only once |
+| 0x01 | pzpeer → pzsign | the job, first frame and only once |
 | 0x02 | pzpeer → pzsign | a message of the other party |
 | 0x81 | pzsign → pzpeer | a message for the other party |
-| 0x82 | pzsign → pzpeer | `{"sigs": [{"r": hex32, "s": hex32}, ...]}`, last frame |
-| 0x83 | pzsign → pzpeer | `{"error": "...", "blame": [i...]}`, last frame |
+| 0x82 | pzsign → pzpeer | the signatures: `r` and `s` (32 bytes each, big-endian, `s` low) of each digest, in order; last frame |
+| 0x83 | pzsign → pzpeer | the reason it failed, text; last frame |
 
-Job: `{"op": "sign", "i": 0|1, "eid": hex32, "share": hex32, "pub": [hex33, hex33], "key": hex33, "primes": path, "digests": [hex32, ...]}`
-(unknown fields are refused, 1 to 64 digests). Then:
+The job, binary: version (2), `i` (this party, 0 or 1), `first` (the party that gets the signatures first), the session id (32 bytes),
+the own piece (32), the public pieces of party 0 and party 1 and the key (33 each, compressed), then 1 to 64 digests of 32 bytes.
+Then:
 
-1. **Key share.** pzsign checks that `share·G = pub[i]` and `pub[0] + pub[1] = key`, and builds the library's key share from the pieces:
-   `DirtyCoreKeyShare { i, key_info: { shared_public_key: key, public_shares: pub, vss_setup: None }, x: share }`. Without a VSS setup
-   the library validates it as an additive 2-of-2 sharing. There is no dealer and no key generation.
-2. **Auxiliary data**, `aux_info_gen` with the primes of the file and the execution id `SHA256("pznet1/aux" || eid)`. It gives the
-   Paillier keys and ring-Pedersen parameters of both parties and completes the key share.
-3. **One signing per digest**, in order, with the execution id `SHA256("pznet1/eid" || eid || u32_be(index))`. The digest is the
-   legacy signature hash: it is signed as the number it is (reduced mod n, as ECDSA does), not hashed again. `s` is made low and
-   each signature is verified against `key` before it is reported. No presignatures.
+1. **Checks.** The piece is a scalar in `[1, n-1]`, `piece·G = pub[i]` and `pub[0] + pub[1] = key`.
+2. **Import of the pieces**: the key generation of the library (`ecdsa2pc::dkg`) with the party's own piece in place of a random one.
+   Each party commits to its public piece and proves it knows the piece; the party `first` (P1 in the library) makes a fresh Paillier
+   key, encrypts its piece under it and proves the key and the encryption well formed. The pieces must give `key`. The names of the
+   two parties carry the session id, so that no proof of one session counts in another.
+3. **Signing**, all the digests in one run (`ecdsa2pc::sign_batch`). The digest is the legacy signature hash: it is signed as the number
+   it is mod n (ECDSA uses nothing else of it), and the library takes it reduced. P1 gets the signatures, already with a low `s` and
+   verified by the library.
+4. **The signatures to P2**: P1 sends them, P2 takes them as its own. Each side verifies every signature against `key` before it
+   reports it, and refuses a high `s`.
 
-Any malformed input (a frame, the job, a message, a frame of an unexpected type, the end of stdin) ends the session with 0x83.
-Before it, pzsign sends the partner an abort message (0x81), so that the other side stops at once. `blame` lists the parties that
-the library names as culprits, or the partner when its message does not decode; it is empty otherwise. pzsign has no timeout:
-pzpeer kills it when the session is over.
+P1 has the signatures before P2, and P2 has them only if P1 sends them: pzpeer makes S, the party that broadcasts the second
+transaction, the party `first` (NETWORK.md 7.5, step 6). The library's signing makes P2 prove its last message well formed, so a P2
+that cheats gets nothing and learns nothing; there is no presignature and no state kept between sessions.
 
-The last message of each run reaches one side before the other: if it is lost or damaged, one side may report its signatures (0x82)
-while the other reports an error. That is the asymmetry that the project's cancel lever is for (NETWORK.md 7.5, step 6).
+Anything malformed (a frame, the job, a message, a frame of an unexpected type, the end of stdin) ends the session with 0x83. pzsign
+sends the partner nothing when it fails: pzpeer ends the partner's input instead (S_SIGNED with no signatures). pzsign has no timeout:
+pzpeer stops it when the session is over.
 
 ## The envelope
 
-The payload of 0x81 and 0x02 is opaque to pzpeer. It is a header and the library's message, both in postcard (serde, varints, no
-field names):
+The payload of 0x81 and 0x02 is opaque to pzpeer: three bytes, then the library's message.
 
-| Field | Encoding | Meaning |
-|---|---|---|
-| version | byte | 1 |
-| from | varint | the sender, 0 or 1 |
-| phase | varint 0, or 1 and a varint index, or 2 | auxiliary data, signing of the digest `index`, abort |
-| broadcast | byte 0 or 1 | how the library sent it |
-| message | postcard | the library's message for that phase; for an abort, the reason as a string |
+| Byte | Meaning |
+|---|---|
+| version | 2 |
+| from | the sender, 0 or 1 |
+| phase | 1 import of the pieces, 2 signing, 3 the signatures from P1 |
 
-The receiver checks each field against what it expects (version, sender, the phase it is running) and refuses trailing bytes: the
-two parties run the same runs in the same order over an ordered channel, so any other message is malformed. The library requires
-its messages to be authenticated and the point-to-point ones encrypted; the Noise channel between the homes gives both.
+The receiver checks the three against what it expects: the two parties run the same steps in the same order over an ordered channel,
+so any other message is malformed. The library requires its messages to be authenticated and kept secret on the way; the Noise channel
+between the homes gives both.
 
-Sizes: the second and third rounds of the auxiliary data are about 200 KB each (the library writes its big numbers as hex strings);
-a signing is about 45 KB per party, the largest message 31 KB. pzpeer must split them across its Noise frames of at most 64 KB.
+Sizes, for two digests: P1 sends six messages (1.7 KB, 36 KB, 20 B, 36 B, 3.2 KB and the signatures), P2 four (2.4 KB, 20 B, 3.2 KB,
+8 KB). The import of the pieces and the signing take well under a second together on one core of a laptop, the Paillier key included.
 
 ## Tests
 
-`cargo test --release` (or `make signer-test`) runs `tests/session.rs`: two `pzsign session` processes with the test as their
-pzpeer, which relays the 0x81 frames of each to the other as 0x02. It checks that both sides return the same signatures, valid for
-`key` (verified there with curve operations only) and with a low `s`; that a damaged envelope, a corrupted proof and a corrupted
-broadcast make both sides abort, with the blame on the sender where the library names it; that a share that does not match its
-piece, or pieces that do not add up to the key, are refused; and that malformed jobs are refused. The first run makes the two primes
-files the tests share, in `target/tmp`.
-
-On a 4-core machine with both parties on it: a primes file in 4 to 40 s (it is luck), the auxiliary data in about 6 s, a signature
-in 0.7 s.
+`make signer-test` runs `pzsign selftest` and [test.py](test.py): two `pzsign session` processes with the test as their pzpeer, which
+relays the messages of each to the other and changes, drops or replays them. It checks, with the curve of `tools/ref.py` (no code shared
+with pzsign), that both sides return the same signatures, valid for `key` and with a low `s`, with either party first; that a message
+changed in its middle or its header, or dropped, leaves no signature anywhere but on P1, and on P1 only when it was the last one, the
+signatures themselves; that a partner with another digest, in another session, or replaying the messages of an earlier session, gets
+nothing; and that a piece that is not its public piece, pieces that do not add up to the key and malformed jobs are refused. The
+pzpeer tests `t_pieces` and `t_session` run the real pzsign too, when `make signer` has built it.
 
 ## Licenses
 
-pzsign is AGPL-3.0-or-later. Its main dependencies: `cggmp21`, `key-share`, `paillier-zk`, `fast-paillier`, `generic-ec`,
-`round-based` (the protocol, MIT OR Apache-2.0); `rug` and `gmp-mpfr-sys` (LGPL-3.0-or-later), which bring GMP (LGPL-3.0-or-later or
-GPL-2.0-or-later), linked statically; `postcard`, `serde`, `serde_json`, `sha2`, `hex`, `zeroize`, `rand_core` (MIT OR Apache-2.0).
-The rest of the tree is MIT, Apache-2.0, BSD-3-Clause or similar permissive licenses. All are compatible with the AGPL; a binary
-distributed under other terms must still let its user relink GMP, as the LGPL asks.
+pzsign is AGPL-3.0-or-later. It is linked statically with cb-mpc (MIT), with the copy of libsecp256k1 that cb-mpc carries (MIT) and
+with OpenSSL 3 (Apache-2.0); all are compatible with the AGPL. [vendor/README.md](vendor/README.md) lists what the copy of cb-mpc holds
+and what was changed in it.

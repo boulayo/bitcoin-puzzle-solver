@@ -3,7 +3,6 @@
 /* signer.c - the pzsign process (see signer.h). */
 #include "signer.h"
 #include "sys.h"
-#include <pzcore/seal.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,37 +61,16 @@ void signer_stop(signer *s)
     s->proc = 0, s->to = s->from = -1;
 }
 
-bool signer_primes(const char *path, const char *file)
+size_t signer_job(uint8_t out[SIGNER_JOB_MAX], int i, int first, const uint8_t eid[32], const uint8_t share[32], const uint8_t pub[2][33],
+                  const uint8_t key[33], const uint8_t (*digests)[32], int ndigests)
 {
-    const char *const argv[] = {path, "primes", file, NULL};
-    int st;
-    const sys_proc p = sys_spawn(argv, NULL, NULL, NULL);
-    return p && sys_proc_ended(p, true, &st) && st == 0;
-}
-
-static void hex(const uint8_t *p, size_t n, char *out)
-{
-    static const char D[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; i++) out[2 * i] = D[p[i] >> 4], out[2 * i + 1] = D[p[i] & 15];
-    out[2 * n] = 0;
-}
-
-char *signer_job(int i, const uint8_t eid[32], const uint8_t share[32], const uint8_t pub[2][33], const uint8_t key[33], const char *primes,
-                 const uint8_t (*digests)[32], int ndigests)
-{
-    for (const char *c = primes; *c; c++)
-        if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) return NULL;   /* a path that would need escaping: not one of ours */
-    const size_t cap = 512 + strlen(primes) + (size_t)ndigests * 70;
-    char *j = malloc(cap), e[65], sh[65], p0[67], p1[67], k[67], d[65];
-    if (!j) return NULL;
-    hex(eid, 32, e), hex(share, 32, sh), hex(pub[0], 33, p0), hex(pub[1], 33, p1), hex(key, 33, k);
-    size_t o = (size_t)snprintf(j, cap, "{\"op\": \"sign\", \"i\": %d, \"eid\": \"%s\", \"share\": \"%s\", \"pub\": [\"%s\", \"%s\"], \"key\": \"%s\", "
-                                         "\"primes\": \"%s\", \"digests\": [", i, e, sh, p0, p1, k, primes);
-    for (int n = 0; n < ndigests; n++) {
-        hex(digests[n], 32, d);
-        o += (size_t)snprintf(j + o, cap - o, "%s\"%s\"", n ? ", " : "", d);
-    }
-    snprintf(j + o, cap - o, "]}");
-    pz_secure_zero(sh, sizeof sh);
-    return j;
+    uint8_t *p = out;
+    *p++ = 2, *p++ = (uint8_t)i, *p++ = (uint8_t)first;         /* 2: the version of the job and of the envelopes of pzsign */
+    memcpy(p, eid, 32), p += 32;
+    memcpy(p, share, 32), p += 32;
+    memcpy(p, pub[0], 33), p += 33;
+    memcpy(p, pub[1], 33), p += 33;
+    memcpy(p, key, 33), p += 33;
+    memcpy(p, digests, 32 * (size_t)ndigests), p += 32 * (size_t)ndigests;
+    return (size_t)(p - out);
 }

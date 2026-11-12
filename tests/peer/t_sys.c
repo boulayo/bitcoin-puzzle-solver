@@ -166,19 +166,7 @@ static void test_files(const char *dir)
     CHECK(sys_pread(fd, buf, 4, 100) == 0 && sys_truncate(fd, 5) && sys_size(fd) == 5 && sys_sync(fd) && close(fd) == 0);
     fd = sys_open_rw(path);                                    /* kept */
     CHECK(fd >= 0 && sys_size(fd) == 5 && close(fd) == 0);
-    /* the files of a prefix, and no other */
-    static const char *const NAMES[] = {"primes-1.json", "primes-2.json", "other"};
-    for (int i = 0; i < 3; i++) {
-        snprintf(tmp, sizeof tmp, "%s/%s", dir, NAMES[i]);
-        FILE *f = sys_fopen(tmp, "wb");
-        CHECK(f != NULL);
-        if (f) fclose(f);
-    }
-    sys_remove_prefixed(dir, "primes-");
-    snprintf(tmp, sizeof tmp, "%s/primes-1.json", dir);
-    CHECK(sys_fopen(tmp, "rb") == NULL);
-    snprintf(tmp, sizeof tmp, "%s/other", dir);
-    CHECK(remove(tmp) == 0 && remove(path) == 0);
+    CHECK(remove(path) == 0);
 }
 
 int main(int argc, char **argv)
