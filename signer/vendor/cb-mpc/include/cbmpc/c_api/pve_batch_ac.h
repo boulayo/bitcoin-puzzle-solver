@@ -1,0 +1,108 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <cbmpc/c_api/access_structure.h>
+#include <cbmpc/c_api/common.h>
+#include <cbmpc/c_api/pve_base_pke.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ---------------------------------------------------------------------------
+// PVE-AC (access-structure / quorum decryption) API (C API)
+// ---------------------------------------------------------------------------
+//
+// This API encrypts a *batch* of scalars {x_i} under a leaf-keyed access structure.
+//
+// Partial decryptions are sensitive: anyone who collects partial decryptions from a quorum
+// can use them to recover the backed-up values.
+// Encrypt them to the authorized recipient before forwarding through an intermediary.
+// These APIs, including HSM variants, do not provide recipient encryption.
+// See SECURE_USAGE.md#pve-ac-recovery-partial-decryptions-and-recipient-protection and demo-api/pve.
+//
+// Notes:
+// - Leaf keys are passed as a mapping (parallel arrays) from leaf name to key blob.
+// - If `base_pke` is NULL, cbmpc uses its built-in default base PKE.
+
+cbmpc_error_t cbmpc_pve_ac_encrypt(const cbmpc_pve_base_pke_t* base_pke, cbmpc_curve_id_t curve,
+                                   const cbmpc_access_structure_t* ac, const char* const* leaf_names,
+                                   const cmem_t* leaf_eks, int leaf_count, cmem_t label, cmems_t xs,
+                                   cmem_t* out_ciphertext);
+
+cbmpc_error_t cbmpc_pve_ac_verify(const cbmpc_pve_base_pke_t* base_pke, cbmpc_curve_id_t curve,
+                                  const cbmpc_access_structure_t* ac, const char* const* leaf_names,
+                                  const cmem_t* leaf_eks, int leaf_count, cmem_t ciphertext, cmems_t Qs_compressed,
+                                  cmem_t label);
+
+// Step 1: decrypt a single leaf share for `attempt_index`.
+// First call cbmpc_pve_ac_verify() with the expected access structure, public keys,
+// public values, and label from trusted application state.
+// Encrypt the returned partial decryption to the authorized recipient before forwarding.
+//
+// Ownership: same as `cbmpc_pve_encrypt`.
+cbmpc_error_t cbmpc_pve_ac_partial_decrypt_attempt(const cbmpc_pve_base_pke_t* base_pke, cbmpc_curve_id_t curve,
+                                                   const cbmpc_access_structure_t* ac, cmem_t ciphertext,
+                                                   int attempt_index, const char* leaf_name, cmem_t dk, cmem_t label,
+                                                   cmem_t* out_share);
+
+// Step 1 (HSM): decrypt a single leaf share for `attempt_index` using an HSM-backed
+// RSA-OAEP private key (KEM decapsulation callback).
+// Verify the backup before partial decryption, then encrypt the returned partial decryption
+// to the authorized recipient before forwarding.
+//
+// - `dk_handle` is an opaque handle understood by the callback.
+// - `ek` is the leaf's built-in base PKE public key blob (used to validate key type).
+//
+// Ownership: same as `cbmpc_pve_ac_partial_decrypt_attempt`.
+cbmpc_error_t cbmpc_pve_ac_partial_decrypt_attempt_rsa_oaep_hsm(cbmpc_curve_id_t curve,
+                                                                const cbmpc_access_structure_t* ac, cmem_t ciphertext,
+                                                                int attempt_index, const char* leaf_name,
+                                                                cmem_t dk_handle, cmem_t ek, cmem_t label,
+                                                                const cbmpc_pve_rsa_oaep_hsm_decap_t* cb,
+                                                                cmem_t* out_share);
+
+// Step 1 (HSM): decrypt a single leaf share for `attempt_index` using an HSM-backed
+// ECIES(P-256) private key (ECDH callback only).
+// Verify the backup before partial decryption, then encrypt the returned partial decryption
+// to the authorized recipient before forwarding.
+//
+// - `dk_handle` is an opaque handle understood by the callback.
+// - `ek` is the leaf's built-in base PKE public key blob (used to validate key type
+//   and derive the KEM context).
+//
+// Ownership: same as `cbmpc_pve_ac_partial_decrypt_attempt`.
+cbmpc_error_t cbmpc_pve_ac_partial_decrypt_attempt_ecies_p256_hsm(cbmpc_curve_id_t curve,
+                                                                  const cbmpc_access_structure_t* ac, cmem_t ciphertext,
+                                                                  int attempt_index, const char* leaf_name,
+                                                                  cmem_t dk_handle, cmem_t ek, cmem_t label,
+                                                                  const cbmpc_pve_ecies_p256_hsm_ecdh_t* cb,
+                                                                  cmem_t* out_share);
+
+// Step 2: combine partial decryptions at the authorized recipient to recover {x_i} for one attempt.
+// If another attempt is needed, collect new partial decryptions for that attempt.
+//
+// - `quorum_leaf_names[i]` corresponds to `quorum_shares[i]`.
+//
+// Notes:
+// - Call cbmpc_pve_ac_verify() first; this function does not verify the ciphertext.
+//
+// Ownership: same as `cbmpc_pve_batch_decrypt`.
+cbmpc_error_t cbmpc_pve_ac_combine(const cbmpc_pve_base_pke_t* base_pke, cbmpc_curve_id_t curve,
+                                   const cbmpc_access_structure_t* ac, const char* const* quorum_leaf_names,
+                                   const cmem_t* quorum_shares, int quorum_count, cmem_t ciphertext, int attempt_index,
+                                   cmem_t label, cmems_t* out_xs);
+
+// Extract batch count from a PVE-AC ciphertext.
+cbmpc_error_t cbmpc_pve_ac_get_count(cmem_t ciphertext, int* out_batch_count);
+
+// Extract {Q_i} from a PVE-AC ciphertext (compressed point encodings).
+//
+// Ownership: same as `cbmpc_pve_batch_decrypt`.
+cbmpc_error_t cbmpc_pve_ac_get_Qs(cmem_t ciphertext, cmems_t* out_Qs_compressed);
+
+#ifdef __cplusplus
+}
+#endif
