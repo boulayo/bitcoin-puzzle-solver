@@ -391,7 +391,7 @@ relays do not cut the channel as idle, and the reader skips it):
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
    computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`. The hello and the proof of the partner are awaited 30 s at
-   most (it makes them at once); every later message 5 minutes.
+   most (it makes them at once); every later message 5 minutes. A wait counts from its start: `S_ALIVE` does not move it.
 3. `S_PLAN`: `SHA256("pznet1/plan" || the first transaction)`, which each side built on its own from the confirmed coins of the puzzle
    (section 8); a different hash stops the session. Then the two-party signing of its inputs (step 5; only now, when the partner has
    proved its distance and builds the same transaction), the broadcast by both, and one confirmation.
@@ -403,17 +403,23 @@ relays do not cut the channel as idle, and the reader skips it):
    which carries them. So in the second transaction S has the whole signature first, and F, whose tiny coin is in it, holds the cancel;
    a last message of F that is garbage, or missing, leaves S without a signature, and F without one too. The first transaction, which
    only gives the prize back to the puzzle, is signed the same way. pzpeer never relays an error of pzsign: its reason would say which
-   check failed (project 4.6); the `S_SIGNED` with no signatures that follows stops the partner.
+   check failed (project 4.6); the `S_SIGNED` with no signatures that follows stops the partner. A signing ends when no whole message
+   of the partner came for 5 minutes, and after 15 minutes in all, whatever else comes on the channel; signatures that verify are kept
+   whatever the partner sends after them.
 6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
-   address, and the transaction S may be holding is worth nothing. F also sends the second transaction itself when it got the whole
-   signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
+   address, and the transaction S may be holding is worth nothing; it sends the cancel again at every block until it is in a block, or
+   the prize moves. A spend counts only once it is in a block: one in the mempool can still leave it, and S hold the second transaction
+   again. F also sends the second transaction itself when it got the whole signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
    (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the session ends instead of waiting for
    ever, and F, then, tries its cancel.
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
-failure), so the home counts them in `HOME/failed-signings`, lines `<hex of F or of an eid> <failures>`: every run of pzsign counts as failed
-before it starts (written through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash
-or a kill in the middle counts. At 10 failures on a network, with any partner, or 3 for one pair, the home signs no more on it, and says so
+failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
+fingerprint || x of an own point)> <failures>` (a line at 0 is left out): every run of pzsign counts as failed before it starts (written
+through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash or a kill in the middle
+counts; a pzsign that could not start counts nothing. At 10 failures on a network, with any partner, or 3 on one own point, with any
+partner (the piece at stake is that of the point, and whoever knows the distance of the other point can name it again under new
+identities, each a new eid), the home signs no more on it, and says so
 before the plan of the first transaction, so that the partner's pzsign does not start (it would count a failure of its own). Runs are one
 at a time; a session that does not get its turn within 2 minutes gives up without a run. Not done yet: the count published in the network
 and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
@@ -421,12 +427,14 @@ and countersigned by the partner, so that it survives a restore of the seed; the
 **The daemon** (`src/peer/home.c`). A session starts on the alert of the table (both proofs checked there) or on a hello that names the
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
 the proofs (pzsign starts after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
-they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. A pair
+they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. Once a
+partner proved its distance on an own point, no other pair on that point gets a slot (its records named under other identities). A pair
 that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day.
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzsign and a chain in memory that checks every input: the
 payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
-under the joint key; a partner F that stops, or sends garbage, in place of its last message, which gets nothing and cancels; the same at a
+under the joint key, also when it keeps the channel alive with `S_ALIVE` for ever; a partner F that stops, or sends garbage, in place of
+its last message, which gets nothing and cancels, or sends garbage after it, which leaves S its signatures and pays; the same at a
 high fee rate, where the tiny coins are larger and F still cancels; the limit of failed signings, refused before anything is signed; a partner that copied the x of a
 record and cannot prove it, for which no pzsign runs; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
@@ -434,9 +442,9 @@ The counts of the limit are checked in every case, and every channel carries `S_
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
 for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are);
-F takes a spend of the prize in its node's mempool for the payout (chain_rpc asks `gettxout` with the mempool), so a second transaction
-that S sends and that then leaves the mempools unconfirmed would be S's to hold again; two sessions of one puzzle at once build their
-first transactions from the same coins, and the one that loses waits its 144 blocks.
+two sessions of one puzzle at once build their first transactions from the same coins, and the one that loses waits its 144 blocks;
+"paid" means that the prize output was spent in a block, by the second transaction or by anything else (another session of the same
+puzzle).
 
 ### 7.6 pzsign
 
@@ -468,7 +476,8 @@ counts in another session. No presignature, no state between sessions, nothing o
 cb-mpc the two-party key generation and signing (`protocol/ecdsa_2p.cpp`, `protocol/ec_dkg.cpp`), the proofs they use about Paillier
 (`zk/zk_paillier.cpp`) and the commitments (`zk/zk_pedersen.cpp`, `protocol/int_commitment.cpp`, `zk/zk_unknown_order.cpp`).
 
-- The commitments of the key generation are in a fixed group whose parameters come from a hash: neither party chooses them. The proof
+- The commitments of the key generation are in a fixed group: its modulus is a constant of the library and its second generator comes
+  from a hash, so neither party chooses them. The proof
   that the Paillier key of P1 is well formed takes its challenge from the other party (128 bits), so it cannot be retried offline.
 - The signing uses the default protocol of the library, which makes P2 prove its last message well formed: the variant without that
   proof, whose failures can leak a bit of P1's piece, is not used. That proof uses commitments modulo a number whose factors Coinbase
@@ -629,6 +638,8 @@ On the main chain:
   where the prize may come last.
 - When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
   would cancel at once.
+- An output spent only in the node's mempool still counts as unspent (`gettxout` with the mempool, then without it): a spend counts
+  once it is in a block (7.5, step 6).
 
 - A puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON reader: it would cost
   an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a prize. So the session also takes the prizes of
@@ -662,9 +673,9 @@ checks the rules that the proof of work alone does not (below).
    (`blockchain.transaction.get_merkle`) to the header of its height in the kept chain: then it is confirmed, as deep as that header.
    A "transaction" of 64 bytes is refused, as it could be an inner node of the tree passed off as a leaf (CVE-2017-12842).
 3. **Spent** is proven too. A coin a server lists is dropped only when another shows the transaction that spends it, confirmed with
-   its branch. For the wait of F and the confirmations of our own transactions, an output is spent when such a transaction is
-   confirmed or, while it waits in the mempool, when all its inputs are outputs of the transaction asked about and every signature is
-   valid: a server that just stops listing the prize proves nothing, and the partner could run it.
+   its branch. For the wait of F and the confirmations of our own transactions, an output is spent only when such a transaction is
+   confirmed: a server that just stops listing the prize proves nothing, nor does one that shows a spend in its mempool (the partner
+   could run it, and keep the transaction to itself).
 4. **Our transactions** go to every server; the broadcast holds when a server then serves the transaction back.
 5. **Fee rate:** the median of `blockchain.estimatefee` of the servers that answer, under the cap of the file.
 

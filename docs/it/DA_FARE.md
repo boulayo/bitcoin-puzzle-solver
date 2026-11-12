@@ -23,6 +23,19 @@ Sulle macchine Windows e macOS della CI i test di pzpeer passano (su Windows anc
 ### 1.2 Revisione esterna della firma a due
 La mia revisione non sostituisce quella di specialisti. **Da decidere:** se farla fare prima di usare bitcoin veri. **Consiglio:** sì, prima del #140.
 
+La revisione interna di novembre (quattro revisori indipendenti: firma, sessione e pagamento, rete, risolutore) ha portato alle correzioni
+del ramo. Restano questi punti di progetto, da chiudere prima del #140:
+- chi attacca può scegliere se essere F o S rifirmando il proprio record: serve un passo di impegno e rivelazione dei nonce;
+- un partner può far ripartire la coppia con annullamenti ripetuti per un giorno, e ogni giro costa una commissione al premio;
+- avvisi falsi della tabella (record con una x copiata) possono occupare i 64 posti delle sessioni per un giorno;
+- i limiti per blocco di indirizzi sono larghi, e il conteggio si azzera con collisioni di FNV;
+- la custodia predefinita arriva a 2^28 record (37 GB);
+- un saluto fa interrogare i server Electrum prima di qualunque prova;
+- gli identificativi delle richieste verso BitTorrent sono prevedibili, e gli indirizzi IPv6 6to4 e Teredo non sono filtrati;
+- il tempo con cui P1 fallisce dice quale firma del lotto non andava (al più log2(n+1) bit);
+- i valori segreti possono restare nelle riserve di memoria dei numeri grandi di OpenSSL;
+- le azioni della CI non sono fissate per hash, e `check_binary.sh` ha una sola lista per tutti i programmi.
+
 ### 1.3 La prova pubblica con due o tre computer
 Quando vuoi farla: un puzzle di 60–64 bit creato da noi, con un premio piccolo, e `--debug FILE` su ogni computer. I file di debug non contengono segreti: me li puoi far leggere così come sono.
 
