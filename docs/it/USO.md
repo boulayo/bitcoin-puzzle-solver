@@ -400,6 +400,7 @@ come se la variabile non ci fosse.
 |-----------|---------|
 | `PZ_GPU_API=cuda\|opencl` | il runtime delle GPU che vedono sia CUDA sia OpenCL: `cuda` usa solo CUDA, `opencl` solo OpenCL (sezione 7.3); `auto`, o nessuna variabile: CUDA per le schede NVIDIA (OpenCL come riserva), OpenCL per le altre |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
+| `PZ_CUDA_LIB=PERCORSO` | la libreria del driver CUDA da caricare, con il suo percorso, al posto di quella del sistema (le prove danno così il loro driver simulato su Windows, dove un driver si cerca solo nella cartella di sistema) |
 | `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
 | `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128cm`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |

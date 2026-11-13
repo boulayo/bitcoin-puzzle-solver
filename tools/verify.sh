@@ -491,12 +491,15 @@ if command -v x86_64-w64-mingw32-gcc-posix >/dev/null && command -v wine >/dev/n
     { tail -5 "$T/winmeet.log"; echo "  FAIL the rendezvous of pzpeer.exe"; fail=$((fail+1)); }
   run make winmockcuda >/dev/null
   W="$T/win"; rm -rf "$W"; mkdir -p "$W"; cp build/win/pzsolve.exe build/win/mockcuda/nvcuda.dll "$W/"
-  (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
+  (cd "$W" && PZ_CUDA_LIB='.\\nvcuda.dll' wine pzsolve.exe selftest 2>&1 | tr -d '\r' | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU") && echo "  OK GPU self-test via CUDA (nvcuda.dll)" || { echo "  FAIL GPU self-test via CUDA under Windows"; fail=$((fail+1)); }
+  # the simulated driver sits beside the exe: without PZ_CUDA_LIB it must not be loaded (a driver is looked for in the system folder only)
+  (cd "$W" && wine pzsolve.exe devices 2>&1 | tr -d '\r' | grep -q "Mock CUDA") && { echo "  FAIL a nvcuda.dll in the current folder was loaded"; fail=$((fail+1)); } ||
+    echo "  OK a nvcuda.dll in the current folder is not loaded"
   (cd "$W" && wine pzsolve.exe hunt -p 26 -a "$A" -m linear -c w -d camp --no-gpu --ui log -q >/dev/null 2>&1)
   check_found "$W/camp/w" "$K" && echo "  OK linear (exe)" || { echo "  FAIL linear (exe)"; fail=$((fail+1)); }
   (cd "$W" && wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m bsgs --table t.bin -c b -d camp --no-gpu --ui log -q >/dev/null 2>&1)
   check_found "$W/camp/b" "$KK" && [ -s "$W/t.bin" ] && echo "  OK bsgs with table on file (exe)" || { echo "  FAIL bsgs (exe)"; fail=$((fail+1)); }
-  (cd "$W" && WINEDLLOVERRIDES=nvcuda=n wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c k -d camp --no-cpu --ui log -q >/dev/null 2>&1)
+  (cd "$W" && PZ_CUDA_LIB='.\\nvcuda.dll' wine pzsolve.exe hunt -p 44 -a "$KA" -k "$KP" -m kangaroo -c k -d camp --no-cpu --ui log -q >/dev/null 2>&1)
   check_found "$W/camp/k" "$KK" && echo "  OK kangaroo via CUDA (exe)" || { echo "  FAIL kangaroo via CUDA (exe)"; fail=$((fail+1)); }
   (cd "$W" && wine pzsolve.exe hunt -p 71 -c i -d camp --no-gpu --ui log -q >/dev/null 2>&1 &)
   wait_for 'running "$W/camp/i"'   # started (Wine may take a while) and running: the first report is written 2 s after the start

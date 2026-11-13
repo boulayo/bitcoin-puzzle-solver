@@ -380,7 +380,7 @@ tsan:
 	$(MAKE) BUILD=build/tsan OPT="-O1 -fsanitize=thread" all
 
 # Mock CUDA driver for tests (libcuda.so.1 / nvcuda.dll): runs the kernel sources on the CPU behind the driver API,
-# so the whole CUDA code path can be exercised without an NVIDIA GPU (LD_LIBRARY_PATH / WINEDLLPATH, see tools/verify.sh).
+# so the whole CUDA code path can be exercised without an NVIDIA GPU (LD_LIBRARY_PATH / PZ_CUDA_LIB, see tools/verify.sh).
 MOCK    := $(BUILD)/mockcuda
 ifeq ($(WIN),1)
 MOCKLIB := $(MOCK)/nvcuda.dll
