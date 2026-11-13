@@ -559,12 +559,12 @@ static void run_case(const tcase *tc, const char *bin)
     printf("  %s: F %s (%s), S %s (%s)\n", tc->name, RES[h[F_home].res], h[F_home].why, RES[h[S_home].res], h[S_home].why);
     /* what the chain holds now */
     uint64_t pay[2], at_puzzle = balance(puzzle_spk);
-    bool coin_left[2];
+    uint64_t coin_left[2];                                                          /* the satoshis of its tiny coin still unspent */
     for (int i = 0; i < 2; i++) {
         uint8_t coin_spk[BTC_P2PKH_LEN];
         p2pkh_of(h[i].cfg.coin_sec, coin_spk);
         pay[i] = balance(h[i].cfg.pay_spk);
-        coin_left[i] = balance(coin_spk) > 0;
+        coin_left[i] = balance(coin_spk);
         if (regtest) btc_rpc_done(&rpcs[i]);
     }
     printf("    paid: F %llu, S %llu sat; left on the puzzle address %llu sat\n", (unsigned long long)pay[F_home], (unsigned long long)pay[S_home],
@@ -573,8 +573,9 @@ static void run_case(const tcase *tc, const char *bin)
         CHECK(h[0].res == SESSION_PAID && h[1].res == SESSION_PAID);
         CHECK(at_puzzle == 0 && pay[S_home] > 49900000);            /* half of 1 BTC less the two tiny coins and two fees (on a regtest
                                                                      * node with a history, at twice its own estimate) */
-        CHECK(pay[F_home] - PAYOUT_TINY_MIN - pay[S_home] <= 1);                       /* F also has its tiny coin back */
-        CHECK(coin_left[S_home] && !coin_left[F_home]);                            /* S keeps its tiny coin for the next time */
+        /* F also has its tiny coin back, and S keeps its own for the next time: the two are equal, PAYOUT_TINY_MIN or more with the
+         * fee rate (the estimate of a regtest node moves while the test itself fills its blocks) */
+        CHECK(coin_left[S_home] >= PAYOUT_TINY_MIN && !coin_left[F_home] && pay[F_home] - coin_left[S_home] - pay[S_home] <= 1);
     } else if (tc->expect == CANCEL) {
         CHECK(h[F_home].res == SESSION_CANCELLED && h[S_home].res == SESSION_FAILED);
         CHECK(at_puzzle > 99800000 && pay[S_home] == 0);                           /* the prize is still under the joint key */
