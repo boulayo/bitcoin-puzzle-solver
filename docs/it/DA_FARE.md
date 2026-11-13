@@ -99,3 +99,74 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | D2 | pzsign già compilato, nello stesso archivio di pzsolve e pzpeer | È in C++ e contiene cb-mpc (MIT), una copia di libsecp256k1 (MIT) e OpenSSL (Apache-2.0): licenze compatibili con la nostra, nessun obbligo di ricompilazione come quello che dava la libreria GMP |
 | D3 | Tutto resta nel ramo `rete-condivisa`. Nel repository niente italiano fuori da `docs/it` | controllato: non ce n'è |
 | D4 | Prova pubblica fatta da te, con il registro dettagliato `--debug FILE` | il registro c'è |
+
+## 3. Dalla revisione completa (novembre 2026)
+
+Otto revisori indipendenti, uno per area, più gli analizzatori statici. Quello che è stato corretto è nel `CHANGELOG.md` e nei
+commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione sono nel rapporto della revisione.
+
+### 3.1 Sicurezza, da fare prima di una rete con denaro vero
+
+| | Rilievo | Rimedio proposto |
+|---|---|---|
+| E1 | Un avviso con un punto copiato costa alla vittima circa 50 connessioni, e riempie la sua cassetta finché non arriva una prova | Il custode chiede a chi ha depositato il record una prova di possesso legata al custode, prima di avvisare (circa 30 righe) |
+| E2 | Le cassette di una casa che non ascolta stanno sui 5 nodi più vicini a un nome pubblico: chi mette nodi lì le controlla | Più cassette, scelte anche con un segreto condiviso fra le due case; connessioni tenute aperte al posto delle interrogazioni |
+| E3 | Una coppia arrivata dopo può sostituire la prima transazione di una coppia arrivata prima | Prima transazione sempre alla commissione massima |
+| E4 | Chi fa fallire le firme blocca un punto (3 fallimenti) senza pagare nulla | I fallimenti si dimenticano col tempo; un tentativo costa qualcosa a chi lo chiede |
+| E5 | Un server Electrum lento allunga ogni lettura della catena | Un limite di tempo per server e per operazione |
+| E6 | Il partner può imporre fino a 1000 sat/vB e fermarsi dopo la prima transazione | Un tetto più basso, o la commissione presa dal blocco |
+| E7 | Il generatore del seme accredita 256 bit al tempo anche con un orologio senza rumore | Togliere i rami che dipendono dai dati nella parte cronometrata, oppure stimare sulla differenza di due ripetizioni |
+| E8 | pzsign: 126 MB per un solo messaggio dentro il limite di dimensione | Un limite agli elementi per fase |
+| E9 | Windows: la cartella predefinita `pznet-NOME` prende i permessi della cartella madre; `--seed-hex` si vede nell'elenco dei processi | Permessi espliciti; il seme da file o da ambiente |
+| E10 | La mappatura UPnP "senza fine" non viene mai tolta | Toglierla all'uscita |
+
+### 3.2 Sprechi
+
+| | Rilievo | Rimedio proposto |
+|---|---|---|
+| F1 | A ogni arresto il canguro butta il percorso di ogni camminatore dall'ultimo punto distinto (fino a K·2^dp passi) | Salvare il branco |
+| F2 | Pubblicare un record costa 7 connessioni; un riavvio ripubblica tutto | Connessioni tenute aperte, salto di ciò che `own.bin` ha già (con C1 e C2) |
+| F3 | Ogni sessione rilegge tutte le monete non spese; in attesa, 4n+1 richieste ogni 15 secondi | Seguire le uscite e non le transazioni; `scripthash.subscribe` |
+| F4 | Un processore con AVX2 ma senza ADX (Intel Haswell) cade sul motore di base: 4,0 contro 8,8 M chiavi/s | Compilare i motori a corsie senza `-madx` |
+| F5 | Motori nuovi misurati: hash con SHA-NI nel motore a corsie AVX2 (+9 %), curva a 4 corsie da 52 bit con AVX-IFMA (+30 %, +45 % con SHA-NI) | Aggiungerli |
+| F6 | La scelta del motore CPU si rifà a ogni avvio (2 secondi); la memoria della scheda è contata due volte nel limite dei lanci | Ricordare la scelta; contare una volta |
+| F7 | Un core intero riservato per ogni scheda OpenCL | `clFlush`, attesa, poi `clFinish` |
+| F8 | La tabella del canguro è una potenza di due dentro `--mem`; voci da 16 byte | Voci da 8 byte, tabella di qualsiasi misura |
+| F9 | pzpeer tiene 4,5 MB per 64 sessioni possibili | Allocare alla prima sessione |
+
+### 3.3 Semplificazioni proposte (circa 1000 righe in meno)
+
+| | Proposta | Righe |
+|---|---|---|
+| G1 | Un solo strato di sistema per `src` e `src/peer` | −250 |
+| G2 | Una tabella delle opzioni, e una dei campi `chiave=valore` dei file | −200 |
+| G3 | Le funzioni per l'esadecimale stanno in 9 posti: una coppia in pzcore | −70 |
+| G4 | I nove `eng_*.c` e i sei `h160_*.c` cambiano solo per le definizioni: un file per famiglia compilato più volte | −150 |
+| G5 | `rt.c`: tredici scelte fra CUDA e OpenCL diventano una tabella di funzioni | −40 |
+| G6 | Tre riempimenti di SHA-256 in pzcore (hash.c, kdf.c): uno | −40 |
+| G7 | La copia di cb-mpc tiene 7400 righe che pzsign non usa | −7400 (nessun cambio ai sorgenti usati) |
+| G8 | Togliere i numeri di sequenza dei record (con C1) | da valutare |
+
+### 3.4 Documenti da allineare
+
+- `PROGETTO_RETE.md`: UPnP è acceso se non lo si spegne (6.2 dice il contrario); nessuno firma il file della rete (6.1, 6.2); i
+  fallimenti di firma sono 3 per punto proprio e non per coppia (3.2, 5.2); le chiavi di prova della ricerca lineare sono 16 e i
+  blocchi da 40 a 48 bit (8.2); "mezz'ora al massimo" (2.3) vale solo con blocchi e server puntuali.
+- `ALGORITHMS.md`: 2.2 (NEON ha una sua implementazione), 4.3 (due camminatori che si uniscono su un ciclo di 2), 4.4 (lo sfoltimento
+  "una corsa su cinque" vale solo con `--mem` potenza di due), 4.7 e `USAGE.md` 9.2 (quanto si perde a un riavvio), 277-280 (cosa
+  riporta la scheda nella ricerca lineare).
+- `NETWORK.md`: la custodia (55 GB per casa contro i 37 scritti), l'indice (dal 19 al 25 %, non 1/8), la stima 1,06 mostrata nelle
+  campagne di rete contro l'1,18 misurato.
+- Commenti: `chain_spv.c:3`, `chain_spv.h:6`, `dht_priv.h:10`, `net.h:5`, `gpu.c:178`, `hash160_batch.h`.
+
+### 3.5 Librerie
+
+- OpenSSL 3.6.5 è uscita (13 CVE, nessuna tocca ciò che pzsign usa), ma cb-mpc accetta solo la 3.6.4: va scritta la procedura di
+  aggiornamento (versione e impronta in `signer/openssl.sh`, il controllo di versione nella copia, i test).
+- libsecp256k1 0.8.0 è uscita (nessuna correzione di sicurezza; verifica fino all'11 % più veloce).
+- cb-mpc: a luglio e agosto 2026 gli autori hanno corretto quattro volte la firma a due. A ogni aggiornamento va riconfrontato
+  `import_piece` di pzsign con il loro `dkg`.
+- Un archivio che contiene pzpeer o pzsign deve portare le licenze di cb-mpc, libsecp256k1 e OpenSSL (`tools/package_release.sh`
+  copia solo quella del progetto).
+- Le protezioni del compilatore (canarini, FORTIFY) vengono solo dalla distribuzione: su Windows `pzpeer.exe` non le ha. Vanno
+  scritte nel Makefile per pzpeer e pzsign.

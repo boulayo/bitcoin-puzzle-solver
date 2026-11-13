@@ -67,6 +67,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   already was.
 
 ### Fixed
+
+- Linear search on a GPU: the size of a launch could stop adapting to the device (it was compared with a claim that the scheduler had
+  rounded down to 1024 keys).
+- `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked
+  as scanned with their near misses missing).
 - A key found while the disk was full was lost: `FOUND.txt` could not be written, yet the state recorded the block as searched, and the
   next start ended "completed without the key". A campaign now keeps two blocks of the disk for `FOUND.txt` (`reserve.bin`) and gives
   them back at the find; if the file still cannot be written, the state is left as it was before the find, so that the same command

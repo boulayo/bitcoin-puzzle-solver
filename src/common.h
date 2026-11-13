@@ -37,7 +37,8 @@ typedef uint8_t u8;
 #define PZ_PRINTF printf
 #endif
 
-/* Exit status of 'hunt' (see 'pzsolve help hunt'). Every other command uses 0 for success and PZ_EXIT_ERROR for an error. */
+/* Exit status of 'hunt' (see 'pzsolve help hunt'). Every other command uses 0 for success and PZ_EXIT_ERROR for an error; selftest and
+ * doctor give 1 when a check fails. */
 enum {
     PZ_EXIT_FOUND = 0,           /* the key was found */
     PZ_EXIT_NOT_FOUND = 1,       /* the search finished (the whole range, or the whole --part) without the key */

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* upnp.h - asking the router of the home to let the port in (UPnP IGD, the protocol by which programs open a port on home routers), so
- * that a node behind it can be dialled and be a custodian (docs/en/NETWORK.md 7.9). Only when the user asks (--upnp). IPv4. */
+ * that a node behind it can be dialled and be a custodian (docs/en/NETWORK.md 7.9). Asked unless the user says not to (--no-upnp). IPv4. */
 #ifndef PZPEER_UPNP_H
 #define PZPEER_UPNP_H
 
