@@ -312,6 +312,7 @@ typedef struct {
     net_cfg cfg;
     int lfd;
     uint64_t max, moved;
+    int64_t idle;                   /* 0: no limit of its own */
 } relay_srv;
 
 static void *relay_main(void *arg)
@@ -327,7 +328,7 @@ static void *relay_main(void *arg)
         if (!c[i] || !net_recv(c[i], m, sizeof m, &n) || n != 4 || memcmp(m, "join", 4)) break;
     }
     if (c[0] && c[1] && net_send(c[0], (const uint8_t *)"go", 2) && net_send(c[1], (const uint8_t *)"go", 2)) {
-        r->moved = net_splice(c[0], c[1], r->max, 10000, NULL);
+        r->moved = net_splice(c[0], c[1], r->max, 10000, r->idle ? r->idle : 10000, NULL);
     } else {
         net_close(c[0]);
         net_close(c[1]);
@@ -409,6 +410,31 @@ static void test_relay(void)
     /* the relay's limit of bytes: the copy stops, and the homes see the end of the channel */
     relay_run(1u << 20, idc.xonly, 50, &a, &c, &r);
     CHECK(a.hs_ok && c.hs_ok && a.echoed < 10 && r.moved <= 1u << 20);
+    /* two homes that join and say nothing: the relay closes them after its idle time, not after its life */
+    {
+        pthread_t th;
+        uint16_t pt;
+        net_cfg ca, cc;
+        net_addr at;
+        uint8_t m[16];
+        size_t n;
+        memset(&r, 0, sizeof r);
+        net_cfg_init(&r.cfg, ctx, &idb, FP, BITS, 0, 2000), net_cfg_init(&ca, ctx, &ida, FP, BITS, 0, 2000), net_cfg_init(&cc, ctx, &idc, FP, BITS, 0, 2000);
+        r.max = 1u << 20, r.idle = 300;
+        r.lfd = net_listen("127.0.0.1", 0, &pt);
+        CHECK(r.lfd >= 0 && net_parse_addr("127.0.0.1:1", &at));
+        at.port = pt;
+        CHECK(pthread_create(&th, NULL, relay_main, &r) == 0);
+        net_conn *x = net_dial(&ca, &at, idb.xonly);
+        CHECK(x && net_send(x, (const uint8_t *)"join", 4));
+        net_conn *y = net_dial(&cc, &at, idb.xonly);
+        CHECK(y && net_send(y, (const uint8_t *)"join", 4) && net_recv(x, m, sizeof m, &n) && net_recv(y, m, sizeof m, &n));
+        const int64_t t0 = ms();
+        pthread_join(th, NULL);
+        CHECK(r.moved == 0 && ms() - t0 >= 250 && ms() - t0 < 1500);
+        net_close(x), net_close(y);
+        net_close_fd(r.lfd);
+    }
     /* the initiator expects another identity than the one at the other end (a relay that splices it to someone else): refused before
      * it shows its own key, and the other side sees the end */
     relay_run(64u << 20, idb.xonly, 1, &a, &c, &r);

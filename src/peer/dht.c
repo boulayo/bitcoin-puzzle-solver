@@ -14,6 +14,7 @@
 #define ANS_MAX MBOX_LEN           /* the longest answer */
 #define JOBS_MAX 4096
 #define ALERT_JOBS_MAX 256         /* of them, the alerts a custodian sends */
+#define IN_MS 2000                 /* the handshake and the request of a connection that comes in: they come at once */
 #define CONN_PER_BLOCK 4           /* connections of one address block queued or being answered at a time */
 #define LIM_SLOTS 4096             /* address blocks whose limits are remembered */
 #define OWNER_SHARE 16             /* an owner holds at most 1/16 of a custodian's records */
@@ -222,7 +223,9 @@ bool dht_serve(dht *d, net_conn *c, const uint8_t *msg, size_t len)
 
 static void serve(dht *d, int fd, const net_addr *from, uint8_t *req, uint8_t *ans)
 {
-    net_conn *c = net_handshake(&d->ncfg, fd, from);
+    net_cfg in = d->ncfg;                                      /* a peer that opens and says nothing holds a handler for IN_MS */
+    if (in.timeout_ms > IN_MS) in.timeout_ms = IN_MS;
+    net_conn *c = net_handshake(&in, fd, from);
     size_t len;
     if (!c) return;
     if (!is_me(d, c->remote_id) && addr_ok(d, from)) atomic_store(&d->in_ms, sys_now_ms());   /* the port of this node is open (reached) */
@@ -230,6 +233,7 @@ static void serve(dht *d, int fd, const net_addr *from, uint8_t *req, uint8_t *a
         net_close(c);
         return;
     }
+    net_set_timeout(c, d->ncfg.timeout_ms);
     if (req[0] >= DHT_SESSION_FIRST && req[0] <= DHT_SESSION_LAST) {
         if (d->cfg.on_session) d->cfg.on_session(d->cfg.user, c, req, len);   /* the daemon owns the connection now */
         else net_close(c);

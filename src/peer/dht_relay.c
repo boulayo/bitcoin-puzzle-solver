@@ -9,6 +9,7 @@
 
 #define RELAY_PER_BLOCK 2          /* relays (waiting or under way) of the homes of one address block, */
 #define RELAY_PER_ID 2             /* ... and waits of one identity */
+#define RELAY_IDLE_MS 180000       /* a relay with no byte for this long is closed: a session says it is alive every minute */
 
 
 typedef struct {
@@ -21,7 +22,7 @@ static void *relay_main(void *arg)
 {
     relay_job *j = arg;
     dht *d = j->d;
-    const uint64_t n = net_splice(j->a, j->b, d->cfg.relay_bytes, d->relay_ms, &d->stop);
+    const uint64_t n = net_splice(j->a, j->b, d->cfg.relay_bytes, d->relay_ms, RELAY_IDLE_MS, &d->stop);
     dlog(d, "a relay ended: %" PRIu64 " bytes", n);
     pthread_mutex_lock(&d->r_mu);                              /* the last use of d: dht_stop may free it once this is unlocked */
     j->slot->used = false;
@@ -70,9 +71,12 @@ bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
     net_conn *other = NULL;
     relay_slot *act = NULL;
     bool kept = false;
+    int in_block, of_id;
     pthread_mutex_lock(&d->r_mu);
     relay_sweep(d);
-    for (int i = 0; i < RELAY_WAITING && !other; i++) {
+    relay_count(d, blk, c->remote, &in_block, &of_id);
+    const bool room = !lim || in_block < RELAY_PER_BLOCK;      /* for the home that waits and for the one that joins it */
+    for (int i = 0; i < RELAY_WAITING && !other && room; i++) {
         relay_slot *w = &d->waiting[i];
         if (!w->used || memcmp(w->name, name, 32) || memcmp(w->from, to, 32) || memcmp(w->to, c->remote, 32)) continue;
         w->used = false;
@@ -93,8 +97,7 @@ bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
         }
     }
     if (!other) {
-        int in_block, of_id, free_at = -1;
-        relay_count(d, blk, c->remote, &in_block, &of_id);
+        int free_at = -1;
         for (int i = 0; i < RELAY_WAITING; i++) {
             relay_slot *w = &d->waiting[i];
             if (w->used && !memcmp(w->name, name, 32) && !memcmp(w->from, c->remote, 32)) {   /* the same home again: the new join wins */

@@ -365,7 +365,7 @@ void net_close(net_conn *c)
     free(c);
 }
 
-uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms, const atomic_bool *stop)
+uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms, int64_t idle_ms, const atomic_bool *stop)
 {
     /* direction i copies fd[i] to fd[1 - i] through the receive buffer of its connection, which the relay no longer needs */
     const int fd[2] = {a->fd, b->fd};
@@ -374,10 +374,11 @@ uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms
     bool eof[2] = {false, false};
     uint64_t moved = 0;
     const int64_t until = sys_now_ms() + max_ms;
+    int64_t quiet = sys_now_ms() + idle_ms;
     pz_secure_zero(&a->tx, sizeof a->tx), pz_secure_zero(&a->rx, sizeof a->rx);
     pz_secure_zero(&b->tx, sizeof b->tx), pz_secure_zero(&b->rx, sizeof b->rx);
     while (!(stop && atomic_load(stop))) {
-        const int64_t left = until - sys_now_ms();
+        const int64_t left = (until < quiet ? until : quiet) - sys_now_ms();
         if (left <= 0 || (eof[0] && off[0] == len[0]) || (eof[1] && off[1] == len[1])) break;   /* one side is done and delivered */
         struct pollfd p[2] = {{.fd = -1}, {.fd = -1}};       /* an end with nothing to wait for is left out */
         for (int i = 0; i < 2; i++) {
@@ -392,7 +393,7 @@ uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms
             const int o = 1 - i;
             if (off[i] == len[i] && (p[i].revents & (POLLIN | POLLHUP | POLLERR))) {
                 const long n = sys_recv_now(fd[i], buf[i], sizeof a->rbuf);
-                if (n > 0 && moved + (uint64_t)n <= max_bytes) off[i] = 0, len[i] = (size_t)n, moved += (uint64_t)n;
+                if (n > 0 && moved + (uint64_t)n <= max_bytes) off[i] = 0, len[i] = (size_t)n, moved += (uint64_t)n, quiet = sys_now_ms() + idle_ms;
                 else if (n == 0) eof[i] = true;
                 else if (n != SYS_AGAIN) broken = true;          /* over the limit, or an error */
             }

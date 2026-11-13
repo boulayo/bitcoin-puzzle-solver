@@ -99,9 +99,9 @@ bool net_alive(net_conn *c);
 void net_close(net_conn *c);
 
 /* The relay: copies the bytes of a to b and of b to a, as they come, until one side closes (what it sent before is delivered), an error,
- * max_bytes in all (both ways together), max_ms, or *stop. Their channels are not used (their keys are wiped); both are closed at the
- * end. The bytes copied. */
-uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms, const atomic_bool *stop);
+ * max_bytes in all (both ways together), max_ms, idle_ms without a byte, or *stop. Their channels are not used (their keys are wiped);
+ * both are closed at the end. The bytes copied. */
+uint64_t net_splice(net_conn *a, net_conn *b, uint64_t max_bytes, int64_t max_ms, int64_t idle_ms, const atomic_bool *stop);
 
 /* One exchange: dial, the request, the answer (at most cap bytes), close. remote (may be NULL): the identity that answered. */
 bool net_exchange(const net_cfg *cfg, const net_addr *to, const uint8_t expect[32], const uint8_t *req, size_t rlen, uint8_t *ans,

@@ -333,7 +333,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   |---|---|
   | contacts of one block in a bucket, in the table, in a NODES answer | 2, 4, 4 |
   | queries of one lookup, to one block | 64, 4 (a candidate past them counts as failed) |
-  | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most) |
+  | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most, for the 2 seconds the handshake and the request of a connection have) |
   | records stored from one block | 50 a second, 100 000 at once (a republish sends them all) |
   | ALERTs received from one block | 2 a second, 64 at once (checked before the signatures) |
   | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs |
@@ -529,9 +529,10 @@ neither can dial the other, a node that listens joins their connections (`src/pe
   relay sees ephemeral keys and ciphertext only: it can stop or delay the channel, not read or change it. The session then runs on it as
   on a direct one.
 - **Limits at the relay:** 8 relays under way at once and 32 homes waiting; 2 relays (waiting or under way) per address block of the
-  homes and 2 waits per identity; 32 MiB per relay, both ways together (a session moves about 100 KB, the largest message of pzsign
-  36 KB); 4 hours per relay (the channel stays open while the session waits for the confirmation of its first
-  transaction). A relay under way is one thread that copies through the receive buffers of the two connections.
+  homes, counted for the home that waits and for the one that joins it, and 2 waits per identity; 32 MiB per relay, both ways together
+  (a session moves about 100 KB, the largest message of pzsign 36 KB); 4 hours per relay (the channel stays open while the session
+  waits for the confirmation of its first transaction), and 3 minutes without a byte (a session says it is alive every minute): pairs
+  that join and say nothing do not hold the relays. A relay under way is one thread that copies through the receive buffers of the two connections.
 - **The channel of a session:** `dht_channel(partner, eid)` gives the daemon one connection with the partner, whichever way it comes.
   Party 0 dials the partner it finds in the table, and so does a side nobody reaches (nobody can dial it). A side the others reach
   gives the partner's own connection (the one `on_session` got) the first slot. Then the relay of each slot, slot after slot, while the

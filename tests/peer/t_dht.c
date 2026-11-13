@@ -25,6 +25,7 @@
 
 static int fails;
 static unsigned probe_s;           /* of the next node made (0: the default) */
+static int timeout_ms = 2000;      /* of the next node made */
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
 #define BITS 4                     /* zero bits of a node ID in this network */
@@ -156,7 +157,7 @@ static dht_config node_cfg(node *n, int port)
 {
     const dht_config cfg = {
         .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
-        .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = 2000, .handlers = 4,
+        .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = timeout_ms, .handlers = 4,
         .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .allow_private = true, .relay_max = 2, .relay_bytes = 8u << 20, .relay_slot_s = 1,
         .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL,
     };
@@ -884,12 +885,14 @@ static bool closed_within(int fd, int msec)
 }
 
 /* Connections that open and say nothing, from one address, on a node of a public network (whose limits apply to loopback, as to any
- * address there): four hold four handlers, the fifth is closed at once, and so is a request from that address until they go. Before,
- * the fifth waited in the queue for a handler, and every request behind it, for the timeout of each idle one. */
+ * address there): four hold four handlers, the fifth is closed at once, and so is a request from that address until they go, which is
+ * after two seconds. Before, the fifth waited in the queue for a handler, and every request behind it, for the timeout of each idle one. */
 static void test_slowloris(void)
 {
     home_identity sid, cid;
+    timeout_ms = 8000;
     dht *sv = scratch("s-slow", false, DHT_ANY_PORT, -1, &sid);
+    timeout_ms = 2000;
     CHECK(sv != NULL);
     if (!sv) return;
     make_id("slow client", &cid);
@@ -908,6 +911,7 @@ static void test_slowloris(void)
     size_t n;
     int64_t t0 = ms();
     CHECK(!net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && ms() - t0 < 500);
+    CHECK(closed_within(idle[0], 3000));                        /* the node drops a silent one after 2 seconds, not after its timeout of 8 */
     for (int i = 0; i < 4; i++)
         sys_close(idle[i]);
     sys_close(fifth);
