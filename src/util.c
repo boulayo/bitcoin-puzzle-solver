@@ -69,7 +69,7 @@ void pz_log_set_file(const char *path)
 {
     log_lock();
     if (g_log_fp) fclose(g_log_fp);
-    g_log_fp = path ? fopen(path, "ab") : NULL;   /* binary: on Windows the text mode would write CRLF */
+    g_log_fp = path ? pz_fopen_private(path, true) : NULL;   /* binary (on Windows the text mode would write CRLF); never a link */
     if (g_log_fp) setvbuf(g_log_fp, NULL, _IOLBF, 0);
     log_unlock();
 }

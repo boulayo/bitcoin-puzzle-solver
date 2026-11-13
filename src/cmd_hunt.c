@@ -454,6 +454,24 @@ void encrypt_on_resume(const opts_t *o, run_ctx *r)
     snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
     if (cfg_add_encrypt_pubkey(&r->cfg, conf) != 0) pz_die("cannot add the public key to %s: %s", conf, strerror(errno));
     pz_log(PZ_LOG_INFO, "the campaign now encrypts the key it finds (the public key is stored in campaign.conf)");
+    /* the log of the sessions before may show the seed (the line of --part), which an encrypting campaign keeps out of its files */
+    char sd[65], log[720];
+    pz_hex_encode(r->cfg.seed, 32, sd);
+    snprintf(log, sizeof log, "%s/log.txt", r->cfg.dir);
+    char *text = pz_read_file(log, NULL);
+    size_t w = 0;
+    for (char *p = text, *e; p && *p; p = e) {                 /* the lines without the seed, moved up in place */
+        e = p + strcspn(p, "\n") + (p[strcspn(p, "\n")] == '\n');
+        const char c = *e;
+        *e = 0;
+        const bool has = strstr(p, sd) != NULL;
+        *e = c;
+        if (!has) memmove(text + w, p, (size_t)(e - p)), w += (size_t)(e - p);
+    }
+    if (text && w < strlen(text) && pz_write_file_atomic(log, text, w, 0600) != 0)
+        pz_log(PZ_LOG_ERR, "cannot rewrite %s without the seed: delete that file", log);
+    pz_secure_zero(sd, sizeof sd);
+    free(text);
 }
 
 /* What a campaign that encrypts the key says at the start of a session. */
@@ -490,6 +508,13 @@ static void print_spend_warning(const run_ctx *r)
 }
 
 /* The banner printed when the key is found (by 'hunt' or by 'merge'). */
+/* what becomes of a key that could not be saved: the state stays as it was before the find (end_session) */
+static const char *found_again(const run_ctx *r)
+{
+    return r->cfg.mode == MODE_KANGAROO ? "(the walk of a new session is another: this screen may be the only copy of the key)"
+                                        : "(its place stays unsearched in the campaign: the same command finds it again)";
+}
+
 void print_found_banner(const run_ctx *r)
 {
     char addr[80];
@@ -506,7 +531,7 @@ void print_found_banner(const run_ctx *r)
             enc_key_id(&r->cfg.encrypt_pubkey, id);
             printf("  The key is encrypted to the public key with id %s: only the owner of the matching secret can read it.\n", id);
             if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the encrypted key from this screen\n"
-                                              "                  (its place stays unsearched in the campaign: the same command finds it again)\n", r->path_found);
+                                              "                  %s\n", r->path_found, found_again(r));
             else printf("  saved in:       %s\n", r->path_found);
             printf("  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->found_sealed);
         }
@@ -521,7 +546,7 @@ void print_found_banner(const run_ctx *r)
     pz_privkey_to_wif(kb, true, wif, sizeof wif);
     printf("  address:        %s\n  key (hex):      0x%s\n  WIF compressed: %s\n", addr, hx, wif);
     if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the key from this screen now\n"
-                                      "                  (its place stays unsearched in the campaign: the same command finds it again)\n", r->path_found);
+                                      "                  %s\n", r->path_found, found_again(r));
     else printf("  saved in:       %s\n", r->path_found);
     printf("=========================================================\n");
     print_spend_warning(r);
@@ -626,7 +651,7 @@ static void shared_bind(const opts_t *o, campaign_cfg *c, bool fresh)
 /* The folder of a campaign is its owner's alone: its state and its seed say where the search stands, which after a find is where the
  * key is, whatever protects FOUND.txt; and a folder that another user made (in a base folder everyone can write) could hold links and
  * a configuration of theirs. */
-static void campaign_private(const char *dir)
+void campaign_private(const char *dir)
 {
     if (!pz_dir_private(dir)) pz_die("%s is not a folder of this user that can be closed to the others: the campaign is not opened", dir);
 }
@@ -786,7 +811,7 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
  * with the seed, which orders the blocks, that is where the key is: whoever read the folder afterwards found the key again in a moment.
  * The seed goes first, from memory and from campaign.conf (the reports written from here on show zeros); the files that hold the
  * position go once they are closed. An earlier copy of campaign.conf still has the seed (docs/en/USAGE.md 11.5). */
-static void forget_seed(run_ctx *r)
+void forget_seed(run_ctx *r)
 {
     char conf[700];
     snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
@@ -794,9 +819,9 @@ static void forget_seed(run_ctx *r)
     if (cfg_save(&r->cfg, conf) != 0) pz_log(PZ_LOG_ERR, "cannot rewrite %s without the seed: delete the folder once FOUND.txt is copied", conf);
 }
 
-static void forget_position(const run_ctx *r)
+void forget_position(const run_ctx *r)
 {
-    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin"};
+    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin", "near.txt"};   /* near misses: keys of the last blocks */
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         char p[700];
         snprintf(p, sizeof p, "%s/%s", r->cfg.dir, names[i]);
@@ -810,7 +835,7 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
     double el = run_session_elapsed(r);
     /* a key that is on the screen only (FOUND.txt could not be written): the state stays as it was before the find, so that the next
      * start finds the key again instead of taking its place for searched */
-    const bool unsaved = atomic_load(&r->found) && r->found_write_failed;
+    const bool unsaved = atomic_load(&r->found) && (r->found_write_failed || r->found_seal_failed);
     const bool forget = atomic_load(&r->found) && r->cfg.has_encrypt && !unsaved;
     if (forget) forget_seed(r);
     if (!unsaved && !forget && r->checkpoint && r->checkpoint(r) != 0) {

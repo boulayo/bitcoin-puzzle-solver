@@ -696,8 +696,11 @@ processo dello stesso utente non può collegarsi a esso.
 Ciò che dice **dove** sta la chiave sparisce al ritrovamento. Lo stato di una ricerca (e i punti di un canguro) dicono dov'era arrivata quando ha trovato la
 chiave, e il seed dà l'ordine dei blocchi: insieme restituiscono la chiave in un attimo, qualunque cosa protegga `FOUND.txt` (le versioni prima della 1.23.3
 li lasciavano entrambi). Perciò, quando una campagna che cifra trova la chiave, il programma sostituisce con zeri il seed in `campaign.conf`, non lo scrive in
-`FOUND.txt` né nel log, e cancella `state.dat`, la sua copia e `dp.bin`. La cartella di ogni campagna è del solo proprietario (modo 0700), così gli altri utenti
-della macchina non leggono nulla di tutto questo mentre la ricerca gira.
+`FOUND.txt` né nel log (un log scritto prima che si aggiungesse la cifratura perde le righe con il seed), e cancella `state.dat`, la sua copia, `dp.bin` e
+`near.txt`; vale per `hunt` come per `merge`. Una chiave che non si è potuta cifrare non è scritta da nessuna parte, e la campagna resta com'era, così che
+una nuova ricerca la ritrovi. La cartella di ogni campagna è del solo proprietario (modo 0700), così gli altri utenti
+della macchina non leggono nulla di tutto questo mentre la ricerca gira, e i file di una campagna non si aprono mai attraverso un collegamento (una cartella
+copiata da altrove potrebbe contenerne uno che punta a un altro file dell'utente).
 
 **Non protetti**:
 
