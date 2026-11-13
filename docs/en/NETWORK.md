@@ -564,7 +564,7 @@ relays at once, the bytes.
 
 | Missing | Why it is not done |
 |---|---|
-| NAT-PMP and PCP, the other two ways a home opens its own port | UPnP is done (7.9) and covers most home routers; these two are for the routers that only speak them |
+| NAT-PMP and PCP, the other two ways a home opens its own port | UPnP is done (7.9). These two are what Bitcoin Core uses: it dropped UPnP in 29.0 and asks the router by them by default since 30.0, a short binary message to the gateway with no search on the LAN and no XML |
 | IPv6 as a way out of NAT | addresses, listening (`::` takes IPv4 too) and NODES carry IPv6 already, but a home does not learn or announce a public IPv6 address of its own: a responder keeps the address it sees. There is no IPv6 on the test machine |
 | Tor, optional (project 2.5) | a SOCKS5 client in `net.c`, and onion addresses in NODES, which has 16 bytes for an address: a new format. A node behind Tor cannot be a custodian, like one that does not listen |
 | A defence of the rendezvous key in the BitTorrent DHT | nodes that sit close to the key there can hide the announces (7.9). The rule that ties a node ID of that table to its address (BEP 42) would make it dear; many nodes of that table do not follow it yet |
@@ -781,8 +781,9 @@ What a Bitcoin node does is the model.
   start (as a Bitcoin node keeps its keys in its data folder, never on the command line). As its own user that sees only its folder:
   [`tools/pzpeer-node.service`](../../tools/pzpeer-node.service) is the systemd unit, with the protections of the unit of Bitcoin Core
   (`systemd-analyze security` rates it 1.3, where 10 is a service with none).
-- **The port.** Only TCP 28140, opened by hand on the router toward that machine, and UPnP off (`--no-upnp`): Bitcoin Core does not
-  ask the router either. The node shows the others its address and port, as every node of the table does, and nothing else.
+- **The port.** Only TCP 28140: a rented server has it open already; at home it is opened by hand on the router toward that machine,
+  so the request to the router is off (`--no-upnp`). The node shows the others its address and port, as every node of the table
+  does, and nothing else.
 - **Disk and memory.** `--store-gb N` (37 by default): the index takes about a fifth of it in RAM.
 - **A VPN such as Tailscale** is for reaching the machine, not for the network: the other nodes reach a custodian only at a public
   address. Bitcoin Core also takes connections through a Tor onion service, with no open port and no address shown; in a table such as

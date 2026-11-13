@@ -5,7 +5,7 @@
 # privileges. Copy it to /etc/systemd/system/, put pzpeer in /usr/local/bin and the network file in /etc/pzpeer/network.txt, then
 #   systemctl enable --now pzpeer-node
 # The node's folder is /var/lib/pzpeer (its identity, node.seed, is made there at the first start). Open TCP port 28140 on the router
-# toward this machine by hand: UPnP is off here, as in Bitcoin Core.
+# toward this machine by hand (a rented server has it open already), so the request to the router is off here.
 [Unit]
 Description=pzpeer node (a custodian of the shared network)
 After=network-online.target

@@ -119,7 +119,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | E8 | pzsign: 126 MB per un solo messaggio dentro il limite di dimensione | Un limite agli elementi per fase |
 | E9 | Windows: la cartella predefinita `pznet-NOME` prende i permessi della cartella madre (il seme di un nodo non passa più dalla riga di comando: sta in `node.seed`) | Permessi espliciti |
 | E10 | La mappatura UPnP "senza fine" non viene mai tolta | Toglierla all'uscita |
-| E11 | Una casa (`pzpeer run`) chiede da sola al router di aprire la porta (UPnP, decisione A4). Bitcoin Core non lo fa: lo tiene spento e nelle versioni recenti lo ha tolto, perché con UPnP acceso qualunque apparecchio di casa può aprire porte | **Da decidere.** Consiglio: spento di default come in Bitcoin Core, acceso con `--upnp`. Costo: meno custodi, finché la rete è piccola |
+| E11 | Una casa (`pzpeer run`) chiede da sola al router di aprire la porta, con UPnP (decisione A4). Bitcoin Core ha tolto UPnP nella 29.0 e dalla 30.0 chiede da solo al router, ma con PCP o NAT-PMP: un messaggio binario corto verso il router, senza la ricerca sulla rete di casa e senza l'XML di UPnP | **Da decidere.** Consiglio: come Bitcoin Core 30, apertura accesa di default, chiesta prima con PCP e NAT-PMP e poi con UPnP per i router che parlano solo quello. Costo: circa 150 righe, compresa la ricerca del router su Linux, Windows e macOS |
 
 ### 3.2 Sprechi
 
