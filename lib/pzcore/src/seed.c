@@ -52,7 +52,7 @@
 #define HW_SEED_WORDS  128         /* RDSEED / RNDRRS: conditioned output of the entropy source */
 #define HW_DRBG_WORDS  1024        /* RDRAND / RNDR: DRBG output; 1024 words span more than one reseed (Intel: at most 511 outputs of 128 bits) */
 #define TPM_CHUNK      32
-#define TPM_CALLS      8
+#define TPM_CALLS      32          /* 1024 bytes: a full window of the byte tests, as the other full-entropy sources give */
 #define TPM_RESP       (12 + TPM_CHUNK)
 #define JIT_SAMPLES    4096        /* per round */
 #define JIT_MEM        (1u << 20)  /* larger than L1: the walk meets the latencies of L2 and L3 */

@@ -6,7 +6,7 @@
  * The sources, in the order they are read, and the bits each one is credited when it passes its health tests:
  *   cpu-rng  RDSEED (else RDRAND) on x86-64, RNDRRS (else RNDR) on arm64: 128 bits (RNDR 64). Mixed in, but not counted by the rule
  *            below: nobody can check it, and the operating system often seeds its own generator from it.
- *   tpm      TPM2_GetRandom, 8 x 32 bytes, through /dev/tpmrm0 or /dev/tpm0 (Linux) or TBS (Windows): 128 bits. No TPM, or no
+ *   tpm      TPM2_GetRandom, 32 x 32 bytes, through /dev/tpmrm0 or /dev/tpm0 (Linux) or TBS (Windows): 128 bits. No TPM, or no
  *            permission to use it, means the source is skipped, not an error.
  *   caller   the source the caller passes in pz_seed_opts (for example GPU timing jitter): the bits it claims, at most 256.
  *   jitter   CPU timing jitter: rounds of 4096 timer deltas, each around a fixed walk through 1 MiB of memory. 0.5 bit per sample

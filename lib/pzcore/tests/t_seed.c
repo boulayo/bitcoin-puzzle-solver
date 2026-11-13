@@ -319,7 +319,7 @@ static void test_cases(void)
         {"jitter 1 random bit per sample", 0, 0, JF_LOWENT, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "live estimate"},
         {"jitter attacker-known (passes)", 0, 0, JF_ATTACKER, 0, 0, 0, 0, PZ_SEED_OK, U, A, U, U, NULL},
         /* the TPM: used, excluded or absent alone */
-        {"TPM good", 0, 0, 0, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, U, U, "8 commands"},
+        {"TPM good", 0, 0, 0, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, U, U, "32 commands"},
         {"TPM error code", 0, 0, 0, TPM_RC, 0, 0, 0, PZ_SEED_OK, U, X, U, U, "response code 0x101"},
         {"TPM the same answer each time", 0, 0, 0, TPM_SAME, 0, 0, 0, PZ_SEED_OK, U, X, U, U, "the same"},
         {"TPM short answer", 0, 0, 0, TPM_SHORT, 0, 0, 0, PZ_SEED_OK, U, X, U, U, "16 bytes where 32"},

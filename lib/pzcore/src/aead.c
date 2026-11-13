@@ -168,6 +168,7 @@ bool pz_aead_open(const uint8_t key[32], const uint8_t nonce[12], const uint8_t 
                   const uint8_t tag[16], uint8_t *pt)
 {
     uint8_t t[16];
+    if ((uint64_t)len > (1ULL << 38) - 64) return false;
     aead_tag(key, nonce, ad, adlen, ct, len, t);
     const bool ok = pz_ct_equal(t, tag, 16);
     pz_secure_zero(t, sizeof t);

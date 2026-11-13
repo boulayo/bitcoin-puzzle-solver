@@ -19,7 +19,9 @@ void pz_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t co
 void pz_poly1305(const uint8_t key[32], const uint8_t *msg, size_t len, uint8_t tag[16]);
 
 /* AEAD_CHACHA20_POLY1305 (RFC 8439 2.8). seal: ct = pt encrypted, and its tag over ad and ct. open: true and pt = ct decrypted when the tag
- * is right; false, with pt untouched, when it is not. pt and ct may be the same buffer; ad may be NULL when adlen is 0. */
+ * is right; false, with pt untouched, when it is not. pt and ct may be the same buffer; ad may be NULL when adlen is 0. len must be
+ * below 2^38 - 64 bytes, the reach of the 32-bit block counter (RFC 8439 2.8): open refuses more, and nothing here seals a message
+ * of that size (the frames of pzpeer are 64 KiB at most). */
 void pz_aead_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *ad, size_t adlen, const uint8_t *pt, size_t len,
                   uint8_t *ct, uint8_t tag[16]);
 bool pz_aead_open(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *ad, size_t adlen, const uint8_t *ct, size_t len,
