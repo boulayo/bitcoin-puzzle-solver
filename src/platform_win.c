@@ -564,11 +564,12 @@ void pz_interrupt_done(void) { if (g_done_event) SetEvent(g_done_event); }
 /* ---- dynamic libraries ---- */
 
 /* The libraries of the GPU drivers are in the system folder, and only there are they looked for: a bare name would go on to the current
- * folder and PATH on a machine without that driver, and a campaign folder with a DLL of that name would run it inside pzsolve. */
+ * folder and PATH on a machine without that driver, and a campaign folder with a DLL of that name would run it inside pzsolve. A
+ * name with a path (PZ_CUDA_LIB) is that file. */
 void *pz_lib_open(const char *const *names)
 {
     HMODULE h = NULL;
-    for (int i = 0; names[i] && !h; i++) h = LoadLibraryExA(names[i], NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    for (int i = 0; names[i] && !h; i++) h = LoadLibraryExA(names[i], NULL, strpbrk(names[i], "/\\") ? 0 : LOAD_LIBRARY_SEARCH_SYSTEM32);
     return (void *)h;
 }
 

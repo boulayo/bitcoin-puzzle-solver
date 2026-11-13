@@ -384,6 +384,7 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 |----------|--------|
 | `PZ_GPU_API=cuda\|opencl` | the runtime of the GPUs that both CUDA and OpenCL see: `cuda` uses CUDA only, `opencl` OpenCL only (section 7.3); `auto`, or no variable: CUDA for NVIDIA cards (OpenCL as a fallback), OpenCL for the others |
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | do not load that runtime |
+| `PZ_CUDA_LIB=PATH` | the CUDA driver library to load, by its path, in place of the one of the system (the tests give their simulated driver this way on Windows, where a driver is looked for in the system folder only) |
 | `PZ_GPU_HALF=N` | fix the window of the linear kernel (skips the tuning; the values are in ALGORITHMS.md section 5); a number that the device does not offer is reported for each device |
 | `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `128cm`, `64l`, `4g` |
 | `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
