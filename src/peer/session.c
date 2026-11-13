@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <secp256k1_extrakeys.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -260,7 +261,7 @@ static bool limit_add(const sess *s, int d, char *why, size_t whylen)
     uint8_t key[LIMIT_LINES][32];
     unsigned count[LIMIT_LINES];
     int n;
-    if (!limit_read(l->path, key, count, &n)) return snprintf(why, whylen, "the count of failed signings in %.200s cannot be read", l->path), false;
+    if (!limit_read(l->path, key, count, &n)) return snprintf(why, whylen, "the count of failed signings cannot be read"), false;   /* no path: the partner is told */
     /* the pair by the own point, on this network: the piece of this home is that of its point, and the partner can change any byte of
      * its own record (a new session id each time) */
     uint8_t m[11 + 64], pair[32];
@@ -272,7 +273,7 @@ static bool limit_add(const sess *s, int d, char *why, size_t whylen)
     for (int w = 0; w < 2; w++) {
         for (at[w] = 0; at[w] < n && memcmp(key[at[w]], which[w], 32); at[w]++) {}
         if (at[w] == n) {
-            if (n == LIMIT_LINES) return snprintf(why, whylen, "the count of failed signings in %.200s is full", l->path), false;
+            if (n == LIMIT_LINES) return snprintf(why, whylen, "the count of failed signings is full"), false;
             memcpy(key[n], which[w], 32), count[n++] = 0;
         }
         if (d >= 0 && count[at[w]] >= max[w])
@@ -281,7 +282,7 @@ static bool limit_add(const sess *s, int d, char *why, size_t whylen)
     }
     if (!d) return true;
     for (int w = 0; w < 2; w++) count[at[w]] = d > 0 ? count[at[w]] + 1 : count[at[w]] ? count[at[w]] - 1 : 0;
-    return limit_write(l->path, key, count, n) || (snprintf(why, whylen, "cannot write the count of failed signings to %.200s", l->path), false);
+    return limit_write(l->path, key, count, n) || (snprintf(why, whylen, "cannot write the count of failed signings"), false);
 }
 
 /* whether this home may still sign for the pair: asked before the plan, so that a home at its limit stops before the partner's pzsign
@@ -332,6 +333,7 @@ static void limit_end(sess *s, bool ok)
 typedef struct {
     sess *s;
     signer sg;
+    bool heard;                             /* a whole message of the partner's pzsign came */
     uint8_t *result;                        /* the answer of pzsign (0x82), when it gave one */
     size_t result_len;
 } relay;
@@ -390,7 +392,7 @@ static void *relay_in(void *arg)
         len += n - 2;
         if (m[1]) continue;                                     /* more pieces follow */
         const bool ok = signer_send(&r->sg, SIGNER_IN, msg, len);
-        len = 0, progress = now;
+        len = 0, progress = now, r->heard = true;
         if (!ok) break;
     }
     free(msg);
@@ -441,7 +443,9 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
     for (size_t i = 0; ok && i < n; i++)
         ok = btc_put_sig_p2pkh(tx, i, r.result + 64 * i, r.result + 64 * i + 32, c->pubkey33) && btc_verify_p2pkh(tx, i, s->t.puzzle_spk, BTC_P2PKH_LEN);
     free(r.result);
-    limit_end(s, ok || !started);                               /* a pzsign that did not start told nothing */
+    /* a pzsign that did not start told nothing, and one that got no message of the partner answered none: a partner that is late, or
+     * gone, costs no count (the leak the limit bounds is in the answers to its messages) */
+    limit_end(s, ok || !started || !r.heard);
     return ok;
 }
 
@@ -474,9 +478,28 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
 
 /* The coins of the puzzle: the largest of a scan of its address, and the prizes of the network file (project 4.4). A scan can fail:
  * thousands of coins of dust sent to the address make the node's answer too long to read, and the prizes are still found one by one. */
+typedef struct {
+    sess *s;
+    atomic_bool stop;
+} alive;
+
+static void *alive_main(void *arg)
+{
+    alive *a = arg;
+    const int every = a->s->c->alive_ms > 0 ? a->s->c->alive_ms : ALIVE_MS;
+    for (int64_t next = sys_now_ms() + every; !atomic_load(&a->stop); sys_sleep_ms(200))
+        if (sys_now_ms() >= next) (void)send_msg(a->s, S_ALIVE, NULL, 0), next = sys_now_ms() + every;
+    return NULL;
+}
+
+/* Meanwhile S_ALIVE goes to the partner, which waits for the plan: a scan of the node's whole set can take half an hour, and the
+ * partner would give up after one wait (and this side, reading its plan later, start a signing nobody answers). */
 static int puzzle_coins(sess *s, payout_coin coins[64])
 {
     const session_chain *ch = s->c->chain;
+    alive al = {.s = s};
+    pthread_t t;
+    const bool beat = pthread_create(&t, NULL, alive_main, &al) == 0;
     int n = ch->coins(ch->ctx, s->t.puzzle_spk, coins, 64 - SESSION_PRIZES_MAX);
     if (n < 0) n = 0;
     for (int i = 0; i < s->c->nprizes && i < SESSION_PRIZES_MAX && ch->coin; i++) {
@@ -485,6 +508,8 @@ static int puzzle_coins(sess *s, payout_coin coins[64])
         for (int j = 0; j < n && !have; j++) have = !memcmp(coins[j].txid, p->txid, 32) && coins[j].vout == p->vout;
         if (!have && ch->coin(ch->ctx, p->txid, p->vout, s->t.puzzle_spk, &coins[n]) == 1) n++;
     }
+    atomic_store(&al.stop, true);
+    if (beat) pthread_join(t, NULL);
     return n;
 }
 

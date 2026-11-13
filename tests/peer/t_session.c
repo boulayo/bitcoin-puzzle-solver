@@ -134,7 +134,7 @@ static uint64_t ch_feerate(void *c) { return g_fee[c != NULL]; }
  * gets confirmed) */
 typedef struct {
     session_chain in;
-    int lost;
+    int lost, slow_ms;                 /* slow_ms: the scan of the coins takes this long */
     bool scan_fails, frozen;
     uint64_t at;
 } flaky;
@@ -142,6 +142,7 @@ typedef struct {
 static int fl_coins(void *c, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
 {
     flaky *f = c;
+    if (f->slow_ms) usleep((useconds_t)f->slow_ms * 1000);
     return f->scan_fails ? -1 : f->in.coins(f->in.ctx, spk, out, max);
 }
 static bool fl_broadcast(void *c, const btc_tx *tx) { flaky *f = c; return f->in.broadcast(f->in.ctx, tx); }
@@ -426,6 +427,8 @@ typedef struct {
     const char *why;                  /* in the reason of both homes, when not NULL */
     bool scan_fails;                  /* the scan of the puzzle address fails: the prize of the network file is given */
     bool frozen;                      /* the chain stops, and a wait gives up after a while of block_ms a block */
+    int slow_ms, timeout_ms;          /* the scan of home 0 takes slow_ms; the wait for a message (0: 20 s) */
+    bool silent0;                     /* the pzsign of home 0 sends nothing: home 1, which never heard it, counts no failure */
     int block_ms;
 } tcase;
 
@@ -515,6 +518,7 @@ static void run_case(const tcase *tc, const char *bin)
             chn[i].in = chain_rpc_iface(&crpc[i]);
         } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin};
         chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0;
+        chn[i].slow_ms = i ? 0 : tc->slow_ms;
         g->block_ms = tc->block_ms;
         if (tc->scan_fails) {                                   /* the prize, as a line of the network file gives it */
             payout_coin pc[64];
@@ -522,7 +526,7 @@ static void run_case(const tcase *tc, const char *bin)
             g->prizes[0] = pc[0], g->nprizes = 1;
         }
         g->chan = &chan[i];
-        g->timeout_ms = 20000, g->poll_ms = 50, g->cancel_blocks = 3, g->alive_ms = 1;
+        g->timeout_ms = tc->timeout_ms ? tc->timeout_ms : 20000, g->poll_ms = 50, g->cancel_blocks = 3, g->alive_ms = 1;
         /* each home its limit, in a file of the case */
         snprintf(l, sizeof l, "limit%d", i);
         in_dir(l, limpath[i], sizeof limpath[i]);
@@ -587,7 +591,7 @@ static void run_case(const tcase *tc, const char *bin)
     CHECK(proved[0] && proved[1]);
     /* the limits: a failed signing counts for the network and the pair, a good one nothing, a refused one nothing */
     for (int i = 0; i < 2; i++) {
-        const unsigned failed = i == F_home ? tc->fails_F : tc->fails_S;
+        const unsigned failed = tc->silent0 && i == 1 ? 0 : i == F_home ? tc->fails_F : tc->fails_S;
         CHECK(fails_of(limpath[i], net.fp) == (i ? 0 : tc->limit[0]) + failed);
         CHECK(fails_of(limpath[i], own) == (i ? tc->limit[1] : 0) + failed);
         pthread_mutex_destroy(&lim[i].mu);
@@ -709,7 +713,11 @@ int main(void)
         /* one home at its limit (on the network, or for the pair): it stops before the plan, and the other counts no failure */
         {.name = "limit of the network reached", .expect = NOTHING, .limit = {10, 0}, .why = "failed signings on this network"},
         {.name = "limit of the pair reached", .expect = NOTHING, .limit = {0, 3}, .why = "failed signings of this pair"},
-        {.name = "a pzsign that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1},
+        /* the one that hangs was sent messages and counts a failure; the other never got one and counts none (a partner that is gone) */
+        {.name = "a pzsign that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1, .silent0 = true},
+        /* one home reads its coins for longer than the other waits for a message: its S_ALIVE keeps the other there (before, the other
+         * gave up, and the slow one then counted a failed signing that nobody answered) */
+        {.name = "a scan slower than the partner's wait", .expect = PAYOUT, .slow_ms = 9000, .timeout_ms = 6000},
         /* the scan fails (dust): the prize of the network file is paid all the same (before, no coin of the puzzle to spend) */
         {.name = "the scan fails", .expect = PAYOUT, .scan_fails = true},
         /* the chain stops after the first transaction: the wait for its block ends (before, never) */
