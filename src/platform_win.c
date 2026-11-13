@@ -324,7 +324,10 @@ void pz_power_scheme(char *buf, size_t n)
 {
     if (!n) return;
     buf[0] = 0;
-    FILE *f = _popen("powercfg /getactivescheme 2>nul", "r");
+    char sys[MAX_PATH], cmd[MAX_PATH + 64];                /* by its full path: a bare name is looked for in the current folder first */
+    if (!GetSystemDirectoryA(sys, sizeof sys)) return;
+    snprintf(cmd, sizeof cmd, "\"%s\\powercfg.exe\" /getactivescheme 2>nul", sys);
+    FILE *f = _popen(cmd, "r");
     if (!f) return;
     char line[256];
     if (fgets(line, sizeof line, f)) {
@@ -567,10 +570,12 @@ void pz_interrupt_done(void) { if (g_done_event) SetEvent(g_done_event); }
 
 /* ---- dynamic libraries ---- */
 
+/* The libraries of the GPU drivers are in the system folder, and only there are they looked for: a bare name would go on to the current
+ * folder and PATH on a machine without that driver, and a campaign folder with a DLL of that name would run it inside pzsolve. */
 void *pz_lib_open(const char *const *names)
 {
     HMODULE h = NULL;
-    for (int i = 0; names[i] && !h; i++) h = LoadLibraryA(names[i]);
+    for (int i = 0; names[i] && !h; i++) h = LoadLibraryExA(names[i], NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     return (void *)h;
 }
 

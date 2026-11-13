@@ -44,6 +44,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
+- Windows: the libraries of the GPU drivers (`nvcuda.dll`, `OpenCL.dll`) are loaded from the system folder only, and `powercfg` is
+  run by its full path. On a machine without that driver Windows went on to the current folder, so a campaign folder holding a file
+  of that name (a share, a downloaded archive) ran it inside pzsolve. On macOS the OpenCL loader of Homebrew is opened by its full
+  path for the same reason.
 - An encrypting campaign (`--encrypt-pubkey`) left behind what gave the plain key back: the state said where the search stood at the
   find and the seed gave the order of the blocks, so whoever read the folder afterwards found the key again in a tenth of a second.
   At the find the seed is now replaced with zeros in `campaign.conf` and left out of `FOUND.txt` and of the log, and `state.dat`,

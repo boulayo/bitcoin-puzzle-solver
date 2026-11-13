@@ -71,8 +71,10 @@ static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
 static void cu_load(void)
 {
-#ifdef _WIN32
+#if defined(_WIN32)
     const char *names[] = {"nvcuda.dll", NULL};
+#elif defined(__APPLE__)
+    const char *names[] = {NULL};                              /* no CUDA there, and dlopen would look for a bare name in the current folder */
 #else
     const char *names[] = {"libcuda.so.1", "libcuda.so", NULL};
 #endif

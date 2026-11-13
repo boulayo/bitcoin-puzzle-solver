@@ -17,8 +17,10 @@ const cl_api *cl_load(void)
     const char *names[] = {"OpenCL.dll", NULL};   /* installed by every GPU driver (NVIDIA, AMD, Intel) */
 #elif defined(__APPLE__)
     /* The system framework (deprecated by Apple but still shipped; it lives in the dyld shared cache, so dlopen finds it even
-     * though the file is not on disk), then an ICD loader installed by the user (Homebrew). No NVIDIA/CUDA on macOS. */
-    const char *names[] = {"/System/Library/Frameworks/OpenCL.framework/OpenCL", "libOpenCL.dylib", NULL};
+     * though the file is not on disk), then an ICD loader installed by the user (Homebrew), by its full path: dlopen looks for a bare
+     * name in the current folder too. No NVIDIA/CUDA on macOS. */
+    const char *names[] = {"/System/Library/Frameworks/OpenCL.framework/OpenCL", "/opt/homebrew/lib/libOpenCL.dylib",
+                           "/usr/local/lib/libOpenCL.dylib", NULL};
 #else
     const char *names[] = {"libOpenCL.so.1", "libOpenCL.so", NULL};
 #endif
