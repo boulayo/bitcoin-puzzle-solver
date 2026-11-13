@@ -31,6 +31,9 @@ int pz_open_rw(const char *path, bool create);
 int pz_open_trunc(const char *path, int mode);            /* write only, created (with `mode` & ~umask; ignored on Windows) or truncated */
 FILE *pz_fopen_private(const char *path, bool append);   /* to write, appended to or emptied; for this user alone (0600, also when it was
                                                             * there already; on Windows the folder decides who can read) */
+bool pz_dir_private(const char *path);                      /* path is this user's own directory, now closed to everyone else (0700); on
+                                                             * Windows, where the parent folder decides who reads, any directory */
+bool pz_is_own_dir(const char *path);                       /* a directory itself (no link to one) that belongs to this user */
 int pz_create_temp(char *tmpl);                            /* tmpl ends in "XXXXXX", replaced in place; read/write */
 i64 pz_pread(int fd, void *buf, size_t n, u64 off);       /* bytes read, -1 on error (may be short) */
 i64 pz_pwrite(int fd, const void *buf, size_t n, u64 off);

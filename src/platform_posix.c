@@ -130,6 +130,18 @@ bool pz_is_dir(const char *path)
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+bool pz_dir_private(const char *path)
+{
+    struct stat st;
+    return pz_is_own_dir(path) && stat(path, &st) == 0 && ((st.st_mode & 077) == 0 || chmod(path, 0700) == 0);
+}
+
+bool pz_is_own_dir(const char *path)
+{
+    struct stat st;
+    return lstat(path, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == geteuid();
+}
+
 bool pz_make_temp_dir(char *out, size_t n, const char *prefix)
 {
     const char *t = g_env.tmpdir[0] ? g_env.tmpdir : "/tmp";

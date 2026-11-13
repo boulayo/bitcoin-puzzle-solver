@@ -169,6 +169,14 @@ bool pz_is_dir(const char *path)
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+bool pz_dir_private(const char *path) { return pz_is_dir(path); }
+
+bool pz_is_own_dir(const char *path)                            /* the folders asked about are in the user's own temporary folder */
+{
+    DWORD a = GetFileAttributesA(path);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) && !(a & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
 bool pz_make_temp_dir(char *out, size_t n, const char *prefix)
 {
     char base[MAX_PATH + 1];

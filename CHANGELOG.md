@@ -43,8 +43,22 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
 ### Security
+- An encrypting campaign (`--encrypt-pubkey`) left behind what gave the plain key back: the state said where the search stood at the
+  find and the seed gave the order of the blocks, so whoever read the folder afterwards found the key again in a tenth of a second.
+  At the find the seed is now replaced with zeros in `campaign.conf` and left out of `FOUND.txt` and of the log, and `state.dat`,
+  its copy and `dp.bin` are deleted. A copy of the folder made before the find still holds the seed (USAGE 11.5).
+- The folder of a campaign is its owner's alone (mode 0700), and a folder that belongs to another user is refused: other users of the
+  machine could read the state of a search, or plant a folder with links and a configuration of theirs.
+- The scratch folders of the kangaroo self-tests (`pzkang*` in the temporary folder) are cleaned up only when they are real folders of
+  this user, and links are never followed: another user could plant one whose cleanup deleted this user's files.
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.
+
+### Fixed
+- A key found while the disk was full was lost: `FOUND.txt` could not be written, yet the state recorded the block as searched, and the
+  next start ended "completed without the key". A campaign now keeps two blocks of the disk for `FOUND.txt` (`reserve.bin`) and gives
+  them back at the find; if the file still cannot be written, the state is left as it was before the find, so that the same command
+  finds the key again, `--on-found` still runs and the exit status is 2.
 
 ## [1.23.2] — 2026-11-08
 

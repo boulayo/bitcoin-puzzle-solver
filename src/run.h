@@ -107,6 +107,7 @@ typedef struct run_ctx {
     int sessions;
     u64 prev_units_total;            /* units from previous sessions */
     char path_state[600], path_status[600], path_report[600], path_stats[600], path_log[600], path_found[600], path_session[600];
+    char path_reserve[600];          /* space kept for FOUND.txt, given back when the disk is full at the find */
 
     /* mode hooks */
     void (*progress)(struct run_ctx *, progress_info *);

@@ -692,6 +692,12 @@ del disco, o un disco restituito al proprietario della macchina o venduto. E chi
 disattiva i core dump (`setrlimit`) e, su Linux, si rende non scaricabile (`PR_SET_DUMPABLE`), così un arresto anomalo non scrive la memoria in un file e un altro
 processo dello stesso utente non può collegarsi a esso.
 
+Ciò che dice **dove** sta la chiave sparisce al ritrovamento. Lo stato di una ricerca (e i punti di un canguro) dicono dov'era arrivata quando ha trovato la
+chiave, e il seed dà l'ordine dei blocchi: insieme restituiscono la chiave in un attimo, qualunque cosa protegga `FOUND.txt` (le versioni prima della 1.24.0
+li lasciavano entrambi). Perciò, quando una campagna che cifra trova la chiave, il programma sostituisce con zeri il seed in `campaign.conf`, non lo scrive in
+`FOUND.txt` né nel log, e cancella `state.dat`, la sua copia e `dp.bin`. La cartella di ogni campagna è del solo proprietario (modo 0700), così gli altri utenti
+della macchina non leggono nulla di tutto questo mentre la ricerca gira.
+
 **Non protetti**:
 
 * **L'amministratore della macchina (root), o il fornitore di una macchina virtuale, mentre il programma gira.** La chiave in chiaro esiste nella memoria del
@@ -708,6 +714,9 @@ processo dello stesso utente non può collegarsi a esso.
 * **Lo swap**: la memoria del programma può essere scritta dal sistema in un file di swap o di ibernazione. I buffer della password e la memoria della derivazione
   sono bloccati in RAM quando i limiti del sistema lo consentono (di solito non per i 256 MiB di scrypt senza privilegi); la chiave in chiaro vive troppo poco per
   finire probabilmente nello swap, ma nulla qui lo garantisce. Usa uno swap cifrato, o nessuno.
+* **Una copia della cartella fatta prima del ritrovamento.** Contiene il seed: con l'avanzamento che i rapporti e il log della campagna finita mostrano, porta
+  al blocco della chiave. Non fare backup o istantanee della cartella di una campagna che cifra su una macchina di cui non ti fidi; un seed scritto a mano
+  (`-s`) è anche nella cronologia della shell.
 * **Una password debole**, come in 11.4; un keylogger o un terminale modificato, che vedono la password mentre la digiti.
 * **I metadati**: indirizzo, puzzle, ora e nome della campagna restano in chiaro (sono pubblici per natura).
 

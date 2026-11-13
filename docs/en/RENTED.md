@@ -81,7 +81,7 @@ the shares among machines of different speeds).
   returned disk: they find the encrypted line, which opens only with your password.
 * Not protected: an administrator (root, the provider of a virtual machine) who reads the memory of the process at the moment the key is
   found, or who replaces the binary or the public key on the command line (the key id in the log tells you after the fact, not before).
-* In the clear by nature: the address, the puzzle, the range, the seed, the progress and the time of the find. USAGE section 11.5 has the
+* In the clear by nature: the address, the puzzle, the range, the progress and the time of the find; the seed too, until the key is found. USAGE section 11.5 has the
   whole threat model.
 
 ## 5. After
@@ -94,5 +94,6 @@ pzsolve decrypt-key FOUND.txt                            # the password; prints 
 
 It must print `check: OK` with the address you were hunting: a line can be made by anyone who knows the public key, so only the address
 check proves that the key is the right one. Move the funds with a wallet that imports the WIF. When the rental ends, delete the campaign
-folder on the rented machine (`rm -rf campaigns/p71`): it holds the range, the target, the seed, the public key and the progress of the
-search, never the key, but there is no reason to leave them behind.
+folder on the rented machine (`rm -rf campaigns/p71`): it holds the range, the target, the public key and the progress of the search,
+never the key (at the find the program removed the seed, the state and the points, which together led to it), but there is no reason
+to leave them behind.
