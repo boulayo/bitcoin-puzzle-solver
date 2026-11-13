@@ -24,6 +24,9 @@ typedef struct {
 
 /* The identity of the home: the first j from 0 whose node ID has zero_bits leading zero bits, about 2^zero_bits derivations (65 000, a second
  * or two, for NODE_ID_ZERO_BITS). zero_bits is at most 32. */
+/* The context of libsecp256k1 of the process, made at the first call and blinded with random bytes (its defence against side channels
+ * on the secret keys it multiplies by). */
+const secp256k1_context *keys_ctx(void);
 bool keys_identity(const secp256k1_context *ctx, const uint8_t seed[32], const uint8_t fp[32], unsigned zero_bits, home_identity *out);
 /* The start key of pzsolve (hunt --start-key). */
 void keys_starts(const uint8_t seed[32], const uint8_t fp[32], uint8_t out[32]);

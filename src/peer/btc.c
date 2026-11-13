@@ -2,12 +2,12 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* btc.c - Bitcoin transactions (btc.h). */
 #include "btc.h"
+#include "keys.h"
 #include "sys.h"
 #include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <secp256k1.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,22 +16,7 @@
 /* One context for the whole process, made on first use; after that it is only read, which libsecp256k1 allows from any number of
  * threads. Randomizing it blinds the signing against side channels; without the entropy it still signs correctly, so a failure
  * there is ignored (and randomizing a context made here cannot fail). */
-static secp256k1_context *g_ctx;
-static pthread_once_t g_ctx_once = PTHREAD_ONCE_INIT;
-
-static void ctx_make(void)
-{
-    uint8_t seed[32];
-    g_ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
-    if (sys_random(seed, sizeof seed)) (void)!secp256k1_context_randomize(g_ctx, seed);
-    pz_secure_zero(seed, sizeof seed);
-}
-
-static const secp256k1_context *ctx(void)
-{
-    pthread_once(&g_ctx_once, ctx_make);
-    return g_ctx;
-}
+static const secp256k1_context *ctx(void) { return keys_ctx(); }
 
 /* ---- bytes ---- */
 

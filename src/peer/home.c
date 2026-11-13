@@ -57,7 +57,7 @@ typedef struct session_slot {
 
 typedef struct {
     const home_cfg *cfg;
-    secp256k1_context *ctx;
+    const secp256k1_context *ctx;
     netfile nf;
     record_net net;
     uint8_t base[32], seed[32], pay_spk[BTC_SPK_MAX];
@@ -476,7 +476,7 @@ int home_run(const home_cfg *cfg)
     h->cfg = cfg;
     pthread_mutex_init(&h->mu, NULL);
     pthread_cond_init(&h->cv, NULL);
-    h->ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+    h->ctx = keys_ctx();
     if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
     snprintf(h->dirname, sizeof h->dirname, "pznet-%.31s", h->nf.net);
     h->dir = cfg->dir ? cfg->dir : h->dirname;
@@ -611,7 +611,6 @@ int home_run(const home_cfg *cfg)
         if (!cfg->rpc) chain_spv_free(&h->spv);
         pz_secure_zero(h->seed, sizeof h->seed);
         pz_secure_zero(&h->id, sizeof h->id);
-        secp256k1_context_destroy(h->ctx);
     }
     return rc ? rc : (paid || solved_alone || !cfg->exit_when_done) ? 0 : 3;
 }

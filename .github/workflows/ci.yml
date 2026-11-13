@@ -18,9 +18,7 @@
 #
 # pzpeer, the daemon of the shared network (docs/en/NETWORK.md), is built and tested after pzsolve in the same jobs: its unit tests on
 # Linux (with pzsign on the gcc job, where the tests of the two-party signing run too), the Windows program and its
-# tests built with pzsolve.exe and run on the real Windows machine, and the build and the tests on macOS. The Windows and macOS steps
-# are informational (continue-on-error) until they have been seen green there: the code was written on Linux and the Windows program
-# has only run under Wine. pzsign.exe is cross-compiled in the Windows build job (signer/README.md: cb-mpc, and OpenSSL built from its
+# tests built with pzsolve.exe and run on the real Windows machine, and the build and the tests on macOS. pzsign.exe is cross-compiled in the Windows build job (signer/README.md: cb-mpc, and OpenSSL built from its
 # release the first time, some minutes).
 #
 # Compiler errors: the build step runs `make -k` (keeps compiling the other files after an error, so one run shows every error),
@@ -99,10 +97,7 @@ jobs:
           grep -qi d2c55 "$RUNNER_TEMP/campaigns/ci20/FOUND.txt"
       - name: Binary needs no glibc newer than 2.34
         run: tools/check_binary.sh linux build/pzsolve
-      # The unit tests gate the gcc build on x86-64. Elsewhere they are informational until the test sources build with clang and
-      # without the x86 engines (tests/t_engine.c uses a nested function, tests/t_bsgs.c calls bs_group_x86 unconditionally).
       - name: Unit tests
-        continue-on-error: ${{ !(matrix.name == 'linux-x86_64' && matrix.variant == 'gcc') }}
         run: make test CC=${{ matrix.cc }} ${{ matrix.args }}
       # pzpeer and its unit tests; on the gcc job also pzsign (OpenSSL, cb-mpc and pzsign: a few minutes) and its tests, and with it the
       # tests of the two-party signing and of the session
@@ -175,9 +170,8 @@ jobs:
         run: |
           tools/check_binary.sh windows build/win/pzsolve.exe
           tools/check_binary.sh windows build/win/pzpeer.exe
-      # pzsign.exe, OpenSSL for Windows included (some minutes). Informational, like the steps that use it on the Windows machine.
+      # pzsign.exe, OpenSSL for Windows included (some minutes)
       - name: pzsign.exe
-        continue-on-error: true
         run: |
           make -j"$(nproc)" winsigner
           tools/check_binary.sh windows build/win/pzsign.exe
@@ -220,10 +214,9 @@ jobs:
         run: |
           ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --ui log -q --no-gpu
           grep -qi d2c55 campaigns/ci20/FOUND.txt
-      # Informational until seen green on a real Windows: under Wine every test passes but one check of t_sys, the stop request to a
-      # child (a Ctrl-Break to its process group), which Wine does not deliver.
+      # Under Wine every test passes but one check of t_sys, the stop request to a child (a Ctrl-Break to its process group), which
+      # Wine does not deliver: here it runs on a real Windows.
       - name: pzpeer (unit tests)
-        continue-on-error: true
         shell: bash
         run: |
           ./pzpeer.exe version
@@ -303,17 +296,13 @@ jobs:
       # by themselves (they are x86_64-only Mach-O files).
       - name: Unit tests
         if: steps.rosetta.outputs.skip != '1'
-        continue-on-error: true
         run: PZ_NO_OPENCL=1 make test -k ${{ matrix.make }}
-      # Informational until seen green on a Mac: pzpeer was written and run on Linux. pzsign is built for the machine itself, so the
-      # tests of the two-party signing run on the native build only.
+      # pzsign is built for the machine itself, so the tests of the two-party signing run on the native build only.
       - name: pzpeer (build and unit tests)
         if: steps.rosetta.outputs.skip != '1'
-        continue-on-error: true
         run: make peer-test -k ${{ matrix.make }}
       - name: pzsign and the tests of the two-party signing
         if: matrix.arch == 'arm64'
-        continue-on-error: true
         run: |
           make -j"$(sysctl -n hw.ncpu)" signer-test
           make peer-test

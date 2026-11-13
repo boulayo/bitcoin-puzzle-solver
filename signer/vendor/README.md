@@ -9,8 +9,9 @@
 each protocol, and the library had two audits by Cure53 in 2024 (in its repository, `docs/`). pzsign uses its two-party ECDSA
 (`ecdsa2pc`).
 
-The copy holds only what pzsign builds: `include/`, `include-internal/`, the sources of `src/cbmpc/{core,crypto,zk,protocol}` (the
-public C++ and C interfaces, the tests, the benchmarks and the documents are left out), and the files of libsecp256k1 that
+The copy holds `include/`, `include-internal/` and the sources of `src/cbmpc/{core,crypto,zk,protocol}` (the sources of the public
+C++ and C interfaces, the tests, the benchmarks and the documents are left out; their headers and the protocols pzsign does not use
+are still there, a fifth of the lines, and a third of the objects is never linked), and the files of libsecp256k1 that
 `base_ecc_secp256k1.cpp` includes, from Coinbase's own copy of it (`vendors/secp256k1`, MIT, [COPYING](cb-mpc/vendors/secp256k1/COPYING)).
 The `CMakeLists.txt` files are left out too: the Makefile builds the sources (`src/peer/peer.mk`).
 
@@ -25,4 +26,4 @@ With these, all 1454 unit tests of cb-mpc pass under Wine as on Linux (1453 pass
 repository keeps outside git).
 
 OpenSSL is not in the copy: [../openssl.sh](../openssl.sh) fetches the release that cb-mpc names (3.6.4), checks its hash and builds it
-with the one change cb-mpc asks for.
+as released (cb-mpc's own scripts make the functions of `crypto/ec/curve25519.c` visible; nothing that pzsign links uses them).

@@ -76,7 +76,7 @@ static bool load_net(const secp256k1_context *ctx, const char *path, netfile *nf
     return true;
 }
 
-static int cmd_dpcheck(secp256k1_context *ctx, const char *netpath, const char *dppath)
+static int cmd_dpcheck(const secp256k1_context *ctx, const char *netpath, const char *dppath)
 {
     netfile nf;
     record_net net;
@@ -146,7 +146,7 @@ static void print_alert(void *user, const record *mine, const record *theirs, bo
 }
 
 /* A node for manual tests of the network: no points of its own (no dp.bin, no sessions), so it is a custodian and a mailbox only. */
-static int cmd_node(secp256k1_context *ctx, int argc, char **argv)
+static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
 {
     const char *network = NULL, *seedhex = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
     char entries[16][256];
@@ -302,13 +302,12 @@ int main(int argc, char **argv)
         return 0;
     }
     (void)pz_seed_harden();                                     /* the home seed, the pieces, the keys of the tiny coins: no core file */
-    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+    const secp256k1_context *ctx = keys_ctx();
     const int rc = argc == 4 && !strcmp(argv[1], "dpcheck")  ? cmd_dpcheck(ctx, argv[2], argv[3])
                  : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2])
                  : argc >= 2 && !strcmp(argv[1], "node")     ? cmd_node(ctx, argc, argv)
                  : argc >= 2 && !strcmp(argv[1], "run")      ? cmd_run(argc, argv)
                  : argc >= 2 && !strcmp(argv[1], "sweep")    ? sweep_main(argc, argv)
                                                              : usage();
-    secp256k1_context_destroy(ctx);
     return rc;
 }

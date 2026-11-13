@@ -6,8 +6,26 @@
 #include "sys.h"
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
+#include <pthread.h>
 #include <string.h>
 #include <unistd.h>
+
+static secp256k1_context *g_ctx;
+static pthread_once_t g_ctx_once = PTHREAD_ONCE_INIT;
+
+static void ctx_make(void)
+{
+    uint8_t seed[32];
+    g_ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+    if (sys_random(seed, sizeof seed)) (void)!secp256k1_context_randomize(g_ctx, seed);
+    pz_secure_zero(seed, sizeof seed);
+}
+
+const secp256k1_context *keys_ctx(void)
+{
+    pthread_once(&g_ctx_once, ctx_make);
+    return g_ctx;
+}
 
 /* HKDF(salt "pznet1", seed, use || F || counter (4 bytes, big-endian, when has_n)) */
 static void derive(const uint8_t seed[32], const char *use, const uint8_t fp[32], bool has_n, uint32_t n, uint8_t out[32])

@@ -82,7 +82,7 @@ peer-test: peer-tests
 	$(RUN) ./$(PEER) version
 
 # pzsign is C++ on the two-party ECDSA of cb-mpc (signer/vendor/cb-mpc, MIT, with the changes listed in signer/vendor/README.md), which
-# needs a static OpenSSL 3 with one change of its own: signer/openssl.sh fetches it (checked by its hash) and builds it once per build
+# needs a static OpenSSL 3: signer/openssl.sh fetches it (checked by its hash) and builds it once per build
 # folder, with $(CC). For the machine that runs make, or, with the MinGW-w64 compilers (make winsigner), for Windows. On macOS for the
 # machine only (not with MACOS_ARCH).
 SIGNER      := $(BUILD)/pzsign$(EXE)

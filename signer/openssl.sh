@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # openssl.sh DIR - the static OpenSSL that cb-mpc needs (signer/vendor/README.md), built into DIR (DIR/include, DIR/lib/libcrypto.a)
-# for the compiler $CC: for Windows when it is a MinGW-w64 one, else for the machine. The release tarball is checked by its hash; the
-# one change cb-mpc asks for makes the functions of crypto/ec/curve25519.c visible (their `static` removed), as its own scripts do.
+# for the compiler $CC: for Windows when it is a MinGW-w64 one, else for the machine. The release tarball is checked by its hash and
+# built as it is; the tree it is built in is removed at the end (the tarball stays for the next build).
 set -eu
 DIR=$1
 VER=3.6.4
@@ -21,7 +21,6 @@ cd "$DIR.src"
 rm -rf "openssl-$VER"
 tar -xzf "openssl-$VER.tar.gz"
 cd "openssl-$VER"
-sed -e 's/^static//' crypto/ec/curve25519.c > curve25519.c.new && mv curve25519.c.new crypto/ec/curve25519.c
 
 # the options of cb-mpc's own scripts (scripts/openssl/ in its repository)
 OPTS="no-shared no-afalgeng no-apps no-aria no-autoload-config no-bf no-camellia no-cast no-chacha no-cmac no-cms no-crypto-mdebug
@@ -39,4 +38,5 @@ MAKEFLAGS= make -j4 libcrypto.a >/dev/null
 mkdir -p "$DIR/lib"
 cp libcrypto.a "$DIR/lib/"
 rm -rf "$DIR/include" && cp -R include "$DIR/include"
+cd .. && rm -rf "openssl-$VER"
 echo "openssl.sh: OpenSSL $VER for $($CC -dumpmachine) in $DIR"
