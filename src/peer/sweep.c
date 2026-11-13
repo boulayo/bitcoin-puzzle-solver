@@ -52,9 +52,10 @@ int sweep_main(int argc, char **argv)
     if ((rpc_arg ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&spv, why, sizeof why)) != 1) return fprintf(stderr, "the chain is not ready: %s\n", why), 1;
     const session_chain ch = rpc_arg ? chain_rpc_iface(&crpc) : chain_spv_iface(&spv);
 
-    /* every confirmed coin of the key to the address, less a fee that passes at once */
+    /* the confirmed coins of the key to the address, less a fee that passes at once: the largest, as many as a transaction holds, each
+     * worth more than the fee of its own input (an address of a puzzle collects dozens of coins of dust) */
     payout_coin coins[64];
-    const int n = ch.coins(ch.ctx, spk, coins, 64);
+    int n = ch.coins(ch.ctx, spk, coins, 64);
     if (!rate) {                                                /* twice the estimate, 50 to 1000 sat/vB: no server sets the fee of a prize */
         const uint64_t est = 2 * ch.feerate(ch.ctx);
         rate = est < 50000 ? 50000 : est > 1000000 ? 1000000 : est;
@@ -64,13 +65,15 @@ int sweep_main(int argc, char **argv)
     uint64_t total = 0;
     memcpy(out.script, to_spk, to_len);
     btc_tx_init(&tx);
+    const int listed = n;
+    if (n > 0) n = (int)payout_largest(coins, (size_t)n, BTC_MAX_IN, btc_fee(BTC_P2PKH_IN_SIZE, rate) + 1);
     bool ok = n > 0;
     for (int i = 0; ok && i < n; i++) total += coins[i].value, ok = btc_tx_add_in(&tx, coins[i].txid, coins[i].vout, BTC_SEQUENCE_FINAL);
     const uint64_t fee = ok ? btc_fee(btc_vsize_p2pkh(tx.n_in, &out, 1), rate) : 0;
     ok = ok && total > fee + 546 && btc_tx_add_out(&tx, total - fee, to_spk, to_len);
     for (size_t i = 0; ok && i < tx.n_in; i++) ok = btc_sign_p2pkh(&tx, i, sec) && btc_verify_p2pkh(&tx, i, spk, sizeof spk);
     pz_secure_zero(sec, sizeof sec);
-    if (!ok) return fprintf(stderr, n > 0 ? "the coins of this key do not pay the fee\n" : n == 0 ? "this key has no confirmed coin\n" : "the chain did not answer\n"), 1;
+    if (!ok) return fprintf(stderr, listed > 0 ? "the coins of this key do not pay the fee\n" : listed == 0 ? "this key has no confirmed coin\n" : "the chain did not answer\n"), 1;
 
     static uint8_t raw[BTC_TX_MAX_SIZE];
     static char text[2 * BTC_TX_MAX_SIZE + 1];
@@ -80,6 +83,7 @@ int sweep_main(int argc, char **argv)
     btc_tx_txid(&tx, txid), btc_hash_to_hex(txid, id), btc_hex(raw, len, text);
     printf("coins: %d, %llu satoshis; to %s: %llu satoshis; fee %llu satoshis (%llu sat/vB)\ntxid: %s\n\n%s\n\n", n, (unsigned long long)total, to,
            (unsigned long long)(total - fee), (unsigned long long)fee, (unsigned long long)(rate / 1000), id, text);
+    if (n < listed) printf("%d smaller coins are left where they are: those worth their fee can go in a second transaction, once this one is in a block.\n\n", listed - n);
     printf("NOT SENT. Do not paste this transaction into a wallet, a block explorer or a node: in the public mempool it shows the public key,\n"
            "and with a key this short a program finds the private key from it in seconds and replaces your transaction with its own.\n"
            "Give it to a mining pool that takes private transactions (for example the Slipstream service of MARA), and wait for the block.\n");

@@ -28,6 +28,9 @@ typedef struct {
     int first;                            /* F, the party whose tiny coin goes into the second transaction */
 } payout_terms;
 
+/* Puts the coins largest first (ties by outpoint) and returns how many of the first `max` are worth at least `least`. */
+size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least);
+
 /* The first transaction from the coins of the puzzle: the largest first (ties by outpoint), at most PAYOUT_MAX_COINS, without the coins worth
  * less than 3 times the fee of their input. *used: how many were taken. False when what is taken does not pay the fee and the tiny coins. */
 bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx, size_t *used);

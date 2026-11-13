@@ -13,6 +13,14 @@ static int by_value(const void *a, const void *b)
     return c ? c : (x->vout > y->vout) - (x->vout < y->vout);
 }
 
+size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least)
+{
+    size_t k = 0;
+    qsort(coins, n, sizeof *coins, by_value);
+    while (k < n && k < max && coins[k].value >= least) k++;
+    return k;
+}
+
 /* the output of F's cancel and its fee */
 static uint64_t cancel_out(const payout_terms *t, btc_out *out)
 {
@@ -43,12 +51,10 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
     const uint64_t tiny = payout_tiny(t);
     if (n > 64) n = 64;
     memcpy(take, coins, n * sizeof *coins);
-    qsort(take, n, sizeof *take, by_value);
-    const uint64_t in_fee = btc_fee(BTC_P2PKH_IN_SIZE, t->feerate);
+    const size_t worth = payout_largest(take, n, PAYOUT_MAX_COINS, 3 * btc_fee(BTC_P2PKH_IN_SIZE, t->feerate));
     uint64_t total = 0;
     btc_tx_init(tx);
-    for (size_t i = 0; i < n && tx->n_in < PAYOUT_MAX_COINS; i++) {
-        if (take[i].value < 3 * in_fee) break;                 /* sorted: the rest are worth even less */
+    for (size_t i = 0; i < worth; i++) {
         if (total + take[i].value > BTC_MAX_MONEY || !btc_tx_add_in(tx, take[i].txid, take[i].vout, BTC_SEQUENCE_FINAL)) return false;
         total += take[i].value;
     }
