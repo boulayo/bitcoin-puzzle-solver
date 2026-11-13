@@ -532,7 +532,7 @@ static void *gpu_linear_thread(void *p)
         }
         sched_complete(r->sched, &c, covered);
         GPU_UNITS_STAMP(&r->ws[s->widx], c.nkeys);
-        if (c.nkeys == want) ngroups = gpu_launch_resize(ngroups, dt, s->launch_s, 0.005, 4096);
+        if (c.nkeys == (want & ~(u64)1023)) ngroups = gpu_launch_resize(ngroups, dt, s->launch_s, 0.005, 4096);
     }
     if (atomic_fetch_sub(s->active, 1) == 1) atomic_store(&r->stop, 1);
     return NULL;
