@@ -1328,8 +1328,6 @@ int main(void)
     test_policy();
     test_nodes_answer();
     test_slowloris();
-    test_asker();
-    test_hostile_lookup();
     test_alert_flood();
     test_seq();
     t0 = ms();
@@ -1337,6 +1335,10 @@ int main(void)
     test_relay_limits();
     test_relay_stop();
     printf("t_dht: the relay in %.1f s\n", (double)(ms() - t0) / 1000);
+    /* last: they leave nodes in the tables of the others that are gone, and every dial to them costs a timeout (on Windows two seconds
+     * even on loopback, where a refused connection is tried again) */
+    test_asker();
+    test_hostile_lookup();
     t0 = ms();
     all(stop_main, NODES);
     printf("t_dht: stopped in %.1f s\n", (double)(ms() - t0) / 1000);

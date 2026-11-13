@@ -133,6 +133,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | F7 | Un core intero riservato per ogni scheda OpenCL | `clFlush`, attesa, poi `clFinish` |
 | F8 | La tabella del canguro è una potenza di due dentro `--mem`; voci da 16 byte | Voci da 8 byte, tabella di qualsiasi misura |
 | F9 | pzpeer tiene 4,5 MB per 64 sessioni possibili | Allocare alla prima sessione |
+| F10 | Ogni giro di una ricerca lancia tre domande e aspetta la più lenta: un nodo spento in tabella ferma il giro per tutto il tempo limite (10 s in rete). Misurato con i rifiuti lenti di Windows: con quattro nodi spenti lo scambio tramite cassette passa da 5 a più di 30 secondi | Tre domande sempre in volo: la successiva parte appena una risponde |
 
 ### 3.3 Semplificazioni proposte (circa 1000 righe in meno)
 
