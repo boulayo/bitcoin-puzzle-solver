@@ -179,5 +179,7 @@ int main(int argc, char **argv)
     test_processes(argv[0], dir);
     test_files(dir);
     CHECK(rmdir(dir) == 0);
+    struct in_addr gw;                                         /* shown, not checked: a machine may have no default route */
+    printf("t_sys: the router of the default route: %s\n", sys_gateway(&gw) ? inet_ntoa(gw) : "none");
     TEST_DONE("t_sys");
 }

@@ -14,7 +14,7 @@ Servono un computer con la rete di casa vera. Per ognuna basta guardare una riga
 | Prova | Comando | Cosa guardare |
 |---|---|---|
 | ritrovo sulla rete BitTorrent vera | su due computer: `pzpeer node --network FILE --dir CARTELLA --bt-router router.bittorrent.com:6881 --verbose` | le righe `rendezvous:` e poi `contacts` |
-| apertura della porta sul router | lo stesso comando (la chiede da solo) | la riga `upnp:` |
+| apertura della porta sul router | lo stesso comando (la chiede da solo) | la riga `router:` |
 | server Electrum pubblici | `pzpeer run --network FILE --payout INDIRIZZO --electrum electrum.blockstream.info:50001 --debug prova.log` su una rete della catena principale | la riga `chain:` e, in `prova.log`, le righe `electrum` |
 
 ### 1.1b Windows e Mac veri
@@ -61,7 +61,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | A1 | **Nessuna firma sul file della rete.** La rete è l'impronta delle righe che la definiscono | È come fanno Bitcoin Core e BitTorrent: i parametri stanno nel programma, e chi li cambia è su un'altra rete. Niente chiavi da custodire, cento righe di codice in meno. La fiducia sta nel programma che si scarica dal tuo repository, come per qualsiasi programma |
 | A2 | Nessun server tuo. Un nodo sul NAS, se un giorno lo vorrai, è un partecipante come gli altri | Con Tailscale da solo il nodo è raggiungibile solo dai tuoi dispositivi: per servire la rete gli serve una porta aperta verso Internet |
 | A3 | I nodi si trovano attraverso la tabella di BitTorrent | fatto |
-| A4 | **Chi scarica il programma lo avvia e partecipa:** `pzpeer run --network FILE --payout INDIRIZZO`. Cartella, programmi, porta (28140), apertura sul router, primi contatti e blockchain hanno un valore predefinito | L'apertura della porta è accesa da sola (`--no-upnp` la spegne): senza, quasi nessuno farebbe da custode. L'indirizzo di pagamento resta l'unica cosa da scrivere: è dove va il premio. Quando i parametri del #140 saranno fissati il file sarà dentro il programma, e non servirà nemmeno `--network` |
+| A4 | **Chi scarica il programma lo avvia e partecipa:** `pzpeer run --network FILE --payout INDIRIZZO`. Cartella, programmi, porta (28140), apertura sul router, primi contatti e blockchain hanno un valore predefinito | L'apertura della porta è accesa da sola (`--no-portmap` la spegne): senza, quasi nessuno farebbe da custode. L'indirizzo di pagamento resta l'unica cosa da scrivere: è dove va il premio. Quando i parametri del #140 saranno fissati il file sarà dentro il programma, e non servirà nemmeno `--network` |
 | A5 | La revisione della firma a due è fatta per la parte che ho potuto fare. Vedi 1.2 | |
 | A6 | Libreria: la firma a due di cb-mpc, di Coinbase (licenza MIT), con due piccole modifiche nostre per Windows | È mantenuta, ha due revisioni esterne (Cure53, 2024) e un premio per chi trova falle. Il suo protocollo (Lindell 2017) è più semplice: una sola delle due parti ha una chiave Paillier, nessuna delle due sceglie parametri che l'altra deve accettare, e non ci sono numeri primi lenti da generare: importazione dei pezzi e firma in meno di un secondo, contro un minuto prima. Usiamo la variante con la prova finale, che non lascia trapelare nulla quando una firma fallisce. Le librerie DKLs23 mature hanno licenze non libere |
 | A7 | Nessun nodo Bitcoin proprio: più server Electrum pubblici, ogni risposta verificata. Chi ha un nodo lo usa con `--rpc` | fatto |
@@ -119,7 +119,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | E8 | pzsign: 126 MB per un solo messaggio dentro il limite di dimensione | Un limite agli elementi per fase |
 | E9 | Windows: la cartella predefinita `pznet-NOME` prende i permessi della cartella madre (il seme di un nodo non passa più dalla riga di comando: sta in `node.seed`) | Permessi espliciti |
 | E10 | La mappatura UPnP "senza fine" non viene mai tolta | Toglierla all'uscita |
-| E11 | Una casa (`pzpeer run`) chiede da sola al router di aprire la porta, con UPnP (decisione A4). Bitcoin Core ha tolto UPnP nella 29.0 e dalla 30.0 chiede da solo al router, ma con PCP o NAT-PMP: un messaggio binario corto verso il router, senza la ricerca sulla rete di casa e senza l'XML di UPnP | **Da decidere.** Consiglio: come Bitcoin Core 30, apertura accesa di default, chiesta prima con PCP e NAT-PMP e poi con UPnP per i router che parlano solo quello. Costo: circa 150 righe, compresa la ricerca del router su Linux, Windows e macOS |
+| E11 | Una casa (`pzpeer run`) chiede da sola al router di aprire la porta, con UPnP (decisione A4). Bitcoin Core ha tolto UPnP nella 29.0 e dalla 30.0 chiede da solo al router, ma con PCP o NAT-PMP: un messaggio binario corto verso il router, senza la ricerca sulla rete di casa e senza l'XML di UPnP | **Deciso e fatto:** come Bitcoin Core 30, apertura accesa di default, chiesta prima con PCP e NAT-PMP e poi con UPnP per i router che parlano solo quello (`portmap.c`, `t_portmap`; il router si trova da solo su Linux, Windows e macOS). Da provare con un router vero |
 
 ### 3.2 Sprechi
 

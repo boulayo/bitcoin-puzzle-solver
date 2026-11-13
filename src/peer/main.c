@@ -42,7 +42,7 @@ static int usage(void)
                     "  --dir DIR            the folder of the home or node (pznet-<name of the network>, pznode-<name> for node)\n"
                     "  --listen PORT        the TCP port other nodes dial (default 28140; 0: do not listen, only dial out)\n"
                     "  --bind ADDR          listen on this address only\n"
-                    "  --no-upnp            do not ask the router of this LAN to let the port in\n"
+                    "  --no-portmap         do not ask the router of this LAN to let the port in (PCP, NAT-PMP, UPnP)\n"
                     "  --peer HOST:PORT     a node to start from, besides those found on their own\n"
                     "  --bt-router H:P      a node of the table of BitTorrent to find the other nodes through, in place of the well-known\n"
                     "                       ones (a network of the main chain uses that table; a test network only with this option)\n"
@@ -134,7 +134,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     char entries[16][256], dirname[48], seedpath[1100], err[300];
     int nb = 0, npeer = 0;
     long port = DEFAULT_PORT, store_gb = 0;
-    bool verbose = false, allow_private = false, no_bt = false, upnp = true;
+    bool verbose = false, allow_private = false, no_bt = false, portmap = true;
     const char *peers[32], *routers[8], *debug = NULL;
     int nrouters = 0;
     for (int i = 2; i < argc; i++) {
@@ -143,7 +143,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         if (!strcmp(a, "--verbose")) { verbose = true; continue; }
         if (!strcmp(a, "--allow-private")) { allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { no_bt = true; continue; }
-        if (!strcmp(a, "--no-upnp")) { upnp = false; continue; }
+        if (!strcmp(a, "--no-portmap")) { portmap = false; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) network = v;
         else if (!strcmp(a, "--dir")) dir = v;
@@ -192,7 +192,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     }
     for (int i = 0; i < npeer; i++) boot[nb++] = peers[i];
     dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
-                      .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .upnp = upnp,
+                      .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .portmap = portmap,
                       .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
                       .store_max = (uint64_t)store_gb * 1000000000ull / RECORD_LEN};
     cfg.bt_routers = bt_routers(!strcmp(nf.chain, "main"), no_bt, routers, nrouters, &cfg.nbt_routers);
@@ -236,7 +236,7 @@ static int cmd_run(int argc, char **argv)
 {
     char solve[4096], sign[4096];
     home_cfg cfg = {.pzsolve = beside(argv[0], "pzsolve", solve), .pzsign = beside(argv[0], "pzsign", sign), .id_bits = NODE_ID_ZERO_BITS,
-                    .listen_port = DEFAULT_PORT, .upnp = true};
+                    .listen_port = DEFAULT_PORT, .portmap = true};
     const char *peers[32], *electrum[8], *routers[8], *debug = NULL;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -248,7 +248,7 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--exit-when-done")) { cfg.exit_when_done = true; continue; }
         if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { cfg.no_bt = true; continue; }
-        if (!strcmp(a, "--no-upnp")) { cfg.upnp = false; continue; }
+        if (!strcmp(a, "--no-portmap")) { cfg.portmap = false; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) cfg.network = v;
         else if (!strcmp(a, "--dir")) cfg.dir = v;

@@ -22,8 +22,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   delay a payout, never misdirect it. A node of one's own stays the stronger choice.
 - pzpeer finds the other nodes with no server of the network: each node announces its port in the Mainline DHT of BitTorrent under
   a key made from the network's fingerprint and looks the others up there (`--bt-router`, `--no-bt`). Only addresses pass through it,
-  each dialled and checked as any other. A node listens on port 28140 and asks the home router to let it in (`--no-upnp`,
-  `--listen 0`).
+  each dialled and checked as any other. A node listens on port 28140 and asks the home router to let it in, as Bitcoin Core does: by PCP or
+  NAT-PMP, and by UPnP for the routers that only speak that (`--no-portmap`, `--listen 0`).
 - `pzpeer run --network FILE --payout ADDRESS` is all a home needs: the folder, the programs, the port, the first contacts and the
   chain have defaults. `--debug FILE` logs every message, step and answer of the chain, with no secret, for reading afterwards.
 - The fee of the payout is twice the estimate of the chain, 20 to 1000 sat/vB, and the tiny coins grow with it, so that the party

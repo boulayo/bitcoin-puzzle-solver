@@ -526,7 +526,7 @@ int home_run(const home_cfg *cfg)
     snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
                      .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
-                     .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .upnp = cfg->upnp,
+                     .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .portmap = cfg->portmap,
                      .allow_private = h->chain != BTC_MAIN || cfg->allow_private,
                      .store_max = (uint64_t)cfg->store_gb * 1000000000ull / RECORD_LEN};
     dc.bt_routers = bt_routers(h->chain == BTC_MAIN, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);

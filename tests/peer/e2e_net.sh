@@ -73,14 +73,14 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     NPID=
     if [ -z "${PZ_E2E_MEET:-}" ]; then
         $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --dir "$T/n" \
-            --listen $PORT --no-upnp > "$T/n.log" 2>&1 &
+            --listen $PORT --no-portmap > "$T/n.log" 2>&1 &
         NPID=$!
         sleep 3
     fi
     port=$PORT
     for h in a b c; do
         port=$((port + 1))
-        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" "${MEET[@]}" --listen $port --no-upnp \
+        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" "${MEET[@]}" --listen $port --no-portmap \
             --pzsolve "$BIN/pzsolve$EXE" --pzsign "$BIN/pzsign$EXE" --debug "$T/$h.debug" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
         [ "$h" = a ] && [ -n "${PZ_E2E_MEET:-}" ] && sleep "${PZ_E2E_ALONE:-30}"   # the first home of the network, alone

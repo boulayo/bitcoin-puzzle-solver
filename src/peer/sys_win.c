@@ -5,6 +5,7 @@
 #include "sys.h"
 #include <windows.h>
 #include <bcrypt.h>
+#include <iphlpapi.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
@@ -112,6 +113,14 @@ long sys_sendto(int fd, const void *p, size_t n, const struct sockaddr_in *to)
 {
     const int r = sendto(fd, p, clamp(n), 0, (const struct sockaddr *)to, sizeof *to);
     return r < 0 ? again() : r;
+}
+
+bool sys_gateway(struct in_addr *gw)        /* the next hop of the best route toward 0.0.0.0: the default one */
+{
+    MIB_IPFORWARDROW r;
+    if (GetBestRoute(0, 0, &r) != NO_ERROR || !r.dwForwardNextHop || r.dwForwardType != 4) return false;   /* 4: through a router */
+    gw->s_addr = r.dwForwardNextHop;
+    return true;
 }
 
 const char *sys_net_why(void)

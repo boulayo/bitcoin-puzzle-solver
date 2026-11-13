@@ -14,6 +14,10 @@
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/random.h>
+#elif defined(__APPLE__)
+#include <net/route.h>
+#include <stdlib.h>
+#include <sys/sysctl.h>
 #endif
 
 #ifndef MSG_NOSIGNAL
@@ -137,6 +141,45 @@ long sys_sendto(int fd, const void *p, size_t n, const struct sockaddr_in *to)
 }
 
 const char *sys_net_why(void) { return strerror(errno); }
+
+#if defined(__linux__)
+bool sys_gateway(struct in_addr *gw)        /* the line of /proc/net/route toward 0.0.0.0 through a router (RTF_GATEWAY) */
+{
+    FILE *f = fopen("/proc/net/route", "re");
+    char line[256];
+    unsigned dst, via, flags;
+    bool ok = false;
+    while (f && !ok && fgets(line, sizeof line, f))
+        ok = sscanf(line, "%*s %x %x %x", &dst, &via, &flags) == 3 && !dst && (flags & 2) && via;
+    if (f) fclose(f);
+    if (ok) gw->s_addr = via;                  /* written in the order of the network already */
+    return ok;
+}
+#elif defined(__APPLE__)
+bool sys_gateway(struct in_addr *gw)        /* the routes through a router, from the kernel; the one toward 0.0.0.0 */
+{
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
+    size_t n = 0;
+    char *buf = NULL;
+    bool ok = false;
+    if (sysctl(mib, 6, NULL, &n, NULL, 0) || !n || !(buf = malloc(n)) || sysctl(mib, 6, buf, &n, NULL, 0)) n = 0;
+    for (size_t at = 0; !ok && at + sizeof(struct rt_msghdr) <= n;) {
+        const struct rt_msghdr *m = (const struct rt_msghdr *)(buf + at);
+        const char *end = buf + at + m->rtm_msglen;
+        const struct sockaddr_in *dst = (const struct sockaddr_in *)(m + 1), *via = NULL;   /* the destination first, then the router */
+        if (m->rtm_msglen < sizeof *m || end > buf + n) break;
+        if ((const char *)(dst + 1) <= end) via = (const struct sockaddr_in *)((const char *)dst + ((dst->sin_len + 3u) & ~3u));
+        if (via && (const char *)(via + 1) <= end && (m->rtm_addrs & (RTA_DST | RTA_GATEWAY)) == (RTA_DST | RTA_GATEWAY) &&
+            dst->sin_family == AF_INET && !dst->sin_addr.s_addr && via->sin_family == AF_INET && via->sin_addr.s_addr)
+            *gw = via->sin_addr, ok = true;
+        at += m->rtm_msglen;
+    }
+    free(buf);
+    return ok;
+}
+#else
+bool sys_gateway(struct in_addr *gw) { (void)gw; return false; }
+#endif
 
 /* ---- child processes ---- */
 

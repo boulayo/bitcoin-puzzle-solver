@@ -63,6 +63,7 @@ long sys_recv(int fd, void *p, size_t cap, int64_t deadline);
 bool sys_recv_all(int fd, void *p, size_t n, int64_t deadline);
 bool sys_send_all(int fd, const void *p, size_t n, int64_t deadline);
 const char *sys_net_why(void);     /* the reason of the last failure of a socket call of this thread, for a message */
+bool sys_gateway(struct in_addr *gw);   /* the IPv4 router of the default route of this machine; false when there is none */
 
 /* ---- child processes ---- */
 

@@ -89,8 +89,8 @@ typedef struct {
                                     * (bt.h), with no server of this network. They must stay valid while the node runs. NULL: not used */
     int nbt_routers;
     unsigned rendezvous_s;         /* between two rounds there; 0: 900 (120 while the node has no contact) */
-    bool upnp;                     /* ask the router of the LAN to let the listening port in (upnp.h) */
-    const char *upnp_ssdp;         /* tests: where the search for the router goes; NULL: the multicast address */
+    bool portmap;                  /* ask the router of the LAN to let the listening port in (portmap.h) */
+    const char *router;            /* tests: the address of that router; NULL: the one of the default route */
     bool verbose;                  /* what the node does, on stderr */
 } dht_config;
 

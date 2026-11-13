@@ -59,7 +59,7 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `payout.c` | the transactions of the pair: the first, the second, the cancel |
 | `session.c` | the session of a coincidence, from the hello to the payout (section 7.5) |
 | `bt.c` | the rendezvous in the Mainline DHT of BitTorrent: announce and lookup of the network's key |
-| `upnp.c` | the request to the home router to let the listening port in |
+| `portmap.c` | the request to the home router to let the listening port in (PCP, NAT-PMP, UPnP) |
 | `chain_rpc.c` | the chain of a session on bitcoind |
 | `spv.c` | block headers checked by their proof of work, Merkle branches |
 | `electrum.c` | a client of the Electrum protocol (plain TCP) |
@@ -564,7 +564,6 @@ relays at once, the bytes.
 
 | Missing | Why it is not done |
 |---|---|
-| NAT-PMP and PCP, the other two ways a home opens its own port | UPnP is done (7.9). These two are what Bitcoin Core uses: it dropped UPnP in 29.0 and asks the router by them by default since 30.0, a short binary message to the gateway with no search on the LAN and no XML |
 | IPv6 as a way out of NAT | addresses, listening (`::` takes IPv4 too) and NODES carry IPv6 already, but a home does not learn or announce a public IPv6 address of its own: a responder keeps the address it sees. There is no IPv6 on the test machine |
 | Tor, optional (project 2.5) | a SOCKS5 client in `net.c`, and onion addresses in NODES, which has 16 bytes for an address: a new format. A node behind Tor cannot be a custodian, like one that does not listen |
 | A defence of the rendezvous key in the BitTorrent DHT | nodes that sit close to the key there can hide the announces (7.9). The rule that ties a node ID of that table to its address (BEP 42) would make it dear; many nodes of that table do not follow it yet |
@@ -604,15 +603,18 @@ comes from the address asked, with the number of the question, and is read withi
 bytes, answers to other questions, nodes that do not exist, and peers without end).
 
 **The port.** A node listens on TCP port 28140 unless `--listen` says otherwise (`--listen 0`: it only dials out). Behind a home
-router it is dialled only when the router lets the port in, and pzpeer asks the router for it unless `--no-upnp` (`upnp.c`,
-UPnP IGD): a search on the LAN (SSDP), the description of the router, and `AddPortMapping` for the `--listen` port over TCP, for two
-hours, asked again every hour; a router that only takes mappings without end gets one. Nothing the router says is followed out of the
-LAN: its description and its control address must be at the address its answer came from, and that address must not be a public
-one. It is on by default so that a home takes its part of the custody without its owner doing anything; the mapping lasts two hours
-after pzpeer stops. A node that does not listen still
+router it is dialled only when the router lets the port in, and pzpeer asks the router for it unless `--no-portmap`
+(`portmap.c`), as Bitcoin Core does since its version 30: the `--listen` port over TCP, the same port outside, for two hours, asked
+again before half of the time the router gives passes. First by PCP (RFC 6887), one datagram to port 5351 of the router of the default
+route and its answer, which counts only from there; a router that only speaks NAT-PMP (RFC 6886) answers PCP with version 0 and is
+asked in that way. A router that speaks neither is asked by UPnP IGD: a search on the LAN (SSDP), the description of the router, and
+`AddPortMapping`; a router that only takes mappings without end gets one. Nothing the router says there is followed out of the LAN:
+its description and its control address must be at the address its answer came from, and that address must not be a public one.
+The line `router:` of the log says which way worked, or why none did. It is on by default so that a home takes its part of the custody
+without its owner doing anything; the mapping lasts two hours after pzpeer stops. A node that does not listen still
 searches, publishes and signs (through the relay, 7.7); it is not a custodian.
 
-`t_bt` and `t_upnp` run against a table and a router made in the tests; `tests/peer/e2e_meet.sh` starts three nodes that are given
+`t_bt` and `t_portmap` run against a table and a router made in the tests (one that speaks PCP, one that only speaks NAT-PMP, the UPnP ones); `tests/peer/e2e_meet.sh` starts three nodes that are given
 no address and find each other through `tests/peer/bt_table.py`. Not tried yet against the real table of BitTorrent nor a real
 router: the machine of the tests reaches neither.
 
@@ -732,7 +734,7 @@ in `t_session` with `PZ_REGTEST`.
 | `noise.c`, `keys.c`, `record.c`, `dpfeed.c` | done (`t_noise`: byte for byte against the noiseprotocol package of Python; `t_record`; `pzpeer dpcheck` on real dp.bin files) |
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; what a public network still needs is in 7.8 |
 | `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node) |
-| `bt.c`, `upnp.c` | done (`t_bt`, `t_upnp`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
+| `bt.c`, `portmap.c` | done (`t_bt`, `t_portmap`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
 | `sweep.c` | done (`tests/peer/e2e_sweep.sh`: the node would take the transaction, and pzpeer did not send it) |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`make signer-test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
@@ -782,7 +784,7 @@ What a Bitcoin node does is the model.
   [`tools/pzpeer-node.service`](../../tools/pzpeer-node.service) is the systemd unit, with the protections of the unit of Bitcoin Core
   (`systemd-analyze security` rates it 1.3, where 10 is a service with none).
 - **The port.** Only TCP 28140: a rented server has it open already; at home it is opened by hand on the router toward that machine,
-  so the request to the router is off (`--no-upnp`). The node shows the others its address and port, as every node of the table
+  so the request to the router is off (`--no-portmap`). The node shows the others its address and port, as every node of the table
   does, and nothing else.
 - **Disk and memory.** `--store-gb N` (37 by default): the index takes about a fifth of it in RAM.
 - **A VPN such as Tailscale** is for reaching the machine, not for the network: the other nodes reach a custodian only at a public

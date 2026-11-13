@@ -30,17 +30,17 @@ $(SECP_LIB): $(SECP_OBJ)
 # sys.h has one implementation per system (sys_posix.c, sys_win.c) and sys.c for what the two share
 ifeq ($(WIN),1)
 PEER_SYS   := sys sys_win
-PEER_LIBS   = $(LIBLDLIBS) -lws2_32
+PEER_LIBS   = $(LIBLDLIBS) -lws2_32 -liphlpapi
 else
 PEER_SYS   := sys sys_posix
 PEER_LIBS   = $(LIBLDLIBS)
 endif
-PEER_SRC   := $(PEER_SYS) dbg json btc btc_rpc spv electrum netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay bt upnp dpfeed pieces signer payout session chain_rpc chain_spv sweep block home main
+PEER_SRC   := $(PEER_SYS) dbg json btc btc_rpc spv electrum netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay bt portmap dpfeed pieces signer payout session chain_rpc chain_spv sweep block home main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include -DSECP256K1_STATIC
 PEER       := $(BUILD)/pzpeer$(EXE)
-PEERTESTS  := t_sys t_json t_btc t_spv t_chain_spv t_noise t_record t_net t_store t_bt t_upnp t_dht t_pieces t_payout t_netfile t_block
+PEERTESTS  := t_sys t_json t_btc t_spv t_chain_spv t_noise t_record t_net t_store t_bt t_portmap t_dht t_pieces t_payout t_netfile t_block
 # the tests whose stand-ins for bitcoind and pzsign are written for POSIX (sockets used directly, shell scripts): Linux and macOS
 ifneq ($(WIN),1)
 PEERTESTS  += t_btc_rpc t_chain_rpc t_session

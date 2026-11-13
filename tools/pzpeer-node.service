@@ -12,7 +12,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/pzpeer node --network /etc/pzpeer/network.txt --dir /var/lib/pzpeer/node --store-gb 20 --no-upnp
+ExecStart=/usr/local/bin/pzpeer node --network /etc/pzpeer/network.txt --dir /var/lib/pzpeer/node --store-gb 20 --no-portmap
 DynamicUser=yes
 StateDirectory=pzpeer
 StateDirectoryMode=0700

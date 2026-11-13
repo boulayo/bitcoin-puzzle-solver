@@ -4,7 +4,7 @@
 #
 #   tools/check_binary.sh linux BINARY      no glibc symbol newer than 2.34 and no __isoc23_* symbol (the code avoids both, so that the
 #                                           binary starts on older distributions)
-#   tools/check_binary.sh windows BINARY    imports only DLLs that are part of Windows (kernel32, msvcrt, advapi32, bcrypt, ws2_32, crypt32, user32)
+#   tools/check_binary.sh windows BINARY    imports only DLLs that are part of Windows (kernel32, msvcrt, advapi32, bcrypt, ws2_32, crypt32, user32, iphlpapi)
 #
 # One line on stdout and exit status 0 when the binary passes. When it does not, the reason is printed (on stderr, or as a GitHub
 # Actions error annotation when it runs there) and the status is 1. Status 2: the check could not be made (usage, missing file or
@@ -37,7 +37,7 @@ case "$kind" in
     objdump=${OBJDUMP:-x86_64-w64-mingw32-objdump}
     command -v "$objdump" >/dev/null 2>&1 || die "$objdump not found"
     imports=$("$objdump" -p "$bin") || die "$objdump -p failed on $bin"
-    bad=$(grep 'DLL Name' <<<"$imports" | grep -viE 'kernel32|msvcrt|advapi32|bcrypt|ws2_32|crypt32|user32' | sed 's/.*DLL Name: *//' | paste -sd, - || true)
+    bad=$(grep 'DLL Name' <<<"$imports" | grep -viE 'kernel32|msvcrt|advapi32|bcrypt|ws2_32|crypt32|user32|iphlpapi' | sed 's/.*DLL Name: *//' | paste -sd, - || true)
     if [ -n "$bad" ]; then
       fail "$(basename "$bin") depends on a DLL that is not part of Windows: ${bad//,/, }"
     fi

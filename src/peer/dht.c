@@ -4,7 +4,7 @@
  * maintenance), the answers to requests, and the limits by address block. */
 #include "dbg.h"
 #include "dht_priv.h"
-#include "upnp.h"
+#include "portmap.h"
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <stdarg.h>
@@ -354,7 +354,7 @@ static void *handler_main(void *arg)
 
 /* The way in without a server of this network: every so often the node announces its port in the table of BitTorrent under the key of
  * the network and takes the addresses announced there (bt.h); they are candidates, dialled and checked by the next bootstrap as any
- * other. The same thread keeps the port open on the router of the LAN, when asked (upnp.h). */
+ * other. The same thread keeps the port open on the router of the LAN, when asked (portmap.h). */
 static void *meet_main(void *arg)
 {
     dht *d = arg;
@@ -368,11 +368,11 @@ static void *meet_main(void *arg)
     int64_t next_meet = 0, next_map = 0;
     while (!stopping(d)) {
         const int64_t now = sys_now_ms();
-        if (d->cfg.upnp && d->port && now >= next_map) {       /* a lease of two hours, asked again every hour */
-            char why[200];
-            const bool ok = upnp_map(d->port, 7200, d->cfg.upnp_ssdp, why, sizeof why);
-            dlog(d, "upnp: %s", why);
-            next_map = now + (ok ? 3600000 : 600000);
+        if (d->cfg.portmap && d->port && now >= next_map) {    /* a lease of two hours, asked again before half of it passes */
+            char why[400];
+            const unsigned s = portmap(d->port, 7200, d->me.xonly, d->cfg.router, why, sizeof why);
+            dlog(d, "router: %s", why);
+            next_map = now + (s ? 500LL * (s < 120 ? 120 : s) : 600000);
         }
         if (d->cfg.nbt_routers && now >= next_meet) {
             net_addr peers[BT_PEERS_MAX];
@@ -555,7 +555,7 @@ int dht_start(dht *d)
     const int n = bootstrap(d);
     if (n) (void)dht_mbox_poll(d);                             /* the alerts that came while this node was away */
     d->has_maint = spawn(&d->th_maint, maint_main, d, HANDLER_STACK, false);
-    if (d->cfg.nbt_routers || (d->cfg.upnp && d->port)) d->has_meet = spawn(&d->th_meet, meet_main, d, HANDLER_STACK, false);
+    if (d->cfg.nbt_routers || (d->cfg.portmap && d->port)) d->has_meet = spawn(&d->th_meet, meet_main, d, HANDLER_STACK, false);
     dlog(d, "started, %s, %d contacts", d->port ? "listening" : "not listening", n);
     return d->has_maint ? n : -1;
 }

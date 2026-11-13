@@ -19,7 +19,7 @@ printf 'net=meet\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\nju
 sleep 1
 for i in 1 2 3; do
     $PEER node --network "$DIR/net.txt" --dir "$DIR/n$i" \
-        --listen $((PORT + i)) --no-upnp --bt-router 127.0.0.1:$PORT --verbose > "$DIR/n$i.log" 2>&1 &
+        --listen $((PORT + i)) --no-portmap --bt-router 127.0.0.1:$PORT --verbose > "$DIR/n$i.log" 2>&1 &
     sleep 3
 done
 for wait in $(seq 1 150); do                                   # a node alone looks again every two minutes
