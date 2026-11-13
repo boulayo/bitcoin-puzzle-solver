@@ -18,7 +18,7 @@ printf 'net=meet\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\nju
     "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$DIR/net.txt"
 sleep 1
 for i in 1 2 3; do
-    $PEER node --network "$DIR/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$DIR/n$i" \
+    $PEER node --network "$DIR/net.txt" --dir "$DIR/n$i" \
         --listen $((PORT + i)) --no-upnp --bt-router 127.0.0.1:$PORT --verbose > "$DIR/n$i.log" 2>&1 &
     sleep 3
 done

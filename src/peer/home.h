@@ -20,6 +20,7 @@ typedef struct {
     int nelectrum;
     const char *listen_host;        /* NULL: every address */
     int listen_port;                /* 0: do not listen (dial out only) */
+    unsigned store_gb;              /* the records kept for others, in GB of disk; 0: the default of the node (37) */
     const char *const *peers;       /* host:port, besides the entry lines of the network file */
     int npeers;
     const char *const *bt_routers;  /* nodes of the table of BitTorrent to find the others through (bt.h); none given: the well-known ones */

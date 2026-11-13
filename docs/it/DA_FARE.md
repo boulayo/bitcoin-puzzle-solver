@@ -13,7 +13,7 @@ Servono un computer con la rete di casa vera. Per ognuna basta guardare una riga
 
 | Prova | Comando | Cosa guardare |
 |---|---|---|
-| ritrovo sulla rete BitTorrent vera | su due computer: `pzpeer node --network FILE --seed-hex SEME --dir CARTELLA --bt-router router.bittorrent.com:6881 --verbose` | le righe `rendezvous:` e poi `contacts` |
+| ritrovo sulla rete BitTorrent vera | su due computer: `pzpeer node --network FILE --dir CARTELLA --bt-router router.bittorrent.com:6881 --verbose` | le righe `rendezvous:` e poi `contacts` |
 | apertura della porta sul router | lo stesso comando (la chiede da solo) | la riga `upnp:` |
 | server Electrum pubblici | `pzpeer run --network FILE --payout INDIRIZZO --electrum electrum.blockstream.info:50001 --debug prova.log` su una rete della catena principale | la riga `chain:` e, in `prova.log`, le righe `electrum` |
 
@@ -117,8 +117,9 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | E6 | Il partner può imporre fino a 1000 sat/vB e fermarsi dopo la prima transazione | Un tetto più basso, o la commissione presa dal blocco |
 | E7 | Il generatore del seme accredita 256 bit al tempo anche con un orologio senza rumore | Togliere i rami che dipendono dai dati nella parte cronometrata, oppure stimare sulla differenza di due ripetizioni |
 | E8 | pzsign: 126 MB per un solo messaggio dentro il limite di dimensione | Un limite agli elementi per fase |
-| E9 | Windows: la cartella predefinita `pznet-NOME` prende i permessi della cartella madre; `--seed-hex` si vede nell'elenco dei processi | Permessi espliciti; il seme da file o da ambiente |
+| E9 | Windows: la cartella predefinita `pznet-NOME` prende i permessi della cartella madre (il seme di un nodo non passa più dalla riga di comando: sta in `node.seed`) | Permessi espliciti |
 | E10 | La mappatura UPnP "senza fine" non viene mai tolta | Toglierla all'uscita |
+| E11 | Una casa (`pzpeer run`) chiede da sola al router di aprire la porta (UPnP, decisione A4). Bitcoin Core non lo fa: lo tiene spento e nelle versioni recenti lo ha tolto, perché con UPnP acceso qualunque apparecchio di casa può aprire porte | **Da decidere.** Consiglio: spento di default come in Bitcoin Core, acceso con `--upnp`. Costo: meno custodi, finché la rete è piccola |
 
 ### 3.2 Sprechi
 

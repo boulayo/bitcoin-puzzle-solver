@@ -30,15 +30,16 @@ static int usage(void)
     fprintf(stderr, "usage: pzpeer run --network FILE --payout ADDRESS [options] [-- PZSOLVE OPTIONS]\n"
                     "         the home: pzsolve on the network, its points published, the records of others kept, and for every\n"
                     "         coincidence with another home the prize paid half each to the two payout addresses\n"
-                    "       pzpeer node --network FILE --seed-hex HEX --dir DIR [options]\n"
-                    "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions\n"
+                    "       pzpeer node --network FILE [options]\n"
+                    "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions; its\n"
+                    "         identity is DIR/node.seed, made at the first start\n"
                     "       pzpeer sweep --to ADDRESS [options]  the transaction that moves the coins of a found key, signed and NOT sent,\n"
                     "                                            to give to a mining pool in private (the key on the standard input)\n"
                     "       pzpeer netcheck NETWORK_FILE         the values and the fingerprint of a network file\n"
                     "       pzpeer dpcheck NETWORK_FILE DP_BIN   recompute every point of a campaign's dp.bin and check its tag\n"
                     "       pzpeer version\n"
                     "options of run and node:\n"
-                    "  --dir DIR            the folder of the home (run: pznet-<name of the network> when not given)\n"
+                    "  --dir DIR            the folder of the home or node (pznet-<name of the network>, pznode-<name> for node)\n"
                     "  --listen PORT        the TCP port other nodes dial (default 28140; 0: do not listen, only dial out)\n"
                     "  --bind ADDR          listen on this address only\n"
                     "  --no-upnp            do not ask the router of this LAN to let the port in\n"
@@ -49,14 +50,13 @@ static int usage(void)
                     "  --allow-private      take loopback and private addresses on a main-chain network (other chains take them)\n"
                     "  --verbose            what the node does, on stderr\n"
                     "  --debug FILE         every message, step and answer of the chain, with its time, into FILE (no secret is written)\n"
+                    "  --store-gb N         the records kept for others, in GB of disk (default 37; the index takes about a fifth of it in RAM)\n"
                     "options of run:\n"
                     "  --rpc H:P:USER:PASSWORD   a bitcoind of one's own (or --rpc H:P --rpc-cookie FILE, the .cookie of its data directory)\n"
                     "  --electrum HOST:PORT      without --rpc the chain comes from Electrum servers (plain TCP): those of the network file,\n"
                     "                            these, or a built-in list on the main chain. None is trusted: every answer is proven\n"
                     "  --pzsolve PATH, --pzsign PATH   the two programs (default: beside pzpeer, or in PATH)\n"
-                    "  --id-bits N, --exit-when-done   for tests\n"
-                    "options of node:\n"
-                    "  --store-gb N         the records kept for others, in GB of disk (default 37; the index takes about 1/8 of it in RAM)\n");
+                    "  --id-bits N, --exit-when-done   for tests\n");
     return 2;
 }
 
@@ -130,8 +130,8 @@ static void print_alert(void *user, const record *mine, const record *theirs, bo
 /* A node for manual tests of the network: no points of its own (no dp.bin, no sessions), so it is a custodian and a mailbox only. */
 static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
 {
-    const char *network = NULL, *seedhex = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
-    char entries[16][256];
+    const char *network = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
+    char entries[16][256], dirname[48], seedpath[1100], err[300];
     int nb = 0, npeer = 0;
     long port = DEFAULT_PORT, store_gb = 0;
     bool verbose = false, allow_private = false, no_bt = false, upnp = true;
@@ -146,7 +146,6 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         if (!strcmp(a, "--no-upnp")) { upnp = false; continue; }
         if (!v) return usage();
         if (!strcmp(a, "--network")) network = v;
-        else if (!strcmp(a, "--seed-hex")) seedhex = v;
         else if (!strcmp(a, "--dir")) dir = v;
         else if (!strcmp(a, "--bind")) bind = v;
         else if (!strcmp(a, "--peer") && npeer < 32) peers[npeer++] = v;
@@ -161,17 +160,19 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         } else return usage();
         i++;
     }
-    if (!network || !seedhex || !dir) return usage();
+    if (!network) return usage();
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     netfile nf;
     record_net net;
     uint8_t seed[32];
     home_identity id;
     if (!load_net(ctx, network, &nf, &net)) return 1;
-    if (strlen(seedhex) != 64 || !btc_unhex(seedhex, 64, seed)) {
-        fprintf(stderr, "--seed-hex: the home seed, 64 hex digits\n");
-        return 2;
-    }
+    if (!dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), dir = dirname;
+    if (!sys_mkdir(dir) || !sys_private(dir)) return fprintf(stderr, "%s must be a folder of this user that nobody else can open\n", dir), 1;
+    snprintf(seedpath, sizeof seedpath, "%s/node.seed", dir);          /* its identity, as the keys of a Bitcoin node in its folder */
+    const int got = keys_seed_file(seedpath, seed, err, sizeof err);
+    if (!got) return fprintf(stderr, "%s\n", err), 1;
+    if (got == 2) printf("a new node seed in %s: the identity of this node (no coin depends on it)\n", seedpath);
     const bool have_id = keys_identity(ctx, seed, nf.fp, NODE_ID_ZERO_BITS, &id);
     pz_secure_zero(seed, sizeof seed);
     if (!have_id) {
@@ -195,7 +196,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
                       .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
                       .store_max = (uint64_t)store_gb * 1000000000ull / RECORD_LEN};
     cfg.bt_routers = bt_routers(!strcmp(nf.chain, "main"), no_bt, routers, nrouters, &cfg.nbt_routers);
-    char err[300], idhex[65];
+    char idhex[65];
     dht *d = dht_create(&cfg, err, sizeof err);
     if (!d) {
         fprintf(stderr, "%s\n", err);
@@ -261,12 +262,13 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) electrum[cfg.nelectrum++] = v;
         else if (!strcmp(a, "--bt-router") && cfg.nbt_routers < 8) routers[cfg.nbt_routers++] = v;
         else if (!strcmp(a, "--debug")) debug = v;
-        else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits")) {
+        else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits") || !strcmp(a, "--store-gb")) {
             char *end;
             const long n = strtol(v, &end, 10);
-            if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : 32)) return usage();
+            if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : !strcmp(a, "--id-bits") ? 32 : 1000000)) return usage();
             if (!strcmp(a, "--listen")) cfg.listen_port = (int)n;
-            else cfg.id_bits = (unsigned)n;
+            else if (!strcmp(a, "--id-bits")) cfg.id_bits = (unsigned)n;
+            else cfg.store_gb = (unsigned)n;
         } else return usage();
         i++;
     }

@@ -6,6 +6,8 @@
 #include "sys.h"
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
+#include <pzcore/seed.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <string.h>
 #include <unistd.h>
@@ -122,4 +124,14 @@ bool keys_file_write(const char *path, const uint8_t v[32])
     pz_secure_zero(hex, sizeof hex);
     if (!ok || !sys_replace(tmp, path)) return remove(tmp), false;
     return true;
+}
+
+int keys_seed_file(const char *path, uint8_t out[32], char *err, size_t errlen)
+{
+    const int got = keys_file_read(path, out, err, errlen);
+    if (got) return got > 0;
+    pz_seed_report rep;
+    if (pz_seed_generate(out, NULL, &rep) != PZ_SEED_OK) return snprintf(err, errlen, "no seed for %.300s: %s", path, rep.error), 0;
+    if (!keys_file_write(path, out)) return snprintf(err, errlen, "cannot write %.300s", path), 0;
+    return 2;
 }

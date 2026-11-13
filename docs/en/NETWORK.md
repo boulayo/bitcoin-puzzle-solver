@@ -772,6 +772,22 @@ file that others may read, or a link, and a home folder that others can open. `H
 written at every start through a new file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
 in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
 
+### A node that stays on
+
+What a Bitcoin node does is the model.
+- **Where.** A machine with no personal data on it (a small rented server, a small computer of its own) rather than one that holds them,
+  such as a NAS: the port is open to everyone, and a fault of pzpeer would give whoever used it what pzpeer can reach.
+- **How.** `pzpeer node --network FILE`: no pzsolve, a custodian and a relay only; its identity is `DIR/node.seed`, made at the first
+  start (as a Bitcoin node keeps its keys in its data folder, never on the command line). As its own user that sees only its folder:
+  [`tools/pzpeer-node.service`](../../tools/pzpeer-node.service) is the systemd unit, with the protections of the unit of Bitcoin Core
+  (`systemd-analyze security` rates it 1.3, where 10 is a service with none).
+- **The port.** Only TCP 28140, opened by hand on the router toward that machine, and UPnP off (`--no-upnp`): Bitcoin Core does not
+  ask the router either. The node shows the others its address and port, as every node of the table does, and nothing else.
+- **Disk and memory.** `--store-gb N` (37 by default): the index takes about a fifth of it in RAM.
+- **A VPN such as Tailscale** is for reaching the machine, not for the network: the other nodes reach a custodian only at a public
+  address. Bitcoin Core also takes connections through a Tor onion service, with no open port and no address shown; in a table such as
+  this one every node must reach every custodian, so a custodian behind Tor would serve only the nodes that have Tor too: not now.
+
 ## 11. The shared linear search (under construction)
 
 A puzzle whose public key is not known is searched key by key, and the key is seen whole by whoever tries it: no prize can be split.

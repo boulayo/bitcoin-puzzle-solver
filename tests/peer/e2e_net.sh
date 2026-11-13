@@ -72,7 +72,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
     NPID=
     if [ -z "${PZ_E2E_MEET:-}" ]; then
-        $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$T/n" \
+        $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --dir "$T/n" \
             --listen $PORT --no-upnp > "$T/n.log" 2>&1 &
         NPID=$!
         sleep 3

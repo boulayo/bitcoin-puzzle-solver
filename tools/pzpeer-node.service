@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Leonardo Boulay
+# pzpeer-node.service - a node of the shared network that stays on (docs/en/NETWORK.md 10), run by systemd as the service of a Bitcoin
+# node is: its own user, which sees only its own folder; the rest of the system read-only, no home folders, no devices, no new
+# privileges. Copy it to /etc/systemd/system/, put pzpeer in /usr/local/bin and the network file in /etc/pzpeer/network.txt, then
+#   systemctl enable --now pzpeer-node
+# The node's folder is /var/lib/pzpeer (its identity, node.seed, is made there at the first start). Open TCP port 28140 on the router
+# toward this machine by hand: UPnP is off here, as in Bitcoin Core.
+[Unit]
+Description=pzpeer node (a custodian of the shared network)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/pzpeer node --network /etc/pzpeer/network.txt --dir /var/lib/pzpeer/node --store-gb 20 --no-upnp
+DynamicUser=yes
+StateDirectory=pzpeer
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=30
+KillSignal=SIGINT
+UMask=0077
+TimeoutStopSec=60
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ProtectProc=invisible
+ProcSubset=pid
+PrivateUsers=yes
+DevicePolicy=closed
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

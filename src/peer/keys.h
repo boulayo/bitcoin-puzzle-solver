@@ -43,5 +43,8 @@ int keys_file_read(const char *path, uint8_t out[32], char *err, size_t errlen);
 /* Writes a secret to a new file of mode 0600 that then takes the place of path, synced with its folder: whatever was at path (a file
  * others could read, a link) is replaced, never kept or followed. */
 bool keys_file_write(const char *path, const uint8_t v[32]);
+/* The seed kept in path (home.seed, node.seed): read, or made the first time from several sources (pzcore/seed.h) and written. 1 read,
+ * 2 made, 0 refused or failed, with the reason in err. */
+int keys_seed_file(const char *path, uint8_t out[32], char *err, size_t errlen);
 
 #endif

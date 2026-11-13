@@ -113,13 +113,9 @@ static bool home_seed(home *h, char *err, size_t errlen)
 {
     char path[1100];
     snprintf(path, sizeof path, "%s/home.seed", h->dir);
-    const int got = keys_file_read(path, h->seed, err, errlen);
-    if (got) return got > 0;
-    pz_seed_report rep;
-    if (pz_seed_generate(h->seed, NULL, &rep) != PZ_SEED_OK) return snprintf(err, errlen, "no home seed: %s", rep.error), false;
-    if (!keys_file_write(path, h->seed)) return snprintf(err, errlen, "cannot write %.300s", path), false;
-    say(h, "a new home seed in %s: keep a copy of it, it is the key of every point of this home", path);
-    return true;
+    const int got = keys_seed_file(path, h->seed, err, errlen);
+    if (got == 2) say(h, "a new home seed in %s: keep a copy of it, it is the key of every point of this home", path);
+    return got > 0;
 }
 
 /* ---- the own points ---- */
@@ -531,7 +527,8 @@ int home_run(const home_cfg *cfg)
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
                      .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
                      .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .upnp = cfg->upnp,
-                     .allow_private = h->chain != BTC_MAIN || cfg->allow_private};
+                     .allow_private = h->chain != BTC_MAIN || cfg->allow_private,
+                     .store_max = (uint64_t)cfg->store_gb * 1000000000ull / RECORD_LEN};
     dc.bt_routers = bt_routers(h->chain == BTC_MAIN, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     sys_on_stop(on_signal);
