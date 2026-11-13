@@ -694,7 +694,7 @@ disattiva i core dump (`setrlimit`) e, su Linux, si rende non scaricabile (`PR_S
 processo dello stesso utente non può collegarsi a esso.
 
 Ciò che dice **dove** sta la chiave sparisce al ritrovamento. Lo stato di una ricerca (e i punti di un canguro) dicono dov'era arrivata quando ha trovato la
-chiave, e il seed dà l'ordine dei blocchi: insieme restituiscono la chiave in un attimo, qualunque cosa protegga `FOUND.txt` (le versioni prima della 1.24.0
+chiave, e il seed dà l'ordine dei blocchi: insieme restituiscono la chiave in un attimo, qualunque cosa protegga `FOUND.txt` (le versioni prima della 1.23.3
 li lasciavano entrambi). Perciò, quando una campagna che cifra trova la chiave, il programma sostituisce con zeri il seed in `campaign.conf`, non lo scrive in
 `FOUND.txt` né nel log, e cancella `state.dat`, la sua copia e `dp.bin`. La cartella di ogni campagna è del solo proprietario (modo 0700), così gli altri utenti
 della macchina non leggono nulla di tutto questo mentre la ricerca gira.

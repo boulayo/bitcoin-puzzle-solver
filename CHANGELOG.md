@@ -51,10 +51,19 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
-- Windows: the libraries of the GPU drivers (`nvcuda.dll`, `OpenCL.dll`) are loaded from the system folder only, and `powercfg` is
-  run by its full path. On a machine without that driver Windows went on to the current folder, so a campaign folder holding a file
-  of that name (a share, a downloaded archive) ran it inside pzsolve. On macOS the OpenCL loader of Homebrew is opened by its full
-  path for the same reason.
+- `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
+  already was.
+
+### Fixed
+
+- `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked
+  as scanned with their near misses missing).
+
+## [1.23.3] — 2026-11-13
+
+Fixes from a complete review of the program. Campaigns of 1.23.2 resume as they are.
+
+### Security
 - An encrypting campaign (`--encrypt-pubkey`) left behind what gave the plain key back: the state said where the search stood at the
   find and the seed gave the order of the blocks, so whoever read the folder afterwards found the key again in a tenth of a second.
   At the find the seed is now replaced with zeros in `campaign.conf` and left out of `FOUND.txt` and of the log, and `state.dat`,
@@ -63,19 +72,22 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   machine could read the state of a search, or plant a folder with links and a configuration of theirs.
 - The scratch folders of the kangaroo self-tests (`pzkang*` in the temporary folder) are cleaned up only when they are real folders of
   this user, and links are never followed: another user could plant one whose cleanup deleted this user's files.
-- `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
-  already was.
+- Windows: the libraries of the GPU drivers (`nvcuda.dll`, `OpenCL.dll`) are loaded from the system folder only, and `powercfg` is run
+  by its full path. On a machine without that driver Windows went on to the current folder, so a campaign folder holding a file of
+  that name (a share, a downloaded archive) ran it inside pzsolve. On macOS the OpenCL loader of Homebrew is opened by its full path
+  for the same reason. `PZ_CUDA_LIB=PATH` names a CUDA driver to load by its path (the tests give their simulated driver this way).
 
 ### Fixed
-
-- Linear search on a GPU: the size of a launch could stop adapting to the device (it was compared with a claim that the scheduler had
-  rounded down to 1024 keys).
-- `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked
-  as scanned with their near misses missing).
 - A key found while the disk was full was lost: `FOUND.txt` could not be written, yet the state recorded the block as searched, and the
   next start ended "completed without the key". A campaign now keeps two blocks of the disk for `FOUND.txt` (`reserve.bin`) and gives
   them back at the find; if the file still cannot be written, the state is left as it was before the find, so that the same command
-  finds the key again, `--on-found` still runs and the exit status is 2.
+  finds the key again, and the exit status is 2.
+- Linear search on a GPU: the size of a launch could stop adapting to the device (it was compared with a claim that the scheduler had
+  rounded down to 1024 keys).
+
+### Tests
+- `tests/e2e.sh`: links planted in the scratch folders, a find on a full disk, the mode of the campaign folder and `reserve.bin`, and
+  what an encrypting campaign leaves after a find. `tools/verify.sh`: a `nvcuda.dll` beside the Windows exe is not loaded.
 
 ## [1.23.2] — 2026-11-08
 
