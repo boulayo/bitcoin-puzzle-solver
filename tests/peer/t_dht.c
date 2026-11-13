@@ -16,6 +16,7 @@
 #include "sys.h"
 #include <pzcore/hash.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -755,6 +756,107 @@ static void test_nodes_answer(void)
     scratch_end(sd, "s-nodes");
 }
 
+/* Hostile nodes near a key answer FIND_NODE with twenty contacts each that do not exist: identities that are no keys (a hash each), closer
+ * to the key than any real node, at ports that take a connection and never speak. The lookup must still end with the real nodes closest
+ * to the key beside the hostile ones, after a few timeouts (before, it spent all its queries on those names and returned the hostile
+ * nodes alone: one address block could become the custodian of every record). */
+typedef struct {
+    home_identity id;
+    net_cfg cfg;
+    int lfd;
+    uint16_t port;
+    uint8_t pool[DHT_K][82];
+    atomic_bool stop;
+} hostile;
+
+static void *hostile_main(void *arg)
+{
+    hostile *h = arg;
+    uint8_t req[64], ans[2 + DHT_K * 82] = {DHT_NODES, DHT_K};
+    memcpy(ans + 2, h->pool, sizeof h->pool);
+    while (!atomic_load(&h->stop)) {
+        net_addr from;
+        size_t len;
+        const int fd = net_accept(h->lfd, 100, &from);
+        net_conn *c = fd < 0 ? NULL : net_handshake(&h->cfg, fd, &from);
+        if (!c) continue;
+        if (net_recv(c, req, sizeof req, &len) && len) {
+            if (req[0] == DHT_PING) (void)net_send(c, (const uint8_t[]){DHT_PONG}, 1);
+            else if (req[0] == DHT_FIND_NODE) (void)net_send(c, ans, sizeof ans);
+        }
+        net_close(c);
+    }
+    return NULL;
+}
+
+/* whether id shares `bits` bits with t after the zero bits of an identity */
+static bool near(const uint8_t id[32], const uint8_t t[32], int bits)
+{
+    for (int b = BITS; b < BITS + bits; b++)
+        if ((id[b / 8] ^ t[b / 8]) & (0x80 >> (b % 8))) return false;
+    return true;
+}
+
+static void test_hostile_lookup(void)
+{
+    enum { H = 3, TAR = H * DHT_K };                           /* a port for each name: an answer with an address twice is refused whole */
+    static hostile hs[H];
+    pthread_t th[H];
+    uint16_t tar[TAR];
+    int tfd[TAR];
+    uint8_t target[32];
+    dht_contact base[DHT_K], got[DHT_K];
+    hashed("the key of a record", target);
+    const int nb = dht_lookup(nodes[2].d, target, base, DHT_KSTORE);
+    CHECK(nb == DHT_KSTORE);
+    for (int i = 0; i < TAR; i++) tfd[i] = net_listen("127.0.0.1", 0, &tar[i]);   /* never accepted: a connection there stays silent */
+    for (int k = 0; k < H; k++) {
+        hostile *h = &hs[k];
+        char label[48];
+        for (int c = 0;; c++) {                                 /* a real identity near the key */
+            snprintf(label, sizeof label, "hostile %d try %d", k, c);
+            make_id(label, &h->id);
+            if (near(h->id.id, target, 9)) break;
+        }
+        for (int i = 0; i < DHT_K; i++) {                       /* the names it gives: no keys, nearer still */
+            uint8_t *p = h->pool[i], m[40];
+            for (uint32_t c = 0;; c++) {
+                memcpy(m, target, 32), memcpy(m + 32, &(uint32_t){(uint32_t)(k * 100 + i)}, 4), memcpy(m + 36, &c, 4);
+                pz_sha256(m, sizeof m, p + 32);
+                keys_node_id(p + 32, p);
+                if (keys_id_ok(p, BITS) && near(p, target, 12)) break;
+            }
+            memset(p + 64, 0, 10), p[74] = p[75] = 0xff, p[76] = 127, p[77] = p[78] = 0, p[79] = 1;
+            p[80] = (uint8_t)(tar[k * DHT_K + i] >> 8), p[81] = (uint8_t)tar[k * DHT_K + i];
+        }
+        h->lfd = net_listen("127.0.0.1", 0, &h->port);
+        net_cfg_init(&h->cfg, ctx, &h->id, FP, BITS, h->port, 2000);
+        atomic_store(&h->stop, false);
+        CHECK(pthread_create(&th[k], NULL, hostile_main, h) == 0);
+        for (int i = 0; i < N; i++) {                           /* one question to each node puts it in their tables */
+            net_addr a;
+            uint8_t ans[1];
+            size_t len;
+            CHECK(net_parse_addr("127.0.0.1:1", &a));
+            a.port = dht_port(nodes[i].d);
+            (void)net_exchange(&h->cfg, &a, NULL, (const uint8_t[]){DHT_PING}, 1, ans, 1, &len, NULL);
+        }
+    }
+    const int64_t t0 = ms();
+    const int ng = dht_lookup(nodes[2].d, target, got, DHT_KSTORE);
+    int honest = 0, evil = 0;
+    for (int i = 0; i < ng; i++) {
+        for (int k = 0; k < H; k++) evil += !memcmp(got[i].id, hs[k].id.id, 32);
+        for (int j = 0; j < nb; j++) honest += !memcmp(got[i].id, base[j].id, 32);
+    }
+    printf("t_dht: a lookup among %d hostile nodes in %.1f s: %d nodes, %d of them hostile, %d of the real closest\n", H, (double)(ms() - t0) / 1000,
+           ng, evil, honest);
+    CHECK(ng == DHT_KSTORE && evil == H && honest == DHT_KSTORE - H && ms() - t0 < 20000);   /* evil == H: the attack was really there */
+    for (int k = 0; k < H; k++) atomic_store(&hs[k].stop, true);
+    for (int k = 0; k < H; k++) pthread_join(th[k], NULL), net_close_fd(hs[k].lfd);
+    for (int i = 0; i < TAR; i++) net_close_fd(tfd[i]);
+}
+
 static int raw_connect(uint16_t port)
 {
     struct sockaddr_in a;
@@ -1178,6 +1280,7 @@ int main(void)
     test_policy();
     test_nodes_answer();
     test_slowloris();
+    test_hostile_lookup();
     test_alert_flood();
     test_seq();
     t0 = ms();

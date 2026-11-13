@@ -311,6 +311,7 @@ enum { C_NEW, C_OK, C_FAIL };
 typedef struct {
     dht_contact c;
     int state;
+    uint8_t by[32];                /* the node whose answer named it; all zero for a contact of this node's own table */
 } cand;
 
 typedef struct {
@@ -322,19 +323,48 @@ typedef struct {
     bool ok;
 } query;
 
-/* into the candidates, sorted by distance to t, at most SHORT_MAX (the farthest goes) */
-static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c, int state)
+/* Into the candidates, sorted by distance to t, at most SHORT_MAX. In a full list a new one takes the place of one that failed, or of
+ * the farthest that another node named and that was not asked yet, when it is closer; never of one that answered, nor of a contact of
+ * the own table: names that nobody checked cannot push out the nodes this node knows to be there. */
+static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c, int state, const uint8_t *by)
 {
+    static const uint8_t own[32];
     for (int i = 0; i < *n; i++)
         if (!memcmp(s[i].c.id, c->id, 32)) return;
+    if (*n == SHORT_MAX) {
+        int out = *n - 1;
+        while (out >= 0 && s[out].state != C_FAIL) out--;
+        if (out < 0) {
+            for (out = *n - 1; out >= 0 && (s[out].state != C_NEW || !memcmp(s[out].by, own, 32)); out--) {}
+            if (out < 0 || !closer(t, c->id, s[out].c.id)) return;
+        }
+        memmove(&s[out], &s[out + 1], (size_t)(*n - 1 - out) * sizeof *s);
+        (*n)--;
+    }
     int at = *n;
     while (at > 0 && closer(t, c->id, s[at - 1].c.id)) at--;
-    if (at >= SHORT_MAX) return;
-    const int keep = *n < SHORT_MAX ? *n : SHORT_MAX - 1;
-    memmove(&s[at + 1], &s[at], (size_t)(keep - at) * sizeof *s);
+    memmove(&s[at + 1], &s[at], (size_t)(*n - at) * sizeof *s);
     s[at].c = *c;
     s[at].state = state;
-    *n = keep + 1;
+    memcpy(s[at].by, by ? by : own, 32);
+    (*n)++;
+}
+
+/* A node is believed while the nodes it names answer. When three more of them failed than answered, the rest of what it named is given
+ * up: answers full of closer identities that do not exist (they cost a hash each) would spend every query of the lookup on timeouts
+ * and keep it from the nodes that are there. The contacts of the own table are not judged this way. */
+static void cand_distrust(cand *s, int n, const uint8_t failed[32])
+{
+    static const uint8_t own[32];
+    const uint8_t *by = NULL;
+    int bad = 0;
+    for (int i = 0; i < n && !by; i++)
+        if (!memcmp(s[i].c.id, failed, 32)) by = s[i].by;
+    if (!by || !memcmp(by, own, 32)) return;
+    for (int i = 0; i < n; i++)
+        if (!memcmp(s[i].by, by, 32)) bad += (s[i].state == C_FAIL) - (s[i].state == C_OK);
+    for (int i = 0; bad >= 3 && i < n; i++)
+        if (s[i].state == C_NEW && !memcmp(s[i].by, by, 32)) s[i].state = C_FAIL;
 }
 
 static void *query_main(void *arg)
@@ -368,8 +398,8 @@ int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
     uint8_t blocks[LOOKUP_ASK_MAX][16];
     int n = 0, nasked = 0;
     const int ns = rt_closest(d, target, seed, DHT_K);
-    for (int i = 0; i < ns; i++) cand_add(s, &n, target, &seed[i], C_NEW);
-    if (d->port) cand_add(s, &n, target, &d->me, C_OK);        /* a node that listens is a node of the table like the others */
+    for (int i = 0; i < ns; i++) cand_add(s, &n, target, &seed[i], C_NEW, NULL);
+    if (d->port) cand_add(s, &n, target, &d->me, C_OK, NULL);        /* a node that listens is a node of the table like the others */
     const int bk = bucket_of(d->me.id, target);
     if (bk < DHT_BUCKETS) {
         pthread_mutex_lock(&d->rt_mu);
@@ -401,8 +431,10 @@ int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
             for (int i = 0; i < n; i++)
                 if (!memcmp(s[i].c.id, q[j].c.id, 32)) s[i].state = q[j].ok ? C_OK : C_FAIL;
         for (int j = 0; j < nq; j++)
+            if (!q[j].ok) cand_distrust(s, n, q[j].c.id);
+        for (int j = 0; j < nq; j++)
             for (int g = 0; g < q[j].ngot; g++)
-                if (!is_me(d, q[j].got[g].id)) cand_add(s, &n, target, &q[j].got[g], C_NEW);
+                if (!is_me(d, q[j].got[g].id)) cand_add(s, &n, target, &q[j].got[g], C_NEW, q[j].c.id);
     }
     int m = 0;
     for (int i = 0; i < n && m < want; i++)
