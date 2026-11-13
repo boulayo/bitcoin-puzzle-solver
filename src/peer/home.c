@@ -550,7 +550,7 @@ int home_run(const home_cfg *cfg)
         sys_sleep_ms(500);
         const int contacts = dht_count(h->d);                  /* what the network is to this home: at the first contact, and every 10 minutes */
         if ((contacts > 0) != met || mono_s() >= next_status) {
-            if (contacts) say(h, "network: %d contacts; %llu points of this home, %llu records of others kept here", contacts,
+            if (contacts) say(h, "network: %d contacts; %llu points of this home, %llu records held here as a custodian", contacts,
                               (unsigned long long)found, (unsigned long long)dht_local_count(h->d));
             else say(h, "network: no contact, looking for the others; %llu points of this home wait for them", (unsigned long long)found);
             met = contacts > 0, next_status = mono_s() + 600;

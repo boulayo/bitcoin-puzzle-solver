@@ -13,7 +13,7 @@
 # With PZ_E2E_WIN=1 the three programs are the Windows ones of build/win, run under Wine (the bitcoind stays the one of this machine).
 # With PZ_E2E_MEET=1 nobody is given an address, as on the first day of a network: no custodian node and no entry line; the homes find
 # each other through a stand-in of the table of BitTorrent (tests/peer/bt_table.py), and the first runs alone for PZ_E2E_ALONE seconds
-# (default 30) before the two others start.
+# (default 30) before the two others start, on a puzzle of 62 bits that it does not solve alone in that time.
 # Usage: PZ_REGTEST=host:port:user:password [PZ_E2E_LIGHT=1] [PZ_E2E_WIN=1] [PZ_E2E_MEET=1] tests/peer/e2e_net.sh    (pzsolve, pzpeer and pzsign built)
 set -u
 IFS=: read -r RH RP RU RW <<< "${PZ_REGTEST:?set PZ_REGTEST=host:port:user:password of a bitcoind in regtest}"
@@ -52,8 +52,10 @@ fi
 
 for try in 1 2 3 4 5 6; do
     T="$DIR/try$try"; mkdir -p "$T"
-    # a puzzle of 58 bits, its key from the independent reference, its P2PKH address on regtest funded with 1 BTC
-    K=$(python3 -c "import random; print(hex(random.SystemRandom().randrange(2**57, 2**58)))")
+    # a puzzle of 58 bits (62 in PZ_E2E_MEET, where one home runs alone first), its key from the independent reference, its P2PKH
+    # address on regtest funded with 1 BTC
+    B=$([ -n "${PZ_E2E_MEET:-}" ] && echo 62 || echo 58)
+    K=$(python3 -c "import random; print(hex(random.SystemRandom().randrange(2**($B-1), 2**$B)))")
     PUB=$(python3 tools/ref.py "$K" | awk '$1=="pub"{print $2}'); H160=$(python3 tools/ref.py "$K" | awk '$1=="h160"{print $2}')
     PADDR=$(python3 -c "
 import hashlib,sys
@@ -63,8 +65,8 @@ while n: n,r=divmod(n,58); s=a[r]+s
 print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     rpc wallet sendtoaddress "[\"$PADDR\", 1]" >/dev/null
     PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
-    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\n' \
-        "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$T/net.txt"
+    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=%x:%x\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\n' \
+        "$try" "$PUB" $((1 << (B - 1))) $(((1 << B) - 1)) "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$T/net.txt"
     [ -z "${PZ_E2E_MEET:-}" ] && echo "entry=127.0.0.1:$PORT" >> "$T/net.txt"
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
