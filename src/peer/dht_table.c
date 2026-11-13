@@ -518,19 +518,22 @@ static int boot_list(dht *d, boot_addr *out, int max)
         if (net_parse_addr(d->boot[i], &out[n].a)) out[n++].has_id = false;
         else dlog(d, "bootstrap: cannot resolve %s", d->boot[i]);
     }
-    pthread_mutex_lock(&d->f_mu);
-    for (int i = 0; i < d->nfound && n < max; i++) out[n].a = d->found[i], out[n++].has_id = false;
-    pthread_mutex_unlock(&d->f_mu);
+    /* the contacts of the last run, with their identities, up to half of what is left: addresses that anyone can announce in the table of
+     * BitTorrent do not push them out, nor do they push those out */
+    const int half = n + (max - n) / 2;
     char path[4096], line[256];
     path_of(d, "peers.txt", path, sizeof path);
     FILE *f = fopen(path, "r");
-    while (f && n < max && fgets(line, sizeof line, f)) {
+    while (f && n < half && fgets(line, sizeof line, f)) {
         char *sp = strchr(line, ' ');
         if (!sp) continue;
         *sp = 0;
         if (strcspn(sp + 1, " \r\n") == 64 && btc_unhex(sp + 1, 64, out[n].xonly) && net_parse_addr(line, &out[n].a)) out[n++].has_id = true;
     }
     if (f) fclose(f);
+    pthread_mutex_lock(&d->f_mu);
+    for (int i = 0; i < d->nfound && n < max; i++) out[n].a = d->found[i], out[n++].has_id = false;
+    pthread_mutex_unlock(&d->f_mu);
     return n;
 }
 

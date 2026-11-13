@@ -567,15 +567,16 @@ static void run_case(const tcase *tc, const char *bin)
         coin_left[i] = balance(coin_spk);
         if (regtest) btc_rpc_done(&rpcs[i]);
     }
-    printf("    paid: F %llu, S %llu sat; left on the puzzle address %llu sat\n", (unsigned long long)pay[F_home], (unsigned long long)pay[S_home],
-           (unsigned long long)at_puzzle);
+    printf("    paid: F %llu, S %llu sat; left on the puzzle address %llu sat; tiny coins left: F %llu, S %llu sat\n", (unsigned long long)pay[F_home],
+           (unsigned long long)pay[S_home], (unsigned long long)at_puzzle, (unsigned long long)coin_left[F_home], (unsigned long long)coin_left[S_home]);
     if (tc->expect == PAYOUT) {
         CHECK(h[0].res == SESSION_PAID && h[1].res == SESSION_PAID);
         CHECK(at_puzzle == 0 && pay[S_home] > 49900000);            /* half of 1 BTC less the two tiny coins and two fees (on a regtest
                                                                      * node with a history, at twice its own estimate) */
         /* F also has its tiny coin back, and S keeps its own for the next time: the two are equal, PAYOUT_TINY_MIN or more with the
          * fee rate (the estimate of a regtest node moves while the test itself fills its blocks) */
-        CHECK(coin_left[S_home] >= PAYOUT_TINY_MIN && !coin_left[F_home] && pay[F_home] - coin_left[S_home] - pay[S_home] <= 1);
+        const int64_t gap = (int64_t)pay[F_home] - (int64_t)pay[S_home] - (int64_t)coin_left[S_home];   /* the odd satoshi of a half */
+        CHECK(coin_left[S_home] >= PAYOUT_TINY_MIN && !coin_left[F_home] && gap >= -1 && gap <= 1);
     } else if (tc->expect == CANCEL) {
         CHECK(h[F_home].res == SESSION_CANCELLED && h[S_home].res == SESSION_FAILED);
         CHECK(at_puzzle > 99800000 && pay[S_home] == 0);                           /* the prize is still under the joint key */

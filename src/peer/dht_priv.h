@@ -48,7 +48,7 @@ typedef struct {
     int64_t looked;                /* the last lookup in the range of the bucket */
 } bucket;
 
-enum { JOB_ALERT_OUT, JOB_ALERT_OWN, JOB_PING };
+enum { JOB_ALERT_OWN, JOB_ALERT_OUT, JOB_PING };   /* in the order the queue serves them */
 
 typedef struct job {
     struct job *next;
@@ -87,6 +87,7 @@ struct dht {
     store *custody, *own;
     mbox *mb;
     atomic_bool stop;
+    atomic_bool unplaced;          /* an own record went to no other node: the first contacts after none get all of them again */
     int lfd;
     uint16_t port;
     int64_t refresh_ms, republish_ms, retry_ms, relay_ms, slot_ms, probe_ms;

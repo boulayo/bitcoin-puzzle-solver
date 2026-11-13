@@ -1,6 +1,6 @@
 # Da fare: decisioni prese e decisioni aperte
 
-11 novembre 2026. Si riferisce a [PROGETTO_RETE.md](PROGETTO_RETE.md).
+13 novembre 2026. Si riferisce a [PROGETTO_RETE.md](PROGETTO_RETE.md).
 
 Prima le poche cose che aspettano te, poi l'elenco di ciò che è deciso, con il motivo.
 
@@ -170,6 +170,26 @@ Una casa che entra dopo mesi confronta ogni suo punto con quelli di tutte le cas
 | H1 | Chi lascia la rete per sempre porta via la sua metà di ogni chiave: una coincidenza con i suoi punti non la paga nessuno | Da decidere. Oggi chi vuole lasciare il posto a qualcuno gli dà la cartella della casa (`home.seed` e la campagna). Un comando "passa la casa" lo renderebbe esplicito |
 | H2 | Un camminatore che incontra il punto di una casa sparita, o una fusione con un'altra casa, rifà un percorso già fatto | Farlo ripartire da un punto nuovo (pzpeer lo dice a pzsolve). È la "ripartenza dei camminatori" già in programma |
 | H3 | La ripubblicazione quotidiana di mesi di punti pesa molto | La ripubblicazione leggera (C2, F2) |
+
+### 3.7 Dall'analisi del 13 novembre
+
+Quattro revisori (rete, pagamento, demone e sistema, pzsolve) più gli analizzatori statici. Corretti con prova: il tetto ai proprietari
+di un custode, il saluto lungo che teneva un posto di sessione, la blockchain interrogata prima del canale (il saluto arrivava oltre i 2
+secondi), il partner preso anche durante l'attesa al relay, l'ordine dei primi contatti, la ripubblicazione dopo ogni tabella vuota, gli
+avvisi propri prima di quelli da custode, la mediana delle commissioni, la cartella con un collegamento, `nohup`, la password di `--rpc`;
+in pzsolve `merge` che non cancellava nulla al ritrovamento cifrato, `near.txt` lasciato, il seed nel log, i collegamenti nella cartella
+della campagna, la cifratura fallita che chiudeva la campagna. Restano aperti:
+
+| | Rilievo | Rimedio proposto |
+|---|---|---|
+| J1 | 16 blocchi di indirizzi tengono occupati i 32 posti d'attesa di un relay (e 8 blocchi gli 8 relay attivi per ore): le coppie dietro router di tutta la rete non si incontrano | Molti più posti d'attesa (sono solo connessioni aperte), uno per blocco |
+| J2 | Pochi blocchi di indirizzi possono tenere piena la coda degli avvisi da custode con lavori lenti | Un tetto di avvisi in coda per blocco di chi li manda |
+| J3 | 256 monetine di polvere mandate all'indirizzo del puzzle fra la prima e la seconda transazione nascondono la seconda alla catena leggera: niente denaro perso, ma il pagamento risulta fallito | Contare solo le transazioni che spendono dall'indirizzo, oppure cercare direttamente la seconda transazione |
+| J4 | Un pzpeer ucciso (memoria finita, crash) lascia pzsolve acceso; al riavvio il secondo pzsolve trova la campagna occupata | Leggere il PID nel file `lock` della campagna e fermare quello rimasto |
+| J5 | Il "chiudi alla nascita" dei descrittori arriva un attimo dopo la loro creazione: un figlio avviato in quell'attimo ne eredita uno | `SOCK_CLOEXEC`, `pipe2` su Linux, `POSIX_SPAWN_CLOEXEC_DEFAULT` su macOS |
+| J6 | La cartella della casa è controllata, poi i file si riaprono per nome | Aprire la cartella una volta e lavorare dentro di essa |
+| J7 | Su macOS `fsync` non arriva fino al disco: un'interruzione di corrente subito dopo il primo avvio poteva perdere il seme nuovo | **Fatto**: `F_FULLFSYNC` per il seme, lo stato delle sessioni e la custodia |
+| J8 | Il controllo della monetina minuscola di `t_session` falliva a volte (i pagamenti erano giusti) | **Fatto**: quando la metà dispari dava un satoshi in meno a F, la differenza senza segno del test diventava enorme |
 
 ### 3.5 Librerie
 

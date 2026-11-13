@@ -214,6 +214,30 @@ static void test_limits(void)
     }
     store_close(st);
     remove(PATH);
+    /* owners in all: 4096 records may take 4096 / 256 + 1024 owners; one more is refused, an owner already there is not */
+    st = store_open(PATH, ctx, &net, err, sizeof err);
+    CHECK(st != NULL);
+    if (!st) return;
+    store_limits(st, 4096, 0);
+    home_identity first = {0};
+    int ok = 0;
+    for (int i = 0; i <= 4096 / 256 + 1024; i++) {
+        char label[32];
+        uint8_t seed[32];
+        home_identity id;
+        snprintf(label, sizeof label, "many %d", i);
+        hashed(label, seed), point_x(label, x);
+        if (!keys_identity(ctx, seed, FP, 4, &id)) continue;
+        const record r = make(&id, 0, x, 1);
+        ok += store_put(st, &r, &mine, others, 4, &no) == (i < 4096 / 256 + 1024 ? STORE_OK : STORE_FULL);
+        if (!i) first = id;
+    }
+    CHECK(ok == 4096 / 256 + 1024 + 1);
+    point_x("many again", x);
+    const record again = make(&first, 0, x, 2);
+    CHECK(store_put(st, &again, &mine, others, 4, &no) == STORE_OK);
+    store_close(st);
+    remove(PATH);
 }
 
 /* A record damaged on disk. At the end of the file (a crash): it is checked again when the file is opened, not indexed, and its sequence

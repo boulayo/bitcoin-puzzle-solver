@@ -7,7 +7,8 @@
  * each owner. The index is rebuilt from the file when it is opened, and a record cut by a crash at the end of the file is dropped.
  * A store refuses a second record with the same x from the same owner, and a new record whose sequence number is not above the last one
  * of its owner. Records with the same x from different owners are a coincidence: store_put gives them to the caller, which alerts.
- * A custodian's store has limits (store_limits): records in all, records of one owner, owners of one x; beyond them it is full.
+ * A custodian's store has limits (store_limits): records in all, records of one owner, owners in all (one per 256 records it may hold,
+ * and 1024 more), owners of one x; beyond them it is full.
  *
  * The file is ours, so the records are not checked again when it is opened, except the last STORE_CHECK_TAIL: a crash can leave a record
  * that is whole in length but not in content. A record that fails its check there is not indexed. The records store_put reports as a

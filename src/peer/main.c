@@ -52,7 +52,8 @@ static int usage(void)
                     "  --debug FILE         every message, step and answer of the chain, with its time, into FILE (no secret is written)\n"
                     "  --store-gb N         the records kept for others, in GB of disk (default 37; the index takes about a fifth of it in RAM)\n"
                     "options of run:\n"
-                    "  --rpc H:P:USER:PASSWORD   a bitcoind of one's own (or --rpc H:P --rpc-cookie FILE, the .cookie of its data directory)\n"
+                    "  --rpc H:P:USER:PASSWORD   a bitcoind of one's own (or, better on a shared machine, --rpc H:P --rpc-cookie FILE, the\n"
+                    "                            .cookie of its data directory)\n"
                     "  --electrum HOST:PORT      without --rpc the chain comes from Electrum servers (plain TCP): those of the network file,\n"
                     "                            these, or a built-in list on the main chain. None is trusted: every answer is proven\n"
                     "  --pzsolve PATH, --pzsign PATH   the two programs (default: beside pzpeer, or in PATH)\n"
@@ -253,7 +254,11 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--network")) cfg.network = v;
         else if (!strcmp(a, "--dir")) cfg.dir = v;
         else if (!strcmp(a, "--payout")) cfg.payout = v;
-        else if (!strcmp(a, "--rpc")) cfg.rpc = v;
+        else if (!strcmp(a, "--rpc")) {                        /* kept here, and blanked where the list of processes shows it */
+            static char rpc[512];
+            snprintf(rpc, sizeof rpc, "%s", v), cfg.rpc = rpc;
+            memset(argv[i + 1], 'x', strlen(v));
+        }
         else if (!strcmp(a, "--rpc-cookie")) cfg.rpc_cookie = v;
         else if (!strcmp(a, "--bind")) cfg.listen_host = v;
         else if (!strcmp(a, "--pzsolve")) cfg.pzsolve = v;

@@ -444,7 +444,7 @@ static uint64_t feerate(void *ctx)
     close_all(&s);
     if (!n) return c->fallback_feerate;
     qsort(f, (size_t)n, sizeof *f, by_u64);
-    return f[n / 2];                                           /* the median: one server cannot set the fee */
+    return f[(n - 1) / 2];                                     /* the lower median: servers that raise the fee win only as a majority */
 }
 
 session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin}; }

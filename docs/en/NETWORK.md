@@ -269,7 +269,8 @@ counts them), signature.
     random nodes is refused, and one aimed at a node costs about (nodes / 10) tries per record;
   - within a rate per address block of the sender (the table of the limits in 7.4);
   - at most `store_max` records in all (`--store-gb`, 37 GB by default, 2^28 records; the index in memory is about 1/8 of the file), at
-    most 1/16 of them of one owner, at most 8 owners of one x.
+    most 1/16 of them of one owner, at most 8 owners of one x, and owners in all one per 256 records it may hold and 1024 more (an
+    owner takes memory, not disk, and an identity costs little).
   The checks that cost nothing come first, the signature last.
 - `store.bin` is the custodian's own file, so its records are not checked again when it is opened, except the last 1024: a crash can
   leave a record whole in length and wrong in content, which could give its owner a huge sequence number and refuse all its next ones.
@@ -378,12 +379,12 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   pzpeer signs the records itself (owner, sequence number, signature) and sends them under one lock, so the numbers of one owner reach
   every custodian in order. Its own records are also kept in `own.bin` (the format of `store.bin`). Every day it publishes them again,
   signed with new numbers: a node that became a custodian since takes them, the others answer duplicate. It does so at once when it
-  gets its first contacts after having none: the points of the first home of a network, or of a home that was cut off, which went to
-  nobody, go then, not a day later. Custodians do not copy records to each other. The last number signed is kept in `own.seq`:
+  gets its first contacts after having none, if a record went meanwhile to no other node: the points of the first home of a network, or
+  of a home that was cut off, go then, not a day later. Custodians do not copy records to each other. The last number signed is kept in `own.seq`:
   `own.bin` keeps the numbers of the first publication only, and a node that restarted with its clock behind its last republish would
   sign below what the custodians saw, and be refused by all of them.
-- Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, and the saved `peers.txt` (whose lines name the
-  identity too, which is checked). A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
+- Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, the saved `peers.txt` (whose lines name the
+  identity too, which is checked) up to half of the 64 tried, then the addresses found in the table of BitTorrent. A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
   contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an
   empty table tries again every 30 s.
 - Every hour each bucket that had no lookup in its range gets one, for a random ID in it (from the first bucket a node ID can be in to
@@ -551,8 +552,9 @@ neither can dial the other, a node that listens joins their connections (`src/pe
   Party 0 dials the partner it finds in the table, and so does a side nobody reaches (nobody can dial it). A side the others reach
   gives the partner's own connection (the one `on_session` got) the first slot, then dials the partner too: the partner may not reach
   it, or may wait for nothing (its session gave up on the pair long ago, and a home back after an absence starts it again). Then the
-  relay of each slot, slot after slot, while the partner's connection is still taken if it comes; for 10 minutes. `home.c` asks it for
-  every session.
+  relay of each slot, slot after slot, while the partner's connection is still taken if it comes, also during the wait at a relay; for
+  10 minutes. `home.c` asks it for every session once its chain is ready and its fee rate known: the partner closes a connection whose
+  hello does not come within 2 seconds, and a chain without a node can take longer to answer.
 - The relay carries sessions only: the proofs of an alert go through the mailboxes (7.3), the requests of the table are not relayed.
 
 `tests/peer/t_net.c` splices two connections, runs 6 MB through them end to end, and checks both identities and the limit of bytes.
@@ -707,7 +709,8 @@ checks the rules that the proof of work alone does not (below).
    confirmed: a server that just stops listing the prize proves nothing, nor does one that shows a spend in its mempool (the partner
    could run it, and keep the transaction to itself).
 4. **Our transactions** go to every server; the broadcast holds when a server then serves the transaction back.
-5. **Fee rate:** the median of `blockchain.estimatefee` of the servers that answer, under the cap of the file.
+5. **Fee rate:** the lower median of `blockchain.estimatefee` of the servers that answer, under the cap of the file: servers that raise
+   it win only as a majority.
 
 What it does not check: that the transactions of a block are valid. A coin that does not exist needs a block with real work that
 holds an invalid transaction: on the main chain that costs a block's reward for each block, and it only makes the two homes sign a

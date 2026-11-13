@@ -430,7 +430,7 @@ int main(void)
     chain_spv_free(&c);
     view(&c, &ch, &hider, &honest, NULL);
     CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 1 && coins[0].value == 100000000);
-    CHECK(ch.feerate(ch.ctx) == 3000);                        /* the median of 2000 and 3000 is the upper one */
+    CHECK(ch.feerate(ch.ctx) == 2000);                        /* the median of 2000 and 3000 is the lower one: a raise needs a majority */
     chain_spv_free(&c);
 
     /* a server that lists a spent coin and hides who spent it: alone it is believed (the first transaction would be refused by the

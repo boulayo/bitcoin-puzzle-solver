@@ -237,7 +237,8 @@ store_status store_put(store *st, const record *r, record *mine, record *others,
         if (mine) *mine = same[held];
     } else if (o && r->seq <= o->seq) {
         s = STORE_OLD;
-    } else if ((st->max && st->count >= st->max) || (st->max_owner && o && o->n >= st->max_owner) || ns >= STORE_X_OWNERS) {
+    } else if ((st->max && st->count >= st->max) || (st->max_owner && o && o->n >= st->max_owner) || ns >= STORE_X_OWNERS ||
+               (st->max && !o && st->oused >= st->max / 256 + 1024)) {     /* an identity costs little: owners take memory, not disk */
         s = STORE_FULL;
     } else {
         uint8_t enc[RECORD_LEN];

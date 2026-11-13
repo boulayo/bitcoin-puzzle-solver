@@ -154,7 +154,7 @@ static bool hello(sess *s)
     if (!sys_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
     if (!p2pkh_of(c->ctx, c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
     /* twice what the chain estimates, and never little: these transactions move a prize, and no fee is large beside it */
-    uint64_t fr = 2 * c->chain->feerate(c->chain->ctx);
+    uint64_t fr = 2 * (c->feerate ? c->feerate : c->chain->feerate(c->chain->ctx));
     if (fr < c->min_feerate) fr = c->min_feerate;
     if (fr > c->max_feerate) fr = c->max_feerate;
     record_encode(&c->mine, m);

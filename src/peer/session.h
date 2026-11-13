@@ -67,6 +67,8 @@ typedef struct {
     size_t pay_len;
     uint64_t min_feerate, max_feerate;      /* the fee rate this home proposes is twice the estimate of its chain, within these (satoshis
                                              * per 1000 virtual bytes); the higher of the two homes is taken, and one above max ends the session */
+    uint64_t feerate;                       /* the estimate of the chain, asked before the channel opened (the partner waits seconds for
+                                             * the hello, and a chain without a node can take longer); 0: asked at the hello */
     payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
     int nprizes;
     const char *pzsign;                    /* the signer */

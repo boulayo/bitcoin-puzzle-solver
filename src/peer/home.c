@@ -46,7 +46,7 @@ typedef struct session_slot {
     bool used, running, have_conn;
     bool alerted;                   /* the table alerted the pair, or its partner proved its distance in a session: the slot is kept */
     bool proved;                    /* its partner proved its distance */
-    bool waiting;                   /* its session waits for the partner to dial */
+    bool waiting;                   /* its session has no channel yet: a hello of the partner is taken */
     int64_t retry_at;               /* when its session starts again (0: never), the seconds of mono_s */
     int tries;
     uint8_t eid[32], partner[32];
@@ -265,60 +265,56 @@ static void *session_main(void *arg)
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
     bool proved = false;
+    /* the chain and the own terms first: once the channel is open the partner's hello comes within seconds (and is waited for no
+     * longer), and a chain without a node takes longer than that to answer */
+    btc_rpc rpc = {0};
+    chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};
+    session_cfg sc = {0};
+    net_conn *c = NULL;
+    if (cfg->rpc && !btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) {
+        snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
+        goto done;
+    }
+    /* a chain that is behind would report coins that are not those of the chain */
+    if ((cfg->rpc ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&h->spv, why, sizeof why)) != 1) goto done;
+    const session_chain chain = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
+    sc = (session_cfg){.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
+                       .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
+                       .feerate = chain.feerate(chain.ctx), .pzsign = cfg->pzsign, .limit = &h->limit, .proved = &proved,
+                       .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3,
+                       /* how often the chain is asked: public servers are not to be hammered */
+                       .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
+    memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
+    memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
+    memcpy(sc.prizes, h->prizes, sizeof sc.prizes), sc.nprizes = h->nprizes;
+    const uint32_t n = (uint32_t)s->eid[0] << 24 | (uint32_t)s->eid[1] << 16 | (uint32_t)s->eid[2] << 8 | s->eid[3];
+    if (!own_distance(h, s->mine.x, s->mine.t, sc.d) || !keys_coin(h->ctx, h->seed, h->nf.fp, n, sc.coin_sec)) {
+        snprintf(why, sizeof why, "the distance of the own point is not in dp.bin");
+        goto done;
+    }
     /* the channel (docs/en/NETWORK.md 7.7): the partner's hello if it came first (dialling as well would lose it); else dialled, the
      * partner's own connection (on_session), or through a relay */
     pthread_mutex_lock(&h->mu);
-    net_conn *c = s->have_conn ? s->conn : NULL;
-    s->waiting = !c;                                            /* a hello may come in only while dht_channel looks */
+    c = s->have_conn ? s->conn : NULL;
     pthread_mutex_unlock(&h->mu);
     chan_wait w = {h, s};
     if (!c) c = dht_channel(h->d, s->theirs.owner, s->eid, 600000, incoming, &w);
     pthread_mutex_lock(&h->mu);
     s->waiting = false;
+    conn_chan cc = {c, c && c == s->conn ? s->first : NULL, s->first_len, 0};
     pthread_mutex_unlock(&h->mu);
-    if (!c) {
-        snprintf(why, sizeof why, "no channel with the partner");
-        goto done;
-    }
-    {
-        pthread_mutex_lock(&h->mu);
-        conn_chan cc = {c, c == s->conn ? s->first : NULL, s->first_len, 0};
-        pthread_mutex_unlock(&h->mu);
-        session_chan chan = {&cc, cc_send, cc_recv};
-        btc_rpc rpc = {0};
-        chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};
-        if (cfg->rpc && !btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) {
-            snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
-            goto done;
-        }
-        /* a chain that is behind would report coins that are not those of the chain */
-        if ((cfg->rpc ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&h->spv, why, sizeof why)) != 1) {
-            if (cfg->rpc) btc_rpc_done(&rpc);
-            goto done;
-        }
-        const session_chain chain = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
-        session_cfg sc = {.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
-                          .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
-                          .pzsign = cfg->pzsign, .limit = &h->limit, .proved = &proved,
-                          .chan = &chan, .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3,
-                          /* how often the chain is asked: public servers are not to be hammered */
-                          .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
-        memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
-        memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
-        memcpy(sc.prizes, h->prizes, sizeof sc.prizes), sc.nprizes = h->nprizes;
-        const uint32_t n = (uint32_t)s->eid[0] << 24 | (uint32_t)s->eid[1] << 16 | (uint32_t)s->eid[2] << 8 | s->eid[3];
-        if (!own_distance(h, s->mine.x, s->mine.t, sc.d) || !keys_coin(h->ctx, h->seed, h->nf.fp, n, sc.coin_sec))
-            snprintf(why, sizeof why, "the distance of the own point is not in dp.bin");
-        else res = session_run(&sc, why, sizeof why);
-        pz_secure_zero(&sc, sizeof sc);
-        if (cfg->rpc) btc_rpc_done(&rpc);
-    }
+    session_chan chan = {&cc, cc_send, cc_recv};
+    sc.chan = &chan;
+    if (!c) snprintf(why, sizeof why, "no channel with the partner");
+    else res = session_run(&sc, why, sizeof why);
 done:
+    pz_secure_zero(&sc, sizeof sc);
+    if (cfg->rpc) btc_rpc_done(&rpc);
     say(h, "session %s: %s (%s)", tag, res == SESSION_PAID ? "PAID" : res == SESSION_CANCELLED ? "cancelled" : "failed", why);
     pthread_mutex_lock(&h->mu);
     if (c) net_close(c);
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
-    s->running = false, s->have_conn = false, s->conn = NULL;
+    s->running = false, s->waiting = false, s->have_conn = false, s->conn = NULL;
     s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
     s->used = s->alerted;                                       /* a pair whose partner never proved anything gives its slot back */
     s->retry_at = s->alerted && res != SESSION_PAID && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
@@ -359,7 +355,7 @@ static void start_session(home *h, session_slot *s)
     pthread_t t;
     if (!job) return;
     job->h = h, job->s = s;
-    s->running = true;
+    s->running = true, s->waiting = true;                      /* until it has a channel the partner's hello is taken: it may be ready first */
     if (pthread_create(&t, NULL, session_main, job) != 0) {
         s->running = false;
         free(job);
@@ -385,7 +381,8 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 {
     home *h = user;
     record a, b;
-    if (len < 1 + 2 * RECORD_LEN || msg[0] != S_HELLO || !record_decode(msg + 1, &a) || !record_decode(msg + 1 + RECORD_LEN, &b) ||
+    if (len < 1 + 2 * RECORD_LEN || len > SESSION_HELLO_MAX || msg[0] != S_HELLO || !record_decode(msg + 1, &a) ||
+        !record_decode(msg + 1 + RECORD_LEN, &b) ||
         memcmp(a.owner, c->remote, 32) || memcmp(b.owner, h->id.xonly, 32) || !record_check(h->ctx, &h->net, &a) ||
         !record_check(h->ctx, &h->net, &b)) {
         net_close(c);
@@ -406,7 +403,7 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
         if (!busy && open < HELLO_SESSIONS) s = slot_of(h, &b, &a, true, &fresh);
     }
     /* a session that runs takes the connection only while it waits for one */
-    if (!s || s->have_conn || (s->running && !s->waiting) || len > sizeof s->first) {
+    if (!s || s->have_conn || (s->running && !s->waiting)) {
         pthread_mutex_unlock(&h->mu);
         net_close(c);
         return;

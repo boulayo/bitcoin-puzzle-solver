@@ -53,11 +53,31 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.
+- An encrypting campaign that finds the key with `merge` now leaves nothing that leads to it, as `hunt` does: the seed, the state and
+  the points go. `near.txt`, whose last lines are keys next to the key, goes too, and a log written before the encryption was added
+  loses its lines with the seed. A key that could not be encrypted leaves the campaign as it was (before, its state was wiped and the
+  next run said "found"); `merge` fails when `FOUND.txt` cannot be written.
+- The files of a campaign (the lock, the log, `stats.csv`, `near.txt`, `dp.bin`) are never opened through a link: a folder copied from
+  elsewhere could hold one that points at another file of the user, which the lock emptied. The folder of a home or node of pzpeer
+  must not be a link either.
+- pzpeer: a custodian keeps the owners of at most one record in 256 it may hold, and 1024 more: identities cost little, and their table
+  grew in memory without a bound. A hello longer than any real one is refused before it takes a place among the sessions (it kept one
+  until a restart). The password of `--rpc` is blanked in the list of processes (`--rpc-cookie` stays the better way). The fee rate of
+  the Electrum servers is their lower median, so that one server of two cannot raise it.
 
 ### Fixed
 
 - `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked
   as scanned with their near misses missing).
+- A kangaroo key that could not be written to `FOUND.txt` is no longer said to be found again by the same command: the walk of a new
+  session is another one.
+- pzpeer: a session asks its chain and its fee rate before it opens the channel, so that its hello reaches the partner within the 2
+  seconds a new connection is given (with Electrum servers it came later, and the session failed). A side waiting at a relay takes the
+  partner's own connection if it comes meanwhile. The contacts of `peers.txt` are tried before the addresses found in the table of
+  BitTorrent, which could push them out. The records go again at the first contacts after none only when one went to no other node
+  meanwhile (not after every outage). The own alerts of a node come before those it sends as a custodian, and an alert that finds the
+  queue full is tried again with the next record of the pair instead of an hour later. Under `nohup` the terminal closing no longer
+  stops pzpeer. On macOS a new seed, the state of a session and the custody reach the disk itself (`F_FULLFSYNC`).
 
 ## [1.23.3] — 2026-11-13
 

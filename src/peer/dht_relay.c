@@ -174,7 +174,17 @@ static bool relay_of(dht *d, const uint8_t name[32], const uint8_t partner[32], 
 }
 
 /* joins the relay r and waits there for the partner until until: the channel, its handshake end to end done (party 0 initiates) */
-static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[32], const uint8_t name[32], int64_t until)
+static net_conn *await(void *arg, dht_wait_fn wait, int64_t ms, bool *give_up)
+{
+    if (wait) return wait(arg, (int)ms, give_up);
+    sys_sleep_ms((int)ms);
+    return NULL;
+}
+
+/* The relay r for this slot, until its end: its channel, or the partner's own connection if that comes meanwhile (the partner may have
+ * dialled this side after its first slot) */
+static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[32], const uint8_t name[32], int64_t until,
+                            dht_wait_fn wait, void *arg, bool *give_up)
 {
     uint8_t req[65], ans[1];
     size_t n;
@@ -186,7 +196,12 @@ static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[
     req[0] = DHT_RELAY;
     memcpy(req + 1, name, 32), memcpy(req + 33, partner, 32);
     bool ok = net_send(c, req, sizeof req);
-    while (ok && !stopping(d) && sys_now_ms() < until && !net_readable(c, until - sys_now_ms() < 200 ? (int)(until - sys_now_ms()) : 200)) {}
+    net_conn *direct = NULL;
+    while (ok && !stopping(d) && sys_now_ms() < until && !net_readable(c, until - sys_now_ms() < 200 ? (int)(until - sys_now_ms()) : 200))
+        if ((direct = await(arg, wait, 0, give_up)) || *give_up) {
+            net_close(c);
+            return direct;
+        }
     ok = ok && !stopping(d) && net_readable(c, 0) && net_recv(c, ans, sizeof ans, &n) && n == 1 && ans[0] == DHT_RELAYED &&
          net_rehandshake(&d->ncfg, c, memcmp(d->me.xonly, partner, 32) < 0, partner);
     if (!ok) {
@@ -195,13 +210,6 @@ static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[
     }
     dlog(d, "a channel through a relay");
     return c;
-}
-
-static net_conn *await(void *arg, dht_wait_fn wait, int64_t ms, bool *give_up)
-{
-    if (wait) return wait(arg, (int)ms, give_up);
-    sys_sleep_ms((int)ms);
-    return NULL;
 }
 
 /* a direct connection to the partner, found in the table */
@@ -232,7 +240,7 @@ net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32],
         const uint64_t wall = wall_us() / 1000, slot = wall / (uint64_t)d->slot_ms;
         const int64_t left = (int64_t)((slot + 1) * (uint64_t)d->slot_ms - wall), end = sys_now_ms() + left < until ? sys_now_ms() + left : until;
         dht_contact r;
-        if (relay_of(d, name, partner, slot, &r) && (c = relay_join(d, &r, partner, name, end))) return c;
+        if (relay_of(d, name, partner, slot, &r) && ((c = relay_join(d, &r, partner, name, end, wait, arg, &give_up)) || give_up)) return c;
         while (!stopping(d) && sys_now_ms() < end) {               /* this slot's relay did not serve: the next slot has another */
             if ((c = await(arg, wait, end - sys_now_ms() < 200 ? end - sys_now_ms() : 200, &give_up)) || give_up) return c;
         }

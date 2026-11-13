@@ -31,6 +31,15 @@ static bool sent_check(dht *d, const uint8_t h[32])
     return ok;
 }
 
+/* an alert that found the queue full: the next record of the pair tries again, within the hour */
+static void sent_forget(dht *d, const uint8_t h[32])
+{
+    pthread_mutex_lock(&d->a_mu);
+    for (int i = 0; i < d->nsent; i++)
+        if (!memcmp(d->sent[i].h, h, 32)) d->sent[i].at = sys_now_ms() - RESEND_MS;
+    pthread_mutex_unlock(&d->a_mu);
+}
+
 /* A record for the custody of this node: its status for STORED. from: the address of the owner that sent it, NULL for this node's own.
  * A record of another node is taken only when this node may be one of its custodians, and within the rate of the sender's block. Each
  * coincidence becomes a job that alerts the owners and their mailboxes, also for a duplicate (a republished record alerts again, at most
@@ -50,8 +59,10 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     for (int i = 0; i < no; i++) {
         uint8_t h[32];
         pair_hash(&held, &others[i], h);
-        if ((!from || lim_take(d, from, LIM_COIN, 1)) && sent_check(d, h) && job_push(d, JOB_ALERT_OUT, &held, &others[i], NULL))
-            dlog(d, "coincidence (%s): alerting the owners", held.t == others[i].t ? "merge" : "useful");
+        if ((!from || lim_take(d, from, LIM_COIN, 1)) && sent_check(d, h)) {
+            if (job_push(d, JOB_ALERT_OUT, &held, &others[i], NULL)) dlog(d, "coincidence (%s): alerting the owners", held.t == others[i].t ? "merge" : "useful");
+            else sent_forget(d, h);
+        }
     }
     switch (s) {
     case STORE_OK: return no ? DHT_ST_COINCIDENCE : DHT_ST_STORED;
@@ -115,7 +126,8 @@ static int send_batch(dht *d, const record *recs, int n)
                 for (int j2 = 0; j2 < ncs[i2]; j2++)
                     if (!sent[i2][j2] && !memcmp(cs[i2][j2].id, t.id, 32)) sent[i2][j2] = true, idx[m++] = i2;
             uint8_t st[DHT_STORE_MAX], ans[2 + DHT_STORE_MAX];
-            if (is_me(d, t.id)) {
+            const bool me = is_me(d, t.id);
+            if (me) {
                 for (int q = 0; q < m; q++) st[q] = (uint8_t)custody_put(d, &recs[idx[q]], NULL);
             } else {
                 size_t len;
@@ -126,9 +138,13 @@ static int send_batch(dht *d, const record *recs, int n)
                 if (!got) continue;
                 memcpy(st, ans + 2, (size_t)m);
             }
-            for (int q = 0; q < m; q++) held[idx[q]] |= st[q] == DHT_ST_STORED || st[q] == DHT_ST_DUP || st[q] == DHT_ST_COINCIDENCE;
+            for (int q = 0; q < m; q++)
+                if (st[q] == DHT_ST_STORED || st[q] == DHT_ST_DUP || st[q] == DHT_ST_COINCIDENCE) held[idx[q]] |= me ? 1 : 3;
         }
-    for (int i = 0; ok && i < n; i++) done += held[i];
+    for (int i = 0; ok && i < n; i++) {
+        done += held[i] != 0;
+        if (!(held[i] & 2)) atomic_store(&d->unplaced, true);  /* on this node alone, or nowhere */
+    }
     free(cs), free(ncs), free(sent), free(held), free(req), free(idx);
     return done;
 }

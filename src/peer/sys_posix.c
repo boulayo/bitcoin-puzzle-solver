@@ -211,7 +211,7 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
         posix_spawn_file_actions_adddup2(&fa, out[1], 1);
     } else if (log) {
         posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-        posix_spawn_file_actions_addopen(&fa, 1, log, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        posix_spawn_file_actions_addopen(&fa, 1, log, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
         posix_spawn_file_actions_adddup2(&fa, 1, 2);
     }
     const int rc = posix_spawnp(&pid, argv[0], &fa, &at, (char *const *)argv, environ);
@@ -270,10 +270,10 @@ bool sys_mkdir(const char *path)
     return mkdir(path, 0700) == 0 || (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
 }
 
-bool sys_private(const char *path)
+bool sys_private(const char *path)        /* the folder itself, not one a link points to: the link could point elsewhere later */
 {
     struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == geteuid() && !(st.st_mode & 077);
+    return lstat(path, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == geteuid() && !(st.st_mode & 077);
 }
 
 int sys_open_secret(const char *path)
@@ -300,7 +300,13 @@ long sys_pread(int fd, void *p, size_t n, uint64_t off) { return (long)pread(fd,
 long sys_pwrite(int fd, const void *p, size_t n, uint64_t off) { return (long)pwrite(fd, p, n, (off_t)off); }
 int64_t sys_size(int fd) { return (int64_t)lseek(fd, 0, SEEK_END); }
 bool sys_truncate(int fd, uint64_t size) { return ftruncate(fd, (off_t)size) == 0; }
-bool sys_sync(int fd) { return fsync(fd) == 0; }
+bool sys_sync(int fd)
+{
+#ifdef F_FULLFSYNC
+    if (fcntl(fd, F_FULLFSYNC) == 0) return true;              /* macOS: fsync alone stops at the cache of the disk */
+#endif
+    return fsync(fd) == 0;
+}
 
 bool sys_replace(const char *from, const char *to)
 {
@@ -320,5 +326,7 @@ void sys_on_stop(void (*fn)(int))
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = fn;
-    sigaction(SIGINT, &sa, NULL), sigaction(SIGTERM, &sa, NULL), sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL), sigaction(SIGTERM, &sa, NULL);
+    struct sigaction hup;                                      /* the terminal closing, unless started under nohup */
+    if (sigaction(SIGHUP, NULL, &hup) == 0 && hup.sa_handler != SIG_IGN) sigaction(SIGHUP, &sa, NULL);
 }

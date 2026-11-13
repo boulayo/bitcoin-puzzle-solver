@@ -269,8 +269,8 @@ bool job_push(dht *d, int kind, const record *a, const record *b, const dht_cont
     pthread_mutex_lock(&d->j_mu);
     const bool ok = d->jn < JOBS_MAX && (kind != JOB_ALERT_OUT || d->jn_alert < ALERT_JOBS_MAX) && !stopping(d);
     if (ok) {
-        job **at = &d->jhead;                                  /* an alert goes before the pings that wait */
-        while (*at && (kind == JOB_PING || (*at)->kind != JOB_PING)) at = &(*at)->next;
+        job **at = &d->jhead;                                  /* this node's own alerts first, then the others' alerts, then the pings */
+        while (*at && (*at)->kind <= kind) at = &(*at)->next;
         j->next = *at;
         *at = j;
         d->jn++;
@@ -437,8 +437,9 @@ static void *maint_main(void *arg)
             save_peers(d);
             next_save = now + SAVE_MS;
         }
-        const bool met = alone && rt_count(d);                 /* the first contacts after none: what went to nobody goes now */
-        alone = !rt_count(d);
+        const int nc = rt_count(d);
+        const bool met = alone && nc && atomic_exchange(&d->unplaced, false);   /* the first contacts after none: what went to nobody */
+        alone = !nc;
         if (now >= next_repub || met) {
             republish(d);
             next_repub = sys_now_ms() + d->republish_ms;

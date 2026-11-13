@@ -88,7 +88,7 @@ void sys_pipe_close(int fd);
  * decides who reads its files, and nothing is checked. */
 
 bool sys_mkdir(const char *path);          /* one level, for this user alone when it is made; true when the folder is there */
-bool sys_private(const char *path);        /* whether path is a folder of this user that nobody else can open */
+bool sys_private(const char *path);        /* whether path is a folder (not a link) of this user that nobody else can open */
 int sys_open_secret(const char *path);     /* to read: -1 with errno ENOENT when there is none, -2 when it is not a secret file (or a link) */
 int sys_create_secret(const char *path);   /* to write, new: -1 when it exists already */
 int sys_open_rw(const char *path);         /* to read and write, made for this user alone when it is not there */
@@ -103,7 +103,7 @@ bool sys_replace(const char *from, const char *to);   /* from takes the place of
 /* ---- the stop ---- */
 
 /* fn is called, as a signal handler is, when the user or the system asks the program to stop: Ctrl-C, a termination request, the
- * terminal closing. */
+ * terminal closing (not under nohup). */
 void sys_on_stop(void (*fn)(int));
 
 #endif
