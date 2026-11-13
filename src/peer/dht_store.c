@@ -50,7 +50,7 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     for (int i = 0; i < no; i++) {
         uint8_t h[32];
         pair_hash(&held, &others[i], h);
-        if (sent_check(d, h) && (!from || lim_take(d, from, LIM_COIN, 1)) && job_push(d, JOB_ALERT_OUT, &held, &others[i], NULL))
+        if ((!from || lim_take(d, from, LIM_COIN, 1)) && sent_check(d, h) && job_push(d, JOB_ALERT_OUT, &held, &others[i], NULL))
             dlog(d, "coincidence (%s): alerting the owners", held.t == others[i].t ? "merge" : "useful");
     }
     switch (s) {

@@ -144,7 +144,7 @@ void net_addr_block(const net_addr *a, uint8_t block[16])
     memcpy(block, a->ip, 16);
     if (!net_addr_public(a)) return;
     if (!memcmp(a->ip, V4MAPPED, 12)) block[15] = 0;
-    else memset(block + 6, 0, 10);
+    else memset(block + 4, 0, 12);
 }
 
 /* ---- sockets ---- */

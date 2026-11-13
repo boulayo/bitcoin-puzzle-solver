@@ -64,7 +64,7 @@ void net_addr_str(const net_addr *a, char *out, size_t cap);
 /* Whether a is an address of the public internet: not unspecified, loopback, private (RFC 1918, RFC 4193), shared (RFC 6598), link-local,
  * benchmarking, documentation, multicast or reserved. A node of a public network dials and keeps only these (docs/en/NETWORK.md 7.4). */
 bool net_addr_public(const net_addr *a);
-/* The block of an address, for the limits by block: the /24 of a public IPv4 address, the /48 of a public IPv6 one, the whole address of
+/* The block of an address, for the limits by block: the /24 of a public IPv4 address, the /32 of a public IPv6 one, the whole address of
  * one that is not public; the port does not count. 16 bytes. */
 void net_addr_block(const net_addr *a, uint8_t block[16]);
 

@@ -115,7 +115,7 @@ static void test_addr(void)
         if (!net_parse_addr(NOT_PUBLIC[i], &a) || net_addr_public(&a)) printf("FAIL %s:%d: %s is public\n", __FILE__, __LINE__, NOT_PUBLIC[i]), fails++;
     for (size_t i = 0; i < sizeof PUBLIC / sizeof *PUBLIC; i++)
         if (!net_parse_addr(PUBLIC[i], &a) || !net_addr_public(&a)) printf("FAIL %s:%d: %s is not public\n", __FILE__, __LINE__, PUBLIC[i]), fails++;
-    /* blocks: the /24 of IPv4, the /48 of IPv6, the whole address otherwise; never the port */
+    /* blocks: the /24 of IPv4, the /32 of IPv6 (what one provider gets: a /48 is one customer of it), the whole address otherwise; never the port */
     net_addr b;
     uint8_t ka[16], kb[16];
     CHECK(net_parse_addr("1.2.3.4:1", &a) && net_parse_addr("1.2.3.200:9", &b));
@@ -124,10 +124,10 @@ static void test_addr(void)
     CHECK(net_parse_addr("1.2.4.4:1", &b));
     net_addr_block(&b, kb);
     CHECK(memcmp(ka, kb, 16) != 0);
-    CHECK(net_parse_addr("[2a00:1450:4001:1::1]:1", &a) && net_parse_addr("[2a00:1450:4001:ffff::2]:2", &b));
+    CHECK(net_parse_addr("[2a00:1450:4001:1::1]:1", &a) && net_parse_addr("[2a00:1450:ffff:ffff::2]:2", &b));
     net_addr_block(&a, ka), net_addr_block(&b, kb);
     CHECK(!memcmp(ka, kb, 16));
-    CHECK(net_parse_addr("[2a00:1450:4002::1]:1", &b));
+    CHECK(net_parse_addr("[2a00:1451:4001:1::1]:1", &b));
     net_addr_block(&b, kb);
     CHECK(memcmp(ka, kb, 16) != 0);
     CHECK(net_parse_addr("127.0.0.1:1", &a) && net_parse_addr("127.0.0.2:1", &b));

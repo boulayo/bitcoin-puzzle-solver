@@ -328,8 +328,8 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   A NODES answer that points elsewhere is refused (it would make the node connect into the user's own LAN), and so is a contact that
   asks from such an address (it is answered, not kept). On a test network (`test`, `signet`, `regtest`, or `--allow-private`) they are
   taken, and the limits by block below do not apply to them: the nodes of a test are on one machine.
-- The limits by address block: the /24 of an IPv4 address, the /48 of an IPv6 one, the whole address of one that is not public (on a
-  public network). They apply to public addresses everywhere, and to all addresses on a public network.
+- The limits by address block: the /24 of an IPv4 address, the /32 of an IPv6 one (what one provider gets: with /48, one of them had
+  65 536 blocks), the whole address of one that is not public (on a public network). They apply to public addresses everywhere, and to all addresses on a public network.
 
   | Limit | Value |
   |---|---|
