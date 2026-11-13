@@ -85,7 +85,7 @@ divide le quote fra macchine di velocità diverse).
 * Non protetto: un amministratore (root, il fornitore di una macchina virtuale) che legge la memoria del processo nel momento in cui la
   chiave è trovata, o che sostituisce l'eseguibile o la chiave pubblica nella riga di comando (l'identificativo nel log te lo dice dopo,
   non prima).
-* In chiaro per natura: l'indirizzo, il puzzle, l'intervallo, il seed, l'avanzamento e l'ora del ritrovamento. USO sezione 11.5 ha il
+* In chiaro per natura: l'indirizzo, il puzzle, l'intervallo, l'avanzamento e l'ora del ritrovamento; anche il seed, finché la chiave non è trovata. USO sezione 11.5 ha il
   modello di minaccia completo.
 
 ## 5. Dopo
@@ -98,5 +98,6 @@ pzsolve decrypt-key FOUND.txt                            # la password; stampa l
 
 Deve stampare `check: OK` con l'indirizzo che cercavi: una riga la può fare chiunque conosca la chiave pubblica, quindi solo il
 controllo dell'indirizzo prova che la chiave è quella giusta. Sposta i fondi con un wallet che importa il WIF. Quando l'affitto finisce,
-cancella la cartella della campagna sulla macchina in affitto (`rm -rf campaigns/p71`): contiene l'intervallo, il bersaglio, il seed, la
-chiave pubblica e l'avanzamento della ricerca, mai la chiave, ma non c'è motivo di lasciarli lì.
+cancella la cartella della campagna sulla macchina in affitto (`rm -rf campaigns/p71`): contiene l'intervallo, il bersaglio, la chiave
+pubblica e l'avanzamento della ricerca, mai la chiave (al ritrovamento il programma ha tolto il seed, lo stato e i punti, che insieme
+portavano alla chiave), ma non c'è motivo di lasciarli lì.

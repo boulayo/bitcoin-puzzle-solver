@@ -150,7 +150,9 @@ static void sweep_scratch_dirs(const char *mine)
         char path[1400], owner[1500];
         struct stat st;
         snprintf(path, sizeof path, "%s/%s", base, e->d_name);
-        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode) || now - st.st_mtime < 60) continue;   /* a folder that is just being made is left alone */
+        /* only a folder of this user, itself and not a link: the temporary folder is everyone's, and another user could plant there a
+         * pzkang* whose removal would take this user's files with it. One that is just being made is left alone */
+        if (!pz_is_own_dir(path) || stat(path, &st) != 0 || now - st.st_mtime < 60) continue;
         snprintf(owner, sizeof owner, "%s/owner", path);
         const int fd = pz_open_rw(owner, false);
         if (fd < 0) continue;                      /* not one of ours */

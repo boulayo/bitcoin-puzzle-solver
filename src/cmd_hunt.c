@@ -494,7 +494,8 @@ void print_found_banner(const run_ctx *r)
             char id[9];
             enc_key_id(&r->cfg.encrypt_pubkey, id);
             printf("  The key is encrypted to the public key with id %s: only the owner of the matching secret can read it.\n", id);
-            if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the encrypted key from this screen\n", r->path_found);
+            if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the encrypted key from this screen\n"
+                                              "                  (its place stays unsearched in the campaign: the same command finds it again)\n", r->path_found);
             else printf("  saved in:       %s\n", r->path_found);
             printf("  at home:        pzsolve decrypt-key FOUND.txt\n  encrypted key (safe to copy anywhere):\n%s\n", r->found_sealed);
         }
@@ -508,10 +509,20 @@ void print_found_banner(const run_ctx *r)
     pz_u256_to_be(&r->found_key, kb);
     pz_privkey_to_wif(kb, true, wif, sizeof wif);
     printf("  address:        %s\n  key (hex):      0x%s\n  WIF compressed: %s\n", addr, hx, wif);
-    if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the key from this screen now\n", r->path_found);
+    if (r->found_write_failed) printf("  NOT SAVED:      %s could not be written (see the log): copy the key from this screen now\n"
+                                      "                  (its place stays unsearched in the campaign: the same command finds it again)\n", r->path_found);
     else printf("  saved in:       %s\n", r->path_found);
     printf("=========================================================\n");
     print_found_thanks();
+}
+
+/* Two blocks of the disk kept for FOUND.txt from the first start of a campaign: a disk that fills while the search runs (its own
+ * points and logs can fill it) must not cost the key. */
+static void reserve_space(const run_ctx *r)
+{
+    static const char zero[8192];
+    if (!file_exists(r->path_reserve) && pz_write_file_atomic(r->path_reserve, zero, sizeof zero, 0600) != 0)
+        pz_log(PZ_LOG_WARN, "cannot write %s: %s (a disk that is full at the find would lose the key)", r->path_reserve, strerror(errno));
 }
 
 /* A campaign that has already found the key ('hunt' and 'merge' end there): FOUND.txt is shown. False when it has not. */
@@ -544,6 +555,14 @@ static bool campaign_completed(const run_ctx *r)
     return file_exists(r->path_state) && !strcmp(campaign_state(r->cfg.dir, st, sizeof st), "COMPLETED");
 }
 
+/* The folder of a campaign is its owner's alone: its state and its seed say where the search stands, which after a find is where the
+ * key is, whatever protects FOUND.txt; and a folder that another user made (in a base folder everyone can write) could hold links and
+ * a configuration of theirs. */
+static void campaign_private(const char *dir)
+{
+    if (!pz_dir_private(dir)) pz_die("%s is not a folder of this user that can be closed to the others: the campaign is not opened", dir);
+}
+
 /* The campaign of the command: opened when it exists, otherwise created (its folder and campaign.conf, under its lock), with the options
  * checked against it either way. Returns whether it existed; *locked tells whether its lock is already taken. */
 static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
@@ -561,6 +580,7 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
         encrypt_from_options(o, &r->cfg);              /* last of the checks: it may ask for a password, and nothing is created yet */
         snprintf(r->cfg.dir, sizeof r->cfg.dir, "%s/%s", o->dir, r->cfg.name);
         if (pz_mkdir_p(r->cfg.dir) != 0) pz_die("cannot create folder %s: %s", r->cfg.dir, strerror(errno));
+        campaign_private(r->cfg.dir);
         /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the
          * lock decides, and only then is it known whether the configuration exists. Writing it before the lock would let the loser
          * leave its seed in campaign.conf while the winner checkpoints with another one. */
@@ -573,6 +593,7 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
     }
     if (resuming) {
         char err[256];
+        campaign_private(cdir);
         if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
         check_resume_consistency(o, &r->cfg);
         check_options_for_campaign(o, &r->cfg, r, false);
@@ -668,8 +689,10 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
         char sd[65];
         pz_hex_encode(r->cfg.seed, 32, sd);
         const bool text_seed = o->seed[0] && strcmp(o->seed, "auto") != 0;   /* the seed the user typed is the one to give the others */
+        const bool show = !text_seed && !r->cfg.has_encrypt;   /* an encrypting campaign keeps its seed out of the log (forget_seed) */
         pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --chunk-bits and %s%s%s with the other shares",
-               r->cfg.part, text_seed ? "the same -s" : "this seed (-s ", text_seed ? "" : sd, text_seed ? "" : ")");
+               r->cfg.part, text_seed ? "the same -s" : show ? "this seed (-s " : "the seed of this campaign", show ? sd : "", show ? ")" : "");
+        if (!text_seed && !show) printf("  the seed for the other computers (shown here only, not written to the log): -s %s\n", sd);
     }
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
     if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)%s", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes,
@@ -687,11 +710,38 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
     pz_log(PZ_LOG_INFO, "campaign folder: %s", r->cfg.dir);
 }
 
+/* An encrypting campaign that found its key leaves nothing that leads to it. The state and the points say where the search stood, and
+ * with the seed, which orders the blocks, that is where the key is: whoever read the folder afterwards found the key again in a moment.
+ * The seed goes first, from memory and from campaign.conf (the reports written from here on show zeros); the files that hold the
+ * position go once they are closed. An earlier copy of campaign.conf still has the seed (docs/en/USAGE.md 11.5). */
+static void forget_seed(run_ctx *r)
+{
+    char conf[700];
+    snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
+    pz_secure_zero(r->cfg.seed, sizeof r->cfg.seed);
+    if (cfg_save(&r->cfg, conf) != 0) pz_log(PZ_LOG_ERR, "cannot rewrite %s without the seed: delete the folder once FOUND.txt is copied", conf);
+}
+
+static void forget_position(const run_ctx *r)
+{
+    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin"};
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
+        char p[700];
+        snprintf(p, sizeof p, "%s/%s", r->cfg.dir, names[i]);
+        remove(p);
+    }
+}
+
 /* The end of a session: the last save, the reports, the final frame, then the found key or what is left to do. Returns the exit status. */
 static int end_session(run_ctx *r, const opts_t *o, int rc)
 {
     double el = run_session_elapsed(r);
-    if (r->checkpoint && r->checkpoint(r) != 0) {
+    /* a key that is on the screen only (FOUND.txt could not be written): the state stays as it was before the find, so that the next
+     * start finds the key again instead of taking its place for searched */
+    const bool unsaved = atomic_load(&r->found) && r->found_write_failed;
+    const bool forget = atomic_load(&r->found) && r->cfg.has_encrypt && !unsaved;
+    if (forget) forget_seed(r);
+    if (!unsaved && !forget && r->checkpoint && r->checkpoint(r) != 0) {
         /* the progress of this session may not be on disk: say so loudly and fail the command */
         pz_log(PZ_LOG_ERR, "final state save FAILED in %s (disk full or not writable?): the progress of the last session may be lost", r->cfg.dir);
         rc = PZ_EXIT_ERROR;
@@ -704,12 +754,13 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
     const bool finished = r->sched && sched_finished(r->sched);
     if (r->cleanup) r->cleanup(r);
     if (r->sched) { sched_free(r->sched); r->sched = NULL; }
+    if (forget) forget_position(r);
     char ds[48];
     pz_log(PZ_LOG_INFO, "session ended after %s", pz_fmt_duration(el, ds, sizeof ds));
     if (atomic_load(&r->found)) {
         print_found_banner(r);
         onfound_wait();                               /* the box is out; the program ends when the command has (at most 120 s) */
-        const int st = r->found_seal_failed ? PZ_EXIT_ERROR : PZ_EXIT_FOUND;
+        const int st = r->found_seal_failed || r->found_write_failed ? PZ_EXIT_ERROR : PZ_EXIT_FOUND;
         pz_log_set_file(NULL);
         free(r);
         return st;
@@ -779,6 +830,7 @@ int cmd_hunt(int argc, char **argv)
 
     run_session_load(r);
     r->sessions++;
+    reserve_space(r);
     r->t_start = pz_mono();
     if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");
 

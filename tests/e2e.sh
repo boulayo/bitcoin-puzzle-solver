@@ -87,6 +87,13 @@ A=$(field 0x9a3b1 addr)
 OUT=$($BIN hunt -p 20 -a "$A" -c nf -d "$DIR" --ui log -q --no-gpu 2>&1); RC=$?
 echo "$OUT" | grep -q "key (hex): *0x9a3b1" && echo "$OUT" | grep -q "NOT SAVED: .*FOUND.txt could not be written" && ! echo "$OUT" | grep -q "saved in" \
   && ok "the box shows the key and says that FOUND.txt was not written" || bad "FOUND.txt not written: rc=$RC $(echo "$OUT" | grep -E 'saved|SAVED|key \(hex\)' | tr '\n' ' ')"
+# a key that is on the screen only is an error, and its place is not recorded as searched: the next start, with the way clear, finds it
+# again (before, the state took the block for done and the campaign ended "completed without the key")
+[ "$RC" = 2 ] && [ ! -e "$DIR/nf/state.dat" ] && ok "a key that could not be saved: exit status 2, no state saved after the find" || bad "key not saved: rc=$RC, $(ls "$DIR/nf" | tr '\n' ' ')"
+rmdir "$DIR/nf/FOUND.txt"
+$BIN hunt -p 20 -a "$A" -c nf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
+[ "$RC" = 0 ] && grep -qi "9a3b1" "$DIR/nf/FOUND.txt" && ok "the next start finds the key again and saves it" || bad "after a key that was not saved: rc=$RC"
+[ -s "$DIR/nf/reserve.bin" ] && [ "$(stat -c %a "$DIR/nf")" = 700 ] && ok "a campaign keeps two blocks of the disk for FOUND.txt, and its folder is its owner's alone (0700)" || bad "reserve.bin or the mode of the folder: $(stat -c %a "$DIR/nf") $(ls "$DIR/nf" | tr '\n' ' ')"
 echo "$OUT" | grep -q "Congratulations, you solved it" && echo "$OUT" | grep -q "Bitcoin: *bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz" \
   && echo "$OUT" | grep -q "Lightning address: *trivialalarm90@cake.cash" && echo "$OUT" | grep -q "README of https://github.com/boulayo/bitcoin-puzzle-solver" \
   && ok "under the box: congratulations and the donation addresses of the README" || bad "no congratulations or donation addresses under the box: $(echo "$OUT" | tail -8 | tr '\n' ' ')"
@@ -526,12 +533,20 @@ t = time.time()
 while not os.path.exists(sys.argv[2]) and time.time() - t < 600: time.sleep(0.1)
 PYEOF
 wait_for 'grep -q locked "$DIR/lock.out"'
+# what another user could plant: a link inside an abandoned folder, and a pzkang* that is itself a link, both to a folder with files
+mkdir -p "$DIR/victim" "$DIR/victim2"; echo keep > "$DIR/victim/file"; echo keep > "$DIR/victim2/file"; : > "$DIR/victim2/owner"
+ln -s "$DIR/victim" "$DIR/tmp/pzkangDEAD01/link"; ln -s "$DIR/victim2" "$DIR/tmp/pzkangLINK01"
+touch -d '10 minutes ago' "$DIR/victim2"
 touch -d '10 minutes ago' "$DIR/tmp/pzkangDEAD01" "$DIR/tmp/pzkangLIVE01" "$DIR/tmp/pzkangFOREIGN"   # FRESH1 stays new: it may be being made
 TMPDIR="$DIR/tmp" $BIN kstat 16 1 1 >/dev/null 2>&1
 touch "$DIR/lock.stop"
 [ ! -e "$DIR/tmp/pzkangDEAD01" ] && ok "the folder of a program that is gone (free lock, not new) is removed" || bad "abandoned scratch folder left"
 [ -d "$DIR/tmp/pzkangLIVE01" ] && ok "a folder whose lock is held is left alone" || bad "scratch folder in use removed"
 [ -d "$DIR/tmp/pzkangFRESH1" ] && [ -d "$DIR/tmp/pzkangFOREIGN" ] && ok "a new folder and one without owner file are left alone" || bad "a scratch folder that is not abandoned was removed"
+[ -s "$DIR/victim/file" ] && [ -s "$DIR/victim2/file" ] && [ -L "$DIR/tmp/pzkangLINK01" ] \
+  && ok "links are never followed: the files behind one inside an abandoned folder, or behind a pzkang* that is a link, are untouched" \
+  || bad "the sweep followed a link: victim '$(cat "$DIR/victim/file" 2>/dev/null)', victim2 '$(cat "$DIR/victim2/file" 2>/dev/null)'"
+rm -f "$DIR/tmp/pzkangLINK01"
 [ "$(ls "$DIR/tmp" | wc -l)" = 3 ] && ok "the folder of the run itself is removed at its end" || bad "scratch folders left: $(ls "$DIR/tmp" | tr '\n' ' ')"
 wait
 
@@ -580,6 +595,10 @@ enc_case() {   # enc_case NAME N KEY SECRET RAWOPT PUBKEY HUNTARGS...
     leaks=$(grep -r -i -l -F -e "$PUBK" -e "$X" "$CD" 2>/dev/null)
     [ -z "$leaks" ] && ok "$name: the public key of the found key is nowhere in the campaign folder" || bad "$name: the public key appears in: $leaks"
   fi
+  # what led to the key is gone: the state and the points said where the search stood, and with the seed that was the place of the key
+  # (before, a copy of the folder gave the plain key back in a tenth of a second)
+  [ ! -e "$CD/state.dat" ] && [ ! -e "$CD/state.dat.bak" ] && [ ! -e "$CD/dp.bin" ] && grep -q '^seed=0\{64\}$' "$CD/campaign.conf" && ! grep -qi "seed" "$CD/FOUND.txt" \
+    && ok "$name: no state, no points and no seed are left in the folder" || bad "$name: left behind: $(ls "$CD" | tr '\n' ' ') $(grep '^seed=' "$CD/campaign.conf")"
   grep -q "^PZENC1:" "$CD.out" && grep -q "pzsolve decrypt-key" "$CD.out" && ok "$name: the box shows the encrypted line and how to read it" || bad "$name: the box: $(cat "$CD.out")"
   local LINE; LINE=$(grep '^PZENC1:' "$CD/FOUND.txt")
   [ "$(wc -l < "$CD.hook")" = 1 ] && [ "$(cat "$CD.hook")" = "$LINE|$A|$n|$name|$CD/FOUND.txt" ] && ok "$name: --on-found ran once and received the line, address, puzzle, campaign and file" || bad "$name: --on-found: $(cat "$CD.hook" 2>&1)"

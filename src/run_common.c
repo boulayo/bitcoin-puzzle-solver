@@ -112,6 +112,17 @@ void run_paths(run_ctx *r)
     snprintf(r->path_log, sizeof r->path_log, "%s/log.txt", d);
     snprintf(r->path_found, sizeof r->path_found, "%s/FOUND.txt", d);
     snprintf(r->path_session, sizeof r->path_session, "%s/session.txt", d);
+    snprintf(r->path_reserve, sizeof r->path_reserve, "%s/reserve.bin", d);
+}
+
+/* FOUND.txt; on a full disk the reserve is given back and the write tried again */
+static bool found_save(run_ctx *r, const char *buf, size_t n)
+{
+    bool ok = pz_write_file_atomic(r->path_found, buf, n, 0600) == 0;
+    if (!ok && remove(r->path_reserve) == 0) ok = pz_write_file_atomic(r->path_found, buf, n, 0600) == 0;
+    r->found_write_failed = !ok;
+    if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
+    return ok;
 }
 
 int run_session_load(run_ctx *r)
@@ -255,9 +266,7 @@ static bool write_found_plain(run_ctx *r)
         "version:         %s\n\n"
         "KEEP THIS FILE IN A SAFE PLACE and move the funds as soon as possible.\n",
         ts, r->cfg.name, pz, addr, hx, wif, pk, seed, PZ_VERSION);
-    const bool ok = pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) == 0;
-    r->found_write_failed = !ok;
-    if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
+    const bool ok = found_save(r, buf, (size_t)n);
     pz_secure_zero(hx, sizeof hx);
     pz_secure_zero(wif, sizeof wif);
     pz_secure_zero(kb, sizeof kb);
@@ -270,7 +279,7 @@ static bool write_found_plain(run_ctx *r)
  * done the key is written nowhere, which the file and the box say. */
 static bool write_found_encrypted(run_ctx *r)
 {
-    char addr[64], buf[2048], seed[65], pz[48] = "", id[9], ts[40];
+    char addr[64], buf[2048], pz[48] = "", id[9], ts[40];
     u8 kb[32];
     if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
     else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
@@ -278,7 +287,6 @@ static bool write_found_encrypted(run_ctx *r)
     r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, r->found_sealed, sizeof r->found_sealed);
     pz_secure_zero(kb, sizeof kb);
     enc_key_id(&r->cfg.encrypt_pubkey, id);
-    pz_hex_encode(r->cfg.seed, 32, seed);
     struct tm tmv;
     pz_localtime((time_t)r->found_time, &tmv);
     strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
@@ -291,10 +299,9 @@ static bool write_found_encrypted(run_ctx *r)
             "campaign:        %s\n"
             "%s"
             "address:         %s\n"
-            "campaign seed:   %s\n"
             "version:         %s\n\n"
             "The key could not be encrypted (the system gave no random numbers), so it was written nowhere and is lost: search again.\n",
-            ts, r->cfg.name, pz, addr, seed, PZ_VERSION);
+            ts, r->cfg.name, pz, addr, PZ_VERSION);
     else
         n = snprintf(buf, sizeof buf,
             "*** PRIVATE KEY FOUND (ENCRYPTED) ***\n\n"
@@ -302,26 +309,22 @@ static bool write_found_encrypted(run_ctx *r)
             "campaign:        %s\n"
             "%s"
             "address:         %s\n"
-            "campaign seed:   %s\n"
             "version:         %s\n"
             "encrypted to:    key id %s\n\n"
             "The private key is encrypted: only the owner of the secret that matches the public key given with --encrypt-pubkey (or made from the\n"
             "password of --encrypt-password) can read it. The line below is safe to copy anywhere, and it opens with the secret alone. At home:\n"
             "    pzsolve decrypt-key FOUND.txt\n\n"
             "%s\n",
-            ts, r->cfg.name, pz, addr, seed, PZ_VERSION, id, r->found_sealed);
-    const bool ok = pz_write_file_atomic(r->path_found, buf, (size_t)n, 0600) == 0;
-    r->found_write_failed = !ok;
-    if (!ok) pz_log(PZ_LOG_ERR, "cannot write %s: %s", r->path_found, strerror(errno));
-    return ok && !r->found_seal_failed;
+            ts, r->cfg.name, pz, addr, PZ_VERSION, id, r->found_sealed);
+    return found_save(r, buf, (size_t)n) && !r->found_seal_failed;
 }
 
 /* Writes FOUND.txt (and, with --on-found, starts the command). With cfg.has_encrypt the file carries the PZENC1 line (found_sealed) and neither the key nor its
  * public key. */
 static void run_write_found(run_ctx *r)
 {
-    const bool ok = r->cfg.has_encrypt ? write_found_encrypted(r) : write_found_plain(r);
-    if (!ok || !r->on_found[0]) return;
+    (void)(r->cfg.has_encrypt ? write_found_encrypted(r) : write_found_plain(r));
+    if (r->found_seal_failed || !r->on_found[0]) return;      /* also when the file could not be written: the command may be all that tells */
     char addr[64];
     if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
     else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
@@ -720,7 +723,7 @@ void run_reporter_loop(run_ctx *r)
         if (now >= next_files) { run_write_report_files(r, &pi, false); next_files = now + r->checkpoint_interval; }
         if (now >= next_csv) { append_stats_csv(r, &pi); next_csv = now + 60; }
         if (now >= next_ckpt) {
-            if (r->checkpoint && r->checkpoint(r) != 0) pz_log(PZ_LOG_WARN, "checkpoint save failed");
+            if (r->checkpoint && !atomic_load(&r->found) && r->checkpoint(r) != 0) pz_log(PZ_LOG_WARN, "checkpoint save failed");
             next_ckpt = now + r->checkpoint_interval;
         }
     }

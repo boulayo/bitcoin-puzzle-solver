@@ -673,6 +673,12 @@ of the disk, or a disk that is returned to the owner of the machine or sold. Als
 On Linux and macOS the program turns core dumps off (`setrlimit`) and, on Linux, makes itself non-dumpable (`PR_SET_DUMPABLE`), so that a crash does not write
 the memory to a file and another process of the same user cannot attach to it.
 
+What says **where** the key is goes at the find. The state of a search (and the points of a kangaroo) say where it stood when it found the key, and the seed
+gives the order of the blocks: together they give the key back in a moment, whatever protects `FOUND.txt` (versions before 1.23.3 left both). So when an
+encrypting campaign finds the key, the program replaces the seed in `campaign.conf` with zeros, leaves it out of `FOUND.txt` and of the log, and deletes
+`state.dat`, its copy and `dp.bin`. The folder of every campaign is its owner's alone (mode 0700), so that other users of the machine read none of this while
+the search runs.
+
 **Not protected**:
 
 * **The administrator of the machine (root), or the provider of a virtual machine, while the program runs.** The plain key exists in the memory of the program for the
@@ -688,6 +694,9 @@ the memory to a file and another process of the same user cannot attach to it.
 * **Swap**: the memory of the program can be written to a swap file or a hibernation file by the system. The password buffers and the key-derivation memory are locked
   in RAM when the limits of the system allow it (usually not for the 256 MiB of scrypt without privileges); the plain key is too short-lived to be likely to reach
   swap, but nothing here guarantees it. Use encrypted swap, or none.
+* **A copy of the folder made before the find.** It holds the seed: with the progress that the reports and the log of the finished campaign show, it leads to
+  the block of the key. Make no backup or snapshot of the folder of an encrypting campaign on a machine you do not trust; a seed you typed (`-s`) is also in
+  the history of the shell.
 * **A weak password**, as in 11.4; a keylogger or a modified terminal, which see the password as you type.
 * **The metadata**: the address, the puzzle, the time and the campaign name stay in the clear (they are public by nature).
 
