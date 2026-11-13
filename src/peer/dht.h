@@ -88,7 +88,7 @@ typedef struct {
     const char *const *bt_routers; /* "host:port" of nodes of the table of BitTorrent: the node announces itself there and looks for the others
                                     * (bt.h), with no server of this network. They must stay valid while the node runs. NULL: not used */
     int nbt_routers;
-    unsigned rendezvous_s;         /* between two rounds there; 0: 1800 (120 while the node has no contact) */
+    unsigned rendezvous_s;         /* between two rounds there; 0: 900 (120 while the node has no contact) */
     bool upnp;                     /* ask the router of the LAN to let the listening port in (upnp.h) */
     const char *upnp_ssdp;         /* tests: where the search for the router goes; NULL: the multicast address */
     bool verbose;                  /* what the node does, on stderr */
@@ -148,8 +148,9 @@ int dht_mbox_poll(dht *d);
 void dht_refresh(dht *d);
 /* A contact heard from, as the routing table takes it (a full bucket pings its oldest contact). */
 void dht_seen(dht *d, const dht_contact *c);
-/* The contacts of the routing table, at most max; their number. */
+/* The contacts of the routing table, at most max; their number. dht_count: how many there are. */
 int dht_contacts(dht *d, dht_contact *out, int max);
+int dht_count(dht *d);
 /* What the node holds: the records of the network with x, the number of them, the alert pairs of an owner in its mailbox. */
 int dht_local_records(dht *d, const uint8_t x[32], record *out, int max);
 uint64_t dht_local_count(dht *d);

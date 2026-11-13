@@ -359,17 +359,20 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   partner or meets it at a relay; for two minutes of every hour it tells its port all the same, and the first node that dials it back
   gives it its place again. Before, such a home was in the table of every node it had asked, was a custodian of records nobody could
   ask it for, and found an alert in its mailboxes up to an hour late.
-- Lookups are iterative: rounds of up to α FIND_NODE to the closest candidates not asked yet, among the `want` closest that did not fail;
-  they end when those `want` have all answered, or after 64 queries (answers that keep pointing at new nodes cannot make a lookup
-  endless). A lookup asks at most 4 nodes of one address block: answers that all point at one network, a victim or the attacker's own,
-  do not make the node dial it more. The result counts the node itself when it listens. `want` is 20 to find nodes, 5 to find the
-  custodians of a record or the mailboxes of an owner.
+- Lookups are iterative, with α FIND_NODE always in flight: α workers each take the closest candidate not asked yet, among the `want`
+  closest that did not fail, and the next one as soon as its answer comes, so a slow or dead node holds one worker and not the lookup
+  (before, each round of α waited for its slowest). A lookup ends when those `want` have all answered, or after 64 queries (answers that
+  keep pointing at new nodes cannot make a lookup endless). A lookup asks at most 4 nodes of one address block: answers that all point
+  at one network, a victim or the attacker's own, do not make the node dial it more. The result counts the node itself when it listens.
+  `want` is 20 to find nodes, 5 to find the custodians of a record or the mailboxes of an owner.
 - Publishing: a lookup for each record, then one STORE per custodian with all its records, in the order of their sequence numbers.
   pzpeer signs the records itself (owner, sequence number, signature) and sends them under one lock, so the numbers of one owner reach
   every custodian in order. Its own records are also kept in `own.bin` (the format of `store.bin`). Every day it publishes them again,
-  signed with new numbers: a node that became a custodian since takes them, the others answer duplicate. Custodians do not copy
-  records to each other. The last number signed is kept in `own.seq`: `own.bin` keeps the numbers of the first publication only, and a
-  node that restarted with its clock behind its last republish would sign below what the custodians saw, and be refused by all of them.
+  signed with new numbers: a node that became a custodian since takes them, the others answer duplicate. It does so at once when it
+  gets its first contacts after having none: the points of the first home of a network, or of a home that was cut off, which went to
+  nobody, go then, not a day later. Custodians do not copy records to each other. The last number signed is kept in `own.seq`:
+  `own.bin` keeps the numbers of the first publication only, and a node that restarted with its clock behind its last republish would
+  sign below what the custodians saw, and be refused by all of them.
 - Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, and the saved `peers.txt` (whose lines name the
   identity too, which is checked). A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
   contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an
@@ -568,10 +571,11 @@ The owner of the network runs no server. Three things make the first contact, us
 - `peers.txt`: the contacts that answered in an earlier run.
 - `--peer HOST:PORT`: an address from someone who is already in.
 - **The Mainline DHT of BitTorrent** (`bt.c`, BEP 5), for who has neither. Every node that listens announces its port there under the
-  key `SHA256("pznet1/bt" || F)` cut to 20 bytes, and every node looks the key up: a round when it starts, then every half hour (every
-  two minutes while it has no contact). A round is a lookup with `get_peers`, eight questions at a time, until the eight closest nodes
-  that answered are closer than any node not asked yet (96 questions and 20 seconds at most), then `announce_peer` to those eight.
-  pzpeer asks and never answers: it is a guest of that table for some tens of packets every half hour, over UDP and IPv4. A network of
+  key `SHA256("pznet1/bt" || F)` cut to 20 bytes, and every node looks the key up: a round when it starts, then every quarter of an
+  hour, since the nodes of that table forget an announce after about half an hour (every two minutes while it has no contact). A round
+  is a lookup with `get_peers`, eight questions at a time, until the eight closest nodes that answered are closer than any node not
+  asked yet (96 questions and 20 seconds at most), then `announce_peer` to those eight. pzpeer asks and never answers: it is a guest of
+  that table for some tens of packets every quarter of an hour, over UDP and IPv4. A network of
   the main chain starts from the well-known routers of that table (`router.bittorrent.com:6881`, `dht.transmissionbt.com:6881`,
   `router.utorrent.com:6881`, `dht.libtorrent.org:25401`), unless `--no-bt`; `--bt-router HOST:PORT` gives others, and is the only
   way a test network uses it.

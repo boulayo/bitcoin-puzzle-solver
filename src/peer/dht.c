@@ -364,7 +364,7 @@ static void *meet_main(void *arg)
     memcpy(m, TAG, sizeof TAG - 1), memcpy(m + sizeof TAG - 1, d->cfg.net->fp, 32);
     pz_sha256(m, sizeof m, h);
     memcpy(bc.infohash, h, 20);
-    const int64_t period = (int64_t)(d->cfg.rendezvous_s ? d->cfg.rendezvous_s : 1800) * 1000;
+    const int64_t period = (int64_t)(d->cfg.rendezvous_s ? d->cfg.rendezvous_s : 900) * 1000;   /* that table forgets in half an hour */
     int64_t next_meet = 0, next_map = 0;
     while (!stopping(d)) {
         const int64_t now = sys_now_ms();
@@ -402,6 +402,7 @@ static void *maint_main(void *arg)
     const int64_t t0 = sys_now_ms();
     int64_t polled = t0, next_refresh = t0 + 60000, next_repub = t0 + d->republish_ms, next_save = t0 + SAVE_MS,
             next_boot = t0 + BOOT_RETRY_MS, next_retry = t0 + 1000;
+    bool alone = !rt_count(d);
     if (next_refresh > t0 + d->refresh_ms) next_refresh = t0 + d->refresh_ms;
     pthread_mutex_lock(&d->m_mu);
     while (!stopping(d)) {
@@ -436,7 +437,9 @@ static void *maint_main(void *arg)
             save_peers(d);
             next_save = now + SAVE_MS;
         }
-        if (now >= next_repub) {
+        const bool met = alone && rt_count(d);                 /* the first contacts after none: what went to nobody goes now */
+        alone = !rt_count(d);
+        if (now >= next_repub || met) {
             republish(d);
             next_repub = sys_now_ms() + d->republish_ms;
         }

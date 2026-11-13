@@ -955,6 +955,42 @@ static void test_asker(void)
     scratch_end(sv, "s-ask");
 }
 
+/* The first home of a network: alone, and past the grace in which it counts its own port open, it publishes its points to nobody. They
+ * go at its first contact, not at the republish of the next day: a node that joins holds them within a few seconds. Before, the
+ * points of a home that had been alone waited for that republish, or for a restart. */
+static void test_first_contact(void)
+{
+    home_identity aid, bid;
+    probe_s = 1;
+    dht *a = scratch("s-first-a", true, DHT_ANY_PORT, -1, &aid);
+    probe_s = 0;
+    dht *b = scratch("s-first-b", true, DHT_ANY_PORT, -1, &bid);
+    CHECK(a && b);
+    if (!a || !b) return;
+    nap(1300);
+    record pts[20];
+    for (int i = 0; i < 20; i++) {
+        char label[32];
+        uint8_t dk[32];
+        snprintf(label, sizeof label, "first %d", i);
+        hashed(label, dk);
+        even_point(dk, pts[i].x);
+        pts[i].t = i & 1;
+    }
+    CHECK(dht_publish(a, pts, 20) == 0);                       /* nobody to hold them, not even a itself */
+    dht_contact cb;
+    memcpy(cb.id, bid.id, 32), memcpy(cb.xonly, bid.xonly, 32);
+    CHECK(net_parse_addr("127.0.0.1:1", &cb.addr));
+    cb.addr.port = dht_port(b);
+    const int64_t t0 = ms();
+    dht_seen(a, &cb);                                            /* b answered a: its first contact */
+    while (ms() - t0 < 10000 && dht_local_count(b) < 20) nap(50);
+    CHECK(dht_local_count(b) == 20);
+    printf("t_dht: the points of a home that was alone held by the first node it met in %.1f s\n", (double)(ms() - t0) / 1000);
+    scratch_end(a, "s-first-a");
+    scratch_end(b, "s-first-b");
+}
+
 /* A flood of alerts that will never be proved: copies of a record of A2 by 1100 identities that are no node. A2 does not know that
  * point's distance, so they all wait, and fill its table of alerts (1024). Then a real coincidence of A2 with B2: before, it was refused
  * (the table was full of waiting alerts and kept them for a day); now the oldest waiting one goes, and the real one gets its on_alert. */
@@ -1335,6 +1371,7 @@ int main(void)
     test_relay_limits();
     test_relay_stop();
     printf("t_dht: the relay in %.1f s\n", (double)(ms() - t0) / 1000);
+    test_first_contact();
     /* last: they leave nodes in the tables of the others that are gone, and every dial to them costs a timeout (on Windows two seconds
      * even on loopback, where a refused connection is tried again) */
     test_asker();

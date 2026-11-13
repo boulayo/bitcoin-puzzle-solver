@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* bt.c - a client of the Mainline DHT (see bt.h): get_peers towards the key, wave after wave, then announce_peer to the closest nodes that
- * answered. It asks and never answers: it is a guest of that table, for a few packets every half hour. Every packet that comes is from
+ * answered. It asks and never answers: it is a guest of that table, for a few packets every quarter of an hour. Every packet that comes is from
  * a stranger: it counts only when it comes from the address asked, with the transaction number given, and is read within its bounds. */
 #include "bt.h"
 #include "sys.h"

@@ -11,7 +11,10 @@
 # With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
 # bitcoind) and check every answer themselves (chain_spv.c).
 # With PZ_E2E_WIN=1 the three programs are the Windows ones of build/win, run under Wine (the bitcoind stays the one of this machine).
-# Usage: PZ_REGTEST=host:port:user:password [PZ_E2E_LIGHT=1] [PZ_E2E_WIN=1] tests/peer/e2e_net.sh    (pzsolve, pzpeer and pzsign built)
+# With PZ_E2E_MEET=1 nobody is given an address, as on the first day of a network: no custodian node and no entry line; the homes find
+# each other through a stand-in of the table of BitTorrent (tests/peer/bt_table.py), and the first runs alone for PZ_E2E_ALONE seconds
+# (default 30) before the two others start.
+# Usage: PZ_REGTEST=host:port:user:password [PZ_E2E_LIGHT=1] [PZ_E2E_WIN=1] [PZ_E2E_MEET=1] tests/peer/e2e_net.sh    (pzsolve, pzpeer and pzsign built)
 set -u
 IFS=: read -r RH RP RU RW <<< "${PZ_REGTEST:?set PZ_REGTEST=host:port:user:password of a bitcoind in regtest}"
 BIN=$(pwd)/build; EXE=; RUN=
@@ -31,6 +34,12 @@ rpc generatetoaddress "[101, \"$MINE\"]" >/dev/null
 ( while sleep 1; do rpc generatetoaddress "[1, \"$MINE\"]" >/dev/null; done ) &
 
 CHAIN=(--rpc "$PZ_REGTEST")
+MEET=()
+if [ -n "${PZ_E2E_MEET:-}" ]; then
+    BT=$((${PZ_E2E_PORT:-30000} + 800))
+    python3 tests/peer/bt_table.py $BT > "$DIR/table.log" 2>&1 &
+    MEET=(--bt-router 127.0.0.1:$BT)
+fi
 if [ -n "${PZ_E2E_LIGHT:-}" ]; then
     EP=$((${PZ_E2E_PORT:-30000} + 900))
     for i in 0 1; do python3 tests/peer/electrum_bridge.py $((EP + i)) "$PZ_REGTEST" > "$DIR/bridge$i.log" 2>&1 & done
@@ -54,24 +63,29 @@ while n: n,r=divmod(n,58); s=a[r]+s
 print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     rpc wallet sendtoaddress "[\"$PADDR\", 1]" >/dev/null
     PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
-    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\nentry=127.0.0.1:%d\n' \
-        "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" "$PORT" > "$T/net.txt"
+    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=200000000000000:3ffffffffffffff\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\n' \
+        "$try" "$PUB" "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$T/net.txt"
+    [ -z "${PZ_E2E_MEET:-}" ] && echo "entry=127.0.0.1:$PORT" >> "$T/net.txt"
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
-    $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$T/n" \
-        --listen $PORT --no-upnp > "$T/n.log" 2>&1 &
-    NPID=$!
-    sleep 3
+    NPID=
+    if [ -z "${PZ_E2E_MEET:-}" ]; then
+        $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --seed-hex "$(python3 -c 'import os; print(os.urandom(32).hex())')" --dir "$T/n" \
+            --listen $PORT --no-upnp > "$T/n.log" 2>&1 &
+        NPID=$!
+        sleep 3
+    fi
     port=$PORT
     for h in a b c; do
         port=$((port + 1))
-        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" --listen $port --no-upnp \
+        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" "${MEET[@]}" --listen $port --no-upnp \
             --pzsolve "$BIN/pzsolve$EXE" --pzsign "$BIN/pzsign$EXE" --debug "$T/$h.debug" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
+        [ "$h" = a ] && [ -n "${PZ_E2E_MEET:-}" ] && sleep "${PZ_E2E_ALONE:-30}"   # the first home of the network, alone
     done
     wait "${PID[a]}" "${PID[b]}" "${PID[c]}"
-    kill $NPID 2>/dev/null
-    echo "== try $try"; for h in a b c; do grep -h -E "session|pzsolve ended|home stopped" "$T/$h.log" | sed "s/^/   $h /"; done
+    [ -n "$NPID" ] && kill $NPID 2>/dev/null
+    echo "== try $try"; for h in a b c; do grep -h -E "rendezvous|session|pzsolve ended|home stopped" "$T/$h.log" | head -12 | sed "s/^/   $h /"; done
     PAID=$(grep -l "PAID" "$T"/[abc].log | sed 's|.*/\(.\)\.log|\1|' | tr '\n' ' ')
     if [ "$(echo $PAID | wc -w)" -ge 2 ]; then
         set -- $PAID

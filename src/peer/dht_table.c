@@ -3,6 +3,7 @@
 /* dht_table.c - the routing table (docs/en/NETWORK.md 7.4): the buckets and the limits by address block in them, the exchanges with a
  * contact and what the table learns from them, NODES, the iterative lookups, the bootstrap, the refresh of the buckets, peers.txt. */
 #include "dht_priv.h"
+#include "btc.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -27,7 +28,7 @@ typedef struct {
 
 
 /* fn on each of n (at most BOOT_BATCH) arguments at once: the first on this thread, the others on threads of their own, or on this one
- * when a thread cannot be made. The rounds of a lookup and the pings of a bootstrap. */
+ * when a thread cannot be made. The workers of a lookup and the pings of a bootstrap. */
 static void parallel(void *(*fn)(void *), void *args, size_t size, int n)
 {
     pthread_t th[BOOT_BATCH];
@@ -308,22 +309,13 @@ void job_ping(dht *d, const dht_contact *c)
 
 /* ---- lookups ---- */
 
-enum { C_NEW, C_OK, C_FAIL };
+enum { C_NEW, C_ASKED, C_OK, C_FAIL };   /* a candidate: not asked yet, asked and not answered yet, answered, failed */
 
 typedef struct {
     dht_contact c;
     int state;
     uint8_t by[32];                /* the node whose answer named it; all zero for a contact of this node's own table */
 } cand;
-
-typedef struct {
-    dht *d;
-    dht_contact c;
-    const uint8_t *target;
-    dht_contact got[DHT_K];
-    int ngot;
-    bool ok;
-} query;
 
 /* Into the candidates, sorted by distance to t, at most SHORT_MAX. In a full list a new one takes the place of one that failed, or of
  * the farthest that another node named and that was not asked yet, when it is closer; never of one that answered, nor of a contact of
@@ -369,18 +361,6 @@ static void cand_distrust(cand *s, int n, const uint8_t failed[32])
         if (s[i].state == C_NEW && !memcmp(s[i].by, by, 32)) s[i].state = C_FAIL;
 }
 
-static void *query_main(void *arg)
-{
-    query *q = arg;
-    uint8_t req[33], ans[NODES_LEN];
-    size_t len;
-    req[0] = DHT_FIND_NODE;
-    memcpy(req + 1, q->target, 32);
-    q->ok = exchange(q->d, &q->c, req, sizeof req, ans, sizeof ans, &len) && parse_nodes(q->d, ans, len, q->got, &q->ngot);
-    heard(q->d, &q->c, q->ok);
-    return NULL;
-}
-
 /* how many of the queries so far went to the block of c's address (a lookup asks at most LOOKUP_BLOCK_MAX there) */
 static int asked_in_block(const dht *d, const net_addr *a, uint8_t (*blocks)[16], int nasked)
 {
@@ -392,55 +372,96 @@ static int asked_in_block(const dht *d, const net_addr *a, uint8_t (*blocks)[16]
     return k;
 }
 
+/* A lookup: DHT_ALPHA workers (this thread and DHT_ALPHA - 1 others) each take the closest candidate not asked yet among the want closest
+ * that did not fail, ask it, and take the next as soon as it answers: a slow or dead node holds one worker, not the lookup. It ends when
+ * those want have all answered, or after LOOKUP_ASK_MAX queries. A candidate in a block that had its queries counts as failed: answers
+ * that all point at one network (a victim, or the attacker's own) cannot make this node dial it more. */
+typedef struct {
+    dht *d;
+    const uint8_t *target;
+    int want, n, nasked, busy;
+    cand s[SHORT_MAX];
+    uint8_t blocks[LOOKUP_ASK_MAX][16];
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+} lookup;
+
+/* the candidate to ask now (mu held), -1 when there is none */
+static int lookup_next(lookup *L)
+{
+    for (int i = 0, live = 0; i < L->n && live < L->want && L->nasked < LOOKUP_ASK_MAX; i++) {
+        cand *c = &L->s[i];
+        if (c->state == C_NEW && asked_in_block(L->d, &c->c.addr, L->blocks, L->nasked) >= LOOKUP_BLOCK_MAX) c->state = C_FAIL;
+        if (c->state == C_FAIL) continue;
+        live++;
+        if (c->state == C_NEW) return i;
+    }
+    return -1;
+}
+
+static void *lookup_main(void *arg)
+{
+    lookup *L = *(lookup **)arg;
+    uint8_t req[33], ans[NODES_LEN];
+    req[0] = DHT_FIND_NODE;
+    memcpy(req + 1, L->target, 32);
+    pthread_mutex_lock(&L->mu);
+    while (!stopping(L->d)) {
+        const int i = lookup_next(L);
+        if (i < 0) {
+            if (!L->busy) break;                                /* nothing to ask, and no answer to wait for: done */
+            pthread_cond_wait(&L->cv, &L->mu);
+            continue;
+        }
+        const dht_contact c = L->s[i].c;
+        L->s[i].state = C_ASKED;
+        net_addr_block(&c.addr, L->blocks[L->nasked++]);
+        L->busy++;
+        pthread_mutex_unlock(&L->mu);
+        dht_contact got[DHT_K];
+        int ngot = 0;
+        size_t len;
+        const bool ok = exchange(L->d, &c, req, sizeof req, ans, sizeof ans, &len) && parse_nodes(L->d, ans, len, got, &ngot);
+        heard(L->d, &c, ok);
+        pthread_mutex_lock(&L->mu);
+        L->busy--;
+        for (int j = 0; j < L->n; j++)
+            if (!memcmp(L->s[j].c.id, c.id, 32)) L->s[j].state = ok ? C_OK : C_FAIL;
+        if (!ok) cand_distrust(L->s, L->n, c.id);
+        for (int g = 0; g < ngot; g++)
+            if (!is_me(L->d, got[g].id)) cand_add(L->s, &L->n, L->target, &got[g], C_NEW, c.id);
+        pthread_cond_broadcast(&L->cv);
+    }
+    pthread_cond_broadcast(&L->cv);
+    pthread_mutex_unlock(&L->mu);
+    return NULL;
+}
+
 int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
 {
-    if (want > DHT_K) want = DHT_K;
-    cand s[SHORT_MAX];
+    lookup *L = calloc(1, sizeof *L), *w[DHT_ALPHA];
     dht_contact seed[DHT_K];
-    uint8_t blocks[LOOKUP_ASK_MAX][16];
-    int n = 0, nasked = 0;
+    if (!L) return 0;
+    L->d = d, L->target = target, L->want = want < DHT_K ? want : DHT_K;
+    pthread_mutex_init(&L->mu, NULL);
+    pthread_cond_init(&L->cv, NULL);
     const int ns = rt_closest(d, target, seed, DHT_K);
-    for (int i = 0; i < ns; i++) cand_add(s, &n, target, &seed[i], C_NEW, NULL);
-    if (reached(d)) cand_add(s, &n, target, &d->me, C_OK, NULL);     /* a node the others reach is a node of the table like them */
+    for (int i = 0; i < ns; i++) cand_add(L->s, &L->n, target, &seed[i], C_NEW, NULL);
+    if (reached(d)) cand_add(L->s, &L->n, target, &d->me, C_OK, NULL);   /* a node the others reach is a node of the table like them */
     const int bk = bucket_of(d->me.id, target);
     if (bk < DHT_BUCKETS) {
         pthread_mutex_lock(&d->rt_mu);
         d->b[bk].looked = sys_now_ms();
         pthread_mutex_unlock(&d->rt_mu);
     }
-    query q[DHT_ALPHA];
-    /* Rounds of up to alpha queries to the closest candidates not asked yet, among the want closest that did not fail; the lookup ends
-     * when those want have all answered, or after LOOKUP_ASK_MAX queries. A candidate in a block that had its queries counts as failed:
-     * answers that all point at one network (a victim, or the attacker's own) cannot make this node dial it more. */
-    while (!stopping(d) && nasked < LOOKUP_ASK_MAX) {
-        int nq = 0, live = 0;
-        for (int i = 0; i < n && live < want && nq < DHT_ALPHA && nasked + nq < LOOKUP_ASK_MAX; i++) {
-            if (s[i].state == C_FAIL) continue;
-            if (s[i].state == C_NEW && asked_in_block(d, &s[i].c.addr, blocks, nasked + nq) >= LOOKUP_BLOCK_MAX) {
-                s[i].state = C_FAIL;
-                continue;
-            }
-            live++;
-            if (s[i].state != C_NEW) continue;
-            q[nq].d = d, q[nq].c = s[i].c, q[nq].target = target, q[nq].ngot = 0, q[nq].ok = false;
-            net_addr_block(&s[i].c.addr, blocks[nasked + nq]);
-            nq++;
-        }
-        if (!nq) break;
-        nasked += nq;
-        parallel(query_main, q, sizeof *q, nq);
-        for (int j = 0; j < nq; j++)
-            for (int i = 0; i < n; i++)
-                if (!memcmp(s[i].c.id, q[j].c.id, 32)) s[i].state = q[j].ok ? C_OK : C_FAIL;
-        for (int j = 0; j < nq; j++)
-            if (!q[j].ok) cand_distrust(s, n, q[j].c.id);
-        for (int j = 0; j < nq; j++)
-            for (int g = 0; g < q[j].ngot; g++)
-                if (!is_me(d, q[j].got[g].id)) cand_add(s, &n, target, &q[j].got[g], C_NEW, q[j].c.id);
-    }
+    for (int i = 0; i < DHT_ALPHA; i++) w[i] = L;
+    parallel(lookup_main, w, sizeof *w, DHT_ALPHA);
     int m = 0;
-    for (int i = 0; i < n && m < want; i++)
-        if (s[i].state == C_OK) out[m++] = s[i].c;
+    for (int i = 0; i < L->n && m < L->want; i++)
+        if (L->s[i].state == C_OK) out[m++] = L->s[i].c;
+    pthread_mutex_destroy(&L->mu);
+    pthread_cond_destroy(&L->cv);
+    free(L);
     return m;
 }
 
@@ -463,24 +484,6 @@ net_conn *dht_dial(dht *d, const dht_contact *c) { return net_dial(dial_cfg(d), 
 
 /* ---- bootstrap, refresh, peers.txt ---- */
 
-static void hex32(const uint8_t b[32], char out[65])
-{
-    static const char H[] = "0123456789abcdef";
-    for (int i = 0; i < 32; i++) out[2 * i] = H[b[i] >> 4], out[2 * i + 1] = H[b[i] & 15];
-    out[64] = 0;
-}
-
-static bool unhex32(const char *s, uint8_t out[32])
-{
-    for (int i = 0; i < 64; i++) {
-        const char c = s[i];
-        const int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
-        if (v < 0) return false;
-        out[i / 2] = (uint8_t)(i % 2 ? out[i / 2] | v : v << 4);
-    }
-    return s[64] == 0 || s[64] == '\n' || s[64] == '\r' || s[64] == ' ';
-}
-
 /* peers.txt: the contacts, one per line, "address identity" */
 void save_peers(dht *d)
 {
@@ -499,7 +502,7 @@ void save_peers(dht *d)
         for (int i = 0; i < n; i++) {
             char a[64], h[65];
             net_addr_str(&cs[i].addr, a, sizeof a);
-            hex32(cs[i].xonly, h);
+            btc_hex(cs[i].xonly, 32, h);
             fprintf(f, "%s %s\n", a, h);
         }
         if (fclose(f) == 0) (void)sys_replace(tmp, path);
@@ -525,7 +528,7 @@ static int boot_list(dht *d, boot_addr *out, int max)
         char *sp = strchr(line, ' ');
         if (!sp) continue;
         *sp = 0;
-        if (unhex32(sp + 1, out[n].xonly) && net_parse_addr(line, &out[n].a)) out[n++].has_id = true;
+        if (strcspn(sp + 1, " \r\n") == 64 && btc_unhex(sp + 1, 64, out[n].xonly) && net_parse_addr(line, &out[n].a)) out[n++].has_id = true;
     }
     if (f) fclose(f);
     return n;
@@ -612,6 +615,8 @@ void refresh(dht *d, bool all)
 void dht_refresh(dht *d) { refresh(d, true); }
 
 void dht_seen(dht *d, const dht_contact *c) { rt_seen(d, c); }
+
+int dht_count(dht *d) { return rt_count(d); }
 
 int dht_contacts(dht *d, dht_contact *out, int max)
 {

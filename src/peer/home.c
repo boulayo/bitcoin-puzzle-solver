@@ -9,6 +9,7 @@
  * most HELLO_SESSIONS of them run at a time, one per partner, and a slot whose partner proved nothing is given back: they never take the
  * slots of the pairs the table alerted. */
 #include "home.h"
+#include "btc.h"
 #include "chain_rpc.h"
 #include "dbg.h"
 #include "bt.h"
@@ -51,7 +52,7 @@ typedef struct session_slot {
     uint8_t eid[32], partner[32];
     record mine, theirs;
     net_conn *conn;                 /* an incoming channel handed by on_session */
-    uint8_t first[SESSION_MSG_MAX];
+    uint8_t first[SESSION_HELLO_MAX];  /* the hello that came with it; a longer first message is no hello */
     size_t first_len;
 } session_slot;
 
@@ -237,11 +238,6 @@ static bool cc_recv(void *ctx, uint8_t *m, size_t cap, size_t *len, int timeout_
     return net_recv(cc->c, m, cap, len);
 }
 
-static void hex8(const uint8_t *p, char out[17])
-{
-    for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", p[i]);
-}
-
 typedef struct { home *h; session_slot *s; } session_job, chan_wait;
 
 /* the partner's own connection to this home, which on_session handed to the slot: dht_channel looks for it while it tries the others */
@@ -268,7 +264,7 @@ static void *session_main(void *arg)
     free(job);
     const home_cfg *cfg = h->cfg;
     char tag[17], why[300] = "";
-    hex8(s->eid, tag);
+    btc_hex(s->eid, 8, tag);
     const int me = memcmp(s->mine.owner, s->theirs.owner, 32) < 0 ? 0 : 1;
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
@@ -541,16 +537,24 @@ int home_run(const home_cfg *cfg)
     sys_on_stop(on_signal);
     const int nc = dht_start(h->d);
     char idhex[17];
-    hex8(h->id.xonly, idhex);
+    btc_hex(h->id.xonly, 8, idhex);
     say(h, "home %s... on network %s: %d contacts, %s", idhex, h->nf.net, nc, cfg->listen_port ? "listening" : "not listening");
     int rc = nc < 0 || !start_pzsolve(h, err, sizeof err);
     if (rc) fprintf(stderr, "%s\n", nc < 0 ? "cannot listen" : err);
     /* the feed: the new points of dp.bin to the table, every half second */
     dpfeed df = {0};
-    uint64_t published = 0;
-    bool solved_alone = false;
+    uint64_t published = 0, found = 0;
+    bool solved_alone = false, met = nc > 0;
+    int64_t next_status = mono_s() + 600;
     while (!rc && !g_stop) {
         sys_sleep_ms(500);
+        const int contacts = dht_count(h->d);                  /* what the network is to this home: at the first contact, and every 10 minutes */
+        if ((contacts > 0) != met || mono_s() >= next_status) {
+            if (contacts) say(h, "network: %d contacts; %llu points of this home, %llu records of others kept here", contacts,
+                              (unsigned long long)found, (unsigned long long)dht_local_count(h->d));
+            else say(h, "network: no contact, looking for the others; %llu points of this home wait for them", (unsigned long long)found);
+            met = contacts > 0, next_status = mono_s() + 600;
+        }
         if (!df.f && dpfeed_open(&df, h->dpbin)) {
             pthread_mutex_lock(&h->mu);
             h->dpr = sys_fopen(h->dpbin, "rb");                 /* the distances of the home: not for pzsign */
@@ -568,6 +572,7 @@ int home_run(const home_cfg *cfg)
             }
             pthread_mutex_unlock(&h->mu);
             pz_secure_zero(p, sizeof p);
+            found += (uint64_t)n;
             published += (uint64_t)dht_publish(h->d, recs, n);
         }
         int st;

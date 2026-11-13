@@ -10,6 +10,7 @@
 #include <pthread.h>
 
 #define SESSION_MSG_MAX 65535               /* a Noise frame */
+#define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 426 bytes at most */
 
 /* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
  * while a session waits for blocks, and is skipped by the reader. */

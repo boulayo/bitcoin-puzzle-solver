@@ -25,6 +25,7 @@
 
 #define HELLO_FIXED (2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 1)
 #define CHUNK 65000                         /* a piece of a pzsign message in one S_SIGNER */
+_Static_assert(1 + HELLO_FIXED + BTC_SPK_MAX <= SESSION_HELLO_MAX, "a hello fits in SESSION_HELLO_MAX");
 #define HELLO_MS 30000                      /* the longest wait for the hello and the proof of the partner, which it makes at once */
 #define LIMIT_LINES 1024                    /* lines of the file of the limit: one per network, one per pair that failed */
 #define LIMIT_WAIT_S 120                    /* the longest wait for the turn of a signing (a partner waits 300 s for a message) */
