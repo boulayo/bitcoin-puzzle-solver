@@ -160,6 +160,16 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
   campagne di rete contro l'1,18 misurato.
 - Commenti: `chain_spv.c:3`, `chain_spv.h:6`, `dht_priv.h:10`, `net.h:5`, `gpu.c:178`, `hash160_batch.h`.
 
+### 3.6 Il lavoro nel tempo
+
+Una casa che entra dopo mesi confronta ogni suo punto con quelli di tutte le case dal primo giorno (NETWORK.md 7.3). Restano aperti:
+
+| | Rilievo | Rimedio proposto |
+|---|---|---|
+| H1 | Chi lascia la rete per sempre porta via la sua metà di ogni chiave: una coincidenza con i suoi punti non la paga nessuno | Da decidere. Oggi chi vuole lasciare il posto a qualcuno gli dà la cartella della casa (`home.seed` e la campagna). Un comando "passa la casa" lo renderebbe esplicito |
+| H2 | Un camminatore che incontra il punto di una casa sparita, o una fusione con un'altra casa, rifà un percorso già fatto | Farlo ripartire da un punto nuovo (pzpeer lo dice a pzsolve). È la "ripartenza dei camminatori" già in programma |
+| H3 | La ripubblicazione quotidiana di mesi di punti pesa molto | La ripubblicazione leggera (C2, F2) |
+
 ### 3.5 Librerie
 
 - OpenSSL 3.6.5 è uscita (13 CVE, nessuna tocca ciò che pzsign usa), ma cb-mpc accetta solo la 3.6.4: va scritta la procedura di

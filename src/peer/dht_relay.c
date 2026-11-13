@@ -204,21 +204,31 @@ static net_conn *await(void *arg, dht_wait_fn wait, int64_t ms, bool *give_up)
     return NULL;
 }
 
+/* a direct connection to the partner, found in the table */
+static net_conn *dial_partner(dht *d, const uint8_t partner[32])
+{
+    dht_contact pc;
+    if (!dht_find(d, partner, &pc)) return NULL;
+    net_conn *c = dht_dial(d, &pc);
+    if (!c) rt_failed(d, pc.id);
+    return c;
+}
+
 net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32], int wait_ms, dht_wait_fn wait, void *arg)
 {
     const int64_t until = sys_now_ms() + wait_ms;
     bool give_up = false;
-    dht_contact pc;
+    net_conn *c;
     /* direct: party 0 dials the partner it finds, and so does a side nobody reaches */
-    if ((memcmp(d->me.xonly, partner, 32) < 0 || !reached(d)) && dht_find(d, partner, &pc)) {
-        net_conn *c = dht_dial(d, &pc);
-        if (c) return c;
-        rt_failed(d, pc.id);
-    }
+    const bool dials = memcmp(d->me.xonly, partner, 32) < 0 || !reached(d);
+    if (dials && (c = dial_partner(d, partner))) return c;
     for (int round = 0; !stopping(d) && sys_now_ms() < until; round++) {
         /* the partner's own connection: a side the others reach gives it the first slot, then looks between the tries of the relay */
-        net_conn *c = await(arg, wait, round == 0 && reached(d) ? (d->slot_ms < until - sys_now_ms() ? d->slot_ms : until - sys_now_ms()) : 0, &give_up);
+        c = await(arg, wait, round == 0 && reached(d) ? (d->slot_ms < until - sys_now_ms() ? d->slot_ms : until - sys_now_ms()) : 0, &give_up);
         if (c || give_up) return c;
+        /* It did not come: it cannot reach this side, or its session gave up long ago (a home back after an absence starts the pair
+         * again, and the other side waits for nothing). This side dials it too. */
+        if (round == 0 && !dials && (c = dial_partner(d, partner))) return c;
         const uint64_t wall = wall_us() / 1000, slot = wall / (uint64_t)d->slot_ms;
         const int64_t left = (int64_t)((slot + 1) * (uint64_t)d->slot_ms - wall), end = sys_now_ms() + left < until ? sys_now_ms() + left : until;
         dht_contact r;

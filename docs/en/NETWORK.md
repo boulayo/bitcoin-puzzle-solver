@@ -301,6 +301,15 @@ counts them), signature.
 - An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour while the others reach it, and every minute when
   they do not (it does not listen, or nothing comes in at its port).
 
+**The work of everyone, at any time.** Nothing of the table is sent live only. A custodian keeps every record on its disk (`store.bin`),
+without an end, within its limits; every owner sends all its records again every day and as soon as it is back among the others (7.4).
+So each point of a home that joins after months is compared with the points of every home since the first day, at the custodians of
+that point: nothing is downloaded, and every new point has a better chance than the one before. A home away for a time loses nothing
+(it keeps `home.seed` and its campaign): when it is back its records come again, the custodians alert every coincidence with them
+again, and the session of a pair starts again even if its partner had given up on it (7.7). A home that leaves for good takes its half
+of every key with it: its distances are its secret, so a coincidence with its points can be paid by nobody. Its records stay in the
+table, a walker of another home that meets one is on a path walked already.
+
 ### 7.4 Kademlia
 
 k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type; an answer is its request + 1; `n` is one byte):
@@ -540,8 +549,10 @@ neither can dial the other, a node that listens joins their connections (`src/pe
   that join and say nothing do not hold the relays. A relay under way is one thread that copies through the receive buffers of the two connections.
 - **The channel of a session:** `dht_channel(partner, eid)` gives the daemon one connection with the partner, whichever way it comes.
   Party 0 dials the partner it finds in the table, and so does a side nobody reaches (nobody can dial it). A side the others reach
-  gives the partner's own connection (the one `on_session` got) the first slot. Then the relay of each slot, slot after slot, while the
-  partner's connection is still taken if it comes; for 10 minutes. `home.c` asks it for every session.
+  gives the partner's own connection (the one `on_session` got) the first slot, then dials the partner too: the partner may not reach
+  it, or may wait for nothing (its session gave up on the pair long ago, and a home back after an absence starts it again). Then the
+  relay of each slot, slot after slot, while the partner's connection is still taken if it comes; for 10 minutes. `home.c` asks it for
+  every session.
 - The relay carries sessions only: the proofs of an alert go through the mailboxes (7.3), the requests of the table are not relayed.
 
 `tests/peer/t_net.c` splices two connections, runs 6 MB through them end to end, and checks both identities and the limit of bytes.

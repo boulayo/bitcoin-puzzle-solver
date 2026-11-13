@@ -955,6 +955,24 @@ static void test_asker(void)
     scratch_end(sv, "s-ask");
 }
 
+/* A pair whose other side gave up long ago, started again by a home that comes back after an absence: the other side waits for
+ * nothing, so a side that would only wait for its connection dials it too after one slot. Before, a side that the others reach and
+ * that is party 1 of the pair waited, then went to the relays, where nobody came. */
+static void test_partner_back(void)
+{
+    node *p0 = &nodes[3], *p1 = &nodes[4];
+    if (memcmp(p0->id.xonly, p1->id.xonly, 32) > 0) p0 = &nodes[4], p1 = &nodes[3];
+    uint8_t name[32], got[8];
+    const uint8_t m = DHT_SESSION_FIRST;
+    size_t n;
+    hashed("a pair that comes back", name);
+    const int64_t t0 = ms();
+    net_conn *c = dht_channel(p1->d, p0->id.xonly, name, 6000, NULL, NULL);
+    CHECK(c != NULL && ms() - t0 < 4000);
+    CHECK(c && net_send(c, &m, 1) && net_recv(c, got, sizeof got, &n) && n == 1 && got[0] == m);   /* the partner's session answered */
+    net_close(c);
+}
+
 /* The first home of a network: alone, and past the grace in which it counts its own port open, it publishes its points to nobody. They
  * go at its first contact, not at the republish of the next day: a node that joins holds them within a few seconds. Before, the
  * points of a home that had been alone waited for that republish, or for a restart. */
@@ -1371,6 +1389,7 @@ int main(void)
     test_relay_limits();
     test_relay_stop();
     printf("t_dht: the relay in %.1f s\n", (double)(ms() - t0) / 1000);
+    test_partner_back();
     test_first_contact();
     /* last: they leave nodes in the tables of the others that are gone, and every dial to them costs a timeout (on Windows two seconds
      * even on loopback, where a refused connection is tried again) */
