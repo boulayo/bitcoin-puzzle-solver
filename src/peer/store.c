@@ -340,13 +340,26 @@ static void drop_at(mbox *m, size_t i)
     m->n--;
 }
 
-/* room for one more pair of owner: its oldest goes when it has per_owner of them (a flood for one owner pushes out its own pairs only) */
-static void owner_room(mbox *m, const uint8_t owner[32])
+/* Room for one more pair among those of owner (among all when NULL), which may be limit: the oldest that no owner proved goes, else the
+ * oldest. A flood for one owner pushes out its own pairs only, and pairs made of points copied from the table, which their sender
+ * cannot prove, go before the ones an owner proved. */
+static void make_room(mbox *m, const uint8_t *owner, size_t limit)
 {
-    size_t k = 0, oldest = 0;
+    size_t k = 0, oldest = 0, bare = m->n;
     for (size_t i = m->n; i-- > 0;)
-        if (has_owner(&m->e[i], owner)) k++, oldest = i;
-    if (k >= m->per_owner) drop_at(m, oldest);
+        if (!owner || has_owner(&m->e[i], owner)) {
+            k++, oldest = i;
+            if (!m->e[i].p.has[0] && !m->e[i].p.has[1]) bare = i;
+        }
+    if (k >= limit) drop_at(m, bare < m->n ? bare : oldest);
+}
+
+/* the same owners at the same point with the same types: one pair, whatever the sequence numbers of its records */
+static bool same_pair(const mbox_pair *p, const mbox_pair *q)
+{
+    for (int i = 0; i < 2; i++)
+        if (memcmp(p->r[i].owner, q->r[i].owner, 32) || memcmp(p->r[i].x, q->r[i].x, 32) || p->r[i].t != q->r[i].t) return false;
+    return true;
 }
 
 bool mbox_put(mbox *m, const record *a, const record *b, const uint8_t proof[64])
@@ -363,15 +376,21 @@ bool mbox_put(mbox *m, const record *a, const record *b, const uint8_t proof[64]
     pthread_mutex_lock(&m->mu);
     size_t at = m->n;
     for (size_t i = 0; i < m->n && at == m->n; i++)
-        if (!memcmp(m->e[i].h, e.h, 32)) at = i;
+        if (same_pair(&m->e[i].p, &e.p)) at = i;
     bool fresh = at == m->n;
-    if (fresh) {
-        owner_room(m, e.p.r[0].owner);
-        owner_room(m, e.p.r[1].owner);
-        if (m->n == m->cap) drop_at(m, 0);                     /* full: the oldest pair goes */
-        at = m->n++;
-        m->e[at] = e;
+    /* the pair with other sequence numbers (a proof is over the records as they are): the one kept stays, unless only the new one is proved */
+    const bool other = !fresh && memcmp(m->e[at].h, e.h, 32);
+    if (other && (!proof || m->e[at].p.has[0] || m->e[at].p.has[1])) {
+        pthread_mutex_unlock(&m->mu);
+        return false;
     }
+    if (fresh) {
+        make_room(m, e.p.r[0].owner, m->per_owner);
+        make_room(m, e.p.r[1].owner, m->per_owner);
+        make_room(m, NULL, m->cap);
+        at = m->n++;
+    }
+    if (fresh || other) m->e[at] = e;
     if (proof && !m->e[at].p.has[who]) {
         m->e[at].p.has[who] = true;
         memcpy(m->e[at].p.proof[who], proof, 64);

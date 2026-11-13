@@ -283,7 +283,9 @@ counts them), signature.
   dozen connections, so a record alerts at most 2 pairs, and the coincidences of the records of one address block are limited (7.4).
 - A node that receives an `ALERT` checks both records (signatures, same x, different owners). It keeps the pair as a mailbox when it may
   be a mailbox of one of the owners (the rule of the custodian above, for the key of the mailbox), in memory: the last 4096 pairs, at
-  most 64 of one owner (a flood of the pairs of one owner pushes out its own). When one owner is itself it checks the proofs of
+  most 64 of one owner (a flood of the pairs of one owner pushes out its own). Two owners at one point are one pair whatever the
+  sequence numbers of their records, and the pair that goes is the oldest that no owner proved, then the oldest: pairs made of points
+  copied from the table, which their sender cannot prove, do not push out a pair that an owner proved. When one owner is itself it checks the proofs of
   possession: its own (the daemon gives the distance of the point) and the other owner's. Only then the daemon gets the alert.
 - The other owner's proof comes one of two ways. `POSSESS`, with a nonce of the asker, when the other owner listens. Or the other owner
   sends it: once its own proof checks out, an owner sends `ALERT(its record, the other record, proof)` to the other owner when it can

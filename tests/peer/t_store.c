@@ -301,7 +301,7 @@ static void test_mbox(void)
     CHECK(mbox_put(m, &c, &a2, NULL));
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 2 && mbox_get(m, ida.xonly, pairs, 1) == 1);
     CHECK(pairs[0].r[0].x[0] == x2[0] && !memcmp(pairs[0].r[0].x, x2, 32));   /* the newest first */
-    /* three more pairs in a mailbox of three: the oldest go */
+    /* three more pairs in a mailbox of three: the oldest that nobody proved go */
     for (int i = 0; i < 3; i++) {
         char label[16];
         uint8_t x[32];
@@ -310,8 +310,9 @@ static void test_mbox(void)
         const record p = make(&idb, 0, x, 10 + (uint64_t)i), q = make(&idc, 1, x, 10 + (uint64_t)i);
         CHECK(mbox_put(m, &p, &q, NULL));
     }
-    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 0 && mbox_get(m, idc.xonly, pairs, 4) == 3 && mbox_get(m, idb.xonly, pairs, 4) == 3);
-    CHECK(mbox_put(m, &a, &b, NULL));                           /* gone, so new again */
+    /* the pair of a with c went, and the first of the three; the pair of a with b, which both proved, stays */
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &b) && mbox_get(m, idc.xonly, pairs, 4) == 2);
+    CHECK(mbox_put(m, &c, &a2, NULL));                          /* gone, so new again */
     mbox_free(m);
     /* a limit per owner: a flood of pairs of b and c pushes out their own oldest only, not the pairs of a and d */
     const record d1 = make(&idd, 1, x1, 1);
@@ -327,6 +328,32 @@ static void test_mbox(void)
     }
     CHECK(mbox_get(m, idb.xonly, pairs, 4) == 4 && mbox_get(m, idd.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));   /* the pair of a with c went: c had too many */
+    mbox_free(m);
+    /* What one identity that copied the points of a can do to the pair of a with b, which b proved: the same point under ten sequence
+     * numbers is one pair, and ten points push out each other, not the proved pair. Before, any four of them pushed it out. */
+    m = mbox_new(100, 4);
+    CHECK(m && mbox_put(m, &b, &a, pb));
+    for (int i = 0; i < 10; i++) {
+        const record q = make(&idc, 1, x1, 20 + (uint64_t)i);
+        CHECK(mbox_put(m, &a, &q, NULL) == (i == 0));
+    }
+    const record c9 = make(&idc, 1, x1, 99);
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 2 && !mbox_put(m, &a, &c9, NULL) && !has_pair(pairs, mbox_get(m, idc.xonly, pairs, 4), &a, &c9));
+    for (int i = 0; i < 10; i++) {
+        char label[16];
+        uint8_t x[32];
+        snprintf(label, sizeof label, "m5 %d", i);
+        point_x(label, x);
+        const record p = make(&ida, 0, x, 30 + (uint64_t)i), q = make(&idc, 1, x, 30 + (uint64_t)i);
+        CHECK(mbox_put(m, &p, &q, NULL));
+    }
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 4 && has_pair(pairs, 4, &a, &b));
+    /* the pair with other sequence numbers takes the place of the one kept only when it alone is proved */
+    const record c1 = make(&idc, 1, x1, 20);
+    mbox_free(m);
+    m = mbox_new(100, 4);
+    CHECK(m && mbox_put(m, &a, &c1, NULL) && mbox_put(m, &a, &c9, pa) && mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &c9));
+    CHECK(!mbox_put(m, &a, &c1, pa) && has_pair(pairs, mbox_get(m, ida.xonly, pairs, 4), &a, &c9));
     mbox_free(m);
 }
 

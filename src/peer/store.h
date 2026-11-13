@@ -57,8 +57,9 @@ void store_key(const uint8_t x[32], uint8_t k[32]);
 /* A coincidence: two valid records with the same x from different owners. */
 bool store_pair_ok(const secp256k1_context *ctx, const record_net *net, const record *a, const record *b);
 
-/* The mailbox: alert pairs kept for their owners, in memory, at most cap in all and per_owner of one owner (the oldest go first: of the
- * owner that has too many, else of all). A pair is kept in the order of its owners (the smaller x-only identity first), whatever order
+/* The mailbox: alert pairs kept for their owners, in memory, at most cap in all and per_owner of one owner (of the owner that has
+ * too many, else of all, the oldest pair that no owner proved goes first, then the oldest). Two owners at one point with the same types
+ * are one pair, whatever the sequence numbers of their records. A pair is kept in the order of its owners (the smaller x-only identity first), whatever order
  * it came in, with the proof of possession of each owner when one came (docs/en/NETWORK.md 7.3: over the pair, for the other owner). The
  * mailbox keeps what it is given: the caller checks pairs and proofs. */
 typedef struct mbox mbox;
