@@ -132,8 +132,8 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | F6 | La scelta del motore CPU si rifà a ogni avvio (2 secondi); la memoria della scheda è contata due volte nel limite dei lanci | Ricordare la scelta; contare una volta |
 | F7 | Un core intero riservato per ogni scheda OpenCL | `clFlush`, attesa, poi `clFinish` |
 | F8 | La tabella del canguro è una potenza di due dentro `--mem`; voci da 16 byte | Voci da 8 byte, tabella di qualsiasi misura |
-| F9 | pzpeer tiene 4,5 MB per 64 sessioni possibili | Allocare alla prima sessione |
-| F10 | Ogni giro di una ricerca lancia tre domande e aspetta la più lenta: un nodo spento in tabella ferma il giro per tutto il tempo limite (10 s in rete). Misurato con i rifiuti lenti di Windows: con quattro nodi spenti lo scambio tramite cassette passa da 5 a più di 30 secondi | Tre domande sempre in volo: la successiva parte appena una risponde |
+| F9 | pzpeer teneva 4,5 MB per 64 sessioni possibili | **Fatto**: ogni sessione tiene solo lo spazio di un saluto (32 KB in tutto) |
+| F10 | Ogni giro di una ricerca lanciava tre domande e aspettava la più lenta: un nodo spento fermava il giro per tutto il tempo limite | **Fatto**: tre domande sempre in volo. Con nodi spenti e rifiuti lenti come su Windows lo scambio tramite cassette passa da oltre 30 a 23 secondi |
 
 ### 3.3 Semplificazioni proposte (circa 1000 righe in meno)
 
