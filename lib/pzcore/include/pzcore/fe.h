@@ -96,8 +96,8 @@ static inline void pz_fe_sub_c(pz_fe *r, const pz_fe *a, const pz_fe *b)
     r->n[0] = o[0]; r->n[1] = o[1]; r->n[2] = o[2]; r->n[3] = o[3];
 }
 
-#if defined(__x86_64__) && defined(__BMI2__) && defined(__ADX__) && !defined(PZ_NO_ASM)
-/* Straight-line x86-64 versions of pz_fe_add / pz_fe_sub: the compiler's pz_u128 carry chains cost about twice as much.
+#if defined(__x86_64__) && !defined(PZ_NO_ASM)
+/* Straight-line x86-64 versions of pz_fe_add / pz_fe_sub (add, adc, sbb: every x86-64 CPU has them): the compiler's pz_u128 carry chains cost about twice as much.
  * A carry (borrow) out of bit 256 is folded back as +-C with a mask; if that fold wraps again the value is tiny
  * (< C), so a second mask-and-add of a single limb is exact and needs no carry propagation. */
 #define PZ_FE_ADDSUB_ASM 1
@@ -491,28 +491,35 @@ void pz_fe_inv(pz_fe *r, const pz_fe *a);
 bool pz_fe_sqrt(pz_fe *r, const pz_fe *a);
 
 /* Montgomery batch inversion of the n elements of a, in place, with a single inversion; tmp must hold n elements and not overlap
- * a. If some element is zero (mod p) it returns false and leaves a[] untouched (tmp is overwritten); n == 0 is fine. */
-static inline bool pz_fe_inv_batch(pz_fe *a, pz_fe *tmp, size_t n)
+ * a. If some element is zero (mod p) it returns false and leaves a[] untouched (tmp is overwritten); n == 0 is fine. The products
+ * run in two chains, the elements of even and of odd index: each chain waits for its own last product only, so the pace is the
+ * multiplier's throughput and not its latency (a quarter less time for two products more). Not inlined: once per batch, and the
+ * assembly product needs registers that a large caller does not have left. */
+static __attribute__((noinline, unused)) bool pz_fe_inv_batch(pz_fe *a, pz_fe *tmp, size_t n)
 {
     if (n == 0) return true;
-    pz_fe acc = a[0];
-    tmp[0] = a[0];
-    for (size_t i = 1; i < n; i++) {
-        pz_fe_mul(&acc, &acc, &a[i]);
-        tmp[i] = acc;
+    for (size_t i = 0; i < n; i++) {
+        if (i < 2) tmp[i] = a[i];
+        else pz_fe_mul(&tmp[i], &tmp[i - 2], &a[i]);            /* a[i] * a[i-2] * a[i-4] ... */
     }
-    pz_fe chk = acc;
+    pz_fe inv[2], all, last = tmp[n - 1], other = tmp[n > 1 ? n - 2 : 0];   /* the products of the two chains (copies: see above) */
+    if (n > 1) pz_fe_mul(&all, &last, &other);
+    else all = last;
+    pz_fe chk = all;
     pz_fe_normalize(&chk);
     if (PZ_UNLIKELY(pz_fe_is_zero(&chk))) return false;
-    pz_fe inv;
-    pz_fe_inv(&inv, &acc);
-    for (size_t i = n - 1; i > 0; i--) {
-        pz_fe t;
-        pz_fe_mul(&t, &inv, &tmp[i - 1]);
-        pz_fe_mul(&inv, &inv, &a[i]);
+    pz_fe_inv(&all, &all);
+    pz_fe_mul(&last, &all, &last), pz_fe_mul(&other, &all, &other);   /* 1/other chain, 1/last chain */
+    inv[(n - 1) & 1] = n > 1 ? other : all;                     /* inv[j]: the inverse of what is left of chain j */
+    inv[n & 1] = last;
+    for (size_t i = n - 1; i >= 2; i--) {
+        pz_fe *v = &inv[i & 1], t;
+        pz_fe_mul(&t, v, &tmp[i - 2]);
+        pz_fe_mul(v, v, &a[i]);
         a[i] = t;
     }
-    a[0] = inv;
+    a[0] = inv[0];
+    if (n > 1) a[1] = inv[1];
     return true;
 }
 

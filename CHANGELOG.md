@@ -42,6 +42,13 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   pzpeer on macOS. A whole network has not been run on those systems yet.
 - New campaign seeds come from the generator of several sources of pzcore (OS, CPU generator, timing jitter, TPM), mixed with HKDF.
 
+### Changed
+
+- Faster scalar engines: the batch inversion multiplies in two interleaved chains (a quarter less time with BMI2/ADX, a tenth
+  without), and the straight-line addition and subtraction are used on every x86-64 build, not only with BMI2/ADX. Measured on one
+  thread: kangaroo step BMI2/ADX 9.4 to 10.9 M steps/s, portable 7.2 to 8.2 M; linear baseline 4.62 to 4.74 M keys/s, avx512
+  10.2 to 10.6 M. The lane engines (avx2v, avx512v, avx512i) invert in lanes and are unchanged.
+
 ### Security
 
 - Windows: the libraries of the GPU drivers (`nvcuda.dll`, `OpenCL.dll`) are loaded from the system folder only, and `powercfg` is

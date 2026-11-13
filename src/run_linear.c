@@ -95,6 +95,12 @@ static void linear_progress(run_ctx *r, progress_info *pi)
 
 static int linear_checkpoint(run_ctx *r)
 {
+    if (r->near) {                                  /* the near misses of the blocks about to be recorded as scanned: on the disk first */
+        pthread_mutex_lock(&r->found_mu);
+        const bool ok = fflush(r->near) == 0 && !ferror(r->near) && pz_fd_sync(fileno(r->near)) == 0;
+        pthread_mutex_unlock(&r->found_mu);
+        if (!ok) return -1;
+    }
     int rc = sched_save(r->sched, r->path_state);
     u64 session = 0;
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);

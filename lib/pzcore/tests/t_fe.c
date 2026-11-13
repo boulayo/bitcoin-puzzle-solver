@@ -178,6 +178,26 @@ int main(void)
         for (int j = 5 - len; j < 4 && len; j++) a.n[j] = 0;
         check_inv(&a);
     }
+    /* batch inversion, every length from 0 to 70: each element against its own inversion; with a zero (mod p: 0 or p) at any
+     * place it is refused and the elements are left as they were */
+    for (size_t n = 0; n <= 70; n++) {
+        pz_fe a[70], o[70], tmp[70];
+        for (size_t i = 0; i < n; i++)
+            for (int j = 0; j < 4; j++) o[i].n[j] = rnd();
+        memcpy(a, o, sizeof a);
+        CHECK(pz_fe_inv_batch(a, tmp, n));
+        for (size_t i = 0; i < n; i++) {
+            pz_fe want;
+            pz_fe_inv(&want, &o[i]);
+            CHECK(pz_fe_equiv(&a[i], &want));
+        }
+        if (n == 0) continue;
+        const size_t z = (size_t)rnd() % n;
+        memcpy(a, o, sizeof a);
+        a[z] = n & 1 ? pz_fe_p : (pz_fe){{0, 0, 0, 0}};
+        memcpy(o, a, sizeof a);
+        CHECK(!pz_fe_inv_batch(a, tmp, n) && !memcmp(a, o, n * sizeof *a));
+    }
     printf(fails ? "t_fe (%s): %d FAILED\n" : "t_fe (%s): OK\n", mode, fails);
     return fails != 0;
 }
