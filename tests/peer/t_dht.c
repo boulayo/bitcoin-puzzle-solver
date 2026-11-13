@@ -800,7 +800,7 @@ static void *hostile_main(void *arg)
 }
 
 /* whether id shares `bits` bits with t after the zero bits of an identity */
-static bool near(const uint8_t id[32], const uint8_t t[32], int bits)
+static bool close_to(const uint8_t id[32], const uint8_t t[32], int bits)
 {
     for (int b = BITS; b < BITS + bits; b++)
         if ((id[b / 8] ^ t[b / 8]) & (0x80 >> (b % 8))) return false;
@@ -826,7 +826,7 @@ static void test_hostile_lookup(void)
         for (int c = 0;; c++) {                                 /* a real identity near the key */
             snprintf(label, sizeof label, "hostile %d try %d", k, c);
             make_id(label, &h->id);
-            if (near(h->id.id, target, 9)) break;
+            if (close_to(h->id.id, target, 9)) break;
         }
         for (int i = 0; i < DHT_K; i++) {                       /* the names it gives: no keys, nearer still */
             uint8_t *p = h->pool[i], m[40];
@@ -834,7 +834,7 @@ static void test_hostile_lookup(void)
                 memcpy(m, target, 32), memcpy(m + 32, &(uint32_t){(uint32_t)(k * 100 + i)}, 4), memcpy(m + 36, &c, 4);
                 pz_sha256(m, sizeof m, p + 32);
                 keys_node_id(p + 32, p);
-                if (keys_id_ok(p, BITS) && near(p, target, 12)) break;
+                if (keys_id_ok(p, BITS) && close_to(p, target, 12)) break;
             }
             memset(p + 64, 0, 10), p[74] = p[75] = 0xff, p[76] = 127, p[77] = p[78] = 0, p[79] = 1;
             p[80] = (uint8_t)(tar[k * DHT_K + i] >> 8), p[81] = (uint8_t)tar[k * DHT_K + i];
