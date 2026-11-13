@@ -163,9 +163,10 @@ static void test_rendezvous(int liars, int min_took)
     bt_config a = {.port = 1111, .routers = routers, .nrouters = 2, .budget_ms = 6000, .wave_ms = 300}, b = a;
     memcpy(a.infohash, KEY, 20), memcpy(b.infohash, KEY, 20);
     b.port = 2222;
-    CHECK(bt_rendezvous(&a, peers, BT_PEERS_MAX, &took) >= 0 && !has(peers, BT_PEERS_MAX, 1111));   /* nobody there yet */
+    int n = bt_rendezvous(&a, peers, BT_PEERS_MAX, &took);
+    CHECK(n >= 0 && !has(peers, n, 1111));                      /* nobody there yet */
     CHECK(took >= min_took);
-    int n = bt_rendezvous(&b, peers, BT_PEERS_MAX, &took);
+    n = bt_rendezvous(&b, peers, BT_PEERS_MAX, &took);
     CHECK(n >= 1 && n <= BT_PEERS_MAX && has(peers, n, 1111) && took >= min_took);
     n = bt_rendezvous(&a, peers, BT_PEERS_MAX, NULL);
     CHECK(n >= 2 && has(peers, n, 2222));

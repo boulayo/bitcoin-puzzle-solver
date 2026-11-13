@@ -147,6 +147,7 @@ static bool pipe_cloexec(int p[2])
     if (pipe(p) != 0) return false;
     if (fcntl(p[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(p[1], F_SETFD, FD_CLOEXEC) == 0) return true;
     close(p[0]), close(p[1]);
+    p[0] = p[1] = -1;                                           /* the caller closes what is left: not these again (the numbers may be another thread's by now) */
     return false;
 }
 
