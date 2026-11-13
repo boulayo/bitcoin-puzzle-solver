@@ -296,7 +296,8 @@ counts them), signature.
   node remembers 1024 alerts: when they are all waiting, the oldest goes, so a flood of alerts that will never be proved (copies of a
   home's points by identities that do not answer) cannot shut out the next real one, which is tried at once; an alert pushed out comes
   back with the next republish or poll.
-- An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour, and every minute when it does not listen.
+- An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour while the others reach it, and every minute when
+  they do not (it does not listen, or nothing comes in at its port).
 
 ### 7.4 Kademlia
 
@@ -342,14 +343,20 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 - POSSESS is answered only for a record of the node itself, with its signature; the proof binds the asker's identity, which the
   handshake told. A node that cannot prove closes the connection.
 - The routing table: buckets by the number of leading bits an ID shares with the node's own, the least recently seen contact first. A
-  contact goes to the tail when it answers or asks something. A full bucket pings its weakest contact (the one that failed most, the
-  oldest among equals) and keeps it if it answers; the newcomer waits as the candidate, and a candidate that answered a request of this
-  node is not pushed aside by one that only asked. Before, a contact that had missed one answer was replaced at once, which an attacker
-  on the path could use to swap good contacts for its own. Three failed exchanges in a row drop a contact. A contact enters the table
-  only when it answers or asks, never from a NODES answer, and only within the limits by block: one attacker's nodes, on its few
-  networks, cannot fill a bucket or the table (project 4.2). A known contact that moves to a block that has its share keeps its old
-  address. A node that does not listen (port 0) is never put in a table: it dials out, publishes, polls its mailboxes, and is never a
-  custodian.
+  contact goes to the tail when it answers. A full bucket pings its weakest contact (the one that failed most, the oldest among equals)
+  and keeps it if it answers; the newcomer waits, and takes the place of a dead contact once it has answered a ping of its own. Before,
+  a contact that had missed one answer was replaced at once, which an attacker on the path could use to swap good contacts for its own.
+  Three failed exchanges in a row drop a contact. A contact enters the table only when it answers, never from a NODES answer, and only
+  within the limits by block: one attacker's nodes, on its few networks, cannot fill a bucket or the table (project 4.2). A known
+  contact that moves to a block that has its share keeps its old address.
+- A node that asks tells its port itself, so it is not taken at its word: the node asked pings it at that address (3 seconds, one
+  ping at a time for a bucket, behind the alerts that wait) and takes it when it answers. A node that does not listen (port 0) is never
+  put in a table: it dials out, publishes, polls its mailboxes, and is never a custodian. A home whose router lets nothing in listens
+  in vain, and must live the same way: a node counts its port open for an hour after a connection of another node came in (and for its
+  first two minutes). Without one it tells port 0, takes no place in its own lookups, polls its mailboxes every minute and dials its
+  partner or meets it at a relay; for two minutes of every hour it tells its port all the same, and the first node that dials it back
+  gives it its place again. Before, such a home was in the table of every node it had asked, was a custodian of records nobody could
+  ask it for, and found an alert in its mailboxes up to an hour late.
 - Lookups are iterative: rounds of up to α FIND_NODE to the closest candidates not asked yet, among the `want` closest that did not fail;
   they end when those `want` have all answered, or after 64 queries (answers that keep pointing at new nodes cannot make a lookup
   endless). A lookup asks at most 4 nodes of one address block: answers that all point at one network, a victim or the attacker's own,
@@ -526,7 +533,7 @@ neither can dial the other, a node that listens joins their connections (`src/pe
   36 KB); 4 hours per relay (the channel stays open while the session waits for the confirmation of its first
   transaction). A relay under way is one thread that copies through the receive buffers of the two connections.
 - **The channel of a session:** `dht_channel(partner, eid)` gives the daemon one connection with the partner, whichever way it comes.
-  Party 0 dials the partner it finds in the table, and so does a side that does not listen (nobody can dial it). A side that listens
+  Party 0 dials the partner it finds in the table, and so does a side nobody reaches (nobody can dial it). A side the others reach
   gives the partner's own connection (the one `on_session` got) the first slot. Then the relay of each slot, slot after slot, while the
   partner's connection is still taken if it comes; for 10 minutes. `home.c` asks it for every session.
 - The relay carries sessions only: the proofs of an alert go through the mailboxes (7.3), the requests of the table are not relayed.

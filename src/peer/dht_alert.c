@@ -199,7 +199,7 @@ int dht_ask_proof(dht *d, const record *r)
     }
     const int st = dht_proof_on(d, k, r);
     net_close(k);
-    if (st >= 0) rt_seen(d, &c, true);
+    if (st >= 0) rt_seen(d, &c);
     return st;
 }
 

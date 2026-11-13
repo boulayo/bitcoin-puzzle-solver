@@ -118,13 +118,12 @@ static void rt_drop(bucket *b, int at)
     b->n--;
 }
 
-static void rt_push(bucket *b, const dht_contact *c, bool answered)
+static void rt_push(bucket *b, const dht_contact *c)
 {
     rt_entry *e = &b->e[b->n++];
     e->c = *c;
     net_addr_block(&c->addr, e->block);
     e->fails = 0;
-    e->answered = answered;
 }
 
 /* Room for a contact at address a in bucket b (rt_mu held), not counting the contact id itself: at most RT_BLOCK_BUCKET of one address
@@ -144,26 +143,21 @@ static bool rt_room(const dht *d, const bucket *b, const net_addr *a, const uint
     return inb < RT_BLOCK_BUCKET && all < RT_BLOCK_TABLE;
 }
 
-/* the waiting candidate of a bucket into it, when there is room for it now (rt_mu held) */
-static void rt_take_cand(dht *d, bucket *b)
-{
-    if (b->has_cand && b->n < DHT_K && rt_index(b, b->cand.id) < 0 && rt_room(d, b, &b->cand.addr, b->cand.id)) rt_push(b, &b->cand, b->cand_answered);
-    b->has_cand = false;
-}
-
-/* A contact heard from goes to the tail of its bucket. A full bucket pings its weakest contact (the one that failed most, the oldest
- * among equals) and the new one waits: Kademlia keeps the contacts that have lived longest, which an attacker cannot replace by flooding
- * the node with new ones, nor by making a good contact miss one answer. A candidate that answered a request of this node is not pushed
- * aside by one that only asked. A known contact that moves keeps its old address when the new one's block has its share. */
-void rt_seen(dht *d, const dht_contact *c, bool answered)
+/* A node heard from. One that answered goes to the tail of its bucket, or into it when there is room. One that only asked told its port
+ * itself, and a home behind a router that lets nothing in tells a port nobody reaches: it is pinged at that address and enters when it
+ * answers (job_ping). A full bucket pings its weakest contact (the one that failed most, the oldest among equals) and the new one waits:
+ * Kademlia keeps the contacts that have lived longest, which an attacker cannot replace by flooding the node with new ones, nor by making
+ * a good contact miss one answer. One ping at a time for a bucket. A known contact that moves keeps its old address when the new one's
+ * block has its share. */
+static void rt_note(dht *d, const dht_contact *c, bool answered)
 {
     if (is_me(d, c->id) || !addr_ok(d, &c->addr)) return;
-    dht_contact weak;
-    bool ping = false;
+    dht_contact ping;
+    bool go = false;
     pthread_mutex_lock(&d->rt_mu);
     bucket *b = &d->b[bucket_of(d->me.id, c->id)];
     const int at = rt_index(b, c->id);
-    if (at >= 0) {
+    if (at >= 0 && answered) {
         rt_entry e = b->e[at];
         rt_drop(b, at);
         if ((memcmp(e.c.addr.ip, c->addr.ip, 16) || e.c.addr.port != c->addr.port) && rt_room(d, b, &c->addr, c->id)) {
@@ -171,33 +165,34 @@ void rt_seen(dht *d, const dht_contact *c, bool answered)
             net_addr_block(&c->addr, e.block);
         }
         e.fails = 0;
-        e.answered = e.answered || answered;
         b->e[b->n++] = e;
+    } else if (at >= 0) {
+        /* a contact that asks is no news */
     } else if (!rt_room(d, b, &c->addr, c->id)) {
         /* its address block has its share of the table */
-    } else if (b->n < DHT_K) {
-        rt_push(b, c, answered);
-    } else {
-        if (!b->has_cand || answered || !b->cand_answered) {
-            b->cand = *c;
-            b->cand_answered = answered;
-            b->has_cand = true;
-        }
-        if (!b->pinging) {
+    } else if (answered && b->n < DHT_K) {
+        rt_push(b, c);
+    } else if (!b->pinging) {
+        b->pinging = go = true;
+        ping = *c;
+        if (b->n == DHT_K) {
             int w = 0;
             for (int i = 1; i < b->n; i++)
                 if (b->e[i].fails > b->e[w].fails) w = i;
-            b->pinging = ping = true;
-            weak = b->e[w].c;
+            b->cand = *c, b->has_cand = true;
+            ping = b->e[w].c;
         }
     }
     pthread_mutex_unlock(&d->rt_mu);
-    if (ping && !job_push(d, JOB_PING, NULL, NULL, &weak)) {
+    if (go && !job_push(d, JOB_PING, NULL, NULL, &ping)) {
         pthread_mutex_lock(&d->rt_mu);
-        b->pinging = false;
+        b->pinging = b->has_cand = false;
         pthread_mutex_unlock(&d->rt_mu);
     }
 }
+
+void rt_seen(dht *d, const dht_contact *c) { rt_note(d, c, true); }
+void rt_asked(dht *d, const dht_contact *c) { rt_note(d, c, false); }
 
 void rt_failed(dht *d, const uint8_t id[32])
 {
@@ -205,10 +200,7 @@ void rt_failed(dht *d, const uint8_t id[32])
     pthread_mutex_lock(&d->rt_mu);
     bucket *b = &d->b[bucket_of(d->me.id, id)];
     const int at = rt_index(b, id);
-    if (at >= 0 && ++b->e[at].fails >= FAILS_MAX) {
-        rt_drop(b, at);
-        if (!b->pinging) rt_take_cand(d, b);
-    }
+    if (at >= 0 && ++b->e[at].fails >= FAILS_MAX) rt_drop(b, at);
     pthread_mutex_unlock(&d->rt_mu);
 }
 
@@ -271,7 +263,7 @@ bool responsible(dht *d, const uint8_t key[32])
 /* One request to a contact, dialled with its identity, and its answer, whose type must be the request's + 1. */
 bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uint8_t *ans, size_t cap, size_t *alen)
 {
-    net_conn *k = net_dial(&d->ncfg, &c->addr, c->xonly);
+    net_conn *k = dht_dial(d, c);
     const bool ok = k && net_send(k, req, rlen) && net_recv(k, ans, cap, alen) && *alen >= 1 && ans[0] == req[0] + 1;
     net_close(k);
     return ok;
@@ -280,28 +272,38 @@ bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uin
 /* what the routing table learns from an exchange whose answer was checked */
 void heard(dht *d, const dht_contact *c, bool ok)
 {
-    if (ok) rt_seen(d, c, true);
+    if (ok) rt_seen(d, c);
     else rt_failed(d, c->id);
 }
 
-void job_ping(dht *d, const dht_contact *weak)
+/* The ping of the weakest contact of a full bucket, or of a node that waits to enter one. A dead contact leaves its place to the node
+ * that waited, once that one has answered its own ping. A node that listens answers at once: PING_MS, so that a silent address holds
+ * the thread of the jobs for a moment only. */
+void job_ping(dht *d, const dht_contact *c)
 {
     const uint8_t req = DHT_PING;
     uint8_t ans[1];
     size_t n;
-    const bool alive = exchange(d, weak, &req, 1, ans, sizeof ans, &n) && n == 1;
-    heard(d, weak, alive);                                     /* alive: to the tail of its bucket */
+    dht_contact next;
+    net_cfg quick = *dial_cfg(d);
+    if (quick.timeout_ms > PING_MS) quick.timeout_ms = PING_MS;
+    const bool alive = net_exchange(&quick, &c->addr, c->xonly, &req, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG;
     pthread_mutex_lock(&d->rt_mu);
-    bucket *b = &d->b[bucket_of(d->me.id, weak->id)];
-    b->pinging = false;
-    if (!alive) {
-        const int at = rt_index(b, weak->id);
-        if (at >= 0) rt_drop(b, at);
-        rt_take_cand(d, b);
-    }
+    bucket *b = &d->b[bucket_of(d->me.id, c->id)];
+    const int at = rt_index(b, c->id);
+    if (at >= 0 && !alive) rt_drop(b, at);
+    const bool more = at >= 0 && !alive && b->has_cand;
+    if (more) next = b->cand;
     b->has_cand = false;
+    b->pinging = more;
     pthread_mutex_unlock(&d->rt_mu);
-    dlog(d, alive ? "the weakest contact of a full bucket answered: kept" : "the weakest contact of a full bucket did not answer: replaced");
+    if (alive) rt_seen(d, c);
+    if (more && !job_push(d, JOB_PING, NULL, NULL, &next)) {
+        pthread_mutex_lock(&d->rt_mu);
+        b->pinging = false;
+        pthread_mutex_unlock(&d->rt_mu);
+    }
+    dlog(d, "ping: the contact %s", alive ? "answered" : "did not answer");
 }
 
 /* ---- lookups ---- */
@@ -399,7 +401,7 @@ int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
     int n = 0, nasked = 0;
     const int ns = rt_closest(d, target, seed, DHT_K);
     for (int i = 0; i < ns; i++) cand_add(s, &n, target, &seed[i], C_NEW, NULL);
-    if (d->port) cand_add(s, &n, target, &d->me, C_OK, NULL);        /* a node that listens is a node of the table like the others */
+    if (reached(d)) cand_add(s, &n, target, &d->me, C_OK, NULL);     /* a node the others reach is a node of the table like them */
     const int bk = bucket_of(d->me.id, target);
     if (bk < DHT_BUCKETS) {
         pthread_mutex_lock(&d->rt_mu);
@@ -457,7 +459,7 @@ bool dht_find(dht *d, const uint8_t xonly[32], dht_contact *out)
     return false;
 }
 
-net_conn *dht_dial(dht *d, const dht_contact *c) { return net_dial(&d->ncfg, &c->addr, c->xonly); }
+net_conn *dht_dial(dht *d, const dht_contact *c) { return net_dial(dial_cfg(d), &c->addr, c->xonly); }
 
 /* ---- bootstrap, refresh, peers.txt ---- */
 
@@ -479,7 +481,7 @@ static bool unhex32(const char *s, uint8_t out[32])
     return s[64] == 0 || s[64] == '\n' || s[64] == '\r' || s[64] == ' ';
 }
 
-/* peers.txt: the contacts that answered, one per line, "address identity" */
+/* peers.txt: the contacts, one per line, "address identity" */
 void save_peers(dht *d)
 {
     dht_contact *cs = malloc(PEERS_MAX * sizeof *cs);
@@ -488,8 +490,7 @@ void save_peers(dht *d)
     if (!cs) return;
     pthread_mutex_lock(&d->rt_mu);
     for (int i = 0; i < DHT_BUCKETS; i++)
-        for (int j = 0; j < d->b[i].n && n < PEERS_MAX; j++)
-            if (d->b[i].e[j].answered) cs[n++] = d->b[i].e[j].c;
+        for (int j = 0; j < d->b[i].n && n < PEERS_MAX; j++) cs[n++] = d->b[i].e[j].c;
     pthread_mutex_unlock(&d->rt_mu);
     path_of(d, "peers.txt", path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
@@ -544,7 +545,7 @@ static void *boot_ping_main(void *arg)
     const uint8_t req = DHT_PING;
     uint8_t ans[1], remote[32];
     size_t len;
-    p->ok = net_exchange(&p->d->ncfg, &p->b->a, p->b->has_id ? p->b->xonly : NULL, &req, 1, ans, sizeof ans, &len, remote) && len == 1 &&
+    p->ok = net_exchange(dial_cfg(p->d), &p->b->a, p->b->has_id ? p->b->xonly : NULL, &req, 1, ans, sizeof ans, &len, remote) && len == 1 &&
             ans[0] == DHT_PONG;
     if (p->ok) {
         memcpy(p->c.xonly, remote, 32);
@@ -567,7 +568,7 @@ int bootstrap(dht *d)
         parallel(boot_ping_main, p, sizeof *p, m);
         for (int j = 0; j < m; j++)
             if (p[j].ok && !is_me(d, p[j].c.id)) {             /* not its own address */
-                rt_seen(d, &p[j].c, true);
+                rt_seen(d, &p[j].c);
                 ok++;
             }
     }
@@ -610,7 +611,7 @@ void refresh(dht *d, bool all)
 
 void dht_refresh(dht *d) { refresh(d, true); }
 
-void dht_seen(dht *d, const dht_contact *c) { rt_seen(d, c, false); }
+void dht_seen(dht *d, const dht_contact *c) { rt_seen(d, c); }
 
 int dht_contacts(dht *d, dht_contact *out, int max)
 {

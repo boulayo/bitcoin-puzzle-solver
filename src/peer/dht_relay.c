@@ -206,15 +206,15 @@ net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32],
     const int64_t until = sys_now_ms() + wait_ms;
     bool give_up = false;
     dht_contact pc;
-    /* direct: party 0 dials the partner it finds, and so does a side that does not listen (nobody can dial it) */
-    if ((memcmp(d->me.xonly, partner, 32) < 0 || !d->port) && dht_find(d, partner, &pc)) {
+    /* direct: party 0 dials the partner it finds, and so does a side nobody reaches */
+    if ((memcmp(d->me.xonly, partner, 32) < 0 || !reached(d)) && dht_find(d, partner, &pc)) {
         net_conn *c = dht_dial(d, &pc);
         if (c) return c;
         rt_failed(d, pc.id);
     }
     for (int round = 0; !stopping(d) && sys_now_ms() < until; round++) {
-        /* the partner's own connection: a side that listens gives it the first slot, then looks between the tries of the relay */
-        net_conn *c = await(arg, wait, round == 0 && d->port ? (d->slot_ms < until - sys_now_ms() ? d->slot_ms : until - sys_now_ms()) : 0, &give_up);
+        /* the partner's own connection: a side the others reach gives it the first slot, then looks between the tries of the relay */
+        net_conn *c = await(arg, wait, round == 0 && reached(d) ? (d->slot_ms < until - sys_now_ms() ? d->slot_ms : until - sys_now_ms()) : 0, &give_up);
         if (c || give_up) return c;
         const uint64_t wall = wall_us() / 1000, slot = wall / (uint64_t)d->slot_ms;
         const int64_t left = (int64_t)((slot + 1) * (uint64_t)d->slot_ms - wall), end = sys_now_ms() + left < until ? sys_now_ms() + left : until;

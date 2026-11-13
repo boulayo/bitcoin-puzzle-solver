@@ -225,6 +225,7 @@ static void serve(dht *d, int fd, const net_addr *from, uint8_t *req, uint8_t *a
     net_conn *c = net_handshake(&d->ncfg, fd, from);
     size_t len;
     if (!c) return;
+    if (!is_me(d, c->remote_id) && addr_ok(d, from)) atomic_store(&d->in_ms, sys_now_ms());   /* the port of this node is open (reached) */
     if (!net_recv(c, req, NOISE_FRAME_MAX, &len) || len == 0) {
         net_close(c);
         return;
@@ -240,11 +241,11 @@ static void serve(dht *d, int fd, const net_addr *from, uint8_t *req, uint8_t *a
     }
     const size_t n = answer(d, c, req, len, ans);
     if (n && net_send(c, ans, n)) {
-        dht_contact ct;                                        /* a node that asks is alive (one that does not listen is not taken) */
+        dht_contact ct;                                        /* a node that asks is alive: a contact, once it answers at its port */
         memcpy(ct.id, c->remote_id, 32);
         memcpy(ct.xonly, c->remote, 32);
         ct.addr = c->addr;
-        rt_seen(d, &ct, false);
+        rt_asked(d, &ct);
     }
     net_close(c);
 }
@@ -264,9 +265,10 @@ bool job_push(dht *d, int kind, const record *a, const record *b, const dht_cont
     pthread_mutex_lock(&d->j_mu);
     const bool ok = d->jn < JOBS_MAX && (kind != JOB_ALERT_OUT || d->jn_alert < ALERT_JOBS_MAX) && !stopping(d);
     if (ok) {
-        if (d->jtail) d->jtail->next = j;
-        else d->jhead = j;
-        d->jtail = j;
+        job **at = &d->jhead;                                  /* an alert goes before the pings that wait */
+        while (*at && (kind == JOB_PING || (*at)->kind != JOB_PING)) at = &(*at)->next;
+        j->next = *at;
+        *at = j;
         d->jn++;
         d->jn_alert += kind == JOB_ALERT_OUT;
         pthread_cond_signal(&d->j_cv);
@@ -285,7 +287,6 @@ static void *jobs_main(void *arg)
         job *j = stopping(d) ? NULL : d->jhead;
         if (j) {
             d->jhead = j->next;
-            if (!d->jhead) d->jtail = NULL;
             d->jn--;
             d->jn_alert -= j->kind == JOB_ALERT_OUT;
         }
@@ -388,11 +389,14 @@ static void *meet_main(void *arg)
     return NULL;
 }
 
+/* between two polls of the mailboxes: a node the others reach gets its alerts by itself, and its mailboxes hold the few that missed it */
+static int64_t poll_ms(const dht *d) { return 1000LL * (d->cfg.mbox_poll_s ? d->cfg.mbox_poll_s : reached(d) ? 3600 : 60); }
+
 static void *maint_main(void *arg)
 {
     dht *d = arg;
     const int64_t t0 = sys_now_ms();
-    int64_t next_poll = t0 + d->poll_ms, next_refresh = t0 + 60000, next_repub = t0 + d->republish_ms, next_save = t0 + SAVE_MS,
+    int64_t polled = t0, next_refresh = t0 + 60000, next_repub = t0 + d->republish_ms, next_save = t0 + SAVE_MS,
             next_boot = t0 + BOOT_RETRY_MS, next_retry = t0 + 1000;
     if (next_refresh > t0 + d->refresh_ms) next_refresh = t0 + d->refresh_ms;
     pthread_mutex_lock(&d->m_mu);
@@ -416,9 +420,9 @@ static void *maint_main(void *arg)
             pthread_mutex_unlock(&d->r_mu);
             next_retry = now + 1000;
         }
-        if (now >= next_poll) {
+        if (now >= polled + poll_ms(d)) {
             (void)dht_mbox_poll(d);
-            next_poll = sys_now_ms() + d->poll_ms;
+            polled = sys_now_ms();
         }
         if (now >= next_refresh) {
             refresh(d, false);
@@ -468,7 +472,6 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     d->lfd = -1;
     d->refresh_ms = 1000LL * (cfg->refresh_s ? cfg->refresh_s : 3600);
     d->republish_ms = 1000LL * (cfg->republish_s ? cfg->republish_s : 86400);
-    d->poll_ms = 1000LL * (cfg->mbox_poll_s ? cfg->mbox_poll_s : cfg->listen_port ? 3600 : 60);
     d->retry_ms = 1000LL * (cfg->retry_s ? cfg->retry_s : 60);
     d->relay_ms = 1000LL * (cfg->relay_s ? cfg->relay_s : 4 * 3600);
     d->slot_ms = 1000LL * (cfg->relay_slot_s ? cfg->relay_slot_s : 60);
@@ -494,6 +497,10 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     const int64_t now = sys_now_ms();
     for (int i = 0; i < DHT_BUCKETS; i++) d->b[i].looked = now;
     net_cfg_init(&d->ncfg, cfg->ctx, cfg->self, cfg->net->fp, cfg->id_bits, 0, cfg->timeout_ms);
+    d->ncfg0 = d->ncfg;
+    d->t0 = now;
+    d->probe_ms = 1000LL * (cfg->probe_s ? cfg->probe_s : 120);
+    atomic_init(&d->in_ms, now - REACH_MS + d->probe_ms);
     if (!(d->lim = calloc(LIM_SLOTS, sizeof *d->lim)) || !(d->active = calloc((size_t)d->cfg.relay_max, sizeof *d->active))) {
         snprintf(err, errlen, "out of memory");
         dht_stop(d);

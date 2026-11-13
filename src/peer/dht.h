@@ -74,7 +74,8 @@ typedef struct {
     int handlers;                  /* threads that answer; 0: 8 */
     unsigned refresh_s;            /* bucket refresh; 0: 3600 */
     unsigned republish_s;          /* republish of the own records; 0: 86400 */
-    unsigned mbox_poll_s;          /* mailbox polls; 0: 60 when not listening, 3600 when listening */
+    unsigned mbox_poll_s;          /* mailbox polls; 0: 3600 while the others reach this node, 60 otherwise */
+    unsigned probe_s;              /* how long a node that listens goes without a connection coming in before it doubts its port; 0: 120 */
     unsigned retry_s;              /* an alert whose other owner did not answer is retried after this, then twice as late each time up to an
                                     * hour, for a day; 0: 60 */
     bool allow_private;            /* a test network (or --allow-private): loopback and private addresses are taken, and not limited.

@@ -23,6 +23,8 @@
 #define NODE_LEN 82                /* a contact in NODES: node id, xonly, ip, port */
 #define PAIR_LEN (2 * RECORD_LEN)
 #define MBOX_LEN (2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY)
+#define PING_MS 3000               /* the answer to a ping: a node that listens gives it at once */
+#define REACH_MS 3600000           /* a node believes its port open for this long after a connection came in */
 #define QUEUE_MAX 64               /* accepted connections waiting for a handler: more are closed at once */
 #define SENT_MAX 256               /* pairs a custodian remembers having alerted */
 #define RELAY_WAITING 32           /* homes waiting at this relay for their partner */
@@ -36,14 +38,13 @@ typedef struct {
     dht_contact c;
     uint8_t block[16];             /* of its address */
     int fails;                     /* failed exchanges in a row */
-    bool answered;                 /* it answered a request of this node (peers.txt keeps those) */
 } rt_entry;
 
 typedef struct {
     rt_entry e[DHT_K];             /* the least recently seen first */
     int n;
-    bool pinging, has_cand, cand_answered;
-    dht_contact cand;              /* a contact that waits for the ping of the weakest contact */
+    bool pinging, has_cand;
+    dht_contact cand;              /* a node that waits for the ping of the weakest contact */
     int64_t looked;                /* the last lookup in the range of the bucket */
 } bucket;
 
@@ -78,7 +79,9 @@ typedef struct {
 
 struct dht {
     dht_config cfg;
-    net_cfg ncfg;
+    net_cfg ncfg, ncfg0;           /* ncfg0: the same, telling no port (dial_cfg) */
+    atomic_llong in_ms;            /* when the last connection of another node came in */
+    int64_t t0;
     dht_contact me;
     char *dir, **boot;
     store *custody, *own;
@@ -86,7 +89,7 @@ struct dht {
     atomic_bool stop;
     int lfd;
     uint16_t port;
-    int64_t refresh_ms, republish_ms, poll_ms, retry_ms, relay_ms, slot_ms;
+    int64_t refresh_ms, republish_ms, retry_ms, relay_ms, slot_ms, probe_ms;
     pthread_mutex_t rt_mu;         /* the routing table */
     bucket b[DHT_BUCKETS];
     pthread_mutex_t l_mu;          /* the limits by address block */
@@ -97,7 +100,7 @@ struct dht {
     int qhead, qn;
     pthread_mutex_t j_mu;          /* jobs */
     pthread_cond_t j_cv;
-    job *jhead, *jtail;
+    job *jhead;
     int jn, jn_alert;
     pthread_mutex_t a_mu;          /* alerts of this node, alerts sent as a custodian */
     own_alert *alerts;
@@ -142,6 +145,18 @@ static inline bool addr_ok(const dht *d, const net_addr *a) { return a->port != 
  * loopback or a LAN, all in one block) */
 static inline bool limited(const dht *d, const net_addr *a) { return !d->cfg.allow_private || net_addr_public(a); }
 
+/* Whether the others reach the port of this node: a connection of another node came in within REACH_MS, or the node started less than
+ * probe_ms ago. A home behind a router that lets nothing in listens in vain: it lives as a node that does not listen (no place in the
+ * table, its mailboxes asked every minute, its partner dialled or met at a relay). */
+static inline bool reached(const dht *d) { return d->port && sys_now_ms() - atomic_load(&d->in_ms) < REACH_MS; }
+
+/* What a connection this node opens tells: its port while the others reach it, and for probe_ms of every REACH_MS all the same. A node
+ * asked that does not know this one dials it back, and that connection is how this one learns that its port is open. */
+static inline const net_cfg *dial_cfg(const dht *d)
+{
+    return reached(d) || (d->port && (sys_now_ms() - d->t0) % REACH_MS < d->probe_ms) ? &d->ncfg : &d->ncfg0;
+}
+
 /* dht.c */
 void dlog(const dht *d, const char *fmt, ...) __attribute__((format(SYS_PRINTF, 2, 3)));
 bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool detached);
@@ -150,14 +165,15 @@ void path_of(const dht *d, const char *name, char *out, size_t cap);
 bool job_push(dht *d, int kind, const record *a, const record *b, const dht_contact *c);
 
 /* dht_table.c */
-void rt_seen(dht *d, const dht_contact *c, bool answered);
+void rt_seen(dht *d, const dht_contact *c);     /* it answered */
+void rt_asked(dht *d, const dht_contact *c);    /* it asked */
 void rt_failed(dht *d, const uint8_t id[32]);
 int rt_closest(dht *d, const uint8_t t[32], dht_contact *out, int max);
 int rt_count(dht *d);
 bool responsible(dht *d, const uint8_t key[32]);
 bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uint8_t *ans, size_t cap, size_t *alen);
 void heard(dht *d, const dht_contact *c, bool ok);
-void job_ping(dht *d, const dht_contact *weak);
+void job_ping(dht *d, const dht_contact *c);
 void encode_contact(const dht_contact *c, uint8_t *p);
 void refresh(dht *d, bool all);
 int bootstrap(dht *d);

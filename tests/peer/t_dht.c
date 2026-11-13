@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 static int fails;
+static unsigned probe_s;           /* of the next node made (0: the default) */
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
 #define BITS 4                     /* zero bits of a node ID in this network */
@@ -157,7 +158,7 @@ static dht_config node_cfg(node *n, int port)
         .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
         .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = 2000, .handlers = 4,
         .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .allow_private = true, .relay_max = 2, .relay_bytes = 8u << 20, .relay_slot_s = 1,
-        .verbose = getenv("T_DHT_VERBOSE") != NULL,
+        .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL,
     };
     return cfg;
 }
@@ -530,22 +531,25 @@ static bool has(const dht_contact *cs, int n, const uint8_t id[32], int *at)
     return false;
 }
 
-/* A full bucket: the oldest contact is pinged; alive, it stays (moved to the newest) and the newcomer is dropped; dead, it goes. */
+/* A full bucket: the oldest contact is pinged; alive, it stays (moved to the newest) and the newcomer is dropped; dead, it goes, and the
+ * newcomer takes its place when it answers a ping of its own. */
 static void test_eviction(void)
 {
     node *e = &nodes[E];
     CHECK(start_node(e, DHT_ANY_PORT, -1));
     if (!e->d) return;
     const int b = BITS;                                         /* the bucket of the IDs whose first bit after the zero bits differs */
-    int r = -1;
-    for (int i = 0; i < N && r < 0; i++)
-        if (bucket_of(e->id.id, nodes[i].id.id) == b) r = i;
-    CHECK(r >= 0);
-    if (r < 0) return;
-    dht_contact live, fake[DHT_K + 2];
+    int r = -1, r2 = -1;                                        /* two nodes of that bucket */
+    for (int i = 0; i < N && r2 < 0; i++)
+        if (bucket_of(e->id.id, nodes[i].id.id) == b) r2 = r < 0 ? -1 : i, r = r < 0 ? i : r;
+    CHECK(r2 >= 0);
+    if (r2 < 0) return;
+    dht_contact live, live2, fake[DHT_K + 2];
     memcpy(live.id, nodes[r].id.id, 32), memcpy(live.xonly, nodes[r].id.xonly, 32);
     CHECK(net_parse_addr("127.0.0.1:1", &live.addr));
-    live.addr.port = dht_port(nodes[r].d);
+    live2 = live;
+    memcpy(live2.id, nodes[r2].id.id, 32), memcpy(live2.xonly, nodes[r2].id.xonly, 32);
+    live.addr.port = dht_port(nodes[r].d), live2.addr.port = dht_port(nodes[r2].d);
     for (int i = 0, k = 0; k < DHT_K + 1; i++) {                /* identities in that bucket, at an address where nobody listens */
         char label[32];
         uint8_t seed[32];
@@ -569,12 +573,17 @@ static void test_eviction(void)
         if (has(cs, n, live.id, &at) && at == n - 1) break;
     }
     CHECK(n == DHT_K && at == DHT_K - 1 && !has(cs, n, fake[DHT_K - 1].id, NULL));
-    dht_seen(e->d, &fake[DHT_K]);                               /* now the oldest is fake 0: pinged, no answer, replaced */
+    dht_seen(e->d, &live2);                                     /* now the oldest is fake 0: pinged, no answer, replaced */
     for (const int64_t t0 = ms(); ms() - t0 < 5000; nap(20)) {
         n = dht_contacts(e->d, cs, DHT_K + 4);
-        if (has(cs, n, fake[DHT_K].id, NULL)) break;
+        if (has(cs, n, live2.id, NULL)) break;
     }
-    CHECK(n == DHT_K && has(cs, n, fake[DHT_K].id, NULL) && !has(cs, n, fake[0].id, NULL) && has(cs, n, live.id, NULL));
+    CHECK(n == DHT_K && has(cs, n, live2.id, NULL) && !has(cs, n, fake[0].id, NULL) && has(cs, n, live.id, NULL));
+    dht_seen(e->d, &fake[DHT_K]);                               /* fake 1 goes the same way, for a newcomer that does not answer */
+    for (const int64_t t0 = ms(); ms() - t0 < 5000 && n == DHT_K; nap(20)) n = dht_contacts(e->d, cs, DHT_K + 4);
+    nap(300);
+    n = dht_contacts(e->d, cs, DHT_K + 4);
+    CHECK(n == DHT_K - 1 && !has(cs, n, fake[1].id, NULL) && !has(cs, n, fake[DHT_K].id, NULL));
 }
 
 /* ---- the limits ---- */
@@ -905,6 +914,41 @@ static void test_slowloris(void)
     nap(300);
     CHECK(net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG);
     scratch_end(sv, "s-slow");
+}
+
+/* A node that asks tells its port itself. One that tells a port nobody reaches (a home behind a router that lets nothing in) stays out
+ * of the table of the node it asked; one that listens there is dialled back and enters. Before, both were taken at their word, and the
+ * first was given to the others as a node of the table. And a node that listens counts itself a node of the table (here: the closest
+ * to its own name) only while connections come in: this one doubts its port after a second without any, until node 0 dials it back. */
+static void test_asker(void)
+{
+    home_identity sid, cid;
+    dht_contact cs[DHT_K * 8], me;
+    probe_s = 1;
+    dht *sv = scratch("s-ask", true, DHT_ANY_PORT, -1, &sid);
+    probe_s = 0;
+    CHECK(sv != NULL);
+    if (!sv) return;
+    make_id("deaf asker", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 1, 1000);          /* port 1: nobody listens there */
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(nodes[0].d);
+    const uint8_t ping = DHT_PING;
+    uint8_t ans[4];
+    size_t n;
+    CHECK(dht_lookup(sv, sid.id, &me, 1) == 1);
+    nap(1200);
+    CHECK(dht_lookup(sv, sid.id, &me, 1) == 0);
+    CHECK(net_exchange(&cli, &a, nodes[0].id.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG);
+    cli.self = &sid, cli.port = dht_port(sv);                   /* the same question from the node that listens */
+    CHECK(net_exchange(&cli, &a, nodes[0].id.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG);
+    int nc = 0;
+    for (const int64_t t0 = ms(); ms() - t0 < 5000 && !has(cs, nc, sid.id, NULL); nap(20)) nc = dht_contacts(nodes[0].d, cs, DHT_K * 8);
+    CHECK(has(cs, nc, sid.id, NULL) && !has(cs, nc, cid.id, NULL));
+    CHECK(dht_lookup(sv, sid.id, &me, 1) == 1 && !memcmp(me.id, sid.id, 32));
+    scratch_end(sv, "s-ask");
 }
 
 /* A flood of alerts that will never be proved: copies of a record of A2 by 1100 identities that are no node. A2 does not know that
@@ -1280,6 +1324,7 @@ int main(void)
     test_policy();
     test_nodes_answer();
     test_slowloris();
+    test_asker();
     test_hostile_lookup();
     test_alert_flood();
     test_seq();
