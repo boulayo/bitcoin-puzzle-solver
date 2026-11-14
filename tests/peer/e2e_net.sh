@@ -5,9 +5,9 @@
 # puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, half each,
 # read back from the node. With three equal homes two coincidences in three are between homes; a home that finds the key on its own
 # first (its own walkers meet too) starts a new try with a new puzzle, up to 6.
-# The two homes get the same half, and one of them the tiny coin of 10 000 satoshis on top. With several coincidences at once more than
-# one pair may get its first transaction confirmed, each on the prize the one before sent back to the puzzle address: the last pair is
-# paid, and the prize is smaller by the fee and the two tiny coins of each first transaction (about 25 000 satoshis at 20 sat/vB).
+# The two homes get the same half, of the prize and of F's tiny coin (the odd satoshi to S). With several coincidences at once more
+# than one pair may get its first transaction confirmed, each on the prize the one before sent back to the puzzle address: the last
+# pair is paid, and the prize is smaller by the fee and the tiny coin of each first transaction (about 15 000 satoshis at 20 sat/vB).
 # With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
 # bitcoind) and check every answer themselves (chain_spv.c).
 # With PZ_E2E_WIN=1 the three programs are the Windows ones of build/win, run under Wine (the bitcoind stays the one of this machine).
@@ -95,7 +95,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
         G1=$(rpc wallet getreceivedbyaddress "[\"${PAY[$1]}\", 1]"); G2=$(rpc wallet getreceivedbyaddress "[\"${PAY[$2]}\", 1]")
         LEFT=$(rpc scantxoutset "[\"start\", [\"addr($PADDR)\"]]" | python3 -c 'import json,sys; print(json.load(sys.stdin)["total_amount"])')
         echo "   received: home $1 $G1 BTC, home $2 $G2 BTC; left on the puzzle address $LEFT BTC"
-        python3 -c "import sys; a,b,l=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.499 and abs(abs(a-b)-0.0001)<2e-8 and a+b<1 and l==0 else 1)" "$G1" "$G2" "$LEFT" &&
+        python3 -c "import sys; a,b,l=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.499 and abs(a-b)<2e-8 and a+b<1 and l==0 else 1)" "$G1" "$G2" "$LEFT" &&
             { echo "E2E NET PASSED (try $try)"; exit 0; }
         echo "E2E NET FAILED: the amounts are not half each"; exit 1
     fi

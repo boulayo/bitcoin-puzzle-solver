@@ -53,6 +53,12 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.
+- The two-party payout, after a review of the signing (docs/en/NETWORK.md 7.5): a payout counts from the signing of its first
+  transaction until it pays, at most 5 on one own point, and a partner's fee rate more than 4 times the home's own is refused: a
+  partner could make the pair try for ever, each try paying a fee and a tiny coin from the prize. Only F gets a tiny coin, and the
+  second transaction splits the prize and that coin half each (S's coin was never spent again). P2 that gave all its messages and
+  only lacks P1's signatures ends with a frame of its own (0x84) and counts no failed signing: a partner that kept them could use up the
+  home's count for free. pzsign verifies the signatures before it sends them. A pair out of tries gives its slot back.
 - The fixes of 1.23.4 (below), and with them: an encrypting campaign that finds the key deletes `near.txt` too, whose last lines are
   keys next to the key; `near.txt` is never opened through a link; the folder of a home or node of pzpeer must not be a link.
 - pzpeer: a custodian keeps the owners of at most one record in 256 it may hold, and 1024 more: identities cost little, and their table

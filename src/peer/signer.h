@@ -12,7 +12,7 @@
 
 #define SIGNER_FRAME_MAX (1u << 20)     /* the limit of pzsign */
 
-enum { SIGNER_JOB = 0x01, SIGNER_IN = 0x02, SIGNER_OUT = 0x81, SIGNER_RESULT = 0x82, SIGNER_ERROR = 0x83 };
+enum { SIGNER_JOB = 0x01, SIGNER_IN = 0x02, SIGNER_OUT = 0x81, SIGNER_RESULT = 0x82, SIGNER_ERROR = 0x83, SIGNER_UNPAID = 0x84 };
 
 typedef struct {
     sys_proc proc;

@@ -33,6 +33,7 @@
 #define HELLO_SESSIONS 16          /* sessions started by a hello alone, without an alert of the table (the others always have room) */
 #define FAILS_MAX 10               /* failed signings of a home on a network, with any partner (project 4.6) */
 #define FAILS_PAIR_MAX 3           /* and with one pair */
+#define PAYOUTS_MAX 5              /* payouts of one own point that reached the signing of their first transaction and did not pay */
 #define RETRY_S 600                /* a kept pair whose session did not pay starts again after this, */
 #define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
 
@@ -316,8 +317,10 @@ done:
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
     s->running = false, s->waiting = false, s->have_conn = false, s->conn = NULL;
     s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
-    s->used = s->alerted;                                       /* a pair whose partner never proved anything gives its slot back */
     s->retry_at = s->alerted && res != SESSION_PAID && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
+    /* a pair whose partner never proved anything gives its slot back, and so does one out of tries (an alert that comes again starts it
+     * afresh, within the limits of session.h); a paid pair keeps its slot, so that it is not started again */
+    s->used = s->alerted && (res == SESSION_PAID || s->retry_at);
     h->ended++;
     h->paid |= res == SESSION_PAID;
     pthread_mutex_unlock(&h->mu);
@@ -476,7 +479,7 @@ int home_run(const home_cfg *cfg)
     snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", h->dir);
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);
-    h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX;
+    h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.pay_max = PAYOUTS_MAX;
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;

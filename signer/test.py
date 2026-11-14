@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import ref  # noqa: E402
 
 CMD = sys.argv[1:]
-JOB, FROM_PARTNER, TO_PARTNER, RESULT, ERROR = 0x01, 0x02, 0x81, 0x82, 0x83
+JOB, FROM_PARTNER, TO_PARTNER, RESULT, ERROR, UNPAID = 0x01, 0x02, 0x81, 0x82, 0x83, 0x84
 failures = 0
 
 
@@ -126,7 +126,7 @@ def signed(answers, k, digests):
             check(ok, f'side {s} answered with signatures that do not verify')
             out.append(s)
         else:
-            check(a is not None and a[0] == ERROR, f'side {s} ended without an error frame: {a}')
+            check(a is not None and a[0] in (ERROR, UNPAID), f'side {s} ended without an error frame: {a}')
     return out
 
 
@@ -155,6 +155,10 @@ def main():
                 got = signed(answers, k, digests)
                 last = side == 0 and index == counts[0] - 1     # the signatures themselves, which P1 already has
                 check(got == ([0] if last else []), f'message {index} of side {side}, {how}: signatures on {got}')
+                # P2 says it only lacked the signatures (0x84, not counted by pzpeer) once it gave all its messages, and only then
+                done = last or (side == 1 and index == counts[1] - 1)
+                end = answers[1][0] if answers[1] else None
+                check(end == (UNPAID if done else ERROR), f'message {index} of side {side}, {how}: P2 ended with {end}')
 
     print('a partner with another digest, or in another session, gets nothing')
     jobs, k, digests = setup()

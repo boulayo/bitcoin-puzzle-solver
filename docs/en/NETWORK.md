@@ -406,9 +406,11 @@ relays do not cut the channel as idle, and the reader skips it):
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
    about the same pair. The fee rate is the higher of the two. Each proposes twice the estimate of its chain for a confirmation within 2 blocks, at
    least 20 and at most 1000 sat/vB: these transactions move a prize, and no such fee is large beside it. A rate above the home's
-   limit ends the session. The tiny coins grow with the rate: each is twice the fee of F's cancel and the dust limit, 10 000 satoshis
-   at least, so F can cancel at any rate (were its coin worth less than that fee, S could hold the second transaction back with
-   nothing to fear); the payout scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
+   limit ends the session, and so does a partner's rate more than 4 times the home's own: every try of the payout pays it from the
+   prize. The tiny coin, F's only (the script S sends is not used), grows with the rate: twice the fee of F's cancel and the dust limit,
+   10 000 satoshis at least, so F can cancel at any rate (were its coin worth less than that fee, S could hold the second transaction
+   back with nothing to fear). It comes from the prize, and the second transaction spends it with the prize, half each; the payout
+   scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
    proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
@@ -440,11 +442,19 @@ relays do not cut the channel as idle, and the reader skips it):
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
 fingerprint || x of an own point)> <failures>` (a line at 0 is left out): every run of pzsign counts as failed before it starts (written
 through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash or a kill in the middle
-counts; a pzsign that could not start counts nothing. At 10 failures on a network, with any partner, or 3 on one own point, with any
+counts; a pzsign that could not start counts nothing, and neither does P2 (F) when it gave all its messages and only the signatures of
+P1 did not come or do not verify (pzsign ends with 0x84): nothing it answered depends on that, and a partner that keeps them could
+otherwise use up the home's count. At 10 failures on a network, with any partner, or 3 on one own point, with any
 partner (the piece at stake is that of the point, and whoever knows the distance of the other point can name it again under new
 identities, each a new eid), the home signs no more on it, and says so
 before the plan of the first transaction, so that the partner's pzsign does not start (it would count a failure of its own). Runs are one
-at a time; a session that does not get its turn within 2 minutes gives up without a run. Not done yet: the count published in the network
+at a time; a session that does not get its turn within 2 minutes gives up without a run.
+
+**The limit of payouts.** Each first transaction pays a fee and F's tiny coin from the prize, so a payout counts, in the same file under
+`SHA256("pznet1/paid" || fingerprint || x of the own point)`, from the signing of its first transaction until the prize is paid. At 5 on
+one own point the home tries no more there. Without it a partner could make the pair try again and again: F spending its tiny coin
+before the second transaction, S keeping either signature back, an old copy of the first transaction sent before the new one; each try
+cost the prize a fee and a tiny coin. Not done yet: the count published in the network
 and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
 
 **The daemon** (`src/peer/home.c`). A session starts on the alert of the table (both proofs checked there) or on a hello that names the
@@ -453,13 +463,16 @@ the proofs (pzsign starts after them, step 3), at most 16 of them run at a time,
 they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. Once a
 partner proved its distance on an own point, no other pair on that point gets a slot (its records named under other identities), and
 while a session runs on a point a hello for another pair on it is refused. A pair
-that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after, for a day.
+that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after it ends, up to
+144 times (a session may wait for blocks for a day); then its slot is given back, and an alert that comes again starts it afresh, within
+the limits above.
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzsign and a chain in memory that checks every input: the
-payout (half each, F's tiny coin back to F, S keeps its own; with a chain that loses its first answer about the height); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
+payout (half each of the prize and of F's tiny coin; with a chain that loses its first answer about the height); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
 under the joint key, also when it keeps the channel alive with `S_ALIVE` for ever; a partner F that stops, or sends garbage, in place of
 its last message, which gets nothing and cancels, or sends garbage after it, which leaves S its signatures and pays; the same at a
-high fee rate, where the tiny coins are larger and F still cancels; the limit of failed signings, refused before anything is signed; a partner that copied the x of a
+high fee rate, where the tiny coin is larger and F still cancels; a partner's rate far above the home's, refused; the limits of failed signings and of
+payouts, checked in every case, refused before anything is signed; a partner that copied the x of a
 record and cannot prove it, for which no pzsign runs; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
 The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
@@ -483,13 +496,15 @@ for Windows). [signer/README.md](../../signer/README.md) has its frames, its job
 | 0x81 | pzsign → pzpeer | a message for the other party, opaque |
 | 0x82 | pzsign → pzpeer | `r` and `s` of each digest, `s` low, verified against the key; last frame |
 | 0x83 | pzsign → pzpeer | the reason it failed; last frame |
+| 0x84 | pzsign → pzpeer | the same, from P2 once it gave all its messages: the signatures of P1 did not come or do not verify (not counted, 7.5) |
 
 The own piece of party 0 includes `base`; pzpeer computes both public pieces from the records (section 7.5). A session imports the two
 pieces through the key generation of the library (with each party's piece in place of a random one: the commitments, the proofs of
 knowledge of the pieces, a fresh Paillier key of `first` with the proofs that it and the encryption of its piece are well formed),
 the key must come out as the puzzle key, and then signs all the digests in one run. `first` (P1 in the library) gets the signatures and
-sends them to the other; each side verifies them before it gives them. The names of the parties carry the signing id, so that no proof
-counts in another session. No presignature, no state between sessions, nothing on disk.
+sends them to the other; each side verifies them before it gives them. The name of P1 carries the signing id, and every proof is bound
+to a session id that both sides make random together, so that no proof counts in another session. No presignature, no state between
+sessions, nothing on disk.
 
 - pzsign has no timeouts: pzpeer ends a process that does not answer, and kills it once its last frame came or did not come in time
   (a pzsign that stopped reading would otherwise keep the relay of the partner's messages waiting for ever). Its pipes are not
@@ -502,8 +517,12 @@ cb-mpc the two-party key generation and signing (`protocol/ecdsa_2p.cpp`, `proto
 (`zk/zk_paillier.cpp`) and the commitments (`zk/zk_pedersen.cpp`, `protocol/int_commitment.cpp`, `zk/zk_unknown_order.cpp`).
 
 - The commitments of the key generation are in a fixed group: its modulus is a constant of the library and its second generator comes
-  from a hash, so neither party chooses them. The proof
-  that the Paillier key of P1 is well formed takes its challenge from the other party (128 bits), so it cannot be retried offline.
+  from a hash, so neither party chooses them. The proofs that P1's Paillier key and the encryption of its piece are well formed take
+  their challenges from the other party after P1 committed, so they cannot be retried offline. Their margin is about 2^-50 a run, not
+  2^-128: a P1 that cheated in them and was lucky once could learn the other piece in that run. Every failed run counts toward the
+  limit of failed signings (7.5), 3 on an own point, so the chance stays near 3·2^-50.
+- A message of the partner inside the size limit of its phase can make the library reserve about 400 times its size (about 120 MB for a
+  run of 64 digests) before it is refused: memory only, one run at a time.
 - The signing uses the default protocol of the library, which makes P2 prove its last message well formed: the variant without that
   proof, whose failures can leak a bit of P1's piece, is not used. That proof uses commitments modulo a number whose factors Coinbase
   generated once (its `SECURE_USAGE.md`); with the published proof that the parameters are related as they must be, the one trust
@@ -725,7 +744,7 @@ tests/peer/e2e_net.sh` pays a coincidence with three homes that have no node. No
 
 Everything below works and is tested; `tests/peer/e2e_net.sh` runs the whole of it on one machine with a bitcoind in regtest: a custodian
 node and three homes (`pzpeer run`, each with its pzsolve), a puzzle of 58 bits funded with 1 BTC. With Bitcoin Core 28.1 a coincidence
-between two homes ended in the payout: 0.49999366 and 0.49989366 BTC (the difference is F's tiny coin, back to F), nothing left on the
+between two homes ended in the payout: half each of the prize less two fees, nothing left on the
 puzzle address. With so few homes a home may find the key on its own first (its own walkers meet too): the script then starts a new try
 with a new puzzle. The cases of the session (the payout, and the cancel when a partner keeps the second transaction) also run on the node
 in `t_session` with `PZ_REGTEST`.

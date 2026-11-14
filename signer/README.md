@@ -36,6 +36,7 @@ stderr.
 | 0x81 | pzsign → pzpeer | a message for the other party |
 | 0x82 | pzsign → pzpeer | the signatures: `r` and `s` (32 bytes each, big-endian, `s` low) of each digest, in order; last frame |
 | 0x83 | pzsign → pzpeer | the reason it failed, text; last frame |
+| 0x84 | pzsign → pzpeer | the same, by P2 once it has given all its messages: the signatures of P1 did not come or do not verify. Nothing of P2's answers depends on that, so pzpeer does not count it as a failed signing |
 
 The job, binary: version (2), `i` (this party, 0 or 1), `first` (the party that gets the signatures first), the session id (32 bytes),
 the own piece (32), the public pieces of party 0 and party 1 and the key (33 each, compressed), then 1 to 64 digests of 32 bytes.
@@ -44,8 +45,9 @@ Then:
 1. **Checks.** The piece is a scalar in `[1, n-1]`, `piece·G = pub[i]` and `pub[0] + pub[1] = key`.
 2. **Import of the pieces**: the key generation of the library (`ecdsa2pc::dkg`) with the party's own piece in place of a random one.
    Each party commits to its public piece and proves it knows the piece; the party `first` (P1 in the library) makes a fresh Paillier
-   key, encrypts its piece under it and proves the key and the encryption well formed. The pieces must give `key`. The names of the
-   two parties carry the session id, so that no proof of one session counts in another.
+   key, encrypts its piece under it and proves the key and the encryption well formed. The pieces must give `key`. The name of P1
+   carries the session id, and every proof is bound to a session id the two parties make random together, so that no proof of one
+   session counts in another.
 3. **Signing**, all the digests in one run (`ecdsa2pc::sign_batch`). The digest is the legacy signature hash: it is signed as the number
    it is mod n (ECDSA uses nothing else of it), and the library takes it reduced. P1 gets the signatures, already with a low `s` and
    verified by the library.

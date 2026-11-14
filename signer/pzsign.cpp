@@ -38,13 +38,16 @@ using coinbase::crypto::ecc_point_t;
 using bytes = std::vector<uint8_t>;
 namespace ecdsa2pc = coinbase::mpc::ecdsa2pc;
 
-enum : uint8_t { F_JOB = 0x01, F_FROM_PARTNER = 0x02, F_TO_PARTNER = 0x81, F_RESULT = 0x82, F_ERROR = 0x83 };   // the frames
+enum : uint8_t { F_JOB = 0x01, F_FROM_PARTNER = 0x02, F_TO_PARTNER = 0x81, F_RESULT = 0x82, F_ERROR = 0x83, F_UNPAID = 0x84 };   // the frames
 enum : uint8_t { VERSION = 2, IMPORT = 1, SIGN = 2, SIGS = 3 };   // the version of the job and of the envelopes; the phases
 const size_t MAX_FRAME = 1 << 20, MAX_DIGESTS = 64, JOB_FIXED = 166;
 
 struct fail {
   std::string why;
 };
+
+// P2 has given all its messages and waits for the signatures of P1: a failure from here on depends on nothing P2 holds (0x84, not 0x83)
+static bool only_the_signatures;
 
 static const crypto::ecurve_t& curve() { return crypto::curve_secp256k1; }
 
@@ -228,6 +231,7 @@ static bytes run(const job_t& j, link_t& l) {
 
   bytes rs;
   l.phase = SIGS;
+  only_the_signatures = !job.is_p1();
   if (job.is_p1()) {
     for (const buf_t& d : der) {
       crypto::ecdsa_signature_t sig;
@@ -235,14 +239,13 @@ static bytes run(const job_t& j, link_t& l) {
       const buf_t r = sig.get_r().to_bin(32), s = sig.get_s().to_bin(32);
       rs.insert(rs.end(), r.data(), r.data() + 32), rs.insert(rs.end(), s.data(), s.data() + 32);
     }
-    check(l.send(1 - j.i, mem_t(rs.data(), int(rs.size()))), l, "sending the signatures");
   } else {
     buf_t got;
     check(l.receive(1 - j.i, got), l, "receiving the signatures");
     if (size_t(got.size()) != 64 * msgs.size()) throw fail{"the partner gave " + std::to_string(got.size()) + " bytes of signatures"};
     rs.assign(got.data(), got.data() + got.size());
   }
-  // the check that counts: a signature that does not verify, or whose s is not low, never leaves
+  // the check that counts: a signature that does not verify, or whose s is not low, never leaves, not even toward the partner
   const bn_t half = n >> 1;
   for (size_t k = 0; k < msgs.size(); k++) {
     const bn_t r = bn_t::from_bin(mem_t(&rs[64 * k], 32)), s = bn_t::from_bin(mem_t(&rs[64 * k + 32], 32));
@@ -250,6 +253,7 @@ static bytes run(const job_t& j, link_t& l) {
         crypto::ecc_pub_key_t(j.key).verify(msgs[k], crypto::ecdsa_signature_t(curve(), r, s).to_der()))
       throw fail{"signature " + std::to_string(k) + " does not verify"};
   }
+  if (job.is_p1()) check(l.send(1 - j.i, mem_t(rs.data(), int(rs.size()))), l, "sending the signatures");   // only once they verify
   fprintf(stderr, "pzsign[%d]: %zu signatures in %.2f s\n", j.i, msgs.size(), seconds_since(t0));
   return rs;
 }
@@ -299,11 +303,11 @@ static int session() {
     return write_frame(F_RESULT, rs.data(), rs.size()) ? 0 : 1;
   } catch (const fail& f) {
     fprintf(stderr, "pzsign[%d]: %s\n", me, f.why.c_str());
-    write_frame(F_ERROR, (const uint8_t*)f.why.data(), f.why.size());
+    write_frame(only_the_signatures ? F_UNPAID : F_ERROR, (const uint8_t*)f.why.data(), f.why.size());
   } catch (const std::exception& e) {  // an assertion of the library: the session still ends with an error frame
     const std::string why = std::string("internal error: ") + e.what();
     fprintf(stderr, "pzsign[%d]: %s\n", me, why.c_str());
-    write_frame(F_ERROR, (const uint8_t*)why.data(), why.size());
+    write_frame(only_the_signatures ? F_UNPAID : F_ERROR, (const uint8_t*)why.data(), why.size());
   }
   return 1;
 }

@@ -2,8 +2,8 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* payout.h - the transactions of a pair that holds the key in two pieces (project 2.4, docs/en/NETWORK.md 8). Both homes build them on their
  * own from the same terms, so the same terms give the same bytes:
- *   first:  the coins of the puzzle (at most 8) back to the puzzle address, less the fee and a tiny coin for each party;
- *   second: the prize of the first and the tiny coin of party F, half each to the payout addresses, the tiny coin back to F;
+ *   first:  the coins of the puzzle (at most 8) back to the puzzle address, less the fee and a tiny coin for party F;
+ *   second: the prize of the first and F's tiny coin, which came from it, half each to the payout addresses;
  *   cancel: F alone spends its tiny coin, which makes a second transaction held back by the partner worthless. */
 #ifndef PZPEER_PAYOUT_H
 #define PZPEER_PAYOUT_H

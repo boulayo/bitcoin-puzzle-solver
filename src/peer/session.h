@@ -51,6 +51,7 @@ typedef struct {
     bool busy;                              /* a run of pzsign is under way */
     const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point> <failures>" */
     unsigned max, pair_max;
+    unsigned pay_max;                       /* payouts of one own point that did not pay (each spent a fee and a tiny coin of the prize) */
 } session_limit;
 
 typedef struct {

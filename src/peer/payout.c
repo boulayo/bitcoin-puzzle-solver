@@ -59,23 +59,24 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
         total += take[i].value;
     }
     *used = tx->n_in;
-    btc_out out[3] = {{0}};                                     /* the outputs as they will be, for the size */
-    for (int k = 0; k < 3; k++) {
+    btc_out out[2] = {{0}};                                     /* the outputs as they will be, for the size */
+    for (int k = 0; k < 2; k++) {
         out[k].script_len = BTC_P2PKH_LEN;
-        memcpy(out[k].script, k ? t->coin_spk[k - 1] : t->puzzle_spk, BTC_P2PKH_LEN);
+        memcpy(out[k].script, k ? t->coin_spk[t->first] : t->puzzle_spk, BTC_P2PKH_LEN);
     }
-    const uint64_t fee = btc_fee(btc_vsize_p2pkh(tx->n_in, out, 3), t->feerate), second = second_fee(t) + 2 * 546;
-    if (!tx->n_in || total < fee + 2 * tiny + (second > tiny ? second : tiny)) return false;   /* the prize must stay larger than a tiny
-                                                                                               * coin, and pay for the second transaction */
-    return btc_tx_add_out(tx, total - fee - 2 * tiny, t->puzzle_spk, BTC_P2PKH_LEN) &&
-           btc_tx_add_out(tx, tiny, t->coin_spk[0], BTC_P2PKH_LEN) && btc_tx_add_out(tx, tiny, t->coin_spk[1], BTC_P2PKH_LEN);
+    const uint64_t fee = btc_fee(btc_vsize_p2pkh(tx->n_in, out, 2), t->feerate), second = second_fee(t) + 2 * 546;
+    if (!tx->n_in || total < fee + tiny + (second > tiny ? second : tiny)) return false;   /* the prize must stay larger than a tiny
+                                                                                           * coin, and pay for the second transaction */
+    return btc_tx_add_out(tx, total - fee - tiny, t->puzzle_spk, BTC_P2PKH_LEN) &&
+           btc_tx_add_out(tx, tiny, t->coin_spk[t->first], BTC_P2PKH_LEN);
 }
 
-/* the outputs of the first transaction: the prize at 0, the tiny coin of party p at 1 + p */
+/* the outputs of the first transaction: the prize at 0, the tiny coin of F at 1 */
 static bool first_ok(const payout_terms *t, const btc_tx *first)
 {
-    return first->n_out == 3 && first->out[0].script_len == BTC_P2PKH_LEN && !memcmp(first->out[0].script, t->puzzle_spk, BTC_P2PKH_LEN) &&
-           (t->first == 0 || t->first == 1) && first->out[1].value == payout_tiny(t) && first->out[2].value == payout_tiny(t);
+    return (t->first == 0 || t->first == 1) && first->n_out == 2 && first->out[0].script_len == BTC_P2PKH_LEN &&
+           !memcmp(first->out[0].script, t->puzzle_spk, BTC_P2PKH_LEN) && first->out[1].value == payout_tiny(t) &&
+           first->out[1].script_len == BTC_P2PKH_LEN && !memcmp(first->out[1].script, t->coin_spk[t->first], BTC_P2PKH_LEN);
 }
 
 bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
@@ -83,11 +84,11 @@ bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
     uint8_t txid[32];
     if (!first_ok(t, first) || !btc_tx_txid(first, txid)) return false;
     btc_tx_init(tx);
-    const uint64_t prize = first->out[0].value, fee = second_fee(t);
-    if (prize < fee + 2 * 546) return false;                    /* each half above the dust limit */
-    const uint64_t half = (prize - fee) / 2, other = prize - fee - half;
-    const uint64_t tiny = payout_tiny(t), v[2] = {t->first == 0 ? half + tiny : other, t->first == 1 ? half + tiny : other};
-    return btc_tx_add_in(tx, txid, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_in(tx, txid, (uint32_t)(1 + t->first), BTC_SEQUENCE_FINAL) &&
+    /* the prize and F's tiny coin, which came from the prize too, half each: the odd satoshi to S */
+    const uint64_t all = first->out[0].value + first->out[1].value, fee = second_fee(t);
+    if (all < fee + 2 * 546) return false;                      /* each half above the dust limit */
+    const uint64_t half = (all - fee) / 2, v[2] = {t->first == 0 ? half : all - fee - half, t->first == 1 ? half : all - fee - half};
+    return btc_tx_add_in(tx, txid, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_in(tx, txid, 1, BTC_SEQUENCE_FINAL) &&
            btc_tx_add_out(tx, v[0], t->pay_spk[0], t->pay_len[0]) && btc_tx_add_out(tx, v[1], t->pay_spk[1], t->pay_len[1]);
 }
 
@@ -98,8 +99,7 @@ bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx)
     if (!first_ok(t, first) || t->pay_len[t->first] > BTC_SPK_MAX || !btc_tx_txid(first, txid)) return false;
     const uint64_t fee = cancel_out(t, &out);
     btc_tx_init(tx);
-    return btc_tx_add_in(tx, txid, (uint32_t)(1 + t->first), BTC_SEQUENCE_FINAL) &&
-           btc_tx_add_out(tx, payout_tiny(t) - fee, out.script, out.script_len);
+    return btc_tx_add_in(tx, txid, 1, BTC_SEQUENCE_FINAL) && btc_tx_add_out(tx, payout_tiny(t) - fee, out.script, out.script_len);
 }
 
 bool payout_digests(const btc_tx *tx, const uint8_t puzzle_spk[BTC_P2PKH_LEN], size_t n, uint8_t (*digests)[32])

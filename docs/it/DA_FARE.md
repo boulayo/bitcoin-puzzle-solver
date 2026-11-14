@@ -26,7 +26,7 @@ La mia revisione non sostituisce quella di specialisti. **Da decidere:** se farl
 La revisione interna di novembre (quattro revisori indipendenti: firma, sessione e pagamento, rete, risolutore) ha portato alle correzioni
 del ramo. Restano questi punti di progetto, da chiudere prima del #140:
 - chi attacca può scegliere se essere F o S rifirmando il proprio record: serve un passo di impegno e rivelazione dei nonce;
-- un partner può far ripartire la coppia con annullamenti ripetuti per un giorno, e ogni giro costa una commissione al premio;
+- ~~un partner può far ripartire la coppia con annullamenti ripetuti per un giorno, e ogni giro costa una commissione al premio~~: fatto il 14 novembre, al massimo 5 pagamenti non riusciti per punto (3.8);
 - avvisi falsi della tabella (record con una x copiata) possono occupare i 64 posti delle sessioni per un giorno;
 - i limiti per blocco di indirizzi sono larghi, e il conteggio si azzera con collisioni di FNV;
 - la custodia predefinita arriva a 2^28 record (37 GB);
@@ -190,6 +190,24 @@ della campagna, la cifratura fallita che chiudeva la campagna. Restano aperti:
 | J6 | La cartella della casa è controllata, poi i file si riaprono per nome | Aprire la cartella una volta e lavorare dentro di essa |
 | J7 | Su macOS `fsync` non arriva fino al disco: un'interruzione di corrente subito dopo il primo avvio poteva perdere il seme nuovo | **Fatto**: `F_FULLFSYNC` per il seme, lo stato delle sessioni e la custodia |
 | J8 | Il controllo della monetina minuscola di `t_session` falliva a volte (i pagamenti erano giusti) | **Fatto**: quando la metà dispari dava un satoshi in meno a F, la differenza senza segno del test diventava enorme |
+
+### 3.8 Dalla revisione della firma a due (14 novembre)
+
+Due revisori: la crittografia (pzsign e cb-mpc) e il protocollo fra le due case. Nessuno dei due ha trovato un modo per rubare la chiave
+o un pezzo, per prendersi più della metà o per far firmare altro. La copia di cb-mpc (5 ottobre) contiene già le due correzioni
+dell'avviso di sicurezza GHSA-h3cp-c5xm-jjj8 (versioni 0.1.1 e 0.2.2). Corretti con prova: lo svuotamento del premio a cicli (al massimo
+5 pagamenti non riusciti per punto, e una commissione del partner oltre 4 volte la propria è rifiutata), il conteggio gratuito dei
+fallimenti quando S trattiene le firme (pzsign ora lo distingue, 0x84), la monetina di S che restava bloccata (ora c'è solo quella di
+F, e la seconda transazione divide tutto a metà), le firme controllate prima di essere mandate, i posti delle coppie che hanno finito i
+tentativi. Restano aperti:
+
+| | Rilievo | Rimedio proposto |
+|---|---|---|
+| K1 | Chi attacca sceglie se essere F o S rifirmando il proprio record (2 tentativi in media) | Moneta a due: il saluto porta l'impronta di un numero a caso, la prova lo rivela, F viene da entrambi |
+| K2 | Una copia vecchia della prima transazione, mandata prima di quella nuova, ferma la sessione per un giorno (ora conta come un pagamento non riuscito, al massimo 5) | Riconoscere una prima transazione uguale con altre firme e proseguire con quella |
+| K3 | Un partner che manda messaggi rovinati fa contare un fallimento alla casa onesta: con i punti di una fusione può arrivare a 10 e la casa non firma più su quella rete | **Da decidere**: dimenticare i fallimenti dopo un tempo (per esempio 10 ogni 30 giorni) oppure tenerli per sempre come oggi |
+| K4 | Le prove di cb-mpc sulla chiave Paillier e sulla cifratura del pezzo hanno un margine di 2^-50 per tentativo, non 2^-128 | Nessuno: con i limiti dei fallimenti resta vicino a 3·2^-50. Scritto in NETWORK.md 7.6 |
+| K5 | Un messaggio costruito ad arte fa riservare alla libreria circa 120 MB prima di essere rifiutato | Accettato (solo memoria, una firma alla volta); oppure una modifica locale di cb-mpc |
 
 ### 3.5 Librerie
 
