@@ -3,6 +3,26 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/RELEASING.md)).
 
+## [1.23.4] — 2026-11-14
+
+Fixes from a second review of the program, each case tried as an attacker would. Campaigns of 1.23.3 resume as they are.
+
+### Security
+- `merge` of an encrypting campaign that found the key cleared nothing: the seed and `dp.bin` stayed, and the key came back in two
+  seconds. `merge` now ends as `hunt` does: the seed goes from `campaign.conf`, the state and `dp.bin` are deleted, the folder must be
+  its owner's alone, and the command fails when `FOUND.txt` cannot be written.
+- Encryption added to a campaign on resume left the seed in `log.txt` (the line of `--part`): those lines are taken out of the log.
+- The files of a campaign (the lock, the log, `stats.csv`, `dp.bin`, the temporary files) are never opened through a link: a folder
+  copied from elsewhere could hold one that points at another file of the user, which the lock emptied. The log and `stats.csv` are
+  made for the user alone.
+
+### Fixed
+- A key that could not be encrypted at the find (the system gave no random numbers) left a `FOUND.txt` saying "not saved" and wiped
+  the campaign, whose next run then said "found" without searching. Now nothing is written and the state stays as it was, so that a
+  new search finds the key again.
+- For the kangaroo, a key that could not be written to `FOUND.txt` is no longer said to be found again by the same command: a new
+  session walks another way.
+
 ## [1.23.3] — 2026-11-13
 
 Fixes from a complete review of the program. Campaigns of 1.23.2 resume as they are.
