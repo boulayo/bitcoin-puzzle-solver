@@ -15,6 +15,8 @@
 /* The version a shared walk needs (jumpseed=): an older version would walk its own jump table with a seed it does not have (seed= is empty:
  * the start key is never written). */
 #define PZ_REQUIRES_NET "1.24.0"
+/* The version a campaign with a step needs (step=): an older version would search every key of the range instead of the steps. */
+#define PZ_REQUIRES_STEP "1.24.0"
 
 typedef enum { MODE_LINEAR = 0, MODE_KANGAROO = 1, MODE_BSGS = 2 } search_mode;
 
@@ -40,7 +42,7 @@ typedef struct {
     char name[96];
     char dir[512];
     int puzzle;                  /* 0 when a custom range is used */
-    pz_u256 range_start, range_end; /* inclusive */
+    pz_u256 range_start, range_end; /* inclusive; with a step, of the index i: 1 to the number of keys */
     u8 target_h160[20];
     char address[64];            /* may be empty if only a hash160 was given */
     bool has_pubkey;
@@ -61,9 +63,24 @@ typedef struct {
     bool net;                    /* a shared walk (--jump-seed, --start-key: docs/en/NETWORK.md 6): seed is the start key, in memory only */
     u8 net_jumpseed[32];         /* the public seed of the jump table */
     char net_keyid[17];          /* seed_to_id of the start key: a resume with another key is refused */
+    bool has_step;               /* --step: the keys are step_base + i * step for the index i of the range (1 to their number); the
+                                  * engines count, the campaign schedules and the reports measure in i (docs/en/USAGE.md, "Steps") */
+    pz_u256 step, step_base;     /* step_base = START - step mod n, so that START, the first key, is i = 1 */
 } campaign_cfg;
 
 const char *mode_name(search_mode m);
+/* --step: the keys START, START + STEP, ... up to END become the index range 1 to their number. False, with the reason, when the step is
+ * 0, or not below n. */
+bool cfg_set_step(campaign_cfg *c, const pz_u256 *start, const pz_u256 *end, const pz_u256 *step, const char **why);
+/* The key of index i: i itself, or step_base + i * step mod n. */
+void cfg_key_of(const campaign_cfg *c, const pz_u256 *i, pz_u256 *key);
+/* The index of a key, the other way; false when it is not one of the keys of the range. */
+bool cfg_index_of(const campaign_cfg *c, const pz_u256 *key, pz_u256 *i);
+/* The point whose key the kangaroo and BSGS look for in the range: the public key, or (pubkey - step_base * G) / step, whose key is the
+ * index. False when there is none (the public key is step_base * G, a key of no step). */
+bool cfg_search_pubkey(const campaign_cfg *c, pz_ge *q);
+/* The range as the reports show it: "0xSTART - 0xEND", or with a step "0xSTART - 0xLAST, step 0xSTEP" (cap: 3 * PZ_U256_HEX_BUF + 40). */
+char *cfg_range_text(const campaign_cfg *c, char *out, size_t cap);
 /* Range size = end - start + 1 (pz_u256). */
 pz_u256 cfg_range_size(const campaign_cfg *c);
 /* The default size of the blocks of the visiting order (bits) for a range; the stored value of an existing campaign wins. */

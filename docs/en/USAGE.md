@@ -53,6 +53,13 @@ line of the help:
 
 * `-p N` with `-r S:E` takes the target of puzzle N and the range of `-r`. A key outside the `-r` range is not reported by the
   linear search, not even when its last block happens to reach it (the engines scan whole lanes).
+* `--step STEP` (hexadecimal) searches only the keys `S, S + STEP, S + 2·STEP, ...` up to `E` of the range: the case of a key whose
+  unknown bits are one block in the middle and the others known. A key `0xa5c????12345` with four unknown hex digits is
+  `-r a5c000012345:a5cffff12345 --step 100000`, 65 536 keys; with the bits of a puzzle (`-p N`) the range is the puzzle's. Every method
+  takes it at its full speed: the kangaroo and BSGS look for the key of `(pubkey − (S − STEP)·G) / STEP`, which is the index of the
+  key among the steps, and the linear engines and kernels move from one key to the next by `STEP·G` where they move by `G` otherwise.
+  The campaign counts, splits (`--part`) and reports the keys of the steps, and `where` takes a key of the steps. Unknown bits in
+  several separate groups are not one step: split them into several campaigns, one for each value of the smaller group, when it is small.
 * `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random.
 * `--mem` is in GiB (`--mem 0.25` is 256 MiB). Without it the kangaroo takes 40 % of the free RAM for the table of distinguished points
   (at least 256 MiB, at most 64 GiB) and BSGS chooses a table that fits in 70 % of it.

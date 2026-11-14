@@ -22,6 +22,74 @@ bool puzzle_range(int n, pz_u256 *start, pz_u256 *end)
     return true;
 }
 
+/* a / d (d not 0), shift and subtract */
+static pz_u256 div_u256(const pz_u256 *a, const pz_u256 *d)
+{
+    pz_u256 q = pz_u256_zero(), r = pz_u256_zero();
+    for (int i = 255; i >= 0; i--) {
+        const bool top = pz_u256_bit(&r, 255);
+        r = pz_u256_shl(&r, 1);
+        r.w[0] |= pz_u256_bit(a, (unsigned)i);
+        if (top || pz_u256_cmp(&r, d) >= 0) pz_u256_sub(&r, &r, d), q.w[i / 64] |= 1ULL << (i % 64);   /* top: 2^256 + r is above d */
+    }
+    return q;
+}
+
+bool cfg_set_step(campaign_cfg *c, const pz_u256 *start, const pz_u256 *end, const pz_u256 *step, const char **why)
+{
+    if (pz_u256_is_zero(step) || pz_u256_cmp(step, &pz_secp256k1_n) >= 0) return *why = "--step must be at least 1 and below the group order", false;
+    pz_u256 span;
+    pz_u256_sub(&span, end, start);
+    const pz_u256 count = div_u256(&span, step);                /* the keys after the first */
+    c->has_step = true;
+    c->step = *step;
+    pz_u256_submod_n(&c->step_base, start, step);
+    c->range_start = pz_u256_from_u64(1);
+    pz_u256_add_u64(&c->range_end, &count, 1);
+    return true;
+}
+
+void cfg_key_of(const campaign_cfg *c, const pz_u256 *i, pz_u256 *key)
+{
+    if (!c->has_step) return (void)(*key = *i);
+    pz_u256 t = *i;
+    if (pz_u256_cmp(&t, &pz_secp256k1_n) >= 0) pz_u256_sub(&t, &t, &pz_secp256k1_n);
+    pz_u256_mulmod_n(&t, &t, &c->step);
+    pz_u256_addmod_n(key, &t, &c->step_base);
+}
+
+bool cfg_index_of(const campaign_cfg *c, const pz_u256 *key, pz_u256 *i)
+{
+    if (pz_u256_cmp(key, &pz_secp256k1_n) >= 0) return false;
+    if (c->has_step) {
+        pz_u256 inv;
+        pz_u256_submod_n(i, key, &c->step_base);
+        pz_u256_invmod_n(&inv, &c->step);
+        pz_u256_mulmod_n(i, i, &inv);
+    } else *i = *key;
+    return pz_u256_cmp(i, &c->range_start) >= 0 && pz_u256_cmp(i, &c->range_end) <= 0;
+}
+
+bool cfg_search_pubkey(const campaign_cfg *c, pz_ge *q)
+{
+    if (!c->has_step) return *q = c->pubkey, true;
+    pz_ge o, t = c->pubkey;
+    pz_u256 inv;
+    if (!pz_u256_is_zero(&c->step_base) && (!pz_ec_mul_g(&o, &c->step_base) || !pz_ge_sub(&t, &c->pubkey, &o))) return false;
+    pz_u256_invmod_n(&inv, &c->step);
+    return pz_ec_mul(q, &t, &inv);
+}
+
+char *cfg_range_text(const campaign_cfg *c, char *out, size_t cap)
+{
+    char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], st[PZ_U256_HEX_BUF];
+    pz_u256 first, last;
+    cfg_key_of(c, &c->range_start, &first), cfg_key_of(c, &c->range_end, &last);
+    if (c->has_step) snprintf(out, cap, "0x%s - 0x%s, step 0x%s", pz_u256_to_hex(&first, a), pz_u256_to_hex(&last, b), pz_u256_to_hex(&c->step, st));
+    else snprintf(out, cap, "0x%s - 0x%s", pz_u256_to_hex(&first, a), pz_u256_to_hex(&last, b));
+    return out;
+}
+
 pz_u256 cfg_range_size(const campaign_cfg *c)
 {
     pz_u256 d, one = pz_u256_from_u64(1);
@@ -199,14 +267,20 @@ int cfg_save(const campaign_cfg *c, const char *path)
     pubkey_hex[0] = 0;
     if (c->has_pubkey) pz_hex_encode(c->pubkey33, 33, pubkey_hex);
     if (c->has_encrypt) pz_hex_encode(c->encrypt_pubkey33, 33, encrypt_pubkey_hex);
-    char net_lines[160] = "";
+    char net_lines[160] = "", step_lines[180] = "";
+    if (c->has_step) {                     /* the first key and the step: the range above is of the index */
+        char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF];
+        pz_u256 first;
+        cfg_key_of(c, &c->range_start, &first);
+        snprintf(step_lines, sizeof step_lines, "step_start=%s\nstep=%s\n", pz_u256_to_hex(&first, a), pz_u256_to_hex(&c->step, b));
+    }
     if (c->net) {
         char js[65];
         pz_hex_encode(c->net_jumpseed, 32, js);
         snprintf(net_lines, sizeof net_lines, "jumpseed=%s\nstart_key_id=%s\n", js, c->net_keyid);
     }
     /* the lines below part= are there only when they are used: the file of a campaign without them is as before */
-    const char *req = c->net ? PZ_REQUIRES_NET : c->has_encrypt ? PZ_REQUIRES_ENCRYPT : NULL;
+    const char *req = c->net ? PZ_REQUIRES_NET : c->has_step ? PZ_REQUIRES_STEP : c->has_encrypt ? PZ_REQUIRES_ENCRYPT : NULL;
     int n = snprintf(buf, sizeof buf,
         "# pzsolve campaign (do not edit by hand)\n"
         "format=%u\n"
@@ -225,10 +299,10 @@ int cfg_save(const campaign_cfg *c, const char *path)
         "dp_bits=%u\n"
         "bsgs_entries=%llu\n"
         "part=%s\n"
-        "%s%s%s%s%s%s%s",
+        "%s%s%s%s%s%s%s%s",
         c->format_version, c->created_with, c->created_at, c->name, c->puzzle, start_hex, end_hex,
         c->address, hash160_hex, pubkey_hex, mode_name(c->mode), seed_hex, c->chunk_bits, c->dp_bits, (unsigned long long)c->bsgs_t, c->part,
-        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex, c->has_encrypt ? "\n" : "", net_lines,
+        c->has_encrypt ? "encrypt_pubkey=" : "", encrypt_pubkey_hex, c->has_encrypt ? "\n" : "", net_lines, step_lines,
         req ? "requires=" : "", req ? req : "", req ? "\n" : "");
     return pz_write_file_atomic(path, buf, (size_t)n, 0644);
 }
@@ -366,6 +440,20 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
                 return -1;
             }
             c->has_encrypt = true;
+        }
+    }
+    {
+        char sv[80], tv[80];                                                          /* a campaign with a step (1.24.0) */
+        if (cfg_val(text, "step", tv, sizeof tv) && tv[0]) {
+            pz_u256 first;
+            if (!cfg_val(text, "step_start", sv, sizeof sv) || !pz_u256_from_hex(&first, sv) || !pz_u256_from_hex(&c->step, tv) ||
+                pz_u256_is_zero(&c->step) || pz_u256_cmp(&c->step, &pz_secp256k1_n) >= 0 || pz_u256_cmp(&first, &pz_secp256k1_n) >= 0) {
+                snprintf(err, errlen, "invalid step or step_start in %s", path);
+                free(text);
+                return -1;
+            }
+            c->has_step = true;
+            pz_u256_submod_n(&c->step_base, &first, &c->step);
         }
     }
 #undef GET

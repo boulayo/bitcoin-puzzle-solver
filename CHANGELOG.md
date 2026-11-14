@@ -6,6 +6,12 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- `hunt --step STEP`: only the keys `S, S + STEP, S + 2·STEP, ...` of the range, for a key whose unknown bits are one block in the middle.
+  Every method runs at its full speed: the kangaroo and BSGS on a transformed public key, the linear engines and kernels moving by
+  `STEP·G`. A campaign with a step needs 1.24.0 (`requires=` in its campaign.conf).
+- pzpeer: after the payout has 6 confirmations and nothing of value is left at the puzzle address, the two homes give each other their
+  pieces, and each has the key of the puzzle, in `FOUND.txt` and on the terminal (encrypted when pzsolve encrypts its key). Every step
+  that matters gets a short line on the terminal, and every 10 minutes a line of the network with its rate and the time the key needs.
 - `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the
   public seed, the walkers follow the schema net-06, and every start draws from a generator of its own seeded with the secret start key,
   which is never written in the campaign files or in the reports. The distinguished points are exactly those of `--dp-bits`, and `dp.bin`

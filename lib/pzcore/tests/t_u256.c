@@ -200,6 +200,34 @@ static void test_mod_n(void)
         pz_u256_addmod_n(&d, &d, &b);                                          /* the output may be an input */
         CHECK(pz_u256_cmp(&d, &a) == 0);
     }
+    /* the product and the inverse: vectors of Python (a * b % n, pow(a, -1, n)), then identities on random values */
+    static const char *const V[][4] = {
+        {"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140", "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140", "1", "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140"},
+        {"8000000000000000000000000000000000000000000000000000000000000000", "8000000000000000000000000000000000000000000000000000000000000000", "2759c7356071a6f179a5fd7916f341f19d0525b0839f3e1e225b3c8519f5f450", "b3d1121ac929df2712fe61824f9f56bbbcc8cbc65001783d4227e69a30f93eeb"},
+        {"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f", "3", "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413b", "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0"},
+        {"14551231950b75fc4402da1732fc9bebf", "14551231950b75fc4402da1732fc9bebf", "9d671cd581c69bc5e697f5e45bcd07c6741496c20e7cf878896cf21467d7d140", "d9e8890d6494ef93897f30c127cfab5d3bbbd4567fa50c3c80fd22938097c016"},
+        {"d23f0824128b2f330c5c7fd0a6a3a4506513270e269e0d37f2a74de452e6b438", "36f675cc81e74ef5e8e25d940ed904759531985d5d9dc9f81818e811892f902b", "5c73575a3ce67bff2fd1cae289bdcfac3cfe35d15d1cab3fe9db804003d2c845", "99ef2df6c534ff0a3003ce9de618c956166588b5a53e52caafbec232464b1a32"},
+        {"8d116ece1738f7d93d9c172411e20b8f6b0d549b6f03675a1600a35a099950d8", "a170b33839263059f28c105d1fb17c2390c192cfd3ac94af0f21ddb66cad4a26", "4b93f42179641a7fe14294a955bd6b136b66848090bffe530f215042e5bdd0cb", "21fd2af4f286826665b688e003b32689a8349ce264c0527536821e82a8558b95"},
+        {"cb1e29c658cda1495e60af593bd04cf0fd630f1f29d0da9953f48f1a09f76b5", "6b4cb2424a23d5962217beaddbc496cb8e81973e0becd7b03898d190f9ebdacc", "61acb0b9fff25064b5cf4adb3142d185bc73c5cd33675a7c08ee60d74c1c12dd", "c69563f18535f0d0377e4356e9207b2096b2bac96254ac9f74ab330f789e0973"},
+        {"ae97ba94d0eda82f8f6d05584ef8aa38922766581e27a1c08a6a63ec24ede6a4", "18f135d25f557203301850c5a38fd547923a736994e3bf911a61dbe22e44158b", "f3fbf7c5c9fe6b6d796e7be42080bb0d8895b38cb5e5169c1d2d46e19f613343", "b1530abcb4293a7ac6abccfd8d69df110ed7ef36e2f9e6b5aeaeb9494c965c6b"},
+    };
+    for (size_t i = 0; i < sizeof V / sizeof *V; i++) {
+        pz_u256 a, b, p, inv, got;
+        CHECK(pz_u256_from_hex(&a, V[i][0]) && pz_u256_from_hex(&b, V[i][1]) && pz_u256_from_hex(&p, V[i][2]) && pz_u256_from_hex(&inv, V[i][3]));
+        pz_u256_mulmod_n(&got, &a, &b);                CHECK(pz_u256_cmp(&got, &p) == 0);
+        pz_u256_invmod_n(&got, &a);                    CHECK(pz_u256_cmp(&got, &inv) == 0);
+    }
+    for (int it = 0; it < 500; it++) {
+        pz_u256 a = rnd256(256), b = rnd256(256), ab, ba, inv, one_back;
+        if (pz_u256_cmp(&a, &n) >= 0) pz_u256_sub(&a, &a, &n);
+        if (pz_u256_cmp(&b, &n) >= 0) pz_u256_sub(&b, &b, &n);
+        if (pz_u256_is_zero(&a)) continue;
+        pz_u256_mulmod_n(&ab, &a, &b), pz_u256_mulmod_n(&ba, &b, &a);
+        CHECK(pz_u256_cmp(&ab, &ba) == 0 && pz_u256_cmp(&ab, &n) < 0);
+        pz_u256_invmod_n(&inv, &a);
+        pz_u256_mulmod_n(&one_back, &inv, &a);         CHECK(pz_u256_cmp(&one_back, &one) == 0);
+        pz_u256_mulmod_n(&ab, &ab, &inv);              CHECK(pz_u256_cmp(&ab, &b) == 0);   /* (a b) / a = b, the output an input */
+    }
 }
 
 int main(void)

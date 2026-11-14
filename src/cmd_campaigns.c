@@ -79,20 +79,20 @@ int cmd_where(int argc, char **argv)
     snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
     snprintf(p, sizeof p, "%s/campaign.conf", cdir);
     if (cfg_load(&c, p, err, sizeof err) != 0) pz_die("%s", err);
-    pz_u256 key;
-    if (!pz_u256_from_hex(&key, o.key)) pz_die("invalid key (hexadecimal digits expected)");
+    pz_u256 given, key;
+    if (!pz_u256_from_hex(&given, o.key)) pz_die("invalid key (hexadecimal digits expected)");
     if (c.mode == MODE_KANGAROO) pz_die("the campaign uses the kangaroo: it has no predetermined visit order, 'where' does not apply");
-    char ra[80], rb[80];
-    pz_u256_to_hex(&c.range_start, ra);
-    pz_u256_to_hex(&c.range_end, rb);
-    if (pz_u256_cmp(&key, &c.range_start) < 0 || pz_u256_cmp(&key, &c.range_end) > 0)
-        pz_die("the key is not in the range of the campaign (0x%s - 0x%s)", ra, rb);
+    char rng[3 * PZ_U256_HEX_BUF + 40];
+    const char *ra = cfg_range_text(&c, rng, sizeof rng);       /* the order is of the index of the key (with --step, not the key) */
+    if (!cfg_index_of(&c, &given, &key)) pz_die("the key is not among the keys of the campaign (%s)", ra);
     if (c.mode == MODE_BSGS) {
         char berr[200];
         bsgs_params bp;
-        if (!bsgs_params_init(&bp, &c.range_start, &c.range_end, &c.pubkey, c.bsgs_t, berr, sizeof berr)) pz_die("%s", berr);
+        pz_ge q;
+        if (!cfg_search_pubkey(&c, &q)) pz_die("the public key is not that of a key of the steps");
+        if (!bsgs_params_init(&bp, &c.range_start, &c.range_end, &q, c.bsgs_t, berr, sizeof berr)) pz_die("%s", berr);
         u64 gi = bsgs_giant_index(&bp, &key);
-        if (!gi) pz_die("the key is not in the range of the campaign (0x%s - 0x%s)", ra, rb);
+        if (!gi) pz_die("the key is not in the range of the campaign (%s)", ra);
         campaign_cfg sc;
         bsgs_sched_cfg(&bp, &c, &sc);
         sched_t *s = sched_new(&sc);
@@ -113,7 +113,7 @@ int cmd_where(int argc, char **argv)
     sched_t *s = sched_new(&c);
     pz_u256 seq;
     u64 off;
-    if (!sched_locate(s, &key, &seq, &off)) pz_die("the key is not in the range of the campaign (0x%s - 0x%s)", ra, rb);
+    if (!sched_locate(s, &key, &seq, &off)) pz_die("the key is not in the range of the campaign (%s)", ra);
     char seq_text[80], block_grouped[64], blocks_grouped[64], blocks_plain[64], offset_text[32];
     const long double blocks = pz_u256_to_ld(&s->blocks_all);            /* of the whole search order, also with --part */
     snprintf(blocks_plain, sizeof blocks_plain, "%.0Lf", blocks);

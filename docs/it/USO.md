@@ -53,6 +53,13 @@ Quello che richiede più di una riga dell'aiuto:
 
 * `-p N` con `-r S:E` prende il bersaglio del puzzle N e l'intervallo di `-r`. Una chiave fuori dall'intervallo di `-r` non viene segnalata dalla
   ricerca lineare, nemmeno quando l'ultimo blocco la raggiunge (i motori scandiscono corsie intere).
+* `--step PASSO` (esadecimale) cerca solo le chiavi `S, S + PASSO, S + 2·PASSO, ...` fino a `E` dell'intervallo: il caso di una chiave i
+  cui bit ignoti sono un blocco in mezzo e gli altri sono noti. Una chiave `0xa5c????12345` con quattro cifre esadecimali ignote è
+  `-r a5c000012345:a5cffff12345 --step 100000`, 65 536 chiavi; con i bit di un puzzle (`-p N`) l'intervallo è quello del puzzle. Ogni
+  metodo la percorre alla sua piena velocità: canguro e BSGS cercano la chiave di `(chiave pubblica − (S − PASSO)·G) / PASSO`, che è la
+  posizione della chiave fra i passi, e i motori lineari e i kernel passano da una chiave alla successiva con `PASSO·G` invece che con
+  `G`. La campagna conta, divide (`--part`) e riporta le chiavi dei passi, e `where` accetta una chiave dei passi. Bit ignoti in più
+  gruppi separati non sono un passo solo: si dividono in più campagne, una per ogni valore del gruppo più piccolo, se è piccolo.
 * `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale.
 * `--mem` è in GiB (`--mem 0.25` sono 256 MiB). Senza, il canguro prende il 40 % della RAM libera per la tabella dei punti distinti
   (almeno 256 MiB, al massimo 64 GiB) e il BSGS sceglie una tabella che stia nel 70 % della RAM libera.

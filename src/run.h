@@ -137,15 +137,15 @@ void run_install_signals(run_ctx *r);
 /* Whether a stop signal (Ctrl-C, SIGTERM, SIGHUP, a closing console) has arrived since run_install_signals. The measurements that run before
  * a campaign poll it, so that they end at once and clean up. */
 bool run_interrupted(void);
-/* Verifies a candidate private key against the campaign target and, if valid,
- * records it and stops everything. Returns true if the key is correct. */
-bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source);
-/* Whether the key lies in the range of the campaign (range_start to range_end, both included; the whole range, not the share of --part). */
-bool run_key_in_range(const run_ctx *r, const pz_u256 *key);
+/* Verifies a candidate against the campaign target and, if valid, records it and stops everything. Returns true if the key is correct. The
+ * engines give the index of a key in the range (cfg_key_of): the key itself, but with --step START + i * STEP. */
+bool run_submit_key(run_ctx *r, const pz_u256 *index, const char *source);
+/* Whether the index lies in the range of the campaign (range_start to range_end, both included; the whole range, not the share of --part). */
+bool run_key_in_range(const run_ctx *r, const pz_u256 *index);
 /* A hit of the linear search. The engines scan whole lanes, so the last block of a range can reach a few keys past its end; a hit there is the
  * right key, but this campaign was not asked for it and whether its scan gets there depends on how the end of the range falls on the lanes. It
  * is ignored (false) with a line in the debug log, which does not show the key. Any other hit goes to run_submit_key. */
-bool run_scan_candidate(run_ctx *r, const pz_u256 *key, const char *source);
+bool run_scan_candidate(run_ctx *r, const pz_u256 *index, const char *source);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);

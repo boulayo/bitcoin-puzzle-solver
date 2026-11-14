@@ -289,6 +289,19 @@ $BIN hunt -c xn -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
 A=$(field 0x200000 addr)
 $BIN hunt -r 1:fffff -a "$A" --part 0/2 -c xp -d "$DIR" --ui log -q --no-gpu >"$DIR/xp.out" 2>&1; RC=$?
 [ $RC -eq 1 ] && grep -q "Part 0/2 was scanned in full" "$DIR/xp.out" && ok "share of a split range covered without the key: exit status 1" || bad "share covered without the key: exit status $RC"
+# --step: a key whose unknown bits are a block in the middle (16 bits above 20 known ones, under 12 known ones), found by every method; the
+# range shown with its step, a resume with another step refused, 'where' on a key of the steps and on one that is not
+SK=$(python3 -c "print(hex((0xa5c<<36)|(0xb7e1<<20)|0x12345))"); SR=a5c000012345:a5cffff12345
+for m in linear kangaroo bsgs; do
+  [ $m = linear ] && T="-a $(field $SK addr)" || T="-k $(field $SK pub)"
+  $BIN hunt -r $SR --step 100000 $T -m $m -c st$m -d "$DIR" --ui log --no-gpu >"$DIR/st$m.out" 2>&1; RC=$?
+  [ $RC -eq 0 ] && grep -qi "private key hex: $SK" "$DIR/st$m/FOUND.txt" && grep -q "step 0x100000 (65,536 keys)" "$DIR/st$m.out" &&
+    ok "--step, $m: the key of the steps found" || bad "--step, $m: exit status $RC"
+done
+$BIN hunt -r $SR --step 200000 -a "$(field $SK addr)" -c stlinear -d "$DIR" --ui log -q --no-gpu >"$DIR/st2.out" 2>&1; RC=$?
+[ $RC -eq 2 ] && grep -q "does not match the keys of the existing campaign" "$DIR/st2.out" && ok "--step: another step refused on resume" || bad "--step on resume: exit status $RC"
+$BIN where -c stbsgs -d "$DIR" --key $SK >"$DIR/st3.out" 2>&1 && grep -q "the key will be found at step" "$DIR/st3.out" &&
+  ! $BIN where -c stbsgs -d "$DIR" --key a5c000012346 >/dev/null 2>&1 && ok "--step: where on a key of the steps and on one that is not" || bad "--step: where"
 for sig in INT TERM; do
   rm -rf "$DIR/xi"
   $BIN hunt -p 71 -c xi -d "$DIR/xi" --ui log -q --no-gpu >/dev/null 2>&1 & XPID=$!

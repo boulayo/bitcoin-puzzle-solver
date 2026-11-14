@@ -188,8 +188,11 @@ static bool key_matches(run_ctx *r, const pz_u256 *key)
 
 static void run_write_found(run_ctx *r);
 
-bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
+bool run_submit_key(run_ctx *r, const pz_u256 *index, const char *source)
 {
+    pz_u256 key_of;
+    cfg_key_of(&r->cfg, index, &key_of);                     /* the engines count in the index of the range: with a step it is not the key */
+    const pz_u256 *key = &key_of;
     bool ok = key_matches(r, key);
     if (!ok) {
         atomic_fetch_add(&r->hits_bad, 1);
@@ -218,22 +221,25 @@ bool run_submit_key(run_ctx *r, const pz_u256 *key, const char *source)
     return true;
 }
 
-bool run_key_in_range(const run_ctx *r, const pz_u256 *key)
+bool run_key_in_range(const run_ctx *r, const pz_u256 *index)
 {
-    return pz_u256_cmp(key, &r->cfg.range_start) >= 0 && pz_u256_cmp(key, &r->cfg.range_end) <= 0;
+    return pz_u256_cmp(index, &r->cfg.range_start) >= 0 && pz_u256_cmp(index, &r->cfg.range_end) <= 0;
 }
 
 /* A key that a linear engine or kernel reports: its hash160 has word SCAN_FILTER_WORD of the target's. The key of the campaign comes this
  * way; the others, one key in 2^32, are near misses, and with --near each is a line of near.txt. Whoever scanned a range knows them and
  * nobody else, so they prove the scan to whom checks them. True when it is the key. */
-bool run_scan_candidate(run_ctx *r, const pz_u256 *key, const char *source)
+bool run_scan_candidate(run_ctx *r, const pz_u256 *index, const char *source)
 {
     pz_ge p;
     u8 pub[33], h[20];
-    if (!run_key_in_range(r, key)) {
+    pz_u256 key_of;
+    const pz_u256 *key = &key_of;
+    if (!run_key_in_range(r, index)) {
         pz_log(PZ_LOG_DEBUG, "candidate from %s beyond the end of the range ignored (the last block is scanned in whole lanes)", source);
         return false;
     }
+    cfg_key_of(&r->cfg, index, &key_of);
     if (!pz_ec_mul_g(&p, key)) return false;
     pz_ge_to_pub33(pub, &p);
     pz_hash160(pub, 33, h);
@@ -250,7 +256,7 @@ bool run_scan_candidate(run_ctx *r, const pz_u256 *key, const char *source)
         fflush(r->near);
         pthread_mutex_unlock(&r->found_mu);
     }
-    return is_key && run_submit_key(r, key, source);
+    return is_key && run_submit_key(r, index, source);
 }
 
 /* The seed as the reports show it: a shared walk's is its start key, which stays in memory (docs/en/NETWORK.md 6). */
@@ -408,7 +414,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 {
     const size_t bcap = 8192 + (size_t)r->nws * 128;      /* the list of the workers grows with their number */
     char *buf = pz_xmalloc(bcap);
-    char stamp[40], seedhex[65], idb[17], rs[80], re[80], addr[80], hx[48], elapsed[48], state[24];
+    char stamp[40], seedhex[65], idb[17], rs[80], addr[80], hx[48], elapsed[48], state[24];
     double el = r->elapsed_prev + run_session_elapsed(r);
     time_t now = time(NULL);
     struct tm tmv;
@@ -416,8 +422,8 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tmv);
     seed_text(&r->cfg, seedhex);
     seed_to_id(r->cfg.seed, idb);
-    pz_u256_to_hex(&r->cfg.range_start, rs);
-    pz_u256_to_hex(&r->cfg.range_end, re);
+    char rng[3 * PZ_U256_HEX_BUF + 40];
+    cfg_range_text(&r->cfg, rng, sizeof rng);
     pz_hex_encode(r->cfg.target_h160, 20, hx);
     if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
     else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
@@ -498,7 +504,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "Target:         %saddress %s\n"
         "                hash160 %s%s\n"
         "Mode:           %s\n"
-        "Range:          0x%s - 0x%s  (%s keys)\n"
+        "Range:          %s  (%s keys)\n"
         "%s"
         "Sessions:       %d, total compute time %s\n"
         "\n"
@@ -508,7 +514,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "Detail:         %s\n"
         "%s",
         PZ_VERSION, stamp, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
-        r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rs, re, rbits, partline,
+        r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rng, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
         pct, amount, speed, tleft,
         detail, rej);

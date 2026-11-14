@@ -206,12 +206,12 @@ bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
     memset(prm, 0, sizeof prm);
     pz_u256 center = L->key_start;
     pz_u256_add_u64(&center, &center, HALFK);
-    pz_ge P0, D, GS;
-    if (!pz_ec_mul_g(&P0, &center)) return false;
+    pz_ge P0, D, GS;                              /* the kernel moves by the points it is given: with --step those of H (cpu_engine.h) */
+    if (!lin_point(&P0, &center)) return false;
     pz_u256 step = pz_u256_from_u64((u64)L->ngroups * GRPK);
-    if (!pz_ec_mul_g(&D, &step)) return false;
+    if (!lin_mul(&D, &step)) return false;
     pz_u256 gs = pz_u256_from_u64(GRPK);
-    if (!pz_ec_mul_g(&GS, &gs)) return false;
+    if (!lin_mul(&GS, &gs)) return false;
     pack_ge(prm, &P0);
     pack_ge(prm + 16, &D);
     pack_ge(prm + 32, &GS);

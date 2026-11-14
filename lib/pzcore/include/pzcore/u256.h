@@ -167,6 +167,9 @@ extern const pz_u256 pz_secp256k1_n;
 /* r = a + b mod n and r = a - b mod n. Both operands must already be below n. r may alias a or b. */
 void pz_u256_addmod_n(pz_u256 *r, const pz_u256 *a, const pz_u256 *b);
 void pz_u256_submod_n(pz_u256 *r, const pz_u256 *a, const pz_u256 *b);
+/* r = a * b mod n (a and b below n), and r = 1 / a mod n (a not 0 mod n; 0 gives 0). Not constant-time: for public values. */
+void pz_u256_mulmod_n(pz_u256 *r, const pz_u256 *a, const pz_u256 *b);
+void pz_u256_invmod_n(pz_u256 *r, const pz_u256 *a);
 
 PZ_END_DECLS
 

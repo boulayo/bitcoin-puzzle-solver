@@ -81,6 +81,8 @@ static const char *hunt_text(void)
 "                          creator in 2017 (only their address is known). With -r it selects only the target\n"
 "  -r, --range S:E         custom range in hexadecimal (inclusive); a key outside it is not reported, not even when the last block\n"
 "                          of the linear search reaches it\n"
+"      --step STEP         only the keys S, S + STEP, S + 2*STEP, ... up to E (hexadecimal): a key whose unknown bits are one block\n"
+"                          in the middle, the others known (docs/en/USAGE.md, \"Steps\"); with any mode\n"
 "  -a, --address ADDR      bitcoin address to find: \"1...\" or \"bc1q...\" (compressed key); required unless -k is used\n"
 "  -k, --pubkey HEX        known public key (compressed 33 bytes or uncompressed 65 bytes): enables the kangaroo and BSGS\n"
 "\n"
@@ -308,7 +310,7 @@ void pz_usage_error(const char *cmd, const char *fmt, ...)
 
 static const char *g_cmd = "";
 
-enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY };
+enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY, O_STEP };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"pubkey", 1, 0, 'k'},
@@ -318,7 +320,7 @@ static const struct option long_opts[] = {
     {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN},
     {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"near", 0, 0, O_NEAR}, {"node", 1, 0, O_NODE},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
-    {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
+    {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"step", 1, 0, O_STEP}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
     {0, 0, 0, 0}};
 
 /* The options removed in 1.23.0 and what takes their place: each one is refused with its own message, not as an unknown option. The
@@ -506,6 +508,7 @@ void parse_opts(int argc, char **argv, opts_t *o)
         case O_ONFOUND: opt_copy("--on-found", o->on_found, sizeof o->on_found, optarg); break;
         case O_JUMPSEED: opt_copy("--jump-seed", o->jump_seed, sizeof o->jump_seed, optarg); break;
         case O_STARTKEY: opt_copy("--start-key", o->start_key, sizeof o->start_key, optarg); break;
+        case O_STEP: opt_copy("--step", o->step, sizeof o->step, optarg); break;
         case O_KEY: opt_copy("--key", o->key, sizeof o->key, optarg); break;
         case O_TABLE: opt_copy("--table", o->table, sizeof o->table, optarg); break;
         case O_BSGSN: o->bsgs_entries = opt_u64("--bsgs-entries", optarg, 1, BS_MAX_T); break;

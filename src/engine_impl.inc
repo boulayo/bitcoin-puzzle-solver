@@ -137,11 +137,11 @@ static bool group_slow(ctx_t *c, u64 cbase, const pz_u256 *center, pz_ge *Cnext)
         pz_u256 k = *center, d = pz_u256_from_u64((u64)(i < 0 ? -i : i));
         if (i < 0) pz_u256_sub(&k, &k, &d); else pz_u256_add(&k, &k, &d);
         pz_ge p;
-        if (pz_ec_mul_g(&p, &k)) ctx_add(c, &p.x, &p.y, cbase + (u64)(int64_t)i);
+        if (lin_point(&p, &k)) ctx_add(c, &p.x, &p.y, cbase + (u64)(int64_t)i);
     }
     pz_u256 nk = *center;
     pz_u256_add_u64(&nk, &nk, GRP);
-    return pz_ec_mul_g(Cnext, &nk);
+    return lin_point(Cnext, &nk);
 }
 
 static u64 CAT(eng_scan_, ISA)(const scan_job *job, const pz_u256 *key_start, u64 nkeys)
@@ -155,7 +155,7 @@ static u64 CAT(eng_scan_, ISA)(const scan_job *job, const pz_u256 *key_start, u6
     pz_u256 center = *key_start;
     pz_u256_add_u64(&center, &center, HALF);
     pz_ge C;
-    bool cvalid = pz_ec_mul_g(&C, &center);      /* false: the centre is the point at infinity (key 0 mod n) */
+    bool cvalid = lin_point(&C, &center);        /* false: the centre is the point at infinity (key 0 mod n) */
     const u64 ngroups = (nkeys + GRP - 1) / GRP;
     u64 g = 0, unreported = 0;
     for (; g < ngroups; g++) {

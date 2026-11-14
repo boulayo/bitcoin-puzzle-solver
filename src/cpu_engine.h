@@ -3,6 +3,7 @@
 #ifndef PZ_CPU_ENGINE_H
 #define PZ_CPU_ENGINE_H
 
+#include "campaign.h"
 #include "common.h"
 #include <pzcore/ec.h>
 #include <stdatomic.h>
@@ -38,11 +39,20 @@ typedef struct {
 
 void scan_job_init(scan_job *j, const u8 h160[20]);
 
-/* Shared read-only tables (built by cpu_tables_init, which is idempotent). */
+/* The keys of a linear search with --step (campaign.h): the engines and the kernels count the index i, whose point is that of the key
+ * step_base + i * step, and move from one index to the next by H = step * G where they move by G otherwise. Set once, before the tables
+ * are built (cpu_tables_init): a search without a step does not call it. */
+void cpu_basis_set(const campaign_cfg *c);
+/* The point of index i (k * G without a step); false when its key is 0 mod n. */
+bool lin_point(pz_ge *r, const pz_u256 *i);
+/* k * H, the move of k indexes (k * G without a step); false when it is the point at infinity. */
+bool lin_mul(pz_ge *r, const pz_u256 *k);
+
+/* Shared read-only tables (built by cpu_tables_init, which is idempotent), of the moves of the index: G, or H with a step. */
 void cpu_tables_init(void);
-extern pz_ge cpu_gtab[CPU_HALF];        /* cpu_gtab[i] = (i+1)*G */
-extern pz_ge cpu_gstep;                 /* CPU_GRP*G */
-/* out[i] = (i+1)*G for i < n, any n (the first CPU_HALF from cpu_gtab) */
+extern pz_ge cpu_gtab[CPU_HALF];        /* cpu_gtab[i] = (i+1)*G (H) */
+extern pz_ge cpu_gstep;                 /* CPU_GRP*G (H) */
+/* out[i] = (i+1)*G (H) for i < n, any n (the first CPU_HALF from cpu_gtab) */
 void cpu_gmultiples(pz_ge *out, int n);
 
 const cpu_engine *const *cpu_engine_all(int *n);

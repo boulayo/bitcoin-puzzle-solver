@@ -108,8 +108,15 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
             snprintf(rng, sizeof rng, "%s:%s", ha, hb);   /* normalised: leading zeros / case do not matter */
         } else pz_strlcpy(rng, o->range, sizeof rng);
     }
-    /* the empty field is where a hash160 target went until 1.22.0: kept, so that the names of the campaigns made since then stay the same */
-    int kl = snprintf(key, sizeof key, "PZNAME1|%d|%s|%s||%s", o->puzzle, rng, o->address, o->pubkey);
+    /* the empty field is where a hash160 target went until 1.22.0: kept, so that the names of the campaigns made since then stay the same;
+     * a step is added only when there is one, for the same reason */
+    char step[100] = "";
+    pz_u256 st;
+    if (o->step[0] && pz_u256_from_hex(&st, o->step)) {
+        char hs[PZ_U256_HEX_BUF];
+        snprintf(step, sizeof step, "|step=%s", pz_u256_to_hex(&st, hs));
+    }
+    int kl = snprintf(key, sizeof key, "PZNAME1|%d|%s|%s||%s%s", o->puzzle, rng, o->address, o->pubkey, step);
     u8 h[32];
     char id[17];
     pz_sha256((const u8 *)key, (size_t)(kl < (int)sizeof key ? kl : (int)sizeof key - 1), h);
@@ -150,9 +157,9 @@ static void warn_solved(const opts_t *o, const campaign_cfg *c)
     const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
     if (!db || !db->privkey[0] || o->address[0] || o->pubkey[0]) return;   /* only for the target of the database */
     pz_log(PZ_LOG_WARN, "puzzle %d is already SOLVED (the key is public): the campaign is only a test run", db->n);
-    pz_u256 pk;
-    if (o->range[0] && pz_u256_from_hex(&pk, db->privkey) && (pz_u256_cmp(&pk, &c->range_start) < 0 || pz_u256_cmp(&pk, &c->range_end) > 0))
-        pz_log(PZ_LOG_WARN, "the known key of puzzle %d is not in the given range: the campaign will not find it", db->n);
+    pz_u256 pk, i;
+    if ((o->range[0] || o->step[0]) && pz_u256_from_hex(&pk, db->privkey) && !cfg_index_of(c, &pk, &i))
+        pz_log(PZ_LOG_WARN, "the known key of puzzle %d is not among the keys given: the campaign will not find it", db->n);
 }
 
 /* The target of a new campaign (c->target_h160, c->address, the public key): from the options, or from the database for -p N. */
@@ -258,6 +265,21 @@ static void set_mode(const opts_t *o, campaign_cfg *c, const pz_u256 *rsz)
     } else pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", o->mode);
 }
 
+/* --step: the keys of the range become START + i * STEP (cfg_set_step). A step of 1 is the range as it is. */
+static void set_step(const opts_t *o, campaign_cfg *c)
+{
+    pz_u256 st;
+    const char *why;
+    pz_ge q;
+    if (!o->step[0]) return;
+    if (!pz_u256_from_hex(&st, o->step)) pz_die("--step: a hexadecimal number is expected");
+    if (o->jump_seed[0]) pz_die("--step cannot be used in a shared walk (--jump-seed)");
+    if (pz_u256_cmp(&st, &(pz_u256){{1, 0, 0, 0}}) == 0) return;
+    const pz_u256 a = c->range_start, b = c->range_end;
+    if (!cfg_set_step(c, &a, &b, &st, &why)) pz_die("%s", why);
+    if (c->has_pubkey && !cfg_search_pubkey(c, &q)) pz_die("the public key is that of START - STEP, which is not one of the keys of the steps");
+}
+
 /* Builds a new campaign configuration from the command line. */
 static void build_new_cfg(const opts_t *o, campaign_cfg *c)
 {
@@ -280,6 +302,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     if (pz_u256_cmp(&c->range_end, &pz_secp256k1_n) >= 0) pz_die("the range exceeds the order of the secp256k1 group");
 
     set_target(o, c);
+    set_step(o, c);
 
     if (o->seed[0] && strcmp(o->seed, "auto") != 0) seed_from_text(o->seed, c->seed);
     else if (!o->jump_seed[0]) seed_generate(c->seed);   /* a shared walk takes the start key (shared_bind) */
@@ -319,12 +342,22 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (c->puzzle) pz_die("campaign '%s' is for puzzle %d, not %d", c->name, c->puzzle, o->puzzle);
         pz_die("campaign '%s' is not associated with a puzzle of the database (use -c %s without -p)", c->name, c->name);
     }
-    if (o->range[0]) {
-        pz_u256 a, b;
+    if (o->range[0] || o->step[0]) {                           /* the keys the options name, as a new campaign would take them */
+        campaign_cfg t = {0};
         const char *why;
-        if (!range_parse(o->range, &a, &b, &why)) pz_die("%s", why);
-        if (pz_u256_cmp(&a, &c->range_start) != 0 || pz_u256_cmp(&b, &c->range_end) != 0)
-            pz_die("--range does not match the range of the existing campaign (the range cannot be changed; use another name with -c)");
+        if (o->range[0] && !range_parse(o->range, &t.range_start, &t.range_end, &why)) pz_die("%s", why);
+        if (!o->range[0] && (!o->puzzle || !puzzle_range(o->puzzle, &t.range_start, &t.range_end)))
+            pz_die("--step goes with the range of the campaign: give it with -r or -p");
+        pz_u256 st;
+        if (o->step[0] && !pz_u256_from_hex(&st, o->step)) pz_die("--step: a hexadecimal number is expected");
+        if (o->step[0] && pz_u256_cmp(&st, &(pz_u256){{1, 0, 0, 0}}) != 0) {
+            const pz_u256 a = t.range_start, b = t.range_end;
+            if (!cfg_set_step(&t, &a, &b, &st, &why)) pz_die("%s", why);
+        }
+        if (t.has_step != c->has_step || pz_u256_cmp(&t.range_start, &c->range_start) || pz_u256_cmp(&t.range_end, &c->range_end) ||
+            (t.has_step && (pz_u256_cmp(&t.step, &c->step) || pz_u256_cmp(&t.step_base, &c->step_base))))
+            pz_die("%s does not match the keys of the existing campaign (they cannot be changed; use another name with -c)",
+                   o->range[0] && o->step[0] ? "--range with --step" : o->range[0] ? "--range" : "--step");
     }
     if (o->address[0]) {
         u8 h[20];
@@ -712,6 +745,7 @@ static void print_completed(const run_ctx *r, const char *dir)
  * False when a Ctrl-C interrupted the measurement of the machine. *thr_full: the CPU threads before --limit. */
 static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
 {
+    cpu_basis_set(&r->cfg);                       /* --step: before the tables of the linear engines and kernels */
     r->nthreads = o->threads > 0 ? o->threads : r->sys.ncpu;
     if (r->nthreads > RUN_MAX_THREADS) {
         pz_log(PZ_LOG_WARN, "%d cores detected: using at most %d threads", r->nthreads, RUN_MAX_THREADS);
@@ -757,10 +791,9 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
 /* The lines that start the session in the log: version, target, range, mode, hardware and what the options changed. */
 static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming, int thr_full)
 {
-    char idb[17], rs[80], re[80], rsz[80], addr[80];
+    char idb[17], rng[3 * PZ_U256_HEX_BUF + 40], rsz[80], addr[80];
     seed_to_id(r->cfg.seed, idb);
-    pz_u256_to_hex(&r->cfg.range_start, rs);
-    pz_u256_to_hex(&r->cfg.range_end, re);
+    cfg_range_text(&r->cfg, rng, sizeof rng);
     pz_u256 sz = cfg_range_size(&r->cfg);
     pz_u256_to_dec(&sz, rsz);
     char rsz_short[64];
@@ -773,7 +806,7 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
     void (*const say)(pz_loglevel, const char *, ...) = run_ui_is_panel(r) ? pz_log_file : pz_log;
     if (r->cfg.puzzle) say(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
     else say(PZ_LOG_INFO, "target: address %s", addr);
-    pz_log(PZ_LOG_INFO, "range: 0x%s - 0x%s (%s)", rs, re, rsz_short);
+    pz_log(PZ_LOG_INFO, "range: %s (%s)", rng, rsz_short);
     if (r->cfg.mode == MODE_LINEAR)
         say(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);
     else if (r->cfg.mode == MODE_BSGS)

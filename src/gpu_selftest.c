@@ -170,7 +170,7 @@ bool gpu_test_linear(gpu_session *s)
         pz_u256_add_u64(&key, &key, off);
         pz_ge p;
         u8 pub[33], h[20];
-        pz_ec_mul_g(&p, &key);
+        lin_point(&p, &key);                      /* the point of the index: with --step the kernel moves by H */
         pz_ge_to_pub33(pub, &p);
         pz_hash160(pub, 33, h);
         lin_launch L;

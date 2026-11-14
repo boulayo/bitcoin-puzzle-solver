@@ -9,17 +9,46 @@
 pz_ge cpu_gtab[CPU_HALF];
 pz_ge cpu_gstep;
 static pthread_once_t g_tab_once = PTHREAD_ONCE_INIT;
+static atomic_bool g_tab_built;
+static campaign_cfg g_basis;            /* has_step, step and step_base of the campaign (cpu_basis_set) */
+static pz_ge g_move;                    /* the move of one index: G, or H = step * G */
+
+void cpu_basis_set(const campaign_cfg *c)
+{
+    if (!c->has_step) return;
+    if (atomic_load(&g_tab_built)) pz_die("internal error: the steps of the search are set after the tables of the engines");
+    pz_ec_init();
+    g_basis.has_step = true, g_basis.step = c->step, g_basis.step_base = c->step_base;
+}
+
+bool lin_point(pz_ge *r, const pz_u256 *i)
+{
+    pz_u256 k;
+    cfg_key_of(&g_basis, i, &k);                 /* i itself without a step */
+    return pz_ec_mul_g(r, &k);
+}
+
+bool lin_mul(pz_ge *r, const pz_u256 *k)
+{
+    if (!g_basis.has_step) return pz_ec_mul_g(r, k);
+    pz_u256 t = *k;
+    if (pz_u256_cmp(&t, &pz_secp256k1_n) >= 0) pz_u256_sub(&t, &t, &pz_secp256k1_n);
+    pz_u256_mulmod_n(&t, &t, &g_basis.step);
+    return pz_ec_mul_g(r, &t);
+}
 
 static void tables_build(void)
 {
     pz_ec_init();
-    /* i*G for i = 1..HALF by repeated affine addition from Jacobian points */
+    atomic_store(&g_tab_built, true);
+    if (!lin_mul(&g_move, &(pz_u256){{1, 0, 0, 0}})) pz_die("CPU tables: the step is a multiple of the group order");
+    /* i*G (i*H) for i = 1..HALF by repeated affine addition from Jacobian points */
     pz_gej *pts = pz_xmalloc(sizeof(pz_gej) * (CPU_HALF + 1));
     pz_gej cur;
-    pz_gej_set_ge(&cur, &pz_ec_g);
+    pz_gej_set_ge(&cur, &g_move);
     pts[0] = cur;
     for (int i = 1; i < CPU_HALF; i++) {
-        pz_gej_add_ge(&cur, &cur, &pz_ec_g);
+        pz_gej_add_ge(&cur, &cur, &g_move);
         pts[i] = cur;
     }
     pz_u256 k = pz_u256_from_u64(CPU_GRP);
@@ -30,7 +59,7 @@ static void tables_build(void)
     memcpy(cpu_gtab, aff, sizeof(pz_ge) * CPU_HALF);
     cpu_gstep = aff[CPU_HALF];
     pz_ge chk;
-    if (!pz_ec_mul_g(&chk, &k) || !pz_ge_equal(&chk, &cpu_gstep)) pz_die("CPU tables: check failed");
+    if (!lin_mul(&chk, &k) || !pz_ge_equal(&chk, &cpu_gstep)) pz_die("CPU tables: check failed");
     free(pts);
     free(aff);
 }
@@ -48,7 +77,7 @@ void cpu_gmultiples(pz_ge *out, int n)
     pz_gej cur;
     pz_gej_set_ge(&cur, &cpu_gtab[CPU_HALF - 1]);
     for (int i = 0; i < n - CPU_HALF; i++) {
-        pz_gej_add_ge(&cur, &cur, &pz_ec_g);
+        pz_gej_add_ge(&cur, &cur, &g_move);
         pts[i] = cur;
     }
     if (!pz_gej_to_ge_batch(out + CPU_HALF, pts, (size_t)(n - CPU_HALF))) pz_die("CPU tables: unexpected point at infinity");
@@ -173,7 +202,7 @@ bool cpu_engine_quickcheck(const cpu_engine *e)
     pz_u256_add_u64(&want, &want, e->granule / 2 + 37);
     pz_ge p;
     u8 pub[33], h[20];
-    if (!pz_ec_mul_g(&p, &want)) return false;
+    if (!lin_point(&p, &want)) return false;
     pz_ge_to_pub33(pub, &p);
     pz_hash160(pub, 33, h);
     scan_job job;
@@ -227,7 +256,7 @@ u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys)
     for (u64 i = 0; i < nkeys; i++) {
         pz_ge p;
         u8 pub[33], h[20];
-        if (pz_ec_mul_g(&p, &k)) {
+        if (lin_point(&p, &k)) {
             pz_ge_to_pub33(pub, &p);
             pz_hash160(pub, 33, h);
             if (!memcmp(h, job->target_h160, 20) && job->on_hit) job->on_hit(job->user, &k);

@@ -23,6 +23,7 @@
 typedef struct {
     int puzzle;
     char range[200], address[80], pubkey[160], campaign[96], dir[400], seed[200], mode[16], gpu[128];
+    char step[80];                /* --step: only the keys START + i * STEP of the range */
     int threads, chunk_bits, dp_bits;
     double mem_gb;
     bool no_cpu, no_gpu, quiet, verbose, retune, keep_awake, near;

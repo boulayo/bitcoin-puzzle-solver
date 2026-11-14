@@ -374,13 +374,15 @@ kang_state *kang_create(run_ctx *r)
 static void kang_setup(kang_state *ks)
 {
     run_ctx *r = ks->r;
+    pz_ge q;                                       /* the public key, or with --step the point whose key is the index (campaign.h) */
+    if (!cfg_search_pubkey(&r->cfg, &q)) pz_die("the public key is not that of a key of the steps");
     ks->base = r->cfg.range_start;
     if (pz_u256_is_zero(&ks->base)) {
-        ks->Qp = r->cfg.pubkey;
+        ks->Qp = q;
     } else {
         pz_ge bg;
         if (!pz_ec_mul_g(&bg, &ks->base)) pz_die("invalid base");
-        if (!pz_ge_sub(&ks->Qp, &r->cfg.pubkey, &bg)) {
+        if (!pz_ge_sub(&ks->Qp, &q, &bg)) {
             /* the public key is exactly base*G */
             run_submit_key(r, &ks->base, "kangaroo (base)");
             ks->Qp = bg;   /* unused */

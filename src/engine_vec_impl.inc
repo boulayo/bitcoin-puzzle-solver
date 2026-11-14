@@ -392,7 +392,7 @@ static PZ_VABI void vround_slow(vctx_t *c, const pz_u256 *start, u64 wbase)
             pz_u256 k = *start;
             pz_u256_add_u64(&k, &k, w0 + (u64)p);
             pz_ge pt;
-            if (pz_ec_mul_g(&pt, &k)) vctx_add_scalar(c, &pt.x, &pt.y, w0 + (u64)p);
+            if (lin_point(&pt, &k)) vctx_add_scalar(c, &pt.x, &pt.y, w0 + (u64)p);
         }
     }
     if (c->n) vctx_flush(c);
@@ -405,7 +405,7 @@ static PZ_VABI bool load_centres(pz_fev *xc, pz_fev *yc, const pz_u256 *start, u
         pz_u256 k = *start;
         pz_u256_add_u64(&k, &k, wbase + (u64)l * GRPV + VHALF);
         pz_ge pt;
-        if (!pz_ec_mul_g(&pt, &k)) return false;
+        if (!lin_point(&pt, &k)) return false;
         pz_fev_set_lane(xc, l, &pt.x);
         pz_fev_set_lane(yc, l, &pt.y);
     }
@@ -424,7 +424,7 @@ static u64 CAT(engv_scan_, ISA)(const scan_job *job, const pz_u256 *key_start, u
     vstep_t st;
     {
         pz_ge sp;
-        if (!pz_ec_mul_g(&sp, &(pz_u256){{(u64)NL * GRPV, 0, 0, 0}})) pz_die("scan: invalid step");
+        if (!lin_mul(&sp, &(pz_u256){{(u64)NL * GRPV, 0, 0, 0}})) pz_die("scan: invalid step");
         to_limbs(st.sx, &sp.x);
         to_limbs(st.sy, &sp.y);
     }

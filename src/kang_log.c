@@ -17,7 +17,9 @@ static void log_fingerprint(const kang_state *ks, const pz_u256 *base, const cha
     pz_u256_to_be(base, buf);
     pz_u256_to_be(&ks->W, buf + 32);
     memcpy(buf + 64, tag, 8);
-    memcpy(buf + 72, ks->r->cfg.pubkey33, 33);
+    pz_ge q;                                       /* the point searched: with --step not the public key itself */
+    if (cfg_search_pubkey(&ks->r->cfg, &q)) pz_ge_to_pub33(buf + 72, &q);
+    else memcpy(buf + 72, ks->r->cfg.pubkey33, 33);
     pz_sha256(buf, 72 + 33, fp);
 }
 
