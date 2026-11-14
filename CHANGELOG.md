@@ -53,13 +53,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.
-- An encrypting campaign that finds the key with `merge` now leaves nothing that leads to it, as `hunt` does: the seed, the state and
-  the points go. `near.txt`, whose last lines are keys next to the key, goes too, and a log written before the encryption was added
-  loses its lines with the seed. A key that could not be encrypted leaves the campaign as it was (before, its state was wiped and the
-  next run said "found"); `merge` fails when `FOUND.txt` cannot be written.
-- The files of a campaign (the lock, the log, `stats.csv`, `near.txt`, `dp.bin`) are never opened through a link: a folder copied from
-  elsewhere could hold one that points at another file of the user, which the lock emptied. The folder of a home or node of pzpeer
-  must not be a link either.
+- The fixes of 1.23.4 (below), and with them: an encrypting campaign that finds the key deletes `near.txt` too, whose last lines are
+  keys next to the key; `near.txt` is never opened through a link; the folder of a home or node of pzpeer must not be a link.
 - pzpeer: a custodian keeps the owners of at most one record in 256 it may hold, and 1024 more: identities cost little, and their table
   grew in memory without a bound. A hello longer than any real one is refused before it takes a place among the sessions (it kept one
   until a restart). The password of `--rpc` is blanked in the list of processes (`--rpc-cookie` stays the better way). The fee rate of
@@ -69,8 +64,6 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 - `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked
   as scanned with their near misses missing).
-- A kangaroo key that could not be written to `FOUND.txt` is no longer said to be found again by the same command: the walk of a new
-  session is another one.
 - pzpeer: a session asks its chain and its fee rate before it opens the channel, so that its hello reaches the partner within the 2
   seconds a new connection is given (with Electrum servers it came later, and the session failed). A side waiting at a relay takes the
   partner's own connection if it comes meanwhile. The contacts of `peers.txt` are tried before the addresses found in the table of
@@ -78,6 +71,26 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   meanwhile (not after every outage). The own alerts of a node come before those it sends as a custodian, and an alert that finds the
   queue full is tried again with the next record of the pair instead of an hour later. Under `nohup` the terminal closing no longer
   stops pzpeer. On macOS a new seed, the state of a session and the custody reach the disk itself (`F_FULLFSYNC`).
+
+## [1.23.4] — 2026-11-14
+
+Fixes from a second review of the program, each case tried as an attacker would. Campaigns of 1.23.3 resume as they are.
+
+### Security
+- `merge` of an encrypting campaign that found the key cleared nothing: the seed and `dp.bin` stayed, and the key came back in two
+  seconds. `merge` now ends as `hunt` does: the seed goes from `campaign.conf`, the state and `dp.bin` are deleted, the folder must be
+  its owner's alone, and the command fails when `FOUND.txt` cannot be written.
+- Encryption added to a campaign on resume left the seed in `log.txt` (the line of `--part`): those lines are taken out of the log.
+- The files of a campaign (the lock, the log, `stats.csv`, `dp.bin`, the temporary files) are never opened through a link: a folder
+  copied from elsewhere could hold one that points at another file of the user, which the lock emptied. The log and `stats.csv` are
+  made for the user alone.
+
+### Fixed
+- A key that could not be encrypted at the find (the system gave no random numbers) left a `FOUND.txt` saying "not saved" and wiped
+  the campaign, whose next run then said "found" without searching. Now nothing is written and the state stays as it was, so that a
+  new search finds the key again.
+- For the kangaroo, a key that could not be written to `FOUND.txt` is no longer said to be found again by the same command: a new
+  session walks another way.
 
 ## [1.23.3] — 2026-11-13
 
