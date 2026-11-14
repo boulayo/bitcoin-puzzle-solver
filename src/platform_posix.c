@@ -55,8 +55,19 @@ int pz_pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(*fn)(voi
 /* ---- files ---- */
 
 int pz_open_read(const char *path) { return open(path, O_RDONLY | O_CLOEXEC); }
-int pz_open_rw(const char *path, bool create) { return open(path, O_RDWR | O_CLOEXEC | (create ? O_CREAT : 0), 0644); }
-int pz_open_trunc(const char *path, int mode) { return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, (mode_t)mode); }
+/* The files a campaign writes are opened by name in its folder, and never through a link: a folder copied from elsewhere could hold one
+ * that points at a file of this user, which the lock would empty and a log would grow. */
+int pz_open_rw(const char *path, bool create) { return open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW | (create ? O_CREAT : 0), 0644); }
+int pz_open_trunc(const char *path, int mode) { return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, (mode_t)mode); }
+FILE *pz_fopen_private(const char *path, bool append)
+{
+    const int fd = open(path, O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW | (append ? O_APPEND : O_TRUNC), 0600);
+    struct stat st;
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 077)) (void)fchmod(fd, 0600);   /* made by an older version */
+    FILE *f = fd < 0 ? NULL : fdopen(fd, append ? "ab" : "wb");
+    if (fd >= 0 && !f) close(fd);
+    return f;
+}
 
 int pz_create_temp(char *tmpl)
 {

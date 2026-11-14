@@ -20,6 +20,7 @@ int cmd_merge(int argc, char **argv)
     snprintf(conf, sizeof conf, "%s/campaign.conf", cdir);
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
+    campaign_private(cdir);
     if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
     if (r->cfg.mode != MODE_KANGAROO) pz_die("campaign '%s' does not use the kangaroo: 'merge' merges the distinguished points of the kangaroo", o.campaign);
     pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
@@ -39,9 +40,11 @@ int cmd_merge(int argc, char **argv)
     for (int i = 0; i < o.nfiles; i++) fl[i] = o.files[i];
     int rc = kangaroo_merge(r, fl, o.nfiles);
     if (atomic_load(&r->found)) {
+        const bool saved = !r->found_write_failed && !r->found_seal_failed;
+        if (saved && r->cfg.has_encrypt) forget_seed(r), forget_position(r);   /* as hunt does: nothing that leads to the key */
         print_found_banner(r);
         onfound_wait();
-        const int st = r->found_seal_failed ? PZ_EXIT_ERROR : 0;
+        const int st = saved ? 0 : PZ_EXIT_ERROR;
         free(r);
         return st;
     }

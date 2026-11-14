@@ -70,6 +70,9 @@ void encrypt_on_resume(const opts_t *o, run_ctx *r);
 void announce_encrypt(const run_ctx *r);
 /* The banner printed when the key is found. */
 void print_found_banner(const run_ctx *r);
+void campaign_private(const char *dir);   /* dies unless the folder of a campaign is its owner's alone */
+void forget_seed(run_ctx *r);             /* an encrypting campaign that found its key: the seed out of memory and campaign.conf */
+void forget_position(const run_ctx *r);   /* then, once they are closed, the files that say where the search stood */
 /* A campaign that has already found the key: FOUND.txt is shown. False when it has not. */
 bool print_already_found(const run_ctx *r);
 

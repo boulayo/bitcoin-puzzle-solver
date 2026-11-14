@@ -276,7 +276,7 @@ static bool write_found_plain(run_ctx *r)
 
 /* The same when the key is encrypted: the file carries the PZENC1 line and the plain data of the campaign, and neither the key nor its public key
  * (for a puzzle known by address only, the public key and the range would let anyone find the key). The key is encrypted first; if that cannot be
- * done the key is written nowhere, which the file and the box say. */
+ * done the key is written nowhere, which the box says, and the campaign keeps its state (end_session). */
 static bool write_found_encrypted(run_ctx *r)
 {
     char addr[64], buf[2048], pz[48] = "", id[9], ts[40];
@@ -291,19 +291,8 @@ static bool write_found_encrypted(run_ctx *r)
     pz_localtime((time_t)r->found_time, &tmv);
     strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
     if (r->cfg.puzzle) snprintf(pz, sizeof pz, "puzzle:          %d\n", r->cfg.puzzle);
-    int n;
-    if (r->found_seal_failed)
-        n = snprintf(buf, sizeof buf,
-            "*** PRIVATE KEY FOUND, BUT NOT SAVED ***\n\n"
-            "date:            %s\n"
-            "campaign:        %s\n"
-            "%s"
-            "address:         %s\n"
-            "version:         %s\n\n"
-            "The key could not be encrypted (the system gave no random numbers), so it was written nowhere and is lost: search again.\n",
-            ts, r->cfg.name, pz, addr, PZ_VERSION);
-    else
-        n = snprintf(buf, sizeof buf,
+    if (r->found_seal_failed) return false;                  /* nothing to write: the box says so, and the state stays for a new search */
+    const int n = snprintf(buf, sizeof buf,
             "*** PRIVATE KEY FOUND (ENCRYPTED) ***\n\n"
             "date:            %s\n"
             "campaign:        %s\n"
@@ -316,7 +305,7 @@ static bool write_found_encrypted(run_ctx *r)
             "    pzsolve decrypt-key FOUND.txt\n\n"
             "%s\n",
             ts, r->cfg.name, pz, addr, PZ_VERSION, id, r->found_sealed);
-    return found_save(r, buf, (size_t)n) && !r->found_seal_failed;
+    return found_save(r, buf, (size_t)n);
 }
 
 /* Writes FOUND.txt (and, with --on-found, starts the command). With cfg.has_encrypt the file carries the PZENC1 line (found_sealed) and neither the key nor its
@@ -536,7 +525,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 static void append_stats_csv(run_ctx *r, const progress_info *pi)
 {
     bool fresh = access(r->path_stats, F_OK) != 0;
-    FILE *f = fopen(r->path_stats, "ab");           /* binary: LF lines on Windows too */
+    FILE *f = pz_fopen_private(r->path_stats, true);   /* binary: LF lines on Windows too; never a link */
     if (!f) return;
     if (fresh) fprintf(f, "unix_time,elapsed_s,fraction,done,rate_total,rate_cpu,rate_gpu\n");
     double cpur, gpur;
