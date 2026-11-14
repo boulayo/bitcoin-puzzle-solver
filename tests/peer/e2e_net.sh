@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # The whole network on one machine, on a bitcoind in regtest: a custodian node and three homes (pzpeer run, each with its pzsolve), a
-# puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, half each,
-# read back from the node, and then in the key of the puzzle in FOUND.txt of both, once they gave each other their pieces. With three
-# equal homes two coincidences in three are between homes; a home that finds the key on its own first (its own walkers meet too) starts
-# a new try with a new puzzle, up to 6.
-# The two homes get the same half, of the prize and of F's tiny coin (the odd satoshi to S). With several coincidences at once more
+# puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, 45% each and
+# 10% to the author, read back from the node, and then in the key of the puzzle in FOUND.txt of both, once they gave each other their
+# pieces. With three equal homes two coincidences in three are between homes; a home that finds the key on its own first (its own walkers
+# meet too) sends the coins, 90% to itself and 10% to the author, which is checked, and a new try starts with a new puzzle, up to 12. Such a
+# home sends them at once; here 90 seconds later (--solo-wait), so that a pair that met meanwhile is paid first: the coincidences between
+# homes come later than those within one (in these tries a home found the key on its own in 7 to 60 seconds, the first coincidence of
+# two homes after about 40).
+# The two homes get the same share, of the prize and of F's tiny coin (the odd satoshi to S). With several coincidences at once more
 # than one pair may get its first transaction confirmed, each on the prize the one before sent back to the puzzle address: the last
 # pair is paid, and the prize is smaller by the fee and the tiny coin of each first transaction (about 15 000 satoshis at 20 sat/vB).
 # With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
@@ -54,7 +57,10 @@ if [ -n "${PZ_E2E_LIGHT:-}" ]; then
     done
 fi
 
-for try in 1 2 3 4 5 6; do
+# the satoshis at a script, from the node's set of unspent outputs; the author's share goes to the script of its address (src/peer/payout.c)
+AUTHOR=00144b944a184c8134ef3c6e0241a9ea8bedec57eb5e
+at() { rpc scantxoutset "[\"start\", [\"$1\"]]" | python3 -c 'import json,sys; print(json.load(sys.stdin)["total_amount"])'; }
+for try in 1 2 3 4 5 6 7 8 9 10 11 12; do
     T="$DIR/try$try"; mkdir -p "$T"
     # a puzzle of 58 bits (62 in PZ_E2E_MEET, where one home runs alone first), its key from the independent reference, its P2PKH
     # address on regtest funded with 1 BTC
@@ -74,6 +80,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     [ -z "${PZ_E2E_MEET:-}" ] && echo "entry=127.0.0.1:$PORT" >> "$T/net.txt"
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
+    A0=$(at "raw($AUTHOR)")
     NPID=
     if [ -z "${PZ_E2E_MEET:-}" ]; then
         $RUN "$BIN/pzpeer$EXE" node --network "$T/net.txt" --dir "$T/n" \
@@ -84,7 +91,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     port=$PORT
     for h in a b c; do
         port=$((port + 1))
-        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" "${MEET[@]}" --listen $port --no-portmap \
+        timeout 600 $RUN "$BIN/pzpeer$EXE" run --network "$T/net.txt" --dir "$T/$h" --payout "${PAY[$h]}" "${CHAIN[@]}" "${MEET[@]}" --listen $port --no-portmap --accept-terms --solo-wait 90 \
             --pzsolve "$BIN/pzsolve$EXE" --pzsign "$BIN/pzsign$EXE" --debug "$T/$h.debug" --exit-when-done -- -t 1 --no-gpu > "$T/$h.log" 2>&1 &
         PID[$h]=$!
         [ "$h" = a ] && [ -n "${PZ_E2E_MEET:-}" ] && sleep "${PZ_E2E_ALONE:-30}"   # the first home of the network, alone
@@ -97,10 +104,11 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
         set -- $PAID
         sleep 2
         G1=$(rpc wallet getreceivedbyaddress "[\"${PAY[$1]}\", 1]"); G2=$(rpc wallet getreceivedbyaddress "[\"${PAY[$2]}\", 1]")
-        LEFT=$(rpc scantxoutset "[\"start\", [\"addr($PADDR)\"]]" | python3 -c 'import json,sys; print(json.load(sys.stdin)["total_amount"])')
-        echo "   received: home $1 $G1 BTC, home $2 $G2 BTC; left on the puzzle address $LEFT BTC"
-        python3 -c "import sys; a,b,l=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.499 and abs(a-b)<2e-8 and a+b<1 and l==0 else 1)" "$G1" "$G2" "$LEFT" ||
-            { echo "E2E NET FAILED: the amounts are not half each"; exit 1; }
+        LEFT=$(at "addr($PADDR)"); A1=$(at "raw($AUTHOR)")
+        echo "   received: home $1 $G1 BTC, home $2 $G2 BTC, the author $(python3 -c "import sys; print(f'{float(sys.argv[2])-float(sys.argv[1]):.8f}')" "$A0" "$A1") BTC; left on the puzzle address $LEFT BTC"
+        # 45% each and 10% to the author of what the fees leave: the author gets a ninth of what the two homes got
+        python3 -c "import sys; a,b,l,a0,a1=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.449 and abs(a-b)<2e-8 and a+b<0.9 and l==0 and abs(a1-a0-(a+b)/9)<3e-8 else 1)" \
+            "$G1" "$G2" "$LEFT" "$A0" "$A1" || { echo "E2E NET FAILED: the amounts are not 45% each and 10% to the author"; exit 1; }
         # after the confirmations of the payout the two homes give each other their pieces: each has the key, in FOUND.txt
         for h in $1 $2; do
             KEY=$(awk '/^private key hex:/{print $4}' "$T/$h/FOUND.txt" 2>/dev/null)
@@ -113,8 +121,17 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
         echo "   the key, in FOUND.txt of both homes: $K"
         echo "E2E NET PASSED (try $try)"; exit 0
     fi
-    grep -q "found the key on its own" "$T"/[abc].log && { echo "   a home found the key on its own: a new try"; continue; }
+    if grep -q "found the key on its own" "$T"/[abc].log; then
+        # it sent the coins of the puzzle at once: 90% to its payout address, 10% to the author
+        sleep 2
+        R=0; for h in a b c; do R=$(python3 -c "import sys; print(float(sys.argv[1]) + float(sys.argv[2]))" "$R" "$(rpc wallet getreceivedbyaddress "[\"${PAY[$h]}\", 1]")"); done
+        LEFT=$(at "addr($PADDR)"); A1=$(at "raw($AUTHOR)")
+        echo "   a home found the key on its own and sent the coins: $R BTC to its payout address, the author $A0 -> $A1 BTC, left $LEFT BTC"
+        python3 -c "import sys; r,l,a0,a1=map(float,sys.argv[1:]); sys.exit(0 if r>0.899 and l==0 and abs(a1-a0-r/9)<3e-8 else 1)" "$R" "$LEFT" "$A0" "$A1" ||
+            { echo "E2E NET FAILED: the home that found the key on its own did not send 90% to itself and 10% to the author (logs in $T)"; trap - EXIT; exit 1; }
+        echo "   a new try"; continue
+    fi
     echo "E2E NET FAILED: no payout and no key (logs in $T)"; trap - EXIT; exit 1
 done
-echo "E2E NET FAILED: 6 tries, each solved by one home alone"
+echo "E2E NET FAILED: 12 tries, each solved by one home alone"
 exit 1

@@ -3,7 +3,8 @@
 /* payout.h - the transactions of a pair that holds the key in two pieces (project 2.4, docs/en/NETWORK.md 8). Both homes build them on their
  * own from the same terms, so the same terms give the same bytes:
  *   first:  the coins of the puzzle (at most 8) back to the puzzle address, less the fee and a tiny coin for party F;
- *   second: the prize of the first and F's tiny coin, which came from it, half each to the payout addresses;
+ *   second: the prize of the first and F's tiny coin, which came from it: the share of the author of pzpeer, the rest half each to the
+ *           payout addresses;
  *   cancel: F alone spends its tiny coin, which makes a second transaction held back by the partner worthless. */
 #ifndef PZPEER_PAYOUT_H
 #define PZPEER_PAYOUT_H
@@ -12,6 +13,7 @@
 
 #define PAYOUT_TINY_MIN 10000      /* satoshis of a tiny coin, at least */
 #define PAYOUT_MAX_COINS 8         /* inputs of the puzzle in one transaction: every one is a two-party signing */
+#define PAYOUT_TERMS 1             /* the latest version of the terms this program knows (payout_author) */
 
 typedef struct {
     uint8_t txid[32];              /* internal order */
@@ -26,7 +28,17 @@ typedef struct {
     size_t pay_len[2];
     uint64_t feerate;                     /* satoshis per 1000 virtual bytes */
     int first;                            /* F, the party whose tiny coin goes into the second transaction */
+    uint8_t author_spk[BTC_SPK_MAX];      /* the share of the author (payout_author) */
+    size_t author_len;
+    unsigned author_pct;
+    const char *author_address;           /* its address, for the terminal */
 } payout_terms;
+
+/* The share of the author of pzpeer by the version of the terms, 1 to PAYOUT_TERMS: a percent of the second transaction and an address,
+ * whose script is the same on every chain (a test chain pays it worthless coins). Nothing sets them but the program. A pair pays by the
+ * older version of its two homes, so a later one may change the address or lower the share and still pay with an older one. False for a
+ * version this program does not know. */
+bool payout_author(unsigned version, payout_terms *t);
 
 /* Puts the coins largest first (ties by outpoint) and returns how many of the first `max` are worth at least `least`. */
 size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least);

@@ -5,6 +5,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* the terms by version (payout.h, docs/en/NETWORK.md 7.5) */
+static const struct {
+    unsigned pct;
+    const char *address;
+} AUTHOR[PAYOUT_TERMS] = {{10, "bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz"}};
+
+bool payout_author(unsigned version, payout_terms *t)
+{
+    if (version < 1 || version > PAYOUT_TERMS) return false;
+    t->author_pct = AUTHOR[version - 1].pct, t->author_address = AUTHOR[version - 1].address;
+    t->author_len = btc_address_script(BTC_MAIN, AUTHOR[version - 1].address, t->author_spk);
+    return t->author_len > 0;
+}
+
 static int by_value(const void *a, const void *b)
 {
     const payout_coin *x = a, *y = b;
@@ -29,12 +43,18 @@ static uint64_t cancel_out(const payout_terms *t, btc_out *out)
     return btc_fee(btc_vsize_p2pkh(1, out, 1), t->feerate);
 }
 
-/* the fee of the second transaction */
-static uint64_t second_fee(const payout_terms *t)
+/* The outputs of the second transaction from what it spends: of what the fee leaves, the share of the author at 2 and the rest half each,
+ * the odd satoshi to S. False when one of them would be dust. */
+static bool second_values(const payout_terms *t, uint64_t all, uint64_t v[3])
 {
-    btc_out out[2] = {{0}};
+    btc_out out[3] = {{0}};
     for (int p = 0; p < 2; p++) out[p].script_len = (uint8_t)t->pay_len[p], memcpy(out[p].script, t->pay_spk[p], t->pay_len[p]);
-    return btc_fee(btc_vsize_p2pkh(2, out, 2), t->feerate);
+    out[2].script_len = (uint8_t)t->author_len, memcpy(out[2].script, t->author_spk, t->author_len);
+    const uint64_t fee = btc_fee(btc_vsize_p2pkh(2, out, 3), t->feerate);
+    if (!t->author_len || t->author_pct > 50 || all < fee) return false;
+    const uint64_t left = all - fee, cut = left * t->author_pct / 100, half = (left - cut) / 2;   /* left: below 2^51 */
+    v[t->first] = half, v[1 - t->first] = left - cut - half, v[2] = cut;
+    return half >= 546 && cut >= 546;
 }
 
 uint64_t payout_tiny(const payout_terms *t)
@@ -64,9 +84,9 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
         out[k].script_len = BTC_P2PKH_LEN;
         memcpy(out[k].script, k ? t->coin_spk[t->first] : t->puzzle_spk, BTC_P2PKH_LEN);
     }
-    const uint64_t fee = btc_fee(btc_vsize_p2pkh(tx->n_in, out, 2), t->feerate), second = second_fee(t) + 2 * 546;
-    if (!tx->n_in || total < fee + tiny + (second > tiny ? second : tiny)) return false;   /* the prize must stay larger than a tiny
-                                                                                           * coin, and pay for the second transaction */
+    const uint64_t fee = btc_fee(btc_vsize_p2pkh(tx->n_in, out, 2), t->feerate);
+    uint64_t v[3];                                              /* the prize must stay larger than a tiny coin, and pay the second */
+    if (!tx->n_in || total < fee + 2 * tiny || !second_values(t, total - fee, v)) return false;
     return btc_tx_add_out(tx, total - fee - tiny, t->puzzle_spk, BTC_P2PKH_LEN) &&
            btc_tx_add_out(tx, tiny, t->coin_spk[t->first], BTC_P2PKH_LEN);
 }
@@ -84,12 +104,10 @@ bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
     uint8_t txid[32];
     if (!first_ok(t, first) || !btc_tx_txid(first, txid)) return false;
     btc_tx_init(tx);
-    /* the prize and F's tiny coin, which came from the prize too, half each: the odd satoshi to S */
-    const uint64_t all = first->out[0].value + first->out[1].value, fee = second_fee(t);
-    if (all < fee + 2 * 546) return false;                      /* each half above the dust limit */
-    const uint64_t half = (all - fee) / 2, v[2] = {t->first == 0 ? half : all - fee - half, t->first == 1 ? half : all - fee - half};
-    return btc_tx_add_in(tx, txid, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_in(tx, txid, 1, BTC_SEQUENCE_FINAL) &&
-           btc_tx_add_out(tx, v[0], t->pay_spk[0], t->pay_len[0]) && btc_tx_add_out(tx, v[1], t->pay_spk[1], t->pay_len[1]);
+    uint64_t v[3];                                              /* the prize and F's tiny coin, which came from the prize too */
+    return second_values(t, first->out[0].value + first->out[1].value, v) && btc_tx_add_in(tx, txid, 0, BTC_SEQUENCE_FINAL) &&
+           btc_tx_add_in(tx, txid, 1, BTC_SEQUENCE_FINAL) && btc_tx_add_out(tx, v[0], t->pay_spk[0], t->pay_len[0]) &&
+           btc_tx_add_out(tx, v[1], t->pay_spk[1], t->pay_len[1]) && btc_tx_add_out(tx, v[2], t->author_spk, t->author_len);
 }
 
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx)

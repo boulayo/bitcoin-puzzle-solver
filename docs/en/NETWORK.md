@@ -402,15 +402,17 @@ send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, 
 `S_ABORT` with its reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so
 that NATs and relays do not cut the channel as idle, and the reader skips it):
 
-1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
+1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, the latest version of the
+   terms of the payout I know (1 byte), my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
    about the same pair. The fee rate is the higher of the two. Each proposes twice the estimate of its chain for a confirmation within 2 blocks, at
    least 20 and at most 1000 sat/vB: these transactions move a prize, and no such fee is large beside it. A rate above the home's
    limit ends the session, and so does a partner's rate more than 4 times the home's own: every try of the payout pays it from the
    prize. The tiny coin, F's only (the script S sends is not used), grows with the rate: twice the fee of F's cancel and the dust limit,
    10 000 satoshis at least, so F can cancel at any rate (were its coin worth less than that fee, S could hold the second transaction
-   back with nothing to fear). It comes from the prize, and the second transaction spends it with the prize, half each; the payout
-   scripts must be of standard addresses. The nonce is 32 bytes from the system, new in every session: the partner's
+   back with nothing to fear). It comes from the prize, and the second transaction spends it with the prize: the share of the author
+   of what its fee leaves, the rest half each (below); the payout scripts must be of standard addresses. The pair pays by the older of
+   the two versions of the terms; one that neither home knows ends the session. The nonce is 32 bytes from the system, new in every session: the partner's
    proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
 2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
@@ -474,6 +476,21 @@ before the second transaction, S keeping either signature back, an old copy of t
 cost the prize a fee and a tiny coin. Not done yet: the count published in the network
 and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
 
+**The share of the author** (`src/peer/payout.c`). The second transaction has a third output: 10% of what its fee leaves goes to the
+author of pzpeer, at `bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz`, and each home gets 45%. The share and the address are in the code,
+by version of the terms (`payout_author`), not in the network file nor in an option: nobody sets them, and they are outside the fingerprint
+of the network, so a later version may change the address or lower the share without a new network and without losing a point. A pair
+pays by the older version of its two homes, which a newer one knows: from this version on, an older home and a newer one always pay each
+other. The second
+transaction is signed by both homes together, and a home checks its outputs (`second_ok` checks the one it gets): a home that runs a
+program changed to leave the share out pays it all the same when its partner runs this one, and the session fails otherwise. A home whose
+pzsolve finds the key on its own sends the coins of the puzzle at once, 90% to its payout address and 10% to the author (`solo_payout`,
+`sweep_tx`), but only once its own sessions are over: one of them may be paying it with a partner, whose share it would otherwise take.
+The public key of the puzzle is known, so that transaction shows nothing and goes to the public mempool; it is tried again every minute
+for an hour while the chain does not take it, and the key goes on the terminal once the coins are sent (or at the last try). A key
+pzsolve encrypted is not read, and its line says so. The terms are shown
+at the first start of a home, which asks to accept them (or `--accept-terms`), and in one line at every start.
+
 **After the payout** (`src/peer/home.c`). The pair, the first and the second transaction and the height go into `HOME/paid`, a line
 each, as soon as the payout is known (before the wait for its confirmations), so that the pieces are still exchanged after a restart: a
 session of a pair in that file only exchanges them (hello, proofs, `S_SECOND`, `S_PIECE`). It is tried
@@ -483,13 +500,16 @@ file and the terminal carry only the encrypted line, which `pzsolve decrypt-key`
 search: the home stops it, and does not start it again at the next start; it stays on, a custodian, and answers a partner that still
 lacks this home's piece.
 
-**What the terminal shows.** One line with the time for each step that matters: the coincidence and its partner, the proofs, each
-transaction sent (its txid) and confirmed, the payout with the amount, F's wait and cancel, the exchange of the pieces and the key, and the
+**What the terminal shows.** At the start the terms and the payout address. Then one line with the time for each step that matters: the
+coincidence and its partner, the proofs, each transaction sent (its txid) and confirmed, the payout with the amounts (to each home and to
+the author), F's wait and cancel, the exchange of the pieces and the key, and the
 end of the session with its reason (`session ID: ended: paid; the key of the puzzle is known`, `... ended: failed: REASON`). A
 coincidence that comes after the prize was taken is not signed (one line says so), and pzsolve stops: a home that paid stays on only to
 give the partner its piece; one whose session finds the puzzle address empty stops searching too. When pzsolve ends on its own the line
-says whether it found the key (and where it is) or why it stopped. Every 10 minutes a line of the network: its nodes, the points in all, its jumps a second and the share
-of this home, and the time within which the key comes with half the chance and with 9 in 10. The network is estimated from what this home
+says whether it found the key (and where it is) or why it stopped; one that found it sends the coins, and a line gives the amounts and
+the txid. Every 10 minutes a line of the network: its nodes, the points in all, its jumps a second and the share of this home, with what
+it gets of the prize on average (its share of the work times the 90% the terms leave to the homes: two homes split a prize, one alone
+takes it whole, so either way the share of the work), and the time within which the key comes with half the chance and with 9 in 10. The network is estimated from what this home
 keeps as a custodian, so only a home that listens shows it: a record goes to the 5 nodes closest to its key, so the network holds about
 `held × nodes / 5` records (`held` those this home keeps), each worth `2^dpbits` jumps on average, and its rate is the growth of `held`
 over the last hour. The nodes come from the distances of the 20 closest to a random point (`dht_nodes`: the j-th of N nodes is at about
@@ -510,11 +530,11 @@ that the table alerted, or whose partner proved its distance, and whose session 
 the limits above.
 
 `tests/peer/t_session.c` runs both homes against each other with the real pzsign and a chain in memory that checks every input: the
-payout (half each of the prize and of F's tiny coin; with a chain that loses its first answer about the height); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
+payout (10% to the author, the rest half each of the prize and of F's tiny coin; with a chain that loses its first answer about the height); a partner that keeps the second transaction and its last message, which ends with F's cancel and the prize still
 under the joint key, also when it keeps the channel alive with `S_ALIVE` for ever; a partner F that stops, or sends garbage, in place of
 its last message, which gets nothing and cancels, or sends garbage after it, which leaves S its signatures and pays; the same at a
 high fee rate, where the tiny coin is larger and F still cancels; a partner's rate far above the home's, refused; the limits of failed signings and of
-payouts, checked in every case, refused before anything is signed; a partner that copied the x of a
+payouts, checked in every case, refused before anything is signed; a hello whose version of the terms no home knows; a partner that copied the x of a
 record and cannot prove it, for which no pzsign runs; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends.
 The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
@@ -698,7 +718,8 @@ router: the machine of the tests reaches neither.
 - The vectors of `tests/peer/t_btc.c` come from transactions of the main chain, pinned by their txids, and from
   `tests/peer/gen_btc_vectors.py`, an independent implementation in Python of the serialization, the legacy signature hash, RFC 6979 and
   DER (`python3 tests/peer/gen_btc_vectors.py > tests/peer/btc_vectors.h`).
-- The rules of the project document (section 4.5): at most 8 inputs, coins worth less than 3 times their fee are left, half each.
+- The rules of the project document (section 4.5): at most 8 inputs, coins worth less than 3 times their fee are left; 10% to the author,
+  the rest half each.
 - `tests/peer/fuzz_peer.c` mutates JSON documents, raw transactions and HTTP replies and checks that the readers agree with each other
   (`make peer-fuzz`, under the sanitizers: `make BUILD=build_asan OPT="-O1 -fsanitize=address,undefined" peer-fuzz FUZZ_SECONDS=300`).
 
@@ -787,9 +808,9 @@ tests/peer/e2e_net.sh` pays a coincidence with three homes that have no node. No
 
 Everything below works and is tested; `tests/peer/e2e_net.sh` runs the whole of it on one machine with a bitcoind in regtest: a custodian
 node and three homes (`pzpeer run`, each with its pzsolve), a puzzle of 58 bits funded with 1 BTC. With Bitcoin Core 28.1 a coincidence
-between two homes ended in the payout: half each of the prize less two fees, nothing left on the
-puzzle address. With so few homes a home may find the key on its own first (its own walkers meet too): the script then starts a new try
-with a new puzzle. The cases of the session (the payout, and the cancel when a partner keeps the second transaction) also run on the node
+between two homes ended in the payout: 45% each of the prize less two fees and 10% to the author, nothing left on the puzzle address.
+With so few homes a home may find the key on its own first (its own walkers meet too): it sends the coins at once, 90% to itself and 10%
+to the author, which the script checks, and then starts a new try with a new puzzle. The cases of the session (the payout, and the cancel when a partner keeps the second transaction) also run on the node
 in `t_session` with `PZ_REGTEST`.
 
 | Part | State |
@@ -821,10 +842,12 @@ PZ_REGTEST=127.0.0.1:18443:pz:pz tests/peer/e2e_net.sh   # the whole network: a 
 By hand, every home runs, with the same network file (section 5),
 
 ```sh
-pzpeer run --network FILE --payout ADDRESS
+pzpeer run --network FILE
 ```
 
-and has pzsolve hunting, its points published, the records of others kept and its coincidences paid. What it adds on its own: the
+The first start shows the terms of the payout and asks to accept them, then asks the payout address (any standard address); both are
+kept in the folder (`HOME/terms`, `HOME/payout`), so the next start needs neither. A service, which has no terminal, takes
+`--payout ADDRESS --accept-terms` once. The home has pzsolve hunting, its points published, the records of others kept and its coincidences paid. What it adds on its own: the
 folder `pznet-NAME` (`--dir`), pzsolve and pzsign beside pzpeer, port 28140 opened on the router, the other nodes found in the table
 of BitTorrent and the chain read from Electrum servers (on the main chain a built-in list and checkpoint; on a test chain
 `--electrum`, `--bt-router` or `--peer`, and `--rpc` for a node of one's own). `--debug FILE` writes every message, step and answer
@@ -836,7 +859,8 @@ cookie file instead (section 8.1).
 
 The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); pzpeer refuses a seed
 file that others may read, or a link, and a home folder that others can open. `HOME/start.key` is the start key pzpeer gives to pzsolve,
-written at every start through a new file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
+written at every start through a new file of mode 0600; `HOME/terms` and `HOME/payout` keep the terms accepted and the payout address;
+`HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
 in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`, and what pzsign says in `HOME/pzsign.out`. After a payout `HOME/paid`
 keeps the pair until the pieces are exchanged, and the key goes into `HOME/FOUND.txt`; the node of the home keeps its contacts and the
 records it holds for others in `HOME/node/`.

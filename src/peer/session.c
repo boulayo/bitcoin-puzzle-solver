@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* session.c - the session of a coincidence (see session.h). The steps, each a message both sides send and then read:
- *   hello   the pair, a nonce, the fee rate proposed, the tiny-coin and payout scripts;
+ *   hello   the pair, a nonce, the fee rate proposed, the tiny-coin script, the version of the terms and the payout script;
  *   proof   the proof of possession of the own record, over the partner's nonce (it shows the distance, hence the piece);
  *   plan    the hash of the first transaction each side built on its own; then the two-party signing, the broadcast, one confirmation;
  *   plan    the hash of the second; F gives the signature of its tiny coin, then the two-party signing in which S gets the whole signature
@@ -23,7 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define HELLO_FIXED (2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 1)
+#define HELLO_FIXED (2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 2)
 #define CHUNK 65000                         /* a piece of a pzsign message in one S_SIGNER */
 _Static_assert(1 + HELLO_FIXED + BTC_SPK_MAX <= SESSION_HELLO_MAX, "a hello fits in SESSION_HELLO_MAX");
 #define HELLO_MS 30000                      /* the longest wait for the hello and the proof of the partner, which it makes at once */
@@ -76,13 +76,6 @@ static void note(const sess *s, const char *fmt, ...)
     va_end(ap);
     dbg("session %s: %s", s->tag, line);
     if (s->c->say) s->c->say(s->c->user, line);
-}
-
-/* satoshis as BTC, for the notes */
-static const char *btc_amount(uint64_t sat, char out[32])
-{
-    snprintf(out, 32, "%llu.%08llu", (unsigned long long)(sat / 100000000), (unsigned long long)(sat % 100000000));
-    return out;
 }
 
 static bool send_msg(sess *s, uint8_t type, const uint8_t *p, size_t len)
@@ -186,6 +179,7 @@ static bool hello(sess *s)
     memcpy(m + 2 * RECORD_LEN, s->nonce[s->me], 32);
     for (int b = 0; b < 8; b++) m[2 * RECORD_LEN + 32 + b] = (uint8_t)(fr >> (56 - 8 * b));
     memcpy(m + 2 * RECORD_LEN + 40, coin_spk, BTC_P2PKH_LEN);
+    m[HELLO_FIXED - 2] = PAYOUT_TERMS;
     m[HELLO_FIXED - 1] = (uint8_t)c->pay_len;
     memcpy(m + HELLO_FIXED, c->pay_spk, c->pay_len);
     if (!send_msg(s, S_HELLO, m, HELLO_FIXED + c->pay_len) || !recv_msg(s, S_HELLO, in, sizeof in, &n)) return false;
@@ -209,6 +203,8 @@ static bool hello(sess *s)
     if (theirs > 4 * fr && !only_pieces) return fail(s, "the partner's fee rate %llu is more than 4 times this home's %llu", (unsigned long long)theirs, (unsigned long long)fr);
     t->feerate = fr > theirs ? fr : theirs;
     t->first = s->F;
+    const unsigned v = in[HELLO_FIXED - 2] < PAYOUT_TERMS ? in[HELLO_FIXED - 2] : PAYOUT_TERMS;   /* the older of the two versions */
+    if (!payout_author(v, t)) return fail(s, "the partner gives terms of the payout this home does not know (version %u)", v);
     dbg("session %s terms: party %d, F is party %d, fee rate mine %llu theirs %llu sat/kvB, tiny coin %llu sat", s->tag, s->me, s->F,
         (unsigned long long)fr, (unsigned long long)theirs, (unsigned long long)payout_tiny(t));
     if (t->feerate > c->max_feerate && !only_pieces) return fail(s, "fee rate %llu above the limit %llu", (unsigned long long)t->feerate, (unsigned long long)c->max_feerate);
@@ -587,10 +583,11 @@ static bool second_ok(const sess *s, const uint8_t *raw, size_t n, btc_tx *b)
 {
     const payout_terms *t = &s->t;
     const session_paid *p = s->c->paid;
-    return btc_tx_parse(b, raw, n) && b->n_in == 2 && b->n_out == 2 && !memcmp(b->in[0].prev_txid, p->first, 32) && b->in[0].prev_vout == 0 &&
+    return btc_tx_parse(b, raw, n) && b->n_in == 2 && b->n_out == 3 && !memcmp(b->in[0].prev_txid, p->first, 32) && b->in[0].prev_vout == 0 &&
            !memcmp(b->in[1].prev_txid, p->first, 32) && b->in[1].prev_vout == 1 && b->out[0].script_len == t->pay_len[0] &&
            !memcmp(b->out[0].script, t->pay_spk[0], t->pay_len[0]) && b->out[1].script_len == t->pay_len[1] &&
-           !memcmp(b->out[1].script, t->pay_spk[1], t->pay_len[1]) && btc_verify_p2pkh(b, 0, t->puzzle_spk, BTC_P2PKH_LEN) &&
+           !memcmp(b->out[1].script, t->pay_spk[1], t->pay_len[1]) && b->out[2].script_len == t->author_len &&
+           !memcmp(b->out[2].script, t->author_spk, t->author_len) && btc_verify_p2pkh(b, 0, t->puzzle_spk, BTC_P2PKH_LEN) &&
            btc_verify_p2pkh(b, 1, t->coin_spk[t->first], BTC_P2PKH_LEN);
 }
 
@@ -763,7 +760,9 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
         dbg_tx(&s, "second, signed", &b);
         dbg("session %s broadcast of the second: %s", s.tag, ch->broadcast(ch->ctx, &b) ? "taken" : "not taken");
         btc_tx_txid(&b, bid), btc_hash_to_hex(bid, hex);
-        note(&s, "second transaction sent, %s BTC to each payout address: %s", btc_amount(b.out[s.me].value, v), hex);
+        char va[32];
+        note(&s, "second transaction sent, %s BTC to each payout address and %s BTC (%u%%) to the author of pzpeer: %s",
+             btc_amount(b.out[s.me].value, v), btc_amount(b.out[2].value, va), s.t.author_pct, hex);
         return wait_for(&s, aid, 0, -1, 144) ? paid(&s, aid, &b, true)
                                             : (snprintf(why, whylen, "the second transaction did not go through"), SESSION_FAILED);
     }

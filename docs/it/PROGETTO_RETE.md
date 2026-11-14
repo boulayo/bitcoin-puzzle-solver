@@ -19,6 +19,8 @@ Risolvere in tanti i puzzle di cui si conosce la chiave pubblica (il #140 e i su
 
 > le due persone i cui calcoli si incontrano si dividono il premio a metà, in automatico, e nessuna delle due può prendersi tutto.
 
+Prima della divisione il 10% va all'autore del programma: ognuno dei due riceve il 45%. Chi trova la chiave da solo riceve il 90%.
+
 Chi partecipa mette potenza di calcolo e un indirizzo Bitcoin. Il programma fa il resto.
 
 Tre programmi:
@@ -53,7 +55,8 @@ Anna e Bruno firmano insieme una transazione senza mai ricostruire la chiave (la
 Resta un problema: nell'ultimo scambio uno dei due riceve la firma completa per primo, e potrebbe tenerla da parte mentre prova a rubare. La difesa, senza depositi:
 
 1. **Primo passaggio.** La coppia firma una transazione che rimanda il premio sullo stesso indirizzo del puzzle e dà a ciascuno una moneta minuscola (10 000 satoshi o più, secondo la commissione) su una chiave solo sua. Trattenere questa firma non serve a niente.
-2. **Secondo passaggio**, dopo una conferma. La transazione metà e metà spende il premio e anche la moneta minuscola di uno dei due, che chiamo F. L'altro, S, riceve la firma completa per primo e la spedisce.
+2. **Secondo passaggio**, dopo una conferma. La transazione spende il premio e anche la moneta minuscola di uno dei due, che chiamo F: il
+   10% all'autore, il resto metà e metà. L'altro, S, riceve la firma completa per primo e la spedisce.
 3. **Se dopo 3 blocchi il premio non si è mosso**, F spende la sua moneta minuscola. La transazione che S teneva da parte non vale più.
 4. **Dopo 6 conferme del pagamento** le due case si scambiano i pezzi, se all'indirizzo non è rimasto niente di valore: ognuna controlla il
    pezzo dell'altra, li somma e ha la chiave. La salva in `FOUND.txt` e la mostra sullo schermo, cifrata se pzsolve cifra la sua. Una
@@ -64,9 +67,19 @@ Una firma trattenuta vale quindi al massimo mezz'ora.
 
 ### 2.4 Cosa vede chi partecipa
 
-Avvia `pzpeer run` con l'indirizzo di pagamento. Il programma crea il seme di casa (una volta), avvia pzsolve, pubblica i punti, e se arriva una coincidenza firma e paga. Sullo schermo una riga breve per ogni passaggio che conta: la coincidenza, le transazioni mandate e confermate, il pagamento con l'importo, lo scambio dei pezzi e la chiave.
+Avvia `pzpeer run`. La prima volta il programma mostra le condizioni (45% a ciascuna casa della coppia, 10% all'autore; 90% a chi trova
+da solo) e chiede di accettarle, poi chiede l'indirizzo di pagamento; li ricorda per le volte dopo. Crea il seme di casa (una volta),
+avvia pzsolve, pubblica i punti, e se arriva una coincidenza firma e paga. Sullo schermo una riga breve per ogni passaggio che conta: la
+coincidenza, le transazioni mandate e confermate, il pagamento con gli importi, lo scambio dei pezzi e la chiave. Se pzsolve trova la
+chiave da solo, la casa manda subito le monete: 90% al suo indirizzo, 10% all'autore.
 
-Ogni 10 minuti una riga della rete: quanti nodi ha, quanti punti in tutto, quanti salti al secondo e la parte di questa casa, ed entro quanto tempo la chiave arriva con metà delle probabilità e con 9 su 10. La stima viene da ciò che la casa custodisce per gli altri: ogni punto sta sui 5 nodi più vicini alla sua chiave, quindi la rete ne ha circa "punti custoditi × nodi / 5", e i nodi si stimano dalle distanze dei più vicini a un punto a caso. Sbaglia di circa un quinto; la vede solo una casa che accetta connessioni, perché solo quella custodisce.
+**La quota dell'autore** è scritta nel programma, non nel file della rete né in un'opzione: nessuno la imposta. Non entra nell'impronta
+della rete, quindi una versione nuova può cambiare l'indirizzo o abbassare la quota senza creare una rete nuova e senza perdere punti. Una
+coppia paga secondo la versione più vecchia delle due case. La seconda transazione la firmano le due case insieme, e ognuna controlla le
+uscite: chi usa un programma modificato per non pagare la quota la paga comunque quando il partner usa questo.
+
+Ogni 10 minuti una riga della rete: quanti nodi ha, quanti punti in tutto, quanti salti al secondo e la parte di questa casa, con quanto
+del premio le spetta in media (la sua parte del lavoro per il 90%), ed entro quanto tempo la chiave arriva con metà delle probabilità e con 9 su 10. La stima viene da ciò che la casa custodisce per gli altri: ogni punto sta sui 5 nodi più vicini alla sua chiave, quindi la rete ne ha circa "punti custoditi × nodi / 5", e i nodi si stimano dalle distanze dei più vicini a un punto a caso. Sbaglia di circa un quinto; la vede solo una casa che accetta connessioni, perché solo quella custodisce.
 
 ---
 

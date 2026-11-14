@@ -8,6 +8,7 @@
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <secp256k1.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -135,6 +136,12 @@ bool btc_script_is_p2pkh(const uint8_t *spk, size_t len, uint8_t h160[20])
         return false;
     if (h160) memcpy(h160, spk + 3, 20);
     return true;
+}
+
+const char *btc_amount(uint64_t sat, char out[32])
+{
+    snprintf(out, 32, "%llu.%08llu", (unsigned long long)(sat / 100000000), (unsigned long long)(sat % 100000000));
+    return out;
 }
 
 size_t btc_address_script(btc_chain chain, const char *addr, uint8_t spk[BTC_SPK_MAX])

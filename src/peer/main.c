@@ -28,9 +28,9 @@
 /* the usage, on stdout when it was asked for (status 0), else on stderr (2) */
 static int usage_to(FILE *f)
 {
-    fprintf(f, "usage: pzpeer run --network FILE --payout ADDRESS [options] [-- PZSOLVE OPTIONS]\n"
+    fprintf(f, "usage: pzpeer run --network FILE [--payout ADDRESS] [options] [-- PZSOLVE OPTIONS]\n"
                     "         the home: pzsolve on the network, its points published, the records of others kept, and for every\n"
-                    "         coincidence with another home the prize paid half each to the two payout addresses\n"
+                    "         coincidence with another home the prize paid: 45%% to each payout address, 10%% to the author of pzpeer\n"
                     "       pzpeer node --network FILE [options]\n"
                     "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions; its\n"
                     "         identity is DIR/node.seed, made at the first start\n"
@@ -53,12 +53,15 @@ static int usage_to(FILE *f)
                     "  --debug FILE         every message, step and answer of the chain, with its time, into FILE (no secret is written)\n"
                     "  --store-gb N         the records kept for others, in GB of disk (default 37; the index takes about a fifth of it in RAM)\n"
                     "options of run:\n"
+                    "  --payout ADDRESS          where the share of this home goes (any address: 1..., 3..., bc1q..., bc1p...); kept in the\n"
+                    "                            folder, and asked on the terminal at the first start when it is not given\n"
+                    "  --accept-terms            accept the terms of the payout without the question of the first start (for a service)\n"
                     "  --rpc H:P:USER:PASSWORD   a bitcoind of one's own (or, better on a shared machine, --rpc H:P --rpc-cookie FILE, the\n"
                     "                            .cookie of its data directory)\n"
                     "  --electrum HOST:PORT      without --rpc the chain comes from Electrum servers (plain TCP): those of the network file,\n"
                     "                            these, or a built-in list on the main chain. None is trusted: every answer is proven\n"
                     "  --pzsolve PATH, --pzsign PATH   the two programs (default: beside pzpeer, or in PATH)\n"
-                    "  --id-bits N, --exit-when-done   for tests\n");
+                    "  --id-bits N, --exit-when-done, --solo-wait SECONDS   for tests\n");
     return f == stdout ? 0 : 2;
 }
 
@@ -275,6 +278,7 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { cfg.no_bt = true; continue; }
         if (!strcmp(a, "--no-portmap")) { cfg.portmap = false; continue; }
+        if (!strcmp(a, "--accept-terms")) { cfg.accept_terms = true; continue; }
         if (!strcmp(a, "--help")) return usage_to(stdout);
         if (!v) return bad("run", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
         if (!strcmp(a, "--network")) cfg.network = v;
@@ -293,7 +297,7 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) electrum[cfg.nelectrum++] = v;
         else if (!strcmp(a, "--bt-router") && cfg.nbt_routers < 8) routers[cfg.nbt_routers++] = v;
         else if (!strcmp(a, "--debug")) debug = v;
-        else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits") || !strcmp(a, "--store-gb")) {
+        else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits") || !strcmp(a, "--store-gb") || !strcmp(a, "--solo-wait")) {
             char *end;
             const long n = strtol(v, &end, 10);
             if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : !strcmp(a, "--id-bits") ? 32 : 1000000))
@@ -301,12 +305,13 @@ static int cmd_run(int argc, char **argv)
                                !strcmp(a, "--listen") ? "a port from 0 to 65535" : !strcmp(a, "--id-bits") ? "0 to 32" : "1 to 1000000"), 2;
             if (!strcmp(a, "--listen")) cfg.listen_port = (int)n;
             else if (!strcmp(a, "--id-bits")) cfg.id_bits = (unsigned)n;
+            else if (!strcmp(a, "--solo-wait")) cfg.solo_wait = (unsigned)n;
             else cfg.store_gb = (unsigned)n;
         } else return bad("run", "unrecognized option '%s'", a);
         i++;
     }
     cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
-    if (!cfg.network || !cfg.payout) return bad("run", "%s", !cfg.network ? "--network FILE is missing" : "--payout ADDRESS is missing");
+    if (!cfg.network) return bad("run", "%s", "--network FILE is missing");
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     return home_run(&cfg);
 }

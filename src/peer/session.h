@@ -10,7 +10,7 @@
 #include <pthread.h>
 
 #define SESSION_MSG_MAX 65535               /* a Noise frame */
-#define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 426 bytes at most */
+#define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 427 bytes at most */
 
 /* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
  * while a session waits for blocks, and is skipped by the reader. After the payout S_SECOND carries the second transaction (empty from
@@ -61,7 +61,7 @@ typedef struct {
 /* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets
  * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces. Once the payout has its confirmations
  * and nothing of value is left at the puzzle address, the two sides give each other their pieces, and each has the key. */
-#define PAID_TX_MAX 600                     /* a second transaction: two signed P2PKH inputs and two outputs, about 400 bytes */
+#define PAID_TX_MAX 600                     /* a second transaction: two signed P2PKH inputs and three outputs, about 430 bytes */
 typedef struct {
     uint64_t paid_at;                       /* the height at which the prize was seen spent in a block; 0: not paid */
     uint8_t first[32];                      /* the txid of the first transaction, whose output 0 the payout spent */

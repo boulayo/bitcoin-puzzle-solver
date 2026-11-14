@@ -9,6 +9,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool sweep_tx(const session_chain *ch, const uint8_t sec[32], const uint8_t *to, size_t to_len, const payout_terms *author, sweep_info *info,
+              btc_tx *tx)
+{
+    uint8_t spk[BTC_P2PKH_LEN];
+    payout_coin coins[64];
+    btc_out out[2] = {{.script_len = (uint8_t)to_len}};       /* the outputs as they will be, for the size */
+    memcpy(out[0].script, to, to_len);
+    if (author) out[1].script_len = (uint8_t)author->author_len, memcpy(out[1].script, author->author_spk, author->author_len);
+    int n = info->listed = btc_key_script(sec, spk) ? ch->coins(ch->ctx, spk, coins, 64) : -1;
+    if (!info->rate) {                                          /* twice the estimate, 50 to 1000 sat/vB: no server sets the fee of a prize */
+        const uint64_t est = 2 * ch->feerate(ch->ctx);
+        info->rate = est < 50000 ? 50000 : est > 1000000 ? 1000000 : est;
+    }
+    btc_tx_init(tx);
+    info->total = 0;
+    if (n > 0) n = (int)payout_largest(coins, (size_t)n, BTC_MAX_IN, btc_fee(BTC_P2PKH_IN_SIZE, info->rate) + 1);
+    bool ok = n > 0;
+    for (int i = 0; ok && i < n; i++) info->total += coins[i].value, ok = btc_tx_add_in(tx, coins[i].txid, coins[i].vout, BTC_SEQUENCE_FINAL);
+    const uint64_t fee = ok ? btc_fee(btc_vsize_p2pkh(tx->n_in, out, author ? 2 : 1), info->rate) : 0;
+    const uint64_t left = info->total > fee ? info->total - fee : 0, cut = author ? left * author->author_pct / 100 : 0;
+    ok = ok && left - cut > 546 && (!author || cut >= 546) && btc_tx_add_out(tx, left - cut, to, to_len) &&
+         (!author || btc_tx_add_out(tx, cut, out[1].script, out[1].script_len));
+    for (size_t i = 0; ok && i < tx->n_in; i++) ok = btc_sign_p2pkh(tx, i, sec) && btc_verify_p2pkh(tx, i, spk, sizeof spk);
+    return ok;
+}
+
 int sweep_main(int argc, char **argv)
 {
     const char *to = NULL, *chain_name = "main", *rpc_arg = NULL, *cookie = NULL, *servers[CHAIN_SPV_SERVERS];
@@ -52,29 +78,14 @@ int sweep_main(int argc, char **argv)
     }
     if ((rpc_arg ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&spv, why, sizeof why)) != 1) return fprintf(stderr, "the chain is not ready: %s\n", why), 1;
     const session_chain ch = rpc_arg ? chain_rpc_iface(&crpc) : chain_spv_iface(&spv);
-
-    /* the confirmed coins of the key to the address, less a fee that passes at once: the largest, as many as a transaction holds, each
-     * worth more than the fee of its own input (an address of a puzzle collects dozens of coins of dust) */
-    payout_coin coins[64];
-    int n = ch.coins(ch.ctx, spk, coins, 64);
-    if (!rate) {                                                /* twice the estimate, 50 to 1000 sat/vB: no server sets the fee of a prize */
-        const uint64_t est = 2 * ch.feerate(ch.ctx);
-        rate = est < 50000 ? 50000 : est > 1000000 ? 1000000 : est;
-    }
     btc_tx tx;
-    btc_out out = {.script_len = (uint8_t)to_len};
-    uint64_t total = 0;
-    memcpy(out.script, to_spk, to_len);
-    btc_tx_init(&tx);
-    const int listed = n;
-    if (n > 0) n = (int)payout_largest(coins, (size_t)n, BTC_MAX_IN, btc_fee(BTC_P2PKH_IN_SIZE, rate) + 1);
-    bool ok = n > 0;
-    for (int i = 0; ok && i < n; i++) total += coins[i].value, ok = btc_tx_add_in(&tx, coins[i].txid, coins[i].vout, BTC_SEQUENCE_FINAL);
-    const uint64_t fee = ok ? btc_fee(btc_vsize_p2pkh(tx.n_in, &out, 1), rate) : 0;
-    ok = ok && total > fee + 546 && btc_tx_add_out(&tx, total - fee, to_spk, to_len);
-    for (size_t i = 0; ok && i < tx.n_in; i++) ok = btc_sign_p2pkh(&tx, i, sec) && btc_verify_p2pkh(&tx, i, spk, sizeof spk);
+    sweep_info si = {.rate = rate};
+    const bool ok = sweep_tx(&ch, sec, to_spk, to_len, NULL, &si, &tx);
     pz_secure_zero(sec, sizeof sec);
-    if (!ok) return fprintf(stderr, listed > 0 ? "the coins of this key do not pay the fee\n" : listed == 0 ? "this key has no confirmed coin\n" : "the chain did not answer\n"), 1;
+    if (!ok) return fprintf(stderr, si.listed > 0 ? "the coins of this key do not pay the fee\n" : si.listed == 0 ? "this key has no confirmed coin\n" : "the chain did not answer\n"), 1;
+    const int n = (int)tx.n_in, listed = si.listed;
+    const uint64_t total = si.total, fee = total - tx.out[0].value;
+    rate = si.rate;
 
     static uint8_t raw[BTC_TX_MAX_SIZE];
     static char text[2 * BTC_TX_MAX_SIZE + 1];

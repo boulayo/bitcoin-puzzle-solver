@@ -39,6 +39,10 @@ int main(void)
     key("payout 0", dummy, t.pay_spk[0]), t.pay_len[0] = BTC_P2PKH_LEN;
     t.pay_len[1] = btc_address_script(BTC_REGTEST, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080", t.pay_spk[1]);
     CHECK(t.pay_len[1] == 22);
+    /* the terms of the author: version 1 is 10% to a P2WPKH address, the same script on every chain; no other version is known */
+    CHECK(payout_author(PAYOUT_TERMS, &t) && t.author_pct == 10 && t.author_len == 22 && t.author_spk[0] == 0 && t.author_spk[1] == 20);
+    payout_terms none = t;
+    CHECK(!payout_author(0, &none) && !payout_author(PAYOUT_TERMS + 1, &none));
     /* ten coins: the prize, nine smaller, two of them dust that is not worth its input */
     payout_coin coins[10];
     for (int i = 0; i < 10; i++) {
@@ -71,13 +75,21 @@ int main(void)
     for (int i = 0; i < 10; i++) rev[i] = coins[9 - i];
     CHECK(payout_first(&t, rev, 10, &a2, &used) && a2.n_in == 8);
     for (size_t i = 0; i < 8; i++) CHECK(!memcmp(a2.in[i].prev_txid, a.in[i].prev_txid, 32) && a2.in[i].prev_vout == a.in[i].prev_vout);
-    /* the second: the prize and the tiny coin of F (party 1), which came from the prize, half each */
+    /* the second: the prize and the tiny coin of F (party 1), which came from the prize: 10% to the author, the rest half each */
     uint8_t aid[32];
     CHECK(btc_tx_txid(&a, aid));
-    CHECK(payout_second(&t, &a, &b) && b.n_in == 2 && b.n_out == 2);
+    CHECK(payout_second(&t, &a, &b) && b.n_in == 2 && b.n_out == 3);
     CHECK(!memcmp(b.in[0].prev_txid, aid, 32) && b.in[0].prev_vout == 0 && b.in[1].prev_vout == 1);
-    const uint64_t fee_b = a.out[0].value + PAYOUT_TINY_MIN - sum_out(&b);
+    const uint64_t fee_b = a.out[0].value + PAYOUT_TINY_MIN - sum_out(&b), left = sum_out(&b);
     CHECK(b.out[0].value >= b.out[1].value && b.out[0].value - b.out[1].value <= 1 && fee_b < 1000);   /* the odd satoshi to S */
+    CHECK(b.out[2].value == left / 10 && b.out[0].value + b.out[1].value == left - left / 10);
+    CHECK(b.out[2].script_len == t.author_len && !memcmp(b.out[2].script, t.author_spk, t.author_len));
+    payout_terms other = t;                                      /* the terms of both homes go into the bytes of the second */
+    other.author_spk[5] ^= 1;
+    btc_tx b2;
+    CHECK(payout_second(&other, &a, &b2) && memcmp(b2.out[2].script, b.out[2].script, t.author_len));
+    other.author_len = 0;
+    CHECK(!payout_second(&other, &a, &b2) && !payout_first(&other, coins, 10, &a2, &used));
     CHECK(btc_sign_p2pkh(&b, 0, puzzle) && btc_sign_p2pkh(&b, 1, coin[1]));
     CHECK(btc_verify_p2pkh(&b, 0, t.puzzle_spk, BTC_P2PKH_LEN) && btc_verify_p2pkh(&b, 1, t.coin_spk[1], BTC_P2PKH_LEN));
     CHECK(!btc_verify_p2pkh(&b, 1, t.coin_spk[0], BTC_P2PKH_LEN));

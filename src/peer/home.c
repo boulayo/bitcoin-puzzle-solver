@@ -18,6 +18,7 @@
 #include "dpfeed.h"
 #include "keys.h"
 #include "session.h"
+#include "sweep.h"
 #include "sys.h"
 #include "netfile.h"
 #include <pzcore/address.h>
@@ -365,6 +366,63 @@ static bool found_key_locked(home *h, const uint8_t key[32])
     return true;
 }
 
+/* pzsolve found the key on its own (its FOUND.txt names it, unless the campaign encrypts it): the coins of the puzzle to the payout
+ * address, less the share of the author (payout.h). The public key of the puzzle is known, so the transaction shows nothing new: it goes
+ * to the public mempool. The key goes on the terminal once the coins are sent, or at the last try. False when they were not sent: the
+ * caller tries again. */
+static bool solo_payout(home *h, const char *found, bool last)
+{
+    const home_cfg *cfg = h->cfg;
+    char line[256], hex[65] = "", why[300] = "the key of the puzzle is not in it in the clear (encrypted?)", va[32], vb[32];
+    uint8_t sec[32], k33[33];
+    bool have = false, sent = false;
+    FILE *f = sys_fopen(found, "rb");
+    while (f && !have && fgets(line, sizeof line, f)) {
+        const size_t n = strncmp(line, "private key hex: 0x", 19) ? 0 : strspn(line + 19, "0123456789abcdefABCDEF");
+        if (n >= 1 && n <= 64) memset(hex, '0', 64 - n), memcpy(hex + 64 - n, line + 19, n), have = btc_unhex(hex, 64, sec);
+    }
+    if (f) fclose(f);
+    pz_secure_zero(line, sizeof line), pz_secure_zero(hex, sizeof hex);
+    secp256k1_pubkey P;
+    size_t kl = 33;
+    if (have && !(secp256k1_ec_pubkey_create(h->ctx, &P, sec) && secp256k1_ec_pubkey_serialize(h->ctx, k33, &kl, &P, SECP256K1_EC_COMPRESSED) &&
+                  !memcmp(k33, h->nf.pubkey33, 33)))
+        have = false, snprintf(why, sizeof why, "the key in it is not the key of the puzzle");
+    btc_rpc rpc = {0};
+    chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};
+    if (have && cfg->rpc && !btc_rpc_init_arg(&rpc, cfg->rpc, cfg->rpc_cookie)) snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
+    else if (have && (cfg->rpc ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&h->spv, why, sizeof why)) == 1) {
+        const session_chain ch = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
+        payout_terms t = {0};
+        sweep_info si = {0};
+        btc_tx tx;
+        uint8_t txid[32];
+        char id[65];
+        if (!payout_author(PAYOUT_TERMS, &t) || !sweep_tx(&ch, sec, h->pay_spk, h->pay_len, &t, &si, &tx))
+            snprintf(why, sizeof why, si.listed > 0 ? "its coins do not pay the fee" : si.listed == 0 ? "the puzzle address has no confirmed coin" : "the chain did not answer");
+        else if (!ch.broadcast(ch.ctx, &tx)) snprintf(why, sizeof why, "the chain did not take the transaction");
+        else {
+            btc_tx_txid(&tx, txid), btc_hash_to_hex(txid, id);
+            say(h, "the coins of the puzzle are sent: %s BTC to the payout address of this home, %s BTC (%u%%) to the author of pzpeer: %s",
+                btc_amount(tx.out[0].value, va), btc_amount(tx.out[1].value, vb), t.author_pct, id);
+            sent = true;
+        }
+    }
+    if (cfg->rpc && have) btc_rpc_done(&rpc);
+    if (have && (sent || last)) {
+        btc_hex(sec, 32, hex);
+        const char *digits = hex + strspn(hex, "0");             /* as pzsolve shows it: no leading zeros */
+        say_secret("THE KEY OF THE PUZZLE: 0x%s (also in %s)", *digits ? digits : "0", found);
+        pz_secure_zero(hex, sizeof hex);
+    }
+    pz_secure_zero(sec, sizeof sec);
+    if (!sent) say(h, "the coins of the puzzle are not sent%s (%s): %s", last ? ", and no more tries: move them with the key" : "", found, why);
+    pthread_mutex_lock(&h->mu);
+    h->prize_gone |= sent;                                      /* no pair is signed for it any more */
+    pthread_mutex_unlock(&h->mu);
+    return sent;
+}
+
 /* ---- pzsolve ---- */
 
 /* the last line of a file that is not blank (the reason pzsolve gives when it ends), "" when there is none */
@@ -704,11 +762,89 @@ static void network_status(home *h, int contacts, uint64_t own)
     const double t90 = rate > 0 ? (double)((sqrtl(done * done + c * c * logl(10)) - done) / rate) : INFINITY;
     const double pc = rate > 0 ? 100 * mine / rate : 0;
     snprintf(sh, sizeof sh, pc >= 1 || pc == 0 ? "%.0f%%" : "%.2g%%", pc > 100 ? 100 : pc);   /* the estimate can put this home above it */
-    say(h, "network: about %.0f nodes, %s points in all, %s jumps/s (this home %s); half the chance within %s, 9 in 10 within %s", nodes,
-        si((double)held * share, pts, sizeof pts), si(rate, jr, sizeof jr), sh, span(t50, a, sizeof a), span(t90, b, sizeof b));
+    /* what this home gets on average when the network finds the key: its share of the work times what the terms leave to the homes
+     * (two homes split a prize, and one alone takes it whole: either way the share of the work, on average) */
+    payout_terms t;
+    char ev[48] = "";
+    if (payout_author(PAYOUT_TERMS, &t) && pc > 0) snprintf(ev, sizeof ev, ": %.2g%% of the prize on average", (pc > 100 ? 100 : pc) * (100 - t.author_pct) / 100);
+    say(h, "network: about %.0f nodes, %s points in all, %s jumps/s (this home %s%s); half the chance within %s, 9 in 10 within %s", nodes,
+        si((double)held * share, pts, sizeof pts), si(rate, jr, sizeof jr), sh, ev, span(t50, a, sizeof a), span(t90, b, sizeof b));
 }
 
 /* ---- the run ---- */
+
+/* the first line of a file of the folder, without the end of the line ("" when there is none) */
+static void read_line(const char *path, char *out, size_t cap)
+{
+    FILE *f = sys_fopen(path, "rb");
+    if (!f || !fgets(out, (int)cap, f)) out[0] = 0;
+    if (f) fclose(f);
+    out[strcspn(out, "\r\n")] = 0;
+}
+
+static bool write_line(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "w");
+    bool ok = f && fprintf(f, "%s\n", text) > 0;
+    if (f) ok = fclose(f) == 0 && ok;
+    return ok;
+}
+
+/* a word typed on the terminal after the prompt, which goes to stderr, the terminal even when the output goes to a file ("" at the end
+ * of the input) */
+static void ask(const char *prompt, char *out, size_t cap)
+{
+    fputs(prompt, stderr);
+    char line[256];
+    if (!fgets(line, sizeof line, stdin)) line[0] = 0;
+    for (int c = 0; !strchr(line, '\n') && c != '\n' && c != EOF;) c = getchar();   /* the rest of a long line */
+    const char *w = line + strspn(line, " \t");
+    snprintf(out, cap, "%.*s", (int)strcspn(w, " \t\r\n"), w);
+}
+
+/* The terms of the payout, the same for every home and set by the program (payout.h): a line at every start, and accepted once, at the
+ * first start on the terminal or with --accept-terms (HOME/terms keeps the version accepted; a new version asks again). */
+static bool terms(home *h)
+{
+    payout_terms t;
+    char path[1100], line[16];
+    if (!payout_author(PAYOUT_TERMS, &t)) return false;
+    const unsigned a = t.author_pct, pair = (100 - a) / 2;
+    snprintf(path, sizeof path, "%s/terms", h->dir);
+    read_line(path, line, sizeof line);
+    if (strtoul(line, NULL, 10) < PAYOUT_TERMS && !h->cfg->accept_terms) {
+        if (!isatty(0)) return fprintf(stderr, "the terms of the payout are not accepted yet: start pzpeer run once in a terminal, or add --accept-terms\n"), false;
+        fprintf(stderr, "The terms of the payout, the same for every home and set by the program:\n"
+               "  - a prize found by two homes together: %u%% to the payout address of each, %u%% to the author of pzpeer (%s);\n"
+               "  - a key this home finds on its own: %u%% to its payout address, %u%% to the author, sent at once;\n"
+               "  - the coins go straight from the puzzle address to these addresses: nobody holds them, the author included.\n",
+               pair, a, t.author_address, 100 - a, a);
+        ask("Type yes to accept them: ", line, sizeof line);
+        if (strcmp(line, "yes")) return fprintf(stderr, "the terms are not accepted: the home does not start\n"), false;
+    }
+    snprintf(line, sizeof line, "%u", PAYOUT_TERMS);
+    if (!write_line(path, line)) fprintf(stderr, "cannot write %s: the terms will be asked again\n", path);
+    say(h, "terms: %u%% to each home of a pair and %u%% to the author of pzpeer; %u%% to a home that finds the key on its own", pair, a, 100 - a);
+    return true;
+}
+
+/* The payout address: --payout, else the one kept in HOME/payout, else asked on the terminal; kept there for the next start. */
+static bool payout_address(home *h)
+{
+    char path[1100], addr[128] = "";
+    snprintf(path, sizeof path, "%s/payout", h->dir);
+    if (h->cfg->payout) snprintf(addr, sizeof addr, "%s", h->cfg->payout);
+    else read_line(path, addr, sizeof addr);
+    for (int k = 0; !(h->pay_len = addr[0] ? btc_address_script(h->chain, addr, h->pay_spk) : 0); k++) {
+        if (addr[0]) fprintf(stderr, "%s: not an address of the %s chain\n", addr, h->nf.chain);
+        if (h->cfg->payout || k == 3 || !isatty(0))
+            return fprintf(stderr, addr[0] ? "give it with --payout ADDRESS\n" : "--payout ADDRESS is missing (on a terminal it is asked for)\n"), false;
+        ask("The payout address of this home, where its share of a prize goes (1..., 3..., bc1q... or bc1p...): ", addr, sizeof addr);
+    }
+    if (!write_line(path, addr)) fprintf(stderr, "cannot write %s: give the address with --payout next time\n", path);
+    say(h, "payout address of this home: %s", addr);
+    return true;
+}
 
 /* The chain without a node: the Electrum servers of the network file and of the command line, the headers from the checkpoint of the file
  * (checkpoint=HEIGHT:HASH, the hash as explorers show it; a chain other than the main one may start from its first block). */
@@ -777,8 +913,7 @@ int home_run(const home_cfg *cfg)
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;
-    h->pay_len = cfg->payout ? btc_address_script(h->chain, cfg->payout, h->pay_spk) : 0;
-    if (!h->pay_len) return fprintf(stderr, "--payout: not an address of the %s chain\n", h->nf.chain), 1;
+    if (!terms(h) || !payout_address(h)) return 2;
     if (cfg->rpc) {                                             /* the node: a wrong --rpc or chain now, not at the first session */
         btc_rpc rpc;
         chain_rpc crpc = {.rpc = &rpc, .chain = h->chain};
@@ -839,7 +974,11 @@ int home_run(const home_cfg *cfg)
     /* the feed: the new points of dp.bin to the table, every half second */
     dpfeed df = {0};
     uint64_t published = 0, found = 0;
-    bool solved_alone = false, met = nc > 0;
+    bool solved_alone = false, searched = false, met = nc > 0;
+    int solo = 0;                                               /* the tries left to send the coins of a key pzsolve found on its own */
+    int64_t solo_at = 0;
+    char fpath[1300];
+    snprintf(fpath, sizeof fpath, "%.1100s/campaigns/net-%.31s/FOUND.txt", h->dir, h->nf.net);
     int64_t next_status = mono_s() + STATUS_S;
     int pause = 500;                                            /* short while dp.bin has more to read */
     while (!rc && !g_stop) {
@@ -887,18 +1026,28 @@ int home_run(const home_cfg *cfg)
             h->pzsolve = 0;
         }
         if (h->pzsolve && sys_proc_ended(h->pzsolve, false, &st)) {
-            char fpath[1300], why[400];
-            snprintf(fpath, sizeof fpath, "%.1100s/campaigns/net-%.31s/FOUND.txt", h->dir, h->nf.net);
+            char why[400];
             solved_alone = st == 0 && access(fpath, F_OK) == 0;  /* pzsolve ends with 0 when it found the key itself */
             last_line(h->logpath, why, sizeof why);
             if (solved_alone) say(h, "pzsolve found the key on its own: it is in %s", fpath);
             else say(h, "pzsolve ended with status %d: %s (all of it in %s); this home goes on as a custodian, without a search", st,
                      why[0] ? why : "no reason given", h->logpath);
             h->pzsolve = 0;
-            if (cfg->exit_when_done) break;
+            solo = solved_alone, solo_at = mono_s() + cfg->solo_wait, searched = true;
         }
+        if (solo && mono_s() >= solo_at) {                      /* at once, but after the sessions of this home, which may be paying it */
+            pthread_mutex_lock(&h->mu);
+            bool paying = false;
+            for (int i = 0; i < MAX_SESSIONS; i++) paying |= h->s[i].running;
+            pthread_mutex_unlock(&h->mu);
+            const bool last = solo >= 60 || cfg->exit_when_done;   /* a chain that does not answer is asked again for an hour */
+            if (paid_now) solo = 0;                             /* a pair of this home paid it */
+            else if (!paying) solo = solo_payout(h, fpath, last) || last ? 0 : solo + 1;
+            solo_at = mono_s() + 60;
+        }
+        if (searched && !solo && cfg->exit_when_done) break;
         pthread_mutex_lock(&h->mu);
-        const bool done = cfg->exit_when_done && h->ended > 0;
+        const bool done = cfg->exit_when_done && h->ended > 0 && !solo;
         bool busy = false;
         for (int i = 0; i < MAX_SESSIONS; i++) {
             session_slot *s = &h->s[i];

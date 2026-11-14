@@ -12,7 +12,8 @@ typedef struct {
     const char *network;            /* the network file */
     const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files; NULL: pznet-<net> */
     const char *pzsolve, *pzsign;   /* the programs: a path, or a name looked up in PATH */
-    const char *payout;             /* the payout address of this home */
+    const char *payout;             /* the payout address of this home; NULL: the one kept in the folder, else asked on the terminal */
+    bool accept_terms;              /* the terms of the payout (payout.h) are accepted without the question of the first start */
     const char *rpc;                /* bitcoind: host:port:user:password, or host:port with rpc_cookie (btc_rpc_init_arg) */
     const char *rpc_cookie;         /* the cookie file of bitcoind, or NULL */
     const char *const *electrum;    /* without rpc: Electrum servers host:port, besides the electrum lines of the network file (chain_spv.h);
@@ -32,6 +33,7 @@ typedef struct {
     int nargs;
     bool allow_private;             /* loopback and private addresses on a main-chain network too (other chains allow them) */
     bool exit_when_done;            /* tests: stop after the first session that ends, or when pzsolve ends */
+    unsigned solo_wait;             /* tests: seconds before the coins of a key pzsolve found on its own are sent (a pair that met is paid first) */
     bool verbose;
 } home_cfg;
 

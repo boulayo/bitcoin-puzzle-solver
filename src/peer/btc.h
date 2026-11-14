@@ -73,6 +73,8 @@ bool btc_chain_parse(const char *name, btc_chain *chain);
 /* The scriptPubKey of a P2PKH, P2SH, P2WPKH, P2WSH or P2TR address of the chain: its length (22 to 34), or 0 for anything else, an
  * address of another chain included (testnet and signet share their forms; regtest has its own bech32 prefix, bcrt). */
 size_t btc_address_script(btc_chain chain, const char *addr, uint8_t spk[BTC_SPK_MAX]);
+/* satoshis as BTC with 8 decimals, for the terminal */
+const char *btc_amount(uint64_t sat, char out[32]);
 /* OP_DUP OP_HASH160 <h160> OP_EQUALVERIFY OP_CHECKSIG */
 void btc_script_p2pkh(const uint8_t h160[20], uint8_t spk[BTC_P2PKH_LEN]);
 /* whether spk is that script; its hash160 goes to h160 when it is not NULL */

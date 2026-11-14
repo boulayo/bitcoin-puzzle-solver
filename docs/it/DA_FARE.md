@@ -61,10 +61,14 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | A1 | **Nessuna firma sul file della rete.** La rete è l'impronta delle righe che la definiscono | È come fanno Bitcoin Core e BitTorrent: i parametri stanno nel programma, e chi li cambia è su un'altra rete. Niente chiavi da custodire, cento righe di codice in meno. La fiducia sta nel programma che si scarica dal tuo repository, come per qualsiasi programma |
 | A2 | Nessun server tuo. Un nodo sul NAS, se un giorno lo vorrai, è un partecipante come gli altri | Con Tailscale da solo il nodo è raggiungibile solo dai tuoi dispositivi: per servire la rete gli serve una porta aperta verso Internet |
 | A3 | I nodi si trovano attraverso la tabella di BitTorrent | fatto |
-| A4 | **Chi scarica il programma lo avvia e partecipa:** `pzpeer run --network FILE --payout INDIRIZZO`. Cartella, programmi, porta (28140), apertura sul router, primi contatti e blockchain hanno un valore predefinito | L'apertura della porta è accesa da sola (`--no-portmap` la spegne): senza, quasi nessuno farebbe da custode. L'indirizzo di pagamento resta l'unica cosa da scrivere: è dove va il premio. Quando i parametri del #140 saranno fissati il file sarà dentro il programma, e non servirà nemmeno `--network` |
+| A4 | **Chi scarica il programma lo avvia e partecipa:** `pzpeer run --network FILE`; la prima volta accetta le condizioni e scrive l'indirizzo di pagamento, che resta nella cartella. Cartella, programmi, porta (28140), apertura sul router, primi contatti e blockchain hanno un valore predefinito | L'apertura della porta è accesa da sola (`--no-portmap` la spegne): senza, quasi nessuno farebbe da custode. L'indirizzo di pagamento resta l'unica cosa da scrivere: è dove va il premio. Quando i parametri del #140 saranno fissati il file sarà dentro il programma, e non servirà nemmeno `--network` |
 | A5 | La revisione della firma a due è fatta per la parte che ho potuto fare. Vedi 1.2 | |
 | A6 | Libreria: la firma a due di cb-mpc, di Coinbase (licenza MIT), con due piccole modifiche nostre per Windows | È mantenuta, ha due revisioni esterne (Cure53, 2024) e un premio per chi trova falle. Il suo protocollo (Lindell 2017) è più semplice: una sola delle due parti ha una chiave Paillier, nessuna delle due sceglie parametri che l'altra deve accettare, e non ci sono numeri primi lenti da generare: importazione dei pezzi e firma in meno di un secondo, contro un minuto prima. Usiamo la variante con la prova finale, che non lascia trapelare nulla quando una firma fallisce. Le librerie DKLs23 mature hanno licenze non libere |
 | A7 | Nessun nodo Bitcoin proprio: più server Electrum pubblici, ogni risposta verificata. Chi ha un nodo lo usa con `--rpc` | fatto |
+| A8 | **Quota dell'autore: 10%**, all'indirizzo delle donazioni (`bc1qfw2y5xzvsy6w70rwqfq6n65tahk906678c7tvz`). Due case: 45% a ciascuna. Scritta nel programma per versione delle condizioni, fuori dal file della rete e dall'impronta: nessuno la imposta, e una versione nuova può cambiare l'indirizzo o abbassarla senza una rete nuova. Una coppia paga secondo la più vecchia delle due versioni | fatto. Alzarla in seguito non converrebbe: chi resta alla versione vecchia pagherebbe meno |
+| A9 | Chi trova la chiave da solo: la casa manda subito le monete, 90% al suo indirizzo e 10% all'autore | fatto. Chi ferma o modifica il programma può evitarlo |
+| A10 | Prima partenza: le condizioni sullo schermo da accettare (`--accept-terms` per un servizio), l'indirizzo chiesto e ricordato, una riga delle condizioni a ogni avvio, e nella riga della rete la parte del premio attesa in media | fatto |
+| A11 | Le reti dei puzzle (#140 e successivi) dentro il programma, il file solo per le prove e per un puzzle nuovo | quando B1 e B2 sono fissati, dopo la prova pubblica |
 
 **La transazione parte sulla rete pubblica?** Sì, da sola, appena firmata. Per il #140 non è un rischio: la chiave pubblica è già nota a tutti, e la firma non rivela nulla. È diverso per i puzzle senza chiave pubblica nota (vedi C4).
 
@@ -89,7 +93,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | C1 | Record corto (senza firma su ogni record, un terzo dello spazio): **sì, ma dopo la prima prova** | È un cambio di formato grosso; la prima prova serve a vedere che il resto regge. Va fatto prima del #140 |
 | C2 | Ripubblicazione leggera: sì | da fare insieme a C1, prima del #140 |
 | C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | da fare. Richiede che ogni motore di ricerca di pzsolve (CPU e schede video) riporti le chiavi che servono da prova di lavoro: senza quella prova chiunque potrebbe dichiarare fatti dei blocchi mai cercati |
-| C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare |
+| C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare. Il pool: MARA Slipstream, gratuito e aperto a tutti da agosto 2026, con un'interfaccia per i programmi; MARA trova il 4-6% dei blocchi, quindi circa 3 ore di attesa. Con la quota dell'autore l'invio dovrebbe diventare automatico: da decidere quando si fa C3 (serve HTTPS: il `curl` del sistema o l'OpenSSL di pzsign) |
 
 ### D. Rilascio
 
@@ -228,6 +232,19 @@ La verifica del 14 novembre (quattro revisori: lo scambio dei pezzi, il passo, l
 corretto con un test: con una seconda coincidenza fra le stesse due case e i server Electrum, che nascondono le monete spese nel mempool,
 un partner disonesto poteva farsi dare il pezzo prima del pagamento vero e prendersi il premio. Ora il pagamento conta solo se la seconda
 transazione della coppia è in un blocco, il pezzo parte dopo 6 sue conferme provate, e la catena leggera guarda anche il mempool.
+
+### 3.10 Quota dell'autore e prima partenza (14 novembre)
+
+Fatti A8, A9 e A10 (sopra), con i test: le tre uscite della seconda transazione e le versioni delle condizioni (`t_payout`), la sessione
+intera con il 45% a testa e un saluto con condizioni sconosciute (`t_session`), la prova con tre case su regtest che controlla il 10%
+all'indirizzo dell'autore anche quando una casa trova la chiave da sola.
+
+| | Cosa | Stato |
+|---|---|---|
+| N1 | Se pzsolve cifra la chiave (`--encrypt-pubkey`), la casa non la legge e non manda le monete: lo fa chi la decifra, e la quota è sulla fiducia | Si potrebbe far passare la chiave da pzsolve a pzpeer prima di cifrarla |
+| N2 | Due case con un programma modificato, nella stessa coppia, possono saltare la quota | Inevitabile: nessun controllo a distanza è possibile su un programma che gira a casa d'altri |
+| N3 | La parte attesa del premio, come la stima del tempo, la vede solo una casa che accetta connessioni | Come L2 |
+| N4 | **Da misurare.** Nella prova con tre case (`e2e_net.sh`) le coincidenze fra case diverse sono rare: in 18 tentativi i punti uguali di due case erano da 0 a 3 su circa 40 000, mentre ogni casa trovava la chiave da sola. Per simmetria due incontri su tre dovrebbero essere fra case diverse. Se succede anche su una rete grande, mettere insieme il lavoro rende meno del previsto | Una prova a parte: due pzsolve con lo stesso seme dei salti e chiavi di partenza diverse, contando gli incontri dentro e fra le due |
 
 ### 3.5 Librerie
 

@@ -673,9 +673,9 @@ static void run_case(const tcase *tc, const char *bin)
            (unsigned long long)pay[S_home], (unsigned long long)at_puzzle, (unsigned long long)coin_left[F_home], (unsigned long long)coin_left[S_home]);
     if (tc->expect == PAYOUT) {
         CHECK(h[0].res == SESSION_PAID && h[1].res == SESSION_PAID);
-        CHECK(at_puzzle == 0 && pay[S_home] > 49900000);            /* half of 1 BTC less the two tiny coins and two fees (on a regtest
-                                                                     * node with a history, at twice its own estimate) */
-        /* half each of the prize and of F's tiny coin, which came from it: no tiny coin is left (the odd satoshi goes to S) */
+        /* 45% each of 1 BTC less two fees (on a regtest node with a history, at twice its own estimate), 10% to the author */
+        CHECK(at_puzzle == 0 && pay[S_home] > 44900000 && pay[S_home] < 45000000);
+        /* half each of the rest of the prize and of F's tiny coin, which came from it: no tiny coin is left (the odd satoshi goes to S) */
         CHECK(pay[S_home] >= pay[F_home] && pay[S_home] - pay[F_home] <= 1 && !coin_left[F_home] && !coin_left[S_home]);
     } else if (tc->expect == CANCEL) {
         CHECK(h[F_home].res == SESSION_CANCELLED && h[S_home].res == SESSION_FAILED);
@@ -707,8 +707,8 @@ static void run_case(const tcase *tc, const char *bin)
 }
 
 /* A partner that copied the x of home 0's record into a record of its own type, under its own identity, and cannot prove it: home 0 runs
- * no pzsign for it (the one it would run leaves a mark). */
-static void run_copied(const char *bin)
+ * no pzsign for it (the one it would run leaves a mark). With terms 0 its hello names no version of the terms of the payout. */
+static void run_copied(const char *bin, unsigned terms)
 {
     static record_net net;
     uint8_t base[32] = {0}, k[32] = {0}, p33[33], d0[32], c[33];
@@ -752,18 +752,18 @@ static void run_copied(const char *bin)
     pthread_t th;
     pthread_create(&th, NULL, run_home, &h);
     /* the thief: its hello, then a proof it could not make */
-    uint8_t m[1 + 2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 1 + BTC_P2PKH_LEN] = {S_HELLO}, proof[1 + 64] = {S_PROOF};
+    uint8_t m[1 + 2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 2 + BTC_P2PKH_LEN] = {S_HELLO}, proof[1 + 64] = {S_PROOF};
     record_encode(&theirs, m + 1), record_encode(&mine, m + 1 + RECORD_LEN);
     m[1 + 2 * RECORD_LEN + 32 + 6] = 0x0b, m[1 + 2 * RECORD_LEN + 32 + 7] = 0xb8;   /* 3000 */
     p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 40);
-    m[1 + 2 * RECORD_LEN + 40 + BTC_P2PKH_LEN] = BTC_P2PKH_LEN;
-    p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 41 + BTC_P2PKH_LEN);
+    m[1 + 2 * RECORD_LEN + 40 + BTC_P2PKH_LEN] = (uint8_t)terms, m[1 + 2 * RECORD_LEN + 41 + BTC_P2PKH_LEN] = BTC_P2PKH_LEN;
+    p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 42 + BTC_P2PKH_LEN);
     hashed("not a proof", proof + 1), hashed("really not", proof + 33);
     CHECK(q_send(&e[1], m, sizeof m) && q_send(&e[1], proof, sizeof proof));
     pthread_join(th, NULL);
     q_drain(&q[0]), q_drain(&q[1]);
-    printf("  copied x: %s (%s)\n", h.res == SESSION_FAILED ? "failed" : "not failed", h.why);
-    CHECK(h.res == SESSION_FAILED && strstr(h.why, "did not prove") && !proved);
+    printf("  %s: %s (%s)\n", terms ? "copied x" : "no terms of the payout", h.res == SESSION_FAILED ? "failed" : "not failed", h.why);
+    CHECK(h.res == SESSION_FAILED && strstr(h.why, terms ? "did not prove" : "does not know") && !proved);
     CHECK(access(mark, F_OK) != 0);
 }
 
@@ -845,7 +845,8 @@ int main(void)
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++)
         if (!regtest || (!cases[i].taken && !cases[i].other)) run_case(&cases[i], bin);   /* a node cannot be changed behind the test's back */
-    run_copied(marker);
+    run_copied(marker, PAYOUT_TERMS);
+    run_copied(marker, 0);                                      /* a hello whose terms no version knows */
     pthread_mutex_lock(&chain.mu);
     chain.stop = true;
     pthread_mutex_unlock(&chain.mu);
