@@ -151,6 +151,8 @@ void dht_seen(dht *d, const dht_contact *c);
 /* The contacts of the routing table, at most max; their number. dht_count: how many there are. */
 int dht_contacts(dht *d, dht_contact *out, int max);
 int dht_count(dht *d);
+/* An estimate of the nodes that listen (the custodians), from one lookup of a random point: about a fifth of it off, so worth averaging. */
+double dht_nodes(dht *d);
 /* What the node holds: the records of the network with x, the number of them, the alert pairs of an owner in its mailbox. */
 int dht_local_records(dht *d, const uint8_t x[32], record *out, int max);
 uint64_t dht_local_count(dht *d);

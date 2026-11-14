@@ -55,12 +55,18 @@ Resta un problema: nell'ultimo scambio uno dei due riceve la firma completa per 
 1. **Primo passaggio.** La coppia firma una transazione che rimanda il premio sullo stesso indirizzo del puzzle e dà a ciascuno una moneta minuscola (10 000 satoshi o più, secondo la commissione) su una chiave solo sua. Trattenere questa firma non serve a niente.
 2. **Secondo passaggio**, dopo una conferma. La transazione metà e metà spende il premio e anche la moneta minuscola di uno dei due, che chiamo F. L'altro, S, riceve la firma completa per primo e la spedisce.
 3. **Se dopo 3 blocchi il premio non si è mosso**, F spende la sua moneta minuscola. La transazione che S teneva da parte non vale più.
+4. **Dopo 6 conferme del pagamento** le due case si scambiano i pezzi, se all'indirizzo non è rimasto niente di valore: ognuna controlla il
+   pezzo dell'altra, li somma e ha la chiave. La salva in `FOUND.txt` e la mostra sullo schermo, cifrata se pzsolve cifra la sua. Una
+   delle due dà il pezzo per prima, e l'altra può tenersi il suo: guadagna solo ciò che la chiave apre ancora, cioè le monete dello stesso
+   indirizzo sulle catene nate da Bitcoin (al #140 circa 300 euro, contro 14 BTC) e ciò che vi arriverà in futuro.
 
 Una firma trattenuta vale quindi al massimo mezz'ora.
 
 ### 2.4 Cosa vede chi partecipa
 
-Avvia `pzpeer run` con l'indirizzo di pagamento. Il programma crea il seme di casa (una volta), avvia pzsolve, pubblica i punti, e se arriva una coincidenza firma e paga. Alla fine sullo schermo compare l'esito.
+Avvia `pzpeer run` con l'indirizzo di pagamento. Il programma crea il seme di casa (una volta), avvia pzsolve, pubblica i punti, e se arriva una coincidenza firma e paga. Sullo schermo una riga breve per ogni passaggio che conta: la coincidenza, le transazioni mandate e confermate, il pagamento con l'importo, lo scambio dei pezzi e la chiave.
+
+Ogni 10 minuti una riga della rete: quanti nodi ha, quanti punti in tutto, quanti salti al secondo e la parte di questa casa, ed entro quanto tempo la chiave arriva con metà delle probabilità e con 9 su 10. La stima viene da ciò che la casa custodisce per gli altri: ogni punto sta sui 5 nodi più vicini alla sua chiave, quindi la rete ne ha circa "punti custoditi × nodi / 5", e i nodi si stimano dalle distanze dei più vicini a un punto a caso. Sbaglia di circa un quinto; la vede solo una casa che accetta connessioni, perché solo quella custodisce.
 
 ---
 
@@ -120,7 +126,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
 | prova di una rete intera su un Windows vero e su un Mac | sulle macchine Windows e macOS della CI passano i test di pzpeer (su Windows anche la firma a due con `pzsign.exe`); la prova completa con tre case è fatta su Linux e, per i programmi Windows, con l'emulatore Wine |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
-| sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia |
+| sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia; dopo un pagamento lo scambio dei pezzi invece riprende (`paid` nella cartella) |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
 | ripubblicazione che regge a campagna avanzata | traffico troppo alto verso la fine |
 | revisione esterna della libreria di firma | la revisione dell'uso che ne facciamo è fatta; quella dell'interno no, vedi ipotesi I4 |

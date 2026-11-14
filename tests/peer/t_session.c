@@ -7,6 +7,8 @@
  * and gets nothing for it, or sends garbage after it, which takes nothing from S; a fee rate
  * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzsign that
  * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
+ * After a payout the pieces: both get the key; a partner that keeps its piece, or gives a wrong one, which leaves only this side without
+ * it, and a later session that gives it; coins left at the puzzle address, which hold the exchange.
  * Needs PZSIGN; without it it says it was skipped. */
 #include "peertest.h"
 #include "chain_rpc.h"
@@ -136,6 +138,7 @@ typedef struct {
     session_chain in;
     int lost, slow_ms;                 /* slow_ms: the scan of the coins takes this long */
     bool scan_fails, frozen;
+    bool ghost;                        /* once the puzzle address is empty, it shows a coin of 1 BTC (sent there after the payout) */
     uint64_t at;
 } flaky;
 
@@ -143,7 +146,9 @@ static int fl_coins(void *c, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out,
 {
     flaky *f = c;
     if (f->slow_ms) usleep((useconds_t)f->slow_ms * 1000);
-    return f->scan_fails ? -1 : f->in.coins(f->in.ctx, spk, out, max);
+    const int n = f->scan_fails ? -1 : f->in.coins(f->in.ctx, spk, out, max);
+    if (n == 0 && f->ghost && max > 0) return memset(&out[0], 0x77, sizeof out[0]), out[0].value = 100000000, 1;
+    return n;
 }
 static bool fl_broadcast(void *c, const btc_tx *tx) { flaky *f = c; return f->in.broadcast(f->in.ctx, tx); }
 static int fl_conf(void *c, const uint8_t txid[32], uint32_t vout)
@@ -269,10 +274,13 @@ typedef struct {
 /* what an end does to its own messages of the second signing (the counts of the first tell which one is the last): sends it, drops it (and
  * its S_SIGNED), drops it and keeps the channel alive for ever, aborts instead, damages it, or sends it and then garbage and an abort */
 enum { LAST_SENT, LAST_DROPPED, LAST_PUMP, LAST_ABORT, LAST_DAMAGED, LAST_JUNK };
+/* and to its piece after the payout: gives it, keeps it, or gives a wrong one */
+enum { PIECE_GIVEN, PIECE_KEPT, PIECE_WRONG };
 
 typedef struct {
     queue *in, *out;
     int last_b;                        /* LAST_*: the last signing message of the second transaction */
+    int piece;                         /* PIECE_* */
     int plans, msgs_a, msgs, alives;
 } end;
 
@@ -288,6 +296,12 @@ static bool q_send(void *c, const uint8_t *m, size_t len)
 {
     end *e = c;
     if (len >= 1 && m[0] == S_ALIVE) e->alives++;
+    if (len == 33 && m[0] == S_PIECE && e->piece != PIECE_GIVEN) {
+        if (e->piece == PIECE_KEPT) return true;
+        uint8_t bad[33];
+        memcpy(bad, m, 33), bad[32] ^= 1;
+        return q_put(e->out, bad, 33), true;
+    }
     if (len >= 1 && (m[0] == S_PLAN || m[0] == S_SIGNER)) q_put(e->out, (const uint8_t[]){S_ALIVE}, 1);   /* the reader must skip it */
     if (e->last_b != LAST_SENT && len >= 1) {
         if (m[0] == S_PLAN) {
@@ -432,6 +446,10 @@ typedef struct {
     int slow_ms, timeout_ms;          /* the scan of home 0 takes slow_ms; the wait for a message (0: 20 s) */
     bool silent0;                     /* the pzsign of home 0 sends nothing: home 1, which never heard it, counts no failure */
     int block_ms;
+    bool pieces;                      /* after the payout, the exchange of the pieces */
+    int piece1;                       /* PIECE_*: what home 1 does to its piece */
+    bool ghost;                       /* a coin comes to the puzzle address after the payout: no exchange */
+    bool again;                       /* then a session of the pair that only exchanges the pieces, both giving theirs */
 } tcase;
 
 /* a puzzle, its coin on the chain, two homes whose records meet on the same point; then the session of both */
@@ -478,6 +496,8 @@ static void run_case(const tcase *tc, const char *bin)
     btc_rpc rpcs[2];
     chain_rpc crpc[2];
     session_limit lim[2];
+    session_paid paid[2];
+    memset(paid, 0, sizeof paid);
     bool proved[2] = {false, false};
     char limpath[2][96];
     uint8_t xo[2][32];
@@ -521,7 +541,8 @@ static void run_case(const tcase *tc, const char *bin)
             crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = tc->fee ? tc->fee : i && tc->fee_far ? tc->fee_far : g_fee[i]};
             chn[i].in = chain_rpc_iface(&crpc[i]);
         } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin};
-        chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0;
+        chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0, chn[i].ghost = tc->ghost;
+        if (tc->pieces) g->paid = &paid[i], g->reveal_conf = 2;
         chn[i].slow_ms = i ? 0 : tc->slow_ms;
         g->block_ms = tc->block_ms;
         if (tc->scan_fails) {                                   /* the prize, as a line of the network file gives it */
@@ -555,6 +576,7 @@ static void run_case(const tcase *tc, const char *bin)
     if (tc->fee_far) g_fee[1] = tc->fee_far;
     h[S_home].cfg.withhold = tc->s_withholds;
     e[S_home].last_b = tc->s_last, e[F_home].last_b = tc->f_last;
+    e[1].piece = tc->piece1;
     pthread_t th[2];
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
@@ -562,6 +584,25 @@ static void run_case(const tcase *tc, const char *bin)
     q_drain(&q[0]), q_drain(&q[1]);
     static const char *const RES[] = {"paid", "cancelled", "failed"};
     printf("  %s: F %s (%s), S %s (%s)\n", tc->name, RES[h[F_home].res], h[F_home].why, RES[h[S_home].res], h[S_home].why);
+    if (tc->pieces) {
+        /* home 1 has home 0's piece whatever it does with its own; home 0 has the key only when home 1 gave the right piece */
+        const bool want[2] = {!tc->ghost && tc->piece1 == PIECE_GIVEN, !tc->ghost};
+        for (int i = 0; i < 2; i++) {
+            CHECK(paid[i].paid_at > 0 && paid[i].have_key == want[i]);
+            if (want[i]) CHECK(!memcmp(paid[i].key, k, 32));
+        }
+        if (tc->piece1 == PIECE_KEPT) CHECK(strstr(h[0].why, "no piece from the partner") != NULL);
+        if (tc->piece1 == PIECE_WRONG) CHECK(strstr(h[0].why, "not the right one") != NULL);
+        if (tc->ghost) CHECK(strstr(h[0].why, "not settled") && strstr(h[1].why, "not settled"));
+    }
+    if (tc->again) {                                            /* a later session of the pair: no payout, only the pieces */
+        e[1].piece = PIECE_GIVEN;
+        for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
+        for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
+        q_drain(&q[0]), q_drain(&q[1]);
+        printf("  %s, again: %s (%s), %s (%s)\n", tc->name, RES[h[0].res], h[0].why, RES[h[1].res], h[1].why);
+        for (int i = 0; i < 2; i++) CHECK(h[i].res == SESSION_PAID && paid[i].have_key && !memcmp(paid[i].key, k, 32));
+    }
     /* what the chain holds now */
     uint64_t pay[2], at_puzzle = balance(puzzle_spk);
     uint64_t coin_left[2];                                                          /* the satoshis of its tiny coin still unspent */
@@ -731,6 +772,13 @@ int main(void)
         {.name = "the scan fails", .expect = PAYOUT, .scan_fails = true},
         /* the chain stops after the first transaction: the wait for its block ends (before, never) */
         {.name = "the chain stops", .expect = FIRST, .frozen = true, .block_ms = 10, .why = "not confirmed"},
+        /* after the payout, the pieces: both have the key */
+        {.name = "the pieces", .expect = PAYOUT, .pieces = true},
+        /* a partner that keeps its piece, or gives a wrong one: this side has no key, and a later session gives it */
+        {.name = "the partner keeps its piece", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_KEPT, .again = true},
+        {.name = "the partner gives a wrong piece", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_WRONG},
+        /* coins come to the puzzle address after the payout: the key would open them, so no piece is given */
+        {.name = "coins at the address after the payout", .expect = PAYOUT, .pieces = true, .ghost = true, .block_ms = 400},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) run_case(&cases[i], bin);
     run_copied(marker);

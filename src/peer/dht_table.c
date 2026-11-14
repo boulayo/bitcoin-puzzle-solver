@@ -4,6 +4,7 @@
  * contact and what the table learns from them, NODES, the iterative lookups, the bootstrap, the refresh of the buckets, peers.txt. */
 #include "dht_priv.h"
 #include "btc.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -620,6 +621,27 @@ void dht_refresh(dht *d) { refresh(d, true); }
 void dht_seen(dht *d, const dht_contact *c) { rt_seen(d, c); }
 
 int dht_count(dht *d) { return rt_count(d); }
+
+/* The j-th closest of N nodes spread evenly over the IDs lies at about j / (N + 1) of their space from any point: a least-squares fit of
+ * the distances of the DHT_K nodes closest to a random point gives N (a lookup that finds fewer knows them all). */
+double dht_nodes(dht *d)
+{
+    uint8_t t[32];
+    dht_contact c[DHT_K];
+    const unsigned zero = d->cfg.id_bits < 64 ? d->cfg.id_bits : 64;
+    if (!sys_random(t, sizeof t)) return 0;
+    for (unsigned b = 0; b < zero; b++) t[b / 8] &= (uint8_t)~(0x80 >> (b % 8));   /* in the space of the IDs */
+    const int n = dht_lookup(d, t, c, DHT_K);
+    if (n < DHT_K) return n;
+    long double sjj = 0, sjx = 0;
+    for (int j = 0; j < n; j++) {
+        long double x = 0;                                     /* the distance, as a share of the space of the IDs */
+        for (int b = 0; b < 16; b++) x = x * 256 + (c[j].id[b] ^ t[b]);
+        x = ldexpl(x, (int)zero - 128);
+        sjj += (long double)(j + 1) * (j + 1), sjx += (j + 1) * x;
+    }
+    return sjx > 0 ? (double)(sjj / sjx) - 1 : n;
+}
 
 int dht_contacts(dht *d, dht_contact *out, int max)
 {

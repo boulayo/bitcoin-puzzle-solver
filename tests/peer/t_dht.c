@@ -326,6 +326,21 @@ static void test_records(void)
     CHECK(by_count[5] + by_count[4] == RECS);
 }
 
+/* The estimate of the network a home prints (home.c): the nodes that listen, from the distances of a lookup, and the records of the network,
+ * from those a custodian holds. Each lookup is a fifth off: the mean of twenty is checked, against the 30 nodes and the 2000 records. */
+static void test_estimate(void)
+{
+    double nodes_sum = 0, recs_sum = 0;
+    for (int i = 0; i < 20; i++) {
+        const double est = dht_nodes(nodes[(i * 7) % N].d);
+        nodes_sum += est;
+        recs_sum += (double)dht_local_count(nodes[(i * 7) % N].d) * est / DHT_KSTORE;
+    }
+    printf("t_dht: about %.1f nodes (%d), about %.0f records (%d)\n", nodes_sum / 20, N, recs_sum / 20, RECS);
+    CHECK(nodes_sum / 20 > 0.75 * N && nodes_sum / 20 < 1.33 * N);
+    CHECK(recs_sum / 20 > 0.7 * RECS && recs_sum / 20 < 1.43 * RECS);
+}
+
 /* the 5 mailboxes of an owner that hold the pair */
 static int in_mailboxes(const uint8_t owner[32], const record *a, const record *b)
 {
@@ -1374,6 +1389,7 @@ int main(void)
     printf("t_dht: lookups in %.1f s\n", (double)(ms() - t0) / 1000);
     t0 = ms();
     test_records();
+    test_estimate();
     printf("t_dht: %d records published by %d owners in %.1f s\n", RECS, OWNERS, (double)(ms() - t0) / 1000);
     test_coincidences();
     test_malformed();

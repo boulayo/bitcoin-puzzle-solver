@@ -3,8 +3,9 @@
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # The whole network on one machine, on a bitcoind in regtest: a custodian node and three homes (pzpeer run, each with its pzsolve), a
 # puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, half each,
-# read back from the node. With three equal homes two coincidences in three are between homes; a home that finds the key on its own
-# first (its own walkers meet too) starts a new try with a new puzzle, up to 6.
+# read back from the node, and then in the key of the puzzle in FOUND.txt of both, once they gave each other their pieces. With three
+# equal homes two coincidences in three are between homes; a home that finds the key on its own first (its own walkers meet too) starts
+# a new try with a new puzzle, up to 6.
 # The two homes get the same half, of the prize and of F's tiny coin (the odd satoshi to S). With several coincidences at once more
 # than one pair may get its first transaction confirmed, each on the prize the one before sent back to the puzzle address: the last
 # pair is paid, and the prize is smaller by the fee and the tiny coin of each first transaction (about 15 000 satoshis at 20 sat/vB).
@@ -87,7 +88,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     done
     wait "${PID[a]}" "${PID[b]}" "${PID[c]}"
     [ -n "$NPID" ] && kill $NPID 2>/dev/null
-    echo "== try $try"; for h in a b c; do grep -h -E "rendezvous|session|pzsolve ended|home stopped" "$T/$h.log" | head -12 | sed "s/^/   $h /"; done
+    echo "== try $try"; for h in a b c; do grep -h -E "rendezvous|session|pzsolve|KEY|home stopped" "$T/$h.log" | head -24 | sed "s/^/   $h /"; done
     PAID=$(grep -l "PAID" "$T"/[abc].log | sed 's|.*/\(.\)\.log|\1|' | tr '\n' ' ')
     if [ "$(echo $PAID | wc -w)" -ge 2 ]; then
         set -- $PAID
@@ -95,9 +96,17 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
         G1=$(rpc wallet getreceivedbyaddress "[\"${PAY[$1]}\", 1]"); G2=$(rpc wallet getreceivedbyaddress "[\"${PAY[$2]}\", 1]")
         LEFT=$(rpc scantxoutset "[\"start\", [\"addr($PADDR)\"]]" | python3 -c 'import json,sys; print(json.load(sys.stdin)["total_amount"])')
         echo "   received: home $1 $G1 BTC, home $2 $G2 BTC; left on the puzzle address $LEFT BTC"
-        python3 -c "import sys; a,b,l=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.499 and abs(a-b)<2e-8 and a+b<1 and l==0 else 1)" "$G1" "$G2" "$LEFT" &&
-            { echo "E2E NET PASSED (try $try)"; exit 0; }
-        echo "E2E NET FAILED: the amounts are not half each"; exit 1
+        python3 -c "import sys; a,b,l=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.499 and abs(a-b)<2e-8 and a+b<1 and l==0 else 1)" "$G1" "$G2" "$LEFT" ||
+            { echo "E2E NET FAILED: the amounts are not half each"; exit 1; }
+        # after the confirmations of the payout the two homes give each other their pieces: each has the key, in FOUND.txt
+        for h in $1 $2; do
+            KEY=$(awk '/^private key hex:/{print $4}' "$T/$h/FOUND.txt" 2>/dev/null)
+            python3 -c "import sys; sys.exit(0 if sys.argv[1] and int(sys.argv[1], 16) == int(sys.argv[2], 16) else 1)" "${KEY:-}" "$K" ||
+                { echo "E2E NET FAILED: home $h has not the key in FOUND.txt (logs in $T)"; trap - EXIT; exit 1; }
+            grep -q "THE KEY OF THE PUZZLE: $KEY" "$T/$h.log" || { echo "E2E NET FAILED: home $h did not show the key"; trap - EXIT; exit 1; }
+        done
+        echo "   the key, in FOUND.txt of both homes: $K"
+        echo "E2E NET PASSED (try $try)"; exit 0
     fi
     grep -q "found the key on its own" "$T"/[abc].log && { echo "   a home found the key on its own: a new try"; continue; }
     echo "E2E NET FAILED: no payout and no key (logs in $T)"; trap - EXIT; exit 1

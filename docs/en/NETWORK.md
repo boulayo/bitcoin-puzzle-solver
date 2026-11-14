@@ -398,9 +398,9 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 Between the two homes, over a Noise channel between their identities (`src/peer/session.c`, run in a thread with the channel and the
 chain given as interfaces). Party 0 is the owner with the smaller identity; `eid = SHA256("pznet1/eid" || F || record_0 || record_1)`;
 F, the party whose tiny coin goes into the second transaction, is the last bit of `eid`, S the other. Every step is a message both sides
-send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`; an `S_ABORT` with its
-reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so that NATs and
-relays do not cut the channel as idle, and the reader skips it):
+send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`, and 24, `S_PIECE`; an
+`S_ABORT` with its reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so
+that NATs and relays do not cut the channel as idle, and the reader skips it):
 
 1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
@@ -437,6 +437,15 @@ relays do not cut the channel as idle, and the reader skips it):
    again. F also sends the second transaction itself when it got the whole signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
    (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the session ends instead of waiting for
    ever, and F, then, tries its cancel.
+7. `S_PIECE`, once the payout is settled: the secret piece of the side, 32 bytes. Settled means 6 confirmations of the block of the spend
+   (counted from the height at which the session saw the prize spent, at or above that block), output 0 of the first transaction still
+   spent in a block (a reorganization that took the payout back shows it unspent, or the coins of the puzzle again), and less than
+   100 000 satoshis at the puzzle address: the key protects nothing more. Each side checks the piece it gets against the public piece of
+   the partner's record, adds the two, and checks that the sum is the key of the puzzle. Someone gives first, and a partner can keep its
+   own piece: all it wins is what the key still opens, the coins of the address on the chains that split from Bitcoin in 2017 and after
+   (the prizes of 2015 and of July 2017 are there too: 1.40 BCH and 1.40 BSV at #140, about 300 euros in November 2026, against 14 BTC)
+   and whatever comes to the address later. Six confirmations: a reorganization of more blocks has not happened since 2013, and the
+   partner would have to make one to take the prize back; the exchange waits (6 + 6) blocks of 20 minutes at most.
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
@@ -456,6 +465,27 @@ one own point the home tries no more there. Without it a partner could make the 
 before the second transaction, S keeping either signature back, an old copy of the first transaction sent before the new one; each try
 cost the prize a fee and a tiny coin. Not done yet: the count published in the network
 and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
+
+**After the payout** (`src/peer/home.c`). The pair, the first transaction and the height go into `HOME/paid`, a line each, so that the
+pieces are still exchanged after a restart: a session of a pair in that file only exchanges them (hello, proofs, `S_PIECE`). It is tried
+again every 10 minutes for a day, until the key is known. The key goes into `HOME/FOUND.txt` and on the terminal, as pzsolve does; when the
+campaign of pzsolve encrypts its key (`--encrypt-pubkey` or `--encrypt-password` after `--`, the public key in its `campaign.conf`), the
+file and the terminal carry only the encrypted line, which `pzsolve decrypt-key` opens. With the prize paid pzsolve has nothing more to
+search: the home stops it, and does not start it again at the next start; it stays on, a custodian, and answers a partner that still
+lacks this home's piece.
+
+**What the terminal shows.** One line with the time for each step that matters: the coincidence and its partner, the proofs, each
+transaction sent (its txid) and confirmed, the payout with the amount, F's wait and cancel, the exchange of the pieces and the key, and the
+end of the session with its reason. Every 10 minutes a line of the network: its nodes, the points in all, its jumps a second and the share
+of this home, and the time within which the key comes with half the chance and with 9 in 10. The network is estimated from what this home
+keeps as a custodian, so only a home that listens shows it: a record goes to the 5 nodes closest to its key, so the network holds about
+`held × nodes / 5` records (`held` those this home keeps), each worth `2^dpbits` jumps on average, and its rate is the growth of `held`
+over the last hour. The nodes come from the distances of the 20 closest to a random point (`dht_nodes`: the j-th of N nodes is at about
+j / (N + 1) of the space of the IDs), a fifth off for one lookup, the mean of the last six used. Then the model of pzsolve: the key comes
+after n jumps with `P = 1 − exp(−(n/c)^2)`, `c = 1.06 / 0.8862 × √W`, and given the work done (`done`) half the chance is within
+`√(done² + c² ln 2) − done` more jumps, 9 in 10 within `√(done² + c² ln 10) − done`. `t_dht` checks the estimate on 30 nodes and 2000
+records (about 32 and 2120). It saturates when the custodians are full (`--store-gb`), and it trusts nothing a node says about itself: a
+point costs the work of a point, real or not.
 
 **The daemon** (`src/peer/home.c`). A session starts on the alert of the table (both proofs checked there) or on a hello that names the
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
@@ -478,7 +508,8 @@ address that fails, where the prize of the network file is paid; a chain that st
 The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
-for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are);
+for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are),
+but for a payout (`HOME/paid`);
 two sessions of one puzzle at once build their first transactions from the same coins, and the one that loses waits its 144 blocks;
 "paid" means that the prize output was spent in a block, by the second transaction or by anything else (another session of the same
 puzzle); on a node of one's own, a reorganization that takes the first transaction back to the mempool while the second waits there too
@@ -840,6 +871,10 @@ miss with byte 12 of the target's too: one key in 2^40, about 16 in a block of 2
 and is valid with a good signature, increasing offsets inside the block, every key a proof key, and at least a quarter of the
 average number of them (an honest scan has fewer once in a thousand blocks, and that block is done again). Checking a claim costs
 some tens of hashes. A claim shows that most of the block was tried; it cannot show that no key was skipped.
+
+**The time a linear search needs**, once it runs on the network: the claims are records of the table like the points of the kangaroo,
+so a home estimates the blocks claimed in the whole network the same way (claims held × nodes / 5), and their rate; the key is in one of
+the blocks not yet tried, evenly, so the time to half the chance is half the blocks left over that rate, and to certainty all of them.
 
 **To come.** The network file of a linear search (an address in place of the public key, the size of the blocks); the claims kept
 in the table like the records of the kangaroo; the home that picks a block nobody claimed, runs `pzsolve hunt -r BLOCK --near`,

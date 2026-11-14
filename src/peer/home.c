@@ -20,8 +20,11 @@
 #include "session.h"
 #include "sys.h"
 #include "netfile.h"
+#include <pzcore/address.h>
+#include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <pzcore/seed.h>
+#include <math.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -36,6 +39,8 @@
 #define PAYOUTS_MAX 5              /* payouts of one own point that reached the signing of their first transaction and did not pay */
 #define RETRY_S 600                /* a kept pair whose session did not pay starts again after this, */
 #define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
+#define STATUS_S 600               /* the status line of the network, every 10 minutes */
+#define C_MEAN 1.06                /* the mean cost of the kangaroo in units of sqrt(W): KANG_C_MEAN of pzsolve (src/kangaroo.h) */
 
 /* the own points: x prefix -> index in dp.bin (the distance is read back from the file when it is needed: 16 bytes a point in memory) */
 typedef struct {
@@ -50,6 +55,7 @@ typedef struct session_slot {
     bool waiting;                   /* its session has no channel yet: a hello of the partner is taken */
     int64_t retry_at;               /* when its session starts again (0: never), the seconds of mono_s */
     int tries;
+    session_paid paid;              /* its payout, once its prize moved, and the key once the pieces are exchanged */
     uint8_t eid[32], partner[32];
     record mine, theirs;
     net_conn *conn;                 /* an incoming channel handed by on_session */
@@ -83,7 +89,12 @@ typedef struct {
     session_limit limit;            /* the failed signings, counted in the home folder */
     payout_coin prizes[SESSION_PRIZES_MAX];   /* the prize= lines of the network file */
     int nprizes;
-    char limitpath[1200];
+    char limitpath[1200], paidpath[1200], foundpath[1200];
+    bool prize_paid;                /* a session of this home paid the prize: pzsolve has nothing more to search */
+    struct { int64_t t; uint64_t held, own; } smp[7];   /* the status lines of the last hour: when, records held, own points */
+    int nsmp;
+    double nodes[6];                /* the last estimates of the nodes that listen (dht_nodes) */
+    int nnodes;
 } home;
 
 static int64_t mono_s(void) { return sys_now_ms() / 1000; }
@@ -91,20 +102,35 @@ static int64_t mono_s(void) { return sys_now_ms() / 1000; }
 static volatile sig_atomic_t g_stop;                            /* 1: stop; 2 (a second signal): do not wait for the sessions */
 static void on_signal(int sig) { (void)sig, g_stop = g_stop < 2 ? g_stop + 1 : 2; }
 
-static void say(const home *h, const char *fmt, ...)
+/* a line for the terminal, with the time; secret: not into the debug log */
+static void vsay(bool secret, const char *fmt, va_list ap)
 {
-    va_list ap;
     char line[600];
-    va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
     time_t t = time(NULL);
     struct tm tm;
     localtime_r(&t, &tm);
-    dbg("home %s", line);
+    if (!secret) dbg("home %s", line);
     fprintf(stdout, "[%02d:%02d:%02d] %s\n", tm.tm_hour, tm.tm_min, tm.tm_sec, line);
     fflush(stdout);
+    pz_secure_zero(line, sizeof line);
+}
+
+static void say(const home *h, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsay(false, fmt, ap);
+    va_end(ap);
     (void)h;
+}
+
+static void say_secret(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsay(true, fmt, ap);
+    va_end(ap);
 }
 
 /* ---- files of the home ---- */
@@ -178,6 +204,133 @@ static bool own_distance(void *user, const uint8_t x[32], int t, uint8_t d[32])
     return ok;
 }
 
+/* ---- the payouts and the key ---- */
+
+/* HOME/paid: a line for every pair whose prize this home saw paid, "<eid> <first txid> <height> <record mine> <record theirs>" (hex), so that
+ * after a restart the pieces are still exchanged; written through a new file that replaces the old one (mu held) */
+static void paid_save(home *h)
+{
+    char tmp[1300], a[65], b[65], r0[2 * RECORD_LEN + 1], r1[2 * RECORD_LEN + 1];
+    snprintf(tmp, sizeof tmp, "%s.tmp", h->paidpath);
+    (void)remove(tmp);
+    const int fd = sys_create_secret(tmp);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
+    bool ok = f != NULL;
+    for (int i = 0; ok && i < MAX_SESSIONS; i++) {
+        const session_slot *s = &h->s[i];
+        uint8_t m[RECORD_LEN], t[RECORD_LEN];
+        if (!s->used || !s->paid.paid_at) continue;
+        record_encode(&s->mine, m), record_encode(&s->theirs, t);
+        btc_hex(s->eid, 32, a), btc_hex(s->paid.first, 32, b), btc_hex(m, RECORD_LEN, r0), btc_hex(t, RECORD_LEN, r1);
+        ok = fprintf(f, "%s %s %llu %s %s\n", a, b, (unsigned long long)s->paid.paid_at, r0, r1) > 0;
+    }
+    ok = ok && fflush(f) == 0 && sys_sync(fileno(f));
+    if (f) ok = fclose(f) == 0 && ok;
+    else if (fd >= 0) close(fd);
+    if (!ok || !sys_replace(tmp, h->paidpath)) remove(tmp), say(h, "cannot write %s: after a restart the pieces would not be exchanged", h->paidpath);
+}
+
+/* The pairs of HOME/paid back in their slots: they try the exchange of the pieces again soon, unless the key is in FOUND.txt already (then
+ * they only answer the partner, which may still lack this home's piece). */
+static void paid_load(home *h)
+{
+    FILE *f = fopen(h->paidpath, "r");
+    char a[80], b[80], r0[2 * RECORD_LEN + 8], r1[2 * RECORD_LEN + 8];
+    unsigned long long at;
+    const bool known = access(h->foundpath, F_OK) == 0;
+    int n = 0;
+    while (f && n < MAX_SESSIONS && fscanf(f, "%79s %79s %llu %283s %283s", a, b, &at, r0, r1) == 5) {
+        uint8_t m[RECORD_LEN], t[RECORD_LEN], eid[32];
+        record pair[2];
+        session_slot *s = &h->s[n];
+        if (strlen(a) != 64 || strlen(b) != 64 || strlen(r0) != 2 * RECORD_LEN || strlen(r1) != 2 * RECORD_LEN || !at ||
+            !btc_unhex(a, 64, eid) || !btc_unhex(b, 64, s->paid.first) || !btc_unhex(r0, 2 * RECORD_LEN, m) || !btc_unhex(r1, 2 * RECORD_LEN, t) ||
+            !record_decode(m, &s->mine) || !record_decode(t, &s->theirs) || !pieces_order(&s->mine, &s->theirs, pair))
+            continue;
+        pieces_eid(&h->net, pair, s->eid);
+        if (memcmp(s->eid, eid, 32) || memcmp(s->mine.owner, h->id.xonly, 32)) continue;   /* of another network, or another home */
+        memcpy(s->partner, s->theirs.owner, 32);
+        s->used = s->alerted = s->proved = true;
+        s->paid.paid_at = at, s->paid.have_key = known;
+        s->retry_at = known ? 0 : mono_s() + 60;               /* once dp.bin is read back: the distance of the own point comes from it */
+        n++;
+    }
+    if (f) fclose(f);
+    h->prize_paid = n > 0;
+}
+
+/* The key of the puzzle, from the pieces: into HOME/FOUND.txt and on the terminal, encrypted when the campaign of pzsolve encrypts its key
+ * (--encrypt-pubkey or --encrypt-password given to pzsolve after --: the public key is in its campaign.conf). False when it could not be
+ * encrypted: then it is shown nowhere, and the pieces are exchanged again later. */
+static bool found_key(home *h, const uint8_t key[32])
+{
+    char conf[1300], hex[65], wif[PZ_WIF_BUF] = "", addr[64] = "", pub[67], sealed[PZ_SEAL_TEXT_BUF] = "", id[9] = "";
+    char buf[2048], tmp[1300], date[40];
+    snprintf(conf, sizeof conf, "%s/campaigns/net-%s/campaign.conf", h->dir, h->nf.net);
+    FILE *f = fopen(conf, "r");
+    pz_ge q;
+    bool enc = false;
+    if (f) {
+        char line[300];
+        uint8_t q33[33];
+        while (!enc && fgets(line, sizeof line, f))
+            enc = !strncmp(line, "encrypt_pubkey=", 15) && btc_unhex(line + 15, 66, q33) && pz_ge_from_pubkey(&q, q33, 33);
+        fclose(f);
+    }
+    uint8_t h160[20], kid[4];
+    pz_hash160(h->nf.pubkey33, 33, h160);
+    if (h->chain == BTC_MAIN) pz_hash160_to_address(h160, addr, sizeof addr);
+    btc_hex(h->nf.pubkey33, 33, pub);
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    strftime(date, sizeof date, "%Y-%m-%d %H:%M:%S", &tm);
+    int n;
+    if (enc) {
+        uint8_t pay[PZ_SEAL_PAYLOAD_LEN], rb[32];
+        pz_u256 r;
+        bool ok = false;
+        while (!ok && sys_random(rb, 32)) {                     /* a scalar in [1, n - 1], drawn again otherwise */
+            pz_u256_from_be(&r, rb);
+            ok = !pz_u256_is_zero(&r) && pz_u256_cmp(&r, &pz_secp256k1_n) < 0;
+        }
+        ok = ok && pz_seal(pay, &q, key, &r) == PZ_SEAL_OK && pz_seal_encode(pay, sealed, sizeof sealed) > 0;
+        pz_secure_zero(rb, sizeof rb), pz_secure_zero(&r, sizeof r);
+        if (!ok) return say(h, "the key of the puzzle is known but could NOT be encrypted (no random numbers): the exchange is tried again"), false;
+        pz_seal_key_id(&q, kid), btc_hex(kid, 4, id);
+        n = snprintf(buf, sizeof buf, "*** PRIVATE KEY FOUND (ENCRYPTED) ***\n\ndate:            %s\nnetwork:         %s\npuzzle:          %d\n%s%s%s"
+                     "version:         %s\nencrypted to:    key id %s\n\nThe private key opens with the secret of that public key alone. At home:\n"
+                     "    pzsolve decrypt-key FOUND.txt\n\n%s\n", date, h->nf.net, h->nf.puzzle, addr[0] ? "address:         " : "", addr,
+                     addr[0] ? "\n" : "", PZ_VERSION, id, sealed);
+    } else {
+        btc_hex(key, 32, hex);
+        if (h->chain == BTC_MAIN) pz_privkey_to_wif(key, true, wif, sizeof wif);
+        n = snprintf(buf, sizeof buf, "*** PRIVATE KEY FOUND ***\n\ndate:            %s\nnetwork:         %s\npuzzle:          %d\n%s%s%s"
+                     "private key hex: 0x%s\n%s%s%spublic key:      %s\nversion:         %s\n\n"
+                     "The prize was paid half each to the two payout addresses; the partner knows this key too. It also opens the coins of\n"
+                     "this address on the chains that split from Bitcoin (Bitcoin Cash and the others), for whoever moves them first.\n",
+                     date, h->nf.net, h->nf.puzzle, addr[0] ? "address:         " : "", addr, addr[0] ? "\n" : "", hex,
+                     wif[0] ? "WIF compressed:  " : "", wif, wif[0] ? "\n" : "", pub, PZ_VERSION);
+    }
+    snprintf(tmp, sizeof tmp, "%s.tmp", h->foundpath);
+    (void)remove(tmp);
+    const int fd = sys_create_secret(tmp);
+    bool saved = fd >= 0 && write(fd, buf, (size_t)n) == n && sys_sync(fd);
+    if (fd >= 0) saved = close(fd) == 0 && saved;
+    saved = saved && sys_replace(tmp, h->foundpath);
+    if (!saved) remove(tmp);
+    pz_secure_zero(buf, sizeof buf);
+    if (enc) say(h, "the key of the puzzle, encrypted to key id %s%s%s: %s (pzsolve decrypt-key opens it)", id, saved ? ", saved in " : " (NOT SAVED)",
+                 saved ? h->foundpath : "", sealed);
+    else {
+        say_secret("THE KEY OF THE PUZZLE: 0x%s%s%s", hex, wif[0] ? "  WIF " : "", wif);
+        say(h, saved ? "the key is saved in %s; it also opens the coins of the address on Bitcoin Cash and the other forks, the partner's too"
+                     : "the key could NOT be written to %s: copy it from this screen", h->foundpath);
+    }
+    pz_secure_zero(hex, sizeof hex), pz_secure_zero(wif, sizeof wif);
+    return true;
+}
+
 /* ---- pzsolve ---- */
 
 static bool start_pzsolve(home *h, char *err, size_t errlen)
@@ -204,7 +357,6 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     argv[n] = NULL;
     snprintf(h->logpath, sizeof h->logpath, "%s/pzsolve.out", h->dir);
     if (!(h->pzsolve = sys_spawn(argv, h->logpath, NULL, NULL))) return snprintf(err, errlen, "cannot start %s", h->cfg->pzsolve), false;
-    snprintf(h->dpbin, sizeof h->dpbin, "%s/net-%s/dp.bin", camp, h->nf.net);
     say(h, "pzsolve started, its output in %s", h->logpath);
     return true;
 }
@@ -237,6 +389,10 @@ static bool cc_recv(void *ctx, uint8_t *m, size_t cap, size_t *len, int timeout_
 
 typedef struct { home *h; session_slot *s; } session_job, chan_wait;
 
+/* the notes of a session, with its tag */
+typedef struct { const home *h; const char *tag; } sayer;
+static void session_say(void *user, const char *line) { const sayer *w = user; say(w->h, "session %s: %s", w->tag, line); }
+
 /* the partner's own connection to this home, which on_session handed to the slot: dht_channel looks for it while it tries the others */
 static net_conn *incoming(void *arg, int ms, bool *give_up)
 {
@@ -266,6 +422,12 @@ static void *session_main(void *arg)
     say(h, "session %s: a coincidence with %02x%02x..., party %d", tag, s->theirs.owner[0], s->theirs.owner[1], me);
     session_result res = SESSION_FAILED;
     bool proved = false;
+    sayer sy = {h, tag};
+    pthread_mutex_lock(&h->mu);
+    session_paid paid = s->paid;                                /* the session writes its copy; the slot gets it back at the end */
+    pthread_mutex_unlock(&h->mu);
+    const uint64_t paid_before = paid.paid_at;
+    const bool had_key = paid.have_key;                         /* a session that gives the partner our piece again shows nothing new */
     /* the chain and the own terms first: once the channel is open the partner's hello comes within seconds (and is waited for no
      * longer), and a chain without a node takes longer than that to answer */
     btc_rpc rpc = {0};
@@ -282,7 +444,7 @@ static void *session_main(void *arg)
     sc = (session_cfg){.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                        .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
                        .feerate = chain.feerate(chain.ctx), .pzsign = cfg->pzsign, .limit = &h->limit, .proved = &proved,
-                       .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3,
+                       .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3, .paid = &paid, .say = session_say, .user = &sy,
                        /* how often the chain is asked: public servers are not to be hammered */
                        .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
     memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
@@ -312,12 +474,17 @@ done:
     pz_secure_zero(&sc, sizeof sc);
     if (cfg->rpc) btc_rpc_done(&rpc);
     say(h, "session %s: %s (%s)", tag, res == SESSION_PAID ? "PAID" : res == SESSION_CANCELLED ? "cancelled" : "failed", why);
+    if (paid.have_key && !had_key) paid.have_key = found_key(h, paid.key);
+    pz_secure_zero(paid.key, sizeof paid.key);
     pthread_mutex_lock(&h->mu);
+    s->paid = paid;
+    if (paid.paid_at && !paid_before) paid_save(h), h->prize_paid = true;
     if (c) net_close(c);
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
     s->running = false, s->waiting = false, s->have_conn = false, s->conn = NULL;
     s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
-    s->retry_at = s->alerted && res != SESSION_PAID && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
+    /* again in 10 minutes if it did not pay, or paid without the pieces */
+    s->retry_at = s->alerted && (res != SESSION_PAID || !paid.have_key) && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
     /* a pair whose partner never proved anything gives its slot back, and so does one out of tries (an alert that comes again starts it
      * afresh, within the limits of session.h); a paid pair keeps its slot, so that it is not started again */
     s->used = s->alerted && (res == SESSION_PAID || s->retry_at);
@@ -418,6 +585,52 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
     pthread_mutex_unlock(&h->mu);
 }
 
+/* ---- the time the network needs ---- */
+
+static const char *span(double s, char *out, size_t cap)
+{
+    if (!isfinite(s) || s < 0) snprintf(out, cap, "unknown");
+    else if (s < 3600) snprintf(out, cap, "%.0f minutes", s / 60);
+    else if (s < 2 * 86400) snprintf(out, cap, "%.1f hours", s / 3600);
+    else if (s < 2 * 365.25 * 86400) snprintf(out, cap, "%.0f days", s / 86400);
+    else snprintf(out, cap, "%.3g years", s / (365.25 * 86400));
+    return out;
+}
+
+/* The work of the whole network, from what this home holds as a custodian: a record goes to the DHT_KSTORE nodes closest to its key, so
+ * the network holds about held * nodes / DHT_KSTORE of them, each worth 2^dpbits jumps on average; its rate is the growth of held over the
+ * last hour. With the kangaroo the key comes after n jumps with P = 1 - exp(-(n / c)^2), c = C_MEAN / 0.8862 * sqrt(W) (docs/en/RESEARCH.md
+ * 4.5): given that it has not come after `done`, half the chance is within sqrt(done^2 + c^2 ln 2) - done more jumps, 9 in 10 within
+ * sqrt(done^2 + c^2 ln 10) - done. The estimate of the nodes is a fifth off at each lookup: the last six are averaged. */
+static void network_status(home *h, int contacts, uint64_t own)
+{
+    const uint64_t held = dht_local_count(h->d);
+    const int64_t now = mono_s();
+    if (h->nsmp == 7) memmove(h->smp, h->smp + 1, 6 * sizeof h->smp[0]), h->nsmp = 6;
+    h->smp[h->nsmp].t = now, h->smp[h->nsmp].held = held, h->smp[h->nsmp].own = own, h->nsmp++;
+    const double nodes_now = h->cfg->listen_port ? dht_nodes(h->d) : 0;
+    if (nodes_now > 0) {
+        if (h->nnodes == 6) memmove(h->nodes, h->nodes + 1, 5 * sizeof h->nodes[0]), h->nnodes = 5;
+        h->nodes[h->nnodes++] = nodes_now;
+    }
+    double nodes = 0;
+    for (int i = 0; i < h->nnodes; i++) nodes += h->nodes[i] / h->nnodes;
+    const double dt = (double)(now - h->smp[0].t), per = ldexp(1, (int)h->nf.dpbits);
+    const double share = nodes / (nodes < DHT_KSTORE ? (nodes > 1 ? nodes : 1) : DHT_KSTORE);   /* records in the network per record held */
+    if (!h->cfg->listen_port || !held || h->nsmp < 2 || dt <= 0 || nodes <= 0)
+        return say(h, "network: %d contacts; %llu points of this home, %llu records held here as a custodian%s", contacts, (unsigned long long)own,
+                   (unsigned long long)held, h->cfg->listen_port ? "; the time it needs: in 10 minutes" : "");
+    const double grew = held > h->smp[0].held ? (double)(held - h->smp[0].held) : 0;   /* a restart of the store can only lower it */
+    const double rate = grew / dt * share * per, mine = (double)(own - h->smp[0].own) / dt * per;
+    const long double W = pz_u256_to_ld(&h->nf.end) - pz_u256_to_ld(&h->nf.start) + 1, c = C_MEAN / 0.8862269254527580L * sqrtl(W);
+    const long double done = (long double)held * share * per;
+    char a[40], b[40];
+    const double t50 = rate > 0 ? (double)((sqrtl(done * done + c * c * logl(2)) - done) / rate) : INFINITY;
+    const double t90 = rate > 0 ? (double)((sqrtl(done * done + c * c * logl(10)) - done) / rate) : INFINITY;
+    say(h, "network: about %.0f nodes, %.3g points in all, 2^%.1f jumps a second (this home %.2g%%); half the chance within %s, 9 in 10 within %s",
+        nodes, (double)(held * share), rate > 0 ? log2(rate) : 0.0, rate > 0 ? 100 * mine / rate : 0.0, span(t50, a, sizeof a), span(t90, b, sizeof b));
+}
+
 /* ---- the run ---- */
 
 /* The chain without a node: the Electrum servers of the network file and of the command line, the headers from the checkpoint of the file
@@ -477,6 +690,9 @@ int home_run(const home_cfg *cfg)
     if (!sys_mkdir(h->dir) || !sys_private(h->dir))
         return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", h->dir), 1;
     snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", h->dir);
+    snprintf(h->paidpath, sizeof h->paidpath, "%s/paid", h->dir);
+    snprintf(h->foundpath, sizeof h->foundpath, "%s/FOUND.txt", h->dir);
+    snprintf(h->dpbin, sizeof h->dpbin, "%.1100s/campaigns/net-%.31s/dp.bin", h->dir, h->nf.net);
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);
     h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.pay_max = PAYOUTS_MAX;
@@ -498,6 +714,7 @@ int home_run(const home_cfg *cfg)
     } else if (!light_chain(h, cfg, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!home_seed(h, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!keys_identity(h->ctx, h->seed, h->nf.fp, cfg->id_bits, &h->id)) return fprintf(stderr, "no identity\n"), 1;
+    paid_load(h);
     /* the table: the entry lines of the file and the peers given */
     const char *boot[64];
     char entries[16][256];
@@ -536,21 +753,21 @@ int home_run(const home_cfg *cfg)
     char idhex[17];
     btc_hex(h->id.xonly, 8, idhex);
     say(h, "home %s... on network %s: %d contacts, %s", idhex, h->nf.net, nc, cfg->listen_port ? "listening" : "not listening");
-    int rc = nc < 0 || !start_pzsolve(h, err, sizeof err);
+    if (h->prize_paid) say(h, "the prize of this network is paid: pzsolve is not started%s", access(h->foundpath, F_OK) ? "; the pieces of the key are still to be exchanged" : ", and the key is in FOUND.txt");
+    int rc = nc < 0 || (!h->prize_paid && !start_pzsolve(h, err, sizeof err));
     if (rc) fprintf(stderr, "%s\n", nc < 0 ? "cannot listen" : err);
     /* the feed: the new points of dp.bin to the table, every half second */
     dpfeed df = {0};
     uint64_t published = 0, found = 0;
     bool solved_alone = false, met = nc > 0;
-    int64_t next_status = mono_s() + 600;
+    int64_t next_status = mono_s() + STATUS_S;
     while (!rc && !g_stop) {
         sys_sleep_ms(500);
         const int contacts = dht_count(h->d);                  /* what the network is to this home: at the first contact, and every 10 minutes */
         if ((contacts > 0) != met || mono_s() >= next_status) {
-            if (contacts) say(h, "network: %d contacts; %llu points of this home, %llu records held here as a custodian", contacts,
-                              (unsigned long long)found, (unsigned long long)dht_local_count(h->d));
+            if (contacts) network_status(h, contacts, found);
             else say(h, "network: no contact, looking for the others; %llu points of this home wait for them", (unsigned long long)found);
-            met = contacts > 0, next_status = mono_s() + 600;
+            met = contacts > 0, next_status = mono_s() + STATUS_S;
         }
         if (!df.f && dpfeed_open(&df, h->dpbin)) {
             pthread_mutex_lock(&h->mu);
@@ -573,6 +790,14 @@ int home_run(const home_cfg *cfg)
             published += (uint64_t)dht_publish(h->d, recs, n);
         }
         int st;
+        pthread_mutex_lock(&h->mu);
+        const bool paid_now = h->prize_paid;
+        pthread_mutex_unlock(&h->mu);
+        if (h->pzsolve && paid_now) {                           /* nothing is left to search: the home stays on for the pieces */
+            say(h, "the prize is paid: pzsolve stops");
+            sys_proc_interrupt(h->pzsolve), (void)sys_proc_ended(h->pzsolve, true, &st);
+            h->pzsolve = 0;
+        }
         if (h->pzsolve && sys_proc_ended(h->pzsolve, false, &st)) {
             solved_alone = st == 0;                             /* pzsolve ends with 0 only when it found the key itself */
             say(h, "pzsolve ended (%s); %llu points published", solved_alone ? "it found the key on its own" : "status not 0",
@@ -586,7 +811,7 @@ int home_run(const home_cfg *cfg)
         for (int i = 0; i < MAX_SESSIONS; i++) {
             session_slot *s = &h->s[i];
             if (s->used && !s->running && s->retry_at && mono_s() >= s->retry_at) s->retry_at = 0, start_session(h, s);   /* again */
-            busy |= s->running;
+            busy |= s->running || (s->paid.paid_at && !s->paid.have_key && s->retry_at);   /* a pair paid without the pieces tries again */
         }
         pthread_mutex_unlock(&h->mu);
         if (done && !busy) break;

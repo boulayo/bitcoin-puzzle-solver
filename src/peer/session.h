@@ -13,8 +13,8 @@
 #define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 426 bytes at most */
 
 /* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
- * while a session waits for blocks, and is skipped by the reader. */
-enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE };
+ * while a session waits for blocks, and is skipped by the reader. S_PIECE, after the payout, carries the secret piece of a side. */
+enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE };
 
 typedef struct {
     void *ctx;
@@ -54,6 +54,16 @@ typedef struct {
     unsigned pay_max;                       /* payouts of one own point that did not pay (each spent a fee and a tiny coin of the prize) */
 } session_limit;
 
+/* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets
+ * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces. Once the payout has its confirmations
+ * and nothing of value is left at the puzzle address, the two sides give each other their pieces, and each has the key. */
+typedef struct {
+    uint64_t paid_at;                       /* the height at which the prize was seen spent in a block; 0: not paid */
+    uint8_t first[32];                      /* the txid of the first transaction, whose output 0 the payout spent */
+    bool have_key;
+    uint8_t key[32];                        /* the key of the puzzle, the sum of the two pieces (have_key); the caller wipes it */
+} session_paid;
+
 typedef struct {
     const secp256k1_context *ctx;
     const record_net *net;
@@ -83,11 +93,16 @@ typedef struct {
     int block_ms;                           /* a wait for n blocks gives up after (n + 6) times this, if the chain stops (0: 20 minutes) */
     int cancel_blocks;                      /* the blocks F waits for the second transaction before it cancels (3) */
     bool withhold;                          /* tests only: as S, do not send the second transaction (the test channel also drops S's last message) */
+    session_paid *paid;                     /* the payout of the pair, read and written (NULL: the pieces are not exchanged) */
+    int reveal_conf;                        /* the confirmations of the payout before the pieces are exchanged (0: 6) */
+    void (*say)(void *user, const char *line);   /* the steps that matter to the owner, one short line each (NULL: none) */
+    void *user;
 } session_cfg;
 
 typedef enum { SESSION_PAID, SESSION_CANCELLED, SESSION_FAILED } session_result;
 
-/* Runs the session. why gets the reason of a failure, or what happened. */
+/* Runs the session. why gets the reason of a failure, or what happened. A session that only exchanges the pieces (paid->paid_at set) gives
+ * SESSION_PAID, and paid->have_key tells whether it got the key. */
 session_result session_run(const session_cfg *cfg, char *why, size_t whylen);
 
 #endif
