@@ -529,7 +529,7 @@ Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoin
 | Sintomo | Causa probabile |
 |---------|-----------------|
 | `the campaign in … is already running` | un altro processo usa la cartella: fermalo o usa un altro nome (`-c`) |
-| `the existing campaign uses mode …` / `--range does not match the range of the existing campaign` / `the given seed does not match the one of the existing campaign` | hai cambiato in ripresa un parametro che definisce la campagna: toglilo (si riprende com'era) o usa un altro nome con `-c` |
+| `the existing campaign uses mode …` / `--range does not match the keys of the existing campaign` / `the given seed does not match the one of the existing campaign` | hai cambiato in ripresa un parametro che definisce la campagna: toglilo (si riprende com'era) o usa un altro nome con `-c` |
 | `final state save FAILED` | disco pieno o cartella non scrivibile: libera spazio e rilancia (il checkpoint precedente è intatto) |
 | `main checkpoint unusable` / `no usable checkpoint` | `state.dat` corrotto: viene tentato `.bak`; altrimenti rimuovilo (si ricomincia) |
 | `the checkpoint belongs to a different split between computers` / `the checkpoint was written by a campaign with another seed` (seguiti da `the state … is intact but belongs to another campaign, another seed or another part of the range`) | lo stato è integro ma è di un'altra `--part`, di un altro seed o di un'altra campagna: non toccarlo, usa la campagna giusta o un altro nome con `-c` |

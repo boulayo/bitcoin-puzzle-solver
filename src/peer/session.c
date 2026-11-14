@@ -92,7 +92,9 @@ static bool send_msg(sess *s, uint8_t type, const uint8_t *p, size_t len)
     m[0] = type;
     if (len) memcpy(m + 1, p, len);
     if (type != S_ALIVE) dbg("session %s > type %u len %zu", s->tag, type, len);
-    return s->c->chan->send(s->c->chan->ctx, m, len + 1);
+    const bool ok = s->c->chan->send(s->c->chan->ctx, m, len + 1);
+    if (type == S_PIECE) pz_secure_zero(m, len + 1);            /* a piece: nowhere but where it goes */
+    return ok;
 }
 
 /* the next message, which must be of the given type; an abort of the partner gives its reason */
@@ -123,6 +125,7 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
     if (m[0] != type || n - 1 > cap) return fail(s, "an unexpected message (type %d)", m[0]);
     memcpy(p, m + 1, n - 1);
     *len = n - 1;
+    if (type == S_PIECE) pz_secure_zero(m, n);
     dbg("session %s < type %u len %zu", s->tag, type, n - 1);
     return true;
 }
@@ -476,7 +479,7 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
     const size_t jl = signer_job(job, s->me, 1 - s->F, eid, piece, (const uint8_t(*)[33])pub, c->pubkey33, (const uint8_t(*)[32])digests, (int)n);
     pz_secure_zero(piece, sizeof piece);
     relay r = {.s = s};
-    const bool started = signer_start(&r.sg, c->pzsign);
+    const bool started = signer_start(&r.sg, c->pzsign, c->pzsign_log);
     bool ok = started && signer_send(&r.sg, SIGNER_JOB, job, jl);
     pz_secure_zero(job, sizeof job);
     if (ok) {
@@ -545,15 +548,16 @@ static void *alive_main(void *arg)
 
 /* The coins of the puzzle address (-1: the chain cannot be asked), while S_ALIVE goes to the partner, which waits for a message: a scan of
  * the node's whole set can take half an hour, and the partner would give up after one wait (and this side, reading its next message
- * later, start a signing nobody answers). With prizes, also the prizes of the network file that the scan did not list. */
+ * later, start a signing nobody answers). With prizes, also the prizes of the network file that the scan did not list (then -1 only
+ * when the scan failed and none of them was found). */
 static int puzzle_coins(sess *s, payout_coin coins[64], bool prizes)
 {
     const session_chain *ch = s->c->chain;
     alive al = {.s = s};
     pthread_t t;
     const bool beat = pthread_create(&t, NULL, alive_main, &al) == 0;
-    int n = ch->coins(ch->ctx, s->t.puzzle_spk, coins, 64 - SESSION_PRIZES_MAX);
-    if (n < 0 && prizes) n = 0;
+    const int scanned = ch->coins(ch->ctx, s->t.puzzle_spk, coins, 64 - SESSION_PRIZES_MAX);
+    int n = scanned < 0 ? 0 : scanned;
     for (int i = 0; prizes && i < s->c->nprizes && i < SESSION_PRIZES_MAX && ch->coin; i++) {
         const payout_coin *p = &s->c->prizes[i];
         bool have = false;
@@ -562,54 +566,104 @@ static int puzzle_coins(sess *s, payout_coin coins[64], bool prizes)
     }
     atomic_store(&al.stop, true);
     if (beat) pthread_join(t, NULL);
-    return n;
+    return n || scanned >= 0 ? n : -1;
 }
 
 /* ---- after the payout: the pieces ---- */
 
-/* Whether the payout is settled at height h: the block of the spend (at or below paid_at) has conf confirmations, the prize output is still
- * spent in a block (a reorganization that took the payout back shows it unspent, or the coins of the puzzle again), and less than
- * REVEAL_DUST is left at the puzzle address. Then the key protects nothing more, and it can be given to the partner. */
-static bool settled(sess *s, uint64_t h, int conf)
+/* the coins left at the puzzle address, in satoshis (of those the chain shows: the largest), or -1 when the chain cannot be asked */
+static int64_t left_at_puzzle(sess *s)
 {
-    const session_chain *ch = s->c->chain;
-    const session_paid *p = s->c->paid;
     payout_coin coins[64];
-    if (h + 1 < p->paid_at + (uint64_t)conf || ch->confirmations(ch->ctx, p->first, 0) != -1) return false;
     const int n = puzzle_coins(s, coins, false);
-    uint64_t left = 0;
-    for (int i = 0; i < n; i++) left += coins[i].value;
-    return n >= 0 && left < REVEAL_DUST;
+    int64_t left = 0;
+    for (int i = 0; i < n; i++) left += (int64_t)coins[i].value;
+    return n < 0 ? -1 : left;
 }
 
-/* Once the payout is settled each side gives its piece and checks the other's against the public piece of the record: their sum is the
- * key of the puzzle. Someone must give first, and a partner can keep its own: all it gains is what the key still opens (docs/en/NETWORK.md
- * 7.5). Waits at most conf + 6 blocks of block_ms; true when the key is in paid->key. */
-static bool exchange(sess *s)
+/* A second transaction of this pair, given by the partner: it spends the prize output and the tiny coin of the first transaction, pays
+ * the two payout addresses, and both its inputs are validly signed, which only the two homes together can do for the first input */
+static bool second_ok(const sess *s, const uint8_t *raw, size_t n, btc_tx *b)
+{
+    const payout_terms *t = &s->t;
+    const session_paid *p = s->c->paid;
+    return btc_tx_parse(b, raw, n) && b->n_in == 2 && b->n_out == 2 && !memcmp(b->in[0].prev_txid, p->first, 32) && b->in[0].prev_vout == 0 &&
+           !memcmp(b->in[1].prev_txid, p->first, 32) && b->in[1].prev_vout == 1 && b->out[0].script_len == t->pay_len[0] &&
+           !memcmp(b->out[0].script, t->pay_spk[0], t->pay_len[0]) && b->out[1].script_len == t->pay_len[1] &&
+           !memcmp(b->out[1].script, t->pay_spk[1], t->pay_len[1]) && btc_verify_p2pkh(b, 0, t->puzzle_spk, BTC_P2PKH_LEN) &&
+           btc_verify_p2pkh(b, 1, t->coin_spk[t->first], BTC_P2PKH_LEN);
+}
+
+typedef enum { PIECES_NO, PIECES_KEY, PIECES_COINS } pieces_end;   /* no key; the key; coins came to the address after the payout */
+
+/* Once this pair's second transaction is settled each side gives its piece and checks the other's against the public piece of the record:
+ * their sum is the key of the puzzle. Settled: that transaction itself has conf confirmations (proven: a block that holds it, by the
+ * outputs it made), the prize output of the first is spent in a block, no transaction of the mempool touches the puzzle address (a light
+ * chain hides a coin whose spend is there), and less than REVEAL_DUST is left at it. When the outputs of the second are spent already and
+ * its depth cannot be read, the state must hold for conf blocks in a row. Someone gives first, and a partner can keep its own piece: all
+ * it gains is what the key still opens (docs/en/NETWORK.md 7.5). The side without the second transaction (F, when S kept the signature)
+ * takes the partner's, checked. Waits at most conf + 6 blocks of block_ms. */
+static pieces_end exchange(sess *s)
 {
     const session_cfg *c = s->c;
     const session_chain *ch = c->chain;
     session_paid *p = c->paid;
     const int conf = c->reveal_conf > 0 ? c->reveal_conf : REVEAL_CONF, every = c->alive_ms > 0 ? c->alive_ms : ALIVE_MS;
+    uint8_t m[PAID_TX_MAX], bid[32];
+    size_t n = 0;
+    btc_tx b;
+    note(s, "the pieces of the key are exchanged after %d confirmations of the payout", conf);
+    if (!send_msg(s, S_SECOND, p->second, p->second_len) || !recv_msg(s, S_SECOND, m, sizeof m, &n))
+        return snprintf(s->why, s->whylen, "the prize moved; the partner did not answer about the second transaction"), PIECES_NO;
+    if (!p->second_len && n && second_ok(s, m, n, &b)) {
+        memcpy(p->second, m, n), p->second_len = n;
+        if (c->on_paid) c->on_paid(c->user, p);
+    }
+    if (!p->second_len || !btc_tx_parse(&b, p->second, p->second_len) || !btc_tx_txid(&b, bid))
+        return snprintf(s->why, s->whylen, "the prize moved, but the second transaction is not known here nor to the partner: no pieces"), PIECES_NO;
     const int64_t end = sys_now_ms() + (int64_t)(conf + 6) * block_ms(s);
     int64_t beat = sys_now_ms() + every;
-    note(s, "the pieces of the key are exchanged after %d confirmations of the payout", conf);
-    for (uint64_t last = 0;;) {
+    uint64_t last = 0, since = 0;                               /* since: the height from which the state was seen settled */
+    bool seen = false;
+    for (;;) {
         const uint64_t h = ch->height(ch->ctx);
-        if (h && h != last && (last = h, settled(s, h, conf))) break;   /* the chain asked once a block */
-        if (sys_now_ms() >= end) return snprintf(s->why, s->whylen, "paid; the payout is not settled yet, the pieces wait"), false;
+        if (h && h != last) {                                   /* the chain asked once a block */
+            last = h;
+            const int k0 = ch->confirmations(ch->ctx, bid, 0), k1 = ch->confirmations(ch->ctx, bid, 1), depth = k0 > k1 ? k0 : k1;
+            if (depth >= 1 && !p->told) {
+                char v[32];
+                note(s, "paid: %s BTC to the payout address of this home", btc_amount(b.out[s->me].value, v));
+                p->told = true;
+            }
+            seen |= depth >= 1;
+            const bool in_block = depth >= 1 || (seen && k0 == -1 && k1 == -1);
+            const int pend = in_block && ch->pending ? ch->pending(ch->ctx, s->t.puzzle_spk) : 0;
+            const int64_t left = in_block && !pend && ch->confirmations(ch->ctx, p->first, 0) == -1 ? left_at_puzzle(s) : -1;
+            if (left >= REVEAL_DUST && depth >= conf) {         /* settled but for coins that came later: a payout of them first */
+                snprintf(s->why, s->whylen, "paid; coins came to the puzzle address after the payout: they are paid out first");
+                return PIECES_COINS;
+            }
+            if (left >= 0 && left < REVEAL_DUST) {
+                if (!since) since = h;
+                if (depth >= conf || h + 1 >= since + (uint64_t)conf) break;
+            } else since = 0;
+        }
+        if (sys_now_ms() >= end)
+            return snprintf(s->why, s->whylen, seen ? "paid; the payout is not settled yet, the pieces wait"
+                                                    : "the prize moved, but the second transaction is not in a block: no pieces yet"), PIECES_NO;
         if (sys_now_ms() >= beat) (void)send_msg(s, S_ALIVE, NULL, 0), beat = sys_now_ms() + every;
         sys_sleep_ms(c->poll_ms);
     }
     uint8_t mine[32], theirs[32], key[32], k33[33];
     secp256k1_pubkey X, Y, K;
-    size_t n = 0, kl = 33;
+    size_t kl = 33;
+    n = 0;
     bool ok = pieces_secret(c->ctx, c->net, c->base, s->pair, s->me, c->d, mine);
     if (ok && (!send_msg(s, S_PIECE, mine, 32) || !recv_msg(s, S_PIECE, theirs, 32, &n))) {
         char r[200];
         snprintf(r, sizeof r, "%s", s->why);
         snprintf(s->why, s->whylen, "paid; no piece from the partner (%s)", r);
-        return pz_secure_zero(mine, sizeof mine), false;
+        return pz_secure_zero(mine, sizeof mine), PIECES_NO;
     }
     memcpy(key, mine, 32);
     ok = ok && n == 32 && pieces_public(c->ctx, c->net, c->base, s->pair, 1 - s->me, &X) && secp256k1_ec_pubkey_create(c->ctx, &Y, theirs) &&
@@ -619,19 +673,38 @@ static bool exchange(sess *s)
     if (ok) memcpy(p->key, key, 32), p->have_key = true;
     pz_secure_zero(mine, sizeof mine), pz_secure_zero(theirs, sizeof theirs), pz_secure_zero(key, sizeof key);
     snprintf(s->why, s->whylen, ok ? "paid; the key of the puzzle is known" : "paid; the piece of the partner is not the right one");
-    return ok;
+    return ok ? PIECES_KEY : PIECES_NO;
 }
 
-/* The prize moved: the payout counts no more against the limit, and the pieces are exchanged once it is settled */
-static session_result paid(sess *s, const uint8_t aid[32], const btc_tx *b)
+/* The prize output of the first transaction is spent in a block. It is this pair's payout only when the spend is its second transaction:
+ * with the whole signature this side checks that it is in a block; without it (F, whose partner kept the signature and sent it later)
+ * that the prize did not come back to the puzzle address, and takes the second transaction from the partner in the exchange. Another
+ * pair's first transaction could have spent it, the prize going back to the address: then nothing is paid. */
+static session_result paid(sess *s, const uint8_t aid[32], const btc_tx *b, bool whole)
 {
-    char v[32];
+    const session_chain *ch = s->c->chain;
+    session_paid *p = s->c->paid;
+    uint8_t bid[32];
+    if (whole) {
+        btc_tx_txid(b, bid);
+        if (ch->confirmations(ch->ctx, bid, 0) < 1 && ch->confirmations(ch->ctx, bid, 1) < 1)
+            return snprintf(s->why, s->whylen, "the first transaction was spent, but not by the second: nothing was paid"), SESSION_FAILED;
+    } else {
+        const int64_t left = left_at_puzzle(s);
+        if (left < 0 || left >= REVEAL_DUST)
+            return snprintf(s->why, s->whylen, "the first transaction was spent, but the prize is still at the puzzle address"), SESSION_FAILED;
+    }
     (void)limit_payout(s, -1);
     snprintf(s->why, s->whylen, "paid");
-    note(s, "paid: %s BTC to the payout address of this home", btc_amount(b->out[s->me].value, v));
-    if (!s->c->paid) return SESSION_PAID;
-    s->c->paid->paid_at = s->c->chain->height(s->c->chain->ctx);   /* the spend is in a block at or below it */
-    memcpy(s->c->paid->first, aid, 32);
+    if (!p) {
+        char v[32];
+        note(s, "paid: %s BTC to the payout address of this home", btc_amount(b->out[s->me].value, v));
+        return SESSION_PAID;
+    }
+    p->paid_at = ch->height(ch->ctx);                           /* the spend is in a block at or below it */
+    memcpy(p->first, aid, 32);
+    p->second_len = whole ? btc_tx_serialize(b, p->second, sizeof p->second) : 0;
+    if (s->c->on_paid) s->c->on_paid(s->c->user, p);           /* kept on disk before the wait: a restart must not lose the pair */
     (void)exchange(s);
     return SESSION_PAID;
 }
@@ -639,18 +712,28 @@ static session_result paid(sess *s, const uint8_t aid[32], const btc_tx *b)
 session_result session_run(const session_cfg *c, char *why, size_t whylen)
 {
     sess s = {.c = c, .why = why, .whylen = whylen, .wait_ms = c->timeout_ms < HELLO_MS ? c->timeout_ms : HELLO_MS};
+    record pair[2];
+    uint8_t eid[32];
     why[0] = 0;
-    snprintf(s.tag, sizeof s.tag, "%s", dbg_hex(c->mine.x, 32));   /* the x of the own point names the session in the debug log */
+    /* the session id names the session in the debug log, as on the terminal (the x of the own point if the records are no pair) */
+    if (pieces_order(&c->mine, &c->theirs, pair)) pieces_eid(c->net, pair, eid), btc_hex(eid, 8, s.tag);
+    else snprintf(s.tag, sizeof s.tag, "%s", dbg_hex(c->mine.x, 32));
     if (!hello(&s)) return SESSION_FAILED;
     s.wait_ms = c->timeout_ms;
-    if (c->paid && c->paid->paid_at) return (void)exchange(&s), SESSION_PAID;   /* an earlier session paid: only the pieces */
+    /* an earlier session paid: only the pieces, unless coins came to the address since, which are paid out first */
+    if (c->paid && c->paid->paid_at && exchange(&s) != PIECES_COINS) return SESSION_PAID;
     const session_chain *ch = c->chain;
     /* the first transaction: the coins of the puzzle back to its address, and the tiny coins */
     payout_coin coins[64];
     btc_tx a, b, x;
     size_t used;
     const int nc = puzzle_coins(&s, coins, true);
-    if (nc <= 0 || !payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "no coin of the puzzle to spend"), SESSION_FAILED;
+    if (nc < 0) return fail(&s, "the chain does not answer about the coins of the puzzle"), SESSION_FAILED;
+    if (!nc) {                                                  /* the prize is gone: another pair, or the owner of the key, took it */
+        if (c->paid) c->paid->empty = true;
+        return fail(&s, "the puzzle address is empty: the prize has been taken"), SESSION_FAILED;
+    }
+    if (!payout_first(&s.t, coins, (size_t)nc, &a, &used)) return fail(&s, "the coins of the puzzle do not pay the fees"), SESSION_FAILED;
     if (!limit_ok(&s) || !plan(&s, &a)) return SESSION_FAILED;
     if (!limit_payout(&s, +1) || !sign_jointly(&s, &a, a.n_in, 'A')) return SESSION_FAILED;
     uint8_t aid[32];
@@ -681,13 +764,13 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
         dbg("session %s broadcast of the second: %s", s.tag, ch->broadcast(ch->ctx, &b) ? "taken" : "not taken");
         btc_tx_txid(&b, bid), btc_hash_to_hex(bid, hex);
         note(&s, "second transaction sent, %s BTC to each payout address: %s", btc_amount(b.out[s.me].value, v), hex);
-        return wait_for(&s, aid, 0, -1, 144) ? paid(&s, aid, &b)
+        return wait_for(&s, aid, 0, -1, 144) ? paid(&s, aid, &b, true)
                                             : (snprintf(why, whylen, "the second transaction did not go through"), SESSION_FAILED);
     }
     if (s.me != s.F) return snprintf(why, whylen, "the joint signature of the second transaction failed"), SESSION_FAILED;
     /* F without the whole signature: S may hold it. F waits for the prize to move, and else spends its tiny coin, which makes it worthless */
     note(&s, "the partner has the signature of the second transaction: %d blocks for it to send it, else the cancel", c->cancel_blocks);
-    if (wait_for(&s, aid, 0, -1, (uint64_t)c->cancel_blocks)) return paid(&s, aid, &b);
+    if (wait_for(&s, aid, 0, -1, (uint64_t)c->cancel_blocks)) return paid(&s, aid, &b, false);
     if (!payout_cancel(&s.t, &a, &x) || !btc_sign_p2pkh(&x, 0, c->coin_sec)) return fail(&s, "no cancel"), SESSION_FAILED;
     uint8_t xid[32];
     btc_tx_txid(&x, xid);
@@ -701,7 +784,7 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
             snprintf(why, whylen, "the partner held the second transaction back: cancelled with the tiny coin");
             return SESSION_CANCELLED;
         }
-        if (wait_for(&s, aid, 0, -1, 0)) return paid(&s, aid, &b);   /* it moved in the meantime */
+        if (wait_for(&s, aid, 0, -1, 0)) return paid(&s, aid, &b, false);   /* it moved in the meantime */
     }
     snprintf(why, whylen, "the cancel did not confirm in 144 blocks");
     return SESSION_FAILED;

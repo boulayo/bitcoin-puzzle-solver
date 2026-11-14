@@ -218,6 +218,7 @@ bool run_submit_key(run_ctx *r, const pz_u256 *index, const char *source)
             pz_log(PZ_LOG_INFO, "KEY FOUND by %s (the key is not written to the log)", source);   /* the box at the end gives the file */
     }
     pthread_mutex_unlock(&r->found_mu);
+    if (r->cfg.has_encrypt) pz_secure_zero(&key_of, sizeof key_of);   /* the plain key: only in the encrypted line */
     return true;
 }
 

@@ -528,7 +528,7 @@ The state on disk is never at risk: every write is atomic and the checkpoint is 
 | Symptom | Probable cause |
 |---------|----------------|
 | `the campaign in … is already running` | another process is using the folder: stop it or use another name (`-c`) |
-| `the existing campaign uses mode …` / `--range does not match the range of the existing campaign` / `the given seed does not match the one of the existing campaign` | you changed, when resuming, a parameter that defines the campaign: remove it (the campaign resumes as it was) or use another name with `-c` |
+| `the existing campaign uses mode …` / `--range does not match the keys of the existing campaign` / `the given seed does not match the one of the existing campaign` | you changed, when resuming, a parameter that defines the campaign: remove it (the campaign resumes as it was) or use another name with `-c` |
 | `final state save FAILED` | disk full or folder not writable: free some space and run again (the previous checkpoint is intact) |
 | `main checkpoint unusable` / `no usable checkpoint` | `state.dat` is corrupt: `.bak` is tried; otherwise remove it (the search starts over) |
 | `the checkpoint belongs to a different split between computers` / `the checkpoint was written by a campaign with another seed` (followed by `the state … is intact but belongs to another campaign, another seed or another part of the range`) | the state is intact but belongs to another `--part`, another seed or another campaign: do not touch it, use the right campaign or another name with `-c` |

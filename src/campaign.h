@@ -64,7 +64,7 @@ typedef struct {
     u8 net_jumpseed[32];         /* the public seed of the jump table */
     char net_keyid[17];          /* seed_to_id of the start key: a resume with another key is refused */
     bool has_step;               /* --step: the keys are step_base + i * step for the index i of the range (1 to their number); the
-                                  * engines count, the campaign schedules and the reports measure in i (docs/en/USAGE.md, "Steps") */
+                                  * engines count, the campaign schedules and the reports measure in i (docs/en/USAGE.md, section 3) */
     pz_u256 step, step_base;     /* step_base = START - step mod n, so that START, the first key, is i = 1 */
 } campaign_cfg;
 

@@ -70,8 +70,8 @@ bool sys_gateway(struct in_addr *gw);   /* the IPv4 router of the default route 
 typedef intptr_t sys_proc;         /* 0: none */
 
 /* Starts argv[0] (a path, or a name looked up in PATH) with the arguments argv[1..], NULL at the end. With to and from it gets a pipe
- * as its input and one as its output, whose other ends come back here and reach no other child; its errors go where those of pzpeer go.
- * With log its input is empty and its output and errors are appended to that file. The child has a process group of its own: a Ctrl-C
+ * as its input and one as its output, whose other ends come back here and reach no other child; its errors go where those of pzpeer go,
+ * or with log are appended to that file. With log alone its input is empty and its output and errors are appended to that file. The child has a process group of its own: a Ctrl-C
  * at the terminal stops pzpeer, which then decides what becomes of its children. 0 on failure. */
 sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from);
 /* Whether it ended: 1 with its exit status (-1 when it did not end by itself), 0 while it runs. With block, waits for the end. */

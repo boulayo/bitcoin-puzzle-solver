@@ -6,11 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool signer_start(signer *s, const char *path)
+bool signer_start(signer *s, const char *path, const char *log)
 {
     const char *const argv[] = {path, "session", NULL};
     s->to = s->from = -1;
-    s->proc = sys_spawn(argv, NULL, &s->to, &s->from);
+    s->proc = sys_spawn(argv, log, &s->to, &s->from);
     return s->proc != 0;
 }
 

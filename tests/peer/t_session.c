@@ -116,6 +116,21 @@ static uint64_t ch_height(void *c)
     return h;
 }
 
+/* the transactions of the mempool that touch a script: an output to it not mined, or one of its outputs spent by a transaction not mined
+ * (ch_coins leaves such an output out, as an Electrum server does) */
+static int ch_pending(void *c, const uint8_t spk[BTC_P2PKH_LEN])
+{
+    (void)c;
+    int n = 0;
+    pthread_mutex_lock(&chain.mu);
+    for (int i = 0; i < chain.n; i++) {
+        const utxo *u = &chain.u[i], *by = u->spent ? find(u->by, 0) : NULL;
+        if (u->spk_len == BTC_P2PKH_LEN && !memcmp(u->spk, spk, BTC_P2PKH_LEN) && (!u->height || (by && !by->height))) n++;
+    }
+    pthread_mutex_unlock(&chain.mu);
+    return n;
+}
+
 /* a prize of the network file, looked up alone */
 static int ch_coin(void *c, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
 {
@@ -171,6 +186,7 @@ static int fl_coin(void *c, const uint8_t txid[32], uint32_t vout, const uint8_t
     flaky *f = c;
     return f->in.coin ? f->in.coin(f->in.ctx, txid, vout, spk, out) : -1;
 }
+static int fl_pending(void *c, const uint8_t spk[BTC_P2PKH_LEN]) { flaky *f = c; return f->in.pending ? f->in.pending(f->in.ctx, spk) : 0; }
 
 /* ---- or a bitcoind on regtest (PZ_REGTEST=host:port:user:password): the same cases on a real node, through chain_rpc ---- */
 
@@ -426,7 +442,8 @@ static void p2pkh_of(const uint8_t sec[32], uint8_t spk[BTC_P2PKH_LEN])
     btc_script_p2pkh(h, spk);
 }
 
-enum { PAYOUT, CANCEL, NOTHING, FIRST };   /* what the chain must show at the end (FIRST: the first transaction alone) */
+enum { PAYOUT, CANCEL, NOTHING, FIRST, TAKEN, OTHER };   /* what the chain must show at the end (FIRST: the first transaction alone; TAKEN: the
+                                                  * prize spent by someone else before) */
 
 typedef struct {
     const char *name;
@@ -450,7 +467,32 @@ typedef struct {
     int piece1;                       /* PIECE_*: what home 1 does to its piece */
     bool ghost;                       /* a coin comes to the puzzle address after the payout: no exchange */
     bool again;                       /* then a session of the pair that only exchanges the pieces, both giving theirs */
+    bool taken;                       /* the prize was taken before the session: the address is empty */
+    bool other;                       /* another pair's first transaction takes the prize output of this pair's first */
 } tcase;
+
+/* another pair of the same puzzle, whose key the test knows: once this pair's first transaction is in a block, its own first transaction
+ * spends the prize output back to the puzzle address, before this pair's second gets there */
+typedef struct { const uint8_t *coin, *spk, *k; } other_arg;
+static void *other_pair(void *arg)
+{
+    const other_arg *a = arg;
+    uint8_t first[32];
+    for (bool in = false; !in; usleep(2000)) {
+        pthread_mutex_lock(&chain.mu);
+        const utxo *c = find(a->coin, 0), *f = c && c->spent ? find(c->by, 0) : NULL;
+        if ((in = f && f->height)) memcpy(first, c->by, 32);
+        pthread_mutex_unlock(&chain.mu);
+    }
+    pthread_mutex_lock(&chain.mu);
+    const uint64_t v = find(first, 0)->value;
+    pthread_mutex_unlock(&chain.mu);
+    btc_tx t;
+    btc_tx_init(&t);
+    CHECK(btc_tx_add_in(&t, first, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&t, v - 2000, a->spk, BTC_P2PKH_LEN) && btc_sign_p2pkh(&t, 0, a->k));
+    CHECK(ch_broadcast(NULL, &t));
+    return NULL;
+}
 
 /* a puzzle, its coin on the chain, two homes whose records meet on the same point; then the session of both */
 static void run_case(const tcase *tc, const char *bin)
@@ -475,6 +517,12 @@ static void run_case(const tcase *tc, const char *bin)
     p2pkh_of(k, puzzle_spk);
     hashed(label, coin_txid);
     fund(puzzle_spk, coin_txid);                                /* 1 BTC on the puzzle address */
+    if (tc->taken) {                                            /* spent in a block by someone else, before the session */
+        pthread_mutex_lock(&chain.mu);
+        utxo *u = find(coin_txid, 0);
+        if (u) u->spent = true, memset(u->by, 0x99, 32), add_utxo(u->by, 0, 1, (const uint8_t[]){0x6a}, 1, chain.tip);
+        pthread_mutex_unlock(&chain.mu);
+    }
     /* the pair: a tame point d_a*G and a wild one Q' + d_b*G, with d_a = x + d_b */
     uint8_t d[2][32], c[33];
     hashed("wild distance", d[1]), d[1][0] = 0;
@@ -540,7 +588,7 @@ static void run_case(const tcase *tc, const char *bin)
             CHECK(rpc_client(&rpcs[i]));
             crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = tc->fee ? tc->fee : i && tc->fee_far ? tc->fee_far : g_fee[i]};
             chn[i].in = chain_rpc_iface(&crpc[i]);
-        } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin};
+        } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending};
         chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0, chn[i].ghost = tc->ghost;
         if (tc->pieces) g->paid = &paid[i], g->reveal_conf = 2;
         chn[i].slow_ms = i ? 0 : tc->slow_ms;
@@ -569,7 +617,7 @@ static void run_case(const tcase *tc, const char *bin)
     }
     session_chain ifc[2];
     for (int i = 0; i < 2; i++) {
-        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin};
+        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin, fl_pending};
         h[i].cfg.chain = &ifc[i];
     }
     if (tc->fee) g_fee[0] = g_fee[1] = tc->fee;
@@ -577,14 +625,22 @@ static void run_case(const tcase *tc, const char *bin)
     h[S_home].cfg.withhold = tc->s_withholds;
     e[S_home].last_b = tc->s_last, e[F_home].last_b = tc->f_last;
     e[1].piece = tc->piece1;
-    pthread_t th[2];
+    pthread_t th[2], ot;
+    other_arg oa = {coin_txid, puzzle_spk, k};
+    if (tc->other) pthread_create(&ot, NULL, other_pair, &oa);
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
+    if (tc->other) pthread_join(ot, NULL);
     g_fee[0] = 2000, g_fee[1] = 3000;
     q_drain(&q[0]), q_drain(&q[1]);
     static const char *const RES[] = {"paid", "cancelled", "failed"};
     printf("  %s: F %s (%s), S %s (%s)\n", tc->name, RES[h[F_home].res], h[F_home].why, RES[h[S_home].res], h[S_home].why);
-    if (tc->pieces) {
+    if (tc->other) {                                            /* nothing was paid: no payout is recorded, no piece given */
+        for (int i = 0; i < 2; i++) CHECK(h[i].res == SESSION_FAILED && !paid[i].paid_at && !paid[i].have_key && strstr(h[i].why, "not by the second"));
+    } else if (tc->taken) {
+        for (int i = 0; i < 2; i++) CHECK(h[i].res == SESSION_FAILED && paid[i].empty && !paid[i].paid_at);
+        CHECK(strstr(h[0].why, "the prize has been taken") || strstr(h[1].why, "the prize has been taken"));
+    } else if (tc->pieces) {
         /* home 1 has home 0's piece whatever it does with its own; home 0 has the key only when home 1 gave the right piece */
         const bool want[2] = {!tc->ghost && tc->piece1 == PIECE_GIVEN, !tc->ghost};
         for (int i = 0; i < 2; i++) {
@@ -593,7 +649,7 @@ static void run_case(const tcase *tc, const char *bin)
         }
         if (tc->piece1 == PIECE_KEPT) CHECK(strstr(h[0].why, "no piece from the partner") != NULL);
         if (tc->piece1 == PIECE_WRONG) CHECK(strstr(h[0].why, "not the right one") != NULL);
-        if (tc->ghost) CHECK(strstr(h[0].why, "not settled") && strstr(h[1].why, "not settled"));
+        if (tc->ghost) CHECK(strstr(h[0].why, "paid out first") && strstr(h[1].why, "paid out first"));
     }
     if (tc->again) {                                            /* a later session of the pair: no payout, only the pieces */
         e[1].piece = PIECE_GIVEN;
@@ -628,10 +684,12 @@ static void run_case(const tcase *tc, const char *bin)
     } else if (tc->expect == FIRST) {
         CHECK(h[0].res == SESSION_FAILED && h[1].res == SESSION_FAILED);
         CHECK(at_puzzle > 99900000 && at_puzzle < 100000000 && pay[0] == 0 && pay[1] == 0 && coin_left[F_home] && !coin_left[S_home]);
-    } else {
+    } else if (tc->expect == OTHER) {
+        CHECK(at_puzzle > 99900000 && pay[0] == 0 && pay[1] == 0 && coin_left[F_home]);   /* the prize is back at the address */
+    } else if (tc->expect == NOTHING) {
         CHECK(h[0].res == SESSION_FAILED && h[1].res == SESSION_FAILED);
         CHECK(at_puzzle == 100000000 && pay[0] == 0 && pay[1] == 0 && !coin_left[0] && !coin_left[1]);   /* nothing was signed */
-    }
+    } else CHECK(at_puzzle == 0 && pay[0] == 0 && pay[1] == 0);
     if (tc->why) CHECK(strstr(h[0].why, tc->why) || strstr(h[1].why, tc->why));
     if (tc->expect == CANCEL) CHECK(e[F_home].alives > 0);      /* sent while F waited its blocks */
     CHECK(tc->unproved || (proved[0] && proved[1]));
@@ -641,7 +699,7 @@ static void run_case(const tcase *tc, const char *bin)
         CHECK(fails_of(limpath[i], net.fp) == (i ? 0 : tc->limit[0]) + failed);
         CHECK(fails_of(limpath[i], own) == (i ? tc->limit[1] : 0) + failed);
         /* a payout counts from the signing of its first transaction until it pays */
-        CHECK(fails_of(limpath[i], paid_key) == (tc->expect == CANCEL || tc->expect == FIRST || tc->bin[0] ? 1u : 0u));
+        CHECK(fails_of(limpath[i], paid_key) == (tc->expect == CANCEL || tc->expect == FIRST || tc->expect == OTHER || tc->bin[0] ? 1u : 0u));
         pthread_mutex_destroy(&lim[i].mu);
         pthread_cond_destroy(&lim[i].cv);
         remove(limpath[i]);
@@ -679,7 +737,7 @@ static void run_copied(const char *bin)
     queue q[2] = {{.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}, {.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}};
     end e[2] = {{.in = &q[0], .out = &q[1]}, {.in = &q[1], .out = &q[0]}};
     session_chan chan = {&e[0], q_send, q_recv};
-    session_chain chn = {NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin};
+    session_chain chn = {NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending};
     session_cfg *g = &h.cfg;
     memset(g, 0, sizeof *g);
     g->ctx = ctx, g->net = &net, g->identity = &h.id, g->mine = mine, g->theirs = theirs;
@@ -779,8 +837,14 @@ int main(void)
         {.name = "the partner gives a wrong piece", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_WRONG},
         /* coins come to the puzzle address after the payout: the key would open them, so no piece is given */
         {.name = "coins at the address after the payout", .expect = PAYOUT, .pieces = true, .ghost = true, .block_ms = 400},
+        /* the prize was taken before: the session says so, and the home stops searching (home.c) */
+        {.name = "the prize already taken", .expect = TAKEN, .pieces = true, .taken = true},
+        /* another pair's first transaction takes the prize output, back to the address: this pair is not paid, and gives no piece (before,
+         * it took the spend for its payout, and with a light chain gave its piece once the other pair's payout was in the mempool) */
+        {.name = "another pair takes the prize output", .expect = OTHER, .pieces = true, .other = true},
     };
-    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) run_case(&cases[i], bin);
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++)
+        if (!regtest || (!cases[i].taken && !cases[i].other)) run_case(&cases[i], bin);   /* a node cannot be changed behind the test's back */
     run_copied(marker);
     pthread_mutex_lock(&chain.mu);
     chain.stop = true;

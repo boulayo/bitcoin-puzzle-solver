@@ -27,8 +27,9 @@ int sweep_main(int argc, char **argv)
     btc_chain chain;
     uint8_t to_spk[BTC_SPK_MAX], spk[BTC_P2PKH_LEN], sec[32], cp[32];
     const size_t to_len = to && btc_chain_parse(chain_name, &chain) ? btc_address_script(chain, to, to_spk) : 0;
-    if (!to_len || argc % 2) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest] [--rpc H:P:USER:PASSWORD |"
-                                                    " --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n       the private key, 64 hex digits, on the standard input\n"), 2;
+    if (!to_len || argc % 2) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest]\n"
+                                                    "                    [--rpc H:P:USER:PASSWORD | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n"
+                                                    "       the private key, 64 hex digits, on the standard input\n"), 2;
     char hex[80] = "";
     if (!fgets(hex, sizeof hex, stdin)) hex[0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;

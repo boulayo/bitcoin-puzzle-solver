@@ -93,7 +93,7 @@ static bool range_parse(const char *text, pz_u256 *a, pz_u256 *b, const char **w
  * command resumes the campaign instead of starting a new one. */
 static void derive_campaign_name(const opts_t *o, char *out, size_t n)
 {
-    if (o->puzzle && !o->range[0]) {
+    if (o->puzzle && !o->range[0] && !o->step[0]) {         /* with a step it is another search: not pN, which `hunt -p N` resumes */
         snprintf(out, n, "p%d", o->puzzle);
         return;
     }
@@ -278,6 +278,7 @@ static void set_step(const opts_t *o, campaign_cfg *c)
     const pz_u256 a = c->range_start, b = c->range_end;
     if (!cfg_set_step(c, &a, &b, &st, &why)) pz_die("%s", why);
     if (c->has_pubkey && !cfg_search_pubkey(c, &q)) pz_die("the public key is that of START - STEP, which is not one of the keys of the steps");
+    if (pz_u256_cmp(&c->range_end, &c->range_start) == 0) pz_log(PZ_LOG_WARN, "--step is larger than the range: only its first key is searched");
 }
 
 /* Builds a new campaign configuration from the command line. */
@@ -342,7 +343,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (c->puzzle) pz_die("campaign '%s' is for puzzle %d, not %d", c->name, c->puzzle, o->puzzle);
         pz_die("campaign '%s' is not associated with a puzzle of the database (use -c %s without -p)", c->name, c->name);
     }
-    if (o->range[0] || o->step[0]) {                           /* the keys the options name, as a new campaign would take them */
+    if (o->range[0] || o->step[0] || (o->puzzle && c->has_step)) {   /* the keys the options name, as a new campaign would take them */
         campaign_cfg t = {0};
         const char *why;
         if (o->range[0] && !range_parse(o->range, &t.range_start, &t.range_end, &why)) pz_die("%s", why);
@@ -357,7 +358,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (t.has_step != c->has_step || pz_u256_cmp(&t.range_start, &c->range_start) || pz_u256_cmp(&t.range_end, &c->range_end) ||
             (t.has_step && (pz_u256_cmp(&t.step, &c->step) || pz_u256_cmp(&t.step_base, &c->step_base))))
             pz_die("%s does not match the keys of the existing campaign (they cannot be changed; use another name with -c)",
-                   o->range[0] && o->step[0] ? "--range with --step" : o->range[0] ? "--range" : "--step");
+                   o->range[0] && o->step[0] ? "--range with --step" : o->range[0] ? "--range" : o->step[0] ? "--step" : "-p without its --step");
     }
     if (o->address[0]) {
         u8 h[20];
@@ -419,7 +420,7 @@ static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
         if ((sz->w[i / 64] >> (i % 64)) & 1) { bits++; top = i; }
     if (len <= 9 || (len <= 12 && bits != 1)) {
         char g[48];
-        snprintf(out, n, "%s keys", pz_group_digits(dec, g, sizeof g));
+        snprintf(out, n, "%s key%s", pz_group_digits(dec, g, sizeof g), strcmp(dec, "1") ? "s" : "");
     } else if (bits == 1) snprintf(out, n, "2^%d keys", top);
     else snprintf(out, n, "about %c.%c%ce%zu keys", dec[0], dec[1], dec[2], len - 1);
 }
@@ -820,7 +821,7 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
         pz_hex_encode(r->cfg.seed, 32, sd);
         const bool text_seed = o->seed[0] && strcmp(o->seed, "auto") != 0;   /* the seed the user typed is the one to give the others */
         const bool show = !text_seed && !r->cfg.has_encrypt;   /* an encrypting campaign keeps its seed out of the log (forget_seed) */
-        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --chunk-bits and %s%s%s with the other shares",
+        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --step, --chunk-bits and %s%s%s with the other shares",
                r->cfg.part, text_seed ? "the same -s" : show ? "this seed (-s " : "the seed of this campaign", show ? sd : "", show ? ")" : "");
         if (!text_seed && !show) printf("  the seed for the other computers (shown here only, not written to the log): -s %s\n", sd);
     }

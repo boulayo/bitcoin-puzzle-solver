@@ -19,8 +19,8 @@ typedef struct {
     int to, from;                       /* its stdin and stdout */
 } signer;
 
-/* Starts `path session`; its stderr is that of pzpeer. */
-bool signer_start(signer *s, const char *path);
+/* Starts `path session`; its stderr is appended to log, or is that of pzpeer when log is NULL. */
+bool signer_start(signer *s, const char *path, const char *log);
 bool signer_send(signer *s, uint8_t type, const uint8_t *payload, size_t len);
 /* Closes its input: at the end of its input pzsign gives its answer. */
 void signer_end_input(signer *s);

@@ -159,7 +159,7 @@ static void test_signing(const char *bin, int first)
     signer s[2];
     for (int i = 0; i < 2; i++) {
         const size_t n = signer_job(job, i, first, eid, piece[i], (const uint8_t(*)[33])pub, f.p33, (const uint8_t(*)[32])digests, 2);
-        CHECK(signer_start(&s[i], bin) && signer_send(&s[i], SIGNER_JOB, job, n));
+        CHECK(signer_start(&s[i], bin, NULL) && signer_send(&s[i], SIGNER_JOB, job, n));
     }
     relay r[2] = {{s, 0, NULL, 0, false}, {s, 1, NULL, 0, false}};
     pthread_t th[2];

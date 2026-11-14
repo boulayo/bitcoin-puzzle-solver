@@ -34,6 +34,9 @@ case $MINE in ERROR*|"") echo "E2E NET FAILED: the node gives no address: $MINE"
 rpc generatetoaddress "[101, \"$MINE\"]" >/dev/null
 ( while sleep 1; do rpc generatetoaddress "[1, \"$MINE\"]" >/dev/null; done ) &
 
+# pzsolve writes its points to dp.bin at its saves, every 60 seconds: a home publishes nothing before. A home alone solves the puzzle of
+# the test in half a minute on a fast machine, so its pzsolve saves every 3 seconds here (the environment reaches it through pzpeer)
+export PZ_TEST_CHECKPOINT_INTERVAL=3
 CHAIN=(--rpc "$PZ_REGTEST")
 MEET=()
 if [ -n "${PZ_E2E_MEET:-}" ]; then
@@ -89,7 +92,7 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     wait "${PID[a]}" "${PID[b]}" "${PID[c]}"
     [ -n "$NPID" ] && kill $NPID 2>/dev/null
     echo "== try $try"; for h in a b c; do grep -h -E "rendezvous|session|pzsolve|KEY|home stopped" "$T/$h.log" | head -24 | sed "s/^/   $h /"; done
-    PAID=$(grep -l "PAID" "$T"/[abc].log | sed 's|.*/\(.\)\.log|\1|' | tr '\n' ' ')
+    PAID=$(grep -l "ended: paid" "$T"/[abc].log | sed 's|.*/\(.\)\.log|\1|' | tr '\n' ' ')
     if [ "$(echo $PAID | wc -w)" -ge 2 ]; then
         set -- $PAID
         sleep 2
@@ -103,7 +106,9 @@ print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
             KEY=$(awk '/^private key hex:/{print $4}' "$T/$h/FOUND.txt" 2>/dev/null)
             python3 -c "import sys; sys.exit(0 if sys.argv[1] and int(sys.argv[1], 16) == int(sys.argv[2], 16) else 1)" "${KEY:-}" "$K" ||
                 { echo "E2E NET FAILED: home $h has not the key in FOUND.txt (logs in $T)"; trap - EXIT; exit 1; }
-            grep -q "THE KEY OF THE PUZZLE: $KEY" "$T/$h.log" || { echo "E2E NET FAILED: home $h did not show the key"; trap - EXIT; exit 1; }
+            SHOWN=$(sed -n 's/.*THE KEY OF THE PUZZLE: \(0x[0-9a-f]*\).*/\1/p' "$T/$h.log" | head -1)
+            python3 -c "import sys; sys.exit(0 if sys.argv[1] and int(sys.argv[1], 16) == int(sys.argv[2], 16) else 1)" "${SHOWN:-}" "$K" ||
+                { echo "E2E NET FAILED: home $h did not show the key"; trap - EXIT; exit 1; }
         done
         echo "   the key, in FOUND.txt of both homes: $K"
         echo "E2E NET PASSED (try $try)"; exit 0

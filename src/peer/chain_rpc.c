@@ -118,4 +118,5 @@ static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t 
     return 1;
 }
 
-session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin}; }
+/* the node's scan reads its set of coins, which a spend in the mempool does not change: no pending to look at */
+session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, NULL}; }

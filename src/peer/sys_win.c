@@ -179,6 +179,8 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     for (int i = 0; ok && i < 3; i++) {
         if (to && i == 0) ok = CreatePipe(&std[0], &in_w, &inherit, 0) && SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
         else if (to && i == 1) ok = CreatePipe(&out_r, &std[1], &inherit, 0) && SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+        else if (to && log && i == 2)                         /* the errors of a child with pipes, to the log */
+            std[2] = CreateFileA(log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         else if (log && i == 0) std[0] = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, NULL);
         else if (log && i == 1)
             std[1] = CreateFileA(log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

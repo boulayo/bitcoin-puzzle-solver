@@ -94,6 +94,8 @@ def answer(method, p):
         mine = {t for t, v in txs.items() if any(o[0] == p[0] for o in v[3])}
         mine |= {t for t, v in txs.items() if any(i[0] in mine and txs[i[0]][3][i[1]][0] == p[0] for i in v[2])}
         return sorted(({"tx_hash": t, "height": txs[t][1]} for t in mine), key=lambda e: (e["height"] == 0, e["height"]))
+    if method == "blockchain.scripthash.get_mempool":
+        return [e for e in answer("blockchain.scripthash.get_history", p) if e["height"] == 0]
     raise ValueError("unknown method")
 
 

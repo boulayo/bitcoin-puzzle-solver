@@ -209,6 +209,7 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     if (to) {                                                  /* the copies on 0 and 1 stay open across exec, the originals do not */
         posix_spawn_file_actions_adddup2(&fa, in[0], 0);
         posix_spawn_file_actions_adddup2(&fa, out[1], 1);
+        if (log) posix_spawn_file_actions_addopen(&fa, 2, log, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
     } else if (log) {
         posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
         posix_spawn_file_actions_addopen(&fa, 1, log, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);

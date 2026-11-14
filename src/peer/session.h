@@ -13,8 +13,9 @@
 #define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 426 bytes at most */
 
 /* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
- * while a session waits for blocks, and is skipped by the reader. S_PIECE, after the payout, carries the secret piece of a side. */
-enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE };
+ * while a session waits for blocks, and is skipped by the reader. After the payout S_SECOND carries the second transaction (empty from
+ * a side that does not have it) and S_PIECE the secret piece of a side. */
+enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE, S_SECOND };
 
 typedef struct {
     void *ctx;
@@ -37,6 +38,9 @@ typedef struct {
     /* one output of a P2PKH script (a prize of the network file): 1 when it is confirmed, unspent and spendable, with its value in out;
      * 0 when it is not; -1 when the chain cannot be asked. NULL: not offered */
     int (*coin)(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out);
+    /* the transactions of the mempool that pay to or spend from a P2PKH script, -1 when the chain cannot be asked: a light chain does not
+     * show a coin whose spend waits in the mempool. NULL: coins shows those coins (a node's scan of its set) */
+    int (*pending)(void *ctx, const uint8_t spk[BTC_P2PKH_LEN]);
 } session_chain;
 
 #define SESSION_PRIZES_MAX 16
@@ -57,11 +61,16 @@ typedef struct {
 /* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets
  * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces. Once the payout has its confirmations
  * and nothing of value is left at the puzzle address, the two sides give each other their pieces, and each has the key. */
+#define PAID_TX_MAX 600                     /* a second transaction: two signed P2PKH inputs and two outputs, about 400 bytes */
 typedef struct {
     uint64_t paid_at;                       /* the height at which the prize was seen spent in a block; 0: not paid */
     uint8_t first[32];                      /* the txid of the first transaction, whose output 0 the payout spent */
+    uint8_t second[PAID_TX_MAX];            /* the second transaction, signed (second_len 0: not known here yet) */
+    size_t second_len;
+    bool told;                              /* the payout was shown on the terminal */
     bool have_key;
     uint8_t key[32];                        /* the key of the puzzle, the sum of the two pieces (have_key); the caller wipes it */
+    bool empty;                             /* out: the chain shows the puzzle address empty, and no prize of the network file: taken */
 } session_paid;
 
 typedef struct {
@@ -83,6 +92,7 @@ typedef struct {
     payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
     int nprizes;
     const char *pzsign;                    /* the signer */
+    const char *pzsign_log;                 /* where its messages go (NULL: where pzpeer's go) */
     session_limit *limit;                   /* NULL: no limit (tests) */
     bool *proved;                           /* set when the partner has proved its distance (NULL: not wanted) */
     const session_chan *chan;
@@ -96,6 +106,7 @@ typedef struct {
     session_paid *paid;                     /* the payout of the pair, read and written (NULL: the pieces are not exchanged) */
     int reveal_conf;                        /* the confirmations of the payout before the pieces are exchanged (0: 6) */
     void (*say)(void *user, const char *line);   /* the steps that matter to the owner, one short line each (NULL: none) */
+    void (*on_paid)(void *user, const session_paid *p);   /* the payout is known (paid_at, first, second): to keep it (NULL: none) */
     void *user;
 } session_cfg;
 

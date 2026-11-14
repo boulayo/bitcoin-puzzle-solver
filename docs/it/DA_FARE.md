@@ -209,6 +209,26 @@ tentativi. Restano aperti:
 | K4 | Le prove di cb-mpc sulla chiave Paillier e sulla cifratura del pezzo hanno un margine di 2^-50 per tentativo, non 2^-128 | Nessuno: con i limiti dei fallimenti resta vicino a 3·2^-50. Scritto in NETWORK.md 7.6 |
 | K5 | Un messaggio costruito ad arte fa riservare alla libreria circa 120 MB prima di essere rifiutato | Accettato (solo memoria, una firma alla volta); oppure una modifica locale di cb-mpc |
 
+### 3.9 Scambio dei pezzi, stima del tempo, passo (14 novembre)
+
+Fatti: lo scambio dei pezzi dopo 6 conferme del pagamento (la chiave in `FOUND.txt` e sullo schermo, cifrata se pzsolve cifra; `paid`
+nella cartella per riprendere dopo un riavvio), una riga sullo schermo per ogni passaggio, la stima della rete ogni 10 minuti, e
+`hunt --step` per i bit ignoti in mezzo alla chiave. Decisioni prese: scelta a) per le monete delle catene nate da Bitcoin (chi riceve
+il pezzo per primo può tenersi il suo e prenderle da solo: al #140 circa 300 euro, contro metà premio intatta); 6 conferme, non 100.
+
+| | Cosa | Stato |
+|---|---|---|
+| L1 | La stima del tempo nella ricerca lineare condivisa: dai blocchi rivendicati nella rete, come per i punti del canguro (NETWORK.md 11) | Da fare insieme a C3 |
+| L2 | La stima la vede solo una casa che accetta connessioni (solo quella custodisce punti) | Si potrebbe chiedere il conteggio a qualche custode; per ora no |
+| L3 | Bit ignoti in più gruppi separati: `--step` copre un solo blocco | Più campagne, una per ogni valore del gruppo più piccolo |
+| L4 | BSGS può riportare la chiave giusta poco oltre la fine dell'intervallo (anche senza passo) | Innocuo: la chiave è sempre quella giusta |
+| L5 | Con la sola scheda video, vicino all'ordine del gruppo, un lancio il cui centro è il punto all'infinito ferma il dispositivo (c'era già prima) | Ricontrollare quel lancio sul processore, come le altre anomalie |
+
+La verifica del 14 novembre (quattro revisori: lo scambio dei pezzi, il passo, l'usabilità, memoria e thread) ha trovato un caso grave,
+corretto con un test: con una seconda coincidenza fra le stesse due case e i server Electrum, che nascondono le monete spese nel mempool,
+un partner disonesto poteva farsi dare il pezzo prima del pagamento vero e prendersi il premio. Ora il pagamento conta solo se la seconda
+transazione della coppia è in un blocco, il pezzo parte dopo 6 sue conferme provate, e la catena leggera guarda anche il mempool.
+
 ### 3.5 Librerie
 
 - OpenSSL 3.6.5 è uscita (13 CVE, nessuna tocca ciò che pzsign usa), ma cb-mpc accetta solo la 3.6.4: va scritta la procedura di

@@ -25,9 +25,10 @@
 #endif
 #define DEFAULT_PORT 28140         /* the TCP port a node listens on when --listen says nothing */
 
-static int usage(void)
+/* the usage, on stdout when it was asked for (status 0), else on stderr (2) */
+static int usage_to(FILE *f)
 {
-    fprintf(stderr, "usage: pzpeer run --network FILE --payout ADDRESS [options] [-- PZSOLVE OPTIONS]\n"
+    fprintf(f, "usage: pzpeer run --network FILE --payout ADDRESS [options] [-- PZSOLVE OPTIONS]\n"
                     "         the home: pzsolve on the network, its points published, the records of others kept, and for every\n"
                     "         coincidence with another home the prize paid half each to the two payout addresses\n"
                     "       pzpeer node --network FILE [options]\n"
@@ -58,6 +59,17 @@ static int usage(void)
                     "                            these, or a built-in list on the main chain. None is trusted: every answer is proven\n"
                     "  --pzsolve PATH, --pzsign PATH   the two programs (default: beside pzpeer, or in PATH)\n"
                     "  --id-bits N, --exit-when-done   for tests\n");
+    return f == stdout ? 0 : 2;
+}
+
+static int usage(void) { return usage_to(stderr); }
+
+/* a wrong command line: what is wrong, in one line, status 2 */
+static int bad(const char *cmd, const char *fmt, const char *arg)
+{
+    fprintf(stderr, "pzpeer %s: ", cmd);
+    fprintf(stderr, fmt, arg);
+    fprintf(stderr, " (see 'pzpeer --help')\n");
     return 2;
 }
 
@@ -111,6 +123,16 @@ static int cmd_netcheck(const char *path)
     return 0;
 }
 
+/* the time at the start of a line, as the lines of a home have it */
+static const char *stamp(char out[16])
+{
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    snprintf(out, 16, "[%02d:%02d:%02d]", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return out;
+}
+
 static volatile sig_atomic_t interrupted;
 
 static void on_signal(int sig)
@@ -121,10 +143,10 @@ static void on_signal(int sig)
 
 static void print_alert(void *user, const record *mine, const record *theirs, bool merge)
 {
-    char x[65], o[65];
+    char x[65], o[65], ts[16];
     btc_hex(mine->x, 32, x);
     btc_hex(theirs->owner, 32, o);
-    printf("alert (%s): x %s, the other owner %s\n", merge ? "merge" : "useful", x, o);
+    printf("%s alert (%s): x %s, the other owner %s\n", stamp(ts), merge ? "merge" : "useful", x, o);
     fflush(stdout);
 }
 
@@ -145,7 +167,8 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         if (!strcmp(a, "--allow-private")) { allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { no_bt = true; continue; }
         if (!strcmp(a, "--no-portmap")) { portmap = false; continue; }
-        if (!v) return usage();
+        if (!strcmp(a, "--help")) return usage_to(stdout);
+        if (!v) return bad("node", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
         if (!strcmp(a, "--network")) network = v;
         else if (!strcmp(a, "--dir")) dir = v;
         else if (!strcmp(a, "--bind")) bind = v;
@@ -154,14 +177,14 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         else if (!strcmp(a, "--debug")) debug = v;
         else if (!strcmp(a, "--listen")) {
             port = strtol(v, &end, 10);
-            if (*end || port < 0 || port > 65535) return usage();
+            if (*end || port < 0 || port > 65535) return bad("node", "--listen: invalid value '%s' (expected a port from 0 to 65535)", v);
         } else if (!strcmp(a, "--store-gb")) {
             store_gb = strtol(v, &end, 10);
-            if (*end || store_gb < 1 || store_gb > 1000000) return usage();
-        } else return usage();
+            if (*end || store_gb < 1 || store_gb > 1000000) return bad("node", "--store-gb: invalid value '%s' (expected 1 to 1000000)", v);
+        } else return bad("node", "unrecognized option '%s'", a);
         i++;
     }
-    if (!network) return usage();
+    if (!network) return bad("node", "%s", "--network FILE is missing");
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     netfile nf;
     record_net net;
@@ -207,14 +230,16 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     sys_on_stop(on_signal);
     const int n = dht_start(d);
     btc_hex(id.xonly, 32, idhex);
+    char ts[16];
     if (n < 0) fprintf(stderr, "cannot listen on port %ld\n", port);
-    else if (port) printf("node %s, listening on port %u, %d contacts\n", idhex, dht_port(d), n);
-    else printf("node %s, not listening, %d contacts\n", idhex, n);
+    else if (port) printf("%s node %s, listening on port %u, %d contact%s\n", stamp(ts), idhex, dht_port(d), n, n == 1 ? "" : "s");
+    else printf("%s node %s, not listening, %d contact%s\n", stamp(ts), idhex, n, n == 1 ? "" : "s");
     fflush(stdout);
     for (int tick = 1; n >= 0 && !interrupted; tick++) {
         sys_sleep_ms(200);
         if (tick % 300 == 0) {                                 /* every minute */
-            printf("%d contacts, %llu records held\n", dht_count(d), (unsigned long long)dht_local_count(d));
+            const int c = dht_count(d);
+            printf("%s %d contact%s, %llu records held\n", stamp(ts), c, c == 1 ? "" : "s", (unsigned long long)dht_local_count(d));
             fflush(stdout);
         }
     }
@@ -250,7 +275,8 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
         if (!strcmp(a, "--no-bt")) { cfg.no_bt = true; continue; }
         if (!strcmp(a, "--no-portmap")) { cfg.portmap = false; continue; }
-        if (!v) return usage();
+        if (!strcmp(a, "--help")) return usage_to(stdout);
+        if (!v) return bad("run", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
         if (!strcmp(a, "--network")) cfg.network = v;
         else if (!strcmp(a, "--dir")) cfg.dir = v;
         else if (!strcmp(a, "--payout")) cfg.payout = v;
@@ -270,21 +296,27 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits") || !strcmp(a, "--store-gb")) {
             char *end;
             const long n = strtol(v, &end, 10);
-            if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : !strcmp(a, "--id-bits") ? 32 : 1000000)) return usage();
+            if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : !strcmp(a, "--id-bits") ? 32 : 1000000))
+                return fprintf(stderr, "pzpeer run: %s: invalid value '%s' (expected %s)\n", a, v,
+                               !strcmp(a, "--listen") ? "a port from 0 to 65535" : !strcmp(a, "--id-bits") ? "0 to 32" : "1 to 1000000"), 2;
             if (!strcmp(a, "--listen")) cfg.listen_port = (int)n;
             else if (!strcmp(a, "--id-bits")) cfg.id_bits = (unsigned)n;
             else cfg.store_gb = (unsigned)n;
-        } else return usage();
+        } else return bad("run", "unrecognized option '%s'", a);
         i++;
     }
     cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
-    if (!cfg.network || !cfg.payout) return usage();
+    if (!cfg.network || !cfg.payout) return bad("run", "%s", !cfg.network ? "--network FILE is missing" : "--payout ADDRESS is missing");
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     return home_run(&cfg);
 }
 
 int main(int argc, char **argv)
 {
+#ifdef SIGPIPE
+    signal(SIGPIPE, SIG_IGN);                                   /* a terminal or a pipe that goes away is no reason to die, leaving pzsolve */
+#endif
+    if (argc == 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h") || !strcmp(argv[1], "help"))) return usage_to(stdout);
     if (argc >= 2 && !strcmp(argv[1], "version")) {
         printf("pzpeer %s (%s)\n", PZ_VERSION, PZ_BUILD_INFO);
         return 0;

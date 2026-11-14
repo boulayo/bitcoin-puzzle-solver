@@ -447,7 +447,34 @@ static uint64_t feerate(void *ctx)
     return f[(n - 1) / 2];                                     /* the lower median: servers that raise the fee win only as a majority */
 }
 
-session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin}; }
+/* The transactions of the mempool that touch a script, the most any server lists: a spend there takes its coin out of listunspent, so a
+ * coin about to be spent looks gone already. -1 when no server answered. */
+static int pending(void *ctx, const uint8_t spk[BTC_P2PKH_LEN])
+{
+    chain_spv *c = ctx;
+    servers s;
+    uint8_t sh[32];
+    int n = -1;
+    open_all(&s, c);
+    script_hash(spk, BTC_P2PKH_LEN, sh);
+    for (int i = 0; i < c->nservers; i++) {
+        json_w w;
+        json_doc d;
+        const json_val *res;
+        if (!s.up[i]) continue;
+        jw_init(&w);
+        jw_arr(&w), put_hash(&w, sh), jw_end(&w);
+        if (!electrum_call(&s.e[i], "blockchain.scripthash.get_mempool", &w, &d, &res)) continue;
+        const int k = res->type == JSON_ARRAY ? (int)res->n : 0;
+        if (k > n) n = k;
+        if (n < 0) n = 0;
+        json_free(&d);
+    }
+    close_all(&s);
+    return n;
+}
+
+session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, pending}; }
 
 int chain_spv_ready(chain_spv *c, char *why, size_t cap)
 {

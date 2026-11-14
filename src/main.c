@@ -82,7 +82,7 @@ static const char *hunt_text(void)
 "  -r, --range S:E         custom range in hexadecimal (inclusive); a key outside it is not reported, not even when the last block\n"
 "                          of the linear search reaches it\n"
 "      --step STEP         only the keys S, S + STEP, S + 2*STEP, ... up to E (hexadecimal): a key whose unknown bits are one block\n"
-"                          in the middle, the others known (docs/en/USAGE.md, \"Steps\"); with any mode\n"
+"                          in the middle, the others known (docs/en/USAGE.md, section 3); with any mode\n"
 "  -a, --address ADDR      bitcoin address to find: \"1...\" or \"bc1q...\" (compressed key); required unless -k is used\n"
 "  -k, --pubkey HEX        known public key (compressed 33 bytes or uncompressed 65 bytes): enables the kangaroo and BSGS\n"
 "\n"

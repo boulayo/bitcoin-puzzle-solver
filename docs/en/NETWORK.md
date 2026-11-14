@@ -398,7 +398,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 Between the two homes, over a Noise channel between their identities (`src/peer/session.c`, run in a thread with the channel and the
 chain given as interfaces). Party 0 is the owner with the smaller identity; `eid = SHA256("pznet1/eid" || F || record_0 || record_1)`;
 F, the party whose tiny coin goes into the second transaction, is the last bit of `eid`, S the other. Every step is a message both sides
-send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`, and 24, `S_PIECE`; an
+send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`, and 24 and 25, `S_PIECE` and `S_SECOND`; an
 `S_ABORT` with its reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so
 that NATs and relays do not cut the channel as idle, and the reader skips it):
 
@@ -437,15 +437,23 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    again. F also sends the second transaction itself when it got the whole signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
    (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the session ends instead of waiting for
    ever, and F, then, tries its cancel.
-7. `S_PIECE`, once the payout is settled: the secret piece of the side, 32 bytes. Settled means 6 confirmations of the block of the spend
-   (counted from the height at which the session saw the prize spent, at or above that block), output 0 of the first transaction still
-   spent in a block (a reorganization that took the payout back shows it unspent, or the coins of the puzzle again), and less than
-   100 000 satoshis at the puzzle address: the key protects nothing more. Each side checks the piece it gets against the public piece of
-   the partner's record, adds the two, and checks that the sum is the key of the puzzle. Someone gives first, and a partner can keep its
+7. The payout counts only when the spend of output 0 of the first transaction is this pair's second transaction: another pair's first
+   transaction can spend it too, the prize going back to the puzzle address. With the whole signature a side checks that its second
+   transaction is in a block; F without it checks that the prize did not come back to the address. Then `S_SECOND`: the second
+   transaction, signed, from each side that has it (empty otherwise); F takes S's, checked (it spends outputs 0 and 1 of the first, pays
+   the two payout addresses, and both its inputs are validly signed, which only the two homes together can do for the first).
+8. `S_PIECE`, once the payout is settled: the secret piece of the side, 32 bytes. Settled means 6 confirmations of the second transaction,
+   proven by a block that holds it (when both its outputs are spent already and its depth cannot be read, the state must have held for 6
+   blocks in a row), output 0 of the first spent in a block, no transaction of the mempool that touches the puzzle address (a light chain
+   does not show a coin whose spend waits there), and less than 100 000 satoshis at the address: the key protects nothing more. Coins of
+   100 000 satoshis or more that came to the address after the payout are paid out first, by a new payout of the pair, and the pieces
+   follow. Each side checks the piece it gets against the public piece of the partner's record, adds the two, and checks that the sum is
+   the key of the puzzle. Someone gives first, and a partner can keep its
    own piece: all it wins is what the key still opens, the coins of the address on the chains that split from Bitcoin in 2017 and after
    (the prizes of 2015 and of July 2017 are there too: 1.40 BCH and 1.40 BSV at #140, about 300 euros in November 2026, against 14 BTC)
    and whatever comes to the address later. Six confirmations: a reorganization of more blocks has not happened since 2013, and the
-   partner would have to make one to take the prize back; the exchange waits (6 + 6) blocks of 20 minutes at most.
+   partner would have to make one to take the prize back (a reorganization that takes the second transaction out starts the count again);
+   the exchange waits (6 + 6) blocks of 20 minutes at most.
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
@@ -466,8 +474,9 @@ before the second transaction, S keeping either signature back, an old copy of t
 cost the prize a fee and a tiny coin. Not done yet: the count published in the network
 and countersigned by the partner, so that it survives a restore of the seed; the file is next to the seed and goes with it in a copy.
 
-**After the payout** (`src/peer/home.c`). The pair, the first transaction and the height go into `HOME/paid`, a line each, so that the
-pieces are still exchanged after a restart: a session of a pair in that file only exchanges them (hello, proofs, `S_PIECE`). It is tried
+**After the payout** (`src/peer/home.c`). The pair, the first and the second transaction and the height go into `HOME/paid`, a line
+each, as soon as the payout is known (before the wait for its confirmations), so that the pieces are still exchanged after a restart: a
+session of a pair in that file only exchanges them (hello, proofs, `S_SECOND`, `S_PIECE`). It is tried
 again every 10 minutes for a day, until the key is known. The key goes into `HOME/FOUND.txt` and on the terminal, as pzsolve does; when the
 campaign of pzsolve encrypts its key (`--encrypt-pubkey` or `--encrypt-password` after `--`, the public key in its `campaign.conf`), the
 file and the terminal carry only the encrypted line, which `pzsolve decrypt-key` opens. With the prize paid pzsolve has nothing more to
@@ -476,7 +485,10 @@ lacks this home's piece.
 
 **What the terminal shows.** One line with the time for each step that matters: the coincidence and its partner, the proofs, each
 transaction sent (its txid) and confirmed, the payout with the amount, F's wait and cancel, the exchange of the pieces and the key, and the
-end of the session with its reason. Every 10 minutes a line of the network: its nodes, the points in all, its jumps a second and the share
+end of the session with its reason (`session ID: ended: paid; the key of the puzzle is known`, `... ended: failed: REASON`). A
+coincidence that comes after the prize was taken is not signed (one line says so), and pzsolve stops: a home that paid stays on only to
+give the partner its piece; one whose session finds the puzzle address empty stops searching too. When pzsolve ends on its own the line
+says whether it found the key (and where it is) or why it stopped. Every 10 minutes a line of the network: its nodes, the points in all, its jumps a second and the share
 of this home, and the time within which the key comes with half the chance and with 9 in 10. The network is estimated from what this home
 keeps as a custodian, so only a home that listens shows it: a record goes to the 5 nodes closest to its key, so the network holds about
 `held × nodes / 5` records (`held` those this home keeps), each worth `2^dpbits` jumps on average, and its rate is the growth of `held`
@@ -803,7 +815,7 @@ make && make peer && make signer            # pzsolve, pzpeer, pzsign (OpenSSL i
 make peer-test                              # the unit tests, the signing ones with the real pzsign
 bitcoind -regtest -daemon -rpcuser=pz -rpcpassword=pz -fallbackfee=0.0002
 PZ_REGTEST=127.0.0.1:18443:pz:pz PZSIGN=build/pzsign build/peer/t_session    # the session on the node
-PZ_REGTEST=127.0.0.1:18443:pz:pz tests/peer/e2e_net.sh   # the whole network: a custodian, two homes, a payout
+PZ_REGTEST=127.0.0.1:18443:pz:pz tests/peer/e2e_net.sh   # the whole network: a custodian node, three homes, a payout, the key
 ```
 
 By hand, every home runs, with the same network file (section 5),
@@ -825,7 +837,9 @@ cookie file instead (section 8.1).
 The home seed is made on the first run in `HOME/home.seed` (keep a copy: it is the key of every point of the home); pzpeer refuses a seed
 file that others may read, or a link, and a home folder that others can open. `HOME/start.key` is the start key pzpeer gives to pzsolve,
 written at every start through a new file of mode 0600; `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
-in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`.
+in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`, and what pzsign says in `HOME/pzsign.out`. After a payout `HOME/paid`
+keeps the pair until the pieces are exchanged, and the key goes into `HOME/FOUND.txt`; the node of the home keeps its contacts and the
+records it holds for others in `HOME/node/`.
 
 ### A node that stays on
 
