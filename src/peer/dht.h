@@ -154,6 +154,7 @@ double dht_nodes(dht *d);
 /* What the node holds: the records of the network with x, the number of them, the alert pairs of an owner in its mailbox. */
 int dht_local_records(dht *d, const uint8_t x[32], record *out, int max);
 uint64_t dht_local_count(dht *d);
+double dht_local_weight(dht *d);   /* the jumps the records held stand for: the sum of 2^(their zero bits) */
 int dht_local_mbox(dht *d, const uint8_t owner[32], mbox_pair *pairs, int max);
 /* SHA256("pznet1/mbox" || owner): the mailboxes of an owner are the DHT_KSTORE nodes closest to it. */
 void dht_mbox_key(const uint8_t owner[32], uint8_t k[32]);

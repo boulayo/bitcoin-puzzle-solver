@@ -22,6 +22,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   possession. A custodian's entry is 38 bytes, with the owner's number in a file of owners beside the store. A record carries its own
   zero bits (at least those of the network). The custody by default is 5 GB (2^27 records). A new protocol (`pznet2`): homes of the
   earlier test builds do not talk to these.
+- pzpeer: the zero bits of a home's points follow the size of the network. The network file gives the least; a home picks
+  `ceil(log2(20·√W / (N·S)))` (N nodes estimated with a lookup, S the records of `--store-gb`), so that the records of the whole search
+  fit at half the room of the custodians, at most 8 bits more than the network's. It picks them at the start and changes them when they
+  move by 2 or more: pzsolve resumes its campaign with the new `--dp-bits`, and `dpbits.txt` remembers from which point of `dp.bin` each
+  value holds. The time estimate weighs each record by its zero bits.
 - pzpeer: a home that finds points faster than it publishes them (tens of graphics cards at 30 zero bits) says how many wait; the
   network sees them late, and the coincidences, which grow with the square of the points seen, come later.
 - `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the

@@ -43,6 +43,8 @@
 #define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
 #define STATUS_S 600               /* the status line of the network, every 10 minutes */
 #define C_MEAN 1.06                /* the mean cost of the kangaroo in units of sqrt(W): KANG_C_MEAN of pzsolve (src/kangaroo.h) */
+#define DP_MORE 8                  /* zero bits a home may add to the network's (choose_dp) */
+#define DP_CHANGES 64              /* changes of them a home remembers */
 
 /* the own points: x prefix -> index in dp.bin (the distance is read back from the file when it is needed: 16 bytes a point in memory) */
 typedef struct {
@@ -95,11 +97,15 @@ typedef struct {
     bool prize_paid;                /* a session of this home paid the prize: pzsolve has nothing more to search */
     bool prize_gone;                /* a session found the puzzle address empty: the prize was taken (by others) */
     bool told_late;                 /* said once that coincidences after the prize are not signed */
-    struct { int64_t t; uint64_t held, own; } smp[7];   /* the status lines of the last hour: when, records held, own points */
+    struct { int64_t t; uint64_t held; double weight, own; } smp[7];   /* the status lines of the last hour: when, records held, the
+                                                                         * jumps they and the own points stand for */
     int nsmp;
     double nodes[6];                /* the last estimates of the nodes that listen (dht_nodes) */
     int nnodes;
     unsigned dp;                    /* the zero bits of the points of pzsolve now: the network's or more (choose_dp) */
+    struct { uint64_t from; unsigned dp; } dps[DP_CHANGES];   /* the zero bits of the records of dp.bin from each index on (dpbits.txt) */
+    int ndps;
+    char dppath[1200];
 } home;
 
 static int64_t mono_s(void) { return sys_now_ms() / 1000; }
@@ -465,6 +471,64 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     return true;
 }
 
+/* ---- the zero bits ---- */
+
+/* The zero bits of the points of this home (docs/en/NETWORK.md 6): the search takes about E = 2 sqrt(W) jumps, which are E / 2^dp
+ * records, each kept by DHT_KSTORE nodes; N nodes that keep S records each are half full at the end when 2^dp = 10 E / (N S). At least
+ * the network's, at most DP_MORE more: beyond, a walk loses more at each stop (2^dp jumps) than the room saves. */
+static unsigned choose_dp(const home *h, double nodes)
+{
+    const long double W = pz_u256_to_ld(&h->nf.end) - pz_u256_to_ld(&h->nf.start) + 1;
+    const long double S = h->cfg->store_gb ? h->cfg->store_gb * 1e9L / STORE_ENTRY : DHT_STORE_DEFAULT;
+    const long double want = ceill(log2l(20 * sqrtl(W) / ((nodes > 1 ? nodes : 1) * S)));
+    const unsigned lo = h->nf.dpbits, hi = lo + DP_MORE;
+    return want <= lo ? lo : want >= hi ? hi : (unsigned)want;
+}
+
+/* the zero bits of the record of dp.bin at index i: those of pzsolve when it wrote it */
+static unsigned dp_at(const home *h, uint64_t i)
+{
+    int j = h->ndps - 1;
+    while (j > 0 && h->dps[j].from > i) j--;
+    return h->dps[j].dp;
+}
+
+/* dpbits.txt: a line "index zero-bits" for each change, appended (a line cut by a crash is a change forgotten: a point that has not the
+ * zero bits it would then claim claims the network's) */
+static void dps_load(home *h)
+{
+    unsigned long long from;
+    unsigned dp;
+    FILE *f = sys_fopen(h->dppath, "r");
+    h->dps[0].from = 0, h->dps[0].dp = h->nf.dpbits, h->ndps = 1;
+    while (f && h->ndps < DP_CHANGES && fscanf(f, "%llu %u", &from, &dp) == 2)
+        if (dp >= h->nf.dpbits && dp <= h->nf.dpbits + DP_MORE && from >= h->dps[h->ndps - 1].from)
+            h->dps[h->ndps].from = from, h->dps[h->ndps++].dp = dp;
+    if (f) fclose(f);
+    h->dp = h->dps[h->ndps - 1].dp;
+}
+
+/* The zero bits for a network of about this many nodes (0: not known), when they differ from those of pzsolve by 2 or more (a network 4
+ * times bigger or smaller): each change costs the walks a restart. */
+static unsigned dp_for(const home *h, double nodes)
+{
+    const unsigned dp = choose_dp(h, nodes);
+    return nodes > 0 && h->ndps < DP_CHANGES && (dp >= h->dp + 2 || dp + 2 <= h->dp) ? dp : h->dp;
+}
+
+/* the zero bits of the next records of dp.bin (pzsolve is not running): those it wrote keep theirs */
+static void set_dp(home *h, unsigned dp, double nodes)
+{
+    FILE *f = sys_fopen(h->dpbin, "rb");
+    const off_t end = f && fseeko(f, 0, SEEK_END) == 0 ? ftello(f) : 0;
+    if (f) fclose(f);
+    const uint64_t from = end > DPBIN_HDR ? (uint64_t)(end - DPBIN_HDR) / DPBIN_REC : 0;
+    if ((f = sys_fopen(h->dppath, "a"))) fprintf(f, "%llu %u\n", (unsigned long long)from, dp), fclose(f);
+    if (h->dps[h->ndps - 1].from == from) h->ndps--;
+    h->dps[h->ndps].from = from, h->dps[h->ndps++].dp = dp, h->dp = dp;
+    say(h, "the network has about %.0f nodes: the points of pzsolve have %u zero bits", nodes, dp);
+}
+
 /* ---- sessions ---- */
 
 typedef struct {
@@ -727,25 +791,32 @@ static const char *span(double s, char *out, size_t cap)
     return out;
 }
 
-/* The work of the whole network, from what this home holds as a custodian: a record goes to the DHT_KSTORE nodes closest to its key, so
- * the network holds about held * nodes / DHT_KSTORE of them, each worth 2^dpbits jumps on average; its rate is the growth of held over the
- * last hour. With the kangaroo the key comes after n jumps with P = 1 - exp(-(n / c)^2), c = C_MEAN / 0.8862 * sqrt(W) (docs/en/RESEARCH.md
- * 4.5): given that it has not come after `done`, half the chance is within sqrt(done^2 + c^2 ln 2) - done more jumps, 9 in 10 within
- * sqrt(done^2 + c^2 ln 10) - done. The estimate of the nodes is a fifth off at each lookup: the last six are averaged. */
-static void network_status(home *h, int contacts, uint64_t own)
+/* The nodes of the network that listen: the average of the last six estimates of dht_nodes, each a fifth off. */
+static double nodes_now(home *h)
 {
-    const uint64_t held = dht_local_count(h->d);
-    const int64_t now = mono_s();
-    if (h->nsmp == 7) memmove(h->smp, h->smp + 1, 6 * sizeof h->smp[0]), h->nsmp = 6;
-    h->smp[h->nsmp].t = now, h->smp[h->nsmp].held = held, h->smp[h->nsmp].own = own, h->nsmp++;
-    const double nodes_now = h->cfg->listen_port ? dht_nodes(h->d) : 0;
-    if (nodes_now > 0) {
+    const double n = dht_nodes(h->d);
+    if (n > 0) {
         if (h->nnodes == 6) memmove(h->nodes, h->nodes + 1, 5 * sizeof h->nodes[0]), h->nnodes = 5;
-        h->nodes[h->nnodes++] = nodes_now;
+        h->nodes[h->nnodes++] = n;
     }
     double nodes = 0;
     for (int i = 0; i < h->nnodes; i++) nodes += h->nodes[i] / h->nnodes;
-    const double dt = (double)(now - h->smp[0].t), per = ldexp(1, (int)h->nf.dpbits);
+    return nodes;
+}
+
+/* The work of the whole network, from what this home holds as a custodian: a record goes to the DHT_KSTORE nodes closest to its key, so
+ * the network holds about held * nodes / DHT_KSTORE of them, each worth 2^(its zero bits) jumps on average; its rate is the growth of
+ * their worth over the last hour. With the kangaroo the key comes after n jumps with P = 1 - exp(-(n / c)^2), c = C_MEAN / 0.8862 *
+ * sqrt(W) (docs/en/RESEARCH.md 4.5): given that it has not come after `done`, half the chance is within sqrt(done^2 + c^2 ln 2) - done
+ * more jumps, 9 in 10 within sqrt(done^2 + c^2 ln 10) - done. own: the points of this home, own_w the jumps they stand for. */
+static void network_status(home *h, int contacts, double nodes, uint64_t own, double own_w)
+{
+    const uint64_t held = dht_local_count(h->d);
+    const double weight = dht_local_weight(h->d);
+    const int64_t now = mono_s();
+    if (h->nsmp == 7) memmove(h->smp, h->smp + 1, 6 * sizeof h->smp[0]), h->nsmp = 6;
+    h->smp[h->nsmp].t = now, h->smp[h->nsmp].held = held, h->smp[h->nsmp].weight = weight, h->smp[h->nsmp].own = own_w, h->nsmp++;
+    const double dt = (double)(now - h->smp[0].t);
     const double share = nodes / (nodes < DHT_KSTORE ? (nodes > 1 ? nodes : 1) : DHT_KSTORE);   /* records in the network per record held */
     const char *why = !h->cfg->listen_port ? " (this home does not listen: no time estimate)"
                     : h->nsmp < 2 || dt <= 0 || nodes <= 0 ? "; the time estimate comes with the next line, in 10 minutes"
@@ -754,10 +825,10 @@ static void network_status(home *h, int contacts, uint64_t own)
     if (why)
         return say(h, "network: %d contact%s; %llu points of this home, %llu records held here as a custodian%s", contacts, contacts == 1 ? "" : "s",
                    (unsigned long long)own, (unsigned long long)held, why);
-    const double grew = held > h->smp[0].held ? (double)(held - h->smp[0].held) : 0;   /* a restart of the store can only lower it */
-    const double rate = grew / dt * share * per, mine = (double)(own - h->smp[0].own) / dt * per;
+    const double grew = weight > h->smp[0].weight ? weight - h->smp[0].weight : 0;   /* a restart of the store can only lower it */
+    const double rate = grew / dt * share, mine = (own_w - h->smp[0].own) / dt;
     const long double W = pz_u256_to_ld(&h->nf.end) - pz_u256_to_ld(&h->nf.start) + 1, c = C_MEAN / 0.8862269254527580L * sqrtl(W);
-    const long double done = (long double)held * share * per;
+    const long double done = (long double)weight * share;
     char a[40], b[40], pts[24], jr[24], sh[16];
     const double t50 = rate > 0 ? (double)((sqrtl(done * done + c * c * logl(2)) - done) / rate) : INFINITY;
     const double t90 = rate > 0 ? (double)((sqrtl(done * done + c * c * logl(10)) - done) / rate) : INFINITY;
@@ -913,7 +984,8 @@ int home_run(const home_cfg *cfg)
     h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.pay_max = PAYOUTS_MAX;
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
-    h->dp = h->nf.dpbits;
+    snprintf(h->dppath, sizeof h->dppath, "%.1100s/dpbits.txt", h->dir);
+    dps_load(h);
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;
     if (!terms(h) || !payout_address(h)) return 2;
     if (cfg->rpc) {                                             /* the node: a wrong --rpc or chain now, not at the first session */
@@ -971,11 +1043,17 @@ int home_run(const home_cfg *cfg)
     btc_hex(h->id.xonly, 8, idhex);
     say(h, "home %s... on network %s: %d contact%s, %s", idhex, h->nf.net, nc, nc == 1 ? "" : "s", cfg->listen_port ? "listening" : "not listening");
     if (h->prize_paid) say(h, "the prize of this network is paid: pzsolve is not started%s", access(h->foundpath, F_OK) ? "; the pieces of the key are still to be exchanged" : ", and the key is in FOUND.txt");
+    if (nc > 0 && !h->prize_paid) {
+        const double nodes = nodes_now(h);
+        const unsigned dp = dp_for(h, nodes);
+        if (dp != h->dp) set_dp(h, dp, nodes);
+    }
     int rc = nc < 0 || (!h->prize_paid && !start_pzsolve(h, err, sizeof err));
     if (rc) fprintf(stderr, "%s\n", nc < 0 ? "cannot listen" : err);
     /* the feed: the new points of dp.bin to the table, every half second */
     dpfeed df = {0};
     uint64_t published = 0, found = 0;
+    double found_w = 0;                                         /* the jumps the points of this home stand for */
     bool solved_alone = false, searched = false, met = nc > 0;
     int solo = 0;                                               /* the tries left to send the coins of a key pzsolve found on its own */
     int64_t solo_at = 0;
@@ -987,8 +1065,16 @@ int home_run(const home_cfg *cfg)
         sys_sleep_ms(pause);
         const int contacts = dht_count(h->d);                  /* what the network is to this home: at the first contact, and every 10 minutes */
         if ((contacts > 0) != met || mono_s() >= next_status) {
-            if (contacts) network_status(h, contacts, found);
+            const double nodes = contacts ? nodes_now(h) : 0;
+            if (contacts) network_status(h, contacts, nodes, found, found_w);
             else say(h, "network: no contact, looking for the others; %llu points of this home wait for them", (unsigned long long)found);
+            const unsigned dp = dp_for(h, nodes);
+            if (h->pzsolve && dp != h->dp) {                    /* pzsolve saves its state, and goes on with the new zero bits */
+                int st;
+                sys_proc_interrupt(h->pzsolve), (void)sys_proc_ended(h->pzsolve, true, &st), h->pzsolve = 0;
+                set_dp(h, dp, nodes);
+                if (!start_pzsolve(h, err, sizeof err)) rc = 1, fprintf(stderr, "%s\n", err);
+            }
             const uint64_t waiting = h->pzsolve && contacts ? dpfeed_waiting(&df) : 0;
             if (waiting > 1000) say(h, "%llu points of this home are not published yet: it finds them faster than it publishes them, and the network sees"
                                        " them late", (unsigned long long)waiting);
@@ -1016,7 +1102,9 @@ int home_run(const home_cfg *cfg)
             for (int i = 0; i < n; i++) {
                 own_add(&h->own, p[i].x, p[i].index);
                 memset(&recs[i], 0, sizeof recs[i]);
-                recs[i].t = p[i].t, recs[i].dp = h->dp;
+                const unsigned dp = dp_at(h, p[i].index);
+                recs[i].t = p[i].t, recs[i].dp = record_dp_ok(p[i].x, dp) ? dp : h->nf.dpbits;
+                found_w += ldexp(1, (int)recs[i].dp);
                 memcpy(recs[i].x, p[i].x, 32);
             }
             pthread_mutex_unlock(&h->mu);

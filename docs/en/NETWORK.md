@@ -201,6 +201,16 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - **Distinguished points**: exactly `--dp-bits`, whatever the walkers and the memory of this home would pick. A point the table leaves out
   (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
   of the network.
+- **How many zero bits.** The network file gives the least, `dpbits`; the home picks its own from the size of the network, so that the
+  records of the whole search fit in the custodians. The search takes about `E = 2√W` jumps, which are `E / 2^dp` records, each kept by
+  5 nodes: N nodes that keep S records each (S from `--store-gb` of this home) are half full at the end when `2^dp = 10 E / (N S)`. The
+  home takes that, at least `dpbits` and at most `dpbits + 8` (beyond, a walk loses more at each stop, `2^dp` jumps, than the room
+  saves). It does so at the start, with the nodes of one lookup (`dht_nodes`, as for the time estimate of 7.5), and with each status line, with the mean of the last
+  six; it changes them only when they move by 2 or more (a network 4 times bigger or smaller), since pzsolve then stops and resumes its
+  campaign with the new `--dp-bits`. A walk of one home still meets the walks of homes with other zero bits: past the meeting both walk
+  the same path, and the first point that has the zero bits of both is in the records of both. `dpbits.txt` in the home folder keeps
+  the changes (`index zero-bits`, the first record of `dp.bin` that has them), so that each record says the zero bits pzsolve had when
+  it wrote it. Hostile nodes that lie in the lookups move a home's zero bits within those 8 bits, no further.
 - `dp.bin` is the usual log of the campaign. pzpeer reads it.
 - `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network. On the curve, W = 2^40, 3000 trials each, one thread:
   schema 3 1.061 ± 0.011, net-06 1.182 ± 0.012 steps per √W: net-06 costs 11.4 % more, as the simulator predicted (+11 %), the price
@@ -511,8 +521,8 @@ the txid. Every 10 minutes a line of the network: its nodes, the points in all, 
 it gets of the prize on average (its share of the work times the 90% the terms leave to the homes: two homes split a prize, one alone
 takes it whole, so either way the share of the work), and the time within which the key comes with half the chance and with 9 in 10. The network is estimated from what this home
 keeps as a custodian, so only a home that listens shows it: a record goes to the 5 nodes closest to its key, so the network holds about
-`held × nodes / 5` records (`held` those this home keeps), each worth `2^dpbits` jumps on average, and its rate is the growth of `held`
-over the last hour. The nodes come from the distances of the 20 closest to a random point (`dht_nodes`: the j-th of N nodes is at about
+`held × nodes / 5` records (`held` those this home keeps), each worth `2^dp` jumps on average with dp its zero bits, and its rate is the
+growth of their worth over the last hour. The nodes come from the distances of the 20 closest to a random point (`dht_nodes`: the j-th of N nodes is at about
 j / (N + 1) of the space of the IDs), a fifth off for one lookup, the mean of the last six used. Then the model of pzsolve: the key comes
 after n jumps with `P = 1 − exp(−(n/c)^2)`, `c = 1.06 / 0.8862 × √W`, and given the work done (`done`) half the chance is within
 `√(done² + c² ln 2) − done` more jumps, 9 in 10 within `√(done² + c² ln 10) − done`. `t_dht` checks the estimate on 30 nodes and 2000

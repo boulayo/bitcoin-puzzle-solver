@@ -92,6 +92,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 |---|---|---|
 | C1 | Record corto (senza firma su ogni record, un terzo dello spazio): sì | fatto il 18 novembre: 66 byte (34 in una STORE, dove il proprietario è chi la manda; 38 nell'archivio, col numero del proprietario), con i bit di zeri del punto |
 | C2 | Ripubblicazione leggera: sì | da fare insieme a C1, prima del #140 |
+| C2b | Bit di zeri adattivi: sì | fatto il 18 novembre: la casa li sceglie dalla grandezza della rete (al minimo quelli del file della rete, al massimo 8 di più) e li cambia quando la rete diventa 4 volte più grande o più piccola |
 | C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | da fare. Richiede che ogni motore di ricerca di pzsolve (CPU e schede video) riporti le chiavi che servono da prova di lavoro: senza quella prova chiunque potrebbe dichiarare fatti dei blocchi mai cercati |
 | C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare. Il pool: MARA Slipstream, gratuito e aperto a tutti da agosto 2026, con un'interfaccia per i programmi; MARA trova il 4-6% dei blocchi, quindi circa 3 ore di attesa. Con la quota dell'autore l'invio dovrebbe diventare automatico: da decidere quando si fa C3 (serve HTTPS: il `curl` del sistema o l'OpenSSL di pzsign) |
 

@@ -164,3 +164,5 @@ int dht_local_records(dht *d, const uint8_t x[32], record *out, int max) { retur
 
 uint64_t dht_local_count(dht *d) { return store_count(d->custody); }
 
+double dht_local_weight(dht *d) { return (double)store_weight(d->custody); }
+
