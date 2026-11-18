@@ -561,7 +561,7 @@ static void test_republish(void)
     CHECK(start_node(o, port, -1));
     if (!o->d) return;
     memcpy(again, mine, sizeof again);
-    CHECK(dht_publish(o->d, again, 100) == 100 && file_size(o->dir, "own.bin") == size);
+    CHECK(dht_publish(o->d, again, 100) == 0 && file_size(o->dir, "own.bin") == size);   /* sent before the restart */
     uint8_t dk[32];
     record fresh = {.t = 0, .dp = net.dpbits};
     hashed("a point after the restart", dk);

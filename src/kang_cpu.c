@@ -448,6 +448,6 @@ void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)
         }
     }
     free(dups);
-    if (!atomic_load(&r->found)) kang_herd_put(ks, w);               /* for the next run (kang_herd_save) */
+    kang_herd_put(ks, w);                                          /* for the next run (kang_herd_save) */
     kang_worker_free(w);
 }

@@ -256,16 +256,31 @@ static int herd_selftest(void)
     kang_herd_put(ks, w);
     kang_herd_save(ks);
     ks->nhout = 0;
+    ks->epoch++;                                            /* the next session of this computer */
     kang_herd_load(ks);
     HCHK(ks->nhin == (size_t)K);
-    kang_herd_start(ks, a, 2, 7);                           /* 150 of the 200 */
-    kang_herd_start(ks, b, 1, 8);                           /* the last 50, and 50 new starts */
-    int same = 0, fresh = 0;
-    for (int i = 0; i < 150; i++) same += same_walker(w, i, a, i);
-    for (int i = 0; i < 50; i++) same += same_walker(w, 150 + i, b, i), fresh += !same_walker(w, 0, b, 50 + i) && b->lastdp[50 + i] == b->round;
-    HCHK(same == K && fresh == 50);
+    kang_herd_start(ks, a, 2, 7);                           /* 150 slots, each with a saved walker of its group while the file has one */
+    kang_herd_start(ks, b, 1, 8);                           /* 100 slots: the rest, and new starts where its group has none left */
+    int same = 0, fresh = 0, used[200] = {0};
+    for (int pass = 0; pass < 2; pass++) {
+        kang_worker *x = pass ? b : a;
+        for (int i = 0; i < x->K; i++) {
+            int hit = -1;
+            for (int j = 0; j < K && hit < 0; j++) hit = !used[j] && same_walker(w, j, x, i) ? j : -1;
+            if (hit >= 0) used[hit] = 1, same++;
+            else fresh += x->lastdp[i] == x->round;
+        }
+    }
+    int mix[2][4] = {{0}};                                  /* every herd keeps the mix of its slots: tame, wild on Q, wild on 3Q */
+    kang_worker *fresh_a = kang_worker_new(ks, 150, 9);
+    for (int i = 0; i < 150; i++) mix[0][a->kind[i]]++, mix[1][fresh_a->kind[i]]++;
+    kang_worker_free(fresh_a);
+    HCHK(same + fresh == 250 && same >= 190 && !memcmp(mix[0], mix[1], sizeof mix[0]));
     ks->jump_tag[0] ^= 1;                                   /* another jump table: the file is not taken */
-    free(ks->hin), ks->hin = NULL, ks->nhin = ks->hnext = 0;
+    free(ks->hin), ks->hin = NULL, ks->nhin = 0;
+    kang_herd_load(ks);
+    HCHK(ks->nhin == 0);
+    ks->jump_tag[0] ^= 1, ks->epoch += 5;                   /* nor a file of another session (a crash, a copy on another computer) */
     kang_herd_load(ks);
     HCHK(ks->nhin == 0);
     kang_worker_free(w), kang_worker_free(a), kang_worker_free(b);

@@ -812,36 +812,68 @@ void kang_init_herd_parallel(kang_state *ks, kang_worker *w, int nthreads, u64 s
 
 /* ---------------- the herd across stops ---------------- */
 
-#define HERD_MAGIC "PZHERD1\n"
-#define HERD_HDR 16              /* the magic, the tag of the jump table, the number of groups, 3 zero bytes */
+#define HERD_MAGIC "PZHERD2\n"
+#define HERD_HDR 28              /* the magic, the tag of the jump table, the number of groups, 3 zero bytes, the tag of the groups, the epoch */
 #define HERD_REC 26              /* d (24 bytes, little-endian), the group, the sign (1: negative) */
 
 static void herd_path(const kang_state *ks, char *out, size_t cap) { snprintf(out, cap, "%s/herd.bin", ks->r->cfg.dir); }
 
+/* the residue mod KANG_MOD of the walkers of group g */
+static u32 grp_res(const kang_state *ks, int g) { return ks->spec[ks->grp_band[ks->grp_first[g]]].res; }
+
+/* the header: the jump table, the groups (their coefficients and residues) and the epoch (session and node) of the run that wrote it */
+static void herd_header(const kang_state *ks, u64 epoch, u8 h[HERD_HDR])
+{
+    u8 gs[2 * KANG_GRP_MAX], t[32];
+    memset(h, 0, HERD_HDR);
+    memcpy(h, HERD_MAGIC, 8), memcpy(h + 8, ks->jump_tag, 4), h[12] = (u8)ks->ngrp;
+    for (int g = 0; g < ks->ngrp; g++) gs[2 * g] = ks->grp_coef[g], gs[2 * g + 1] = (u8)grp_res(ks, g);
+    pz_sha256(gs, (size_t)(2 * ks->ngrp), t);
+    memcpy(h + 16, t, 4);
+    for (int b = 0; b < 8; b++) h[20 + b] = (u8)(epoch >> (8 * b));
+}
+
+/* The walkers of herd.bin, when the run just before this one of this computer wrote it (the session before, the same --node): a copy of
+ * the folder on another computer, or a file a run that did not stop well left (a kill, a crash: the walkers then walked on past it), would
+ * walk again where walkers walked already. Each kept by group, so that every worker gets back the mix of kang_worker_new. */
 void kang_herd_load(kang_state *ks)
 {
     char path[640];
-    u8 h[HERD_HDR], e[HERD_REC];
+    u8 h[HERD_HDR], want[HERD_HDR], e[HERD_REC];
     herd_path(ks, path, sizeof path);
     FILE *f = fopen(path, "rb");
     if (!f) return;
-    if (fread(h, 1, HERD_HDR, f) == HERD_HDR && !memcmp(h, HERD_MAGIC, 8) && !memcmp(h + 8, ks->jump_tag, 4) && h[12] == ks->ngrp) {
-        size_t cap = 0;
-        while (fread(e, 1, HERD_REC, f) == HERD_REC) {
-            if (e[24] >= ks->ngrp) continue;
-            if (ks->nhin == cap) ks->hin = pz_xrealloc(ks->hin, (cap = cap ? 2 * cap : 4096) * sizeof *ks->hin);
-            kang_hrec *r = &ks->hin[ks->nhin++];
-            for (int j = 0; j < 3; j++) {
-                r->d.w[j] = 0;
-                for (int b = 0; b < 8; b++) r->d.w[j] |= (u64)e[8 * j + b] << (8 * b);
-            }
-            r->grp = e[24], r->sigma = e[25] ? -1 : 1;
-        }
-        char n[32];
-        if (ks->nhin) pz_log(PZ_LOG_INFO, "kangaroo: %s walkers of the last run go on from where they stopped (%s)", pz_fmt_u64(ks->nhin, n, sizeof n), path);
+    herd_header(ks, ks->epoch - 1, want);
+    const bool ok = fread(h, 1, HERD_HDR, f) == HERD_HDR && !memcmp(h, want, HERD_HDR);
+    size_t cap = 0;
+    while (ok && fread(e, 1, HERD_REC, f) == HERD_REC) {
+        kang_hrec r = {{{0, 0, 0}}, e[24], e[25] ? -1 : 1};
+        for (int j = 0; j < 3; j++)
+            for (int b = 0; b < 8; b++) r.d.w[j] |= (u64)e[8 * j + b] << (8 * b);
+        i192 m = r.d;
+        if (i192_is_neg(&m)) i192_neg(&m);
+        const u32 res = r.grp < ks->ngrp ? grp_res(ks, r.grp) : KANG_MOD, got = i192_mod_u32(&r.d, KANG_MOD);
+        if (res == KANG_MOD || m.w[2] >> 61 || (got != res && got != (KANG_MOD - res) % KANG_MOD)) continue;   /* no walker of this table */
+        if (ks->nhin == cap) ks->hin = pz_xrealloc(ks->hin, (cap = cap ? 2 * cap : 4096) * sizeof *ks->hin);
+        ks->hin[ks->nhin++] = r;
     }
     fclose(f);
     pz_secure_zero(e, sizeof e);
+    char n[32];
+    if (ks->nhin) pz_log(PZ_LOG_INFO, "kangaroo: %s walkers of the last run go on from where they stopped (%s)", pz_fmt_u64(ks->nhin, n, sizeof n), path);
+    else if (!ok) pz_log(PZ_LOG_INFO, "kangaroo: %s is not of the run before this one of this computer: its walkers start anew", path);
+    /* by group: a counting sort */
+    kang_hrec *by = ks->nhin ? pz_xmalloc(ks->nhin * sizeof *by) : NULL;
+    size_t at = 0;
+    for (int g = 0; g < ks->ngrp; g++) {
+        ks->gfirst[g] = at;
+        for (size_t i = 0; i < ks->nhin; i++)
+            if (ks->hin[i].grp == g) by[at++] = ks->hin[i];
+        ks->gn[g] = at - ks->gfirst[g], ks->gnext[g] = 0;
+    }
+    if (ks->hin) pz_secure_zero(ks->hin, ks->nhin * sizeof *ks->hin);
+    free(ks->hin);
+    ks->hin = by;
 }
 
 /* The point of a saved walker, d*G + sigma*c*Q'; false when it is at infinity (d = 0 on a tame walker) */
@@ -865,51 +897,61 @@ static bool herd_point(const kang_state *ks, const kang_hrec *h, pz_gej *p)
     return true;
 }
 
-/* walkers [from, to) of w from h (h[0] for walker from), KANG_START_BATCH at a time with one inversion; one that cannot be used starts anew */
-static void herd_range(kang_state *ks, kang_worker *w, int from, int to, const kang_hrec *h, u64 rng[4])
+typedef struct { kang_state *ks; kang_worker *w; const kang_hrec *slot; const u8 *has; int from, to; u64 rng[4]; } herd_task;
+
+/* the saved walkers of slots idx[0..n), with one inversion; one that cannot be used starts anew */
+static void herd_batch(herd_task *t, const int *idx, int n)
 {
     pz_gej pj[KANG_START_BATCH];
     pz_ge p[KANG_START_BATCH];
-    for (int i0 = from; i0 < to; i0 += KANG_START_BATCH) {
-        const int n = to - i0 < KANG_START_BATCH ? to - i0 : KANG_START_BATCH;
-        bool ok = true;
-        for (int k = 0; k < n; k++) {
-            const kang_hrec *r = &h[i0 - from + k];
-            w->spec[i0 + k] = r->grp, w->kind[i0 + k] = ks->grp_coef[r->grp];
-            ok &= herd_point(ks, r, &pj[k]);
-        }
-        if (ok && pz_gej_to_ge_batch(p, pj, (size_t)n)) {
-            for (int k = 0; k < n; k++) start_set(w, i0 + k, &p[k], h[i0 - from + k].d, h[i0 - from + k].sigma);
-            continue;
-        }
-        for (int k = 0; k < n; k++) {                             /* one at infinity (practically never): one at a time */
-            const kang_hrec *r = &h[i0 - from + k];
-            if (herd_point(ks, r, &pj[0]) && pz_gej_to_ge(&p[0], &pj[0])) start_set(w, i0 + k, &p[0], r->d, r->sigma);
-            else kang_restart_rng(ks, w, i0 + k, rng);
-        }
+    bool ok = true;
+    memset(pj, 0, sizeof pj);
+    for (int k = 0; k < n; k++) ok &= herd_point(t->ks, &t->slot[idx[k]], &pj[k]);
+    if (ok && pz_gej_to_ge_batch(p, pj, (size_t)n)) {
+        for (int k = 0; k < n; k++) start_set(t->w, idx[k], &p[k], t->slot[idx[k]].d, t->slot[idx[k]].sigma);
+        return;
+    }
+    for (int k = 0; k < n; k++) {                                 /* one at infinity (practically never): one at a time */
+        const kang_hrec *r = &t->slot[idx[k]];
+        if (herd_point(t->ks, r, &pj[0]) && pz_gej_to_ge(&p[0], &pj[0])) start_set(t->w, idx[k], &p[0], r->d, r->sigma);
+        else kang_restart_rng(t->ks, t->w, idx[k], t->rng);
     }
 }
 
-typedef struct { kang_state *ks; kang_worker *w; const kang_hrec *h; int n, from, to; u64 rng[4]; } herd_task;
-
+/* slots [from, to): the saved walkers back, KANG_START_BATCH at a time, and the runs of the others started anew as kang_start_range does */
 static void *herd_thread(void *p)
 {
     herd_task *t = p;
-    const int mid = t->n < t->from ? t->from : t->n > t->to ? t->to : t->n;   /* [from, mid) saved walkers, [mid, to) new starts */
-    herd_range(t->ks, t->w, t->from, mid, t->h + t->from, t->rng);
-    kang_start_range(t->ks, t->w, mid, t->to, t->rng);
+    int idx[KANG_START_BATCH], nb = 0;
+    for (int i = t->from, fresh = t->from; i <= t->to; i++) {
+        const bool saved = i < t->to && t->has && t->has[i];
+        if (i == t->to || saved) {
+            if (fresh < i) kang_start_range(t->ks, t->w, fresh, i, t->rng);
+            fresh = i + 1;
+        }
+        if (saved && (idx[nb++] = i, nb == KANG_START_BATCH)) herd_batch(t, idx, nb), nb = 0;
+    }
+    if (nb) herd_batch(t, idx, nb);
     return NULL;
 }
 
 void kang_herd_start(kang_state *ks, kang_worker *w, int nthreads, u64 stream)
 {
-    pthread_mutex_lock(&ks->hmu);
-    const int n = ks->nhin - ks->hnext < (size_t)w->K ? (int)(ks->nhin - ks->hnext) : w->K;
-    kang_hrec *h = n ? pz_xmalloc((size_t)n * sizeof *h) : NULL;
-    if (n) memcpy(h, ks->hin + ks->hnext, (size_t)n * sizeof *h), ks->hnext += (size_t)n;
+    kang_hrec *slot = NULL;
+    u8 *has = NULL;
+    pthread_mutex_lock(&ks->hmu);                                 /* each slot takes a saved walker of its own group, when one is left */
+    for (int i = 0; i < w->K && ks->nhin; i++) {
+        const int g = w->spec[i];
+        if (ks->gnext[g] == ks->gn[g]) continue;
+        if (!slot) slot = pz_xmalloc((size_t)w->K * sizeof *slot), has = pz_xcalloc((size_t)w->K, 1);
+        slot[i] = ks->hin[ks->gfirst[g] + ks->gnext[g]++], has[i] = 1;
+    }
+    bool left = false;
+    for (int g = 0; g < ks->ngrp; g++) left |= ks->gnext[g] < ks->gn[g];
+    if (ks->hin && !left) pz_secure_zero(ks->hin, ks->nhin * sizeof *ks->hin), free(ks->hin), ks->hin = NULL, ks->nhin = 0;   /* all taken */
     pthread_mutex_unlock(&ks->hmu);
     if (nthreads <= 1) {                                          /* one thread: the new starts from the generator of the worker */
-        herd_task t = {ks, w, h, n, 0, w->K, {0}};
+        herd_task t = {ks, w, slot, has, 0, w->K, {0}};
         memcpy(t.rng, w->rng, sizeof t.rng);
         herd_thread(&t);
         memcpy(w->rng, t.rng, sizeof t.rng);
@@ -919,13 +961,14 @@ void kang_herd_start(kang_state *ks, kang_worker *w, int nthreads, u64 stream)
         herd_task tk[32];
         const int per = (w->K + nthreads - 1) / nthreads;
         for (int t = 0; t < nthreads; t++) {
-            tk[t] = (herd_task){ks, w, h, n, t * per < w->K ? t * per : w->K, (t + 1) * per < w->K ? (t + 1) * per : w->K, {0}};
+            tk[t] = (herd_task){ks, w, slot, has, t * per < w->K ? t * per : w->K, (t + 1) * per < w->K ? (t + 1) * per : w->K, {0}};
             krng_seed(tk[t].rng, ks->r->cfg.seed, "init", ks->epoch, stream * 64 + (u64)t);
             pthread_create(&th[t], NULL, herd_thread, &tk[t]);
         }
         for (int t = 0; t < nthreads; t++) pthread_join(th[t], NULL);
     }
-    if (h) pz_secure_zero(h, (size_t)n * sizeof *h), free(h);
+    if (slot) pz_secure_zero(slot, (size_t)w->K * sizeof *slot);
+    free(slot), free(has);
 }
 
 void kang_herd_put(kang_state *ks, kang_worker *w)
@@ -933,38 +976,43 @@ void kang_herd_put(kang_state *ks, kang_worker *w)
     kang_worker_sync(w);
     pthread_mutex_lock(&ks->hmu);
     if (ks->nhout + (size_t)w->K > ks->caphout) {
-        ks->caphout = (ks->nhout + (size_t)w->K) * 2;
+        ks->caphout = ks->nhout + (size_t)w->K;
         ks->hout = pz_xrealloc(ks->hout, ks->caphout * sizeof *ks->hout);
     }
     for (int i = 0; i < w->K; i++) ks->hout[ks->nhout++] = (kang_hrec){w->d[i], w->spec[i], w->sigma[i] < 0 && w->kind[i] ? -1 : 1};
     pthread_mutex_unlock(&ks->hmu);
 }
 
+static bool herd_write(FILE *f, const kang_hrec *r, u8 e[HERD_REC])
+{
+    for (int j = 0; j < 3; j++)
+        for (int b = 0; b < 8; b++) e[8 * j + b] = (u8)(r->d.w[j] >> (8 * b));
+    e[24] = r->grp, e[25] = r->sigma < 0;
+    return fwrite(e, 1, HERD_REC, f) == HERD_REC;
+}
+
 void kang_herd_save(kang_state *ks)
 {
     char path[640], tmp[660];
+    const run_ctx *r = ks->r;
     herd_path(ks, path, sizeof path);
-    if (atomic_load(&ks->r->found)) {                             /* solved: nothing to go on with */
+    if (atomic_load(&r->found) && !r->found_write_failed && !r->found_seal_failed) {   /* solved: nothing to go on with */
         remove(path);
         return;
     }
     pthread_mutex_lock(&ks->hmu);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = pz_fopen_private(tmp, false);                       /* the distances lead to the key, as those of dp.bin */
-    u8 h[HERD_HDR] = HERD_MAGIC, e[HERD_REC];
-    memcpy(h + 8, ks->jump_tag, 4), h[12] = (u8)ks->ngrp;
+    u8 h[HERD_HDR], e[HERD_REC];
+    herd_header(ks, ks->epoch, h);
     bool ok = f && fwrite(h, 1, HERD_HDR, f) == HERD_HDR;
-    for (size_t i = 0; ok && i < ks->nhout + (ks->nhin - ks->hnext); i++) {   /* this run's walkers, then the saved ones no worker took */
-        const kang_hrec *r = i < ks->nhout ? &ks->hout[i] : &ks->hin[ks->hnext + (i - ks->nhout)];
-        for (int j = 0; j < 3; j++)
-            for (int b = 0; b < 8; b++) e[8 * j + b] = (u8)(r->d.w[j] >> (8 * b));
-        e[24] = r->grp, e[25] = r->sigma < 0;
-        ok = fwrite(e, 1, HERD_REC, f) == HERD_REC;
-    }
+    for (size_t i = 0; ok && i < ks->nhout; i++) ok = herd_write(f, &ks->hout[i], e);
+    for (int g = 0; ok && ks->hin && g < ks->ngrp; g++)          /* the saved walkers no worker took, for a later run with more */
+        for (size_t i = ks->gfirst[g] + ks->gnext[g]; ok && i < ks->gfirst[g] + ks->gn[g]; i++) ok = herd_write(f, &ks->hin[i], e);
     pz_secure_zero(e, sizeof e);
-    if (f) ok = fclose(f) == 0 && ok;
+    if (f) ok = fflush(f) == 0 && pz_fd_sync(fileno(f)) == 0 && ok, ok = fclose(f) == 0 && ok;
     if (!ok || pz_rename_replace(tmp, path) != 0) {
-        remove(tmp);
+        remove(tmp), remove(path);
         pz_log(PZ_LOG_WARN, "kangaroo: the walkers could not be saved to %s: the next run starts them anew", path);
     }
     pthread_mutex_unlock(&ks->hmu);

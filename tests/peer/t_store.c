@@ -297,6 +297,43 @@ static bool has_pair(const mbox_pair *p, int n, const record *a, const record *b
     return false;
 }
 
+/* A crash that lost the line of an owner in PATH.owners but kept its entry: the entry names nobody, and a new owner does not take its
+ * number (before, it did, and the entry became the new owner's record) */
+static void test_lost_owner(void)
+{
+    char err[200], opath[256];
+    uint8_t x1[32], x2[32], x3[32], head[STORE_HDR + 32];
+    record mine, others[4], found[4];
+    int no;
+    point_x("lost 1", x1), point_x("lost 2", x2), point_x("lost 3", x3);
+    snprintf(opath, sizeof opath, "%s.owners", PATH);
+    wipe();
+    store *st = store_open(PATH, ctx, &net, err, sizeof err);
+    CHECK(st != NULL);
+    if (!st) return;
+    const record b1 = make(&idb, 0, x1), c2 = make(&idc, 0, x2), a3 = make(&ida, 0, x3);
+    CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_OK && store_put(st, &c2, &mine, others, 4, &no) == STORE_OK);
+    store_close(st);
+    FILE *f = fopen(opath, "rb");                               /* the owners file loses its second line */
+    CHECK(f && fread(head, 1, sizeof head, f) == sizeof head);
+    if (f) fclose(f);
+    f = fopen(opath, "wb");
+    CHECK(f && fwrite(head, 1, sizeof head, f) == sizeof head);
+    if (f) fclose(f);
+    st = store_open(PATH, ctx, &net, err, sizeof err);
+    CHECK(st != NULL);
+    if (!st) return;
+    CHECK(store_find(st, x2, found, 4) == 0 && store_find(st, x1, found, 4) == 1);
+    CHECK(store_put(st, &a3, &mine, others, 4, &no) == STORE_OK);   /* a new owner: not the number of the lost one */
+    store_close(st);
+    st = store_open(PATH, ctx, &net, err, sizeof err);
+    CHECK(st != NULL);
+    if (!st) return;
+    CHECK(store_find(st, x2, found, 4) == 0 && store_find(st, x3, found, 4) == 1 && same(&found[0], &a3));
+    store_close(st);
+    wipe();
+}
+
 static void test_mbox(void)
 {
     uint8_t x1[32], x2[32];
@@ -397,6 +434,7 @@ int main(void)
     test_store();
     test_limits();
     test_damaged();
+    test_lost_owner();
     test_mbox();
     secp256k1_context_destroy(ctx);
     printf(fails ? "t_store: %d FAILED\n" : "t_store: OK\n", fails);

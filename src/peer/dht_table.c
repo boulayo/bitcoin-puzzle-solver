@@ -302,7 +302,8 @@ void job_ping(dht *d, const dht_contact *c)
 
 /* ---- lookups ---- */
 
-enum { C_NEW, C_ASKED, C_OK, C_FAIL };   /* a candidate: not asked yet, asked and not answered yet, answered, failed */
+enum { C_NEW, C_ASKED, C_OK, C_FAIL, C_SKIP };   /* a candidate: not asked yet, asked and not answered yet, answered, failed, given up
+                                                  * without being asked (from C_FAIL on, it is out of the lookup) */
 
 typedef struct {
     dht_contact c;
@@ -320,7 +321,7 @@ static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c,
         if (!memcmp(s[i].c.id, c->id, 32)) return;
     if (*n == SHORT_MAX) {
         int out = *n - 1;
-        while (out >= 0 && s[out].state != C_FAIL) out--;
+        while (out >= 0 && s[out].state < C_FAIL) out--;
         if (out < 0) {
             for (out = *n - 1; out >= 0 && (s[out].state != C_NEW || !memcmp(s[out].by, own, 32)); out--) {}
             if (out < 0 || !closer(t, c->id, s[out].c.id)) return;
@@ -349,9 +350,9 @@ static void cand_distrust(cand *s, int n, const uint8_t failed[32])
         if (!memcmp(s[i].c.id, failed, 32)) by = s[i].by;
     if (!by || !memcmp(by, own, 32)) return;
     for (int i = 0; i < n; i++)
-        if (!memcmp(s[i].by, by, 32)) bad += (s[i].state == C_FAIL) - (s[i].state == C_OK);
+        if (!memcmp(s[i].by, by, 32)) bad += (s[i].state >= C_FAIL) - (s[i].state == C_OK);
     for (int i = 0; bad >= 3 && i < n; i++)
-        if (s[i].state == C_NEW && !memcmp(s[i].by, by, 32)) s[i].state = C_FAIL;
+        if (s[i].state == C_NEW && !memcmp(s[i].by, by, 32)) s[i].state = C_SKIP;
 }
 
 /* how many of the queries so far went to the block of c's address (a lookup asks at most LOOKUP_BLOCK_MAX there) */
@@ -384,8 +385,8 @@ static int lookup_next(lookup *L)
 {
     for (int i = 0, live = 0; i < L->n && live < L->want && L->nasked < LOOKUP_ASK_MAX; i++) {
         cand *c = &L->s[i];
-        if (c->state == C_NEW && asked_in_block(L->d, &c->c.addr, L->blocks, L->nasked) >= LOOKUP_BLOCK_MAX) c->state = C_FAIL;
-        if (c->state == C_FAIL) continue;
+        if (c->state == C_NEW && asked_in_block(L->d, &c->c.addr, L->blocks, L->nasked) >= LOOKUP_BLOCK_MAX) c->state = C_SKIP;
+        if (c->state >= C_FAIL) continue;
         live++;
         if (c->state == C_NEW) return i;
     }
@@ -455,7 +456,7 @@ int lookup_whole(dht *d, const uint8_t target[32], dht_contact *out, int want, b
     if (whole) *whole = true;
     for (int i = 0; i < L->n && m < L->want; i++)
         if (L->s[i].state == C_OK) out[m++] = L->s[i].c;
-        else if (whole && L->s[i].state != C_FAIL) *whole = false;    /* a node closer than some of the result never answered nor failed */
+        else if (whole && L->s[i].state != C_FAIL) *whole = false;    /* a node closer than some of the result was not asked, or did not answer */
     pthread_mutex_destroy(&L->mu);
     pthread_cond_destroy(&L->cv);
     free(L);

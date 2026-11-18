@@ -141,14 +141,22 @@ static int cc_cover(const cc_entry *e, const uint8_t k[32], dht_contact out[DHT_
     return m;
 }
 
+enum { CC_FRESH, CC_ANY, CC_CLEAN };   /* which entries cc_find takes: of the last hour, all, the clean ones */
+
 /* The custodians of k from one of the two entries around k in the order of the targets (the nearest: they share the longest prefix
- * with k) that shows them; with fresh, of the last hour only. 0 when neither does. */
-static int cc_find(const cc_list *l, const uint8_t k[32], bool fresh, dht_contact out[DHT_KSTORE], const cc_entry **e)
+ * with k) that shows them, among those cc_find takes (an entry it does not take is skipped, also as a neighbour); 0 when neither does. */
+static int cc_find(const cc_list *l, const uint8_t k[32], int how, dht_contact out[DHT_KSTORE], cc_entry **e)
 {
     const int at = cc_at(l, k);
-    for (int i = at - 1; i <= at; i++) {
-        const int n = i >= 0 && i < l->n && (!fresh || sys_now_ms() - l->e[i].at < CC_TTL_MS) ? cc_cover(&l->e[i], k, out) : 0;
-        if (n) return *e = &l->e[i], n;
+    int side[2] = {at - 1, at};
+    for (int s = 0; s < 2; s++)
+        for (; side[s] >= 0 && side[s] < l->n; side[s] += s ? 1 : -1) {
+            const cc_entry *x = &l->e[side[s]];
+            if (how == CC_ANY || (how == CC_FRESH ? sys_now_ms() - x->at < CC_TTL_MS : x->clean)) break;
+        }
+    for (int s = 0; s < 2; s++) {
+        const int n = side[s] >= 0 && side[s] < l->n ? cc_cover(&l->e[side[s]], k, out) : 0;
+        if (n) return *e = &l->e[side[s]], n;
     }
     return 0;
 }
@@ -157,10 +165,9 @@ static int cc_find(const cc_list *l, const uint8_t k[32], bool fresh, dht_contac
  * shows only its own key). *t: the target of that lookup; used, when not NULL, gets it too (when it was whole). */
 static int custodians(dht *d, const uint8_t k[32], dht_contact out[DHT_KSTORE], uint8_t t[32], cc_list *used)
 {
-    const cc_entry *e = NULL;
-    cc_entry f;
+    cc_entry *e = NULL, f;
     bool whole = true;
-    int n = cc_find(&d->cc, k, true, out, &e);
+    int n = cc_find(&d->cc, k, CC_FRESH, out, &e);
     if (!n) {
         memcpy(f.t, k, 32), f.at = sys_now_ms(), f.clean = true;
         if ((f.n = lookup_whole(d, k, f.c, DHT_K, &whole)) <= 0) return 0;
@@ -216,14 +223,24 @@ static void own_append(dht *d, const record *recs, int n)
 
 /* ---- publishing ---- */
 
+/* what a republish keeps for own.cust: the lookups it used, and the keys of the records that not all their custodians took */
+typedef struct {
+    cc_list used;
+    uint8_t (*miss)[32];
+    size_t nmiss, cap;
+} repub;
+
+#define REPUB_MISS_MAX 65536       /* keys of records not taken by all their custodians a republish remembers; beyond, own.cust is dropped */
+
 /* At most DHT_STORE_MAX records: the custodians of each, then one STORE per custodian with all its records. The first nold of them go
  * only to custodians that are not those old shows (the last republish). A lookup that gave a custodian that did not take a record is
  * no clean one in used: the next republish sends the records it covers to all their custodians. The records that at least one custodian
  * holds. */
-static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold, cc_list *used, uint64_t *copies)
+static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold, repub *rp, uint64_t *copies)
 {
+    cc_list *used = rp ? &rp->used : NULL;
     dht_contact (*cs)[DHT_KSTORE] = malloc((size_t)n * sizeof *cs);   /* the custodians of each record */
-    uint8_t (*ts)[32] = malloc((size_t)n * sizeof *ts);        /* the lookup they come from */
+    uint8_t (*ts)[32] = calloc((size_t)n, sizeof *ts);         /* the lookup they come from */
     int *ncs = calloc((size_t)n, sizeof *ncs), done = 0;
     bool (*sent)[DHT_KSTORE] = calloc((size_t)n, sizeof *sent), (*has)[DHT_KSTORE] = calloc((size_t)n, sizeof *has);
     uint8_t *held = calloc((size_t)n, 1), *req = malloc(2 + DHT_STORE_MAX * RECORD_WIRE);
@@ -234,8 +251,8 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
         dht_contact had[DHT_KSTORE];
         store_key(recs[i].x, k);
         ncs[i] = custodians(d, k, cs[i], ts[i], used);
-        const cc_entry *e;
-        const int nh = i < nold ? cc_find(old, k, false, had, &e) : 0;
+        cc_entry *e;
+        const int nh = i < nold ? cc_find(old, k, CC_ANY, had, &e) : 0;
         for (int j = 0; j < ncs[i]; j++)                       /* those that had it at the last republish have it */
             for (int h = 0; h < nh && !sent[i][j]; h++)
                 if (!memcmp(cs[i][j].id, had[h].id, 32)) sent[i][j] = has[i][j] = true, held[i] |= 2;
@@ -276,9 +293,18 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
     for (int i = 0; ok && i < n; i++) {
         done += held[i] != 0;
         if (!(held[i] & 2)) atomic_store(&d->unplaced, true);  /* on this node alone, or nowhere */
-        bool all = !stopping(d);
+        bool all = !stopping(d) && ncs[i] > 0;
         for (int j = 0; j < ncs[i]; j++) all &= has[i][j];
-        if (used && !all) cc_stale(used, ts[i], false);
+        if (rp && !all) {                                      /* the next republish sends it to all its custodians */
+            cc_stale(used, ts[i], false);
+            if (rp->nmiss == rp->cap && rp->cap < REPUB_MISS_MAX) {
+                const size_t c = rp->cap ? rp->cap * 2 : 256;
+                uint8_t (*m)[32] = realloc(rp->miss, c * 32);
+                if (m) rp->miss = m, rp->cap = c;
+            }
+            if (rp->nmiss < rp->cap) store_key(recs[i].x, rp->miss[rp->nmiss]);
+            rp->nmiss++;
+        }
     }
     free(cs), free(ts), free(ncs), free(sent), free(has), free(held), free(req), free(idx), free(jdx);
     return done;
@@ -308,7 +334,7 @@ int dht_publish(dht *d, record *recs, int n)
         if (!stopping(d)) own_append(d, recs + o, m);     /* cut by a stop: given again after the restart */
     }
     pthread_mutex_unlock(&d->p_mu);
-    return done + skip;
+    return done;
 }
 
 /* own.cust: what the last republish saw. "PZCUST02", F, the records own.bin had then and the time of the last republish to every
@@ -364,6 +390,7 @@ static void own_cut(dht *d, uint64_t n)
 {
     char path[4200];
     if (n < d->nown && sys_truncate(d->ownfd, STORE_HDR + n * RECORD_WIRE)) d->nown = n;
+    d->ncut++;
     d->replay = d->replay_end = n;
     cust_path(d, path, sizeof path);
     remove(path);
@@ -376,14 +403,15 @@ static void own_cut(dht *d, uint64_t n)
  * lookups are new: those kept are dropped. The copies sent. */
 uint64_t dht_republish(dht *d, bool all)
 {
-    cc_list old = {0}, used = {0};
+    cc_list old = {0};
+    repub rp = {0};
     uint64_t before = 0, full = 0, copies = 0, i = 0;
     const uint64_t now = wall_us() / 1000000;
     if (!rt_count(d)) return atomic_store(&d->unplaced, true), 0;   /* nobody to send them to: at the first contacts */
     record *batch = malloc(DHT_STORE_MAX * sizeof *batch);
     cust_load(d, &old, &before, &full);
     pthread_mutex_lock(&d->p_mu);
-    const uint64_t total = d->nown;
+    const uint64_t total = d->nown, cuts = d->ncut;
     d->cc.n = 0;
     pthread_mutex_unlock(&d->p_mu);
     if (all || before > total || now - full >= REPUBLISH_FULL_S) before = 0, full = now;   /* to every custodian */
@@ -394,12 +422,25 @@ uint64_t dht_republish(dht *d, bool all)
         for (; i < total && m < DHT_STORE_MAX; i++)
             if (own_read(d, i, &batch[m])) m++;
         const uint64_t nold = first < before ? before - first : 0;   /* those the last republish had */
-        (void)send_batch(d, batch, m, &old, nold < (uint64_t)m ? (int)nold : m, &used, &copies);
+        (void)send_batch(d, batch, m, &old, nold < (uint64_t)m ? (int)nold : m, &rp, &copies);
         pthread_mutex_unlock(&d->p_mu);
     }
-    if (batch && !stopping(d)) cust_save(d, &used, total, full);
+    /* a record that not all its custodians took goes to all of them next time: no lookup kept may show it held, whichever covers it */
+    cc_entry *e;
+    dht_contact tmp[DHT_KSTORE];
+    for (size_t k = 0; k < rp.nmiss && k < rp.cap; k++)
+        while (cc_find(&rp.used, rp.miss[k], CC_CLEAN, tmp, &e)) e->clean = false;
+    pthread_mutex_lock(&d->p_mu);
+    const bool same = d->ncut == cuts;                          /* own.bin was not cut meanwhile (dht_publish after a restart) */
+    pthread_mutex_unlock(&d->p_mu);
+    if (batch && !stopping(d) && same && rp.nmiss <= rp.cap) cust_save(d, &rp.used, total, full);
+    else if (!same || rp.nmiss > rp.cap) {
+        char path[4200];
+        cust_path(d, path, sizeof path);
+        remove(path);
+    }
     dlog(d, "republished %llu records: %llu copies sent", (unsigned long long)total, (unsigned long long)copies);
-    free(batch), free(old.e), free(used.e);
+    free(batch), free(old.e), free(rp.used.e), free(rp.miss);
     return copies;
 }
 

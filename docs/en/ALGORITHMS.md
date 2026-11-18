@@ -241,13 +241,17 @@ is released, under a lock of its own, so a slow disk does not stall the search t
 2^22 records) and the write is tried again; a record cut short at the end of the file is cut off at the next start.
 
 On resume the table is rebuilt from the file, and the walkers go on from where they stopped: when a run stops, every walker's distance `d`,
-sign and group go to `herd.bin` (a header of 16 bytes: the magic `"PZHERD1\n"`, the jump table id and the number of groups; then 26 bytes a
-walker), and the next run puts each one back at its point `d·G + σ·c·Q'` (the GPU walkers are read back from the device). Without it a stop
-threw away every walker's steps since its last DP, `K·2^dp` steps on average: with millions of walkers and many zero bits that is most of the
-work. The next run may have more walkers (new starts for the rest) or fewer (the others wait in the file for a later run), and other
-`--dp-bits`. A file of another jump table is not taken, and the file is deleted once the key is found. A stop that the program does not see
-(a crash, the power) loses the walkers, not the DPs: the next run starts them anew from new points (a different random stream for each
-session and each `--node`), and the old trails remain useful because each of their later DPs is already in the table. A file of another campaign (another range or
+sign and group go to `herd.bin` (a header of 28 bytes: the magic `"PZHERD2\n"`, the jump table id, the number of groups and a tag of their
+coefficients and residues, the session and `--node` of the run; then 26 bytes a walker), synced to the disk before it replaces the last one,
+and the next run puts each one back at its point `d·G + σ·c·Q'` (the GPU walkers are read back from the device, 65536 at a time). Without it
+a stop threw away every walker's steps since its last DP, `K·2^dp` steps on average: with millions of walkers and many zero bits that is most
+of the work. A walker goes back to a slot of its own group, so that every herd keeps the mix of species of a new one: the next run may have
+more walkers (new starts where a group has none left) or fewer (the others wait in the file for a later run), and other `--dp-bits`. The file
+is taken only by the next session of the same computer: a copy of the folder on another computer, or a file a run that did not stop well
+left behind (a kill, a crash, the power: its walkers walked on past it), would walk again where walkers walked already. Those runs start
+their walkers anew from new points (a different random stream for each session and each `--node`), and the old trails remain useful because
+each of their later DPs is already in the table. A walker whose distance is not of its group's residue, or too large, is not taken. The file
+is deleted once the key is found and written. A file of another campaign (another range or
 public key) is refused, and so is one written with another jump table (another seed, or the setup of another computer): the message gives both ids.
 A file of the format `"PZDP4"` (the same records, a header of 38 bytes without the jump table id: versions 1.9.1 to 1.11.0) is loaded, appended
 to and merged as it is. The formats `"PZDP1"` to `"PZDP3"` of the older layouts cannot be used: `hunt` keeps such a `dp.bin` as `dp.bin.vN` and

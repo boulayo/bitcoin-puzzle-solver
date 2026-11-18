@@ -496,17 +496,20 @@ static unsigned choose_dp(const home *h, double nodes, double walkers, unsigned 
 /* the walkers of this home's pzsolve, from the status.json of its campaign; 0 when not known yet */
 static double walkers_now(const home *h)
 {
-    char path[1300], text[8192];
+    char path[1300];
     snprintf(path, sizeof path, "%.1100s/campaigns/net-%.31s/status.json", h->dir, h->nf.net);
     FILE *f = sys_fopen(path, "rb");
-    const size_t n = f ? fread(text, 1, sizeof text, f) : 0;
+    const long size = f && fseek(f, 0, SEEK_END) == 0 ? ftell(f) : 0;   /* one line a worker: a large machine writes a large file */
+    char *text = size > 0 && size < (1 << 20) && fseek(f, 0, SEEK_SET) == 0 ? malloc((size_t)size) : NULL;
+    const size_t n = text ? fread(text, 1, (size_t)size, f) : 0;
     if (f) fclose(f);
     json_doc d;
     uint64_t k = 0;
-    if (n && n < sizeof text && json_parse(&d, text, n)) {
+    if (n && json_parse(&d, text, n)) {
         if (!json_u64(json_get(&d.v[0], "walkers"), &k)) k = 0;
         json_free(&d);
     }
+    free(text);
     return (double)k;
 }
 
@@ -535,9 +538,11 @@ static void dps_load(home *h)
     unsigned dp;
     FILE *f = sys_fopen(h->dppath, "r");
     h->dps[0].from = 0, h->dps[0].dp = h->nf.dpbits, h->ndps = 1;
-    while (f && h->ndps < DP_CHANGES && fscanf(f, "%llu %u", &from, &dp) == 2)
-        if (dp >= h->nf.dpbits && dp <= h->nf.dpbits + RECORD_DP_MORE && from >= h->dps[h->ndps - 1].from)
-            h->dps[h->ndps].from = from, h->dps[h->ndps++].dp = dp;
+    while (f && fscanf(f, "%llu %u", &from, &dp) == 2)
+        if (dp >= h->nf.dpbits && dp <= h->nf.dpbits + RECORD_DP_MORE && from >= h->dps[h->ndps - 1].from) {
+            if (from == h->dps[h->ndps - 1].from) h->ndps--;                   /* the same index: the later line holds */
+            if (h->ndps < DP_CHANGES) h->dps[h->ndps].from = from, h->dps[h->ndps++].dp = dp;
+        }
     if (f) fclose(f);
     h->dp = h->dps[h->ndps - 1].dp;
 }

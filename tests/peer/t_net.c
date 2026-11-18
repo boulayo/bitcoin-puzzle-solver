@@ -292,7 +292,7 @@ static void test_drip(void)
     noise_hs hs;
     uint8_t e[32], m[NOISE_HS_MAX], pl[NOISE_PAYLOAD_MAX], prologue[38], port[2] = {0, 0};
     size_t n, plen;
-    memcpy(prologue, "pznet2", 6), memcpy(prologue + 6, FP, 32);
+    memcpy(prologue, "pznet3", 6), memcpy(prologue + 6, FP, 32);
     memset(e, 7, sizeof e);
     CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, e));
     sys_sleep_ms(2 * SHORT_MS);

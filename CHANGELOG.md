@@ -13,8 +13,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - The kangaroo keeps its walkers across a stop: when a run stops, every walker's distance, sign and group go to `herd.bin` in the
   campaign folder (the GPU walkers read back from the device), and the next run puts each one back at its point and walks on. Before,
   a stop threw away every walker's steps since its last distinguished point, `K·2^dp` steps on average, most of the work with millions
-  of walkers and many zero bits. The next run may have more or fewer walkers, and other `--dp-bits`; the file is deleted once the key
-  is found. `status.json` tells the walkers of a kangaroo run.
+  of walkers and many zero bits. A walker goes back to a slot of its own group, so every herd keeps its mix of species; the next run may
+  have more or fewer walkers, and other `--dp-bits`. Only the next session of the same computer takes the file (not a copy of the folder,
+  nor a run after a crash); it is deleted once the key is found. `status.json` tells the walkers of a kangaroo run.
 - `hunt --step STEP`: only the keys `S, S + STEP, S + 2·STEP, ...` of the range, for a key whose unknown bits are one block in the middle.
   Every method runs at its full speed: the kangaroo and BSGS on a transformed public key, the linear engines and kernels moving by
   `STEP·G`. A campaign with a step needs 1.24.0 (`requires=` in its campaign.conf).

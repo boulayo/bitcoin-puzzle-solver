@@ -128,12 +128,24 @@ static owner_slot *owner_index(store *st, const uint8_t id[32], uint32_t num)
     return o;
 }
 
-/* a new owner: its identity at the end of PATH.owners first, and on the disk, so that every entry names an owner the file has (owners are
- * few: one sync each) */
+/* the numbers up to n taken, those without an owner as zeros (no owner is: an identity is a key): an entry that names an owner whose line
+ * a crash lost keeps naming nobody, and a new owner never gets its number */
+static bool ids_reserve(store *st, uint32_t n)
+{
+    if (n > st->capids) {
+        uint8_t (*m)[32] = realloc(st->ids, (size_t)n * 32);
+        if (!m) return false;
+        st->ids = m, st->capids = n;
+    }
+    for (; st->nids < n; st->nids++) memset(st->ids[st->nids], 0, 32);
+    return true;
+}
+
+/* a new owner: its identity at the end of PATH.owners first, so that every entry names an owner the file has */
 static owner_slot *owner_add(store *st, const uint8_t id[32])
 {
     const uint32_t num = st->nids;
-    if (num == EMPTY || sys_pwrite(st->ofd, id, 32, STORE_HDR + (int64_t)num * 32) != 32 || !sys_sync(st->ofd)) return NULL;
+    if (num == EMPTY || sys_pwrite(st->ofd, id, 32, STORE_HDR + (int64_t)num * 32) != 32) return NULL;
     return owner_index(st, id, num);
 }
 
@@ -152,7 +164,8 @@ static bool entry_decode(const store *st, const uint8_t e[STORE_ENTRY], record *
     uint8_t b[RECORD_LEN];
     uint32_t num = 0;
     for (int i = 0; i < 4; i++) num |= (uint32_t)e[RECORD_WIRE + i] << (8 * i);
-    if (num >= st->nids) return false;
+    static const uint8_t none[32];
+    if (num >= st->nids || !memcmp(st->ids[num], none, 32)) return false;   /* an owner whose line a crash lost */
     memcpy(b, e, RECORD_WIRE), memcpy(b + RECORD_WIRE, st->ids[num], 32);
     return record_decode(b, r);
 }
@@ -222,8 +235,11 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
     if (nown >= EMPTY || nent >= EMPTY) return fail(st, err, errlen, "too many records", path);
     uint8_t *buf = malloc((size_t)LOAD_CHUNK * STORE_ENTRY);
     if (!buf) return fail(st, err, errlen, "out of memory", path);
+    static const uint8_t none[32];
+    uint32_t refs = 0;                                          /* the owners the entries name */
     for (int64_t i = 0; i < nown; i++) {
-        if (sys_pread(st->ofd, buf, 32, STORE_HDR + i * 32) != 32 || !owner_index(st, buf, (uint32_t)i)) {
+        if (sys_pread(st->ofd, buf, 32, STORE_HDR + i * 32) != 32 || !(memcmp(buf, none, 32) ? owner_index(st, buf, (uint32_t)i) != NULL
+                                                                                              : ids_reserve(st, (uint32_t)i + 1))) {
             free(buf);
             return fail(st, err, errlen, "cannot read the owners", opath);
         }
@@ -237,6 +253,9 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
         }
         for (size_t j = 0; j < n; j++) {
             record r;
+            uint32_t num = 0;
+            for (int b = 0; b < 4; b++) num |= (uint32_t)buf[j * STORE_ENTRY + RECORD_WIRE + b] << (8 * b);
+            if (num < EMPTY && num + 1 > refs) refs = num + 1;
             if (!entry_decode(st, buf + j * STORE_ENTRY, &r)) continue;   /* damaged on disk: not indexed (store_read refuses it too) */
             if (i + j + STORE_CHECK_TAIL >= st->count && !record_check(ctx, net, &r)) continue;   /* the tail, where a crash cuts */
             if (!index_grow(st)) {
@@ -249,6 +268,7 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
         }
     }
     free(buf);
+    if (!ids_reserve(st, refs)) return fail(st, err, errlen, "out of memory", path);
     return st;
 }
 

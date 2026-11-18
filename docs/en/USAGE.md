@@ -138,7 +138,8 @@ campaigns/NAME/
   lock            lock (flock) that prevents two processes on the same campaign
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
-  herd.bin        kangaroo: where every walker stood when the run stopped, so that it goes on from there (deleted once the key is found)
+  herd.bin        kangaroo: where every walker stood when the run stopped, so that the next run of this computer goes on from there
+                  (another computer, or a run after a crash, starts its walkers anew; deleted once the key is found)
   session.txt     total time and sessions
   report.txt      readable report, rewritten every minute with the checkpoint (the first time 2 s after the start, and at the end)
   status.json     state for external programs (includes time left and probabilities), rewritten with report.txt

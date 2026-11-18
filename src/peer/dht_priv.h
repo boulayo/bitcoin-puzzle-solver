@@ -130,6 +130,7 @@ struct dht {
     pthread_mutex_t p_mu;          /* publishing: one batch at a time; and what follows */
     int ownfd;                     /* own.bin */
     uint64_t nown, replay, replay_end;   /* its records; those a restart may give again (dht_publish) */
+    uint64_t ncut;                 /* the times own.bin was cut (a republish under way does not save own.cust then) */
     cc_list cc;                    /* the lookups of the last hour */
     pthread_mutex_t m_mu;          /* the sleep of the maintenance thread */
     pthread_cond_t m_cv;

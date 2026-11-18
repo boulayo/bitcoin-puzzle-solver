@@ -110,7 +110,7 @@ uint16_t dht_port(const dht *d);    /* 0 when the node does not listen */
 /* Publishes points of this node: the caller sets t, dp and x of each record, the node sets the owner. They go to the DHT_KSTORE nodes
  * closest to their K, found with a lookup of the last hour near K when one shows them, else with a new one, and are kept in own.bin for
  * the republish. After a restart the caller may give its records again from the first: those own.bin has in the same order are not sent
- * again. The records that at least one custodian holds now (or held then). */
+ * again (nor counted). The records sent now that at least one custodian holds. */
 int dht_publish(dht *d, record *recs, int n);
 /* The own records again now (the maintenance thread does it every republish_s), each to the custodians it did not have at the last
  * republish (all: to every custodian, as at the first contacts after none). The copies sent. */

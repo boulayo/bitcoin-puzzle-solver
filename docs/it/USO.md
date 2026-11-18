@@ -139,7 +139,8 @@ campaigns/NOME/
   lock            blocco (flock) che impedisce due processi sulla stessa campagna
   state.dat       checkpoint della ricerca (insieme di intervalli completati, con checksum; .bak = precedente)
   dp.bin          canguro: log append-only dei punti distinti (per riprendere)
-  herd.bin        canguro: dove si trovava ogni canguro quando la corsa si è fermata, perché riparta da lì (cancellato quando la chiave è trovata)
+  herd.bin        canguro: dove si trovava ogni canguro quando la corsa si è fermata, perché la corsa dopo di questo computer riparta da lì
+                  (un altro computer, o una corsa dopo un arresto brusco, li fa partire da capo; cancellato quando la chiave è trovata)
   session.txt     tempo totale e sessioni
   report.txt      report leggibile, riscritto ogni minuto con il checkpoint (la prima volta 2 s dopo l'avvio, e alla fine)
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto con report.txt

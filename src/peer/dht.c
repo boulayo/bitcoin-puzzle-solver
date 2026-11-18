@@ -458,16 +458,20 @@ static void *maint_main(void *arg)
 
 /* ---- the node ---- */
 
-/* a file of the records before the short record ("PZSTORE1"): set aside as NAME.old, its records are no use to this protocol */
-static void set_aside(const dht *d, const char *name)
+/* a file of records of an earlier version of pzpeer (its magic is another): set aside as NAME.old, with its file of owners; its records
+ * are no use to this protocol */
+static void set_aside(const dht *d, const char *name, const char magic[8])
 {
-    char path[4200], old[4300], m[8];
+    char path[4200], from[4300], old[4400], m[8];
     path_of(d, name, path, sizeof path);
     FILE *f = sys_fopen(path, "rb");
-    const bool was = f && fread(m, 1, 8, f) == 8 && !memcmp(m, "PZSTORE1", 8);
+    const bool was = f && fread(m, 1, 8, f) == 8 && memcmp(m, magic, 8);
     if (f) fclose(f);
-    snprintf(old, sizeof old, "%s.old", path);
-    if (was && sys_replace(path, old)) fprintf(stderr, "%s: of an earlier version of pzpeer, kept as %s\n", path, old);
+    for (int i = 0; was && i < 2; i++) {
+        snprintf(from, sizeof from, "%s%s", path, i ? ".owners" : "");
+        snprintf(old, sizeof old, "%s.old", from);
+        if (sys_replace(from, old) && !i) fprintf(stderr, "%s: of an earlier version of pzpeer, kept as %s\n", path, old);
+    }
 }
 
 static char *dup_str(const char *s)
@@ -537,7 +541,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         dht_stop(d);
         return NULL;
     }
-    set_aside(d, "store.bin"), set_aside(d, "own.bin");
+    set_aside(d, "store.bin", "PZSTORE2"), set_aside(d, "own.bin", "PZOWN002");
     path_of(d, "store.bin", path, sizeof path);
     if (!(d->custody = store_open(path, cfg->ctx, cfg->net, err, errlen))) {
         dht_stop(d);

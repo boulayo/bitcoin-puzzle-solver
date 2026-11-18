@@ -183,8 +183,8 @@ typedef struct kang_state {
     /* The herd across stops (herd.bin): the walkers of the last run, taken by the workers that start, and those of this run, kept when
      * it stops. Under hmu. */
     pthread_mutex_t hmu;
-    struct kang_hrec *hin, *hout;
-    size_t nhin, hnext, nhout, caphout;
+    struct kang_hrec *hin, *hout;  /* hin: by group, gn[g] of group g from gfirst[g], of which gnext[g] are taken */
+    size_t nhin, nhout, caphout, gfirst[KANG_GRP_MAX], gn[KANG_GRP_MAX], gnext[KANG_GRP_MAX];
 } kang_state;
 
 /* per-worker (CPU or host-side GPU) kangaroo herd */

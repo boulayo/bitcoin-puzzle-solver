@@ -35,7 +35,7 @@ typedef struct {
 typedef struct {
     const secp256k1_context *ctx;
     const home_identity *self;
-    uint8_t prologue[38];          /* "pznet1" || F */
+    uint8_t prologue[38];          /* "pznet3" || F */
     unsigned id_bits;              /* leading zero bits a node ID must have: NODE_ID_ZERO_BITS on a real network */
     uint16_t port;                 /* the port this node listens on, told to the nodes it dials; 0 when it does not listen */
     int timeout_ms;

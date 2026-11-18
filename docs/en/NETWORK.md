@@ -246,7 +246,8 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - Transport: TCP, `Noise_XX_secp256k1_ChaChaPoly_SHA256`.
   - DH: libsecp256k1 ECDH, output `SHA256(compressed shared point)`, as in BOLT 8.
   - Static keys are the identity keys (compressed points on the wire, x-only identity = their x).
-  - Prologue: `"pznet2" || F`, so peers of another network, or of the versions before the short record, fail the handshake.
+  - Prologue: `"pznet3" || F`, so peers of another network, or of earlier versions of the protocol (the short record, then records
+    named without their zero bits), fail the handshake.
   - The three handshake messages have fixed lengths, so they travel without a length: 33 bytes (`e`), 98 (`e`, `ee`, `s`, `es`, an
     empty payload), 67 (`s`, `se`, and as payload the port the initiator listens on, 2 bytes, 0 when it does not accept connections).
     The responder puts the initiator in its routing table with the address it sees and that port.
@@ -292,7 +293,7 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
 - Key of a record: `K = SHA256("pznet1/key" || x)`. A record goes to the 5 nodes whose IDs are closest to K (XOR distance).
 - A custodian keeps records on disk and an index in memory by the first 4 bytes of K. The file, `store.bin` in the data folder, is
   append-only: a 40-byte header (`PZSTORE2` and F: a file of another network is refused) and 38-byte entries one after the other: the
-  type, the zero bits, x and the number of the owner (4 bytes, little-endian). The owners are in `store.bin.owners` (each new one synced to the disk before its first entry is written): `PZOWNER2`, F, then
+  type, the zero bits, x and the number of the owner (4 bytes, little-endian). The owners are in `store.bin.owners` (an entry whose owner's line a crash lost names nobody, and its number is never given again): `PZOWNER2`, F, then
   32 bytes an owner, in the order they came. At start the index is rebuilt from the files, and an entry cut by a crash at their end is
   dropped.
 - A custodian refuses a record that does not pass the checks of 7.2 or whose owner's node ID has not the zero bits (an owner is a node:
@@ -423,12 +424,13 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   once its STORE went out (one cut by a stop is given again after the restart). After a restart the home gives its records again from
   the first (it reads its `dp.bin` from the start): those `own.bin` has, in the same order, are not sent again (whatever their zero
   bits), and the first that differs ends that: `own.bin` is cut there, as the records after it are not the home's any more (another
-  `dp.bin`). Files of the versions before the short record (`PZSTORE1`) are set aside as `store.bin.old` and `own.bin.old`.
+  `dp.bin`). A `store.bin` or `own.bin` of an earlier version (another magic) is set aside as `.old`, with its file of owners.
 - The republish, two minutes after the start and then every day: the custodians of each record again, with new lookups, and a record
   goes only to those it did not have at the last republish: the nodes that joined since, or that moved up among the closest of a key as
   others left. `own.cust` keeps what the last republish saw: the records `own.bin` had, the time of the last republish to every
-  custodian, and its clean lookups (target and IDs), those whose custodians all took every record they were given; a custodian that
-  refused or did not answer makes its lookup unclean, and the records it covers go to all their custodians the next time. The records
+  custodian, and its clean lookups (target and IDs), those whose custodians all took every record they were given; a record that not
+  all its custodians took (one refused, or did not answer) makes unclean every lookup that would show it held, and the records those cover
+  go to all their custodians the next time. The records
   published since go to all their custodians too. With no node come or gone it sends nothing (`t_dht`: 486 copies, then 0, then 20
   after a node joined, all of them to it). Once a week every record goes to every custodian: a custodian that lost its store gets it
   back, and an alert lost on the way comes again (a record that comes again alerts its coincidence again). At once, and to every
