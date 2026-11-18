@@ -987,6 +987,9 @@ int home_run(const home_cfg *cfg)
         if ((contacts > 0) != met || mono_s() >= next_status) {
             if (contacts) network_status(h, contacts, found);
             else say(h, "network: no contact, looking for the others; %llu points of this home wait for them", (unsigned long long)found);
+            const uint64_t waiting = h->pzsolve && contacts ? dpfeed_waiting(&df) : 0;
+            if (waiting > 1000) say(h, "%llu points of this home are not published yet: it finds them faster than it publishes them, and the network sees"
+                                       " them late", (unsigned long long)waiting);
             met = contacts > 0, next_status = mono_s() + STATUS_S;
         }
         if (!df.f && dpfeed_open(&df, h->dpbin)) {

@@ -17,6 +17,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   version of the terms, outside the network file and its fingerprint; a pair pays by the older version of its two homes. The first start
   shows the terms and asks to accept them (`--accept-terms` for a service), then asks the payout address, which the folder keeps
   (`--payout` is no longer needed after it); the line of the network says what the home gets of the prize on average.
+- pzpeer: a home that finds points faster than it publishes them (tens of graphics cards at 30 zero bits) says how many wait; the
+  network sees them late, and the coincidences, which grow with the square of the points seen, come later.
 - `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the
   public seed, the walkers follow the schema net-06, and every start draws from a generator of its own seeded with the secret start key,
   which is never written in the campaign files or in the reports. The distinguished points are exactly those of `--dp-bits`, and `dp.bin`

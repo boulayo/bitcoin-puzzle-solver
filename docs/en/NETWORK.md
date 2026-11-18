@@ -500,7 +500,9 @@ file and the terminal carry only the encrypted line, which `pzsolve decrypt-key`
 search: the home stops it, and does not start it again at the next start; it stays on, a custodian, and answers a partner that still
 lacks this home's piece.
 
-**What the terminal shows.** At the start the terms and the payout address. Then one line with the time for each step that matters: the
+**What the terminal shows.** At the start the terms and the payout address. A home that finds points faster than it publishes them
+(a few hundred a second on a test machine: at dpbits 30, tens of graphics cards in one home) says so with the status line, with the
+number of points that wait in its dp.bin. Then one line with the time for each step that matters: the
 coincidence and its partner, the proofs, each transaction sent (its txid) and confirmed, the payout with the amounts (to each home and to
 the author), F's wait and cancel, the exchange of the pieces and the key, and the
 end of the session with its reason (`session ID: ended: paid; the key of the puzzle is known`, `... ended: failed: REASON`). A

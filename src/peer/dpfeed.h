@@ -28,6 +28,8 @@ typedef struct {
 /* Opens dp.bin and checks its header; false when it is missing or of another format. */
 bool dpfeed_open(dpfeed *df, const char *path);
 void dpfeed_close(dpfeed *df);
+/* The records pzsolve wrote that dpfeed_read has not read yet. */
+uint64_t dpfeed_waiting(dpfeed *df);
 /* The points of the records written since the last call, at most max; 0 at the current end of the file (call again later: pzsolve appends).
  * A record cut at the end of the file is left for the next call. */
 int dpfeed_read(const secp256k1_context *ctx, const record_net *net, dpfeed *df, own_point *out, int max);

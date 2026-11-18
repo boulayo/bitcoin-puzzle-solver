@@ -6,9 +6,10 @@
 # 10% to the author, read back from the node, and then in the key of the puzzle in FOUND.txt of both, once they gave each other their
 # pieces. With three equal homes two coincidences in three are between homes; a home that finds the key on its own first (its own walkers
 # meet too) sends the coins, 90% to itself and 10% to the author, which is checked, and a new try starts with a new puzzle, up to 12. Such a
-# home sends them at once; here 90 seconds later (--solo-wait), so that a pair that met meanwhile is paid first: the coincidences between
-# homes come later than those within one (in these tries a home found the key on its own in 7 to 60 seconds, the first coincidence of
-# two homes after about 40).
+# home sends them at once; here 90 seconds later (--solo-wait), so that a pair that met meanwhile is paid first. The points have 16 zero
+# bits: with 14 each home made about 900 a second, more than pzpeer publishes on a shared test machine (a few hundred), the network saw
+# a fifth to a third of them, and the coincidences between homes, which grow with the square of the points seen, were ten times rarer
+# than those within a home.
 # The two homes get the same share, of the prize and of F's tiny coin (the odd satoshi to S). With several coincidences at once more
 # than one pair may get its first transaction confirmed, each on the prize the one before sent back to the puzzle address: the last
 # pair is paid, and the prize is smaller by the fee and the tiny coin of each first transaction (about 15 000 satoshis at 20 sat/vB).
@@ -75,7 +76,7 @@ while n: n,r=divmod(n,58); s=a[r]+s
 print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
     rpc wallet sendtoaddress "[\"$PADDR\", 1]" >/dev/null
     PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
-    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=%x:%x\njumpseed=%s\nschema=net-06\ndpbits=14\nchain=regtest\n' \
+    printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=%x:%x\njumpseed=%s\nschema=net-06\ndpbits=16\nchain=regtest\n' \
         "$try" "$PUB" $((1 << (B - 1))) $(((1 << B) - 1)) "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$T/net.txt"
     [ -z "${PZ_E2E_MEET:-}" ] && echo "entry=127.0.0.1:$PORT" >> "$T/net.txt"
     declare -A PAY PID

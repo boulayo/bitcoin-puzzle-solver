@@ -92,6 +92,14 @@ void dpfeed_close(dpfeed *df)
     df->f = NULL;
 }
 
+uint64_t dpfeed_waiting(dpfeed *df)
+{
+    if (!df->f || fseeko(df->f, 0, SEEK_END) != 0) return 0;   /* dpfeed_read seeks to its record before it reads */
+    const off_t end = ftello(df->f);
+    const uint64_t all = end > DPBIN_HDR ? (uint64_t)(end - DPBIN_HDR) / DPBIN_REC : 0;
+    return all > df->next ? all - df->next : 0;
+}
+
 int dpfeed_read(const secp256k1_context *ctx, const record_net *net, dpfeed *df, own_point *out, int max)
 {
     int n = 0;
