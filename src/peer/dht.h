@@ -42,7 +42,7 @@ enum {
 };
 
 /* the status of a record in STORED */
-enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_OLD, DHT_ST_COINCIDENCE, DHT_ST_FAILED, DHT_ST_FULL, DHT_ST_FAR };
+enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_COINCIDENCE, DHT_ST_FAILED, DHT_ST_FULL, DHT_ST_FAR };
 
 typedef struct {
     uint8_t id[32];                /* node ID = SHA256("pznet1/id" || xonly) */
@@ -94,7 +94,7 @@ typedef struct {
     bool verbose;                  /* what the node does, on stderr */
 } dht_config;
 
-#define DHT_STORE_DEFAULT (1ull << 28) /* records of a custodian: 37 GB on disk, an index of about 4.5 GB in memory */
+#define DHT_STORE_DEFAULT (1ull << 27) /* records of a custodian: 5 GB on disk, an index of 2 GB in memory at most */
 
 typedef struct dht dht;
 
@@ -107,10 +107,8 @@ int dht_start(dht *d);
 void dht_stop(dht *d);
 uint16_t dht_port(const dht *d);    /* 0 when the node does not listen */
 
-/* Publishes points of this node: the caller sets t and x of each record, the node sets the owner, the next sequence numbers and the
- * signature (the records come back signed). They are kept in own.bin for the republish and sent to the DHT_KSTORE nodes closest to
- * their K. The node signs and sends under one lock, so every custodian sees the sequence numbers of this owner in order, as it must
- * (it refuses a new record whose number is not above the last). The records that at least one custodian holds now. */
+/* Publishes points of this node: the caller sets t, dp and x of each record, the node sets the owner. They are kept in own.bin for the
+ * republish and sent to the DHT_KSTORE nodes closest to their K. The records that at least one custodian holds now. */
 int dht_publish(dht *d, record *recs, int n);
 
 /* The want (at most DHT_K) nodes closest to target, this one included when it listens, nearest first: an iterative lookup. */

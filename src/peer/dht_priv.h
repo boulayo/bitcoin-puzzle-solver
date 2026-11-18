@@ -4,7 +4,7 @@
  *   dht.c        the node's life (create, start, stop), its threads (accept, handlers, jobs, maintenance), the answers to requests, the
  *                limits by address block
  *   dht_table.c  the routing table, the exchanges with a contact, NODES, the lookups, the bootstrap, the refresh, peers.txt
- *   dht_store.c  the records: what a custodian takes, what this node publishes (own.bin, own.seq)
+ *   dht_store.c  the records: what a custodian takes, what this node publishes (own.bin)
  *   dht_alert.c  the alerts of a coincidence, the proofs of possession, the mailboxes
  *   dht_relay.c  the relay, and the channel of a session (docs/en/NETWORK.md 7.7)
  * Each shared structure has its own mutex, and no lock is held across a connection: the routing table, the limits by address block, the
@@ -113,8 +113,7 @@ struct dht {
     relay_slot waiting[RELAY_WAITING], *active;
     int nactive;
     uint64_t relays_done;
-    pthread_mutex_t p_mu;          /* publishing: the sequence numbers and their order on the wire */
-    uint64_t seq;
+    pthread_mutex_t p_mu;          /* publishing: one batch at a time */
     pthread_mutex_t m_mu;          /* the sleep of the maintenance thread */
     pthread_cond_t m_cv;
     pthread_mutex_t f_mu;          /* the addresses found in the table of BitTorrent, for the next bootstrap */
@@ -183,7 +182,6 @@ void save_peers(dht *d);
 /* dht_store.c */
 int custody_put(dht *d, const record *r, const net_addr *from);
 void republish(dht *d);
-uint64_t load_seq(const dht *d);
 
 /* dht_alert.c */
 bool owner_ok(const dht *d, const record *r);

@@ -556,8 +556,7 @@ static void run_case(const tcase *tc, const char *bin)
         snprintf(l, sizeof l, "%s home %d", label, i), hashed(l, sec);
         CHECK(secp256k1_keypair_create(ctx, &h[i].id, sec) && secp256k1_keypair_xonly_pub(ctx, &xpk, NULL, &h[i].id));
         CHECK(secp256k1_xonly_pubkey_serialize(ctx, xo[i], &xpk));
-        memcpy(r[i].x, c + 1, 32), memcpy(r[i].owner, xo[i], 32), r[i].seq = 7;
-        CHECK(record_sign(ctx, &net, &h[i].id, &r[i]));
+        memcpy(r[i].x, c + 1, 32), memcpy(r[i].owner, xo[i], 32), r[i].dp = net.dpbits;
     }
     record pair[2];
     uint8_t eid[32];
@@ -731,9 +730,9 @@ static void run_copied(const char *bin, unsigned terms)
     CHECK(secp256k1_keypair_create(ctx, &h.id, sec) && secp256k1_keypair_xonly_pub(ctx, &xpk, NULL, &h.id) && secp256k1_xonly_pubkey_serialize(ctx, xo[0], &xpk));
     hashed("copied thief", sec);
     CHECK(secp256k1_keypair_create(ctx, &thief, sec) && secp256k1_keypair_xonly_pub(ctx, &xpk, NULL, &thief) && secp256k1_xonly_pubkey_serialize(ctx, xo[1], &xpk));
-    record mine = {.t = 0, .seq = 1}, theirs = {.t = 1, .seq = 1};
+    record mine = {.t = 0, .dp = net.dpbits}, theirs = {.t = 1, .dp = net.dpbits};
     memcpy(mine.x, c + 1, 32), memcpy(theirs.x, c + 1, 32), memcpy(mine.owner, xo[0], 32), memcpy(theirs.owner, xo[1], 32);
-    CHECK(record_sign(ctx, &net, &h.id, &mine) && record_sign(ctx, &net, &thief, &theirs) && record_check(ctx, &net, &theirs));
+    CHECK(record_check(ctx, &net, &mine) && record_check(ctx, &net, &theirs));
     queue q[2] = {{.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}, {.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}};
     end e[2] = {{.in = &q[0], .out = &q[1]}, {.in = &q[1], .out = &q[0]}};
     session_chan chan = {&e[0], q_send, q_recv};

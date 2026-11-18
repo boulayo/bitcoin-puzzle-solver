@@ -51,7 +51,7 @@ static int usage_to(FILE *f)
                     "  --allow-private      take loopback and private addresses on a main-chain network (other chains take them)\n"
                     "  --verbose            what the node does, on stderr\n"
                     "  --debug FILE         every message, step and answer of the chain, with its time, into FILE (no secret is written)\n"
-                    "  --store-gb N         the records kept for others, in GB of disk (default 37; the index takes about a fifth of it in RAM)\n"
+                    "  --store-gb N         the records kept for others, in GB of disk (default 5; their index takes up to two fifths of it in RAM)\n"
                     "options of run:\n"
                     "  --payout ADDRESS          where the share of this home goes (any address: 1..., 3..., bc1q..., bc1p...); kept in the\n"
                     "                            folder, and asked on the terminal at the first start when it is not given\n"
@@ -221,7 +221,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
                       .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .portmap = portmap,
                       .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
-                      .store_max = (uint64_t)store_gb * 1000000000ull / RECORD_LEN};
+                      .store_max = (uint64_t)store_gb * 1000000000ull / STORE_ENTRY};
     cfg.bt_routers = bt_routers(!strcmp(nf.chain, "main"), no_bt, routers, nrouters, &cfg.nbt_routers);
     char idhex[65];
     dht *d = dht_create(&cfg, err, sizeof err);

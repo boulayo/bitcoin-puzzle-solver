@@ -20,24 +20,20 @@ bool record_net_init(const secp256k1_context *ctx, record_net *net, const uint8_
 
 void record_encode(const record *r, uint8_t out[RECORD_LEN])
 {
-    out[0] = RECORD_VERSION;
-    out[1] = (uint8_t)(int8_t)r->t;
+    out[0] = (uint8_t)(int8_t)r->t;
+    out[1] = (uint8_t)r->dp;
     memcpy(out + 2, r->x, 32);
-    memcpy(out + 34, r->owner, 32);
-    for (int b = 0; b < 8; b++) out[66 + b] = (uint8_t)(r->seq >> (56 - 8 * b));
-    memcpy(out + RECORD_BODY, r->sig, 64);
+    memcpy(out + RECORD_WIRE, r->owner, 32);
 }
 
 bool record_decode(const uint8_t in[RECORD_LEN], record *r)
 {
-    const int t = (int8_t)in[1];
-    if (in[0] != RECORD_VERSION || t < -1 || t > 1) return false;
+    const int t = (int8_t)in[0];
+    if (t < -1 || t > 1 || in[1] > RECORD_DP_MAX) return false;
     r->t = t;
+    r->dp = in[1];
     memcpy(r->x, in + 2, 32);
-    memcpy(r->owner, in + 34, 32);
-    r->seq = 0;
-    for (int b = 0; b < 8; b++) r->seq = r->seq << 8 | in[66 + b];
-    memcpy(r->sig, in + RECORD_BODY, 64);
+    memcpy(r->owner, in + RECORD_WIRE, 32);
     return true;
 }
 
@@ -48,39 +44,11 @@ bool record_dp_ok(const uint8_t x[32], unsigned dpbits)
     return true;
 }
 
-/* SHA256(tag || F || data) */
-static void tagged(const char *tag, const uint8_t fp[32], const uint8_t *data, size_t len, uint8_t out[32])
-{
-    uint8_t m[24 + 32 + RECORD_LEN + 64];
-    const size_t tl = strlen(tag);
-    memcpy(m, tag, tl);
-    memcpy(m + tl, fp, 32);
-    memcpy(m + tl + 32, data, len);
-    pz_sha256(m, tl + 32 + len, out);
-}
-
-static void digest(const record_net *net, const record *r, uint8_t out[32])
-{
-    uint8_t enc[RECORD_LEN];
-    record_encode(r, enc);
-    tagged("pznet1/record", net->fp, enc, RECORD_BODY, out);
-}
-
-bool record_sign(const secp256k1_context *ctx, const record_net *net, const secp256k1_keypair *id, record *r)
-{
-    uint8_t h[32];
-    digest(net, r, h);
-    return secp256k1_schnorrsig_sign32(ctx, r->sig, h, id, NULL);   /* BIP340 nonces are derived from the key and the message */
-}
-
 bool record_check(const secp256k1_context *ctx, const record_net *net, const record *r)
 {
     secp256k1_xonly_pubkey xr, owner;
-    uint8_t h[32];
-    if (!record_dp_ok(r->x, net->dpbits) || !secp256k1_xonly_pubkey_parse(ctx, &xr, r->x) || !secp256k1_xonly_pubkey_parse(ctx, &owner, r->owner))
-        return false;
-    digest(net, r, h);
-    return secp256k1_schnorrsig_verify(ctx, r->sig, h, 32, &owner);
+    return r->dp >= net->dpbits && r->dp <= RECORD_DP_MAX && record_dp_ok(r->x, r->dp) && secp256k1_xonly_pubkey_parse(ctx, &xr, r->x) &&
+           secp256k1_xonly_pubkey_parse(ctx, &owner, r->owner);
 }
 
 bool record_dpoint(const secp256k1_context *ctx, const record_net *net, const record *r, secp256k1_pubkey *out)
@@ -95,13 +63,15 @@ bool record_dpoint(const secp256k1_context *ctx, const record_net *net, const re
     return secp256k1_ec_pubkey_combine(ctx, out, both, 2);
 }
 
+/* SHA256("pznet1/possess" || F || record || asker || nonce) */
 static void possess_msg(const record_net *net, const record *r, const uint8_t asker[32], const uint8_t nonce[32], uint8_t out[32])
 {
-    uint8_t m[RECORD_LEN + 64];
-    record_encode(r, m);
-    memcpy(m + RECORD_LEN, asker, 32);
-    memcpy(m + RECORD_LEN + 32, nonce, 32);
-    tagged("pznet1/possess", net->fp, m, sizeof m, out);
+    uint8_t m[14 + 32 + RECORD_LEN + 64] = "pznet1/possess";
+    memcpy(m + 14, net->fp, 32);
+    record_encode(r, m + 46);
+    memcpy(m + 46 + RECORD_LEN, asker, 32);
+    memcpy(m + 46 + RECORD_LEN + 32, nonce, 32);
+    pz_sha256(m, sizeof m, out);
 }
 
 bool record_prove(const secp256k1_context *ctx, const record_net *net, const record *r, const uint8_t d32[32], const uint8_t asker[32],

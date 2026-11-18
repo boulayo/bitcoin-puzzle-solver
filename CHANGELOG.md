@@ -17,6 +17,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   version of the terms, outside the network file and its fingerprint; a pair pays by the older version of its two homes. The first start
   shows the terms and asks to accept them (`--accept-terms` for a service), then asks the payout address, which the folder keeps
   (`--payout` is no longer needed after it); the line of the network says what the home gets of the prize on average.
+- pzpeer: the short record. A record is 66 bytes (type, zero bits, x, owner) and carries no signature and no sequence number: a STORE
+  sends 34 bytes a record and its owner is the sender, whose identity the handshake proved, and an alert still waits for the proofs of
+  possession. A custodian's entry is 38 bytes, with the owner's number in a file of owners beside the store. A record carries its own
+  zero bits (at least those of the network). The custody by default is 5 GB (2^27 records). A new protocol (`pznet2`): homes of the
+  earlier test builds do not talk to these.
 - pzpeer: a home that finds points faster than it publishes them (tens of graphics cards at 30 zero bits) says how many wait; the
   network sees them late, and the coincidences, which grow with the square of the points seen, come later.
 - `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the

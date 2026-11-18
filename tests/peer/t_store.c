@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* t_store.c - the custodian of store.c: a record stored, the same again (duplicate), a sequence number that does not go up, an invalid
- * record, the coincidences (useful and merge), many records (the index grows), the file opened again after a restart, a torn record at
- * the end cut, a store of another network refused; the limits (in all, per owner, owners of one x); a record damaged on disk, at the
- * end (not indexed, its sequence number not taken) and in the middle (never reported as a coincidence); then the mailbox, its limit per
- * owner and its proofs. The records are built here on points k*G of the test network. */
+/* t_store.c - the custodian of store.c: a record stored, the same again (duplicate), invalid records, the coincidences (useful and merge),
+ * many records (the index grows), the files opened again after a restart, a torn entry at the end cut, a store of another network
+ * refused; the limits (in all, per owner, owners of one x); an entry damaged on disk, at the end (not indexed) and in the middle (never
+ * reported as a coincidence); then the mailbox, its limit per owner and its proofs. The records are built here on points k*G of the
+ * test network. */
 #include "store.h"
 #include "keys.h"
 #include <pzcore/hash.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -19,7 +20,7 @@ static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0x57, 0x0e};
 static record_net net;
 static home_identity ida, idb, idc, idd;
-static const char *PATH = PZ_TEST_DIR "/t_store.bin";
+#define PATH PZ_TEST_DIR "/t_store.bin"
 
 static void hashed(const char *s, uint8_t out[32]) { pz_sha256((const uint8_t *)s, strlen(s), out); }
 
@@ -34,13 +35,20 @@ static void point_x(const char *label, uint8_t x[32])
     memcpy(x, c + 1, 32);
 }
 
-static record make(const home_identity *id, int t, const uint8_t x[32], uint64_t seq)
+static record make(const home_identity *id, int t, const uint8_t x[32])
 {
-    record r = {.t = t, .seq = seq};
+    record r = {.t = t, .dp = net.dpbits};
     memcpy(r.x, x, 32);
     memcpy(r.owner, id->xonly, 32);
-    CHECK(record_sign(ctx, &net, &id->kp, &r));
     return r;
+}
+
+/* a store is two files */
+static void wipe(void)
+{
+    char o[256];
+    snprintf(o, sizeof o, "%s.owners", PATH);
+    remove(PATH), remove(o);
 }
 
 static bool same(const record *a, const record *b)
@@ -63,35 +71,32 @@ static void test_store(void)
     char err[200];
     uint8_t x1[32], x2[32], x3[32];
     point_x("x1", x1), point_x("x2", x2), point_x("x3", x3);
-    remove(PATH);
+    wipe();
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
     record mine, others[4];
     int no;
-    const record a1 = make(&ida, 0, x1, 10);
+    const record a1 = make(&ida, 0, x1);
     CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_OK && no == 0 && same(&mine, &a1));
     CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_DUP && no == 0 && same(&mine, &a1));
-    const record a1b = make(&ida, 1, x1, 11);                   /* the same x from the same owner, even with another type */
+    const record a1b = make(&ida, 1, x1);                   /* the same x from the same owner, even with another type */
     CHECK(store_put(st, &a1b, &mine, others, 4, &no) == STORE_DUP && same(&mine, &a1));
-    record lower = make(&ida, 0, x2, 9), equal = make(&ida, 0, x2, 10), next = make(&ida, 0, x2, 12);
-    CHECK(store_put(st, &lower, &mine, others, 4, &no) == STORE_OLD && no == 0);
-    CHECK(store_put(st, &equal, &mine, others, 4, &no) == STORE_OLD);
+    const record next = make(&ida, 0, x2);
     CHECK(store_put(st, &next, &mine, others, 4, &no) == STORE_OK);
-    uint64_t seq = 0;
-    CHECK(store_last_seq(st, ida.xonly, &seq) && seq == 12 && !store_last_seq(st, idb.xonly, &seq));
-    record bad = make(&idb, 0, x3, 1);
-    bad.sig[5] ^= 1;
+    record bad = make(&idb, 0, x3);
+    bad.dp = net.dpbits + 30;                                   /* zero bits that x has not */
     CHECK(store_put(st, &bad, &mine, others, 4, &no) == STORE_INVALID);
-    bad = make(&idb, 0, x3, 1);
-    bad.x[31] ^= 1;                                             /* signed for another x */
+    bad = make(&idb, 0, x3);
+    memset(bad.owner, 0xff, 32);                                /* an owner that is no key */
     CHECK(store_put(st, &bad, &mine, others, 4, &no) == STORE_INVALID);
-    /* a useful coincidence: the same x from another owner with another type; the other owner's sequence numbers are its own */
-    const record b1 = make(&idb, 1, x1, 1);
+    CHECK(store_weight(st) == 2 * ldexpl(1, (int)net.dpbits));
+    /* a useful coincidence: the same x from another owner with another type */
+    const record b1 = make(&idb, 1, x1);
     CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_OK && no == 1 && same(&others[0], &a1) && same(&mine, &b1));
     CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_DUP && no == 1 && same(&others[0], &a1));   /* again: still reported */
     /* a merge: a third owner with the type of the first */
-    const record c1 = make(&idc, 0, x1, 5);
+    const record c1 = make(&idc, 0, x1);
     CHECK(store_put(st, &c1, &mine, others, 4, &no) == STORE_OK && no == 2);
     CHECK((same(&others[0], &a1) && same(&others[1], &b1)) || (same(&others[0], &b1) && same(&others[1], &a1)));
     CHECK(others[0].t == c1.t || others[1].t == c1.t);
@@ -104,22 +109,20 @@ static void test_store(void)
         uint8_t x[32];
         snprintf(label, sizeof label, "many %d", i);
         point_x(label, x);
-        const record r = make(&idc, i % 3 - 1, x, 100 + (uint64_t)i);
+        const record r = make(&idc, i % 3 - 1, x);
         if (store_put(st, &r, &mine, others, 4, &no) != STORE_OK) CHECK(!"stored");
     }
     CHECK(store_count(st) == 4 + MANY);
     store_close(st);
-    CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * RECORD_LEN);
+    CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * STORE_ENTRY && file_size(PATH ".owners") == STORE_HDR + 3 * 32);
 
-    /* a restart: everything is found again, the duplicates and the sequence numbers are remembered */
+    /* a restart: everything is found again, the duplicates are remembered */
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
     CHECK(store_count(st) == 4 + MANY && store_find(st, x1, found, 8) == 3 && store_find(st, x2, found, 8) == 1 && same(&found[0], &next));
     CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_DUP && no == 2);
-    CHECK(store_last_seq(st, idc.xonly, &seq) && seq == 100 + MANY - 1);
-    const record c_old = make(&idc, 0, x3, 50);
-    CHECK(store_put(st, &c_old, &mine, others, 4, &no) == STORE_OLD);
+    CHECK(store_weight(st) == (4 + MANY) * ldexpl(1, (int)net.dpbits));
     record r0;
     CHECK(store_read(st, 0, &r0) && same(&r0, &a1) && !store_read(st, 4 + MANY, &r0));
     for (int i = 0; i < MANY; i += 97) {
@@ -127,7 +130,7 @@ static void test_store(void)
         uint8_t x[32];
         snprintf(label, sizeof label, "many %d", i);
         point_x(label, x);
-        if (store_find(st, x, found, 8) != 1 || found[0].seq != 100 + (uint64_t)i) CHECK(!"found after the restart");
+        if (store_find(st, x, found, 8) != 1 || memcmp(found[0].x, x, 32) || memcmp(found[0].owner, idc.xonly, 32)) CHECK(!"found after the restart");
     }
     store_close(st);
 
@@ -135,21 +138,20 @@ static void test_store(void)
     FILE *f = fopen(PATH, "ab");
     CHECK(f != NULL);
     if (f) {
-        uint8_t whole[RECORD_LEN];
-        record_encode(&c_old, whole);
-        fwrite(whole, 1, RECORD_LEN / 2, f);
+        const uint8_t half[STORE_ENTRY / 2] = {0};
+        fwrite(half, 1, sizeof half, f);
         fclose(f);
     }
-    CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * RECORD_LEN + RECORD_LEN / 2);
+    CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * STORE_ENTRY + STORE_ENTRY / 2);
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL && store_count(st) == 4 + MANY);
-    CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * RECORD_LEN);
+    CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * STORE_ENTRY);
     if (st) {
-        const record c3 = make(&idc, 0, x3, 100000);           /* the next record goes where the torn one was */
+        const record c3 = make(&idc, 0, x3);           /* the next record goes where the torn one was */
         CHECK(store_put(st, &c3, &mine, others, 4, &no) == STORE_OK && store_find(st, x3, found, 8) == 1 && same(&found[0], &c3));
         store_close(st);
     }
-    CHECK(file_size(PATH) == STORE_HDR + (5 + MANY) * RECORD_LEN);
+    CHECK(file_size(PATH) == STORE_HDR + (5 + MANY) * STORE_ENTRY);
 
     /* another network, or not a store */
     record_net other = net;
@@ -161,14 +163,14 @@ static void test_store(void)
         fclose(f);
     }
     CHECK(store_open(PATH, ctx, &net, err, sizeof err) == NULL);
-    remove(PATH);
+    wipe();
 }
 
 /* the limits of a custodian: records in all, records of one owner, owners of one x */
 static void test_limits(void)
 {
     char err[200];
-    remove(PATH);
+    wipe();
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
@@ -180,22 +182,22 @@ static void test_limits(void)
         char label[32];
         snprintf(label, sizeof label, "lim %d", i);
         point_x(label, x);
-        const record r = make(&ida, 0, x, 10 + (uint64_t)i);
+        const record r = make(&ida, 0, x);
         CHECK(store_put(st, &r, &mine, others, 4, &no) == (i < 3 ? STORE_OK : STORE_FULL));
     }
     for (int i = 0; i < 4; i++) {                              /* the other owner fills the rest: 6 in all */
         char label[32];
         snprintf(label, sizeof label, "lim b %d", i);
         point_x(label, x);
-        const record r = make(&idb, 0, x, 10 + (uint64_t)i);
+        const record r = make(&idb, 0, x);
         CHECK(store_put(st, &r, &mine, others, 4, &no) == (i < 3 ? STORE_OK : STORE_FULL));
     }
     CHECK(store_count(st) == 6);
     point_x("lim 0", x);
-    const record dup = make(&ida, 0, x, 99);                   /* a duplicate is no new record: still answered as one */
+    const record dup = make(&ida, 0, x);                   /* a duplicate is no new record: still answered as one */
     CHECK(store_put(st, &dup, &mine, others, 4, &no) == STORE_DUP);
     store_close(st);
-    remove(PATH);
+    wipe();
     /* owners of one x: STORE_X_OWNERS, then the store is full for that x, and still reports the coincidences of a record it refuses */
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
@@ -208,12 +210,12 @@ static void test_limits(void)
         snprintf(label, sizeof label, "owner %d", i);
         hashed(label, seed);
         CHECK(keys_identity(ctx, seed, FP, 4, &id));
-        const record r = make(&id, i % 2, x, 1);
+        const record r = make(&id, i % 2, x);
         const store_status got = store_put(st, &r, &mine, others, STORE_X_OWNERS + 1, &no);
         CHECK(got == (i < STORE_X_OWNERS ? STORE_OK : STORE_FULL) && no == i);   /* not kept, its coincidences told all the same */
     }
     store_close(st);
-    remove(PATH);
+    wipe();
     /* owners in all: 4096 records may take 4096 / 256 + 1024 owners; one more is refused, an owner already there is not */
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
@@ -228,70 +230,64 @@ static void test_limits(void)
         snprintf(label, sizeof label, "many %d", i);
         hashed(label, seed), point_x(label, x);
         if (!keys_identity(ctx, seed, FP, 4, &id)) continue;
-        const record r = make(&id, 0, x, 1);
+        const record r = make(&id, 0, x);
         ok += store_put(st, &r, &mine, others, 4, &no) == (i < 4096 / 256 + 1024 ? STORE_OK : STORE_FULL);
         if (!i) first = id;
     }
     CHECK(ok == 4096 / 256 + 1024 + 1);
     point_x("many again", x);
-    const record again = make(&first, 0, x, 2);
+    const record again = make(&first, 0, x);
     CHECK(store_put(st, &again, &mine, others, 4, &no) == STORE_OK);
     store_close(st);
-    remove(PATH);
+    wipe();
 }
 
-/* A record damaged on disk. At the end of the file (a crash): it is checked again when the file is opened, not indexed, and its sequence
- * number, which would refuse every next record of its owner, is not taken. In the middle (not checked at the opening): never given as
- * the other record of a coincidence. */
+/* An entry damaged on disk. At the end of the file (a crash): checked again when the file is opened, and not indexed. In the middle (not
+ * checked at the opening): never given as the other record of a coincidence. */
 static void test_damaged(void)
 {
     char err[200];
-    uint8_t x1[32], x2[32], x3[32];
-    point_x("d1", x1), point_x("d2", x2), point_x("d3", x3);
-    remove(PATH);
+    uint8_t x1[32], x2[32];
+    point_x("d1", x1), point_x("d2", x2);
+    wipe();
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
     record mine, others[4], found[4];
     int no;
-    const record a1 = make(&ida, 0, x1, 5);
+    const record a1 = make(&ida, 0, x1);
     CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_OK);
     for (int i = 0; i < STORE_CHECK_TAIL; i++) {               /* enough records after it that it is out of the tail */
         char label[32];
         uint8_t x[32];
         snprintf(label, sizeof label, "fill %d", i);
         point_x(label, x);
-        const record r = make(&idc, 1, x, 10 + (uint64_t)i);
+        const record r = make(&idc, 1, x);
         if (store_put(st, &r, &mine, others, 4, &no) != STORE_OK) CHECK(!"stored");
     }
     store_close(st);
-    /* a record of b with a huge sequence number, its signature not over it, written at the end as a crash could leave it */
-    record bad = make(&idb, 0, x2, 7);
-    bad.seq = UINT64_MAX - 1;
-    uint8_t enc[RECORD_LEN];
-    record_encode(&bad, enc);
+    /* an entry at the end, as a crash could leave it: it claims 40 zero bits that its x has not */
+    uint8_t e[STORE_ENTRY] = {0, 40};
+    memcpy(e + 2, x2, 32);
     FILE *f = fopen(PATH, "r+b");
     CHECK(f != NULL);
     if (f) {
         fseek(f, 0, SEEK_END);
-        fwrite(enc, 1, RECORD_LEN, f);
-        fseek(f, STORE_HDR + RECORD_LEN - 5, SEEK_SET);        /* and a1's signature changed, in the middle */
+        fwrite(e, 1, STORE_ENTRY, f);
+        fseek(f, STORE_HDR + 2 + 5, SEEK_SET);                  /* and a byte of a1's x changed, in the middle */
         const int c = fgetc(f);
-        fseek(f, STORE_HDR + RECORD_LEN - 5, SEEK_SET);
+        fseek(f, STORE_HDR + 2 + 5, SEEK_SET);
         fputc(c ^ 1, f);
         fclose(f);
     }
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
-    uint64_t seq = 0;
-    CHECK(!store_last_seq(st, idb.xonly, &seq) && store_find(st, x2, found, 4) == 0);
-    const record b3 = make(&idb, 0, x3, 8);
-    CHECK(store_put(st, &b3, &mine, others, 4, &no) == STORE_OK);
-    const record b1 = make(&idb, 1, x1, 9);                    /* the same x as the damaged a1: stored, but no coincidence */
+    CHECK(store_count(st) == 2 + STORE_CHECK_TAIL && store_find(st, x2, found, 4) == 0);
+    const record b1 = make(&idb, 1, x1);                       /* the same x as the damaged a1: stored, but no coincidence */
     CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_OK && no == 0);
     store_close(st);
-    remove(PATH);
+    wipe();
 }
 
 static bool has_pair(const mbox_pair *p, int n, const record *a, const record *b)
@@ -305,10 +301,10 @@ static void test_mbox(void)
 {
     uint8_t x1[32], x2[32];
     point_x("m1", x1), point_x("m2", x2);
-    const record a = make(&ida, 0, x1, 1), b = make(&idb, 1, x1, 1), c = make(&idc, 0, x2, 1), a2 = make(&ida, -1, x2, 2);
+    const record a = make(&ida, 0, x1), b = make(&idb, 1, x1), c = make(&idc, 0, x2), a2 = make(&ida, -1, x2);
     CHECK(store_pair_ok(ctx, &net, &a, &b) && !store_pair_ok(ctx, &net, &a, &a) && !store_pair_ok(ctx, &net, &a, &c));
     record bad = b;
-    bad.sig[0] ^= 1;
+    bad.dp = 40;
     CHECK(!store_pair_ok(ctx, &net, &a, &bad));
     mbox *m = mbox_new(3, 0);
     mbox_pair pairs[4];
@@ -331,7 +327,7 @@ static void test_mbox(void)
         uint8_t x[32];
         snprintf(label, sizeof label, "m3 %d", i);
         point_x(label, x);
-        const record p = make(&idb, 0, x, 10 + (uint64_t)i), q = make(&idc, 1, x, 10 + (uint64_t)i);
+        const record p = make(&idb, 0, x), q = make(&idc, 1, x);
         CHECK(mbox_put(m, &p, &q, NULL));
     }
     /* the pair of a with c went, and the first of the three; the pair of a with b, which both proved, stays */
@@ -339,7 +335,7 @@ static void test_mbox(void)
     CHECK(mbox_put(m, &c, &a2, NULL));                          /* gone, so new again */
     mbox_free(m);
     /* a limit per owner: a flood of pairs of b and c pushes out their own oldest only, not the pairs of a and d */
-    const record d1 = make(&idd, 1, x1, 1);
+    const record d1 = make(&idd, 1, x1);
     m = mbox_new(100, 4);
     CHECK(m && mbox_put(m, &a, &d1, NULL) && mbox_put(m, &a, &c, NULL));
     for (int i = 0; i < 10; i++) {
@@ -347,33 +343,33 @@ static void test_mbox(void)
         uint8_t x[32];
         snprintf(label, sizeof label, "m4 %d", i);
         point_x(label, x);
-        const record p = make(&idb, 0, x, 10 + (uint64_t)i), q = make(&idc, 1, x, 10 + (uint64_t)i);
+        const record p = make(&idb, 0, x), q = make(&idc, 1, x);
         CHECK(mbox_put(m, &p, &q, NULL));
     }
     CHECK(mbox_get(m, idb.xonly, pairs, 4) == 4 && mbox_get(m, idd.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));   /* the pair of a with c went: c had too many */
     mbox_free(m);
-    /* What one identity that copied the points of a can do to the pair of a with b, which b proved: the same point under ten sequence
-     * numbers is one pair, and ten points push out each other, not the proved pair. Before, any four of them pushed it out. */
+    /* What one identity that copied the points of a can do to the pair of a with b, which b proved: the same point sent ten times is one
+     * pair, and ten points push out each other, not the proved pair. Before, any four of them pushed it out. */
     m = mbox_new(100, 4);
     CHECK(m && mbox_put(m, &b, &a, pb));
     for (int i = 0; i < 10; i++) {
-        const record q = make(&idc, 1, x1, 20 + (uint64_t)i);
+        const record q = make(&idc, 1, x1);
         CHECK(mbox_put(m, &a, &q, NULL) == (i == 0));
     }
-    const record c9 = make(&idc, 1, x1, 99);
-    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 2 && !mbox_put(m, &a, &c9, NULL) && !has_pair(pairs, mbox_get(m, idc.xonly, pairs, 4), &a, &c9));
+    const record c9 = make(&idc, 1, x1);
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 2 && !mbox_put(m, &a, &c9, NULL) && mbox_get(m, idc.xonly, pairs, 4) == 1);
     for (int i = 0; i < 10; i++) {
         char label[16];
         uint8_t x[32];
         snprintf(label, sizeof label, "m5 %d", i);
         point_x(label, x);
-        const record p = make(&ida, 0, x, 30 + (uint64_t)i), q = make(&idc, 1, x, 30 + (uint64_t)i);
+        const record p = make(&ida, 0, x), q = make(&idc, 1, x);
         CHECK(mbox_put(m, &p, &q, NULL));
     }
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 4 && has_pair(pairs, 4, &a, &b));
-    /* the pair with other sequence numbers takes the place of the one kept only when it alone is proved */
-    const record c1 = make(&idc, 1, x1, 20);
+    /* the same pair again with a proof: the proof is kept with it */
+    const record c1 = make(&idc, 1, x1);
     mbox_free(m);
     m = mbox_new(100, 4);
     CHECK(m && mbox_put(m, &a, &c1, NULL) && mbox_put(m, &a, &c9, pa) && mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &c9));

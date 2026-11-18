@@ -264,7 +264,7 @@ Ho riguardato l'impianto chiedendomi, per ogni pezzo, se esiste un modo più sem
 | protocollo di firma | CGGMP21 (la libreria cggmp21, usata prima): primi lenti da generare e messaggi da 200 KB. DKLs23: le librerie mature hanno licenze non libere | firma a due di Lindell nella libreria cb-mpc: niente primi lenti, messaggi sotto i 40 KB |
 | pagamento in due passaggi | deposito dell'utente: scartato. Blocco a tempo: non basta | resta |
 | tabella Kademlia per i punti | server centrale: più semplice, e non potrebbe rubare (non ha le distanze), ma può censurare e va mantenuto | resta la tabella; i "nodi grandi" di volontari sono già possibili |
-| record firmato da 138 byte | record corto da circa 40 byte: la firma su ogni record non serve più, perché un custode accetta solo record del nodo con cui sta parlando su un canale autenticato, e ogni effetto richiede comunque la prova di possesso | consigliato: 3 volte meno spazio e traffico |
+| record firmato da 138 byte | record corto: la firma su ogni record non serve più, perché un custode accetta solo record del nodo con cui sta parlando su un canale autenticato, e ogni effetto richiede comunque la prova di possesso | fatto: 34 byte in una STORE, 38 nell'archivio, 4 volte meno spazio e traffico |
 | ripubblicare tutto ogni giorno | mandare a un custode solo ciò che gli manca | necessario prima di una campagna lunga |
 | pzsolve | già al minimo: 270 righe più la tabella dello schema | resta |
 

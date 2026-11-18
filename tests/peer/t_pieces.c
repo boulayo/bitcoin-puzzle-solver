@@ -77,7 +77,6 @@ static void make(fixture *f, int ta, int tb, const char *label)
     snprintf(l, sizeof l, "%s home b", label), hashed(l, s);
     CHECK(secp256k1_keypair_create(ctx, &kb, s) && secp256k1_keypair_xonly_pub(ctx, &xb, NULL, &kb));
     CHECK(secp256k1_xonly_pubkey_serialize(ctx, a.owner, &xa) && secp256k1_xonly_pubkey_serialize(ctx, b.owner, &xb));
-    CHECK(record_sign(ctx, &f->net, &ka, &a) && record_sign(ctx, &f->net, &kb, &b));
     CHECK(record_check(ctx, &f->net, &a) && record_check(ctx, &f->net, &b));
     CHECK(pieces_order(&b, &a, f->pair));
     const bool a_first = !memcmp(f->pair[0].owner, a.owner, 32);
@@ -111,8 +110,12 @@ static void test_pieces(int ta, int tb, const char *label)
     CHECK(!pieces_order(&f.pair[0], &other, same));
     uint8_t e1[32], e2[32];
     pieces_eid(&f.net, f.pair, e1);
-    f.pair[1].seq++;
+    f.pair[1].dp++;                                                              /* the zero bits tell of the walk, not of the pair */
     pieces_eid(&f.net, f.pair, e2);
+    CHECK(memcmp(e1, e2, 32) == 0);
+    f.pair[1].dp--, f.pair[1].owner[0] ^= 1;
+    pieces_eid(&f.net, f.pair, e2);
+    f.pair[1].owner[0] ^= 1;
     CHECK(memcmp(e1, e2, 32) != 0);
 }
 

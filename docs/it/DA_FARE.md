@@ -29,7 +29,7 @@ del ramo. Restano questi punti di progetto, da chiudere prima del #140:
 - ~~un partner può far ripartire la coppia con annullamenti ripetuti per un giorno, e ogni giro costa una commissione al premio~~: fatto il 14 novembre, al massimo 5 pagamenti non riusciti per punto (3.8);
 - avvisi falsi della tabella (record con una x copiata) possono occupare i 64 posti delle sessioni per un giorno;
 - i limiti per blocco di indirizzi sono larghi, e il conteggio si azzera con collisioni di FNV;
-- la custodia predefinita arriva a 2^28 record (37 GB);
+- ~~la custodia predefinita arriva a 2^28 record (37 GB)~~: fatto il 18 novembre, 2^27 record in 5 GB col record corto;
 - un saluto fa interrogare i server Electrum prima di qualunque prova;
 - gli identificativi delle richieste verso BitTorrent sono prevedibili, e gli indirizzi IPv6 6to4 e Teredo non sono filtrati;
 - il tempo con cui P1 fallisce dice quale firma del lotto non andava (al più log2(n+1) bit);
@@ -90,7 +90,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 
 | | Decisione | Stato |
 |---|---|---|
-| C1 | Record corto (senza firma su ogni record, un terzo dello spazio): **sì, ma dopo la prima prova** | È un cambio di formato grosso; la prima prova serve a vedere che il resto regge. Va fatto prima del #140 |
+| C1 | Record corto (senza firma su ogni record, un terzo dello spazio): sì | fatto il 18 novembre: 66 byte (34 in una STORE, dove il proprietario è chi la manda; 38 nell'archivio, col numero del proprietario), con i bit di zeri del punto |
 | C2 | Ripubblicazione leggera: sì | da fare insieme a C1, prima del #140 |
 | C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | da fare. Richiede che ogni motore di ricerca di pzsolve (CPU e schede video) riporti le chiavi che servono da prova di lavoro: senza quella prova chiunque potrebbe dichiarare fatti dei blocchi mai cercati |
 | C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare. Il pool: MARA Slipstream, gratuito e aperto a tutti da agosto 2026, con un'interfaccia per i programmi; MARA trova il 4-6% dei blocchi, quindi circa 3 ore di attesa. Con la quota dell'autore l'invio dovrebbe diventare automatico: da decidere quando si fa C3 (serve HTTPS: il `curl` del sistema o l'OpenSSL di pzsign) |
@@ -151,7 +151,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | G5 | `rt.c`: tredici scelte fra CUDA e OpenCL diventano una tabella di funzioni | −40 |
 | G6 | Tre riempimenti di SHA-256 in pzcore (hash.c, kdf.c): uno | −40 |
 | G7 | La copia di cb-mpc tiene 7400 righe che pzsign non usa | −7400 (nessun cambio ai sorgenti usati) |
-| G8 | Togliere i numeri di sequenza dei record (con C1) | da valutare |
+| G8 | Togliere i numeri di sequenza dei record (con C1) | fatto il 18 novembre, con C1 |
 
 ### 3.4 Documenti da allineare
 

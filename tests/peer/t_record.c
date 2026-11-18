@@ -147,7 +147,7 @@ static void test_record(void)
     hashed("owner", seed);
     home_identity id;
     CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id));
-    record r = {.t = -1, .seq = 0x0102030405060708ULL}, back;
+    record r = {.t = -1, .dp = 0}, back;
     uint8_t d[32], enc[RECORD_LEN];
     hashed("distance", d);
     d[0] = 0;
@@ -157,27 +157,28 @@ static void test_record(void)
         CHECK(point(&net, r.t, d, r.x));
     }
     memcpy(r.owner, id.xonly, 32);
-    CHECK(record_sign(ctx, &net, &id.kp, &r) && record_check(ctx, &net, &r));
+    CHECK(record_check(ctx, &net, &r));
     record_encode(&r, enc);
-    CHECK(enc[0] == 1 && enc[66] == 1 && enc[73] == 8);
+    CHECK(enc[0] == (uint8_t)(int8_t)r.t && enc[1] == 0 && !memcmp(enc + 2, r.x, 32) && !memcmp(enc + RECORD_WIRE, id.xonly, 32));
     uint8_t enc2[RECORD_LEN];
     CHECK(record_decode(enc, &back) && record_check(ctx, &net, &back));
     record_encode(&back, enc2);
     CHECK(!memcmp(enc2, enc, RECORD_LEN));                       /* compared by the encoding: the struct has padding */
-    for (int i = 1; i < RECORD_LEN; i++) {                     /* any changed byte: refused by the format or by the signature */
-        uint8_t e2[RECORD_LEN];
-        memcpy(e2, enc, sizeof e2);
-        e2[i] ^= 0x01;
-        CHECK(!record_decode(e2, &back) || !record_check(ctx, &net, &back));
-    }
-    enc[0] = 2;
-    CHECK(!record_decode(enc, &back));
+    uint8_t e2[RECORD_LEN];
+    memcpy(e2, enc, sizeof e2), e2[0] = 2;
+    CHECK(!record_decode(e2, &back));                           /* no such type */
+    memcpy(e2, enc, sizeof e2), e2[1] = RECORD_DP_MAX + 1;
+    CHECK(!record_decode(e2, &back));                           /* more zero bits than a record may claim */
+    memcpy(e2, enc, sizeof e2), e2[2] ^= 1;
+    CHECK(!record_decode(e2, &back) || !record_check(ctx, &net, &back) || memcmp(back.x, r.x, 32));
+    memset(e2 + RECORD_WIRE, 0xff, 32);
+    CHECK(record_decode(e2, &back) && !record_check(ctx, &net, &back));   /* an owner that is no key */
     record_net other = net;
-    other.fp[5] ^= 1;
-    CHECK(!record_check(ctx, &other, &r));                      /* the signature binds the network */
+    other.dpbits = 1;
+    CHECK(!record_check(ctx, &other, &r));                      /* fewer zero bits than the network asks */
     other = net;
-    other.dpbits = 30;
-    CHECK(!record_check(ctx, &other, &r));                      /* a random x has no 30 zero bits */
+    back = r, back.dp = 30;
+    CHECK(!record_check(ctx, &other, &back));                   /* claims 30 zero bits that a random x has not */
     /* the proof of possession */
     uint8_t asker[32], nonce[32], sig[64], wrong[32];
     hashed("asker", asker), hashed("nonce", nonce);
@@ -191,6 +192,10 @@ static void test_record(void)
     r2.t = r.t ? 0 : 1;                                          /* another type on the same x: the distance does not fit */
     CHECK(!record_prove(ctx, &net, &r2, d, asker, nonce, sig));
     CHECK(record_prove(ctx, &net, &r, d, asker, nonce, sig) && !record_proof_ok(ctx, &net, &r2, asker, nonce, sig));
+    other = net, other.fp[5] ^= 1;
+    CHECK(!record_proof_ok(ctx, &other, &r, asker, nonce, sig));   /* the proof binds the network */
+    r2 = r, r2.owner[0] ^= 1;
+    CHECK(!record_proof_ok(ctx, &net, &r2, asker, nonce, sig));    /* and the owner the record names */
     /* the zero bits */
     uint8_t x[32] = {0};
     x[23] = 0x01;

@@ -24,7 +24,7 @@ void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identit
     memset(cfg, 0, sizeof *cfg);
     cfg->ctx = ctx;
     cfg->self = self;
-    memcpy(cfg->prologue, "pznet1", 6);
+    memcpy(cfg->prologue, "pznet2", 6);
     memcpy(cfg->prologue + 6, fp, 32);
     cfg->id_bits = id_bits;
     cfg->port = port;

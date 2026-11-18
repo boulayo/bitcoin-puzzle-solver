@@ -99,6 +99,7 @@ typedef struct {
     int nsmp;
     double nodes[6];                /* the last estimates of the nodes that listen (dht_nodes) */
     int nnodes;
+    unsigned dp;                    /* the zero bits of the points of pzsolve now: the network's or more (choose_dp) */
 } home;
 
 static int64_t mono_s(void) { return sys_now_ms() / 1000; }
@@ -246,8 +247,8 @@ static void paid_load(home *h)
     unsigned long long at;
     const bool known = access(h->foundpath, F_OK) == 0;
     int n = 0;
-    _Static_assert(2 * PAID_TX_MAX + 8 == 1208 && 2 * RECORD_LEN + 8 == 284, "the widths of fscanf");
-    while (f && n < MAX_SESSIONS && fscanf(f, "%79s %79s %llu %1207s %283s %283s", a, b, &at, sec, r0, r1) == 6) {
+    _Static_assert(2 * PAID_TX_MAX + 8 == 1208 && 2 * RECORD_LEN + 8 == 140, "the widths of fscanf");
+    while (f && n < MAX_SESSIONS && fscanf(f, "%79s %79s %llu %1207s %139s %139s", a, b, &at, sec, r0, r1) == 6) {
         const size_t sl = strcmp(sec, "-") ? strlen(sec) : 0;
         uint8_t m[RECORD_LEN], t[RECORD_LEN], eid[32];
         record pair[2];
@@ -451,7 +452,7 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     snprintf(range, sizeof range, "%s:%s", pz_u256_to_hex(&h->nf.start, a), pz_u256_to_hex(&h->nf.end, b));
     for (int i = 0; i < 33; i++) snprintf(pub + 2 * i, 3, "%02x", h->nf.pubkey33[i]);
     for (int i = 0; i < 32; i++) snprintf(js + 2 * i, 3, "%02x", h->nf.jumpseed[i]);
-    snprintf(dp, sizeof dp, "%u", h->nf.dpbits);
+    snprintf(dp, sizeof dp, "%u", h->dp);
     snprintf(name, sizeof name, "net-%s", h->nf.net);
     const char *argv[64] = {h->cfg->pzsolve, "hunt", "-r", range, "-k", pub, "--dp-bits", dp, "--jump-seed", js, "--start-key", key,
                             "-c", name, "-d", camp, "--ui", "log"};
@@ -912,6 +913,7 @@ int home_run(const home_cfg *cfg)
     h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.pay_max = PAYOUTS_MAX;
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
+    h->dp = h->nf.dpbits;
     if (!btc_chain_parse(h->nf.chain, &h->chain)) return fprintf(stderr, "unknown chain %s\n", h->nf.chain), 1;
     if (!terms(h) || !payout_address(h)) return 2;
     if (cfg->rpc) {                                             /* the node: a wrong --rpc or chain now, not at the first session */
@@ -960,7 +962,7 @@ int home_run(const home_cfg *cfg)
                      .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
                      .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .portmap = cfg->portmap,
                      .allow_private = h->chain != BTC_MAIN || cfg->allow_private,
-                     .store_max = (uint64_t)cfg->store_gb * 1000000000ull / RECORD_LEN};
+                     .store_max = (uint64_t)cfg->store_gb * 1000000000ull / STORE_ENTRY};
     dc.bt_routers = bt_routers(h->chain == BTC_MAIN, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     sys_on_stop(on_signal);
@@ -1014,7 +1016,7 @@ int home_run(const home_cfg *cfg)
             for (int i = 0; i < n; i++) {
                 own_add(&h->own, p[i].x, p[i].index);
                 memset(&recs[i], 0, sizeof recs[i]);
-                recs[i].t = p[i].t;
+                recs[i].t = p[i].t, recs[i].dp = h->dp;
                 memcpy(recs[i].x, p[i].x, 32);
             }
             pthread_mutex_unlock(&h->mu);

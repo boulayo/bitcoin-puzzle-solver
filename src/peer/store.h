@@ -2,16 +2,17 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* store.h - the custodian (docs/en/NETWORK.md 7.3): the records a node keeps for the network, and the alert pairs it keeps as a mailbox.
  *
- * Records live in an append-only file, a 40-byte header ("PZSTORE1" and the fingerprint F of the network) and the 138-byte records one
- * after the other; in memory there is only an index by the first 8 bytes of K = SHA256("pznet1/key" || x) and the last sequence number of
- * each owner. The index is rebuilt from the file when it is opened, and a record cut by a crash at the end of the file is dropped.
- * A store refuses a second record with the same x from the same owner, and a new record whose sequence number is not above the last one
- * of its owner. Records with the same x from different owners are a coincidence: store_put gives them to the caller, which alerts.
- * A custodian's store has limits (store_limits): records in all, records of one owner, owners in all (one per 256 records it may hold,
- * and 1024 more), owners of one x; beyond them it is full.
+ * Records live in an append-only file, a 40-byte header ("PZSTORE2" and the fingerprint F of the network) and 38-byte entries one after
+ * the other: the type, the zero bits, x and the number of the owner, whose identity is the entry of that number in a second file beside it
+ * (PATH.owners: "PZOWNER2", F, then 32 bytes a owner, in the order they came). In memory there is only an index by the first 4 bytes of
+ * K = SHA256("pznet1/key" || x) and the records of each owner; both are rebuilt from the files when they are opened, and an entry cut by
+ * a crash at the end of a file is dropped. A store refuses a second record with the same x from the same owner. Records with the same x
+ * from different owners are a coincidence: store_put gives them to the caller, which alerts. A custodian's store has limits
+ * (store_limits): records in all, records of one owner, owners in all (one per 256 records it may hold, and 1024 more), owners of one x;
+ * beyond them it is full.
  *
- * The file is ours, so the records are not checked again when it is opened, except the last STORE_CHECK_TAIL: a crash can leave a record
- * that is whole in length but not in content. A record that fails its check there is not indexed. The records store_put reports as a
+ * The files are ours, so the records are not checked again when they are opened, except the last STORE_CHECK_TAIL: a crash can leave an
+ * entry that is whole in length but not in content. One that fails its check there is not indexed. The records store_put reports as a
  * coincidence are checked again when they are read back, so a damaged one never becomes an alert.
  *
  * Every function is thread-safe. */
@@ -22,6 +23,7 @@
 #include <stddef.h>
 
 #define STORE_HDR 40
+#define STORE_ENTRY 38             /* an entry of the file: type, zero bits, x, the number of the owner */
 #define STORE_CHECK_TAIL 1024      /* records at the end of the file checked again when it is opened */
 #define STORE_X_OWNERS 8           /* owners of one x a store keeps: more are no walk of the network, but someone's flood */
 
@@ -29,14 +31,14 @@ typedef enum {
     STORE_OK,                      /* stored */
     STORE_DUP,                     /* this owner's record with this x is already there (kept as it was) */
     STORE_INVALID,                 /* record_check refuses it */
-    STORE_OLD,                     /* a new record whose sequence number is not above the last one of its owner */
     STORE_FAIL,                    /* the file could not be written */
     STORE_FULL                     /* over a limit: records in all, records of its owner, owners of its x */
 } store_status;
 
 typedef struct store store;
 
-/* Opens (or creates) the store of a network at path. NULL, with the reason in err, for a file of another network or that cannot be read. */
+/* Opens (or creates) the store of a network at path (and PATH.owners). NULL, with the reason in err, for a file of another network or that
+ * cannot be read. */
 store *store_open(const char *path, const secp256k1_context *ctx, const record_net *net, char *err, size_t errlen);
 void store_close(store *st);
 /* The limits of a custodian (0: none): records in all, records of one owner. Owners of one x are at most STORE_X_OWNERS in any store. */
@@ -50,8 +52,8 @@ int store_find(store *st, const uint8_t x[32], record *out, int max);
 uint64_t store_count(store *st);
 /* The i-th record of the file (in the order they came); false past the end or for a damaged one. */
 bool store_read(store *st, uint64_t i, record *out);
-/* The last sequence number of an owner; false for an owner of whom the store has nothing. */
-bool store_last_seq(store *st, const uint8_t owner[32], uint64_t *seq);
+/* The jumps the records stand for: the sum of 2^dp over the records, each the work of a walk that finds one point in 2^dp. */
+long double store_weight(store *st);
 /* K = SHA256("pznet1/key" || x), the key of a record in the table. */
 void store_key(const uint8_t x[32], uint8_t k[32]);
 
@@ -60,7 +62,7 @@ bool store_pair_ok(const secp256k1_context *ctx, const record_net *net, const re
 
 /* The mailbox: alert pairs kept for their owners, in memory, at most cap in all and per_owner of one owner (of the owner that has
  * too many, else of all, the oldest pair that no owner proved goes first, then the oldest). Two owners at one point with the same types
- * are one pair, whatever the sequence numbers of their records. A pair is kept in the order of its owners (the smaller x-only identity first), whatever order
+ * are one pair, whatever the zero bits of their records. A pair is kept in the order of its owners (the smaller x-only identity first), whatever order
  * it came in, with the proof of possession of each owner when one came (docs/en/NETWORK.md 7.3: over the pair, for the other owner). The
  * mailbox keeps what it is given: the caller checks pairs and proofs. */
 typedef struct mbox mbox;

@@ -158,12 +158,15 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
         return 2 + (size_t)n * NODE_LEN;
     }
     case DHT_STORE:
-        /* an owner stores its own records: another's would bypass the limits of its address, and custodians do not copy */
-        if (len < 2 || m[1] == 0 || len != 2 + (size_t)m[1] * RECORD_LEN) return 0;
+        /* an owner stores its own records, without its identity, which is the sender's: another's would bypass the limits of its address,
+         * and custodians do not copy */
+        if (len < 2 || m[1] == 0 || len != 2 + (size_t)m[1] * RECORD_WIRE) return 0;
         ans[0] = DHT_STORED, ans[1] = m[1];
-        for (int i = 0; i < m[1]; i++)
-            ans[2 + i] = (uint8_t)(record_decode(m + 2 + (size_t)i * RECORD_LEN, &r) && !memcmp(r.owner, c->remote, 32) ? custody_put(d, &r, &c->addr)
-                                                                                                                       : DHT_ST_INVALID);
+        for (int i = 0; i < m[1]; i++) {
+            uint8_t e[RECORD_LEN];
+            memcpy(e, m + 2 + (size_t)i * RECORD_WIRE, RECORD_WIRE), memcpy(e + RECORD_WIRE, c->remote, 32);
+            ans[2 + i] = (uint8_t)(record_decode(e, &r) ? custody_put(d, &r, &c->addr) : DHT_ST_INVALID);
+        }
         return 2 + (size_t)m[1];
     case DHT_ALERT: {
         /* the pair, and maybe the proof of the owner of the first record for the owner of the second over the pair (7.3); the rate
@@ -531,9 +534,6 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         dht_stop(d);
         return NULL;
     }
-    (void)store_last_seq(d->own, d->me.xonly, &d->seq);
-    const uint64_t saved = load_seq(d);
-    if (saved > d->seq) d->seq = saved;
     return d;
 }
 

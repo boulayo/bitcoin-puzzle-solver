@@ -49,7 +49,7 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `btc_rpc.c` | the JSON-RPC client of bitcoind (HTTP/1.1, basic auth) |
 | `noise.c` | Noise_XX_secp256k1_ChaChaPoly_SHA256 and the frames after it: a state machine, no I/O |
 | `keys.c` | the keys derived from the home seed |
-| `record.c` | the record of a distinguished point, its signature, the proof of possession |
+| `record.c` | the record of a distinguished point, its checks, the proof of possession |
 | `net.c` | TCP: one connection per exchange, the handshake, frames, timeouts |
 | `store.c` | the custodian: records by key, on disk, coincidence detection, mailboxes |
 | `dht.c` | Kademlia: routing table, lookups, store, alerts, bootstrap |
@@ -233,20 +233,23 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 
 ### 7.2 The record of a distinguished point
 
-Fixed 138 bytes:
+Fixed 66 bytes:
 
 | Bytes | Field |
 |---|---|
-| 1 | version, 1 |
 | 1 | signed type t: 0, +1 or −1 (as two's complement byte) |
+| 1 | zero bits of x: at least `dpbits` of the network, at most 64 |
 | 32 | x of the point; the point is the representative with even y |
 | 32 | x-only identity of the owner |
-| 8 | sequence number of the owner (strictly increasing: pzpeer uses the microseconds of the clock, always above the last it used) |
-| 64 | BIP340 signature of the owner over `SHA256("pznet1/record" || F || the 74 bytes above)` |
 
 The point is `R = t·Q' + d·G` with `Q' = P − base·G`, `base` the start of the range, `d` the owner's exact distance (an integer of up to
-192 bits, kept at home). Checks on arrival: version, t in range, x on the curve with the zero bits of `dpbits` (on `x.n[1]` as pzsolve
-counts them), signature.
+192 bits, kept at home). Checks on arrival: t in range, the zero bits in range and x has them (on `x.n[1]` as pzsolve counts them), x
+on the curve, the owner an x-only key. The network's `dpbits` is the least: a home may ask pzsolve for more. Two records are of the same
+point when their x is, whatever their zero bits.
+
+A record carries no signature. In a STORE only its first 34 bytes travel, and its owner is the node that sent it, whose identity the
+handshake proved (7.1): a custodian takes the records of nobody else. Everything else a record can do (an alert, a session) waits for
+its owner's proof of possession, which no copier can make.
 
 **Proof of possession** of a record: a BIP340 signature by the key `d` (the scalar `d mod n`, adjusted so that `d·G = R − t·Q'`), over
 `SHA256("pznet1/possess" || F || record || the identity of the asker || a nonce of the asker)`. It is asked before an alert has any effect.
@@ -254,27 +257,26 @@ counts them), signature.
 ### 7.3 Custody and coincidences
 
 - Key of a record: `K = SHA256("pznet1/key" || x)`. A record goes to the 5 nodes whose IDs are closest to K (XOR distance).
-- A custodian keeps records on disk and an index in memory by the first 8 bytes of K. The file, `store.bin` in the data folder, is
-  append-only: a 40-byte header (`PZSTORE1` and F: a file of another network is refused) and the 138-byte records one after the other.
-  At start the index is rebuilt from the file, and a record cut by a crash at its end is dropped.
+- A custodian keeps records on disk and an index in memory by the first 4 bytes of K. The file, `store.bin` in the data folder, is
+  append-only: a 40-byte header (`PZSTORE2` and F: a file of another network is refused) and 38-byte entries one after the other: the
+  type, the zero bits, x and the number of the owner (4 bytes, little-endian). The owners are in `store.bin.owners`: `PZOWNER2`, F, then
+  32 bytes an owner, in the order they came. At start the index is rebuilt from the files, and an entry cut by a crash at their end is
+  dropped.
 - A custodian refuses a record that does not pass the checks of 7.2 or whose owner's node ID has not the zero bits (an owner is a node:
-  the alerts find it by its ID), a second record with the same x **from the same owner** (duplicate: the first is kept), and a new
-  record whose sequence number is not above the last one it has of that owner. So an owner sends its records to each custodian in the
-  order of their numbers, and a republish signs them again with new numbers (7.4).
-- What a custodian takes is bounded (a record costs its owner one signature, with any x that has the zero bits: no discrete log is
-  needed, so a flood is cheap to make):
+  the alerts find it by its ID), and a second record with the same x **from the same owner** (duplicate: the first is kept).
+- What a custodian takes is bounded (a record costs its owner nothing, with any x that has the zero bits: no discrete log is needed, so
+  a flood is cheap to make):
   - only records of the node that sends them (an owner stores its own; custodians do not copy), and only records whose key it may be a
     custodian of: it refuses one when its table knows 10 nodes closer to K (a sum over buckets: a contact of bucket j is closer exactly
     when bit j of `ID ⊕ K` is 1). An honest publisher found it among the 5 closest, so it knows at most 4 closer; a flood sprayed at
     random nodes is refused, and one aimed at a node costs about (nodes / 10) tries per record;
   - within a rate per address block of the sender (the table of the limits in 7.4);
-  - at most `store_max` records in all (`--store-gb`, 37 GB by default, 2^28 records; the index in memory is about 1/8 of the file), at
-    most 1/16 of them of one owner, at most 8 owners of one x, and owners in all one per 256 records it may hold and 1024 more (an
-    owner takes memory, not disk, and an identity costs little).
-  The checks that cost nothing come first, the signature last.
+  - at most `store_max` records in all (`--store-gb`, 5 GB by default, 2^27 records; the index in memory takes 8 bytes a record, up to
+    two fifths of the file while it grows), at most 1/16 of them of one owner, at most 8 owners of one x, and owners in all one per 256
+    records it may hold and 1024 more (an identity costs little).
+  The checks that cost nothing come first, the curve last.
 - `store.bin` is the custodian's own file, so its records are not checked again when it is opened, except the last 1024: a crash can
-  leave a record whole in length and wrong in content, which could give its owner a huge sequence number and refuse all its next ones.
-  A record that fails there is not indexed. The records a coincidence is made of are checked again when they are read back, so a record
+  leave an entry whole in length and wrong in content. One that fails there, or names an owner the owners file has not, is not indexed. The records a coincidence is made of are checked again when they are read back, so a record
   damaged in the middle of the file never becomes an alert.
 - Same x, different owners: a coincidence. Same type: a merge (both walkers should restart). Different types: useful. Both kinds are
   alerted the same way; the owners tell them apart by the types. The custodian sends `ALERT(record1, record2)` to both owners (found
@@ -282,10 +284,10 @@ counts them), signature.
   (a duplicate) with a coincidence alerts again, at most once an hour for a pair: an alert lost on the way comes back with the next
   republish. A record the custodian does not keep because it is full is still alerted. Each alert costs the custodian four lookups and a
   dozen connections, so a record alerts at most 2 pairs, and the coincidences of the records of one address block are limited (7.4).
-- A node that receives an `ALERT` checks both records (signatures, same x, different owners). It keeps the pair as a mailbox when it may
+- A node that receives an `ALERT` checks both records (7.2, same x, different owners). It keeps the pair as a mailbox when it may
   be a mailbox of one of the owners (the rule of the custodian above, for the key of the mailbox), in memory: the last 4096 pairs, at
   most 64 of one owner (a flood of the pairs of one owner pushes out its own). Two owners at one point are one pair whatever the
-  sequence numbers of their records, and the pair that goes is the oldest that no owner proved, then the oldest: pairs made of points
+  zero bits of their records, and the pair that goes is the oldest that no owner proved, then the oldest: pairs made of points
   copied from the table, which their sender cannot prove, do not push out a pair that an owner proved. When one owner is itself it checks the proofs of
   possession: its own (the daemon gives the distance of the point) and the other owner's. Only then the daemon gets the alert.
 - The other owner's proof comes one of two ways. `POSSESS`, with a nonce of the asker, when the other owner listens. Or the other owner
@@ -319,7 +321,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 |---|---|---|
 | 1 | PING | 2 PONG |
 | 3 | FIND_NODE(target 32) | 4 NODES(n, n × (node id 32, xonly 32, ip 16, port 2)), n ≤ 20 |
-| 5 | STORE(n, n × record), 1 ≤ n ≤ 255 | 6 STORED(n, n × status byte) |
+| 5 | STORE(n, n × the first 34 bytes of a record: the owner is the sender), 1 ≤ n ≤ 255 | 6 STORED(n, n × status byte) |
 | 7 | ALERT(record, record), or ALERT(record, record, proof 64): the proof of the first record's owner for the second's (7.3) | 8 OK |
 | 9 | MBOX_GET(owner 32) | 10 MBOX(n, n × (record, record, flags, proof 64, proof 64)), n ≤ 64, the newest first; the records in the order of their owners, bit i of flags set when the proof of the owner of record i is there (else zeros) |
 | 11 | POSSESS(record, nonce 32) | 12 PROOF(sig 64) |
@@ -329,10 +331,9 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 - The lengths are exact. In NODES each contact must have the ID of its identity, with the zero bits, a port, and an address the node may
   dial; no address twice (one address with two identities is no honest table), at most 4 contacts of one address block. The ip is IPv6,
   an IPv4 address as `::ffff:a.b.c.d`. Any other answer is refused whole.
-- STORED statuses: 0 stored, 1 duplicate, 2 invalid (also: a record of another owner than the sender), 3 sequence number not above the
-  last, 4 stored and a coincidence (alerts follow), 5 the custodian could not write it, 6 refused for now (the custodian is full, or
-  the owner's share, or the owners of its x, or its address block is over its rate), 7 not a custodian of it (it knows 10 nodes closer
-  to its key). A record counts as held for 0, 1 and 4.
+- STORED statuses: 0 stored, 1 duplicate, 2 invalid, 3 stored and a coincidence (alerts follow), 4 the custodian could not write it,
+  5 refused for now (the custodian is full, or the owner's share, or the owners of its x, or its address block is over its rate), 6 not
+  a custodian of it (it knows 10 nodes closer to its key). A record counts as held for 0, 1 and 3.
 - Addresses. On a public network (the chain of the network file is `main`) a node dials and keeps only public addresses: not
   unspecified, loopback, private (RFC 1918, RFC 4193), shared (RFC 6598), link-local, benchmarking, documentation, multicast or reserved.
   A NODES answer that points elsewhere is refused (it would make the node connect into the user's own LAN), and so is a contact that
@@ -347,7 +348,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   | queries of one lookup, to one block | 64, 4 (a candidate past them counts as failed) |
   | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most, for the 2 seconds the handshake and the request of a connection have) |
   | records stored from one block | 50 a second, 100 000 at once (a republish sends them all) |
-  | ALERTs received from one block | 2 a second, 64 at once (checked before the signatures) |
+  | ALERTs received from one block | 2 a second, 64 at once (checked before the records and the proof) |
   | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs |
   | relays (waiting or under way) of the homes of one block; waits of one identity | 2; 2 |
 
@@ -375,14 +376,11 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   keep pointing at new nodes cannot make a lookup endless). A lookup asks at most 4 nodes of one address block: answers that all point
   at one network, a victim or the attacker's own, do not make the node dial it more. The result counts the node itself when it listens.
   `want` is 20 to find nodes, 5 to find the custodians of a record or the mailboxes of an owner.
-- Publishing: a lookup for each record, then one STORE per custodian with all its records, in the order of their sequence numbers.
-  pzpeer signs the records itself (owner, sequence number, signature) and sends them under one lock, so the numbers of one owner reach
-  every custodian in order. Its own records are also kept in `own.bin` (the format of `store.bin`). Every day it publishes them again,
-  signed with new numbers: a node that became a custodian since takes them, the others answer duplicate. It does so at once when it
-  gets its first contacts after having none, if a record went meanwhile to no other node: the points of the first home of a network, or
-  of a home that was cut off, go then, not a day later. Custodians do not copy records to each other. The last number signed is kept in `own.seq`:
-  `own.bin` keeps the numbers of the first publication only, and a node that restarted with its clock behind its last republish would
-  sign below what the custodians saw, and be refused by all of them.
+- Publishing: a lookup for each record, then one STORE per custodian with all its records. Its own records are also kept in `own.bin`
+  (the format of `store.bin`). Every day it publishes them again: a node that became a custodian since takes them, the others answer
+  duplicate. It does so at once when it gets its first contacts after having none, if a record went meanwhile to no other node: the
+  points of the first home of a network, or of a home that was cut off, go then, not a day later. Custodians do not copy records to
+  each other.
 - Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, the saved `peers.txt` (whose lines name the
   identity too, which is checked) up to half of the 64 tried, then the addresses found in the table of BitTorrent. A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
   contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an
@@ -658,7 +656,7 @@ relays at once, the bytes.
 | Open connections instead of polls | a home that does not listen polls its mailboxes every minute (a lookup and 5 connections); the project wants it to keep a few connections open to reachable nodes and get its alerts on them |
 | More than one relay at a time | a pair tries one relay per slot; two homes that cannot reach the same node in any slot (a network that blocks part of the Internet) get no channel |
 | The cost of an identity | 16 zero bits cost seconds, so thousands of identities are cheap: the limits by block bound what one network can do, not what many networks (a botnet, a cloud) can |
-| An index that fits a home | 2^28 records take about 4.5 GB of RAM for the index; a larger store needs its index on disk |
+| An index that fits a home | the index takes 8 bytes a record, 2 GB for 2^28 records (10 GB of disk); a larger store needs its index on disk |
 
 ### 7.9 Finding the network with no server of its own
 
@@ -683,7 +681,7 @@ from (the token of BEP 5), so nobody can announce a third party to make the node
 
 What an attacker can do there: put nodes close to the key, take the announces and give back nothing or only its own nodes. A node
 that enters for the first time then finds nobody, or only the attacker, who can hide records from it and delay its alerts (section
-7.4 says what the table does against that) and can steal nothing: records are signed, a coincidence is proven by both owners, and
+7.4 says what the table does against that) and can steal nothing: a node stores only its own records, a coincidence is proven by both owners, and
 the payout needs both signatures. `peers.txt` and `--peer` do not depend on that table. A packet from that table counts only when it
 comes from the address asked, with the number of the question, and is read within its bounds (`t_bt` runs nodes that send random
 bytes, answers to other questions, nodes that do not exist, and peers without end).
@@ -879,7 +877,7 @@ What a Bitcoin node does is the model.
 - **The port.** Only TCP 28140: a rented server has it open already; at home it is opened by hand on the router toward that machine,
   so the request to the router is off (`--no-portmap`). The node shows the others its address and port, as every node of the table
   does, and nothing else.
-- **Disk and memory.** `--store-gb N` (37 by default): the index takes about a fifth of it in RAM.
+- **Disk and memory.** `--store-gb N` (5 by default): the index takes up to two fifths of it in RAM.
 - **A VPN such as Tailscale** is for reaching the machine, not for the network: the other nodes reach a custodian only at a public
   address. Bitcoin Core also takes connections through a Tor onion service, with no open port and no address shown; in a table such as
   this one every node must reach every custodian, so a custodian behind Tor would serve only the nodes that have Tor too: not now.

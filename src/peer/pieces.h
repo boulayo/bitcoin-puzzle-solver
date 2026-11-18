@@ -18,7 +18,7 @@ bool pieces_public(const secp256k1_context *ctx, const record_net *net, const ui
 /* The secret piece of party `me` from its distance d (d mod n, big-endian, of its record of the pair), checked against its public piece. */
 bool pieces_secret(const secp256k1_context *ctx, const record_net *net, const uint8_t base32[32], const record pair[2], int me,
                    const uint8_t d[32], uint8_t piece[32]);
-/* The id of the session of a pair: SHA256("pznet1/eid" || F || record 0 || record 1). */
+/* The id of the session of a pair: SHA256("pznet1/eid" || F || record 0 || record 1), their zero bits set to 0. */
 void pieces_eid(const record_net *net, const record pair[2], uint8_t eid[32]);
 
 #endif

@@ -5,7 +5,7 @@
  * owners are held by 4 or 5 of their 5 closest nodes. Then the coincidences: a useful one and a merge, whose owners both get on_alert
  * after the proofs of possession, with the pair in their mailboxes; an owner that does not listen, which gets its alert from its
  * mailboxes, and its partner, which gets that owner's proof in an ALERT. Then a session over dht_dial, malformed requests (and records
- * refused: of another owner, far from the custodian), a node stopped and started again (its store, its peers and its sequence number come
+ * refused: false zero bits, far from the custodian), a node stopped and started again (its store and its peers come
  * back), the eviction of the oldest contact of a full bucket. The limits: a public network refuses loopback, a NODES answer aimed at one
  * address or block is refused, the table keeps few contacts per block and answers an address once, idle connections hold few handlers,
  * a flood of alerts that will never be proved does not shut out a real one. The relay: two homes that do not listen get their alerts
@@ -142,7 +142,7 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 
 static void clean_dir(const char *dir)
 {
-    static const char *const FILES[] = {"store.bin", "own.bin", "peers.txt", "peers.txt.tmp", "own.seq", "own.seq.tmp"};
+    static const char *const FILES[] = {"store.bin", "store.bin.owners", "own.bin", "own.bin.owners", "peers.txt", "peers.txt.tmp"};
     char p[128];
     for (size_t i = 0; i < sizeof FILES / sizeof *FILES; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, FILES[i]);
@@ -228,7 +228,7 @@ static void even_point(uint8_t d[32], uint8_t x[32])
 /* the point (t, x) with distance d becomes one of node n's; the distance must fit (a proof made with it checks out) */
 static void give_point(node *n, int t, const uint8_t x[32], const uint8_t d[32])
 {
-    record r = {.t = t, .seq = 1};
+    record r = {.t = t, .dp = net.dpbits};
     uint8_t nonce[32] = {1}, sig[64];
     memcpy(r.x, x, 32);
     memcpy(r.owner, n->id.xonly, 32);
@@ -242,7 +242,7 @@ static void give_point(node *n, int t, const uint8_t x[32], const uint8_t d[32])
 
 static bool publish_one(node *n, int t, const uint8_t x[32], record *out)
 {
-    out->t = t;
+    out->t = t, out->dp = net.dpbits;
     memcpy(out->x, x, 32);
     return dht_publish(n->d, out, 1) == 1;
 }
@@ -297,7 +297,7 @@ static void test_records(void)
         hashed(label, k);
         CHECK(secp256k1_ec_pubkey_create(ctx, &p, k) && secp256k1_ec_pubkey_serialize(ctx, c, &n, &p, SECP256K1_EC_COMPRESSED));
         memcpy(recs[i].x, c + 1, 32);
-        recs[i].t = i % 3 - 1;
+        recs[i].t = i % 3 - 1, recs[i].dp = net.dpbits;
     }
     for (int o = 0; o < OWNERS; o++) {
         jobs[o] = (pub_job){&nodes[1 + o], recs + o * (RECS / OWNERS), RECS / OWNERS, 0};
@@ -408,7 +408,7 @@ static void test_coincidences(void)
     record fake = rA;
     fake.t = 1;
     memcpy(fake.owner, nodes[3].id.xonly, 32);
-    CHECK(dht_ask_proof(nodes[20].d, &fake) == -1);             /* not its record (unsigned by it): it closes without a proof */
+    CHECK(dht_ask_proof(nodes[20].d, &fake) == -1);             /* not its record: it closes without a proof */
     CHECK(dht_ask_proof(nodes[20].d, &rU) == -1);               /* U does not listen */
 
     /* a session to B: the first frame comes back, then a proof over the same connection */
@@ -449,7 +449,7 @@ static void test_malformed(void)
     CHECK(!net_exchange(&cli, &a, NULL, req, 1, ans, sizeof ans, &n, NULL));                 /* an unknown type */
     req[0] = DHT_STORE, req[1] = 2;
     record_encode(&recs[0], req + 2);
-    CHECK(!net_exchange(&cli, &a, NULL, req, 2 + RECORD_LEN, ans, sizeof ans, &n, NULL));    /* two records announced, one sent */
+    CHECK(!net_exchange(&cli, &a, NULL, req, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL));   /* two records announced, one sent */
     req[1] = 0;
     CHECK(!net_exchange(&cli, &a, NULL, req, 2, ans, sizeof ans, &n, NULL));                 /* none */
     req[0] = DHT_ALERT;
@@ -460,18 +460,10 @@ static void test_malformed(void)
     CHECK(!net_exchange(&cli, &a, NULL, req, 34, ans, sizeof ans, &n, NULL));
     req[0] = DHT_SESSION_FIRST + 1;
     CHECK(net_exchange(&cli, &a, NULL, req, 5, ans, sizeof ans, &n, NULL) && n == 5);        /* a session: the test's echo */
-    /* well formed, refused record by record: a changed signature, an owner whose node ID has not the zero bits (sent by that owner),
-     * a record of another owner (an owner stores its own: before, anyone could), a record of the sender whose key is far from node 0
-     * (node 0 knows many nodes closer to it: before, it was stored); and one node 0 is the closest to, stored */
-    home_identity nob;
-    for (int i = 0;; i++) {
-        char label[32];
-        snprintf(label, sizeof label, "no bits %d", i);
-        hashed(label, seed);
-        CHECK(keys_identity(ctx, seed, FP, 0, &nob));
-        if (!keys_id_ok(nob.id, BITS)) break;
-    }
-    record mk[3];                                              /* of cid: a broken signature, far from node 0, near node 0 */
+    /* well formed, refused record by record: zero bits that x has not, a record whose key is far from node 0 (node 0 knows many nodes
+     * closer to it: before, it was stored); and one node 0 is the closest to, stored. A STORE names no owner: it is the sender, so
+     * nobody stores the records of another. And an owner whose node ID has not the zero bits: refused */
+    record mk[3];                                              /* of cid: false zero bits, far from node 0, near node 0 */
     for (int i = 0, got = 0; got < 3; i++) {
         char label[32];
         uint8_t k[32], kk[32], x[32];
@@ -485,31 +477,35 @@ static void test_malformed(void)
         store_key(x, kk);
         int nearer = 0;                                         /* the nodes closer to the key than node 0 */
         for (int j = 1; j < N; j++) nearer += closer(kk, nodes[j].id.id, nodes[0].id.id);
-        const int want = got == 1;                              /* near, far, near: the signature is checked after the cheap checks */
+        const int want = got == 1;                              /* near, far, near: the zero bits are checked after the cheap checks */
         if ((want == 1 && nearer < 15) || (want == 0 && nearer != 0)) continue;
-        record r = {.t = 0, .seq = 1000 + (uint64_t)got};
+        record r = {.t = 0, .dp = net.dpbits};
         memcpy(r.x, x, 32);
         memcpy(r.owner, cid.xonly, 32);
-        CHECK(record_sign(ctx, &net, &cid.kp, &r));
         mk[got++] = r;
     }
-    mk[0].sig[9] ^= 4;
+    mk[0].dp = 40;
     uint8_t big[2 + 3 * RECORD_LEN];
     big[0] = DHT_STORE, big[1] = 3;
-    record_encode(&recs[0], big + 2);
-    record_encode(&mk[1], big + 2 + RECORD_LEN);
-    record_encode(&mk[2], big + 2 + 2 * RECORD_LEN);
-    CHECK(net_exchange(&cli, &a, NULL, big, sizeof big, ans, sizeof ans, &n, NULL) && n == 5 && ans[0] == DHT_STORED && ans[1] == 3 &&
+    for (int i = 0; i < 3; i++) {
+        uint8_t e[RECORD_LEN];
+        record_encode(&mk[i], e);
+        memcpy(big + 2 + i * RECORD_WIRE, e, RECORD_WIRE);
+    }
+    CHECK(net_exchange(&cli, &a, NULL, big, 2 + 3 * RECORD_WIRE, ans, sizeof ans, &n, NULL) && n == 5 && ans[0] == DHT_STORED && ans[1] == 3 &&
           ans[2] == DHT_ST_INVALID && ans[3] == DHT_ST_FAR && ans[4] == DHT_ST_STORED);
-    record r2 = {.t = 0, .seq = 7};
-    memcpy(r2.x, recs[5].x, 32);
-    memcpy(r2.owner, nob.xonly, 32);
-    CHECK(record_sign(ctx, &net, &nob.kp, &r2) && record_check(ctx, &net, &r2));
-    big[1] = 2;
-    record_encode(&mk[0], big + 2);
-    record_encode(&r2, big + 2 + RECORD_LEN);
-    CHECK(net_exchange(&cli, &a, NULL, big, 2 + 2 * RECORD_LEN, ans, sizeof ans, &n, NULL) && n == 4 && ans[2] == DHT_ST_INVALID &&
-          ans[3] == DHT_ST_INVALID);
+    home_identity nob;
+    for (int i = 0;; i++) {
+        char label[32];
+        snprintf(label, sizeof label, "no bits %d", i);
+        hashed(label, seed);
+        CHECK(keys_identity(ctx, seed, FP, 0, &nob));
+        if (!keys_id_ok(nob.id, BITS)) break;
+    }
+    net_cfg cnob;
+    net_cfg_init(&cnob, ctx, &nob, FP, 0, 0, 2000);
+    big[1] = 1;
+    CHECK(!net_exchange(&cnob, &a, NULL, big, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL) || (n == 3 && ans[2] == DHT_ST_INVALID));
 }
 
 static void test_restart(void)
@@ -1008,7 +1004,7 @@ static void test_first_contact(void)
         snprintf(label, sizeof label, "first %d", i);
         hashed(label, dk);
         even_point(dk, pts[i].x);
-        pts[i].t = i & 1;
+        pts[i].t = i & 1, pts[i].dp = net.dpbits;
     }
     CHECK(dht_publish(a, pts, 20) == 0);                       /* nobody to hold them, not even a itself */
     dht_contact cb;
@@ -1049,9 +1045,8 @@ static void test_alert_flood(void)
         home_identity sy;
         snprintf(label, sizeof label, "sybil %d", i);
         make_id(label, &sy);
-        record r = {.t = 1, .seq = 1};
+        record r = {.t = 1, .dp = net.dpbits};
         memcpy(r.x, xf, 32), memcpy(r.owner, sy.xonly, 32);
-        CHECK(record_sign(ctx, &net, &sy.kp, &r));
         uint8_t req[1 + 2 * RECORD_LEN], ans[1];
         size_t n;
         req[0] = DHT_ALERT;
@@ -1076,29 +1071,6 @@ static void test_alert_flood(void)
     CHECK(alerts_of(A2, &mine, &theirs, &merge) == 1 && same(&mine, &rA) && same(&theirs, &rB) && !merge);
     CHECK(alerts_of(B2, &mine, &theirs, &merge) == 1 && same(&mine, &rB) && same(&theirs, &rA));
     printf("t_dht: the real alert after the flood in %.1f s\n", (double)(ms() - t1) / 1000);
-}
-
-/* The sequence number survives a restart (own.seq): a republish signs the records with numbers that own.bin does not keep, so a node that
- * restarts with its clock behind its last republish would sign below what the custodians saw, and be refused. own.seq holds a number
- * ahead of the clock here (a clock that went back); the next record is above it. */
-static void test_seq(void)
-{
-    node *n = &nodes[3];
-    const int port = dht_port(n->d);
-    char path[128];
-    dht_stop(n->d);
-    n->d = NULL;
-    const uint64_t ahead = (uint64_t)time(NULL) * 1000000 + 1000000000000ull;   /* 11 days ahead */
-    snprintf(path, sizeof path, "%s/own.seq", n->dir);
-    FILE *f = fopen(path, "w");
-    CHECK(f != NULL);
-    if (f) fprintf(f, "%llu\n", (unsigned long long)ahead), fclose(f);
-    CHECK(start_node(n, port, -1));
-    uint8_t d[32], x[32];
-    record r;
-    hashed("after a clock went back", d);
-    even_point(d, x);
-    CHECK(publish_one(n, 1, x, &r) && r.seq > ahead);
 }
 
 /* ---- the relay ---- */
@@ -1399,7 +1371,6 @@ int main(void)
     test_nodes_answer();
     test_slowloris();
     test_alert_flood();
-    test_seq();
     t0 = ms();
     test_relay_session();
     test_relay_limits();
