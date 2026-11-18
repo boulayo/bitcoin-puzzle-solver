@@ -57,7 +57,7 @@ typedef struct {
     unsigned id_bits;              /* leading zero bits of a node ID: NODE_ID_ZERO_BITS on a real network */
     const char *listen_host;       /* numeric; NULL: every address */
     int listen_port;               /* 0: no listening (the node dials out and polls its mailboxes); DHT_ANY_PORT: a free one */
-    const char *dir;               /* data folder: store.bin (custody), own.bin (own records), peers.txt */
+    const char *dir;               /* data folder: store.bin (custody), own.bin and own.cust (own records), peers.txt */
     const char *const *bootstrap;  /* "host:port": the entry= lines of the network file, --peer (peers.txt is read by the node) */
     int nbootstrap;
     /* An alert for this node, after both proofs of possession: mine is this node's record, theirs the other owner's; merge when they
@@ -107,9 +107,14 @@ int dht_start(dht *d);
 void dht_stop(dht *d);
 uint16_t dht_port(const dht *d);    /* 0 when the node does not listen */
 
-/* Publishes points of this node: the caller sets t, dp and x of each record, the node sets the owner. They are kept in own.bin for the
- * republish and sent to the DHT_KSTORE nodes closest to their K. The records that at least one custodian holds now. */
+/* Publishes points of this node: the caller sets t, dp and x of each record, the node sets the owner. They go to the DHT_KSTORE nodes
+ * closest to their K, found with a lookup of the last hour near K when one shows them, else with a new one, and are kept in own.bin for
+ * the republish. After a restart the caller may give its records again from the first: those own.bin has in the same order are not sent
+ * again. The records that at least one custodian holds now (or held then). */
 int dht_publish(dht *d, record *recs, int n);
+/* The own records again now (the maintenance thread does it every republish_s), each to the custodians it did not have at the last
+ * republish (all: to every custodian, as at the first contacts after none). The copies sent. */
+uint64_t dht_republish(dht *d, bool all);
 
 /* The want (at most DHT_K) nodes closest to target, this one included when it listens, nearest first: an iterative lookup. */
 int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want);

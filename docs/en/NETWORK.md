@@ -357,7 +357,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   | contacts of one block in a bucket, in the table, in a NODES answer | 2, 4, 4 |
   | queries of one lookup, to one block | 64, 4 (a candidate past them counts as failed) |
   | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most, for the 2 seconds the handshake and the request of a connection have) |
-  | records stored from one block | 50 a second, 100 000 at once (a republish sends them all) |
+  | records stored from one block | 50 a second, 100 000 at once (a home that was alone sends them all) |
   | ALERTs received from one block | 2 a second, 64 at once (checked before the records and the proof) |
   | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs |
   | relays (waiting or under way) of the homes of one block; waits of one identity | 2; 2 |
@@ -386,11 +386,25 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   keep pointing at new nodes cannot make a lookup endless). A lookup asks at most 4 nodes of one address block: answers that all point
   at one network, a victim or the attacker's own, do not make the node dial it more. The result counts the node itself when it listens.
   `want` is 20 to find nodes, 5 to find the custodians of a record or the mailboxes of an owner.
-- Publishing: a lookup for each record, then one STORE per custodian with all its records. Its own records are also kept in `own.bin`
-  (the format of `store.bin`). Every day it publishes them again: a node that became a custodian since takes them, the others answer
-  duplicate. It does so at once when it gets its first contacts after having none, if a record went meanwhile to no other node: the
-  points of the first home of a network, or of a home that was cut off, go then, not a day later. Custodians do not copy records to
-  each other.
+- Publishing: the custodians of each record, then one STORE per custodian with all its records. A lookup finds the 20 nodes closest to
+  a target T, and the node keeps it for an hour: the custodians of a key K near T come from it, with no lookup of their own, when it
+  shows that they are the 5 closest of all. A node it does not have is at least D from T, D the distance of the farthest it has; with
+  `d(T, K) < 2^b`, a XOR with it changes only the bits of a distance below b, so that node is at least D with those bits cleared from
+  K. When the 5 closest to K among the 20 are nearer than that, they are the closest of all (a lookup that found fewer than 20 knows
+  every node). The two lookups around K in the order of their targets are tried (the nearest: they share the longest prefix with K),
+  else a lookup of K itself. A custodian that answers "not a custodian" makes the node forget the lookup it came from. A home thus
+  makes a lookup per region of the IDs per hour, not per record: on a test of 31 nodes 2000 records went out in 0.5 s instead of 1.4.
+- `own.bin` keeps the records the node published, in their order: `PZOWN002`, F, then the first 34 bytes of each. A record is written
+  once its STORE went out (one cut by a stop is given again after the restart). After a restart the home gives its records again from
+  the first (it reads its `dp.bin` from the start): those `own.bin` has, in the same order, are not sent again, and the first that
+  differs ends that.
+- The republish, every day: the custodians of each record again, with new lookups, and a record goes only to those it did not have at
+  the last republish: the nodes that joined since, or that moved up among the closest of a key as others left. `own.cust` keeps what
+  the last republish saw (the records `own.bin` had, and its lookups: target and IDs); the records published since go to all their
+  custodians. With no node come or gone it sends nothing (`t_dht`: 2386 copies, then 0, then 80 after a node joined, all of them to
+  it). At once, and to every custodian, when the node gets its first contacts after having none, if a record went meanwhile to no
+  other node: the points of the first home of a network, or of a home that was cut off, go then, not a day later. Custodians do not
+  copy records to each other.
 - Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, the saved `peers.txt` (whose lines name the
   identity too, which is checked) up to half of the 64 tried, then the addresses found in the table of BitTorrent. A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
   contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an
@@ -662,7 +676,6 @@ relays at once, the bytes.
 | Tor, optional (project 2.5) | a SOCKS5 client in `net.c`, and onion addresses in NODES, which has 16 bytes for an address: a new format. A node behind Tor cannot be a custodian, like one that does not listen |
 | A defence of the rendezvous key in the BitTorrent DHT | nodes that sit close to the key there can hide the announces (7.9). The rule that ties a node ID of that table to its address (BEP 42) would make it dear; many nodes of that table do not follow it yet |
 | Spot checks of the walks (project 4.2) | they need the previous distinguished point of a walk from its owner, so pzsolve and `dp.bin` would have to keep the chain of each walker; a check costs minutes of a core and needs a protocol of its own (ask, walk, revoke a machine) |
-| A republish that scales | every day each home sends all its records again: at the end of a campaign with 10 000 GPUs that is about 8·10^7 records a home a day, far above the traffic of project 4.3. A custodian should get only what it lacks (a digest of what it holds, or the republish only to the nodes that became custodians) |
 | Open connections instead of polls | a home that does not listen polls its mailboxes every minute (a lookup and 5 connections); the project wants it to keep a few connections open to reachable nodes and get its alerts on them |
 | More than one relay at a time | a pair tries one relay per slot; two homes that cannot reach the same node in any slot (a network that blocks part of the Internet) get no channel |
 | The cost of an identity | 16 zero bits cost seconds, so thousands of identities are cheap: the limits by block bound what one network can do, not what many networks (a botnet, a cloud) can |
@@ -863,6 +876,11 @@ of BitTorrent and the chain read from Electrum servers (on the main chain a buil
 `--electrum`, `--bt-router` or `--peer`, and `--rpc` for a node of one's own). `--debug FILE` writes every message, step and answer
 of the chain with its time, and no secret: the file to read when something went wrong. Options after `--` go to pzsolve
 (`-- -t 2 --no-gpu`).
+
+**A home that starts with the computer** is a task of the system: start it once by hand (the terms and the payout address), then add,
+with the full paths and `--dir`:
+- Linux and macOS: `crontab -e`, a line `@reboot /PATH/pzpeer run --network /PATH/net.txt --dir /PATH/home >> /PATH/home.log 2>&1`;
+- Windows: `schtasks /create /tn pzpeer /sc onlogon /tr "C:\PATH\pzpeer.exe run --network C:\PATH\net.txt --dir C:\PATH\home"`.
 
 With a bitcoind of its own and no `rpcpassword`, `--rpc 127.0.0.1:8332 --rpc-cookie ~/.bitcoin/.cookie` takes its credentials from its
 cookie file instead (section 8.1).

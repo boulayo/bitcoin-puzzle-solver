@@ -4,7 +4,7 @@
  *   dht.c        the node's life (create, start, stop), its threads (accept, handlers, jobs, maintenance), the answers to requests, the
  *                limits by address block
  *   dht_table.c  the routing table, the exchanges with a contact, NODES, the lookups, the bootstrap, the refresh, peers.txt
- *   dht_store.c  the records: what a custodian takes, what this node publishes (own.bin)
+ *   dht_store.c  the records: what a custodian takes, what this node publishes (own.bin, own.cust)
  *   dht_alert.c  the alerts of a coincidence, the proofs of possession, the mailboxes
  *   dht_relay.c  the relay, and the channel of a session (docs/en/NETWORK.md 7.7)
  * Each shared structure has its own mutex, and no lock is held across a connection: the routing table, the limits by address block, the
@@ -59,6 +59,19 @@ typedef struct job {
 
 typedef struct own_alert own_alert;
 
+/* The DHT_K nodes closest to a target that a lookup found (dht_store.c): the custodians of the keys near the target come from them. */
+typedef struct {
+    uint8_t t[32];
+    int n;
+    int64_t at;
+    dht_contact c[DHT_K];
+} cc_entry;
+
+typedef struct {
+    cc_entry *e;                   /* in the order of their targets */
+    int n, cap;
+} cc_list;
+
 typedef struct {
     uint8_t h[32];
     int64_t at;
@@ -84,7 +97,7 @@ struct dht {
     int64_t t0;
     dht_contact me;
     char *dir, **boot;
-    store *custody, *own;
+    store *custody;
     mbox *mb;
     atomic_bool stop;
     atomic_bool unplaced;          /* an own record went to no other node: the first contacts after none get all of them again */
@@ -113,7 +126,10 @@ struct dht {
     relay_slot waiting[RELAY_WAITING], *active;
     int nactive;
     uint64_t relays_done;
-    pthread_mutex_t p_mu;          /* publishing: one batch at a time */
+    pthread_mutex_t p_mu;          /* publishing: one batch at a time; and what follows */
+    int ownfd;                     /* own.bin */
+    uint64_t nown, replay, replay_end;   /* its records; those a restart may give again (dht_publish) */
+    cc_list cc;                    /* the lookups of the last hour */
     pthread_mutex_t m_mu;          /* the sleep of the maintenance thread */
     pthread_cond_t m_cv;
     pthread_mutex_t f_mu;          /* the addresses found in the table of BitTorrent, for the next bootstrap */
@@ -123,6 +139,14 @@ struct dht {
     int nhandlers;
     bool has_accept, has_jobs, has_maint, has_meet, started;
 };
+
+/* whether a is closer to t than b (XOR distance) */
+static inline bool closer(const uint8_t t[32], const uint8_t a[32], const uint8_t b[32])
+{
+    for (int i = 0; i < 32; i++)
+        if ((a[i] ^ t[i]) != (b[i] ^ t[i])) return (a[i] ^ t[i]) < (b[i] ^ t[i]);
+    return false;
+}
 
 static inline uint64_t wall_us(void)
 {
@@ -181,7 +205,7 @@ void save_peers(dht *d);
 
 /* dht_store.c */
 int custody_put(dht *d, const record *r, const net_addr *from);
-void republish(dht *d);
+bool own_open(dht *d, char *err, size_t errlen);
 
 /* dht_alert.c */
 bool owner_ok(const dht *d, const record *r);

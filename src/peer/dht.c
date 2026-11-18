@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define ANS_MAX MBOX_LEN           /* the longest answer */
 #define JOBS_MAX 4096
@@ -26,7 +27,7 @@
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
 static const double LIM_RATE[LIM_KINDS] = {20, 50, 2, 1.0 / 60};      /* per second: connections, records, alerts in, coincidences */
-static const double LIM_BURST[LIM_KINDS] = {100, 100000, 64, 8};       /* a republish sends all of an owner's records at once */
+static const double LIM_BURST[LIM_KINDS] = {100, 100000, 64, 8};       /* a home that was alone sends all its records at once */
 
 struct lim_entry {
     uint8_t block[16];
@@ -444,7 +445,7 @@ static void *maint_main(void *arg)
         const bool met = alone && nc && atomic_exchange(&d->unplaced, false);   /* the first contacts after none: what went to nobody */
         alone = !nc;
         if (now >= next_repub || met) {
-            republish(d);
+            (void)dht_republish(d, met);
             next_repub = sys_now_ms() + d->republish_ms;
         }
         pthread_mutex_lock(&d->m_mu);
@@ -480,7 +481,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
             break;
         }
     d->cfg.bootstrap = (const char *const *)d->boot;
-    d->lfd = -1;
+    d->lfd = d->ownfd = -1;
     d->refresh_ms = 1000LL * (cfg->refresh_s ? cfg->refresh_s : 3600);
     d->republish_ms = 1000LL * (cfg->republish_s ? cfg->republish_s : 86400);
     d->retry_ms = 1000LL * (cfg->retry_s ? cfg->retry_s : 60);
@@ -528,9 +529,9 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         return NULL;
     }
     store_limits(d->custody, d->cfg.store_max, d->cfg.store_max / OWNER_SHARE);
-    path_of(d, "own.bin", path, sizeof path);
-    if (!(d->own = store_open(path, cfg->ctx, cfg->net, err, errlen)) || !(d->mb = mbox_new(MBOX_CAP, MBOX_PER_OWNER))) {
-        if (d->own) snprintf(err, errlen, "out of memory");
+    const bool own = own_open(d, err, errlen);
+    if (!own || !(d->mb = mbox_new(MBOX_CAP, MBOX_PER_OWNER))) {
+        if (own) snprintf(err, errlen, "out of memory");
         dht_stop(d);
         return NULL;
     }
@@ -589,7 +590,8 @@ void dht_stop(dht *d)
     if (d->started) save_peers(d);
     for (job *j = d->jhead, *nx; j; j = nx) nx = j->next, free(j);
     store_close(d->custody);
-    store_close(d->own);
+    if (d->ownfd >= 0) (void)sys_sync(d->ownfd), close(d->ownfd);
+    free(d->cc.e);
     mbox_free(d->mb);
     for (int i = 0; d->boot && d->boot[i]; i++) free(d->boot[i]);
     free(d->boot);

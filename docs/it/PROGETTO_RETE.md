@@ -265,7 +265,7 @@ Ho riguardato l'impianto chiedendomi, per ogni pezzo, se esiste un modo più sem
 | pagamento in due passaggi | deposito dell'utente: scartato. Blocco a tempo: non basta | resta |
 | tabella Kademlia per i punti | server centrale: più semplice, e non potrebbe rubare (non ha le distanze), ma può censurare e va mantenuto | resta la tabella; i "nodi grandi" di volontari sono già possibili |
 | record firmato da 138 byte | record corto: la firma su ogni record non serve più, perché un custode accetta solo record del nodo con cui sta parlando su un canale autenticato, e ogni effetto richiede comunque la prova di possesso | fatto: 34 byte in una STORE, 38 nell'archivio, 4 volte meno spazio e traffico |
-| ripubblicare tutto ogni giorno | mandare a un custode solo ciò che gli manca | necessario prima di una campagna lunga |
+| ripubblicare tutto ogni giorno | mandare a un custode solo ciò che gli manca | fatto: un punto va solo ai custodi che non aveva all'ultima ripubblicazione |
 | pzsolve | già al minimo: 270 righe più la tabella dello schema | resta |
 
 Nessuna alternativa cambia l'impianto. Le due migliorie che contano sono il record corto e la ripubblicazione leggera.

@@ -33,7 +33,8 @@ static int timeout_ms = 2000;      /* of the next node made */
 #define U N                        /* a node that does not listen */
 #define E (N + 1)                  /* a node alone, for the eviction */
 #define W (N + 2)                  /* another node that does not listen: U and W meet through a relay */
-#define NODES (N + 3)
+#define LATE (N + 3)               /* a node that joins late, for the republish */
+#define NODES (N + 4)
 #define OWNERS 4
 #define RECS 2000
 #define ROOT PZ_TEST_DIR "/t_dht_data"
@@ -142,7 +143,8 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 
 static void clean_dir(const char *dir)
 {
-    static const char *const FILES[] = {"store.bin", "store.bin.owners", "own.bin", "own.bin.owners", "peers.txt", "peers.txt.tmp"};
+    static const char *const FILES[] = {"store.bin", "store.bin.owners", "own.bin", "own.cust", "own.cust.tmp", "peers.txt",
+                                        "peers.txt.tmp"};
     char p[128];
     for (size_t i = 0; i < sizeof FILES / sizeof *FILES; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, FILES[i]);
@@ -312,7 +314,7 @@ static void test_records(void)
         uint8_t k[32];
         int who[DHT_KSTORE], held = 0;
         store_key(recs[i].x, k);
-        CHECK(record_check(ctx, &net, &recs[i]));               /* dht_publish signed it */
+        CHECK(record_check(ctx, &net, &recs[i]));               /* dht_publish set its owner */
         const int m = brute(k, DHT_KSTORE, who);
         for (int j = 0; j < m; j++) {
             record got[4];
@@ -531,6 +533,51 @@ static void test_restart(void)
     for (int i = 0; i < g; i++) CHECK(!memcmp(got[i].id, nodes[want[i]].id.id, 32));
     printf("t_dht: node 7 restarted in %.1f s with its %llu records and %d contacts\n", (double)(ms() - t0) / 1000,
            (unsigned long long)count, nc);
+}
+
+static int64_t file_size(const char *dir, const char *name)
+{
+    char p[128];
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    FILE *f = fopen(p, "rb");
+    const long n = f && !fseek(f, 0, SEEK_END) ? ftell(f) : -1;
+    if (f) fclose(f);
+    return n;
+}
+
+/* An owner restarts, and its home gives its records again from the first: those own.bin has in the same order are not sent again, and
+ * one that differs ends that. The republish: the first sends every record to its custodians, the next with no node come or gone sends
+ * none, and after a node joins only the records it is now a custodian of go, to it alone. */
+static void test_republish(void)
+{
+    node *o = &nodes[2], *r = &nodes[LATE];
+    const int n = RECS / OWNERS, port = dht_port(o->d);
+    const record *mine = recs + n;                              /* node 2's records (test_records) */
+    record again[100];
+    const int64_t size = file_size(o->dir, "own.bin");
+    CHECK(size == STORE_HDR + (int64_t)n * RECORD_WIRE);
+    dht_stop(o->d);
+    o->d = NULL;
+    CHECK(start_node(o, port, -1));
+    if (!o->d) return;
+    memcpy(again, mine, sizeof again);
+    CHECK(dht_publish(o->d, again, 100) == 100 && file_size(o->dir, "own.bin") == size);
+    uint8_t dk[32];
+    record fresh = {.t = 0, .dp = net.dpbits};
+    hashed("a point after the restart", dk);
+    even_point(dk, fresh.x);
+    CHECK(dht_publish(o->d, &fresh, 1) == 1 && file_size(o->dir, "own.bin") == size + RECORD_WIRE);
+    memcpy(again, mine + 100, sizeof again);
+    CHECK(dht_publish(o->d, again, 1) == 1 && file_size(o->dir, "own.bin") == size + 2 * RECORD_WIRE);   /* the replay is over */
+    const uint64_t first = dht_republish(o->d, false), next = dht_republish(o->d, false);
+    CHECK(first >= (uint64_t)(n + 2) * (DHT_KSTORE - 1) && next == 0);
+    CHECK(start_node(r, DHT_ANY_PORT, 0));
+    if (!r->d) return;
+    dht_refresh(r->d);
+    const uint64_t joined = dht_republish(o->d, false), held = dht_local_count(r->d);
+    printf("t_dht: republish: %llu copies, then %llu, then %llu after a node joined, which holds %llu records\n", (unsigned long long)first,
+           (unsigned long long)next, (unsigned long long)joined, (unsigned long long)held);
+    CHECK(joined > 0 && joined == held);
 }
 
 static bool has(const dht_contact *cs, int n, const uint8_t id[32], int *at)
@@ -1366,6 +1413,7 @@ int main(void)
     test_coincidences();
     test_malformed();
     test_restart();
+    test_republish();
     test_eviction();
     test_policy();
     test_nodes_answer();

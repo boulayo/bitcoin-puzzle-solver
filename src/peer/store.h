@@ -37,6 +37,10 @@ typedef enum {
 
 typedef struct store store;
 
+/* A file of entries of unit bytes after a STORE_HDR-byte header (magic, the fingerprint of the network), opened or made: the number of
+ * entries, one cut by a crash at the end dropped; -1 with the reason in *why. */
+int64_t store_file(const char *path, const char magic[8], const uint8_t fp[32], size_t unit, int *fd, const char **why);
+
 /* Opens (or creates) the store of a network at path (and PATH.owners). NULL, with the reason in err, for a file of another network or that
  * cannot be read. */
 store *store_open(const char *path, const secp256k1_context *ctx, const record_net *net, char *err, size_t errlen);

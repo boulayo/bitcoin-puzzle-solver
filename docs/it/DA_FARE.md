@@ -91,7 +91,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | | Decisione | Stato |
 |---|---|---|
 | C1 | Record corto (senza firma su ogni record, un terzo dello spazio): sì | fatto il 18 novembre: 66 byte (34 in una STORE, dove il proprietario è chi la manda; 38 nell'archivio, col numero del proprietario), con i bit di zeri del punto |
-| C2 | Ripubblicazione leggera: sì | da fare insieme a C1, prima del #140 |
+| C2 | Ripubblicazione leggera: sì | fatto il 18 novembre: un punto va solo ai custodi che non aveva all'ultima ripubblicazione; senza nodi arrivati o andati non parte niente |
 | C2b | Bit di zeri adattivi: sì | fatto il 18 novembre: la casa li sceglie dalla grandezza della rete (al minimo quelli del file della rete, al massimo 8 di più) e li cambia quando la rete diventa 4 volte più grande o più piccola |
 | C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | da fare. Richiede che ogni motore di ricerca di pzsolve (CPU e schede video) riporti le chiavi che servono da prova di lavoro: senza quella prova chiunque potrebbe dichiarare fatti dei blocchi mai cercati |
 | C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare. Il pool: MARA Slipstream, gratuito e aperto a tutti da agosto 2026, con un'interfaccia per i programmi; MARA trova il 4-6% dei blocchi, quindi circa 3 ore di attesa. Con la quota dell'autore l'invio dovrebbe diventare automatico: da decidere quando si fa C3 (serve HTTPS: il `curl` del sistema o l'OpenSSL di pzsign) |
@@ -131,7 +131,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | | Rilievo | Rimedio proposto |
 |---|---|---|
 | F1 | A ogni arresto il canguro butta il percorso di ogni camminatore dall'ultimo punto distinto (fino a K·2^dp passi) | Salvare il branco |
-| F2 | Pubblicare un record costa 7 connessioni; un riavvio ripubblica tutto | Connessioni tenute aperte, salto di ciò che `own.bin` ha già (con C1 e C2) |
+| F2 | Pubblicare un record costa 7 connessioni; un riavvio ripubblica tutto | Fatto il 18 novembre: una ricerca per zona all'ora invece che per punto, e dopo un riavvio i punti che `own.bin` ha già non ripartono. Le connessioni tenute aperte no: legano i thread di chi risponde, ed è un modo di bloccare un nodo |
 | F3 | Ogni sessione rilegge tutte le monete non spese; in attesa, 4n+1 richieste ogni 15 secondi | Seguire le uscite e non le transazioni; `scripthash.subscribe` |
 | F4 | Un processore con AVX2 ma senza ADX (Intel Haswell) cade sul motore di base: 4,0 contro 8,8 M chiavi/s | Compilare i motori a corsie senza `-madx` |
 | F5 | Motori nuovi misurati: hash con SHA-NI nel motore a corsie AVX2 (+9 %), curva a 4 corsie da 52 bit con AVX-IFMA (+30 %, +45 % con SHA-NI) | Aggiungerli |
@@ -174,7 +174,7 @@ Una casa che entra dopo mesi confronta ogni suo punto con quelli di tutte le cas
 |---|---|---|
 | H1 | Chi lascia la rete per sempre porta via la sua metà di ogni chiave: una coincidenza con i suoi punti non la paga nessuno | Da decidere. Oggi chi vuole lasciare il posto a qualcuno gli dà la cartella della casa (`home.seed` e la campagna). Un comando "passa la casa" lo renderebbe esplicito |
 | H2 | Un camminatore che incontra il punto di una casa sparita, o una fusione con un'altra casa, rifà un percorso già fatto | Farlo ripartire da un punto nuovo (pzpeer lo dice a pzsolve). È la "ripartenza dei camminatori" già in programma |
-| H3 | La ripubblicazione quotidiana di mesi di punti pesa molto | La ripubblicazione leggera (C2, F2) |
+| H3 | La ripubblicazione quotidiana di mesi di punti pesa molto | Fatto il 18 novembre con la ripubblicazione leggera (C2) |
 
 ### 3.7 Dall'analisi del 13 novembre
 
@@ -246,7 +246,7 @@ all'indirizzo dell'autore anche quando una casa trova la chiave da sola.
 | N2 | Due case con un programma modificato, nella stessa coppia, possono saltare la quota | Inevitabile: nessun controllo a distanza è possibile su un programma che gira a casa d'altri |
 | N3 | La parte attesa del premio, come la stima del tempo, la vede solo una casa che accetta connessioni | Come L2 |
 | N4 | Nella prova con tre case le coincidenze fra case diverse erano dieci volte più rare del previsto | **Causa trovata, corretto.** Con 14 bit di zeri ogni casa trovava circa 900 punti al secondo e ne pubblicava qualche centinaio: la rete ne vedeva solo dal 16 al 36%, e gli incontri crescono col quadrato dei punti visti. Il cammino è giusto: due pzsolve affiancati, confrontando tutti i punti, si incontrano quanto previsto. La prova ora usa 16 bit (la rete vede tutti i punti, la coppia paga al primo tentativo), e la casa avvisa quando ha punti in attesa di pubblicazione |
-| N5 | Quanti punti al secondo può pubblicare una casa | Qualche centinaio su questa macchina di prova. Sulla rete del #140, con 30 bit di zeri, basta per decine di schede video in una stessa casa; oltre, la casa pubblica in ritardo (e lo dice). Il record corto e la ripubblicazione leggera (C1, C2) e le connessioni tenute aperte (F2) alzano questo limite |
+| N5 | Quanti punti al secondo può pubblicare una casa | Qualche centinaio su questa macchina di prova. Sulla rete del #140, con 30 bit di zeri, basta per decine di schede video in una stessa casa; oltre, la casa pubblica in ritardo (e lo dice). Dal 18 novembre una casa non fa più una ricerca per punto (F2): nella prova con tre case la rete vede tutti i punti anche con 14 bit di zeri. E con i bit di zeri adattivi (C2b) una rete grande ha molti meno punti per casa |
 
 ### 3.5 Librerie
 

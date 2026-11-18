@@ -42,14 +42,6 @@ static void parallel(void *(*fn)(void *), void *args, size_t size, int n)
     }
 }
 
-/* whether a is closer to t than b (XOR distance) */
-static bool closer(const uint8_t t[32], const uint8_t a[32], const uint8_t b[32])
-{
-    for (int i = 0; i < 32; i++)
-        if ((a[i] ^ t[i]) != (b[i] ^ t[i])) return (a[i] ^ t[i]) < (b[i] ^ t[i]);
-    return false;
-}
-
 /* the bucket of an id: the number of leading bits it shares with this node's; DHT_BUCKETS for this node */
 static int bucket_of(const uint8_t me[32], const uint8_t id[32])
 {

@@ -186,7 +186,7 @@ static store *fail(store *st, char *err, size_t errlen, const char *msg, const c
 
 /* Opens a file of the store with its header (written to a new one); the number of whole units after it, a unit cut at the end dropped.
  * -1 with the reason in why. */
-static int64_t open_part(const char *path, const char magic[8], const uint8_t fp[32], size_t unit, int *fd, const char **why)
+int64_t store_file(const char *path, const char magic[8], const uint8_t fp[32], size_t unit, int *fd, const char **why)
 {
     uint8_t hdr[STORE_HDR], got[STORE_HDR];
     memcpy(hdr, magic, 8), memcpy(hdr + 8, fp, 32);
@@ -215,7 +215,7 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
     st->net = *net;
     st->fd = st->ofd = -1;
     snprintf(opath, sizeof opath, "%s.owners", path);
-    const int64_t nown = open_part(opath, OMAGIC, net->fp, 32, &st->ofd, &why), nent = nown < 0 ? -1 : open_part(path, MAGIC, net->fp, STORE_ENTRY, &st->fd, &why);
+    const int64_t nown = store_file(opath, OMAGIC, net->fp, 32, &st->ofd, &why), nent = nown < 0 ? -1 : store_file(path, MAGIC, net->fp, STORE_ENTRY, &st->fd, &why);
     if (nown < 0) return fail(st, err, errlen, why, opath);
     if (nent < 0) return fail(st, err, errlen, why, path);
     if (nown >= EMPTY || nent >= EMPTY) return fail(st, err, errlen, "too many records", path);

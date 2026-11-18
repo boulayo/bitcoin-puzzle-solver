@@ -27,6 +27,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   fit at half the room of the custodians, at most 8 bits more than the network's. It picks them at the start and changes them when they
   move by 2 or more: pzsolve resumes its campaign with the new `--dp-bits`, and `dpbits.txt` remembers from which point of `dp.bin` each
   value holds. The time estimate weighs each record by its zero bits.
+- pzpeer: publishing without a lookup per record. A lookup of the 20 nodes closest to a target is kept for an hour, and the custodians
+  of a key near it come from it when it shows that they are the 5 closest of all; a test network of 31 nodes takes 2000 records in
+  0.5 s instead of 1.4, and the homes of `tests/peer/e2e_net.sh` keep up with pzsolve at 14 zero bits. `own.bin` is a plain journal,
+  and after a restart the records it has are not sent again. The daily republish sends a record only to the custodians it did not have
+  at the last republish (`own.cust`), so with no node come or gone it sends nothing.
 - pzpeer: a home that finds points faster than it publishes them (tens of graphics cards at 30 zero bits) says how many wait; the
   network sees them late, and the coincidences, which grow with the square of the points seen, come later.
 - `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the
