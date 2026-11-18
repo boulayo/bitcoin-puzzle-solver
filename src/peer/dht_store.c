@@ -77,6 +77,7 @@ int custody_put(dht *d, const record *r, const net_addr *from)
 
 #define CC_MAX 8192                /* lookups kept */
 #define CC_TTL_MS (3600 * 1000LL)  /* for an hour, as the buckets are refreshed */
+#define REPUBLISH_FULL_S (7 * 86400) /* a republish to every custodian, once a week */
 
 /* the place of k in the order of the targets: the first entry whose target is not below k */
 static int cc_at(const cc_list *l, const uint8_t k[32])
@@ -152,22 +153,33 @@ static int cc_find(const cc_list *l, const uint8_t k[32], bool fresh, dht_contac
     return 0;
 }
 
-/* The custodians of key k, from a lookup of the last hour that shows them, else from a new one, kept. *t: the target of that lookup;
- * used, when not NULL, gets it too. */
+/* The custodians of key k, from a lookup of the last hour that shows them, else from a new one, kept when it was whole (one cut short
+ * shows only its own key). *t: the target of that lookup; used, when not NULL, gets it too (when it was whole). */
 static int custodians(dht *d, const uint8_t k[32], dht_contact out[DHT_KSTORE], uint8_t t[32], cc_list *used)
 {
     const cc_entry *e = NULL;
     cc_entry f;
+    bool whole = true;
     int n = cc_find(&d->cc, k, true, out, &e);
     if (!n) {
-        memcpy(f.t, k, 32), f.at = sys_now_ms();
-        if ((f.n = dht_lookup(d, k, f.c, DHT_K)) <= 0) return 0;
-        cc_put(&d->cc, &f);
+        memcpy(f.t, k, 32), f.at = sys_now_ms(), f.clean = true;
+        if ((f.n = lookup_whole(d, k, f.c, DHT_K, &whole)) <= 0) return 0;
+        if (whole) cc_put(&d->cc, &f);
         e = &f, n = cc_cover(&f, k, out);
     }
     memcpy(t, e->t, 32);
-    if (used) cc_put(used, e);
+    const int at = used && whole ? cc_at(used, e->t) : 0;
+    if (used && whole && (at == used->n || memcmp(used->e[at].t, e->t, 32))) cc_put(used, e);
     return n;
+}
+
+/* the lookup with target t is out of date (a custodian it gave is not one, or does not answer): l keeps it no more */
+static void cc_stale(cc_list *l, const uint8_t t[32], bool drop)
+{
+    const int at = cc_at(l, t);
+    if (at == l->n || memcmp(l->e[at].t, t, 32)) return;
+    if (drop) l->e[at].at = INT64_MIN / 2;
+    l->e[at].clean = false;
 }
 
 /* ---- own.bin: the records this node published, in order ("PZOWN002", F, then RECORD_WIRE bytes a record: the owner is this node) ---- */
@@ -205,16 +217,18 @@ static void own_append(dht *d, const record *recs, int n)
 /* ---- publishing ---- */
 
 /* At most DHT_STORE_MAX records: the custodians of each, then one STORE per custodian with all its records. The first nold of them go
- * only to custodians that are not those old shows (the last republish). The records that at least one custodian holds. */
+ * only to custodians that are not those old shows (the last republish). A lookup that gave a custodian that did not take a record is
+ * no clean one in used: the next republish sends the records it covers to all their custodians. The records that at least one custodian
+ * holds. */
 static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold, cc_list *used, uint64_t *copies)
 {
     dht_contact (*cs)[DHT_KSTORE] = malloc((size_t)n * sizeof *cs);   /* the custodians of each record */
     uint8_t (*ts)[32] = malloc((size_t)n * sizeof *ts);        /* the lookup they come from */
     int *ncs = calloc((size_t)n, sizeof *ncs), done = 0;
-    bool (*sent)[DHT_KSTORE] = calloc((size_t)n, sizeof *sent);
+    bool (*sent)[DHT_KSTORE] = calloc((size_t)n, sizeof *sent), (*has)[DHT_KSTORE] = calloc((size_t)n, sizeof *has);
     uint8_t *held = calloc((size_t)n, 1), *req = malloc(2 + DHT_STORE_MAX * RECORD_WIRE);
-    int *idx = malloc((size_t)n * sizeof *idx);
-    const bool ok = cs && ts && ncs && sent && held && req && idx;
+    int *idx = malloc((size_t)n * DHT_KSTORE * sizeof *idx), *jdx = malloc((size_t)n * DHT_KSTORE * sizeof *jdx);
+    const bool ok = cs && ts && ncs && sent && has && held && req && idx && jdx;
     for (int i = 0; ok && i < n && !stopping(d); i++) {
         uint8_t k[32];
         dht_contact had[DHT_KSTORE];
@@ -224,7 +238,7 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
         const int nh = i < nold ? cc_find(old, k, false, had, &e) : 0;
         for (int j = 0; j < ncs[i]; j++)                       /* those that had it at the last republish have it */
             for (int h = 0; h < nh && !sent[i][j]; h++)
-                if (!memcmp(cs[i][j].id, had[h].id, 32)) sent[i][j] = true, held[i] |= 2;
+                if (!memcmp(cs[i][j].id, had[h].id, 32)) sent[i][j] = has[i][j] = true, held[i] |= 2;
     }
     for (int i = 0; ok && i < n && !stopping(d); i++)
         for (int j = 0; j < ncs[i]; j++) {
@@ -233,9 +247,10 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
             int m = 0;
             for (int i2 = i; i2 < n; i2++)
                 for (int j2 = 0; j2 < ncs[i2]; j2++)
-                    if (!sent[i2][j2] && !memcmp(cs[i2][j2].id, t.id, 32)) sent[i2][j2] = true, idx[m++] = i2;
+                    if (!sent[i2][j2] && !memcmp(cs[i2][j2].id, t.id, 32)) sent[i2][j2] = true, idx[m] = i2, jdx[m++] = j2;
             uint8_t st[DHT_STORE_MAX], ans[2 + DHT_STORE_MAX];
             const bool me = is_me(d, t.id);
+            bool got = true;
             if (me) {
                 for (int q = 0; q < m; q++) st[q] = (uint8_t)custody_put(d, &recs[idx[q]], NULL);
             } else {
@@ -246,45 +261,47 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
                     record_encode(&recs[idx[q]], e);
                     memcpy(req + 2 + (size_t)q * RECORD_WIRE, e, RECORD_WIRE);
                 }
-                const bool got = exchange(d, &t, req, 2 + (size_t)m * RECORD_WIRE, ans, sizeof ans, &len) && len == 2 + (size_t)m && ans[1] == m;
+                got = exchange(d, &t, req, 2 + (size_t)m * RECORD_WIRE, ans, sizeof ans, &len) && len == 2 + (size_t)m && ans[1] == m;
                 heard(d, &t, got);
-                if (!got) continue;
-                memcpy(st, ans + 2, (size_t)m);
-                if (copies) *copies += (uint64_t)m;
+                if (got) memcpy(st, ans + 2, (size_t)m);
+                if (got && copies) *copies += (uint64_t)m;
             }
             for (int q = 0; q < m; q++) {
-                if (st[q] == DHT_ST_STORED || st[q] == DHT_ST_DUP || st[q] == DHT_ST_COINCIDENCE) held[idx[q]] |= me ? 1 : 3;
-                const int at = st[q] == DHT_ST_FAR ? cc_at(&d->cc, ts[idx[q]]) : d->cc.n;
-                if (at < d->cc.n && !memcmp(d->cc.e[at].t, ts[idx[q]], 32)) d->cc.e[at].at = 0;   /* its lookup is out of date */
+                const int i2 = idx[q];
+                if (got && (st[q] == DHT_ST_STORED || st[q] == DHT_ST_DUP || st[q] == DHT_ST_COINCIDENCE))
+                    held[i2] |= me ? 1 : 3, has[i2][jdx[q]] = true;
+                else if (!got || st[q] == DHT_ST_FAR) cc_stale(&d->cc, ts[i2], true);   /* dead, or not a custodian: a new lookup */
             }
         }
     for (int i = 0; ok && i < n; i++) {
         done += held[i] != 0;
         if (!(held[i] & 2)) atomic_store(&d->unplaced, true);  /* on this node alone, or nowhere */
+        bool all = !stopping(d);
+        for (int j = 0; j < ncs[i]; j++) all &= has[i][j];
+        if (used && !all) cc_stale(used, ts[i], false);
     }
-    free(cs), free(ts), free(ncs), free(sent), free(held), free(req), free(idx);
+    free(cs), free(ts), free(ncs), free(sent), free(has), free(held), free(req), free(idx), free(jdx);
     return done;
 }
 
-static bool same_record(const record *a, const record *b)
-{
-    uint8_t ea[RECORD_LEN], eb[RECORD_LEN];
-    record_encode(a, ea), record_encode(b, eb);
-    return !memcmp(ea, eb, RECORD_WIRE);
-}
+static void own_cut(dht *d, uint64_t n);
 
 int dht_publish(dht *d, record *recs, int n)
 {
     int done = 0, skip = 0;
     record r;
+    uint8_t a[RECORD_LEN], b[RECORD_LEN];
     pthread_mutex_lock(&d->p_mu);
     for (int i = 0; i < n; i++) memcpy(recs[i].owner, d->me.xonly, 32);
-    /* after a restart the home gives its records again from the first: those that own.bin has, in the same order, went out then */
-    for (; skip < n && d->replay < d->replay_end; skip++, d->replay++)
-        if (!own_read(d, d->replay, &r) || !same_record(&r, &recs[skip])) {
-            d->replay = d->replay_end;
+    /* after a restart the home gives its records again from the first: those that own.bin has, in the same order, went out then. The
+     * first that differs (another dp.bin) ends that, and own.bin is cut there: the records after it are not the home's any more */
+    for (; skip < n && d->replay < d->replay_end; skip++, d->replay++) {
+        const bool same = own_read(d, d->replay, &r) && (record_name(&r, a), record_name(&recs[skip], b), !memcmp(a, b, RECORD_LEN));
+        if (!same) {
+            own_cut(d, d->replay);
             break;
         }
+    }
     for (int o = skip; o < n && !stopping(d); o += DHT_STORE_MAX) {
         const int m = n - o < DHT_STORE_MAX ? n - o : DHT_STORE_MAX;
         done += send_batch(d, recs + o, m, NULL, 0, NULL, NULL);
@@ -294,18 +311,21 @@ int dht_publish(dht *d, record *recs, int n)
     return done + skip;
 }
 
-/* own.cust: what the last republish saw. "PZCUST01", F, the records own.bin had then (8 bytes, little-endian), then its lookups: the
- * target, the number of nodes (1 byte), their IDs. The records it had: *n. */
-static void cust_load(dht *d, cc_list *l, uint64_t *n)
+/* own.cust: what the last republish saw. "PZCUST02", F, the records own.bin had then and the time of the last republish to every
+ * custodian (8 bytes each, little-endian; the time in seconds since 1970), then its clean lookups: the target, the number of nodes (1
+ * byte), their IDs. */
+static void cust_path(const dht *d, char *out, size_t cap) { path_of(d, "own.cust", out, cap); }
+
+static void cust_load(dht *d, cc_list *l, uint64_t *n, uint64_t *full)
 {
     char path[4200];
-    uint8_t h[48];
+    uint8_t h[56];
     cc_entry e = {0};
     int c;
-    path_of(d, "own.cust", path, sizeof path);
+    cust_path(d, path, sizeof path);
     FILE *f = sys_fopen(path, "rb");
-    *n = 0;
-    if (!f || fread(h, 1, 48, f) != 48 || memcmp(h, "PZCUST01", 8) || memcmp(h + 8, d->cfg.net->fp, 32)) {
+    *n = *full = 0;
+    if (!f || fread(h, 1, 56, f) != 56 || memcmp(h, "PZCUST02", 8) || memcmp(h + 8, d->cfg.net->fp, 32)) {
         if (f) fclose(f);
         return;
     }
@@ -316,21 +336,22 @@ static void cust_load(dht *d, cc_list *l, uint64_t *n)
         if (!e.n) break;
         cc_put(l, &e);
     }
-    for (int i = 0; i < 8; i++) *n |= (uint64_t)h[40 + i] << (8 * i);
+    for (int i = 0; i < 8; i++) *n |= (uint64_t)h[40 + i] << (8 * i), *full |= (uint64_t)h[48 + i] << (8 * i);
     fclose(f);
 }
 
-static void cust_save(dht *d, const cc_list *l, uint64_t n)
+static void cust_save(dht *d, const cc_list *l, uint64_t n, uint64_t full)
 {
     char path[4200], tmp[4300];
-    uint8_t h[48] = "PZCUST01";
-    path_of(d, "own.cust", path, sizeof path);
+    uint8_t h[56] = "PZCUST02";
+    cust_path(d, path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     memcpy(h + 8, d->cfg.net->fp, 32);
-    for (int i = 0; i < 8; i++) h[40 + i] = (uint8_t)(n >> (8 * i));
+    for (int i = 0; i < 8; i++) h[40 + i] = (uint8_t)(n >> (8 * i)), h[48 + i] = (uint8_t)(full >> (8 * i));
     FILE *f = sys_fopen(tmp, "wb");
-    bool ok = f && fwrite(h, 1, 48, f) == 48;
+    bool ok = f && fwrite(h, 1, 56, f) == 56;
     for (int i = 0; ok && i < l->n; i++) {
+        if (!l->e[i].clean) continue;
         ok = fwrite(l->e[i].t, 1, 32, f) == 32 && fputc(l->e[i].n, f) != EOF;
         for (int j = 0; ok && j < l->e[i].n; j++) ok = fwrite(l->e[i].c[j].id, 1, 32, f) == 32;
     }
@@ -338,19 +359,34 @@ static void cust_save(dht *d, const cc_list *l, uint64_t n)
     if (!ok || !sys_replace(tmp, path)) remove(tmp);
 }
 
+/* own.bin cut to its first n records (p_mu held), and own.cust forgotten: its records are not those any more */
+static void own_cut(dht *d, uint64_t n)
+{
+    char path[4200];
+    if (n < d->nown && sys_truncate(d->ownfd, STORE_HDR + n * RECORD_WIRE)) d->nown = n;
+    d->replay = d->replay_end = n;
+    cust_path(d, path, sizeof path);
+    remove(path);
+}
+
 /* The records of own.bin again, to the custodians each did not have at the last republish: the nodes that joined since, or that moved
- * up among the closest of a key as others left. The records published since go to all their custodians, and with all every record does
- * (the first contacts after none). The lookups are new: those kept are dropped. The copies sent. */
+ * up among the closest of a key as others left. The records published since, and those of a lookup whose custodians did not all take
+ * them, go to all their custodians; and every record does when all is set (the first contacts after none) or once a week (a custodian
+ * that lost its store gets it back, and so does an alert lost on the way: a record that comes again alerts its coincidence again). The
+ * lookups are new: those kept are dropped. The copies sent. */
 uint64_t dht_republish(dht *d, bool all)
 {
     cc_list old = {0}, used = {0};
-    uint64_t before = 0, copies = 0, i = 0;
+    uint64_t before = 0, full = 0, copies = 0, i = 0;
+    const uint64_t now = wall_us() / 1000000;
+    if (!rt_count(d)) return atomic_store(&d->unplaced, true), 0;   /* nobody to send them to: at the first contacts */
     record *batch = malloc(DHT_STORE_MAX * sizeof *batch);
-    if (!all) cust_load(d, &old, &before);
+    cust_load(d, &old, &before, &full);
     pthread_mutex_lock(&d->p_mu);
     const uint64_t total = d->nown;
     d->cc.n = 0;
     pthread_mutex_unlock(&d->p_mu);
+    if (all || before > total || now - full >= REPUBLISH_FULL_S) before = 0, full = now;   /* to every custodian */
     while (batch && i < total && !stopping(d)) {
         int m = 0;
         const uint64_t first = i;
@@ -361,7 +397,7 @@ uint64_t dht_republish(dht *d, bool all)
         (void)send_batch(d, batch, m, &old, nold < (uint64_t)m ? (int)nold : m, &used, &copies);
         pthread_mutex_unlock(&d->p_mu);
     }
-    if (batch && !stopping(d)) cust_save(d, &used, total);
+    if (batch && !stopping(d)) cust_save(d, &used, total, full);
     dlog(d, "republished %llu records: %llu copies sent", (unsigned long long)total, (unsigned long long)copies);
     free(batch), free(old.e), free(used.e);
     return copies;

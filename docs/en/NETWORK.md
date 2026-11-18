@@ -201,16 +201,26 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - **Distinguished points**: exactly `--dp-bits`, whatever the walkers and the memory of this home would pick. A point the table leaves out
   (thinned by the RAM limit, or the table full) still goes to `dp.bin`: the table serves the coincidences of this home, `dp.bin` those
   of the network.
-- **How many zero bits.** The network file gives the least, `dpbits`; the home picks its own from the size of the network, so that the
-  records of the whole search fit in the custodians. The search takes about `E = 2√W` jumps, which are `E / 2^dp` records, each kept by
-  5 nodes: N nodes that keep S records each (S from `--store-gb` of this home) are half full at the end when `2^dp = 10 E / (N S)`. The
-  home takes that, at least `dpbits` and at most `dpbits + 8` (beyond, a walk loses more at each stop, `2^dp` jumps, than the room
-  saves). It does so at the start, with the nodes of one lookup (`dht_nodes`, as for the time estimate of 7.5), and with each status line, with the mean of the last
-  six; it changes them only when they move by 2 or more (a network 4 times bigger or smaller), since pzsolve then stops and resumes its
-  campaign with the new `--dp-bits`. A walk of one home still meets the walks of homes with other zero bits: past the meeting both walk
+- **How many zero bits.** The network file gives the least, `dpbits`; the home picks its own from N, the nodes of the network (the mean
+  of the last six lookups of `dht_nodes`, as for the time estimate of 7.5), and K, the walkers of its pzsolve (`walkers` in the
+  `status.json` of the campaign). The search takes about `E = 2√W` jumps.
+  - The delay: once two walks meet, the walker that came second must still reach a point with the zero bits, `2^dp` of its own jumps,
+    while the network's walkers, about N K of them, walk too: the search costs about `N K 2^dp` jumps more, a thirty-second of E when
+    `2^dp = E / (32 N K)`.
+  - The room: `E / 2^dp` records, each kept by 5 nodes; N nodes that keep S records each (the default store, 2^27) are half full at the
+    end when `2^dp = 10 E / (N S)`.
+  The home takes the fewer of the two, at least `dpbits` and at most `dpbits + 8` (60 at most); a custodian refuses a record that claims
+  more, and a record weighs `2^dp` in the time estimate, so nobody can inflate it more. When the room would want more than the delay
+  allows, the home says once that the custodians cannot keep every point (a full custodian still alerts what it is given; the answer is
+  more room on the nodes). With a GPU's millions of walkers the delay decides: the room it needs is about 160 records a walker of the
+  network, whatever the puzzle. The home decides once it has three lookups and pzsolve has written its walkers, at each status line
+  (every 10 minutes), and changes only when the value moves by 2 or more (a network or a home 4 times bigger or smaller): pzsolve then
+  saves its walkers (6), and resumes its campaign with the new `--dp-bits`. A walk of one home still meets the walks of homes with other zero bits: past the meeting both walk
   the same path, and the first point that has the zero bits of both is in the records of both. `dpbits.txt` in the home folder keeps
-  the changes (`index zero-bits`, the first record of `dp.bin` that has them), so that each record says the zero bits pzsolve had when
-  it wrote it. Hostile nodes that lie in the lookups move a home's zero bits within those 8 bits, no further.
+  the changes (`index zero-bits`, the first record of `dp.bin` that has them; rewritten whole at each, through a new file synced to the disk),
+  so that each record says the zero bits pzsolve had when it wrote it; a change past the end of `dp.bin` (a file made again) is dropped.
+  Hostile nodes that lie in the lookups move a home's zero bits within those 8 bits, no further. pzpeer refuses the options after `--`
+  that it gives pzsolve itself (`-r`, `-k`, `--dp-bits`, `--jump-seed`, `--start-key`, `-c`, `-d` and the like).
 - `dp.bin` is the usual log of the campaign. pzpeer reads it.
 - `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network. On the curve, W = 2^40, 3000 trials each, one thread:
   schema 3 1.061 ± 0.011, net-06 1.182 ± 0.012 steps per √W: net-06 costs 11.4 % more, as the simulator predicted (+11 %), the price
@@ -225,7 +235,7 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - Transport: TCP, `Noise_XX_secp256k1_ChaChaPoly_SHA256`.
   - DH: libsecp256k1 ECDH, output `SHA256(compressed shared point)`, as in BOLT 8.
   - Static keys are the identity keys (compressed points on the wire, x-only identity = their x).
-  - Prologue: `"pznet1" || F`, so peers of another network fail the handshake.
+  - Prologue: `"pznet2" || F`, so peers of another network, or of the versions before the short record, fail the handshake.
   - The three handshake messages have fixed lengths, so they travel without a length: 33 bytes (`e`), 98 (`e`, `ee`, `s`, `es`, an
     empty payload), 67 (`s`, `se`, and as payload the port the initiator listens on, 2 bytes, 0 when it does not accept connections).
     The responder puts the initiator in its routing table with the address it sees and that port.
@@ -262,14 +272,16 @@ handshake proved (7.1): a custodian takes the records of nobody else. Everything
 its owner's proof of possession, which no copier can make.
 
 **Proof of possession** of a record: a BIP340 signature by the key `d` (the scalar `d mod n`, adjusted so that `d·G = R − t·Q'`), over
-`SHA256("pznet1/possess" || F || record || the identity of the asker || a nonce of the asker)`. It is asked before an alert has any effect.
+`SHA256("pznet1/possess" || F || the name of the record || the identity of the asker || a nonce of the asker)`, the name of a record
+being its 66 bytes with the zero bits at 0: two custodians may hold one point of one owner with other zero bits (the first copy each got),
+and it is one record, in the hello of a session (7.5), the name of a pair and the id of a session too. It is asked before an alert has any effect.
 
 ### 7.3 Custody and coincidences
 
 - Key of a record: `K = SHA256("pznet1/key" || x)`. A record goes to the 5 nodes whose IDs are closest to K (XOR distance).
 - A custodian keeps records on disk and an index in memory by the first 4 bytes of K. The file, `store.bin` in the data folder, is
   append-only: a 40-byte header (`PZSTORE2` and F: a file of another network is refused) and 38-byte entries one after the other: the
-  type, the zero bits, x and the number of the owner (4 bytes, little-endian). The owners are in `store.bin.owners`: `PZOWNER2`, F, then
+  type, the zero bits, x and the number of the owner (4 bytes, little-endian). The owners are in `store.bin.owners` (each new one synced to the disk before its first entry is written): `PZOWNER2`, F, then
   32 bytes an owner, in the order they came. At start the index is rebuilt from the files, and an entry cut by a crash at their end is
   dropped.
 - A custodian refuses a record that does not pass the checks of 7.2 or whose owner's node ID has not the zero bits (an owner is a node:
@@ -292,7 +304,7 @@ its owner's proof of possession, which no copier can make.
   alerted the same way; the owners tell them apart by the types. The custodian sends `ALERT(record1, record2)` to both owners (found
   by their node IDs) and to the mailboxes of each (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`). A record that comes again
   (a duplicate) with a coincidence alerts again, at most once an hour for a pair: an alert lost on the way comes back with the next
-  republish. A record the custodian does not keep because it is full is still alerted. Each alert costs the custodian four lookups and a
+  republish to every custodian (once a week, 7.4), or sooner from a mailbox. A record the custodian does not keep because it is full is still alerted. Each alert costs the custodian four lookups and a
   dozen connections, so a record alerts at most 2 pairs, and the coincidences of the records of one address block are limited (7.4).
 - A node that receives an `ALERT` checks both records (7.2, same x, different owners). It keeps the pair as a mailbox when it may
   be a mailbox of one of the owners (the rule of the custodian above, for the key of the mailbox), in memory: the last 4096 pairs, at
@@ -303,14 +315,14 @@ its owner's proof of possession, which no copier can make.
 - The other owner's proof comes one of two ways. `POSSESS`, with a nonce of the asker, when the other owner listens. Or the other owner
   sends it: once its own proof checks out, an owner sends `ALERT(its record, the other record, proof)` to the other owner when it can
   dial it and to the other owner's mailboxes, and again every hour while the alert waits. That proof is over the pair: the asker is the
-  other owner and the nonce is the name of the pair, `SHA256("pznet1/pair" || the two records in the order of their owners)`. It binds
+  other owner and the nonce is the name of the pair, `SHA256("pznet1/pair" || the names of the two records in the order of their owners)`. It binds
   the asker, so it proves nothing to anyone else, and a fixed nonce lets it wait in a mailbox; a copier cannot make it without the
   distance. A mailbox checks it and keeps it with the pair, and `MBOX` carries it. So two homes that do not listen prove their points to
   each other through their mailboxes (before, both alerts waited for a day and no session could start).
 - An alert that waits is tried again after a minute, then twice as late each time up to an hour, for a day; a wrong proof drops it. A
   node remembers 1024 alerts: when they are all waiting, the oldest goes, so a flood of alerts that will never be proved (copies of a
   home's points by identities that do not answer) cannot shut out the next real one, which is tried at once; an alert pushed out comes
-  back with the next republish or poll.
+  back with a mailbox poll, or the next republish to every custodian.
 - An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour while the others reach it, and every minute when
   they do not (it does not listen, or nothing comes in at its port).
 
@@ -390,21 +402,27 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   a target T, and the node keeps it for an hour: the custodians of a key K near T come from it, with no lookup of their own, when it
   shows that they are the 5 closest of all. A node it does not have is at least D from T, D the distance of the farthest it has; with
   `d(T, K) < 2^b`, a XOR with it changes only the bits of a distance below b, so that node is at least D with those bits cleared from
-  K. When the 5 closest to K among the 20 are nearer than that, they are the closest of all (a lookup that found fewer than 20 knows
-  every node). The two lookups around K in the order of their targets are tried (the nearest: they share the longest prefix with K),
-  else a lookup of K itself. A custodian that answers "not a custodian" makes the node forget the lookup it came from. A home thus
-  makes a lookup per region of the IDs per hour, not per record: on a test of 31 nodes 2000 records went out in 0.5 s instead of 1.4.
+  K. When the 5 closest to K among the 20 are nearer than that, they are the closest of all. Only a whole lookup is kept: one that
+  left no node closer than the farthest of its result unasked (it did not stop at its limit of queries); a whole lookup that found
+  fewer than 20 knows every node that answers. One cut short serves its own key only. The two lookups around K in the order of their
+  targets are tried (the nearest: they share the longest prefix with K), else a lookup of K itself. A custodian that answers "not a
+  custodian", or does not answer, makes the node forget the lookup it came from. A home thus makes a lookup per region of the IDs per
+  hour, not per record: on a test of 31 nodes 2000 records went out in 0.5 s instead of 1.4.
 - `own.bin` keeps the records the node published, in their order: `PZOWN002`, F, then the first 34 bytes of each. A record is written
   once its STORE went out (one cut by a stop is given again after the restart). After a restart the home gives its records again from
-  the first (it reads its `dp.bin` from the start): those `own.bin` has, in the same order, are not sent again, and the first that
-  differs ends that.
-- The republish, every day: the custodians of each record again, with new lookups, and a record goes only to those it did not have at
-  the last republish: the nodes that joined since, or that moved up among the closest of a key as others left. `own.cust` keeps what
-  the last republish saw (the records `own.bin` had, and its lookups: target and IDs); the records published since go to all their
-  custodians. With no node come or gone it sends nothing (`t_dht`: 2386 copies, then 0, then 80 after a node joined, all of them to
-  it). At once, and to every custodian, when the node gets its first contacts after having none, if a record went meanwhile to no
-  other node: the points of the first home of a network, or of a home that was cut off, go then, not a day later. Custodians do not
-  copy records to each other.
+  the first (it reads its `dp.bin` from the start): those `own.bin` has, in the same order, are not sent again (whatever their zero
+  bits), and the first that differs ends that: `own.bin` is cut there, as the records after it are not the home's any more (another
+  `dp.bin`). Files of the versions before the short record (`PZSTORE1`) are set aside as `store.bin.old` and `own.bin.old`.
+- The republish, two minutes after the start and then every day: the custodians of each record again, with new lookups, and a record
+  goes only to those it did not have at the last republish: the nodes that joined since, or that moved up among the closest of a key as
+  others left. `own.cust` keeps what the last republish saw: the records `own.bin` had, the time of the last republish to every
+  custodian, and its clean lookups (target and IDs), those whose custodians all took every record they were given; a custodian that
+  refused or did not answer makes its lookup unclean, and the records it covers go to all their custodians the next time. The records
+  published since go to all their custodians too. With no node come or gone it sends nothing (`t_dht`: 486 copies, then 0, then 20
+  after a node joined, all of them to it). Once a week every record goes to every custodian: a custodian that lost its store gets it
+  back, and an alert lost on the way comes again (a record that comes again alerts its coincidence again). At once, and to every
+  custodian, when the node gets its first contacts after having none, if a record went meanwhile to no other node: the points of the
+  first home of a network, or of a home that was cut off, go then. Custodians do not copy records to each other.
 - Bootstrap: the `entry=` lines of the network file, addresses given with `--peer`, the saved `peers.txt` (whose lines name the
   identity too, which is checked) up to half of the 64 tried, then the addresses found in the table of BitTorrent. A PING to each, 16 at a time, until 8 answer; then a lookup of the own ID fills the buckets. The
   contacts that answered are saved to `peers.txt` (`address xonly-hex`, one per line) then, every 5 minutes and at stop. A node with an

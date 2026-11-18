@@ -707,7 +707,7 @@ static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, 
     if (!gpu_kang_prepare(s, &ks->P, s->T, gpu_kang_depth(&s->info, (size_t)K, s->kvar))) return false;
     if (*mirror) kang_worker_free(*mirror);
     *mirror = kang_worker_new(ks, K, stream);
-    kang_init_herd_parallel(ks, *mirror, s->r->sys.ncpu, stream);
+    kang_herd_start(ks, *mirror, s->r->sys.ncpu, stream);   /* the walkers of the last run first */
     uint32_t *st = pz_xcalloc((size_t)K * KSTRIDE, 4);
     for (int i = 0; i < K; i++) pack_state(st + (size_t)i * KSTRIDE, *mirror, i);
     const bool ok = rt_write(s->c, s->b_state, 0, st, (size_t)K * KSTRIDE * 4);
@@ -752,7 +752,9 @@ static void *gpu_kang_thread(void *p)
     const uint32_t rmax = rm < 1 ? 1 : (rm > s->hist_rounds ? s->hist_rounds : (uint32_t)rm);
     uint32_t rounds = rmax < 4 ? rmax : 4;
     int boosted = 0;
+    bool whole = true;                                     /* the herd on the device is the one of the mirror, with every step since */
     while (!atomic_load(&r->stop)) {
+        whole = true;
         boost_sync(&boosted);
         if (atomic_load(&s->paused)) { pz_sleep(0.01); continue; }
         uint32_t ndp = 0, nrl = 0;
@@ -797,9 +799,23 @@ static void *gpu_kang_thread(void *p)
         rounds = gpu_launch_resize(rounds, dt, s->launch_s, 0.002, rmax);
         continue;
     device_error:
+        whole = false;
         /* typically the driver reset the device while the machine slept: reopen it and start a fresh herd (the walkers' progress
          * since their last distinguished point is lost; the points already found are on the host) */
         if (atomic_load(&r->stop) || !gpu_device_error(s, &health, true, &rounds, kang_gpu_reboot, &reb)) break;
+    }
+    if (whole && !atomic_load(&r->found)) {                /* for the next run (kang_herd_save): the distances and signs of the device */
+        uint32_t *st = pz_xcalloc((size_t)K * KSTRIDE, 4);
+        if (rt_read(s->c, s->b_state, 0, st, (size_t)K * KSTRIDE * 4)) {
+            for (int i = 0; i < K; i++) {
+                const uint32_t *o = st + (size_t)i * KSTRIDE;
+                for (int j = 0; j < 3; j++) mirror->d[i].w[j] = (u64)o[16 + 2 * j] | (u64)o[17 + 2 * j] << 32;
+                mirror->sigma[i] = o[23] ? -1 : 1;
+            }
+            mirror->vsync = NULL;                          /* the mirror is the device's now */
+            kang_herd_put(ks, mirror);
+        }
+        pz_secure_zero(st, (size_t)K * KSTRIDE * 4), free(st);
     }
     free(dpraw); free(rlraw); free(recs); free(dups);
 done:

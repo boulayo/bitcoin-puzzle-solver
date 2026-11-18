@@ -47,7 +47,7 @@ bool record_dp_ok(const uint8_t x[32], unsigned dpbits)
 bool record_check(const secp256k1_context *ctx, const record_net *net, const record *r)
 {
     secp256k1_xonly_pubkey xr, owner;
-    return r->dp >= net->dpbits && r->dp <= RECORD_DP_MAX && record_dp_ok(r->x, r->dp) && secp256k1_xonly_pubkey_parse(ctx, &xr, r->x) &&
+    return r->dp >= net->dpbits && r->dp <= net->dpbits + RECORD_DP_MORE && r->dp <= RECORD_DP_MAX && record_dp_ok(r->x, r->dp) && secp256k1_xonly_pubkey_parse(ctx, &xr, r->x) &&
            secp256k1_xonly_pubkey_parse(ctx, &owner, r->owner);
 }
 
@@ -63,12 +63,20 @@ bool record_dpoint(const secp256k1_context *ctx, const record_net *net, const re
     return secp256k1_ec_pubkey_combine(ctx, out, both, 2);
 }
 
-/* SHA256("pznet1/possess" || F || record || asker || nonce) */
+void record_name(const record *r, uint8_t out[RECORD_LEN])
+{
+    record_encode(r, out);
+    out[1] = 0;
+}
+
+bool record_same(const uint8_t a[RECORD_LEN], const uint8_t b[RECORD_LEN]) { return a[0] == b[0] && !memcmp(a + 2, b + 2, RECORD_LEN - 2); }
+
+/* SHA256("pznet1/possess" || F || the name of the record || asker || nonce) */
 static void possess_msg(const record_net *net, const record *r, const uint8_t asker[32], const uint8_t nonce[32], uint8_t out[32])
 {
     uint8_t m[14 + 32 + RECORD_LEN + 64] = "pznet1/possess";
     memcpy(m + 14, net->fp, 32);
-    record_encode(r, m + 46);
+    record_name(r, m + 46);
     memcpy(m + 46 + RECORD_LEN, asker, 32);
     memcpy(m + 46 + RECORD_LEN + 32, nonce, 32);
     pz_sha256(m, sizeof m, out);

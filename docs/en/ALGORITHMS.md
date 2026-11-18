@@ -240,8 +240,14 @@ collected under the lock of the table in a buffer of 32768 (1 MiB); a full buffe
 is released, under a lock of its own, so a slow disk does not stall the search threads. If the disk refuses a write the buffer grows (up to
 2^22 records) and the write is tried again; a record cut short at the end of the file is cut off at the next start.
 
-On resume the table is rebuilt from the file and the walkers restart from new points (a different random stream for each session and each
-`--node`); the old trails remain useful because each of their later DPs is already in the table. A file of another campaign (another range or
+On resume the table is rebuilt from the file, and the walkers go on from where they stopped: when a run stops, every walker's distance `d`,
+sign and group go to `herd.bin` (a header of 16 bytes: the magic `"PZHERD1\n"`, the jump table id and the number of groups; then 26 bytes a
+walker), and the next run puts each one back at its point `d·G + σ·c·Q'` (the GPU walkers are read back from the device). Without it a stop
+threw away every walker's steps since its last DP, `K·2^dp` steps on average: with millions of walkers and many zero bits that is most of the
+work. The next run may have more walkers (new starts for the rest) or fewer (the others wait in the file for a later run), and other
+`--dp-bits`. A file of another jump table is not taken, and the file is deleted once the key is found. A stop that the program does not see
+(a crash, the power) loses the walkers, not the DPs: the next run starts them anew from new points (a different random stream for each
+session and each `--node`), and the old trails remain useful because each of their later DPs is already in the table. A file of another campaign (another range or
 public key) is refused, and so is one written with another jump table (another seed, or the setup of another computer): the message gives both ids.
 A file of the format `"PZDP4"` (the same records, a header of 38 bytes without the jump table id: versions 1.9.1 to 1.11.0) is loaded, appended
 to and merged as it is. The formats `"PZDP1"` to `"PZDP3"` of the older layouts cannot be used: `hunt` keeps such a `dp.bin` as `dp.bin.vN` and

@@ -6,6 +6,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- The kangaroo keeps its walkers across a stop: when a run stops, every walker's distance, sign and group go to `herd.bin` in the
+  campaign folder (the GPU walkers read back from the device), and the next run puts each one back at its point and walks on. Before,
+  a stop threw away every walker's steps since its last distinguished point, `K·2^dp` steps on average, most of the work with millions
+  of walkers and many zero bits. The next run may have more or fewer walkers, and other `--dp-bits`; the file is deleted once the key
+  is found. `status.json` tells the walkers of a kangaroo run.
 - `hunt --step STEP`: only the keys `S, S + STEP, S + 2·STEP, ...` of the range, for a key whose unknown bits are one block in the middle.
   Every method runs at its full speed: the kangaroo and BSGS on a transformed public key, the linear engines and kernels moving by
   `STEP·G`. A campaign with a step needs 1.24.0 (`requires=` in its campaign.conf).
@@ -22,16 +27,22 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   possession. A custodian's entry is 38 bytes, with the owner's number in a file of owners beside the store. A record carries its own
   zero bits (at least those of the network). The custody by default is 5 GB (2^27 records). A new protocol (`pznet2`): homes of the
   earlier test builds do not talk to these.
-- pzpeer: the zero bits of a home's points follow the size of the network. The network file gives the least; a home picks
-  `ceil(log2(20·√W / (N·S)))` (N nodes estimated with a lookup, S the records of `--store-gb`), so that the records of the whole search
-  fit at half the room of the custodians, at most 8 bits more than the network's. It picks them at the start and changes them when they
-  move by 2 or more: pzsolve resumes its campaign with the new `--dp-bits`, and `dpbits.txt` remembers from which point of `dp.bin` each
-  value holds. The time estimate weighs each record by its zero bits.
+- pzpeer: the zero bits of a home's points follow the network. The network file gives the least; a home takes the fewer of what the
+  delay allows (once two walks meet, the second walker must reach a distinguished point: `2^dp = E / (32·N·K)`, with N the nodes of the
+  network and K the walkers of its pzsolve, from `status.json`) and what the room of the custodians wants (`2^dp = 10·E / (N·S)`), at
+  most 8 bits more than the network's, which is also the most a custodian takes. It decides from three lookups and changes them when
+  they move by 2 or more: pzsolve saves its walkers and resumes its campaign with the new `--dp-bits`, and `dpbits.txt` remembers from
+  which point of `dp.bin` each value holds. The time estimate weighs each record by its zero bits. pzpeer refuses the options after
+  `--` that it gives pzsolve itself.
 - pzpeer: publishing without a lookup per record. A lookup of the 20 nodes closest to a target is kept for an hour, and the custodians
   of a key near it come from it when it shows that they are the 5 closest of all; a test network of 31 nodes takes 2000 records in
   0.5 s instead of 1.4, and the homes of `tests/peer/e2e_net.sh` keep up with pzsolve at 14 zero bits. `own.bin` is a plain journal,
   and after a restart the records it has are not sent again. The daily republish sends a record only to the custodians it did not have
-  at the last republish (`own.cust`), so with no node come or gone it sends nothing.
+  at the last republish (`own.cust`), so with no node come or gone it sends nothing; a custodian that refused or did not answer gets the
+  records again the next time, the first republish comes two minutes after a start, and once a week every record goes to every
+  custodian (a custodian that lost its store, an alert lost on the way). Only whole lookups are kept. A record is named without its zero
+  bits wherever it counts (the hello, the name of a pair, a proof), so two custodians with other zero bits for one point cannot keep a
+  pair from paying.
 - pzpeer: a home that finds points faster than it publishes them (tens of graphics cards at 30 zero bits) says how many wait; the
   network sees them late, and the coincidences, which grow with the square of the points seen, come later.
 - `hunt --jump-seed HEX --start-key FILE`: a shared walk, the kangaroo of the shared network (docs/en/NETWORK.md). The jumps come from the

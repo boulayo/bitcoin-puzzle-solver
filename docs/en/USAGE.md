@@ -138,6 +138,7 @@ campaigns/NAME/
   lock            lock (flock) that prevents two processes on the same campaign
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
+  herd.bin        kangaroo: where every walker stood when the run stopped, so that it goes on from there (deleted once the key is found)
   session.txt     total time and sessions
   report.txt      readable report, rewritten every minute with the checkpoint (the first time 2 s after the start, and at the end)
   status.json     state for external programs (includes time left and probabilities), rewritten with report.txt
@@ -699,7 +700,7 @@ the memory to a file and another process of the same user cannot attach to it.
 What says **where** the key is goes at the find. The state of a search (and the points of a kangaroo) say where it stood when it found the key, and the seed
 gives the order of the blocks: together they give the key back in a moment, whatever protects `FOUND.txt` (versions before 1.23.3 left both). So when an
 encrypting campaign finds the key, with `hunt` or with `merge`, the program replaces the seed in `campaign.conf` with zeros, leaves it out of `FOUND.txt` and of
-the log (a log written before the encryption was added loses its lines with the seed), and deletes `state.dat`, its copy, `dp.bin` and `near.txt`. A key
+the log (a log written before the encryption was added loses its lines with the seed), and deletes `state.dat`, its copy, `dp.bin`, `herd.bin` and `near.txt`. A key
 that could not be encrypted is written nowhere, and the campaign is left as it was, so that a new search finds it again.
 The folder of every campaign is its owner's alone (mode 0700), so that other users of the machine read none of this while the search runs, and the files
 of a campaign are never opened through a link (a folder copied from elsewhere could hold one that points at another file of the user).

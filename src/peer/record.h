@@ -14,7 +14,8 @@
 
 #define RECORD_LEN 66              /* type, zero bits, x, owner: in alerts, mailboxes, sessions and proofs */
 #define RECORD_WIRE 34             /* the same without the owner: in a STORE, whose sender is the owner */
-#define RECORD_DP_MAX 64           /* the most zero bits a record may claim */
+#define RECORD_DP_MAX 64
+#define RECORD_DP_MORE 8           /* zero bits a home may add to the network's (home.c): a record claims at most these more */           /* the most zero bits a record may claim */
 
 typedef struct {
     int t;                         /* 0 tame, +1 or -1 wild */
@@ -37,6 +38,10 @@ bool record_net_init(const secp256k1_context *ctx, record_net *net, const uint8_
 
 /* The type, the zero bits, x and the owner; the first RECORD_WIRE bytes are a record in a STORE. */
 void record_encode(const record *r, uint8_t out[RECORD_LEN]);
+/* The bytes that name a record wherever it counts (the hello, the name of a pair, a proof, the session): its encoding with the zero bits
+ * at 0. Two custodians may hold one point of one owner with other zero bits (the first copy each got), and it is the same record. */
+void record_name(const record *r, uint8_t out[RECORD_LEN]);
+bool record_same(const uint8_t a[RECORD_LEN], const uint8_t b[RECORD_LEN]);   /* two encodings, whatever their zero bits */
 /* Format only: the type and the zero bits. */
 bool record_decode(const uint8_t in[RECORD_LEN], record *r);
 /* Whether x has the zero bits of a distinguished point: bits 64 to 64 + dpbits - 1, as pzsolve tests x.n[1]. */

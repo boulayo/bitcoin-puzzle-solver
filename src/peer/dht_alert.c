@@ -44,14 +44,14 @@ bool pair_ok(const dht *d, const record *a, const record *b)
     return owner_ok(d, a) && owner_ok(d, b) && store_pair_ok(d->cfg.ctx, d->cfg.net, a, b);
 }
 
-/* SHA256("pznet1/pair" || the two records in the order of their owners): the name of a pair, whichever order it came in; also the nonce
+/* SHA256("pznet1/pair" || the names of the two records in the order of their owners): the name of a pair, whichever order it came in; also the nonce
  * of the proof an owner sends for a pair (docs/en/NETWORK.md 7.3) */
 void pair_hash(const record *a, const record *b, uint8_t h[32])
 {
     uint8_t m[11 + PAIR_LEN] = "pznet1/pair";
     const bool swap = memcmp(a->owner, b->owner, 32) > 0;
-    record_encode(swap ? b : a, m + 11);
-    record_encode(swap ? a : b, m + 11 + RECORD_LEN);
+    record_name(swap ? b : a, m + 11);
+    record_name(swap ? a : b, m + 11 + RECORD_LEN);
     pz_sha256(m, sizeof m, h);
 }
 
@@ -77,8 +77,8 @@ static int alert_state(dht *d, const uint8_t h[32], bool *theirs_ok)
 
 /* The alert of a pair with a record m of this node (a_mu held): found, or added (*fresh). When the table is full the oldest one that is
  * not waiting goes, else the oldest waiting one no job holds: a flood of alerts that will never be proved (copies of this node's points
- * by owners that do not answer) cannot shut out the next real one, which is tried at once; an alert pushed out comes back with the
- * next republish or mailbox poll. NULL only without memory. */
+ * by owners that do not answer) cannot shut out the next real one, which is tried at once; an alert pushed out comes back with a
+ * mailbox poll, or the next republish to every custodian. NULL only without memory. */
 static own_alert *alert_add_locked(dht *d, const record *m, const record *t, const uint8_t h[32], bool *fresh)
 {
     *fresh = false;

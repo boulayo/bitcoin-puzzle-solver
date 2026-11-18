@@ -227,6 +227,53 @@ static int range_selftest(void)
     return fails;
 }
 
+/* The herd across stops: a herd walks, is saved to herd.bin and read back, and herds of other sizes take it (one with two threads, as a GPU
+ * does): every walker taken back is the same point with the same distance, sign and group, the rest start anew; a file of another jump
+ * table is not taken. */
+static bool same_walker(kang_worker *a, int i, kang_worker *b, int j)
+{
+    pz_fe ax = a->x[i], ay = a->y[i], bx = b->x[j], by = b->y[j];
+    pz_fe_normalize(&ax), pz_fe_normalize(&ay), pz_fe_normalize(&bx), pz_fe_normalize(&by);
+    return !memcmp(ax.n, bx.n, sizeof ax.n) && !memcmp(ay.n, by.n, sizeof ay.n) && !memcmp(&a->d[i], &b->d[j], sizeof a->d[i]) &&
+           (a->sigma[i] == b->sigma[j] || !a->kind[i]) && a->spec[i] == b->spec[j] && a->kind[i] == b->kind[j];   /* a tame walker's sign is no matter */
+}
+
+static int herd_selftest(void)
+{
+    int fails = 0;
+#define HCHK(cond) do { if (!(cond)) { fails++; printf("  herd: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
+    pz_u256 off = pz_u256_from_u64(987654321);
+    kang_state *ks = kang_make_test_state_at(40, 1, &off);
+    if (!ks) return 1;
+    int nkr;
+    const kang_round_fn round = kang_round_variants(&nkr)[0].fn;
+    ks->P.cap_since = ~0ULL;
+    const int K = 200;
+    kang_worker *w = kang_worker_new(ks, K, 3), *a = kang_worker_new(ks, 150, 4), *b = kang_worker_new(ks, 100, 5);
+    kang_init_herd(ks, w);
+    for (int i = 0; i < 40; i++) round(w), w->ndp = 0, w->nrestart = 0;
+    kang_worker_sync(w);
+    kang_herd_put(ks, w);
+    kang_herd_save(ks);
+    ks->nhout = 0;
+    kang_herd_load(ks);
+    HCHK(ks->nhin == (size_t)K);
+    kang_herd_start(ks, a, 2, 7);                           /* 150 of the 200 */
+    kang_herd_start(ks, b, 1, 8);                           /* the last 50, and 50 new starts */
+    int same = 0, fresh = 0;
+    for (int i = 0; i < 150; i++) same += same_walker(w, i, a, i);
+    for (int i = 0; i < 50; i++) same += same_walker(w, 150 + i, b, i), fresh += !same_walker(w, 0, b, 50 + i) && b->lastdp[50 + i] == b->round;
+    HCHK(same == K && fresh == 50);
+    ks->jump_tag[0] ^= 1;                                   /* another jump table: the file is not taken */
+    free(ks->hin), ks->hin = NULL, ks->nhin = ks->hnext = 0;
+    kang_herd_load(ks);
+    HCHK(ks->nhin == 0);
+    kang_worker_free(w), kang_worker_free(a), kang_worker_free(b);
+    kang_free_test_state(ks);
+    pz_result_line("kangaroo, walkers kept across a stop", "%s", fails ? "FAILED" : "OK");
+    return fails;
+}
+
 /* ---- the table of distinguished points: growth and thinning ---- */
 
 static int table_noise;      /* failures printed: one broken rule would print thousands */
@@ -567,7 +614,7 @@ int kang_merge_selftest(void)
     int fails = merge_selftest();
     fails += solve_selftest();
     fails += table_selftest();
-    return fails + range_selftest();
+    return fails + range_selftest() + herd_selftest();
 }
 
 /* ---- loading a log of distinguished points ---- */

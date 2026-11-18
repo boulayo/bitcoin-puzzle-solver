@@ -47,6 +47,7 @@ typedef struct run_ctx {
     sysinfo_t sys;
     sched_t *sched;                  /* linear mode */
     void *kang;                      /* kangaroo mode (kang_state*) */
+    long long walkers;               /* kangaroo mode: the walkers of this run (status.json) */
     _Atomic int stop;
     _Atomic int *worker_stop;        /* linear CPU workers: per-slot flag that idles the worker and interrupts its scan (bench only; NULL: r->stop) */
     _Atomic int cpu_cap;             /* kangaroo CPU workers with a slot >= cpu_cap sleep (run_init: no limit; 'bench --together' varies it) */

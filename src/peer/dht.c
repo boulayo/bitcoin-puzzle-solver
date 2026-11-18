@@ -23,6 +23,7 @@
 #define MBOX_PER_OWNER DHT_MBOX_MAX /* ... and of one owner */
 #define BOOT_RETRY_MS 30000
 #define SAVE_MS 300000
+#define REPUB_FIRST_MS 120000      /* the first republish after a start: what went to nobody before the stop, what changed meanwhile */
 #define HANDLER_STACK (1 << 20)
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
@@ -404,7 +405,8 @@ static void *maint_main(void *arg)
 {
     dht *d = arg;
     const int64_t t0 = sys_now_ms();
-    int64_t polled = t0, next_refresh = t0 + 60000, next_repub = t0 + d->republish_ms, next_save = t0 + SAVE_MS,
+    int64_t polled = t0, next_refresh = t0 + 60000, next_save = t0 + SAVE_MS,
+            next_repub = t0 + (d->republish_ms < REPUB_FIRST_MS ? d->republish_ms : REPUB_FIRST_MS),
             next_boot = t0 + BOOT_RETRY_MS, next_retry = t0 + 1000;
     bool alone = !rt_count(d);
     if (next_refresh > t0 + d->refresh_ms) next_refresh = t0 + d->refresh_ms;
@@ -455,6 +457,18 @@ static void *maint_main(void *arg)
 }
 
 /* ---- the node ---- */
+
+/* a file of the records before the short record ("PZSTORE1"): set aside as NAME.old, its records are no use to this protocol */
+static void set_aside(const dht *d, const char *name)
+{
+    char path[4200], old[4300], m[8];
+    path_of(d, name, path, sizeof path);
+    FILE *f = sys_fopen(path, "rb");
+    const bool was = f && fread(m, 1, 8, f) == 8 && !memcmp(m, "PZSTORE1", 8);
+    if (f) fclose(f);
+    snprintf(old, sizeof old, "%s.old", path);
+    if (was && sys_replace(path, old)) fprintf(stderr, "%s: of an earlier version of pzpeer, kept as %s\n", path, old);
+}
 
 static char *dup_str(const char *s)
 {
@@ -523,6 +537,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         dht_stop(d);
         return NULL;
     }
+    set_aside(d, "store.bin"), set_aside(d, "own.bin");
     path_of(d, "store.bin", path, sizeof path);
     if (!(d->custody = store_open(path, cfg->ctx, cfg->net, err, errlen))) {
         dht_stop(d);

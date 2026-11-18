@@ -269,7 +269,15 @@ static int cmd_run(int argc, char **argv)
     const char *peers[32], *electrum[8], *routers[8], *debug = NULL;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
-        if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt */
+        if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt, but not what pzpeer gives it itself */
+            static const char *const OWN[] = {"-p", "--puzzle", "-r", "--range", "-a", "--address", "-k", "--pubkey", "-c", "--campaign", "-d",
+                                              "--dir", "-s", "--seed", "-m", "--mode", "--step", "--dp-bits", "--jump-seed", "--start-key", "--ui"};
+            for (int j = i + 1; j < argc; j++)
+                for (size_t k = 0; k < sizeof OWN / sizeof *OWN; k++) {
+                    const size_t l = strlen(OWN[k]);
+                    if (!strncmp(argv[j], OWN[k], l) && (argv[j][l] == 0 || argv[j][l] == '=' || (OWN[k][1] != '-' && l == 2)))
+                        return bad("run", "%s after --: pzpeer gives it to pzsolve itself", OWN[k]);
+                }
             cfg.pzsolve_args = (const char *const *)argv + i + 1, cfg.nargs = argc - i - 1;
             break;
         }

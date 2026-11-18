@@ -64,6 +64,7 @@ typedef struct {
     uint8_t t[32];
     int n;
     int64_t at;
+    bool clean;                    /* in the list of a republish: every record it gave custodians to was taken by all of them */
     dht_contact c[DHT_K];
 } cc_entry;
 
@@ -199,6 +200,9 @@ bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uin
 void heard(dht *d, const dht_contact *c, bool ok);
 void job_ping(dht *d, const dht_contact *c);
 void encode_contact(const dht_contact *c, uint8_t *p);
+/* dht_lookup, and *whole: no node closer than the farthest of the result was left unasked (the lookup did not stop at its query limit), so
+ * the result is the closest of all the nodes that answer; a whole result of fewer than want is every such node */
+int lookup_whole(dht *d, const uint8_t target[32], dht_contact *out, int want, bool *whole);
 void refresh(dht *d, bool all);
 int bootstrap(dht *d);
 void save_peers(dht *d);

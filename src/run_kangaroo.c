@@ -98,8 +98,10 @@ int run_kangaroo(run_ctx *r)
     kang_state *ks = kang_create(r);
     r->kang = ks;
     if (kang_configure(ks, k_gpu) != 0) pz_die("no compute device available");
+    r->walkers = ks->K_total;
     int lr = kang_load_log(ks);
     if (lr < 0) pz_die("cannot use the distinguished-point file %s", ks->log_path);
+    kang_herd_load(ks);
     char nd[32];
     if (lr == 0) pz_log(PZ_LOG_INFO, "campaign resumed: %s distinguished points loaded from %s", pz_fmt_u64(ks->loaded, nd, sizeof nd), ks->log_path);
     r->progress = kang_progress;
@@ -118,6 +120,7 @@ int run_kangaroo(run_ctx *r)
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
     gpu_kangaroo_join(gpus, ngpu);
     kang_checkpoint(r);
+    kang_herd_save(ks);
     r->cleanup = kang_cleanup;
     return 0;
 }

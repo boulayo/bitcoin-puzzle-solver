@@ -422,7 +422,7 @@ void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)
     run_ctx *r = ks->r;
     sysinfo_pin_thread(&r->sys, slot);
     kang_worker *w = kang_worker_new(ks, ks->K_thread, stream);
-    kang_init_herd(ks, w);
+    kang_herd_start(ks, w, 1, stream);
     kang_round_fn round = kang_round_for_slot(&r->sys, slot);
     int dupcap = w->dpcap;
     bool *dups = pz_xcalloc((size_t)dupcap, sizeof(bool));
@@ -448,5 +448,6 @@ void kang_cpu_worker_main(kang_state *ks, int widx, int slot, u64 stream)
         }
     }
     free(dups);
+    if (!atomic_load(&r->found)) kang_herd_put(ks, w);               /* for the next run (kang_herd_save) */
     kang_worker_free(w);
 }

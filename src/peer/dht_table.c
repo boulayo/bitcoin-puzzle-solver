@@ -430,7 +430,9 @@ static void *lookup_main(void *arg)
     return NULL;
 }
 
-int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
+int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want) { return lookup_whole(d, target, out, want, NULL); }
+
+int lookup_whole(dht *d, const uint8_t target[32], dht_contact *out, int want, bool *whole)
 {
     lookup *L = calloc(1, sizeof *L), *w[DHT_ALPHA];
     dht_contact seed[DHT_K];
@@ -450,8 +452,10 @@ int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want)
     for (int i = 0; i < DHT_ALPHA; i++) w[i] = L;
     parallel(lookup_main, w, sizeof *w, DHT_ALPHA);
     int m = 0;
+    if (whole) *whole = true;
     for (int i = 0; i < L->n && m < L->want; i++)
         if (L->s[i].state == C_OK) out[m++] = L->s[i].c;
+        else if (whole && L->s[i].state != C_FAIL) *whole = false;    /* a node closer than some of the result never answered nor failed */
     pthread_mutex_destroy(&L->mu);
     pthread_cond_destroy(&L->cv);
     free(L);

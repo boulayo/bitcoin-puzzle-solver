@@ -183,7 +183,7 @@ static bool hello(sess *s)
     m[HELLO_FIXED - 1] = (uint8_t)c->pay_len;
     memcpy(m + HELLO_FIXED, c->pay_spk, c->pay_len);
     if (!send_msg(s, S_HELLO, m, HELLO_FIXED + c->pay_len) || !recv_msg(s, S_HELLO, in, sizeof in, &n)) return false;
-    if (n < HELLO_FIXED || n != (size_t)HELLO_FIXED + in[HELLO_FIXED - 1] || memcmp(in, m + RECORD_LEN, RECORD_LEN) || memcmp(in + RECORD_LEN, m, RECORD_LEN))
+    if (n < HELLO_FIXED || n != (size_t)HELLO_FIXED + in[HELLO_FIXED - 1] || !record_same(in, m + RECORD_LEN) || !record_same(in + RECORD_LEN, m))
         return fail(s, "the hello of the partner is not about the same pair");
     memcpy(s->nonce[you], in + 2 * RECORD_LEN, 32);
     /* the terms: both sides fill them the same way from the two hellos */

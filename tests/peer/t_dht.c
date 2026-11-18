@@ -546,7 +546,7 @@ static int64_t file_size(const char *dir, const char *name)
 }
 
 /* An owner restarts, and its home gives its records again from the first: those own.bin has in the same order are not sent again, and
- * one that differs ends that. The republish: the first sends every record to its custodians, the next with no node come or gone sends
+ * one that differs ends that, own.bin cut there (the records after it are not the home's any more). The republish: the first sends every record to its custodians, the next with no node come or gone sends
  * none, and after a node joins only the records it is now a custodian of go, to it alone. */
 static void test_republish(void)
 {
@@ -566,11 +566,11 @@ static void test_republish(void)
     record fresh = {.t = 0, .dp = net.dpbits};
     hashed("a point after the restart", dk);
     even_point(dk, fresh.x);
-    CHECK(dht_publish(o->d, &fresh, 1) == 1 && file_size(o->dir, "own.bin") == size + RECORD_WIRE);
+    CHECK(dht_publish(o->d, &fresh, 1) == 1 && file_size(o->dir, "own.bin") == STORE_HDR + 101 * RECORD_WIRE);
     memcpy(again, mine + 100, sizeof again);
-    CHECK(dht_publish(o->d, again, 1) == 1 && file_size(o->dir, "own.bin") == size + 2 * RECORD_WIRE);   /* the replay is over */
+    CHECK(dht_publish(o->d, again, 1) == 1 && file_size(o->dir, "own.bin") == STORE_HDR + 102 * RECORD_WIRE);   /* the replay is over */
     const uint64_t first = dht_republish(o->d, false), next = dht_republish(o->d, false);
-    CHECK(first >= (uint64_t)(n + 2) * (DHT_KSTORE - 1) && next == 0);
+    CHECK(first >= 102 * (DHT_KSTORE - 1) && next == 0);
     CHECK(start_node(r, DHT_ANY_PORT, 0));
     if (!r->d) return;
     dht_refresh(r->d);

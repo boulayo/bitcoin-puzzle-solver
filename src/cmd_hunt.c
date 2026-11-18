@@ -855,7 +855,7 @@ void forget_seed(run_ctx *r)
 
 void forget_position(const run_ctx *r)
 {
-    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin", "near.txt"};   /* near misses: keys of the last blocks */
+    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin", "herd.bin", "near.txt"};   /* near misses: keys of the last blocks */
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         char p[700];
         snprintf(p, sizeof p, "%s/%s", r->cfg.dir, names[i]);

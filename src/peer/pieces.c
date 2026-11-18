@@ -62,10 +62,6 @@ void pieces_eid(const record_net *net, const record pair[2], uint8_t eid[32])
     uint8_t m[10 + 32 + 2 * RECORD_LEN];
     memcpy(m, "pznet1/eid", 10);
     memcpy(m + 10, net->fp, 32);
-    for (int i = 0; i < 2; i++) {                           /* the points, their types and owners: not the zero bits, which tell of the walk */
-        record r = pair[i];
-        r.dp = 0;
-        record_encode(&r, m + 42 + i * RECORD_LEN);
-    }
+    for (int i = 0; i < 2; i++) record_name(&pair[i], m + 42 + i * RECORD_LEN);   /* not the zero bits, which tell of the walk */
     pz_sha256(m, sizeof m, eid);
 }

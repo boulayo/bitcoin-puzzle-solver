@@ -130,7 +130,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 
 | | Rilievo | Rimedio proposto |
 |---|---|---|
-| F1 | A ogni arresto il canguro butta il percorso di ogni camminatore dall'ultimo punto distinto (fino a K·2^dp passi) | Salvare il branco |
+| F1 | A ogni arresto il canguro butta il percorso di ogni camminatore dall'ultimo punto distinto (fino a K·2^dp passi) | Fatto il 18 novembre: `herd.bin` nella campagna, anche per le schede video |
 | F2 | Pubblicare un record costa 7 connessioni; un riavvio ripubblica tutto | Fatto il 18 novembre: una ricerca per zona all'ora invece che per punto, e dopo un riavvio i punti che `own.bin` ha già non ripartono. Le connessioni tenute aperte no: legano i thread di chi risponde, ed è un modo di bloccare un nodo |
 | F3 | Ogni sessione rilegge tutte le monete non spese; in attesa, 4n+1 richieste ogni 15 secondi | Seguire le uscite e non le transazioni; `scripthash.subscribe` |
 | F4 | Un processore con AVX2 ma senza ADX (Intel Haswell) cade sul motore di base: 4,0 contro 8,8 M chiavi/s | Compilare i motori a corsie senza `-madx` |

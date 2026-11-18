@@ -128,11 +128,12 @@ static owner_slot *owner_index(store *st, const uint8_t id[32], uint32_t num)
     return o;
 }
 
-/* a new owner: its identity at the end of PATH.owners first, so that every entry names an owner the file has */
+/* a new owner: its identity at the end of PATH.owners first, and on the disk, so that every entry names an owner the file has (owners are
+ * few: one sync each) */
 static owner_slot *owner_add(store *st, const uint8_t id[32])
 {
     const uint32_t num = st->nids;
-    if (num == EMPTY || sys_pwrite(st->ofd, id, 32, STORE_HDR + (int64_t)num * 32) != 32) return NULL;
+    if (num == EMPTY || sys_pwrite(st->ofd, id, 32, STORE_HDR + (int64_t)num * 32) != 32 || !sys_sync(st->ofd)) return NULL;
     return owner_index(st, id, num);
 }
 
@@ -420,8 +421,8 @@ bool mbox_put(mbox *m, const record *a, const record *b, const uint8_t proof[64]
     e.p.r[who] = *a;
     e.p.r[1 - who] = *b;
     uint8_t buf[11 + 2 * RECORD_LEN] = "pznet1/pair";
-    record_encode(&e.p.r[0], buf + 11);
-    record_encode(&e.p.r[1], buf + 11 + RECORD_LEN);
+    record_name(&e.p.r[0], buf + 11);
+    record_name(&e.p.r[1], buf + 11 + RECORD_LEN);
     pz_sha256(buf, sizeof buf, e.h);
     pthread_mutex_lock(&m->mu);
     size_t at = m->n;

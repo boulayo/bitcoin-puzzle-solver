@@ -542,11 +542,11 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "  \"fraction\": %.12g,\n  \"rate_per_second\": %.1f,\n  \"rate_cpu\": %.1f,\n  \"rate_gpu\": %.1f,\n"
         "  \"eta_seconds_50\": %s,\n  \"eta_seconds_90\": %s,\n  \"eta_seconds_%s\": %s,\n"
         "  \"prob_1h\": %s,\n  \"prob_24h\": %s,\n  \"prob_7d\": %s,\n  \"prob_30d\": %s,\n  \"prob_1y\": %s,\n"
-        "  \"found\": %s,\n  \"rejected_candidates\": %llu,\n  \"workers\": [",
+        "  \"found\": %s,\n  \"rejected_candidates\": %llu,\n  \"walkers\": %lld,\n  \"workers\": [",
         PZ_VERSION, r->cfg.name, idb, r->cfg.part, r->limit_pct, r->cfg.puzzle, mode_name(r->cfg.mode), state, (long long)now, el,
         r->sessions, pi->unit, pi->done, pi->total, pi->fraction, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
         pj[0], pj[1], pj[2], pj[3], pj[4],
-        atomic_load(&r->found) ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad));
+        atomic_load(&r->found) ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad), r->walkers);
     for (int i = 0; i < r->nws && (size_t)m + 300 < jcap; i++) {
         const double wr = r->ws[i].rate;
         m += snprintf(j + m, jcap - (size_t)m, "%s\n    {\"name\": \"%s\", \"kind\": \"%c\", \"rate\": %.1f, \"units\": %llu}", i ? "," : "",

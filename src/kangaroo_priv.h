@@ -81,6 +81,9 @@ static inline i192 i192_from_signed(bool neg, const pz_u256 *mag)
     return r;
 }
 
+/* a walker of the herd across stops: its distance, its group of species, its sign */
+typedef struct kang_hrec { i192 d; u8 grp; int8_t sigma; } kang_hrec;
+
 /* distinguished-point record: 32 bytes. tagk = (x.n[2] & ~7) | kind. The steps write the codes tame / wild with its sign (0 to 2);
  * kang_dp_recode turns them into the codes of the species (0 to 4). */
 typedef struct { u64 tagk; i192 d; } dp_rec;
@@ -177,6 +180,11 @@ typedef struct kang_state {
      * wait for the lock (a pause of 15 s in its loop reads as a suspension of the system). Written under mu, read without. */
     _Atomic u64 count_mirror, cap_mirror;
     _Atomic unsigned thin_mirror;
+    /* The herd across stops (herd.bin): the walkers of the last run, taken by the workers that start, and those of this run, kept when
+     * it stops. Under hmu. */
+    pthread_mutex_t hmu;
+    struct kang_hrec *hin, *hout;
+    size_t nhin, hnext, nhout, caphout;
 } kang_state;
 
 /* per-worker (CPU or host-side GPU) kangaroo herd */
@@ -208,6 +216,15 @@ typedef struct kang_worker {
     u8 *vstale;                  /* x[i] / y[i] written by scalar code: reload the lane */
     void (*vsync)(struct kang_worker *);   /* copies the vector coordinates back to x / y */
 } kang_worker;
+
+/* The herd across stops (docs/en/ALGORITHMS.md 4.7): when a run stops, every walker's distance, sign and group go to herd.bin in the
+ * campaign folder, and the next run takes them back: its point is d*G + sigma*c*Q', and it walks on from there. Without it a stop throws
+ * away every walker's steps since its last distinguished point, K * 2^dp steps on average, which with many walkers and many zero bits is
+ * most of the work. The file tells the jump table it was made with: walkers of another table start anew. */
+void kang_herd_load(kang_state *ks);
+void kang_herd_start(kang_state *ks, kang_worker *w, int nthreads, u64 stream);   /* the saved walkers first, new starts for the rest */
+void kang_herd_put(kang_state *ks, kang_worker *w);                                /* the walkers of w, to be saved */
+void kang_herd_save(kang_state *ks);                                               /* at the end of the run: herd.bin (removed once solved) */
 
 /* Fruitless cycles. The walk on classes {P, -P} falls into short cycles that never reach a distinguished point:
  * 2-cycles (about 1 step in 2R) are avoided by the prev2 rule, but 4-, 6-, ... cycles remain, about one every 4 R^2
