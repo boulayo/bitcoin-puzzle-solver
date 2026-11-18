@@ -135,7 +135,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 
 | Manca | Effetto |
 |---|---|
-| il file della rete del #140 dentro il programma | oggi il file si dà con `--network`; i parametri del #140 si fissano al rilascio |
+| il file della rete del #140 dentro il programma | fatto il 18 novembre per ogni puzzle con chiave pubblica nota: `pzpeer run --puzzle N`, e senza opzioni il primo ancora aperto |
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
 | prova di una rete intera su un Windows vero e su un Mac | sulle macchine Windows e macOS della CI passano i test di pzpeer (su Windows anche la firma a due con `pzsign.exe`); la prova completa con tre case è fatta su Linux e, per i programmi Windows, con l'emulatore Wine |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
@@ -216,7 +216,7 @@ L'elettricità totale non dipende dal numero di partecipanti: 12–25 GWh per il
 
 | | Rete di prova (oggi) | Rete vera |
 |---|---|---|
-| il file della rete | dato con `--network` | dentro il programma |
+| il file della rete | dato con `--network` | dentro il programma (fatto) |
 | catena | regtest | Bitcoin vero |
 | primo contatto | indirizzi dati a mano | rete BitTorrent, nessun server nostro |
 | indirizzi privati | ammessi | rifiutati |

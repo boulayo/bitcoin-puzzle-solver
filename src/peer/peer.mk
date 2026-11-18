@@ -37,7 +37,8 @@ PEER_LIBS   = $(LIBLDLIBS)
 endif
 PEER_SRC   := $(PEER_SYS) dbg json btc btc_rpc spv electrum netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay bt portmap dpfeed pieces signer payout session chain_rpc chain_spv sweep block home main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
-PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ))
+PEER_DATA  := $(BUILD)/peer/puzzles_data.o  # the table of the puzzles of pzsolve: the networks written in the program (netfile_puzzle)
+PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ)) $(PEER_DATA)
 PEER_FLAGS  = $(LIBFLAGS) -Isrc/peer -I$(SECP_DIR)/include -DSECP256K1_STATIC
 PEER       := $(BUILD)/pzpeer$(EXE)
 PEERTESTS  := t_sys t_json t_btc t_spv t_chain_spv t_noise t_record t_net t_store t_bt t_portmap t_dht t_pieces t_payout t_netfile t_block
@@ -51,8 +52,11 @@ DEPS       += $(PEER_OBJ:.o=.d)
 $(PEER_OBJ): $(BUILD)/peer/%.o: src/peer/%.c | $(BUILD)/peer
 	$(CC) $(PEER_FLAGS) -MMD -MP -c $< -o $@
 
-$(PEER): $(PEER_OBJ) $(LIB) $(SECP_LIB)
-	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(LIB) $(SECP_LIB) $(PEER_LIBS)
+$(PEER_DATA): src/puzzles_data.c src/puzzles.h | $(BUILD)/peer
+	$(CC) $(LIBFLAGS) -c $< -o $@
+
+$(PEER): $(PEER_OBJ) $(PEER_DATA) $(LIB) $(SECP_LIB)
+	$(CC) $(LIBFLAGS) -o $@ $(PEER_OBJ) $(PEER_DATA) $(LIB) $(SECP_LIB) $(PEER_LIBS)
 
 # PZ_TEST_DIR: where a test writes its files, its own build folder
 $(BUILD)/peer/t_%$(EXE): tests/peer/t_%.c tests/peer/peertest.h $(PEER_LIBOBJ) $(LIB) $(SECP_LIB) | $(BUILD)/peer

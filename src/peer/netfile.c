@@ -4,6 +4,7 @@
  * the value do not count. The canonical form of a part is its lines rebuilt as "key=value", sorted bytewise and joined with '\n': the
  * same file reformatted by hand has the same fingerprint. */
 #include "netfile.h"
+#include "../puzzles.h"
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
 #include <stdio.h>
@@ -213,4 +214,32 @@ bool netfile_load(const char *path, netfile *nf, char *err, size_t errlen)
                   : netfile_parse(text, nf, err, errlen);
     free(text);
     return ok;
+}
+
+bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen)
+{
+    const puzzle_info *p = NULL;
+    for (int i = 0; i < PZ_NUM_PUZZLES && !p; i++)
+        if (n ? PZ_PUZZLES[i].n == n : PZ_PUZZLES[i].pubkey[0] && !PZ_PUZZLES[i].privkey[0]) p = &PZ_PUZZLES[i];
+    if (!p || !p->pubkey[0]) {
+        snprintf(err, errlen, n ? "puzzle %d: not in the table, or its public key is not known (a network needs it)" : "no open puzzle with a public key", n);
+        return false;
+    }
+    uint8_t pub[33], seed[32], m[12 + 33] = "pznet1/jumps";
+    char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], js[65], text[600];
+    if (!hex_exact(p->pubkey, pub, 33)) return fail(err, errlen, "a public key of the table of the puzzles", NULL);
+    memcpy(m + 12, pub, 33);
+    pz_sha256(m, sizeof m, seed);
+    for (int i = 0; i < 32; i++) snprintf(js + 2 * i, 3, "%02x", seed[i]);
+    pz_u256 lo = pz_u256_pow2((unsigned)p->n - 1), hi = pz_u256_pow2((unsigned)p->n), one = pz_u256_from_u64(1);
+    pz_u256_sub(&hi, &hi, &one);
+    const int dp = (p->n - 1) / 2 - 44 > 8 ? (p->n - 1) / 2 - 44 : 8;
+    snprintf(text, sizeof text, "net=p%d\npuzzle=%d\npubkey=%s\nrange=%s:%s\njumpseed=%s\nschema=net-06\ndpbits=%d\nchain=main\n", p->n, p->n, p->pubkey,
+             pz_u256_to_hex(&lo, a), pz_u256_to_hex(&hi, b), js, dp);
+    return netfile_parse(text, nf, err, errlen);
+}
+
+bool netfile_get(const char *path, int n, netfile *nf, char *err, size_t errlen)
+{
+    return path ? netfile_load(path, nf, err, errlen) : netfile_puzzle(n, nf, err, errlen);
 }

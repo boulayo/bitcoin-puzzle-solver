@@ -165,6 +165,17 @@ dpbits=30
 chain=main                   # main, test, signet or regtest
 ```
 
+**The networks written in the program.** Every puzzle of the table of pzsolve whose public key is known has its network in pzpeer, as
+a chain's parameters are in a node of that chain: `pzpeer run --puzzle N`, and without `--puzzle` or `--network` the first puzzle whose
+public key is known and whose key is not (today 140). Its lines come from the puzzle alone: `net=pN`, its public key, the range
+`2^(N-1)` to `2^N - 1`, `jumpseed = SHA256("pznet1/jumps" || public key)`, `schema=net-06`, `dpbits = max(8, (N - 1) / 2 - 44)` and
+`chain=main` (`pzpeer netcheck 140` prints them with their fingerprint). The seed comes from the public key, which the creator of the
+puzzles fixed in 2015: nobody chose it, so nobody could have picked one that suits them, and everybody computes the same one. A home
+that starts the day it gets the program and one that starts a year later are on the same network, and the second meets the walks of the
+first. Knowing the seed before others is only being able to walk before them: the same work, which counts the same. The least zero
+bits are the delay rule of section 6 for a network of 2^40 walkers (a million GPUs): each home adds up to 8 to them. A network file is
+for tests (a puzzle of one's own, another chain) and for a puzzle that is not in the table.
+
 Their fingerprint `F = SHA256("pznet1/file" || canonical lines)` **is** the network: every key, record, message and the rendezvous key
 are bound to it, so two nodes are on the same network exactly when their files have the same `F`. Nobody signs a file. Whoever changes
 one of those lines is on another network, as a torrent with another hash is another torrent; the file of a public network comes with

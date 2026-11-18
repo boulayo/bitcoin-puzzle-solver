@@ -28,16 +28,18 @@
 /* the usage, on stdout when it was asked for (status 0), else on stderr (2) */
 static int usage_to(FILE *f)
 {
-    fprintf(f, "usage: pzpeer run --network FILE [--payout ADDRESS] [options] [-- PZSOLVE OPTIONS]\n"
+    fprintf(f, "usage: pzpeer run [--puzzle N | --network FILE] [--payout ADDRESS] [options] [-- PZSOLVE OPTIONS]\n"
                     "         the home: pzsolve on the network, its points published, the records of others kept, and for every\n"
-                    "         coincidence with another home the prize paid: 45%% to each payout address, 10%% to the author of pzpeer\n"
-                    "       pzpeer node --network FILE [options]\n"
+                    "         coincidence with another home the prize paid: 45%% to each payout address, 10%% to the author of pzpeer.\n"
+                    "         The network of every puzzle with a public key is in the program; without either option, that of the\n"
+                    "         first one still open. A network file is for tests and puzzles of one's own\n"
+                    "       pzpeer node [--puzzle N | --network FILE] [options]\n"
                     "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions; its\n"
                     "         identity is DIR/node.seed, made at the first start\n"
                     "       pzpeer sweep --to ADDRESS [options]  the transaction that moves the coins of a found key, signed and NOT sent,\n"
                     "                                            to give to a mining pool in private (the key on the standard input)\n"
-                    "       pzpeer netcheck NETWORK_FILE         the values and the fingerprint of a network file\n"
-                    "       pzpeer dpcheck NETWORK_FILE DP_BIN   recompute every point of a campaign's dp.bin and check its tag\n"
+                    "       pzpeer netcheck NETWORK              the values and the fingerprint of a network (a file, or a puzzle number)\n"
+                    "       pzpeer dpcheck NETWORK DP_BIN        recompute every point of a campaign's dp.bin and check its tag\n"
                     "       pzpeer version\n"
                     "options of run and node:\n"
                     "  --dir DIR            the folder of the home or node (pznet-<name of the network>, pznode-<name> for node)\n"
@@ -76,18 +78,26 @@ static int bad(const char *cmd, const char *fmt, const char *arg)
     return 2;
 }
 
-/* The network of a file, for the checks of records. */
-static bool load_net(const secp256k1_context *ctx, const char *path, netfile *nf, record_net *net)
+/* a puzzle number (the network written in the program), or 0 for the path of a network file */
+static int puzzle_of(const char *s)
+{
+    int n = 0;
+    for (; *s >= '0' && *s <= '9' && n <= 1000; s++) n = n * 10 + (*s - '0');
+    return *s || n < 1 || n > 1000 ? 0 : n;
+}
+
+/* The network of a file, or of a puzzle when path is NULL, for the checks of records. */
+static bool load_net(const secp256k1_context *ctx, const char *path, int puzzle, netfile *nf, record_net *net)
 {
     char err[300];
     uint8_t base[32];
-    if (!netfile_load(path, nf, err, sizeof err)) {
-        fprintf(stderr, "%s (%s)\n", err, path);
+    if (!netfile_get(path, puzzle, nf, err, sizeof err)) {
+        fprintf(stderr, "%s\n", err);
         return false;
     }
     pz_u256_to_be(&nf->start, base);
     if (!record_net_init(ctx, net, nf->fp, nf->dpbits, nf->pubkey33, base)) {
-        fprintf(stderr, "the start of the range is the key of the puzzle (%s)\n", path);
+        fprintf(stderr, "the start of the range is the key of the puzzle (network %s)\n", nf->net);
         return false;
     }
     return true;
@@ -98,7 +108,7 @@ static int cmd_dpcheck(const secp256k1_context *ctx, const char *netpath, const 
     netfile nf;
     record_net net;
     dpfeed df;
-    if (!load_net(ctx, netpath, &nf, &net)) return 1;
+    if (!load_net(ctx, puzzle_of(netpath) ? NULL : netpath, puzzle_of(netpath), &nf, &net)) return 1;
     if (!dpfeed_open(&df, dppath)) {
         fprintf(stderr, "%s: not a dp.bin of this version\n", dppath);
         return 1;
@@ -117,7 +127,7 @@ static int cmd_netcheck(const char *path)
 {
     netfile nf;
     char err[300];
-    if (!netfile_load(path, &nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, path), 1;
+    if (!netfile_get(puzzle_of(path) ? NULL : path, puzzle_of(path), &nf, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF];
     printf("network %s: puzzle %d, range %s:%s, schema %s, dpbits %u, chain %s\nfingerprint ", nf.net, nf.puzzle, pz_u256_to_hex(&nf.start, a),
            pz_u256_to_hex(&nf.end, b), nf.schema, nf.dpbits, nf.chain);
@@ -157,6 +167,7 @@ static void print_alert(void *user, const record *mine, const record *theirs, bo
 static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
 {
     const char *network = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
+    int puzzle = 0;
     char entries[16][256], dirname[48], seedpath[1100], err[300];
     int nb = 0, npeer = 0;
     long port = DEFAULT_PORT, store_gb = 0;
@@ -173,6 +184,8 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         if (!strcmp(a, "--help")) return usage_to(stdout);
         if (!v) return bad("node", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
         if (!strcmp(a, "--network")) network = v;
+        else if (!strcmp(a, "--puzzle") && !(puzzle = puzzle_of(v))) return bad("node", "--puzzle: invalid value '%s' (expected a puzzle number)", v);
+        else if (!strcmp(a, "--puzzle")) {}
         else if (!strcmp(a, "--dir")) dir = v;
         else if (!strcmp(a, "--bind")) bind = v;
         else if (!strcmp(a, "--peer") && npeer < 32) peers[npeer++] = v;
@@ -187,13 +200,12 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         } else return bad("node", "unrecognized option '%s'", a);
         i++;
     }
-    if (!network) return bad("node", "%s", "--network FILE is missing");
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     netfile nf;
     record_net net;
     uint8_t seed[32];
     home_identity id;
-    if (!load_net(ctx, network, &nf, &net)) return 1;
+    if (!load_net(ctx, network, puzzle, &nf, &net)) return 1;
     if (!dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), dir = dirname;
     if (!sys_mkdir(dir) || !sys_private(dir)) return fprintf(stderr, "%s must be a folder of this user that nobody else can open\n", dir), 1;
     snprintf(seedpath, sizeof seedpath, "%s/node.seed", dir);          /* its identity, as the keys of a Bitcoin node in its folder */
@@ -290,6 +302,8 @@ static int cmd_run(int argc, char **argv)
         if (!strcmp(a, "--help")) return usage_to(stdout);
         if (!v) return bad("run", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
         if (!strcmp(a, "--network")) cfg.network = v;
+        else if (!strcmp(a, "--puzzle") && !(cfg.puzzle = puzzle_of(v))) return bad("run", "--puzzle: invalid value '%s' (expected a puzzle number)", v);
+        else if (!strcmp(a, "--puzzle")) {}
         else if (!strcmp(a, "--dir")) cfg.dir = v;
         else if (!strcmp(a, "--payout")) cfg.payout = v;
         else if (!strcmp(a, "--rpc")) {                        /* kept here, and blanked where the list of processes shows it */
@@ -319,7 +333,6 @@ static int cmd_run(int argc, char **argv)
         i++;
     }
     cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
-    if (!cfg.network) return bad("run", "%s", "--network FILE is missing");
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     return home_run(&cfg);
 }

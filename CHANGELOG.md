@@ -6,6 +6,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- pzpeer: the network of every puzzle with a known public key is in the program: `pzpeer run --puzzle N`, and with neither `--puzzle`
+  nor `--network` the first puzzle still open (today 140). Its jump seed is `SHA256("pznet1/jumps" || public key)`, its least zero
+  bits `max(8, (N - 1) / 2 - 44)`, its chain the main one; `pzpeer netcheck 140` prints it. A network file stays for tests and for
+  puzzles that are not in the table.
 - The kangaroo keeps its walkers across a stop: when a run stops, every walker's distance, sign and group go to `herd.bin` in the
   campaign folder (the GPU walkers read back from the device), and the next run puts each one back at its point and walks on. Before,
   a stop threw away every walker's steps since its last distinguished point, `K·2^dp` steps on average, most of the work with millions

@@ -1011,7 +1011,7 @@ int home_run(const home_cfg *cfg)
     pthread_mutex_init(&h->mu, NULL);
     pthread_cond_init(&h->cv, NULL);
     h->ctx = keys_ctx();
-    if (!netfile_load(cfg->network, &h->nf, err, sizeof err)) return fprintf(stderr, "%s (%s)\n", err, cfg->network), 1;
+    if (!netfile_get(cfg->network, cfg->puzzle, &h->nf, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     snprintf(h->dirname, sizeof h->dirname, "pznet-%.31s", h->nf.net);
     h->dir = cfg->dir ? cfg->dir : h->dirname;
     /* the folder holds the seed, the distances of every point (dp.bin of the campaign, made 0600 by pzsolve) and the output of pzsolve,

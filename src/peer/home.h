@@ -9,7 +9,8 @@
 #include <stdbool.h>
 
 typedef struct {
-    const char *network;            /* the network file */
+    const char *network;            /* the network file; NULL: the network of puzzle (written in the program) */
+    int puzzle;                     /* 0: the first open puzzle with a public key */
     const char *dir;                /* the folder of the home: home.seed, start.key, the campaign, the node's files; NULL: pznet-<net> */
     const char *pzsolve, *pzsign;   /* the programs: a path, or a name looked up in PATH */
     const char *payout;             /* the payout address of this home; NULL: the one kept in the folder, else asked on the terminal */

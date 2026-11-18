@@ -4,6 +4,7 @@
  * and changes with every defining line, and the files that are refused. */
 #include "peertest.h"
 #include "netfile.h"
+#include <pzcore/hash.h>
 
 static const char BODY[] =
     "# a test network\n"
@@ -40,5 +41,17 @@ int main(void)
     for (size_t i = 0; i < sizeof BAD / sizeof *BAD; i++) CHECK(!variant(BAD[i][0], BAD[i][1], "", &b));
     CHECK(!variant(NULL, NULL, "net=t1\n", &b) && !variant(NULL, NULL, "color=red\n", &b) && !variant(NULL, NULL, "no equal sign\n", &b));
     CHECK(!variant(NULL, NULL, "sig=00:00\n", &b));            /* files are not signed */
+    /* the networks written in the program: puzzle 140 (its public key, its range, the jump seed from the key, 25 zero bits, the main
+     * chain), the first open puzzle by default, and none for a puzzle without a public key */
+    char err[200];
+    uint8_t m[12 + 33] = "pznet1/jumps", seed[32];
+    static const char P140[] = "031f6a332d3c5c4f2de2378c012f429cd109ba07d69690c6c701b6bb87860d6640";
+    for (int i = 0; i < 33; i++) sscanf(P140 + 2 * i, "%2hhx", &m[12 + i]);
+    pz_sha256(m, sizeof m, seed);
+    CHECK(netfile_puzzle(140, &a, err, sizeof err) && !strcmp(a.net, "p140") && a.puzzle == 140 && a.dpbits == 25 && !strcmp(a.chain, "main") &&
+          !memcmp(a.pubkey33, m + 12, 33) && !memcmp(a.jumpseed, seed, 32) && a.start.w[2] == 1ull << 11 && a.end.w[2] == (1ull << 12) - 1);
+    CHECK(netfile_puzzle(0, &b, err, sizeof err) && b.puzzle == 140 && !memcmp(a.fp, b.fp, 32));
+    CHECK(netfile_puzzle(145, &b, err, sizeof err) && b.dpbits == 28 && memcmp(a.fp, b.fp, 32));
+    CHECK(!netfile_puzzle(71, &b, err, sizeof err) && !netfile_puzzle(161, &b, err, sizeof err));
     TEST_DONE("t_netfile");
 }

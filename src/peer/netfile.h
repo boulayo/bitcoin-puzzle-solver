@@ -35,5 +35,11 @@ typedef struct {
  * of range. */
 bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen);
 bool netfile_load(const char *path, netfile *nf, char *err, size_t errlen);
+/* The network of puzzle n, written in the program (docs/en/NETWORK.md 5): the public key and the range from the table of the puzzles,
+ * the jump seed SHA256("pznet1/jumps" || public key), the schema net-06, at least max(8, (n - 1) / 2 - 44) zero bits, the main chain.
+ * n = 0: the first puzzle whose public key is known and whose key is not. False, with the reason, for a puzzle without a public key. */
+bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen);
+/* The network of the file at path, or of puzzle n when path is NULL. */
+bool netfile_get(const char *path, int n, netfile *nf, char *err, size_t errlen);
 
 #endif
