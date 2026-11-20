@@ -24,12 +24,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define HELLO_FIXED (2 * RECORD_LEN + 32 + BTC_P2PKH_LEN + 2)
 #define CHUNK 65000                         /* a piece of a pzsign message in one S_SIGNER */
 _Static_assert(1 + HELLO_FIXED + BTC_SPK_MAX <= SESSION_HELLO_MAX, "a hello fits in SESSION_HELLO_MAX");
 #define HELLO_MS 30000                      /* the longest wait for the hello and the proof of the partner, which it makes at once */
 #define LIMIT_LINES 1024                    /* lines of the file of the limit: one per network, one per pair that failed */
+#define LIMIT_NETWORK_S (30 * 86400)        /* the failures on a network count for 30 days from the first of them (limit_add) */
 #define LIMIT_WAIT_S 120                    /* the longest wait for the turn of a signing (a partner waits 300 s for a message) */
 #define ALIVE_MS 60000                      /* S_ALIVE while waiting for blocks: an idle channel is cut by NATs and relays */
 #define BLOCK_MS (20 * 60000)               /* twice the mean time of a block: the measure of a wait when the chain stops */
@@ -258,46 +260,53 @@ static bool plan(sess *s, const btc_tx *tx)
 /* ---- the limit of failed signings (session_limit) ---- */
 
 /* the lines of the file; false when it is there but cannot be read whole (no signing then: the count is not known) */
-static bool limit_read(const char *path, uint8_t (*key)[32], unsigned *count, int *n)
+static bool limit_read(const char *path, uint8_t (*key)[32], unsigned *count, int64_t *since, int *n)
 {
     *n = 0;
     FILE *f = fopen(path, "r");
     if (!f) return errno == ENOENT;
-    char hex[65];
-    unsigned v;
-    int got;
+    char line[128], hex[65];
     bool ok = true;
-    while (ok && (got = fscanf(f, "%64s %u", hex, &v)) == 2) {
-        ok = *n < LIMIT_LINES && strlen(hex) == 64 && pz_unhex(hex, 64, key[*n]);
-        if (ok) count[(*n)++] = v;
+    while (ok && fgets(line, sizeof line, f)) {
+        unsigned v;
+        long long t = 0;
+        ok = sscanf(line, "%64s %u %lld", hex, &v, &t) >= 2 && *n < LIMIT_LINES && strlen(hex) == 64 && pz_unhex(hex, 64, key[*n]);
+        if (ok) since[*n] = t, count[(*n)++] = v;
     }
-    ok = ok && got == EOF && !ferror(f);
+    ok = ok && !ferror(f);
     fclose(f);
     return ok;
 }
 
 /* through a new file, synced, that replaces the old one: a crash leaves either. Lines at 0 are left out */
-static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *count, int n)
+static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *count, const int64_t *since, int n)
 {
     char tmp[1100], hex[65];
     if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp) return false;
     FILE *f = fopen(tmp, "w");
     bool ok = f != NULL;
-    for (int i = 0; ok && i < n; i++) pz_hex_encode(key[i], 32, hex), ok = !count[i] || fprintf(f, "%s %u\n", hex, count[i]) > 0;
+    for (int i = 0; ok && i < n; i++) {
+        pz_hex_encode(key[i], 32, hex);
+        ok = !count[i] || (since[i] ? fprintf(f, "%s %u %lld\n", hex, count[i], (long long)since[i]) : fprintf(f, "%s %u\n", hex, count[i])) > 0;
+    }
     ok = ok && fflush(f) == 0 && sys_sync(fileno(f));
     if (f) ok = fclose(f) == 0 && ok;
     return ok && sys_replace(tmp, path);
 }
 
 /* d (+1 or -1) to the failed signings of the network and of the pair, or (payout) to the payouts of the pair that did not pay; +1 is
- * refused at a limit, and 0 only checks. False with the reason in why (mu held) */
+ * refused at a limit, and 0 only checks. The failures on the network count from the first of them for LIMIT_NETWORK_S, and then start
+ * again: a partner that spoils its messages can stop this home on the network for that long, not for ever. Those of an own point count
+ * for ever: its piece is what a bug of the signer would leak. False with the reason in why (mu held) */
 static bool limit_add(const sess *s, int d, bool payout, char *why, size_t whylen)
 {
     const session_limit *l = s->c->limit;
     uint8_t key[LIMIT_LINES][32];
     unsigned count[LIMIT_LINES];
+    int64_t since[LIMIT_LINES];
+    const int64_t now = (int64_t)time(NULL);
     int n;
-    if (!limit_read(l->path, key, count, &n)) return snprintf(why, whylen, "the count of failed signings cannot be read"), false;   /* no path: the partner is told */
+    if (!limit_read(l->path, key, count, since, &n)) return snprintf(why, whylen, "the count of failed signings cannot be read"), false;   /* no path: the partner is told */
     /* the pair by the own point, on this network: the piece of this home is that of its point, and the partner can change any byte of
      * its own record (a new session id each time) */
     uint8_t m[11 + 64], pair[32];
@@ -311,15 +320,17 @@ static bool limit_add(const sess *s, int d, bool payout, char *why, size_t whyle
         for (at[w] = 0; at[w] < n && memcmp(key[at[w]], which[w], 32); at[w]++) {}
         if (at[w] == n) {
             if (n == LIMIT_LINES) return snprintf(why, whylen, "the count of failed signings is full"), false;
-            memcpy(key[n], which[w], 32), count[n++] = 0;
+            memcpy(key[n], which[w], 32), count[n] = 0, since[n++] = 0;
         }
+        if (!payout && !w && (!count[at[w]] || (since[at[w]] && now - since[at[w]] >= LIMIT_NETWORK_S))) count[at[w]] = 0, since[at[w]] = now;
+        if (!payout && !w && !since[at[w]]) since[at[w]] = now;   /* a line of an earlier version, without its date: from now */
         if (d >= 0 && count[at[w]] >= max[w])
             return snprintf(why, whylen, "%u %s %s: no more (the limit of a home, docs/en/NETWORK.md 7.5)", count[at[w]],
                             payout ? "payouts that did not pay" : "failed signings", w || payout ? "of this pair" : "on this network"), false;
     }
     if (!d) return true;
     for (int w = 0; w < lines; w++) count[at[w]] = d > 0 ? count[at[w]] + 1 : count[at[w]] ? count[at[w]] - 1 : 0;
-    return limit_write(l->path, key, count, n) || (snprintf(why, whylen, "cannot write the count of failed signings"), false);
+    return limit_write(l->path, key, count, since, n) || (snprintf(why, whylen, "cannot write the count of failed signings"), false);
 }
 
 /* whether this home may still sign for the pair: asked before the plan, so that a home at its limit stops before the partner's pzsign

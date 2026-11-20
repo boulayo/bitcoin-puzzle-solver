@@ -106,6 +106,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
+- pzpeer: the failed signings of a network count for 30 days from the first of them, then start again; those of an own point
+  count for ever, as before. A partner that spoils its messages could stop an honest home on a network for ever; now for a month at most.
 - pzpeer, before a network with real coins (docs/en/NETWORK.md; the prologue is `pznet4`, so earlier versions do not talk to this one):
   - F, the party whose tiny coin goes into the second transaction, comes from the point and the two types of the pair, which the walks
     fixed: a home could choose its part with a new identity (about two tries).

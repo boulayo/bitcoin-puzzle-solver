@@ -50,13 +50,14 @@ typedef struct {
 
 /* The limit of failed signings of a home (docs/en/NETWORK.md 7.5, project 4.6). A bug of the two-party signer could leak a bit of a piece
  * through each signing that fails, so every run of pzsign counts as failed, in a file, before it starts, and is taken off once it gave valid
- * signatures; at max failures on the network, or pair_max for one own point (with any partner), there are no more signings. The file survives a restart and a crash
- * in the middle of a run. Runs are one at a time (busy): a session that does not get its turn within two minutes gives up without one. */
+ * signatures; at max failures on the network in 30 days, or pair_max for one own point (with any partner, for ever), there are no more
+ * signings. The file survives a restart and a crash in the middle of a run. Runs are one at a time (busy): a session that does not get its
+ * turn within two minutes gives up without one. */
 typedef struct {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     bool busy;                              /* a run of pzsign is under way */
-    const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point> <failures>" */
+    const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point> <failures> [<since>]" */
     unsigned max, pair_max;
     unsigned pay_max;                       /* payouts of one own point that did not pay (each spent a fee and a tiny coin of the prize) */
 } session_limit;

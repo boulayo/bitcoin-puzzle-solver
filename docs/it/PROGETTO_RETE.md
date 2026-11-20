@@ -120,7 +120,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | S poteva proporre commissioni così alte che F non poteva più annullare | alta | corretto |
 | gli identificativi delle firme si ripetevano fra sessioni della stessa coppia | alta | corretto |
 | chiunque copiava un punto pubblicato poteva far sprecare un minuto di CPU a una casa e bloccarne le sessioni | alta | corretto |
-| mancava il limite di firme fallite (10 per rete, 3 per punto proprio) | alta | aggiunto |
+| mancava il limite di firme fallite (10 per rete in 30 giorni, 3 per punto proprio per sempre) | alta | aggiunto |
 | il file del seme poteva restare leggibile da altri utenti | alta | corretto |
 | 8 connessioni lente bloccavano un nodo | alta | corretto |
 | un nodo poteva essere mandato a connettersi dentro la rete di casa dell'utente | alta | corretto |
@@ -193,7 +193,7 @@ Per il #140 l'ipotesi I3 vale finché il bitcoin costa meno di circa 1,2 milioni
 | pubblicare punti falsi o copiati | un punto ha effetto solo dopo che il proprietario dimostra di conoscerne la distanza |
 | far firmare un'altra transazione | ognuno costruisce la transazione da sé e si confrontano gli hash |
 | trattenere la firma | moneta minuscola e annullamento dopo 3 blocchi (2.3) |
-| sfruttare un errore del firmatore un bit alla volta | al massimo 10 firme fallite per rete e 3 per punto proprio (con qualsiasi partner), contate su disco |
+| sfruttare un errore del firmatore un bit alla volta | al massimo 10 firme fallite per rete in 30 giorni e 3 per punto proprio per sempre (con qualsiasi partner), contate su disco |
 | riempire dischi, tabelle, caselle | quote per proprietario e per blocco di indirizzi |
 | isolare un nodo | al massimo 2 contatti per blocco di indirizzi in ogni cella, 4 in tutto |
 | spiare il traffico | canale cifrato fra identità; il relay vede solo dati cifrati |

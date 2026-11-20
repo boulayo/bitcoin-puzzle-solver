@@ -544,15 +544,18 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
-fingerprint || x of an own point)> <failures>` (a line at 0 is left out): every run of pzsign counts as failed before it starts (written
+fingerprint || x of an own point)> <failures>`, and on the line of a network the time of its first failure (a line at 0 is left out): every run of pzsign counts as failed before it starts (written
 through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash or a kill in the middle
 counts; a pzsign that could not start counts nothing, and neither does P2 (F) when it gave all its messages and only the signatures of
 P1 did not come or do not verify (pzsign ends with 0x84): nothing it answered depends on that, and a partner that keeps them could
-otherwise use up the home's count. At 10 failures on a network, with any partner, or 3 on one own point, with any
+otherwise use up the home's count. At 10 failures on a network in 30 days, with any partner, or 3 on one own point for ever, with any
 partner (the piece at stake is that of the point, and whoever knows the distance of the other point can name it again under new
 identities, each a new eid), the home signs no more on it, and says so
 before the plan of the first transaction, so that the partner's pzsign does not start (it would count a failure of its own). Runs are one
-at a time; a session that does not get its turn within 2 minutes gives up without a run.
+at a time; a session that does not get its turn within 2 minutes gives up without a run. The count of a network starts again 30 days
+after its first failure: it guards no piece of its own (each point has its limit), and a partner that spoils its messages, with the points
+of a merger, could otherwise stop an honest home on the network for ever; a line without its time (an earlier version) counts from the
+first time it is read.
 
 **The limit of payouts.** Each first transaction pays a fee and F's tiny coin from the prize, so a payout counts, in the same file under
 `SHA256("pznet1/paid" || fingerprint || x of the own point)`, from the signing of its first transaction until the prize is paid. At 5 on

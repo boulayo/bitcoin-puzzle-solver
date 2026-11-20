@@ -417,12 +417,12 @@ static void write_text(const char *path, const char *text, bool exec)
 /* the failures that a file of the limit counts for key (0 when it has no line for it) */
 static unsigned fails_of(const char *path, const uint8_t key[32])
 {
-    char want[65], hex[80];
+    char want[65], hex[80], line[200];
     unsigned v, n = 0;
     pt_hex(key, 32, want);
     FILE *f = fopen(path, "r");
-    while (f && fscanf(f, "%79s %u", hex, &v) == 2)
-        if (!strcmp(hex, want)) n = v;
+    while (f && fgets(line, sizeof line, f))
+        if (sscanf(line, "%79s %u", hex, &v) == 2 && !strcmp(hex, want)) n = v;
     if (f) fclose(f);
     return n;
 }
@@ -468,6 +468,7 @@ typedef struct {
     bool unproved;                    /* the session ends before the proofs */
     int lost_heights;                 /* answers about the height each chain loses at first */
     unsigned limit[2];                /* failures already counted on the network by home 0, and for the pair by home 1 */
+    bool limit_old;                   /* those on the network were counted from 31 days ago: they are forgotten */
     unsigned fails_F, fails_S;        /* the failed signings F and S count in the case */
     const char *bin[2];               /* the pzsign of each home (NULL: the real one) */
     const char *why;                  /* in the reason of both homes, when not NULL */
@@ -639,7 +640,8 @@ static void run_case(const tcase *tc, const char *bin)
         if (tc->limit[i]) {
             char hex[65], text[200];
             pt_hex(i ? own : net.fp, 32, hex);
-            snprintf(text, sizeof text, "%s %u\n", hex, tc->limit[i]);
+            if (tc->limit_old && !i) snprintf(text, sizeof text, "%s %u %lld\n", hex, tc->limit[i], (long long)time(NULL) - 31 * 86400LL);
+            else snprintf(text, sizeof text, "%s %u\n", hex, tc->limit[i]);
             write_text(limpath[i], text, false);
         }
     }
@@ -725,7 +727,7 @@ static void run_case(const tcase *tc, const char *bin)
     /* the limits: a failed signing counts for the network and the pair, a good one nothing, a refused one nothing */
     for (int i = 0; i < 2; i++) {
         const unsigned failed = tc->silent0 && i == 1 ? 0 : i == F_home ? tc->fails_F : tc->fails_S;
-        CHECK(fails_of(limpath[i], net.fp) == (i ? 0 : tc->limit[0]) + failed);
+        CHECK(fails_of(limpath[i], net.fp) == (i || tc->limit_old ? 0 : tc->limit[0]) + failed);
         CHECK(fails_of(limpath[i], own) == (i ? tc->limit[1] : 0) + failed);
         /* a payout counts from the signing of its first transaction until it pays */
         CHECK(fails_of(limpath[i], paid_key) == (tc->expect == CANCEL || tc->expect == FIRST || tc->expect == OTHER || tc->bin[0] ? 1u : 0u));
@@ -851,6 +853,8 @@ int main(void)
         /* one home at its limit (on the network, or for the pair): it stops before the plan, and the other counts no failure */
         {.name = "limit of the network reached", .expect = NOTHING, .limit = {10, 0}, .why = "failed signings on this network"},
         {.name = "limit of the pair reached", .expect = NOTHING, .limit = {0, 3}, .why = "failed signings of this pair"},
+        /* the failures on the network are forgotten 30 days after the first of them; those of an own point never are */
+        {.name = "limit of the network, 31 days later", .expect = PAYOUT, .limit = {10, 0}, .limit_old = true},
         /* the one that hangs was sent messages and counts a failure; the other never got one and counts none (a partner that is gone) */
         {.name = "a pzsign that hangs", .expect = NOTHING, .bin = {hang, flood}, .fails_F = 1, .fails_S = 1, .silent0 = true},
         /* one home reads its coins for longer than the other waits for a message: its S_ALIVE keeps the other there (before, the other
