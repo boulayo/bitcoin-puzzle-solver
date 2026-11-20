@@ -488,35 +488,11 @@ void *pz_xrealloc(void *p, size_t n)
 
 /* ---- hex and human-readable quantities ---- */
 
-static int hexval(int c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 int pz_hex_decode(const char *hex, u8 *out, size_t maxlen)
 {
     if (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) hex += 2;
-    size_t n = strlen(hex);
-    if (n % 2 || n / 2 > maxlen) return -1;
-    for (size_t i = 0; i < n / 2; i++) {
-        int a = hexval(hex[2 * i]), b = hexval(hex[2 * i + 1]);
-        if (a < 0 || b < 0) return -1;
-        out[i] = (u8)(a << 4 | b);
-    }
-    return (int)(n / 2);
-}
-
-void pz_hex_encode(const u8 *in, size_t n, char *out)
-{
-    static const char d[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; i++) {
-        out[2 * i] = d[in[i] >> 4];
-        out[2 * i + 1] = d[in[i] & 15];
-    }
-    out[2 * n] = 0;
+    const size_t n = strlen(hex);
+    return n / 2 <= maxlen && pz_unhex(hex, n, out) ? (int)(n / 2) : -1;
 }
 
 char *u128_to_dec(u128 v, char *buf)

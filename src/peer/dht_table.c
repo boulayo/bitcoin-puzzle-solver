@@ -500,7 +500,7 @@ void save_peers(dht *d)
         for (int i = 0; i < n; i++) {
             char a[64], h[65];
             net_addr_str(&cs[i].addr, a, sizeof a);
-            btc_hex(cs[i].xonly, 32, h);
+            pz_hex_encode(cs[i].xonly, 32, h);
             fprintf(f, "%s %s\n", a, h);
         }
         if (fclose(f) == 0) (void)sys_replace(tmp, path);
@@ -526,7 +526,7 @@ static int boot_list(dht *d, boot_addr *out, int max)
         char *sp = strchr(line, ' ');
         if (!sp) continue;
         *sp = 0;
-        if (strcspn(sp + 1, " \r\n") == 64 && btc_unhex(sp + 1, 64, out[n].xonly) && net_parse_addr(line, &out[n].a)) out[n++].has_id = true;
+        if (strcspn(sp + 1, " \r\n") == 64 && pz_unhex(sp + 1, 64, out[n].xonly) && net_parse_addr(line, &out[n].a)) out[n++].has_id = true;
     }
     if (f) fclose(f);
     pthread_mutex_lock(&d->f_mu);

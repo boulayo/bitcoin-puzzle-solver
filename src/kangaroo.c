@@ -183,9 +183,10 @@ static void table_thin(kang_state *ks)
     }
     atomic_store_explicit(&ks->count_mirror, kept, memory_order_relaxed);
     atomic_store_explicit(&ks->thin_mirror, ks->thin_level, memory_order_relaxed);
-    /* by design about one run in five where memory sets dp_bits (KANG_DP_MEM_MARGIN): not a warning */
-    pz_log(PZ_LOG_INFO, "distinguished-point table full (RAM limit): halving the density of stored points (level %u). Expected in about one run in five "
-           "when memory sets dp-bits: the search goes on with a slightly later collision; a larger --mem helps only if the RAM is there", ks->thin_level);
+    /* by design where memory sets dp_bits (KANG_DP_MEM_MARGIN, docs/en/ALGORITHMS.md 4.4): not a warning */
+    pz_log(PZ_LOG_INFO, "distinguished-point table full (RAM limit): halving the density of stored points (level %u). Expected when memory sets "
+           "dp-bits (about one run in five with a --mem of a power of two in GiB, more often with other limits): the search goes on with a "
+           "slightly later collision; a larger --mem helps only if the RAM is there", ks->thin_level);
 }
 
 /* A point the table leaves out: counted, and in a network campaign still written to the log, which pzpeer publishes from (a point the
@@ -391,7 +392,7 @@ static void kang_setup(kang_state *ks)
     }
     pz_ge q2;
     if (!pz_ge_add(&q2, &ks->Qp, &ks->Qp) || !pz_ge_add(&ks->Q3, &q2, &ks->Qp)) ks->Q3 = ks->Qp;   /* only if Qp is not a point: the key was found above */
-    ks->expected_steps = KANG_C_MEAN * ks->sqrtW;
+    ks->expected_steps = (ks->net ? KANG_C_NET : KANG_C_MEAN) * ks->sqrtW;
 }
 
 /* dp_bits: the larger of what the overhead of the walkers allows (KANG_DP_OVERHEAD) and what memory requires (the table must hold the points
@@ -537,7 +538,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
            pz_fmt_u64((u64)ks->K_total, kt, sizeof kt), cpu, gpu, dp, pz_fmt_bytes((double)ks->cap * sizeof(dp_ent), table_text, sizeof table_text),
            pz_fmt_bytes((double)r->mem_limit, limit_text, sizeof limit_text), pz_fmt_si((double)ks->expected_steps, steps_text, sizeof steps_text),
            pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), dps_text, sizeof dps_text));
-    pz_log(PZ_LOG_DEBUG, "kangaroo: W = 2^%.1Lf, mean jump %.3Le, expected effort %.2Lf x sqrt(W)", log2l(pz_u256_to_ld(&ks->W)), mean, (long double)KANG_C_MEAN);
+    pz_log(PZ_LOG_DEBUG, "kangaroo: W = 2^%.1Lf, mean jump %.3Le, expected effort %.2Lf x sqrt(W)", log2l(pz_u256_to_ld(&ks->W)), mean, ks->expected_steps / ks->sqrtW);
     /* every computer of a shared campaign compares it, node 0 (the one that usually receives the merges) too; log.txt always has it */
     kang_jump_id(ks->jump_tag, jid);
     pz_log(r->node_given ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);

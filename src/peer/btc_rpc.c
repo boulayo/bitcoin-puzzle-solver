@@ -5,6 +5,7 @@
 #include "btc_rpc.h"
 #include "sys.h"
 #include <pzcore/seal.h>
+#include <pzcore/u256.h>
 #include <ctype.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -168,14 +169,6 @@ static bool send_all(btc_rpc *c, int fd, const char *p, size_t n, int64_t deadli
 
 /* ---- HTTP ---- */
 
-static int hex_digit(unsigned c)
-{
-    if (c - '0' < 10) return (int)(c - '0');
-    c |= 0x20;
-    if (c - 'a' < 6) return (int)(c - 'a' + 10);
-    return -1;
-}
-
 /* A reply as it comes. It is read as it arrives, each byte once: the search for the end of the head goes on where it stopped, and a
  * chunked body is decoded in place, chunk by chunk, as each one is whole (the data moves back over the framing before it). */
 typedef struct {
@@ -260,7 +253,7 @@ static int dechunk(reply *r)
             continue;
         }
         size_t size = 0, k = 0;
-        for (int d; k < ll - 1 && (d = hex_digit((unsigned char)p[k])) >= 0; k++) {
+        for (int d; k < ll - 1 && (d = pz_hex_digit((unsigned char)p[k])) >= 0; k++) {
             if (size > JSON_MAX_SIZE) return -1;
             size = size << 4 | (size_t)d;
         }
@@ -499,7 +492,7 @@ bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t
     const char *hex = json_str(res);
     const size_t n = hex ? res->n / 2 : 0;
     uint8_t *b = n ? malloc(n) : NULL;
-    const bool ok = b && btc_unhex(hex, res->n, b);
+    const bool ok = b && pz_unhex(hex, res->n, b);
     if (!ok) free(b);
     else {
         *raw = b;
@@ -512,7 +505,7 @@ bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t
 static bool get_spk(const json_val *v, btc_utxo *u)
 {
     const char *hex = json_str(v);
-    if (!hex || v->n > 2 * BTC_SPK_MAX || !btc_unhex(hex, v->n, u->spk)) return false;
+    if (!hex || v->n > 2 * BTC_SPK_MAX || !pz_unhex(hex, v->n, u->spk)) return false;
     u->spk_len = (uint8_t)(v->n / 2);
     return true;
 }

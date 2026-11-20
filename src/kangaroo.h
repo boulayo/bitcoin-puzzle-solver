@@ -5,6 +5,7 @@
 #include "run.h"
 #include <math.h>
 #define KANG_C_MEAN 1.06         /* measured mean cost of the kangaroo, in units of sqrt(W) (W = 2^32..2^44) */
+#define KANG_C_NET 1.18          /* the same for the walk of a campaign of the shared network, net-06 (docs/en/NETWORK.md 6) */
 /* The mean cost of the kangaroo on an interval of W keys, in steps: KANG_C_MEAN sqrt(W). */
 static inline long double kang_mean_cost(const pz_u256 *W) { return KANG_C_MEAN * sqrtl(pz_u256_to_ld(W)); }
 #define KANG_MAX_W_LOG2 188      /* the largest interval, 2^188 keys: the exponents are signed 192-bit numbers (+-2^191), the wild walkers on 3Q start

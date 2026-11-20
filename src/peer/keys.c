@@ -104,7 +104,7 @@ int keys_file_read(const char *path, uint8_t out[32], char *err, size_t errlen)
     close(fd);
     hex[n > 0 ? n : 0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;
-    const bool ok = strlen(hex) == 64 && btc_unhex(hex, 64, out);
+    const bool ok = strlen(hex) == 64 && pz_unhex(hex, 64, out);
     pz_secure_zero(hex, sizeof hex);
     return ok ? 1 : (snprintf(err, errlen, "%.300s is not a secret of 64 hex digits: it is left as it is", path), -1);
 }
@@ -117,7 +117,7 @@ bool keys_file_write(const char *path, const uint8_t v[32])
     (void)remove(tmp);                                         /* a leftover of a crash, or a link put there */
     const int fd = sys_create_secret(tmp);
     if (fd < 0) return false;
-    btc_hex(v, 32, hex);
+    pz_hex_encode(v, 32, hex);
     hex[64] = '\n';
     bool ok = write(fd, hex, 65) == 65 && sys_sync(fd);
     ok = close(fd) == 0 && ok;

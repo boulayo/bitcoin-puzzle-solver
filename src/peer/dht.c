@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* dht.c - the node (see dht.h, and dht_priv.h for its files): its life (create, start, stop), its threads (accept, handlers, jobs,
- * maintenance), the answers to requests, and the limits by address block. */
+ * maintenance, and the one that meets the others in the table of BitTorrent and keeps the port open on the router), the answers to
+ * requests, and the limits by address block. */
 #include "dbg.h"
 #include "dht_priv.h"
 #include "portmap.h"

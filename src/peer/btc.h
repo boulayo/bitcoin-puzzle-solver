@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <pzcore/u256.h>
 
 #define BTC_MAX_IN        16
 #define BTC_MAX_OUT       16
@@ -56,10 +57,7 @@ typedef struct {
 
 /* ---- hex ---- */
 
-/* n bytes as 2n lower-case hex digits and a NUL */
-void btc_hex(const uint8_t *p, size_t n, char *out);
-/* len hex digits (either case) to len / 2 bytes; false when len is odd or a character is not a hex digit */
-bool btc_unhex(const char *s, size_t len, uint8_t *out);
+/* bytes to hex and back: pz_hex_encode and pz_unhex of pzcore/u256.h */
 /* a hash in internal order to and from the reversed hex of txids and block hashes (exactly 64 digits) */
 void btc_hash_to_hex(const uint8_t h[32], char out[65]);
 bool btc_hash_from_hex(const char *s, uint8_t h[32]);

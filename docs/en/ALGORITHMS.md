@@ -67,7 +67,10 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
 ### 2.2 Vectorized hash160
 
 SHA-256 (a single block: 33 bytes + padding) and RIPEMD-160 (a single block: 32 bytes + padding) are written once with GCC's
-*vector extensions* and instantiated with 4 lanes (SSE2/NEON), 8 lanes (AVX2) and 16 lanes (AVX-512). The engine to use is
+*vector extensions* and instantiated with 4 lanes (SSE2, or NEON in the `baseline` engine of aarch64), 8 lanes (AVX2) and 16 lanes
+(AVX-512). The `neon` and `neon2` engines of aarch64 have an implementation of their own (`hash_lanes_neon.inc`): SHA-256 on the ARMv8
+SHA2 instructions, four keys at a time in lock step, and RIPEMD-160 on NEON intrinsics, one or two vectors of 4 lanes advanced together; `shani`
+replaces only the SHA-256 stage of the 8-lane template (`hash_lanes_shani.inc`). The engine to use is
 chosen at runtime with a 0.25 s micro-benchmark (the environment variable `PZ_ISA` forces it). For each batch only **one word** of the digest is
 compared with the target: the third, which depends on the fewest steps of RIPEMD-160 (the compiler drops the last three steps
 of the left line and the last four of the right one); the rare candidates are verified in full with the scalar hash and then
@@ -181,8 +184,11 @@ on it repeats the same points forever (an *unproductive* cycle). With `R` jumps 
 of the negation map in the Pollard rho method*, 2010):
 
 * **Cycles of length 2** (`P → P' → P`): probability `1/(2R)` per step. When the current point coincides with the one from
-  two steps earlier (32-bit tags), the next jump `(j+1) mod R` is used: the rule depends only on the history `(P_{n−1}, P_n)`, so two
-  walkers that merge keep merging.
+  two steps earlier (32-bit tags), the next jump `(j+1) mod R` is used. The rule looks at the current point and the one two steps back
+  (`P_{n−2}`, `P_n`), so two walkers that meet walk on together once they share two points, with one exception: a walker leaves a cycle
+  of 2 from the point it entered it by. If one walker enters the cycle `{P, P'}` at `P` and the other at `P'` (the jump from the meeting
+  point leads back to the point one of them came from: about once in `R` meetings), they leave it by different jumps and part, and that
+  meeting is lost. The costs measured on the curve and in the simulators, which use the same rule, include it.
 * **Cycles of length 4, 6, …**: even after removing those of length 2 they remain, with probability `≈ (R−1)/(4R³) ≈ 1/(4R²)` per step,
   that is **one every ≈ 2.6·10⁵ steps** with `R = 256` (measured: 3·10⁵ in the model of `tools/research/ksim.c`, almost all of length 4).
   With `dp_bits = 45` (puzzle 140) a walker meets a DP every 3.5·10¹³ steps: without an exit every walker would be trapped after a few minutes.
@@ -223,6 +229,12 @@ from then on only DPs whose tag has one more zero bit are kept, and the stored o
 with no second table. The search goes on, and a collision is seen with the delay of `dp_bits + 1`, the one a margin twice as large would have had
 from the start. Each bit less halves the delay of the distinguished points (about 1 to 2 `K·2^dp_bits/√W` steps, RESEARCH.md section 8.7).
 
+The table is a power of two of entries, and when memory decides `dp_bits` it gets at once the largest power of two that the limit holds.
+With a `--mem` that is a power of two (in GiB: 8, 16, 32, ...) that is the whole limit, and the table thins only past
+`1.3·0.93/0.8 ≈ 1.5·√W` steps: about one run in five at most, in the cost model of section 11. With any other limit (the default, 40 % of
+the free RAM, seldom is one) the table can be little more than half of the limit, and it thins sooner: from about 0.76·√W steps when the
+limit is just below a power of two, which about two runs in three pass.
+
 An entry holds the 64-bit `tagk` (61 bits of the abscissa and the 3-bit kind) and the index of the record in `dp.bin`, not the 24-byte distance:
 the distance is needed only when two points of different kinds share a tag, about once in a campaign plus a few false matches of the 61 bits.
 It is then read back from the buffer of the log, from the block being written, or from the file (under the table lock, then the lock of the log).
@@ -248,10 +260,12 @@ a stop threw away every walker's steps since its last DP, `K·2^dp` steps on ave
 of the work. A walker goes back to a slot of its own group, so that every herd keeps the mix of species of a new one: the next run may have
 more walkers (new starts where a group has none left) or fewer (the others wait in the file for a later run), and other `--dp-bits`. The file
 is taken only by the next session of the same computer: a copy of the folder on another computer, or a file a run that did not stop well
-left behind (a kill, a crash, the power: its walkers walked on past it), would walk again where walkers walked already. Those runs start
-their walkers anew from new points (a different random stream for each session and each `--node`), and the old trails remain useful because
-each of their later DPs is already in the table. A walker whose distance is not of its group's residue, or too large, is not taken. The file
-is deleted once the key is found and written. A file of another campaign (another range or
+left behind (a `kill -9`, a second Ctrl-C, a crash, the power: its walkers walked on past it), would walk again where walkers walked already.
+Those runs start their walkers anew from new points (a different random stream for each session and each `--node`), and the old trails remain
+useful because each of their later DPs is already in the table. So only a run that does not stop well loses work, what every stop lost
+before `herd.bin`: each walker's steps since its last DP in `dp.bin`, about `K·2^dp` steps (the buffer is written at every checkpoint,
+every 60 s, so at most the DPs of the last minute are missing from the file). A walker whose distance is not of its group's residue, or
+too large, is not taken. The file is deleted once the key is found and written. A file of another campaign (another range or
 public key) is refused, and so is one written with another jump table (another seed, or the setup of another computer): the message gives both ids.
 A file of the format `"PZDP4"` (the same records, a header of 38 bytes without the jump table id: versions 1.9.1 to 1.11.0) is loaded, appended
 to and merged as it is. The formats `"PZDP1"` to `"PZDP3"` of the older layouts cannot be used: `hunt` keeps such a `dp.bin` as `dp.bin.vN` and
@@ -284,11 +298,14 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   immediately for the points `C ± i·G`, recomputing the denominator from the table instead of keeping it in an array: about 8.7 KB of
   private memory per work-item with a window of 256 and ≈ 32 bytes of traffic to video memory per key. The hash filter compares word 2 of the
   hash160, which does not depend on the last three steps of the left RIPEMD-160 line nor on the last four of the right one (the compiler
-  eliminates them); the rare keys that pass are hashed again in full on the device, so a reported hit matches all 160 bits (and is re-verified
-  on the CPU anyway). Both points of a pair share `x(C) + x(i·G)`, so `x3 = λ² − (x(C) + x(i·G))` costs one subtraction.
+  eliminates them). The device reports every key that passes, one in 2^32: the key of the campaign and the *near misses*, whose bytes 8 to 11
+  of the hash160 are the target's. The host hashes each one again on the CPU and compares the rest (`run_scan_candidate`); `hunt --near`
+  keeps the near misses as the proof of a scan (NETWORK.md section 11). Both points of a pair share `x(C) + x(i·G)`, so
+  `x3 = λ² − (x(C) + x(i·G))` costs one subtraction.
 * **Linear**: each work-item scans `ngroups` consecutive groups from its own center `P0 + gid·D` (computed on the
-  device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, complete hash
-  160 on the device, hits collected with an atomic counter. The duration of a launch is regulated towards a length tuned per device (below;
+  device with a small double-and-add multiplication); groups of `2·HALF` keys, table `i·G` in constant memory, word 2
+  of the hash160 on the device, hits collected with an atomic counter (64 at most in a launch: with more, the block is scanned again on the
+  CPU). The duration of a launch is regulated towards a length tuned per device (below;
   0.35 s until it is).
   `HALF` (the window) is a compile-time constant of the kernel. With CUDA there are six variants: window 128, 256 or 512 × free registers
   (≈ 170) or limited to 128 (`__launch_bounds__(128, 4)`: more resident warps, and a grid of 4 blocks per SM to fill them); two further
@@ -712,7 +729,7 @@ success in the next 1 h / 24 h / 7 d / 30 d / 365 d:
   With `--part` the computer can scan only its own part (`reach` units still to do) while the key is uniform over all
   the `remaining` units it has not yet checked: `P(within e) = min(e, reach) / remaining`, and probabilities `q` beyond `reach/remaining`
   cannot be reached alone (time "n/a").
-* **Kangaroo**: cost `n` with `P(found within n) = 1 − exp(−(n/c)²)`, `c = k/0.8862·√W` with `k = 1.06` (`KANG_C_MEAN`, section 8.10), that is `c ≈ 1.20·√W`. Given that after `n₀` steps it has
+* **Kangaroo**: cost `n` with `P(found within n) = 1 − exp(−(n/c)²)`, `c = k/0.8862·√W` with `k = 1.06` (`KANG_C_MEAN`, section 8.10), that is `c ≈ 1.20·√W`; in a campaign of a shared network `k = 1.18` (`KANG_C_NET`), the measured cost of its walk (NETWORK.md section 6). Given that after `n₀` steps it has
   not been found yet: `P(within n₀+e | not found) = 1 − exp(−e(2n₀+e)/c²)` and `e_q = c²·L/(n_q + n₀)` with `L = −ln(1−q)`
   (the form without numerical cancellation).
 

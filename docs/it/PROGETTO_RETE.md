@@ -63,7 +63,8 @@ Resta un problema: nell'ultimo scambio uno dei due riceve la firma completa per 
    delle due dà il pezzo per prima, e l'altra può tenersi il suo: guadagna solo ciò che la chiave apre ancora, cioè le monete dello stesso
    indirizzo sulle catene nate da Bitcoin (al #140 circa 300 euro, contro 14 BTC) e ciò che vi arriverà in futuro.
 
-Una firma trattenuta vale quindi al massimo mezz'ora.
+Una firma trattenuta vale quindi poco più di mezz'ora (3 blocchi, poi quello che contiene l'annullamento), se i blocchi arrivano
+puntuali e il nodo o i server della catena rispondono: un blocco lento, o una catena che tace, allunga l'attesa.
 
 ### 2.4 Cosa vede chi partecipa
 
@@ -79,7 +80,7 @@ coppia paga secondo la versione più vecchia delle due case. La seconda transazi
 uscite: chi usa un programma modificato per non pagare la quota la paga comunque quando il partner usa questo.
 
 Ogni 10 minuti una riga della rete: quanti nodi ha, quanti punti in tutto, quanti salti al secondo e la parte di questa casa, con quanto
-del premio le spetta in media (la sua parte del lavoro per il 90%), ed entro quanto tempo la chiave arriva con metà delle probabilità e con 9 su 10. La stima viene da ciò che la casa custodisce per gli altri: ogni punto sta sui 5 nodi più vicini alla sua chiave, quindi la rete ne ha circa "punti custoditi × nodi / 5", e i nodi si stimano dalle distanze dei più vicini a un punto a caso. Sbaglia di circa un quinto; la vede solo una casa che accetta connessioni, perché solo quella custodisce.
+del premio le spetta in media (la sua parte del lavoro per il 90%), ed entro quanto tempo la chiave arriva con metà delle probabilità e con 9 su 10. La stima viene da ciò che la casa custodisce per gli altri: ogni punto sta sui 5 nodi più vicini alla sua chiave, quindi la rete ne ha circa "punti custoditi × nodi / 5", e i nodi si stimano dalle distanze dei più vicini a un punto a caso. Sbaglia di circa un quinto; i tempi contano il costo misurato del cammino della rete (1,18·√W, un po' più di quello di una campagna da soli, 1,06·√W). La vede solo una casa che accetta connessioni, perché solo quella custodisce.
 
 ---
 
@@ -101,7 +102,7 @@ Tutto il codice è nel ramo `rete-condivisa`. Niente è stato rilasciato.
 | sessione completa, compreso il partner che trattiene la firma | in memoria e su regtest |
 | rete intera: un custode e tre case su una macchina | premio diviso 0,49999366 e 0,49989366 BTC, indirizzo del puzzle vuoto |
 | nodo Bitcoin potato, file cookie, nodo non sincronizzato | test |
-| primo contatto senza server nostri: i nodi si annunciano e si cercano nella tabella di BitTorrent; apertura della porta del router con `--upnp` | test con nodi bugiardi e router non conformi; tre nodi che si trovano da soli |
+| primo contatto senza server nostri: i nodi si annunciano e si cercano nella tabella di BitTorrent; apertura della porta del router (PCP, NAT-PMP, UPnP; `--no-portmap` la spegne) | test con nodi bugiardi e router non conformi; tre nodi che si trovano da soli |
 | nessun nodo Bitcoin proprio: catena letta da più server Electrum, ogni risposta verificata (server che nascondono, mentono, danno prove false) | test e prova completa con tre case |
 | la rete è l'impronta del suo file: nessuna firma, nessuna chiave da custodire | test |
 | pzpeer e pzsign per Windows: uno strato unico sopra il sistema operativo, che ha anche accorciato il codice | test unitari e prova completa con tre case sotto Wine |
@@ -119,7 +120,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | S poteva proporre commissioni così alte che F non poteva più annullare | alta | corretto |
 | gli identificativi delle firme si ripetevano fra sessioni della stessa coppia | alta | corretto |
 | chiunque copiava un punto pubblicato poteva far sprecare un minuto di CPU a una casa e bloccarne le sessioni | alta | corretto |
-| mancava il limite di firme fallite (10 per rete, 3 per coppia) | alta | aggiunto |
+| mancava il limite di firme fallite (10 per rete, 3 per punto proprio) | alta | aggiunto |
 | il file del seme poteva restare leggibile da altri utenti | alta | corretto |
 | 8 connessioni lente bloccavano un nodo | alta | corretto |
 | un nodo poteva essere mandato a connettersi dentro la rete di casa dell'utente | alta | corretto |
@@ -137,7 +138,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 |---|---|
 | il file della rete del #140 dentro il programma | fatto il 18 novembre per ogni puzzle con chiave pubblica nota: `pzpeer run --puzzle N`, e senza opzioni il primo ancora aperto |
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
-| prova di una rete intera su un Windows vero e su un Mac | sulle macchine Windows e macOS della CI passano i test di pzpeer (su Windows anche la firma a due con `pzsign.exe`); la prova completa con tre case è fatta su Linux e, per i programmi Windows, con l'emulatore Wine |
+| prova di una rete intera su un Windows vero e su un Mac | sulle macchine Windows e macOS della CI passano i test di pzpeer e la firma a due con pzsign (su Mac per Apple silicon e per Intel); la prova completa con tre case è fatta su Linux e, per i programmi Windows, con l'emulatore Wine |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
 | sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia; dopo un pagamento lo scambio dei pezzi invece riprende (`paid` nella cartella) |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
@@ -166,7 +167,7 @@ Sono le cose su cui il progetto si regge e che non ho potuto dimostrare. Se una 
 | I9 | Nella rete c'è sempre almeno qualche nodo raggiungibile da fuori | senza, nessuno custodisce i punti e la rete non funziona |
 | I10 | Una GPU fa 5–10 miliardi di passi al secondo con pzsolve | i tempi di 5.3 si allungano in proporzione. Misurato: 0,92 miliardi su una A2000 portatile |
 | I11 | I numeri dello schema `net-06` (costo +11 %, soglie del furto) valgono anche a 140 bit | il costo è misurato a 40 bit; le soglie vengono dal simulatore |
-| I12 | Spazio e traffico per nodo sono quelli stimati (20–30 GB, decine di KB/s) | mai misurati con migliaia di nodi |
+| I12 | Spazio e traffico per nodo sono quelli stimati (al massimo `--store-gb` di disco, 5 GB se non lo si cambia; decine di KB/s) | mai misurati con migliaia di nodi |
 | I13 | Chi pubblica il programma è onesto, e chi lo scarica lo prende dal repository ufficiale | un programma malevolo ruba i semi. È la stessa fiducia che si dà a qualsiasi programma, Bitcoin Core compreso |
 | I14 | Le fonti di casualità del seme (sistema, CPU, tempi di calcolo) non sono tutte prevedibili insieme | seme prevedibile: perde quella casa |
 | I15 | I miner non riscrivono la catena per poche decine di blocchi per rubare | caso estremo, come per qualsiasi pagamento |
@@ -192,7 +193,7 @@ Per il #140 l'ipotesi I3 vale finché il bitcoin costa meno di circa 1,2 milioni
 | pubblicare punti falsi o copiati | un punto ha effetto solo dopo che il proprietario dimostra di conoscerne la distanza |
 | far firmare un'altra transazione | ognuno costruisce la transazione da sé e si confrontano gli hash |
 | trattenere la firma | moneta minuscola e annullamento dopo 3 blocchi (2.3) |
-| sfruttare un errore del firmatore un bit alla volta | al massimo 10 firme fallite per rete e 3 per coppia, contate su disco |
+| sfruttare un errore del firmatore un bit alla volta | al massimo 10 firme fallite per rete e 3 per punto proprio (con qualsiasi partner), contate su disco |
 | riempire dischi, tabelle, caselle | quote per proprietario e per blocco di indirizzi |
 | isolare un nodo | al massimo 2 contatti per blocco di indirizzi in ogni cella, 4 in tutto |
 | spiare il traffico | canale cifrato fra identità; il relay vede solo dati cifrati |
@@ -216,13 +217,13 @@ L'elettricità totale non dipende dal numero di partecipanti: 12–25 GWh per il
 
 | | Rete di prova (oggi) | Rete vera |
 |---|---|---|
-| il file della rete | dato con `--network` | dentro il programma (fatto) |
+| il file della rete | dato con `--network` | dentro il programma (fatto: `pzpeer run --puzzle N`) |
 | catena | regtest | Bitcoin vero |
 | primo contatto | indirizzi dati a mano | rete BitTorrent, nessun server nostro |
 | indirizzi privati | ammessi | rifiutati |
 | identità dei nodi | costo ridotto | costo pieno (qualche secondo di calcolo) |
 
-Il codice è lo stesso: cambia il file della rete e chi lo firma.
+Il codice è lo stesso: cambia solo il file della rete. Nessuno lo firma: la sua impronta è la rete.
 
 ### 6.2 "Scarico il programma e la rete c'è già": si può?
 
@@ -232,13 +233,13 @@ Sì, a due condizioni.
 
 | Strada | Pro | Contro |
 |---|---|---|
-| nodi d'ingresso nostri: 2 o 3 piccoli server, il cui indirizzo sta nel file firmato | semplice, già funziona | **scartata**: hai deciso di non avere server tuoi |
+| nodi d'ingresso nostri: 2 o 3 piccoli server, il cui indirizzo sta nel file della rete | semplice, già funziona | **scartata**: hai deciso di non avere server tuoi |
 | la tabella distribuita di BitTorrent (Mainline DHT): i nodi si annunciano sotto l'impronta della rete e si trovano lì | milioni di nodi, sempre accesa, nessun server nostro | **fatta**; qualche rete la blocca; chi mette molti nodi vicino alla nostra chiave può nascondere gli annunci (ritardo, non furto) |
 | contatti salvati dalla volta prima | già funziona | non aiuta chi entra per la prima volta |
 
 BitTorrent serve solo a **trovarsi**. I punti non si possono mettere lì: sono troppi (centinaia di miliardi) e quella rete non rileva coincidenze. Per i punti resta la nostra tabella Kademlia, che è fatta apposta.
 
-**Essere raggiungibili.** Quasi tutti i computer di casa stanno dietro un router. Chi non è raggiungibile partecipa comunque (cerca, pubblica, firma, anche attraverso il relay), ma non può fare da custode. Servono quindi alcuni nodi raggiungibili: i nodi d'ingresso, chi ha un server, chi apre la porta. L'apertura automatica della porta (`--upnp`) aumenta il loro numero: è fatta, e resta spenta finché l'utente non la chiede.
+**Essere raggiungibili.** Quasi tutti i computer di casa stanno dietro un router. Chi non è raggiungibile partecipa comunque (cerca, pubblica, firma, anche attraverso il relay), ma non può fare da custode. Servono quindi alcuni nodi raggiungibili: i nodi d'ingresso, chi ha un server, chi apre la porta. L'apertura automatica della porta aumenta il loro numero: è fatta, ed è accesa senza bisogno di chiederla: un nodo che ascolta chiede al router di far entrare la sua porta (PCP, poi NAT-PMP, poi UPnP), e `--no-portmap` la spegne.
 
 Ho valutato anche libp2p (troppo grande come dipendenza) e Nostr (comodo per trovarsi, ma richiede TLS e passa da server altrui). Restano scartati.
 
@@ -290,10 +291,10 @@ Esempio sul #71 (stima: 6 miliardi di chiavi al secondo per GPU):
 | tempo massimo | nessuno | 6,2 anni | nessuno | 7,5 mesi |
 
 **Come funziona:**
-- l'intervallo è diviso in blocchi grandi (2^40–2^44 chiavi: minuti o ore di una GPU);
+- l'intervallo è diviso in blocchi grandi: da 2^34 a 2^37 chiavi, con chiavi di prova da 32 bit, o da 2^42 a 2^45, con chiavi di prova da 40 bit (da secondi a ore di una GPU); le reti nel programma usano 2^44;
 - ognuno sceglie a caso un blocco non ancora fatto. Non servono prenotazioni: finché restano molti blocchi, due persone scelgono lo stesso molto di rado;
-- finito un blocco, lo dichiara nella stessa rete dei punti, con una **prova di lavoro**: le chiavi del blocco il cui hash comincia con un certo numero di zeri (qualche centinaio per blocco). Chi non ha davvero provato tutte le chiavi non le conosce;
-- chiunque può ricontrollare un pezzetto a caso di un blocco altrui. Se trova una chiave "con gli zeri" che manca dalla dichiarazione, ha una **prova di frode** che tutti possono verificare: i blocchi di quell'identità tornano da fare.
+- finito un blocco, lo dichiara nella stessa rete dei punti, con una **prova di lavoro**: le sue chiavi di prova, quelle il cui hash160 ha 32 o 40 bit uguali a quelli del bersaglio (i byte dall'8 all'11, o dall'8 al 12), 16 in media in un blocco di 2^36 o di 2^44. Chi non ha davvero provato tutte le chiavi non le conosce;
+- chiunque può ricontrollare un pezzetto a caso di un blocco altrui. Se trova una chiave di prova che manca dalla dichiarazione, ha una **prova di frode** che tutti possono verificare: i blocchi di quell'identità tornano da fare.
 
 **Perché mentire non paga.** Dichiarare fatto un blocco non fatto (per tenerselo) richiede le prove di lavoro, cioè farlo davvero.
 

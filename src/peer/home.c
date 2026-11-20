@@ -45,7 +45,7 @@
 #define RETRY_S 600                /* a kept pair whose session did not pay starts again after this, */
 #define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
 #define STATUS_S 600               /* the status line of the network, every 10 minutes */
-#define C_MEAN 1.06                /* the mean cost of the kangaroo in units of sqrt(W): KANG_C_MEAN of pzsolve (src/kangaroo.h) */
+#define C_MEAN 1.18                /* the mean cost of the walk of net-06 in units of sqrt(W): KANG_C_NET of pzsolve (src/kangaroo.h) */
 #define DP_CHANGES 64              /* changes of them a home remembers */
 
 /* the own points: x prefix -> index in dp.bin (the distance is read back from the file when it is needed: 16 bytes a point in memory) */
@@ -240,8 +240,8 @@ static void paid_save(home *h)
         uint8_t m[RECORD_LEN], t[RECORD_LEN];
         if (!s->used || !s->paid.paid_at) continue;
         record_encode(&s->mine, m), record_encode(&s->theirs, t);
-        btc_hex(s->eid, 32, a), btc_hex(s->paid.first, 32, b), btc_hex(m, RECORD_LEN, r0), btc_hex(t, RECORD_LEN, r1);
-        if (s->paid.second_len) btc_hex(s->paid.second, s->paid.second_len, sec);
+        pz_hex_encode(s->eid, 32, a), pz_hex_encode(s->paid.first, 32, b), pz_hex_encode(m, RECORD_LEN, r0), pz_hex_encode(t, RECORD_LEN, r1);
+        if (s->paid.second_len) pz_hex_encode(s->paid.second, s->paid.second_len, sec);
         else snprintf(sec, sizeof sec, "-");
         ok = fprintf(f, "%s %s %llu %s %s %s\n", a, b, (unsigned long long)s->paid.paid_at, sec, r0, r1) > 0;
     }
@@ -260,7 +260,7 @@ static void proved_add(home *h, const session_slot *s)
         FILE *f = sys_fopen(path, "r");
         uint8_t e[64];
         while (f && h->nproved < PROVED_MAX && fgets(line, sizeof line, f))
-            if (strlen(line) >= 129 && line[64] == ' ' && btc_unhex(line, 64, e) && btc_unhex(line + 65, 64, e + 32)) memcpy(h->proved[h->nproved++], e, 64);
+            if (strlen(line) >= 129 && line[64] == ' ' && pz_unhex(line, 64, e) && pz_unhex(line + 65, 64, e + 32)) memcpy(h->proved[h->nproved++], e, 64);
         if (f) fclose(f);
         return;
     }
@@ -269,7 +269,7 @@ static void proved_add(home *h, const session_slot *s)
     if (h->nproved == PROVED_MAX) return;
     memcpy(h->proved[h->nproved], s->mine.x, 32), memcpy(h->proved[h->nproved] + 32, s->eid, 32), h->nproved++;
     char a[65], b[65];
-    btc_hex(s->mine.x, 32, a), btc_hex(s->eid, 32, b);
+    pz_hex_encode(s->mine.x, 32, a), pz_hex_encode(s->eid, 32, b);
     FILE *f = sys_fopen(path, "a");
     if (!f || fprintf(f, "%s %s\n", a, b) < 0 || fflush(f) || !sys_sync(fileno(f))) say(h, "cannot write %s", path);
     if (f) fclose(f);
@@ -291,8 +291,8 @@ static void paid_load(home *h)
         record pair[2];
         session_slot *s = &h->s[n];
         if (strlen(a) != 64 || strlen(b) != 64 || strlen(r0) != 2 * RECORD_LEN || strlen(r1) != 2 * RECORD_LEN || !at || sl % 2 ||
-            sl > 2 * PAID_TX_MAX || !btc_unhex(sec, sl, s->paid.second) ||
-            !btc_unhex(a, 64, eid) || !btc_unhex(b, 64, s->paid.first) || !btc_unhex(r0, 2 * RECORD_LEN, m) || !btc_unhex(r1, 2 * RECORD_LEN, t) ||
+            sl > 2 * PAID_TX_MAX || !pz_unhex(sec, sl, s->paid.second) ||
+            !pz_unhex(a, 64, eid) || !pz_unhex(b, 64, s->paid.first) || !pz_unhex(r0, 2 * RECORD_LEN, m) || !pz_unhex(r1, 2 * RECORD_LEN, t) ||
             !record_decode(m, &s->mine) || !record_decode(t, &s->theirs) || !pieces_order(&s->mine, &s->theirs, pair))
             continue;
         pieces_eid(&h->net, pair, s->eid);
@@ -334,7 +334,7 @@ static bool found_key_locked(home *h, const uint8_t key[32])
         char line[300];
         uint8_t q33[33];
         while (!enc && fgets(line, sizeof line, f))
-            enc = !strncmp(line, "encrypt_pubkey=", 15) && btc_unhex(line + 15, 66, q33) && pz_ge_from_pubkey(&q, q33, 33);
+            enc = !strncmp(line, "encrypt_pubkey=", 15) && pz_unhex(line + 15, 66, q33) && pz_ge_from_pubkey(&q, q33, 33);
         fclose(f);
     }
     bool password = false;
@@ -343,7 +343,7 @@ static bool found_key_locked(home *h, const uint8_t key[32])
         uint8_t q65[65];
         const size_t l = strlen(v);
         password |= !strcmp(a, "--encrypt-password");
-        enc = !strcmp(a, "--encrypt-pubkey") && (l == 66 || l == 130) && btc_unhex(v, l, q65) && pz_ge_from_pubkey(&q, q65, l / 2);
+        enc = !strcmp(a, "--encrypt-pubkey") && (l == 66 || l == 130) && pz_unhex(v, l, q65) && pz_ge_from_pubkey(&q, q65, l / 2);
     }
     if (!enc && password)
         return say(h, "the key of the puzzle is known but is not shown: --encrypt-password was given, and pzsolve never stored its public key"
@@ -351,7 +351,7 @@ static bool found_key_locked(home *h, const uint8_t key[32])
     uint8_t h160[20], kid[4];
     pz_hash160(h->nf.pubkey33, 33, h160);
     if (h->chain == BTC_MAIN) pz_hash160_to_address(h160, addr, sizeof addr);
-    btc_hex(h->nf.pubkey33, 33, pub);
+    pz_hex_encode(h->nf.pubkey33, 33, pub);
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
@@ -368,13 +368,13 @@ static bool found_key_locked(home *h, const uint8_t key[32])
         ok = ok && pz_seal(pay, &q, key, &r) == PZ_SEAL_OK && pz_seal_encode(pay, sealed, sizeof sealed) > 0;
         pz_secure_zero(rb, sizeof rb), pz_secure_zero(&r, sizeof r);
         if (!ok) return say(h, "the key of the puzzle is known but could NOT be encrypted (no random numbers): the exchange is tried again"), false;
-        pz_seal_key_id(&q, kid), btc_hex(kid, 4, id);
+        pz_seal_key_id(&q, kid), pz_hex_encode(kid, 4, id);
         n = snprintf(buf, sizeof buf, "*** PRIVATE KEY FOUND (ENCRYPTED) ***\n\ndate:            %s\nnetwork:         %s\npuzzle:          %d\n%s%s%s"
                      "version:         %s\nencrypted to:    key id %s\n\nThe private key opens with the secret of that public key alone. At home:\n"
                      "    pzsolve decrypt-key FOUND.txt\n\n%s\n", date, h->nf.net, h->nf.puzzle, addr[0] ? "address:         " : "", addr,
                      addr[0] ? "\n" : "", PZ_VERSION, id, sealed);
     } else {
-        btc_hex(key, 32, hex);
+        pz_hex_encode(key, 32, hex);
         if (h->chain == BTC_MAIN) pz_privkey_to_wif(key, true, wif, sizeof wif);
         n = snprintf(buf, sizeof buf, "*** PRIVATE KEY FOUND ***\n\ndate:            %s\nnetwork:         %s\npuzzle:          %d\n%s%s%s"
                      "private key hex: 0x%s\n%s%s%spublic key:      %s\nversion:         %s\n\n"
@@ -417,7 +417,7 @@ static bool solo_payout(home *h, const char *found, bool last)
     FILE *f = sys_fopen(found, "rb");
     while (f && !have && fgets(line, sizeof line, f)) {
         const size_t n = strncmp(line, "private key hex: 0x", 19) ? 0 : strspn(line + 19, "0123456789abcdefABCDEF");
-        if (n >= 1 && n <= 64) memset(hex, '0', 64 - n), memcpy(hex + 64 - n, line + 19, n), have = btc_unhex(hex, 64, sec);
+        if (n >= 1 && n <= 64) memset(hex, '0', 64 - n), memcpy(hex + 64 - n, line + 19, n), have = pz_unhex(hex, 64, sec);
     }
     if (f) fclose(f);
     pz_secure_zero(line, sizeof line), pz_secure_zero(hex, sizeof hex);
@@ -448,7 +448,7 @@ static bool solo_payout(home *h, const char *found, bool last)
     }
     if (cfg->rpc && have) btc_rpc_done(&rpc);
     if (have && (sent || last)) {
-        btc_hex(sec, 32, hex);
+        pz_hex_encode(sec, 32, hex);
         const char *digits = hex + strspn(hex, "0");             /* as pzsolve shows it: no leading zeros */
         say_secret("THE KEY OF THE PUZZLE: 0x%s (also in %s)", *digits ? digits : "0", found);
         pz_secure_zero(hex, sizeof hex);
@@ -685,7 +685,7 @@ static void *session_main(void *arg)
     free(job);
     const home_cfg *cfg = h->cfg;
     char tag[17], why[300] = "";
-    btc_hex(s->eid, 8, tag);
+    pz_hex_encode(s->eid, 8, tag);
     const int me = memcmp(s->mine.owner, s->theirs.owner, 32) < 0 ? 0 : 1;
     say(h, "session %s: a coincidence with home %02x%02x%02x%02x...: the payout starts", tag, s->theirs.owner[0], s->theirs.owner[1],
         s->theirs.owner[2], s->theirs.owner[3]);
@@ -1130,7 +1130,7 @@ int home_run(const home_cfg *cfg)
     sys_on_stop(on_signal);
     const int nc = dht_start(h->d);
     char idhex[17];
-    btc_hex(h->id.xonly, 8, idhex);
+    pz_hex_encode(h->id.xonly, 8, idhex);
     say(h, "home %s... on network %s: %d contact%s, %s", idhex, h->nf.net, nc, nc == 1 ? "" : "s", cfg->listen_port ? "listening" : "not listening");
     if (h->prize_paid) say(h, "the prize of this network is paid: pzsolve is not started%s", access(h->foundpath, F_OK) ? "; the pieces of the key are still to be exchanged" : ", and the key is in FOUND.txt");
     int rc = nc < 0 || (!h->prize_paid && !start_pzsolve(h, err, sizeof err));

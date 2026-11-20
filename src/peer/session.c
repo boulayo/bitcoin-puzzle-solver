@@ -238,7 +238,7 @@ static void dbg_tx(const sess *s, const char *what, const btc_tx *tx)
     uint8_t raw[BTC_TX_MAX_SIZE];
     static _Thread_local char hex[2 * BTC_TX_MAX_SIZE + 1];
     const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
-    btc_hex(raw, n, hex);
+    pz_hex_encode(raw, n, hex);
     dbg("session %s tx %s: %s", s->tag, what, hex);
 }
 
@@ -268,7 +268,7 @@ static bool limit_read(const char *path, uint8_t (*key)[32], unsigned *count, in
     int got;
     bool ok = true;
     while (ok && (got = fscanf(f, "%64s %u", hex, &v)) == 2) {
-        ok = *n < LIMIT_LINES && strlen(hex) == 64 && btc_unhex(hex, 64, key[*n]);
+        ok = *n < LIMIT_LINES && strlen(hex) == 64 && pz_unhex(hex, 64, key[*n]);
         if (ok) count[(*n)++] = v;
     }
     ok = ok && got == EOF && !ferror(f);
@@ -283,7 +283,7 @@ static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *co
     if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp) return false;
     FILE *f = fopen(tmp, "w");
     bool ok = f != NULL;
-    for (int i = 0; ok && i < n; i++) btc_hex(key[i], 32, hex), ok = !count[i] || fprintf(f, "%s %u\n", hex, count[i]) > 0;
+    for (int i = 0; ok && i < n; i++) pz_hex_encode(key[i], 32, hex), ok = !count[i] || fprintf(f, "%s %u\n", hex, count[i]) > 0;
     ok = ok && fflush(f) == 0 && sys_sync(fileno(f));
     if (f) ok = fclose(f) == 0 && ok;
     return ok && sys_replace(tmp, path);
@@ -732,7 +732,7 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     uint8_t eid[32];
     why[0] = 0;
     /* the session id names the session in the debug log, as on the terminal (the x of the own point if the records are no pair) */
-    if (pieces_order(&c->mine, &c->theirs, pair)) pieces_eid(c->net, pair, eid), btc_hex(eid, 8, s.tag);
+    if (pieces_order(&c->mine, &c->theirs, pair)) pieces_eid(c->net, pair, eid), pz_hex_encode(eid, 8, s.tag);
     else snprintf(s.tag, sizeof s.tag, "%s", dbg_hex(c->mine.x, 32));
     if (!hello(&s)) return SESSION_FAILED;
     s.wait_ms = c->timeout_ms;

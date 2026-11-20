@@ -22,6 +22,9 @@ void pz_hash160(const uint8_t *data, size_t len, uint8_t out[20]);       /* RIPE
  * the initial values of FIPS 180-4). RIPEMD-160: x holds the sixteen words of the block already converted from little-endian. */
 void pz_sha256_compress(uint32_t state[8], const uint32_t w_in[16]);
 void pz_ripemd160_compress(uint32_t state[5], const uint32_t x[16]);
+/* The end of a SHA-256 by pieces: the last n bytes (n < 64) at rest of a message of total bytes, whose whole blocks went through the
+ * compression into state; the padding, and the digest into out. */
+void pz_sha256_tail(uint32_t state[8], const uint8_t *rest, size_t n, uint64_t total, uint8_t out[32]);
 
 /* HASH160 of the compressed public key made of the parity byte 02 (parity even) or 03 (odd, any non-zero parity & 1) and the
  * 32-byte big-endian x coordinate. */

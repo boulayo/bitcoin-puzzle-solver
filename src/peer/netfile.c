@@ -9,6 +9,7 @@
 #include <pzcore/address.h>
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
+#include <pzcore/u256.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,25 +29,8 @@ static int key_index(const char *k, const char *const *list, size_t n)
     return -1;
 }
 
-static int hexval(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 /* exactly 2n hex digits */
-static bool hex_exact(const char *s, uint8_t *out, size_t n)
-{
-    if (strlen(s) != 2 * n) return false;
-    for (size_t i = 0; i < n; i++) {
-        const int a = hexval(s[2 * i]), b = hexval(s[2 * i + 1]);
-        if (a < 0 || b < 0) return false;
-        out[i] = (uint8_t)(a << 4 | b);
-    }
-    return true;
-}
+static bool hex_exact(const char *s, uint8_t *out, size_t n) { return strlen(s) == 2 * n && pz_unhex(s, 2 * n, out); }
 
 static bool small_uint(const char *s, unsigned max, unsigned *out)
 {

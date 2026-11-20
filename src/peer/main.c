@@ -57,7 +57,7 @@ static int usage_to(FILE *f)
                     "  --allow-private      take loopback and private addresses on a main-chain network (other chains take them)\n"
                     "  --verbose            what the node does, on stderr\n"
                     "  --debug FILE         every message, step and answer of the chain, with its time, into FILE (no secret is written)\n"
-                    "  --store-gb N         the records kept for others, in GB of disk (default 5; their index takes up to two fifths of it in RAM)\n"
+                    "  --store-gb N         the records kept for others, in GB of disk (default 5; their index takes 30 to 60 %% of it in RAM)\n"
                     "options of run:\n"
                     "  --payout ADDRESS          where the share of this home goes (any address: 1..., 3..., bc1q..., bc1p...); kept in the\n"
                     "                            folder, and asked on the terminal at the first start when it is not given\n"
@@ -173,8 +173,8 @@ static void on_signal(int sig)
 static void print_alert(void *user, const record *mine, const record *theirs, bool merge)
 {
     char x[65], o[65], ts[16];
-    btc_hex(mine->x, 32, x);
-    btc_hex(theirs->owner, 32, o);
+    pz_hex_encode(mine->x, 32, x);
+    pz_hex_encode(theirs->owner, 32, o);
     printf("%s alert (%s): x %s, the other owner %s\n", stamp(ts), merge ? "merge" : "useful", x, o);
     fflush(stdout);
 }
@@ -261,7 +261,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     }
     sys_on_stop(on_signal);
     const int n = dht_start(d);
-    btc_hex(id.xonly, 32, idhex);
+    pz_hex_encode(id.xonly, 32, idhex);
     char ts[16];
     if (n < 0) fprintf(stderr, "cannot listen on port %ld\n", port);
     else if (port) printf("%s node %s, listening on port %u, %d contact%s\n", stamp(ts), idhex, dht_port(d), n, n == 1 ? "" : "s");

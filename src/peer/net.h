@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* net.h - TCP and the encrypted channel between two nodes (docs/en/NETWORK.md 7.1). One TCP connection per exchange: connect, the Noise XX
- * handshake with the prologue "pznet1" || F, one request frame, one answer frame, close. A session keeps its connection and goes on with
- * frames. This is the only file of pzpeer that calls the sockets of the system (POSIX; Windows gets a shim of its own), and every wait has
- * a deadline: a peer that stops talking costs a timeout, never a thread.
+ * handshake with the prologue "pznet4" || F, one request frame, one answer frame, close. A session (messages 16 to 31) keeps its connection
+ * and goes on with frames; a relay keeps those of the two homes it joins (below). The sockets are those of sys.h (sys_posix.c,
+ * sys_win.c), and every wait has a deadline: a peer that stops talking costs a timeout, never a thread.
  *
  * Both sides check that the node ID of the other's static key has the leading zero bits of the network; a dialler that knows whom it calls
  * also checks the identity before it shows its own (the initiator of XX sends its static key last). The initiator tells, in its last

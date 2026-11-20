@@ -3,6 +3,7 @@
 /* dbg.c - see dbg.h. */
 #include "dbg.h"
 #include "sys.h"
+#include <pzcore/u256.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -43,8 +44,6 @@ void dbg(const char *fmt, ...)
 const char *dbg_hex(const uint8_t *p, size_t n)
 {
     static _Thread_local char out[17];
-    if (n > 8) n = 8;
-    for (size_t i = 0; i < n; i++) snprintf(out + 2 * i, 3, "%02x", p[i]);
-    out[2 * n] = 0;
+    pz_hex_encode(p, n > 8 ? 8 : n, out);
     return out;
 }

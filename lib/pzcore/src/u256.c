@@ -1,17 +1,34 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* u256.c - parsing and printing of 256-bit integers, and the group-order arithmetic. */
+/* u256.c - hexadecimal digits and bytes, parsing and printing of 256-bit integers, and the group-order arithmetic. */
 #include <pzcore/u256.h>
 #include <string.h>
 
 const pz_u256 pz_secp256k1_n = {{0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL, 0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL}};
 
-static int hexval(char c)
+int pz_hex_digit(unsigned c)
 {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
+    if (c - '0' < 10) return (int)(c - '0');
+    c |= 0x20;
+    return c - 'a' < 6 ? (int)(c - 'a' + 10) : -1;
+}
+
+void pz_hex_encode(const uint8_t *p, size_t n, char *out)
+{
+    static const char X[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) out[2 * i] = X[p[i] >> 4], out[2 * i + 1] = X[p[i] & 15];
+    out[2 * n] = 0;
+}
+
+bool pz_unhex(const char *s, size_t len, uint8_t *out)
+{
+    if (len % 2 || (len && !s)) return false;
+    for (size_t i = 0; i < len / 2; i++) {
+        const int hi = pz_hex_digit((unsigned char)s[2 * i]), lo = pz_hex_digit((unsigned char)s[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = (uint8_t)(hi << 4 | lo);
+    }
+    return true;
 }
 
 bool pz_u256_from_hex(pz_u256 *r, const char *s)
@@ -23,7 +40,7 @@ bool pz_u256_from_hex(pz_u256 *r, const char *s)
     if (n == 0 || n > 64) return false;
     pz_u256 v = pz_u256_zero();
     for (size_t i = 0; i < n; i++) {
-        const int d = hexval(s[i]);
+        const int d = pz_hex_digit((unsigned char)s[i]);
         if (d < 0) return false;
         v = pz_u256_shl(&v, 4);
         v.w[0] |= (uint64_t)d;

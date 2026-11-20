@@ -150,7 +150,8 @@ campaigns/NAME/
 ```
 
 * **Stopping**: Ctrl-C, `kill` or closing the terminal (SIGHUP; under `nohup` it is ignored). The state is saved. A second
-  Ctrl-C after half a second exits at once (and loses at most the last minute of work).
+  Ctrl-C after half a second exits at once (and loses at most the last minute of work; a kangaroo also loses the steps of its walkers
+  since their last distinguished points, section 9.2).
 * **Resuming**: the same command (`hunt -p N`, or `hunt -c NAME`). The seed and the parameters that define the search
   cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-m`, `--chunk-bits`, `--bsgs-entries` or `--encrypt-pubkey` different from those of the
   existing campaign, the program **refuses** with an error (it does not silently ignore them); you can however change threads, GPUs,
@@ -169,7 +170,8 @@ campaigns/NAME/
   The other commands exit with 0 when they succeed and 2 on an error (`merge` too, when some file could not be merged; it exits with 0
   both when the merge found the key, which it shows and saves in `FOUND.txt`, and when there is no collision yet); `selftest` and
   `doctor` exit with 1 when a check failed, and `decrypt-key` with 1 when the secret does not open the line or the address does not match.
-* A restart loses at most the work of the blocks in progress (a few seconds per worker); the rest is never redone. In BSGS the
+* A restart loses at most the work of the blocks in progress (a few seconds per worker); the rest is never redone. The kangaroo loses
+  nothing after a stop that saved its walkers in `herd.bin`; after a run that did not stop well they start anew (section 9.2). In BSGS the
   table is rebuilt (a few minutes) unless you use `--table`.
 * A campaign that has already found the key does not start again: it shows `FOUND.txt`.
 
@@ -515,8 +517,8 @@ If the computer goes to sleep or hibernates while a campaign is running:
   or in the speeds, writes `system suspension detected (about … without computing): not counted in times and speeds; saving the state` in the
   log and saves the state at once;
 * if after waking up the driver has reset the GPU and a launch fails, the GPU is reopened, checked again with the same self-test as at startup
-  and put back to work (`GPU[0]: device resumed (…)`; the kangaroo herd on the GPU restarts from new positions: only the path since the last
-  distinguished point is lost, the points already found are safe). The launches that follow a failure are a quarter of the size they were (a card shared
+  and put back to work (`GPU[0]: device resumed (…)`; the kangaroo herd on the GPU restarts from new positions: the path of each of its walkers since
+  its last distinguished point is lost, the points already found are safe). The launches that follow a failure are a quarter of the size they were (a card shared
   with a game or the desktop can be slowed down so much that a launch runs past the 2 s of the watchdog of the system, and would fail again), and grow back
   by themselves; the log says the new size. The wait before a new attempt (up to 30 s) ends at once on Ctrl-C. The GPU is excluded after more than 3
   failures in a row, or more than 40 in all (ten minutes of good launches after a failure reset that count, so that a laptop that sleeps every night
@@ -526,7 +528,11 @@ If the computer goes to sleep or hibernates while a campaign is running:
   starts pzsolve: it gives pzsolve a pipe it never writes, and when that program ends, also killed or crashed, the pipe closes and
   pzsolve ends with it instead of searching on alone (`pzpeer run` does so).
 
-The state on disk is never at risk: every write is atomic and the checkpoint is every 60 s.
+The state on disk is never at risk: every write is atomic and the checkpoint is every 60 s. The walkers of a kangaroo are saved in
+`herd.bin` when the campaign stops (Ctrl-C, `kill`, the closing of the terminal, the end of the input of `--stop-with-input`), and the next
+run goes on from where they stood. A run that ends without stopping (a crash, `kill -9`, a power cut, a battery that runs out during the
+sleep, a second Ctrl-C) saves none: the next run starts its walkers anew, and their steps since their last distinguished points are lost,
+about `walkers × 2^dp-bits` (ALGORITHMS.md section 4.7).
 
 ### 9.3 Symptoms
 
@@ -547,7 +553,7 @@ The state on disk is never at risk: every write is atomic and the checkpoint is 
 | `CUDA driver not found` (in `devices`) | normal without an NVIDIA card; with an NVIDIA card, reinstall the graphics driver |
 | `PZ_ISA=…: the CPU does not support this instruction set` | remove the variable `PZ_ISA` (the program chooses), or set `PZ_ISA=baseline` |
 | `NAME=TEXT ignored (…)` | an environment variable has a value the program cannot use and is ignored: correct or remove it (section 7.10) |
-| `distinguished-point table full (RAM limit): halving the density of stored points` | expected in about one run in five when memory sets dp-bits (ALGORITHMS.md section 4.4): the search goes on with a slightly later collision; a larger `--mem` helps only if the RAM is there |
+| `distinguished-point table full (RAM limit): halving the density of stored points` | expected when memory sets dp-bits: in about one run in five at most with a `--mem` that is a power of two in GiB, more often with other limits, the default among them (ALGORITHMS.md section 4.4); the search goes on with a slightly later collision; a larger `--mem` helps only if the RAM is there |
 | very low speed | check `devices` (how many lanes/GPUs are used) and that no other process is running |
 | slow first BSGS run | the freshly allocated RAM is "touched" for the first time (on some virtual machines this costs seconds per GiB) |
 

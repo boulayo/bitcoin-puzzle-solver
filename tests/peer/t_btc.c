@@ -22,10 +22,10 @@ static void test_hex(void)
 {
     uint8_t b[40], h[32];
     char s[81];
-    CHECK(btc_unhex("00ff7fA0bC", 10, b) && !memcmp(b, "\x00\xff\x7f\xa0\xbc", 5));
-    btc_hex(b, 5, s);
+    CHECK(pz_unhex("00ff7fA0bC", 10, b) && !memcmp(b, "\x00\xff\x7f\xa0\xbc", 5));
+    pz_hex_encode(b, 5, s);
     CHECK_STR(s, "00ff7fa0bc");
-    CHECK(!btc_unhex("abc", 3, b) && !btc_unhex("0g", 2, b) && !btc_unhex("g0", 2, b) && !btc_unhex(" 0", 2, b) && btc_unhex("", 0, b));
+    CHECK(!pz_unhex("abc", 3, b) && !pz_unhex("0g", 2, b) && !pz_unhex("g0", 2, b) && !pz_unhex(" 0", 2, b) && pz_unhex("", 0, b));
     CHECK(btc_hash_from_hex("f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16", h));
     CHECK(h[0] == 0x16 && h[31] == 0xf4);   /* internal order: the reverse */
     btc_hash_to_hex(h, s);

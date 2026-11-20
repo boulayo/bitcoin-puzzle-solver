@@ -43,7 +43,7 @@ bool block_bits_ok(unsigned bits);
 int block_min_proofs(unsigned bits);
 /* The key of the custodians of the claims of block index. */
 void block_key(const block_net *net, uint64_t index, uint8_t key[32]);
-/* Whether key (32 bytes, big-endian) is a proof key of the network: bytes 8 to 12 of its hash160 are the target's. */
+/* Whether key (32 bytes, big-endian) is a proof key of the network: bytes 8 to 11, or 8 to 12 (above), of its hash160 are the target's. */
 bool block_proof_key(const secp256k1_context *ctx, const block_net *net, const uint8_t key[32]);
 /* The claim of a block from the near misses of its scan (nkeys keys of 32 bytes: the lines of near.txt, in any order, with repeats and
  * keys of other blocks): its proof keys, sorted, signed by id. False with fewer than the minimum, or more than a claim holds. */

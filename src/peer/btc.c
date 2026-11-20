@@ -54,46 +54,17 @@ static uint8_t *put_size(uint8_t *o, uint64_t v)
 
 /* ---- hex ---- */
 
-void btc_hex(const uint8_t *p, size_t n, char *out)
-{
-    static const char X[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; i++) {
-        out[2 * i] = X[p[i] >> 4];
-        out[2 * i + 1] = X[p[i] & 15];
-    }
-    out[2 * n] = 0;
-}
-
-static int hex_digit(unsigned c)
-{
-    if (c - '0' < 10) return (int)(c - '0');
-    c |= 0x20;
-    if (c - 'a' < 6) return (int)(c - 'a' + 10);
-    return -1;
-}
-
-bool btc_unhex(const char *s, size_t len, uint8_t *out)
-{
-    if (len % 2 || (len && !s)) return false;
-    for (size_t i = 0; i < len / 2; i++) {
-        const int hi = hex_digit((unsigned char)s[2 * i]), lo = hex_digit((unsigned char)s[2 * i + 1]);
-        if (hi < 0 || lo < 0) return false;
-        out[i] = (uint8_t)(hi << 4 | lo);
-    }
-    return true;
-}
-
 void btc_hash_to_hex(const uint8_t h[32], char out[65])
 {
     uint8_t r[32];
     for (int i = 0; i < 32; i++) r[i] = h[31 - i];
-    btc_hex(r, 32, out);
+    pz_hex_encode(r, 32, out);
 }
 
 bool btc_hash_from_hex(const char *s, uint8_t h[32])
 {
     uint8_t r[32];
-    if (!s || strnlen(s, 65) != 64 || !btc_unhex(s, 64, r)) return false;
+    if (!s || strnlen(s, 65) != 64 || !pz_unhex(s, 64, r)) return false;
     for (int i = 0; i < 32; i++) h[i] = r[31 - i];
     return true;
 }

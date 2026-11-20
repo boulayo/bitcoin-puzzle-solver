@@ -90,7 +90,7 @@ int sweep_main(int argc, char **argv)
     char hex[80] = "";
     if (!fgets(hex, sizeof hex, stdin)) hex[0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;
-    const bool key_ok = strlen(hex) == 64 && btc_unhex(hex, 64, sec) && btc_key_script(sec, spk);
+    const bool key_ok = strlen(hex) == 64 && pz_unhex(hex, 64, sec) && btc_key_script(sec, spk);
     pz_secure_zero(hex, sizeof hex);
     if (!key_ok) return fprintf(stderr, "the key must be 64 hex digits on the standard input\n"), 1;
 
@@ -123,7 +123,7 @@ int sweep_main(int argc, char **argv)
     char id[65];
     uint8_t txid[32];
     const size_t len = btc_tx_serialize(&tx, raw, sizeof raw);
-    btc_tx_txid(&tx, txid), btc_hash_to_hex(txid, id), btc_hex(raw, len, text);
+    btc_tx_txid(&tx, txid), btc_hash_to_hex(txid, id), pz_hex_encode(raw, len, text);
     printf("coins: %d, %llu satoshis; to %s: %llu satoshis; fee %llu satoshis (%llu sat/vB)\ntxid: %s\n\n%s\n\n", n, (unsigned long long)total, to,
            (unsigned long long)(total - fee), (unsigned long long)fee, (unsigned long long)(rate / 1000), id, text);
     if (n < listed) printf("%d smaller coins are left where they are: those worth their fee can go in a second transaction, once this one is in a block.\n\n", listed - n);

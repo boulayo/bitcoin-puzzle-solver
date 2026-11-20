@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* chain_spv.c - session_chain on Electrum servers, with proofs (see chain_spv.h). Every operation opens a connection to each server, asks
- * all of them and keeps what is proven; the servers that do not answer are left out of that operation. */
+/* chain_spv.c - session_chain on Electrum servers, with proofs (see chain_spv.h). Every operation asks all the servers, one operation at a
+ * time, on connections kept from one operation to the next, and keeps what is proven; the servers that do not answer are left out of that
+ * operation, and one that takes no connection is left alone for ten minutes. */
 #include "chain_spv.h"
 #include "electrum.h"
 #include "sys.h"
@@ -53,7 +54,7 @@ static bool get_tx(electrum *e, const uint8_t txid[32], uint8_t **raw, size_t *l
     const char *hex = json_str(res);
     const size_t hl = hex ? strlen(hex) : 0;
     bool ok = hl >= 2 && hl % 2 == 0 && hl / 2 != 64 && (*raw = malloc(hl / 2)) != NULL;
-    ok = ok && btc_unhex(hex, hl, *raw) && btc_txid(*raw, hl / 2, got) && !memcmp(got, txid, 32);
+    ok = ok && pz_unhex(hex, hl, *raw) && btc_txid(*raw, hl / 2, got) && !memcmp(got, txid, 32);
     json_free(&d);
     if (!ok) {
         free(*raw);
@@ -109,7 +110,7 @@ static bool fetch_headers(chain_spv *c, electrum *e, uint64_t at, uint64_t to)
         const char *hex = json_str(json_get(res, "hex"));
         bool ok = hex && json_u64(json_get(res, "count"), &count) && count >= 1 && count <= SPV_PERIOD && strlen(hex) == count * 2 * SPV_HEADER;
         uint8_t *h = ok ? malloc(count * SPV_HEADER) : NULL;
-        ok = h && btc_unhex(hex, count * 2 * SPV_HEADER, h);
+        ok = h && pz_unhex(hex, count * 2 * SPV_HEADER, h);
         if (ok) {                                              /* all of them, or else the valid ones up to the first that is not */
             const uint64_t now = (uint64_t)time(NULL);
             pthread_mutex_lock(&c->mu);

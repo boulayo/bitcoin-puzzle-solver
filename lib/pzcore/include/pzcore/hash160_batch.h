@@ -4,11 +4,12 @@
  *
  * A compressed public key is 33 bytes: 02 or 03 (the parity of y) and the 32-byte x. Hashing one with pz_hash160 costs about 0.7 us;
  * these functions hash 8 or 16 of them in the time the scalar code needs for one or two, which is what a scan over millions of keys
- * (an address search) needs. Both steps are done in 32-bit lanes of a vector register, one key per lane.
+ * (an address search) needs. RIPEMD-160 runs in 32-bit lanes of a vector register, one key per lane, and so does SHA-256 except in "neon",
+ * "neon2" and "shani", which run it on the SHA instructions of the CPU, one compression per key with several keys in flight.
  *
  * The implementation is chosen at run time, the first time it is needed: AVX-512 (16 keys per step), AVX2 (8) on x86-64; NEON with the
  * ARMv8 SHA-256 instructions (8 or 4) on aarch64 CPUs that have them; otherwise portable vector code (4) that needs no particular
- * instruction set; and, only if you ask for it, the scalar reference (1). On x86-64 CPUs that also have the SHA extensions (AMD Zen 2 and
+ * instruction set; and, only if you ask for it, the scalar reference (1). On x86-64 CPUs that also have the SHA extensions (AMD Zen and
  * later, Intel Ice Lake and later) "shani" is there too: AVX2 for RIPEMD-160 and the SHA instructions for SHA-256 (8 keys per step). It is
  * never the default, because whether it is faster depends on the CPU: select it by name and measure. All of them give the same bits.
  * The names are "avx512", "avx2", "shani", "neon2", "neon", "portable" and "scalar".

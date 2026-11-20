@@ -4,17 +4,10 @@
 #include "json.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <pzcore/u256.h>
 #include <string.h>
 
 static bool is_digit(unsigned c) { return c - '0' < 10; }
-
-static int hex_digit(unsigned c)
-{
-    if (c - '0' < 10) return (int)(c - '0');
-    c |= 0x20;
-    if (c - 'a' < 6) return (int)(c - 'a' + 10);
-    return -1;
-}
 
 /* the length of the valid UTF-8 sequence at p (RFC 3629: no overlong form, no surrogate, nothing above U+10FFFF), or 0 */
 static size_t utf8_len(const unsigned char *p, const unsigned char *end)
@@ -72,7 +65,7 @@ static long hex4(const unsigned char *p)
 {
     long v = 0;
     for (int i = 0; i < 4; i++) {
-        const int d = hex_digit(p[i]);
+        const int d = pz_hex_digit(p[i]);
         if (d < 0) return -1;
         v = v << 4 | d;
     }

@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pzcore/defs.h>
+#include <pzcore/u256.h>
 
 #ifndef PZ_VERSION
 #define PZ_VERSION "0.0.0-dev"
@@ -116,9 +116,8 @@ bool pz_parse_rate(const char *s, double *out);
 enum { PZ_KV_ANYWHERE = 1, PZ_KV_LAST = 2, PZ_KV_PAD = 4 };
 const char *pz_kv_find(const char *text, const char *key, char sep, unsigned flags);
 
-/* Hex helpers. */
-int pz_hex_decode(const char *hex, u8 *out, size_t maxlen);   /* returns bytes or -1 */
-void pz_hex_encode(const u8 *in, size_t n, char *out);        /* out needs 2n+1 */
+/* hex, optionally behind 0x, into at most maxlen bytes: their number, or -1 (pz_hex_encode is in pzcore/u256.h) */
+int pz_hex_decode(const char *hex, u8 *out, size_t maxlen);
 
 /* 128-bit decimal/hex formatting (buf >= 41 bytes). */
 char *u128_to_dec(u128 v, char *buf);

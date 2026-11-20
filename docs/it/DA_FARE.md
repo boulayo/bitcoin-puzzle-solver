@@ -106,7 +106,7 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 
 | | Decisione | Stato |
 |---|---|---|
-| D1 | Linux, Windows e macOS | Linux: fatto. Windows: `pzpeer.exe` e `pzsign.exe` passano i test sulla macchina Windows della CI, e la prova completa con tre case passa con l'emulatore Wine. macOS: compilazione e test passano sulla CI. Manca una rete intera provata su un Windows vero e su un Mac |
+| D1 | Linux, Windows e macOS | Linux: fatto. Windows: `pzpeer.exe` e `pzsign.exe` passano i test sulla macchina Windows della CI, e la prova completa con tre case passa con l'emulatore Wine. macOS: compilazione e test passano sulla CI su Apple silicon e su Intel, pzsign e la firma a due compresi (dal 20 novembre anche su Intel, sotto Rosetta). Manca una rete intera provata su un Windows vero e su un Mac |
 | D2 | pzsign già compilato, nello stesso archivio di pzsolve e pzpeer | È in C++ e contiene cb-mpc (MIT), una copia di libsecp256k1 (MIT) e OpenSSL (Apache-2.0): licenze compatibili con la nostra, nessun obbligo di ricompilazione come quello che dava la libreria GMP |
 | D3 | Tutto resta nel ramo `rete-condivisa`. Nel repository niente italiano fuori da `docs/it` | controllato: non ce n'è |
 | D4 | Prova pubblica fatta da te, con il registro dettagliato `--debug FILE` | il registro c'è |
@@ -149,18 +149,24 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 
 ### 3.3 Semplificazioni proposte (circa 1000 righe in meno)
 
+Fatte G3, G6, G7 e G8: 92 righe in meno nel codice nostro e 7418 nella copia di cb-mpc. Le altre sono state valutate e lasciate, con il motivo.
+
 | | Proposta | Righe |
 |---|---|---|
-| G1 | Un solo strato di sistema per `src` e `src/peer` | −250 |
-| G2 | Una tabella delle opzioni, e una dei campi `chiave=valore` dei file | −200 |
-| G3 | Le funzioni per l'esadecimale stanno in 9 posti: una coppia in pzcore | −70 |
-| G4 | I nove `eng_*.c` e i sei `h160_*.c` cambiano solo per le definizioni: un file per famiglia compilato più volte | −150 |
-| G5 | `rt.c`: tredici scelte fra CUDA e OpenCL diventano una tabella di funzioni | −40 |
-| G6 | Tre riempimenti di SHA-256 in pzcore (hash.c, kdf.c): uno | −40 |
+| G1 | Un solo strato di sistema per `src` e `src/peer` | **Valutato, non fatto (20 novembre):** le funzioni in comune sono una dozzina, ma con regole diverse: in pzpeer ogni file e socket non passa ai processi figli, i file segreti rifiutano i collegamenti e le risposte sono vero o falso; lo strato di pzsolve legge anche le sue variabili d'ambiente. Unirli porterebbe in pzpeer le dipendenze di pzsolve, o cambierebbe come pzsolve apre i suoi file |
+| G2 | Una tabella delle opzioni, e una dei campi `chiave=valore` dei file | **Valutato, non fatto:** il file di rete ha già la sua tabella (le chiavi e un controllo per chiave), e in pzpeer ogni opzione è una riga; una tabella generica aggiungerebbe il codice che la legge senza togliere righe |
+| G3 | Le funzioni per l'esadecimale stanno in 9 posti: una coppia in pzcore | **Fatto (20 novembre):** `pz_hex_digit`, `pz_hex_encode` e `pz_unhex` in pzcore (u256.h), usate da pzsolve e da pzpeer; via le sette copie |
+| G4 | I nove `eng_*.c` e i sei `h160_*.c` cambiano solo per le definizioni: un file per famiglia compilato più volte | **Valutato, non fatto:** ogni file è già una dozzina di righe di definizioni attorno a un'unica implementazione inclusa; compilare un file più volte sposterebbe quelle righe nel Makefile, e i nomi dei file non direbbero più quale motore c'è |
+| G5 | `rt.c`: tredici scelte fra CUDA e OpenCL diventano una tabella di funzioni | **Valutato, non fatto:** le scelte sono righe brevi e si leggono dove servono; una tabella di funzioni aggiunge un passaggio in più per seguire il codice e toglie poche righe |
+| G6 | Tre riempimenti di SHA-256 in pzcore (hash.c, kdf.c): uno | **Fatto (20 novembre):** `pz_sha256_tail` in hash.c fa il riempimento per `pz_sha256` e per l'HMAC; via `sha_final` e la struttura di appoggio di kdf.c |
 | G7 | La copia di cb-mpc tiene 7400 righe che pzsign non usa | **Fatto (20 novembre):** tolti 16 sorgenti e 46 intestazioni, 7418 righe; nessun sorgente usato cambia, e le prove della firma passano |
 | G8 | Togliere i numeri di sequenza dei record (con C1) | fatto il 18 novembre, con C1 |
 
 ### 3.4 Documenti da allineare
+
+**Fatto (20 novembre)**, tutto l'elenco qui sotto, controllato sul codice. Due cose erano da correggere nel codice e non nei documenti: le
+stime di tempo di una rete ora contano 1,18·√W (`KANG_C_NET` in pzsolve, `C_MEAN` in pzpeer), il costo misurato del cammino di net-06;
+le chiavi di prova della ricerca lineare sono 16 in media in blocchi di 2^34-2^37 o 2^42-2^45 chiavi, non "da 40 a 48 bit".
 
 - `PROGETTO_RETE.md`: UPnP è acceso se non lo si spegne (6.2 dice il contrario); nessuno firma il file della rete (6.1, 6.2); i
   fallimenti di firma sono 3 per punto proprio e non per coppia (3.2, 5.2); le chiavi di prova della ricerca lineare sono 16 e i

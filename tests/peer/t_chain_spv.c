@@ -195,7 +195,7 @@ static int find_tx(const char *hex)
     return -1;
 }
 
-static void hexcat(char *out, const uint8_t *p, size_t n) { btc_hex(p, n, out + strlen(out)); }
+static void hexcat(char *out, const uint8_t *p, size_t n) { pz_hex_encode(p, n, out + strlen(out)); }
 
 /* the result of a call, as JSON text in out; false: an error */
 static bool answer(server *s, const char *method, const json_val *p, char *out, size_t cap)
@@ -289,7 +289,7 @@ static bool answer(server *s, const char *method, const json_val *p, char *out, 
         uint8_t raw[600], id[32];
         char hex[65];
         const size_t hl = a0 ? strlen(a0) : 0;
-        if (!hl || hl / 2 > sizeof raw || !btc_unhex(a0, hl, raw) || !btc_tx_parse(&tx, raw, hl / 2) || !btc_tx_txid(&tx, id)) return false;
+        if (!hl || hl / 2 > sizeof raw || !pz_unhex(a0, hl, raw) || !btc_tx_parse(&tx, raw, hl / 2) || !btc_tx_txid(&tx, id)) return false;
         s->broadcasts++;
         btc_hash_to_hex(id, hex);
         if (!s->l.drop_broadcast && find_tx(hex) < 0) add_tx(&tx);

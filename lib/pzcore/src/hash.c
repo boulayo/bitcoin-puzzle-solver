@@ -3,6 +3,7 @@
 /* hash.c - SHA-256, RIPEMD-160 and HASH160 (portable scalar code). */
 #include <pzcore/hash.h>
 #include <pzcore/cpu.h>
+#include <pzcore/seal.h>
 #include <pzcore/impl/hash_tables.h>
 #include <stdatomic.h>
 #include "bytes.h"
@@ -65,22 +66,24 @@ static void sha256_blocks(uint32_t st[8], const uint8_t *data, size_t nblocks)
     }
 }
 
+void pz_sha256_tail(uint32_t st[8], const uint8_t *rest, size_t n, uint64_t total, uint8_t out[32])
+{
+    uint8_t blk[128] = {0};
+    if (n) memcpy(blk, rest, n);
+    blk[n] = 0x80;
+    const size_t nb = n + 9 > 64 ? 2 : 1;
+    for (int j = 0; j < 8; j++) blk[nb * 64 - 1 - j] = (uint8_t)(total * 8 >> (8 * j));
+    sha256_blocks(st, blk, nb);
+    for (int j = 0; j < 8; j++) store_be32(out + j * 4, st[j]);
+    pz_secure_zero(blk, sizeof blk);          /* the end of an HMAC is in it */
+}
+
 void pz_sha256(const uint8_t *data, size_t len, uint8_t out[32])
 {
     uint32_t st[8];
     memcpy(st, pz_sha256_h0, sizeof st);
-    uint8_t blk[128];
-    const size_t full = len / 64;
-    sha256_blocks(st, data, full);
-    const size_t rem = len - full * 64;
-    memset(blk, 0, sizeof blk);
-    if (rem) memcpy(blk, data + full * 64, rem);
-    blk[rem] = 0x80;
-    const size_t nb = rem + 9 > 64 ? 2 : 1;
-    const uint64_t bits = (uint64_t)len * 8;
-    for (int j = 0; j < 8; j++) blk[nb * 64 - 1 - j] = (uint8_t)(bits >> (8 * j));
-    sha256_blocks(st, blk, nb);
-    for (int j = 0; j < 8; j++) store_be32(out + j * 4, st[j]);
+    sha256_blocks(st, data, len / 64);
+    pz_sha256_tail(st, len ? data + len / 64 * 64 : data, len % 64, len, out);
 }
 
 void pz_sha256d(const uint8_t *data, size_t len, uint8_t out[32])

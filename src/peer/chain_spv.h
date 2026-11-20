@@ -2,8 +2,9 @@
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* chain_spv.h - the chain of a session (session_chain) without a node of one's own (docs/en/NETWORK.md 8.2): several Electrum servers, none
  * of them trusted. The headers they give are kept only with their proof of work (spv.h); a coin counts only with the transaction that
- * made it and its Merkle proof; a coin is spent only when a server shows the transaction that spends it, confirmed with its proof or, while
- * it waits in the mempool, valid in every signature. What a lying server can still do is hide things: a delay, never a wrong payment. */
+ * made it and its Merkle proof; a coin is spent only when a server shows the transaction that spends it, confirmed, with its proof: a spend
+ * in a mempool counts for nothing (a server could show one that was never sent). What a lying server can still do is hide things: a delay,
+ * never a wrong payment. */
 #ifndef PZPEER_CHAIN_SPV_H
 #define PZPEER_CHAIN_SPV_H
 

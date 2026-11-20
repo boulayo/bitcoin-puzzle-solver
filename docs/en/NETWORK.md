@@ -245,7 +245,8 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - `dp.bin` is the usual log of the campaign. pzpeer reads it.
 - `pzsolve kstat net BITS TRIALS` measures the cost of the walk of the network. On the curve, W = 2^40, 3000 trials each, one thread:
   schema 3 1.061 ± 0.011, net-06 1.182 ± 0.012 steps per √W: net-06 costs 11.4 % more, as the simulator predicted (+11 %), the price
-  of the schema that makes a theft pay only above 51 % of the power of the network (project 2.3).
+  of the schema that makes a theft pay only above 51 % of the power of the network (project 2.3). The estimates of time take this cost, 1.18
+  (`KANG_C_NET` of pzsolve in a campaign of the network, `C_MEAN` of `home.c` for the network line of pzpeer, 7.5).
 
 ## 7. pzpeer
 
@@ -315,9 +316,10 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
     when bit j of `ID ⊕ K` is 1). An honest publisher found it among the 5 closest, so it knows at most 4 closer; a flood sprayed at
     random nodes is refused, and one aimed at a node costs about (nodes / 10) tries per record;
   - within a rate per address block of the sender (the table of the limits in 7.4);
-  - at most `store_max` records in all (`--store-gb`, 5 GB by default, 2^27 records; the index in memory takes 8 bytes a record, up to
-    two fifths of the file while it grows), at most 1/16 of them of one owner, at most 8 owners of one x, and owners in all one per 256
-    records it may hold and 1024 more (an identity costs little).
+  - at most `store_max` records in all (`--store-gb`, 5 GB by default, 2^27 records; the index in memory takes 8 bytes a slot at 35 to
+    70 % load, 11 to 23 bytes a record, that is 30 to 60 % of the 38 bytes of its entry in the file: for the default 2 GB at most, two
+    fifths of the file, and 3 GB for the moment of its last doubling, while the old table is still there), at most 1/16 of them of one
+    owner, at most 8 owners of one x, and owners in all one per 256 records it may hold and 1024 more (an identity costs little).
   The checks that cost nothing come first, the curve last.
 - `store.bin` is the custodian's own file, so its records are not checked again when it is opened, except the last 1024: a crash can
   leave an entry whole in length and wrong in content. One that fails there, or names an owner the owners file has not, is not indexed. The records a coincidence is made of are checked again when they are read back, so a record
@@ -599,7 +601,8 @@ keeps as a custodian, so only a home that listens shows it: a record goes to the
 `held × nodes / 5` records (`held` those this home keeps), each worth `2^dp` jumps on average with dp its zero bits, and its rate is the
 growth of their worth over the last hour. The nodes come from the distances of the 20 closest to a random point (`dht_nodes`: the j-th of N nodes is at about
 j / (N + 1) of the space of the IDs), a fifth off for one lookup, the mean of the last six used. Then the model of pzsolve: the key comes
-after n jumps with `P = 1 − exp(−(n/c)^2)`, `c = 1.06 / 0.8862 × √W`, and given the work done (`done`) half the chance is within
+after n jumps with `P = 1 − exp(−(n/c)^2)`, `c = 1.18 / 0.8862 × √W` (1.18 is the cost of the walk of `net-06`,
+section 6), and given the work done (`done`) half the chance is within
 `√(done² + c² ln 2) − done` more jumps, 9 in 10 within `√(done² + c² ln 10) − done`. `t_dht` checks the estimate on 30 nodes and 2000
 records (about 32 and 2120). It saturates when the custodians are full (`--store-gb`), and it trusts nothing a node says about itself: a
 point costs the work of a point, real or not.
@@ -740,7 +743,7 @@ relays at once, the bytes.
 | Open connections instead of polls | a home that does not listen polls its mailboxes every minute (a lookup and 5 connections); the project wants it to keep a few connections open to reachable nodes and get its alerts on them |
 | More than one relay at a time | a pair tries one relay per slot; two homes that cannot reach the same node in any slot (a network that blocks part of the Internet) get no channel |
 | The cost of an identity | 16 zero bits cost seconds, so thousands of identities are cheap: the limits by block bound what one network can do, not what many networks (a botnet, a cloud) can |
-| An index that fits a home | the index takes 8 bytes a record, 2 GB for 2^28 records (10 GB of disk); a larger store needs its index on disk |
+| An index that fits a home | the index takes 8 bytes a slot, 11 to 23 bytes a record (7.3): 2 GB for the 2^27 records of the default store (5 GB of disk), 4 GB for 2^28 (10 GB); a larger store needs its index on disk |
 
 ### 7.9 Finding the network with no server of its own
 
@@ -910,7 +913,7 @@ in `t_session` with `PZ_REGTEST`.
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`make signer-test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |
-| `sys.c`, `sys_posix.c`, `sys_win.c` | done on Linux (`t_sys`). Windows: `make windows winsigner` builds `pzpeer.exe` and `pzsign.exe` with MinGW-w64, and under Wine the unit tests pass (`make wintest`; all but `t_btc_rpc`, `t_chain_rpc` and `t_session`, whose stand-ins are POSIX programs), three nodes find each other (`PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh`) and `t_pieces` signs with `pzsign.exe`; on the Windows machine of the CI the same unit tests pass, `t_sys` with the Ctrl-Break by which pzpeer stops pzsolve (Wine does not deliver it) and `t_pieces` signing with `pzsign.exe`. macOS: the CI builds pzpeer and passes its unit tests on both architectures, and on arm64 pzsign and the tests of the signing. A whole network (pzsolve, the session, a payout) has not been run on a real Windows or on a Mac |
+| `sys.c`, `sys_posix.c`, `sys_win.c` | done on Linux (`t_sys`). Windows: `make windows winsigner` builds `pzpeer.exe` and `pzsign.exe` with MinGW-w64, and under Wine the unit tests pass (`make wintest`; all but `t_btc_rpc`, `t_chain_rpc` and `t_session`, whose stand-ins are POSIX programs), three nodes find each other (`PZPEER="wine build/win/pzpeer.exe" tests/peer/e2e_meet.sh`) and `t_pieces` signs with `pzsign.exe`; on the Windows machine of the CI the same unit tests pass, `t_sys` with the Ctrl-Break by which pzpeer stops pzsolve (Wine does not deliver it) and `t_pieces` signing with `pzsign.exe`. macOS: the CI builds pzpeer and pzsign and passes their tests, the signing included, on both architectures (x86_64 under Rosetta). A whole network (pzsolve, the session, a payout) has not been run on a real Windows or on a Mac |
 | `home.c`, `pzpeer run` | done (`tests/peer/e2e_net.sh`) |
 | to come | the restart of the walkers of a merge (now only logged); a session that survives a restart of pzpeer; the spot checks of the walks (project 4.2); a whole network on a real Windows and on a Mac; the public test |
 
@@ -967,7 +970,8 @@ What a Bitcoin node does is the model.
 - **The port.** Only TCP 28140: a rented server has it open already; at home it is opened by hand on the router toward that machine,
   so the request to the router is off (`--no-portmap`). The node shows the others its address and port, as every node of the table
   does, and nothing else.
-- **Disk and memory.** `--store-gb N` (5 by default): the index takes up to two fifths of it in RAM.
+- **Disk and memory.** `--store-gb N` (5 by default): once the store is full its index takes 30 to 60 % of N GB in RAM, depending
+  on N (2 GB at the default, two fifths; section 7.3).
 - **A VPN such as Tailscale** is for reaching the machine, not for the network: the other nodes reach a custodian only at a public
   address. Bitcoin Core also takes connections through a Tor onion service, with no open port and no address shown; in a table such as
   this one every node must reach every custodian, so a custodian behind Tor would serve only the nodes that have Tor too: not now.

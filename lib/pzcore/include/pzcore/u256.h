@@ -150,6 +150,13 @@ static inline void pz_u256_from_be(pz_u256 *r, const uint8_t in[32])
     }
 }
 
+/* The value of a hexadecimal digit (either case), or -1. */
+int pz_hex_digit(unsigned c);
+/* The n bytes at p as 2n lower-case hexadecimal digits and a 0 into out (2n + 1 bytes). */
+void pz_hex_encode(const uint8_t *p, size_t n, char *out);
+/* The len hexadecimal digits at s (len even) as len/2 bytes into out; false for an odd len or a character that is not a digit. */
+bool pz_unhex(const char *s, size_t len, uint8_t *out);
+
 /* Parses 1 to 64 hexadecimal digits (either case), optionally behind "0x". Returns false, and leaves *r untouched, for anything
  * else: NULL, an empty string, a longer one (more than 256 bits, leading zeros included), a character that is not a digit. */
 bool pz_u256_from_hex(pz_u256 *r, const char *s);

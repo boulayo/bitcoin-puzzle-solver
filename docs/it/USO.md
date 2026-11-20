@@ -151,7 +151,8 @@ campaigns/NOME/
 ```
 
 * **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato. Un secondo
-  Ctrl-C dopo mezzo secondo esce subito (e perde al massimo l'ultimo minuto di lavoro).
+  Ctrl-C dopo mezzo secondo esce subito (e perde al massimo l'ultimo minuto di lavoro; un canguro perde anche i passi dei suoi
+  camminatori dai loro ultimi punti distinti, sezione 9.2).
 * **Riprendere**: lo stesso comando (`hunt -p N`, oppure `hunt -c NOME`). Il seed e i parametri che definiscono la ricerca non
   possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-m`, `--chunk-bits`, `--bsgs-entries` o `--encrypt-pubkey` diversi da quelli della campagna
   esistente il programma **rifiuta** con un errore (non li ignora in silenzio); puoi invece cambiare thread, GPU, ISA, memoria e
@@ -170,8 +171,9 @@ campaigns/NOME/
   Gli altri comandi escono con 0 se riescono e con 2 in caso di errore (anche `merge`, se qualche file non è stato unito; esce con 0 sia
   quando l'unione ha trovato la chiave, che mostra e salva in `FOUND.txt`, sia quando non c'è ancora nessuna collisione); `selftest` e
   `doctor` escono con 1 se un controllo è fallito, e `decrypt-key` con 1 se il segreto non apre la riga o l'indirizzo non corrisponde.
-* Un riavvio perde al massimo il lavoro dei blocchi in corso (pochi secondi per worker); il resto non viene mai rifatto. Nel BSGS la
-  tabella viene ricostruita (pochi minuti) a meno che tu non usi `--table`.
+* Un riavvio perde al massimo il lavoro dei blocchi in corso (pochi secondi per worker); il resto non viene mai rifatto. Il canguro non
+  perde nulla dopo un arresto che ha salvato i suoi camminatori in `herd.bin`; dopo una corsa che non si è fermata bene ripartono da capo
+  (sezione 9.2). Nel BSGS la tabella viene ricostruita (pochi minuti) a meno che tu non usi `--table`.
 * Una campagna che ha già trovato la chiave non riparte: mostra `FOUND.txt`.
 
 ## 6. Il pannello di avanzamento
@@ -516,8 +518,8 @@ Se il computer va in sospensione o in ibernazione mentre una campagna gira:
   né nelle velocità, scrive nel log `system suspension detected (about … without computing): not counted in times and speeds; saving the state`
   e salva subito lo stato;
 * se dopo il risveglio il driver ha azzerato la GPU e un lancio fallisce, la GPU viene riaperta, ricontrollata con lo stesso autotest dell'avvio
-  e rimessa al lavoro (`GPU[0]: device resumed (…)`; il branco del canguro sulla GPU riparte da posizioni nuove: si perde solo il percorso
-  dall'ultimo punto distinto, i punti già trovati sono al sicuro). I lanci che seguono un fallimento sono grandi un quarto di prima (una scheda
+  e rimessa al lavoro (`GPU[0]: device resumed (…)`; il branco del canguro sulla GPU riparte da posizioni nuove: si perde il percorso di
+  ogni suo camminatore dal suo ultimo punto distinto, i punti già trovati sono al sicuro). I lanci che seguono un fallimento sono grandi un quarto di prima (una scheda
   condivisa con un gioco o con il desktop può rallentare tanto che un lancio supera i 2 s del watchdog del sistema, e fallirebbe di nuovo) e
   ricrescono da soli; il log dice la nuova dimensione. L'attesa prima di un nuovo tentativo (fino a 30 s) finisce subito con Ctrl-C. La GPU viene
   esclusa dopo più di 3 fallimenti di fila, o più di 40 in tutto (dieci minuti di lanci buoni dopo un fallimento azzerano il conteggio, così un
@@ -527,7 +529,11 @@ Se il computer va in sospensione o in ibernazione mentre una campagna gira:
   programma che avvia pzsolve: gli dà un canale su cui non scrive mai, e quando quel programma finisce, anche ucciso o andato in
   crash, il canale si chiude e pzsolve finisce con lui invece di cercare da solo (lo fa `pzpeer run`).
 
-Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoint è ogni 60 s.
+Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoint è ogni 60 s. I camminatori di un canguro sono salvati in
+`herd.bin` quando la campagna si ferma (Ctrl-C, `kill`, la chiusura del terminale, la fine dell'ingresso di `--stop-with-input`), e la
+corsa dopo riparte da dove erano. Una corsa che finisce senza fermarsi (un crash, `kill -9`, la corrente che manca, una batteria che si
+scarica durante la sospensione, un secondo Ctrl-C) non ne salva nessuno: la corsa dopo fa ripartire i camminatori da capo, e si perdono
+i loro passi dagli ultimi punti distinti, circa `camminatori × 2^dp-bits` (ALGORITHMS.md sezione 4.7, in inglese).
 
 ### 9.3 Sintomi
 
@@ -548,7 +554,7 @@ Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoin
 | `CUDA driver not found` (in `devices`) | normale senza scheda NVIDIA; con una NVIDIA, reinstalla il driver grafico |
 | `PZ_ISA=…: the CPU does not support this instruction set` | togli la variabile `PZ_ISA` (sceglie il programma), oppure imposta `PZ_ISA=baseline` |
 | `NAME=TEXT ignored (…)` | una variabile d'ambiente ha un valore che il programma non può usare e viene ignorata: correggila o toglila (sezione 7.10) |
-| `distinguished-point table full (RAM limit): halving the density of stored points` | atteso in circa una corsa su cinque quando è la memoria a fissare i dp-bits (ALGORITHMS.md sezione 4.4, in inglese): la ricerca prosegue con una collisione un po' più tardiva; un `--mem` più grande aiuta solo se la RAM c'è |
+| `distinguished-point table full (RAM limit): halving the density of stored points` | atteso quando è la memoria a fissare i dp-bits: in circa una corsa su cinque al massimo con un `--mem` che è una potenza di due in GiB, più spesso con altri limiti, quello predefinito compreso (ALGORITHMS.md sezione 4.4, in inglese); la ricerca prosegue con una collisione un po' più tardiva; un `--mem` più grande aiuta solo se la RAM c'è |
 | velocità molto bassa | controlla `devices` (quante corsie/GPU usate) e che nessun altro processo sia in esecuzione |
 | prima esecuzione del BSGS lenta | la RAM appena allocata viene "toccata" per la prima volta (su alcune macchine virtuali costa secondi per GiB) |
 

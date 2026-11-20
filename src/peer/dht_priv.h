@@ -1,15 +1,18 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* dht_priv.h - inside the node of dht.h: its state, and what its files share.
- *   dht.c        the node's life (create, start, stop), its threads (accept, handlers, jobs, maintenance), the answers to requests, the
- *                limits by address block
+ *   dht.c        the node's life (create, start, stop), its threads (accept, handlers, jobs, maintenance, and the one that meets the
+ *                others in the table of BitTorrent and keeps the port open on the router), the answers to requests, the limits by
+ *                address block
  *   dht_table.c  the routing table, the exchanges with a contact, NODES, the lookups, the bootstrap, the refresh, peers.txt
  *   dht_store.c  the records: what a custodian takes, what this node publishes (own.bin, own.cust)
  *   dht_alert.c  the alerts of a coincidence, the proofs of possession, the mailboxes
  *   dht_relay.c  the relay, and the channel of a session (docs/en/NETWORK.md 7.7)
- *   dht_claim.c  the claims of the blocks of a linear search (docs/en/NETWORK.md 11)
+ *   dht_claim.c  the claims of the blocks of a linear search (docs/en/NETWORK.md 11): those a custodian keeps (claims.c, claims.bin),
+ *                CLAIM and CLAIM_GET
  * Each shared structure has its own mutex, and no lock is held across a connection: the routing table, the limits by address block, the
- * queue of accepted connections, the jobs, the alerts, the relays, the publishing. The stores and the mailbox lock themselves. */
+ * queue of accepted connections, the jobs, the alerts, the relays, the publishing, the addresses found in the table of BitTorrent. The
+ * stores, the claims and the mailbox lock themselves. */
 #ifndef PZPEER_DHT_PRIV_H
 #define PZPEER_DHT_PRIV_H
 

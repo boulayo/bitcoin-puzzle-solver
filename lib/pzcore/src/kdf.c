@@ -24,14 +24,6 @@ bool pz_ct_equal(const void *a, const void *b, size_t n)
 
 /* ---- SHA-256 by pieces, on the compression function of hash.h (private: the library's hash API is one-shot) ---- */
 
-typedef struct { uint32_t st[8]; uint8_t buf[64]; uint64_t len; } sha_t;
-
-static void sha_init(sha_t *s)
-{
-    memcpy(s->st, pz_sha256_h0, sizeof s->st);
-    s->len = 0;
-}
-
 static void sha_block(uint32_t st[8], const uint8_t *p)
 {
     uint32_t w[16];
@@ -55,24 +47,6 @@ static void sha_update(uint32_t st[8], uint8_t buf[64], uint64_t *len, const uin
     if (n) memcpy(buf, d, n);
 }
 
-/* the digest of the data hashed so far; total is the length that goes into the padding (the key block of an HMAC included) */
-static void sha_final(uint32_t st[8], uint8_t buf[64], uint64_t len, uint64_t total, uint8_t out[32])
-{
-    size_t fill = (size_t)(len & 63);
-    buf[fill++] = 0x80;
-    if (fill > 56) {
-        memset(buf + fill, 0, 64 - fill);
-        sha_block(st, buf);
-        fill = 0;
-    }
-    memset(buf + fill, 0, 56 - fill);
-    const uint64_t bits = total * 8;
-    store_be32(buf + 56, (uint32_t)(bits >> 32));
-    store_be32(buf + 60, (uint32_t)bits);
-    sha_block(st, buf);
-    for (int i = 0; i < 8; i++) store_be32(out + 4 * i, st[i]);
-}
-
 /* ---- HMAC ---- */
 
 void pz_hmac_sha256_init(pz_hmac_sha256 *c, const uint8_t *key, size_t keylen)
@@ -81,19 +55,15 @@ void pz_hmac_sha256_init(pz_hmac_sha256 *c, const uint8_t *key, size_t keylen)
     memset(k, 0, sizeof k);
     if (keylen > 64) pz_sha256(key, keylen, k);
     else if (keylen) memcpy(k, key, keylen);
-    sha_t s;
     for (int i = 0; i < 64; i++) blk[i] = k[i] ^ 0x36;
-    sha_init(&s);
-    sha_block(s.st, blk);
-    memcpy(c->in, s.st, sizeof c->in);
+    memcpy(c->in, pz_sha256_h0, sizeof c->in);
+    sha_block(c->in, blk);
     for (int i = 0; i < 64; i++) blk[i] = k[i] ^ 0x5c;
-    sha_init(&s);
-    sha_block(s.st, blk);
-    memcpy(c->out, s.st, sizeof c->out);
+    memcpy(c->out, pz_sha256_h0, sizeof c->out);
+    sha_block(c->out, blk);
     c->len = 0;
     pz_secure_zero(k, sizeof k);
     pz_secure_zero(blk, sizeof blk);
-    pz_secure_zero(&s, sizeof s);
 }
 
 void pz_hmac_sha256_update(pz_hmac_sha256 *c, const uint8_t *data, size_t len)
@@ -103,15 +73,10 @@ void pz_hmac_sha256_update(pz_hmac_sha256 *c, const uint8_t *data, size_t len)
 
 void pz_hmac_sha256_final(pz_hmac_sha256 *c, uint8_t out[32])
 {
-    uint8_t inner[32], blk[64];
-    sha_final(c->in, c->buf, c->len, c->len + 64, inner);
-    uint32_t st[8];
-    memcpy(st, c->out, sizeof st);
-    sha_update(st, blk, &(uint64_t){0}, inner, 32);       /* the buffer takes the 32 bytes; the padding follows */
-    sha_final(st, blk, 32, 96, out);
+    uint8_t inner[32];
+    pz_sha256_tail(c->in, c->buf, (size_t)(c->len & 63), c->len + 64, inner);     /* the lengths count the key block */
+    pz_sha256_tail(c->out, inner, 32, 96, out);
     pz_secure_zero(inner, sizeof inner);
-    pz_secure_zero(blk, sizeof blk);
-    pz_secure_zero(st, sizeof st);
     pz_secure_zero(c, sizeof *c);
 }
 

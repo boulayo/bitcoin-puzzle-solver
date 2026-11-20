@@ -143,6 +143,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- The time estimates of a campaign of the shared network (pzsolve, and the network line of pzpeer) take the measured cost of its
+  walk, 1.18·√W (net-06), not the 1.06·√W of a campaign alone: they were about a tenth short.
 - `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked
   as scanned with their near misses missing).
 - pzpeer: a session asks its chain and its fee rate before it opens the channel, so that its hello reaches the partner within the 2
