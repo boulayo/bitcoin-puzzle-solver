@@ -313,7 +313,7 @@ static void test_cases(void)
         /* jitter: excluded alone, the TPM gives the 128 bits */
         {"jitter timer constant", 0, 0, JF_CONST, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "does not advance"},
         {"jitter timer runs backwards", 0, 0, JF_BACK, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "not monotonic"},
-        {"jitter constant delta", 0, 0, JF_STEP, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little variation"},
+        {"jitter constant delta", 0, 0, JF_STEP, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "the same work always"},   /* refused before its rounds */
         {"jitter two deltas in turn", 0, 0, JF_ALTERNATE, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "live estimate"},
         {"jitter 4096-tick timer", 0, 0, JF_COARSE, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "variation|repetition"},
         {"jitter 1 random bit per sample", 0, 0, JF_LOWENT, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "live estimate"},

@@ -127,6 +127,12 @@ pzsolve uses it for the seed of every new campaign.
   is unmapped; `PZ_SEED_HARDEN` also turns core files off and makes the process non-dumpable. The report gives the bits and the reasons
   of each source, never data.
 
+The walk of the samples goes on from one to the next, with branches on the data, so on a machine without noise its deltas would vary
+by the work alone. So before the rounds the same work (the same addresses, no branch on the data) is timed 64 times: when all those
+deltas are equal there is no noise to measure, and the source is refused (since 2026-11-20). Timing that same work for every sample
+was tried: it varies too little on the machines of the CI (0.6 to 1.1 bits a sample), and a lower threshold let timers without noise
+pass the tests.
+
 **Measured** on 2026-11-08 on the development machine, a VM (Intel Xeon at 2.3 GHz, 4 vCPUs under KVM, Linux 6.18), with
 `tools/research/seed_assess.c`, which runs the generator's own collector:
 

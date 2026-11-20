@@ -93,7 +93,7 @@ SIGNER      := $(BUILD)/pzsign$(EXE)
 CBMPC       := signer/vendor/cb-mpc
 OSSL        := $(BUILD)/openssl
 CBMPC_OBJ   := $(patsubst $(CBMPC)/src/%.cpp,$(BUILD)/cbmpc/%.o,$(wildcard $(CBMPC)/src/cbmpc/*/*.cpp))
-SIGNER_CXXFLAGS = -std=c++17 -O2 -fno-operator-names -Wno-attributes -Wno-parentheses -DNDEBUG -DNO_DEPRECATED_OPENSSL -MMD -MP \
+SIGNER_CXXFLAGS = $(DEPLOY) -std=c++17 -O2 -fno-operator-names -Wno-attributes -Wno-parentheses -DNDEBUG -DNO_DEPRECATED_OPENSSL -MMD -MP \
               $(if $(filter 1,$(X86)),-mpclmul -maes -msse4.1) $(if $(filter 1,$(ARM64)),-march=armv8-a+crypto) \
               -include $(CBMPC)/include/cbmpc/core/precompiled.h -I$(CBMPC)/vendors -I$(CBMPC)/include -I$(CBMPC)/include-internal -I$(OSSL)/include
 ifeq ($(WIN),1)
@@ -105,7 +105,7 @@ SIGNER_LIBS := -static-libstdc++ -static-libgcc -lpthread -ldl
 endif
 
 $(OSSL)/lib/libcrypto.a: signer/openssl.sh
-	CC="$(CC)" signer/openssl.sh $(abspath $(OSSL))
+	CC="$(CC)" MACOS_ARCH="$(MACOS_ARCH)" signer/openssl.sh $(abspath $(OSSL))
 
 $(BUILD)/cbmpc/%.o: $(CBMPC)/src/%.cpp $(OSSL)/lib/libcrypto.a
 	@mkdir -p $(@D)

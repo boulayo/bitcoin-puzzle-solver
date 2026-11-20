@@ -122,8 +122,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
     blocks after, it gives up and tries again. The rule "one point, one proved pair" is kept on disk (`proved`). With an own node, a
     first transaction that a reorganisation put back in the mempool is no spend in a block. pzsign checks every signature of a batch
     before it stops on a bad one, so the time does not tell which one it was.
-- The seed generator: every sample of the timing jitter is the same work, at the same addresses and with no branch on the data, so the
-  deltas of a machine without noise are all the same and its health tests refuse the source (before, the work itself made them vary).
+- The seed generator times the same work 64 times before the rounds of the timing jitter (the same addresses, no branch on the data):
+  when the deltas are all equal there is no noise to measure, and the source is refused. The walk of the rounds varies by the work
+  too, so a machine without noise could pass its health tests.
 - CI: the actions are named by the hash of their commit; `check_binary.sh` checks each Windows program against the DLLs it needs.
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.

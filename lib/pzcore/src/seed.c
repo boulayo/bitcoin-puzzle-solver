@@ -494,11 +494,10 @@ static void src_caller(pz_seed_source *s, chunk *c, arena *a, const pz_seed_opts
 
 /* ---- jitter: CPU timing jitter ----
  * One raw sample is the timer delta around a fixed workload: a public xorshift walk through JIT_MEM bytes, one cache line per step,
- * with a read-modify-write at each step. Every sample is the same work: the walk starts from the same constant, at the same addresses,
- * and nothing it does depends on the data, so on a machine without noise every delta is the same and the health tests refuse the
- * source (with branches on the data and a walk that went on from sample to sample, the deltas of such a machine varied from the work
- * alone, and looked like noise). No entropy is claimed for anything but the timing; unlike jitterentropy, the length of the walk never
- * depends on earlier timer values, which would chain the samples. */
+ * with a read-modify-write and two branches on the data at each step. The walk starts from a constant, so no entropy is claimed for
+ * anything but the timing; unlike jitterentropy, its length never depends on earlier timer values, which would chain the samples. That
+ * walk goes on from sample to sample, so on a machine without noise its deltas would still vary, by the work alone: before it counts,
+ * the same work (the same addresses, no branch on the data) is timed 64 times, and a source whose deltas are then all equal is refused. */
 #if defined(__x86_64__)
 #define TIMER_NAME "rdtsc"
 static inline uint64_t timer_now(void)
@@ -570,9 +569,40 @@ static uint64_t fault_timer(int which)
 #define jt_now(which) timer_now()
 #endif
 
-typedef struct { volatile uint8_t *mem; uint32_t walk; } jitter;
+typedef struct { volatile uint8_t *mem; uint32_t walk, x; } jitter;
 
 static uint64_t jit_sample(jitter *j)
+{
+    volatile uint8_t *m = j->mem;
+    uint32_t x = j->x;
+    uint64_t acc = 0;
+    const uint64_t t0 = jt_now(0);
+    for (uint32_t i = 0; i < j->walk; i++) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        const size_t idx = ((size_t)x * 64u + (x >> 26)) & (JIT_MEM - 1);
+        const uint8_t v = m[idx];
+        if (v & 1) {                                   /* the empty asm keeps the branches branches */
+            __asm__ __volatile__("");
+            acc += v;
+        } else {
+            acc ^= (uint64_t)v << (i & 31);
+        }
+        if (x & 0x100) {
+            __asm__ __volatile__("");
+            acc = acc << 1 | acc >> 63;
+        }
+        m[idx] = (uint8_t)(v + 1 + (acc & 1));
+    }
+    const uint64_t t1 = jt_now(1);
+    j->x = x;
+    m[0] ^= (uint8_t)acc;
+    return t1 - t0;
+}
+
+/* The same work every time: the walk from its first step, without a branch on the data. Only noise makes two of these differ. */
+static uint64_t jit_same(jitter *j)
 {
     volatile uint8_t *m = j->mem;
     uint32_t x = 0x2545f491u;
@@ -584,8 +614,7 @@ static uint64_t jit_sample(jitter *j)
         x ^= x << 5;
         const size_t idx = ((size_t)x * 64u + (x >> 26)) & (JIT_MEM - 1);
         const uint8_t v = m[idx];
-        acc = (acc + v) ^ (uint64_t)v << (i & 31);
-        acc = acc << 1 | acc >> 63;
+        acc = ((acc + v) ^ (uint64_t)v << (i & 31)) << 1 | acc >> 63;
         m[idx] = (uint8_t)(v + 1 + (acc & 1));
     }
     const uint64_t t1 = jt_now(1);
@@ -609,6 +638,7 @@ static bool jit_init(jitter *j, char *method, size_t mn, char *why, size_t wn)
     bool locked;
     if (!(j->mem = map_pages(JIT_MEM, false, &locked))) return why_set(why, wn, "no memory for the walk");
     memset((void *)j->mem, 0x5a, JIT_MEM);    /* every page touched now, so that page faults do not distort the calibration */
+    j->x = 0x2545f491u;
     /* the walk doubles until the median delta is at least 64 granules of the timer, so that small variations are resolved */
     for (j->walk = 16; j->walk < JIT_MAX_WALK; j->walk *= 2) {
 #ifdef PZ_SEED_TEST
@@ -623,7 +653,13 @@ static bool jit_init(jitter *j, char *method, size_t mn, char *why, size_t wn)
         if (above >= 65) break;
     }
     snprintf(method, mn, "%s, walk %u", TIMER_NAME, j->walk);
-    return true;
+    bool varies = false;
+    for (uint64_t i = 0, first = 0; i < 64 && !varies; i++) {
+        const uint64_t t = jit_same(j);
+        varies = i && t != first;
+        if (!i) first = t;
+    }
+    return varies || why_set(why, wn, "the same work always takes the same time: no noise to measure");
 }
 
 /* The live min-entropy estimate of the 8-bit samples (the low byte of each delta): the lower of SP 800-90B's most-common-value

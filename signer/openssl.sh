@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # openssl.sh DIR - the static OpenSSL that cb-mpc needs (signer/vendor/README.md), built into DIR (DIR/include, DIR/lib/libcrypto.a)
-# for the compiler $CC: for Windows when it is a MinGW-w64 one, else for the machine. The release tarball is checked by its hash and
+# for the compiler $CC: for Windows when it is a MinGW-w64 one, for $MACOS_ARCH (arm64 or x86_64) on macOS when it is set, else for the
+# machine. The release tarball is checked by its hash and
 # built as it is; the tree it is built in is removed at the end (the tarball stays for the next build).
 set -eu
 DIR=$1
@@ -31,7 +32,11 @@ OPTS="no-shared no-afalgeng no-apps no-aria no-autoload-config no-bf no-camellia
 case $($CC -dumpmachine) in
 *mingw*) T=$($CC -dumpmachine)
          ./Configure mingw64 CC="$CC" AR="$T-ar" RANLIB="$T-ranlib" RC="$T-windres" $OPTS --prefix="$DIR" --libdir=lib ;;
-*)       CC=$CC ./config $OPTS --prefix="$DIR" --libdir=lib ;;
+*)       if [ -n "${MACOS_ARCH:-}" ]; then              # the other architecture of a Mac: Configure gives the compiler its -arch
+             ./Configure "darwin64-$MACOS_ARCH-cc" CC="$CC" $OPTS --prefix="$DIR" --libdir=lib
+         else
+             CC=$CC ./config $OPTS --prefix="$DIR" --libdir=lib
+         fi ;;
 esac
 MAKEFLAGS= make -j4 build_generated >/dev/null   # its own jobs, not those of the make that runs this
 MAKEFLAGS= make -j4 libcrypto.a >/dev/null
@@ -39,4 +44,4 @@ mkdir -p "$DIR/lib"
 cp libcrypto.a "$DIR/lib/"
 rm -rf "$DIR/include" && cp -R include "$DIR/include"
 cd .. && rm -rf "openssl-$VER"
-echo "openssl.sh: OpenSSL $VER for $($CC -dumpmachine) in $DIR"
+echo "openssl.sh: OpenSSL $VER for $($CC -dumpmachine)${MACOS_ARCH:+ ($MACOS_ARCH)} in $DIR"

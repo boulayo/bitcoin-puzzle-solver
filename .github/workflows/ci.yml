@@ -315,15 +315,16 @@ jobs:
       - name: Unit tests
         if: steps.rosetta.outputs.skip != '1'
         run: PZ_NO_OPENCL=1 make test -k ${{ matrix.make }}
-      # pzsign is built for the machine itself, so the tests of the two-party signing run on the native build only.
       - name: pzpeer (build and unit tests)
         if: steps.rosetta.outputs.skip != '1'
         run: make peer-test -k ${{ matrix.make }}
+      # pzsign for the architecture of the job (OpenSSL configured for it, cb-mpc with -arch), and the tests of the two-party signing,
+      # the x86_64 ones under Rosetta
       - name: pzsign and the tests of the two-party signing
-        if: matrix.arch == 'arm64'
+        if: steps.rosetta.outputs.skip != '1'
         run: |
-          make -j"$(sysctl -n hw.ncpu)" signer-test
-          make peer-test
+          make -j"$(sysctl -n hw.ncpu)" signer-test ${{ matrix.make }}
+          make peer-test ${{ matrix.make }}
       - name: Compiler errors
         if: failure()
         run: grep -nE 'error:|Error [0-9]+|undefined (reference|symbol)' build.log | head -100 || true
