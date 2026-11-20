@@ -4,6 +4,7 @@
 #include "sweep.h"
 #include "chain_rpc.h"
 #include "chain_spv.h"
+#include "sys.h"
 #include <pzcore/seal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,14 +36,43 @@ bool sweep_tx(const session_chain *ch, const uint8_t sec[32], const uint8_t *to,
     return ok;
 }
 
+/* The transaction to a mining pool that does not show it in the public mempool (--private): POST {"tx_hex": ...} to url through the curl
+ * of the system (Linux, macOS, and Windows since 10 have it), so that pzpeer needs no TLS of its own. What the pool answers is printed. */
+static bool send_private(const char *url, const char *hex)
+{
+    const char *argv[] = {"curl", "-sS", "--max-time", "60", "-H", "Content-Type: application/json", "--data-binary", "@-", "-w", "\nHTTP %{http_code}\n", url, NULL};
+    int to = -1, from = -1;
+    const sys_proc p = sys_spawn(argv, NULL, &to, &from);
+    if (!p) return fprintf(stderr, "cannot start curl: install it, or give the transaction to the pool by hand\n"), false;
+    const bool sent = sys_pipe_write(to, "{\"tx_hex\":\"", 11) && sys_pipe_write(to, hex, strlen(hex)) && sys_pipe_write(to, "\"}", 2);
+    sys_pipe_close(to);
+    char ans[2048];
+    size_t n = 0;
+    while (n + 1 < sizeof ans && sys_pipe_read(from, ans + n, 1, 70000)) n++;
+    ans[n] = 0;
+    sys_pipe_close(from);
+    int st;
+    (void)sys_proc_ended(p, true, &st);
+    const bool ok = sent && st == 0 && strstr(ans, "\nHTTP 2") != NULL;
+    printf("the pool at %s answered%s:\n%s\n", url, ok ? "" : " (not taken)", ans);
+    return ok;
+}
+
 int sweep_main(int argc, char **argv)
 {
-    const char *to = NULL, *chain_name = "main", *rpc_arg = NULL, *cookie = NULL, *servers[CHAIN_SPV_SERVERS];
+    const char *to = NULL, *chain_name = "main", *rpc_arg = NULL, *cookie = NULL, *servers[CHAIN_SPV_SERVERS], *pool = NULL;
     int nservers = 0;
     uint64_t rate = 0;
-    for (int i = 2; i + 1 < argc; i += 2) {
-        const char *a = argv[i], *v = argv[i + 1];
-        if (!strcmp(a, "--to")) to = v;
+    for (int i = 2; i < argc; i += 2) {
+        const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+        if (!strcmp(a, "--private")) {
+            pool = pool ? pool : SWEEP_POOL;
+            i--;
+            continue;
+        }
+        if (!v) to = NULL, i = argc;
+        else if (!strcmp(a, "--pool")) pool = v;
+        else if (!strcmp(a, "--to")) to = v;
         else if (!strcmp(a, "--chain")) chain_name = v;
         else if (!strcmp(a, "--rpc")) rpc_arg = v;
         else if (!strcmp(a, "--rpc-cookie")) cookie = v;
@@ -53,9 +83,10 @@ int sweep_main(int argc, char **argv)
     btc_chain chain;
     uint8_t to_spk[BTC_SPK_MAX], spk[BTC_P2PKH_LEN], sec[32], cp[32];
     const size_t to_len = to && btc_chain_parse(chain_name, &chain) ? btc_address_script(chain, to, to_spk) : 0;
-    if (!to_len || argc % 2) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest]\n"
-                                                    "                    [--rpc H:P:USER:PASSWORD | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n"
-                                                    "       the private key, 64 hex digits, on the standard input\n"), 2;
+    if (!to_len) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest]\n"
+                                        "                    [--rpc H:P:USER:PASSWORD | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n"
+                                        "                    [--private | --pool URL]\n"
+                                        "       the private key, 64 hex digits, on the standard input\n"), 2;
     char hex[80] = "";
     if (!fgets(hex, sizeof hex, stdin)) hex[0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;
@@ -96,8 +127,10 @@ int sweep_main(int argc, char **argv)
     printf("coins: %d, %llu satoshis; to %s: %llu satoshis; fee %llu satoshis (%llu sat/vB)\ntxid: %s\n\n%s\n\n", n, (unsigned long long)total, to,
            (unsigned long long)(total - fee), (unsigned long long)fee, (unsigned long long)(rate / 1000), id, text);
     if (n < listed) printf("%d smaller coins are left where they are: those worth their fee can go in a second transaction, once this one is in a block.\n\n", listed - n);
+    if (pool) return send_private(pool, text) ? 0 : 1;
     printf("NOT SENT. Do not paste this transaction into a wallet, a block explorer or a node: in the public mempool it shows the public key,\n"
            "and with a key this short a program finds the private key from it in seconds and replaces your transaction with its own.\n"
-           "Give it to a mining pool that takes private transactions (for example the Slipstream service of MARA), and wait for the block.\n");
+           "Give it to a mining pool that takes private transactions (for example the Slipstream service of MARA), and wait for the block:\n"
+           "pzpeer sweep --private does it, with the same options.\n");
     return 0;
 }

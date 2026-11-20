@@ -336,3 +336,15 @@ void sys_on_stop(void (*fn)(int))
     g_on_stop = fn;
     SetConsoleCtrlHandler(on_console, TRUE);
 }
+
+bool sys_remove_dir(const char *path)
+{
+    WIN32_FIND_DATAA f;
+    char p[4200];
+    snprintf(p, sizeof p, "%s\\*", path);
+    const HANDLE h = FindFirstFileA(p, &f);
+    for (bool more = h != INVALID_HANDLE_VALUE; more; more = FindNextFileA(h, &f))
+        if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (size_t)snprintf(p, sizeof p, "%s\\%s", path, f.cFileName) < sizeof p) (void)DeleteFileA(p);
+    if (h != INVALID_HANDLE_VALUE) FindClose(h);
+    return RemoveDirectoryA(path) || GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
+}

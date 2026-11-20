@@ -35,7 +35,7 @@ else
 PEER_SYS   := sys sys_posix
 PEER_LIBS   = $(LIBLDLIBS)
 endif
-PEER_SRC   := $(PEER_SYS) dbg json btc btc_rpc spv electrum netfile noise keys record net store dht dht_table dht_store dht_alert dht_relay bt portmap dpfeed pieces signer payout session chain_rpc chain_spv sweep block home main
+PEER_SRC   := $(PEER_SYS) dbg json btc btc_rpc spv electrum netfile noise keys record net store claims dht dht_table dht_store dht_alert dht_relay dht_claim bt portmap dpfeed pieces signer payout session chain_rpc chain_spv sweep block linear home main
 PEER_OBJ   := $(addprefix $(BUILD)/peer/,$(addsuffix .o,$(PEER_SRC)))
 PEER_DATA  := $(BUILD)/peer/puzzles_data.o  # the table of the puzzles of pzsolve: the networks written in the program (netfile_puzzle)
 PEER_LIBOBJ := $(filter-out $(BUILD)/peer/main.o,$(PEER_OBJ)) $(PEER_DATA)

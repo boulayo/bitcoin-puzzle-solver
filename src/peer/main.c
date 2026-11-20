@@ -33,12 +33,15 @@ static int usage_to(FILE *f)
                     "         the home: pzsolve on the network, its points published, the records of others kept, and for every\n"
                     "         coincidence with another home the prize paid: 45%% to each payout address, 10%% to the author of pzpeer.\n"
                     "         The network of every puzzle with a public key is in the program; without either option, that of the\n"
-                    "         first one still open. A network file is for tests and puzzles of one's own\n"
+                    "         first one still open. A puzzle without a public key (--puzzle 71) has a linear search instead: the\n"
+                    "         home scans blocks nobody claimed and publishes its claims; a key found stays with it, nothing is\n"
+                    "         paid. A network file is for tests and puzzles of one's own\n"
                     "       pzpeer node [--puzzle N | --network FILE] [options]\n"
                     "         a node without pzsolve: it keeps the records of others, alerts their owners and relays sessions; its\n"
                     "         identity is DIR/node.seed, made at the first start\n"
                     "       pzpeer sweep --to ADDRESS [options]  the transaction that moves the coins of a found key, signed and NOT sent,\n"
-                    "                                            to give to a mining pool in private (the key on the standard input)\n"
+                    "                                            to give to a mining pool in private (the key on the standard input);\n"
+                    "                                            with --private it goes to MARA's Slipstream (--pool URL: another pool)\n"
                     "       pzpeer netcheck NETWORK              the values and the fingerprint of a network (a file, or a puzzle number)\n"
                     "       pzpeer dpcheck NETWORK DP_BIN        recompute every point of a campaign's dp.bin and check its tag\n"
                     "       pzpeer version\n"
@@ -87,14 +90,20 @@ static int puzzle_of(const char *s)
     return *s || n < 1 || n > 1000 ? 0 : n;
 }
 
-/* The network of a file, or of a puzzle when path is NULL, for the checks of records. */
-static bool load_net(const secp256k1_context *ctx, const char *path, int puzzle, netfile *nf, record_net *net)
+/* The network of a file, or of a puzzle when path is NULL, for the checks of records, or of claims (bn) on a linear one, which has no
+ * records: none has all the zero bits a record there must have */
+static bool load_net(const secp256k1_context *ctx, const char *path, int puzzle, netfile *nf, record_net *net, block_net *bn)
 {
     char err[300];
     uint8_t base[32];
     if (!netfile_get(path, puzzle, nf, err, sizeof err)) {
         fprintf(stderr, "%s\n", err);
         return false;
+    }
+    if (nf->linear) {
+        memset(net, 0, sizeof *net), memcpy(net->fp, nf->fp, 32), net->dpbits = RECORD_DP_MAX;
+        netfile_blocks(nf, bn);
+        return true;
     }
     pz_u256_to_be(&nf->start, base);
     if (!record_net_init(ctx, net, nf->fp, nf->dpbits, nf->pubkey33, base)) {
@@ -108,8 +117,10 @@ static int cmd_dpcheck(const secp256k1_context *ctx, const char *netpath, const 
 {
     netfile nf;
     record_net net;
+    block_net bn;
     dpfeed df;
-    if (!load_net(ctx, puzzle_of(netpath) ? NULL : netpath, puzzle_of(netpath), &nf, &net)) return 1;
+    if (!load_net(ctx, puzzle_of(netpath) ? NULL : netpath, puzzle_of(netpath), &nf, &net, &bn)) return 1;
+    if (nf.linear) return fprintf(stderr, "network %s: a linear search has no dp.bin\n", nf.net), 1;
     if (!dpfeed_open(&df, dppath)) {
         fprintf(stderr, "%s: not a dp.bin of this version\n", dppath);
         return 1;
@@ -130,8 +141,12 @@ static int cmd_netcheck(const char *path)
     char err[300];
     if (!netfile_get(puzzle_of(path) ? NULL : path, puzzle_of(path), &nf, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF];
-    printf("network %s: puzzle %d, range %s:%s, schema %s, dpbits %u, chain %s\nfingerprint ", nf.net, nf.puzzle, pz_u256_to_hex(&nf.start, a),
-           pz_u256_to_hex(&nf.end, b), nf.schema, nf.dpbits, nf.chain);
+    if (nf.linear)
+        printf("network %s: puzzle %d, a linear search of address %s, range %s:%s, blocks of 2^%u keys, chain %s\nfingerprint ", nf.net, nf.puzzle,
+               nf.address, pz_u256_to_hex(&nf.start, a), pz_u256_to_hex(&nf.end, b), nf.blockbits, nf.chain);
+    else
+        printf("network %s: puzzle %d, range %s:%s, schema %s, dpbits %u, chain %s\nfingerprint ", nf.net, nf.puzzle, pz_u256_to_hex(&nf.start, a),
+               pz_u256_to_hex(&nf.end, b), nf.schema, nf.dpbits, nf.chain);
     for (int i = 0; i < 32; i++) printf("%02x", nf.fp[i]);
     printf("\n");
     return 0;
@@ -204,9 +219,10 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     netfile nf;
     record_net net;
+    block_net bn;
     uint8_t seed[32];
     home_identity id;
-    if (!load_net(ctx, network, puzzle, &nf, &net)) return 1;
+    if (!load_net(ctx, network, puzzle, &nf, &net, &bn)) return 1;
     if (!dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), dir = dirname;
     if (!sys_mkdir(dir) || !sys_private(dir)) return fprintf(stderr, "%s must be a folder of this user that nobody else can open\n", dir), 1;
     snprintf(seedpath, sizeof seedpath, "%s/node.seed", dir);          /* its identity, as the keys of a Bitcoin node in its folder */
@@ -234,7 +250,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
                       .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .portmap = portmap,
                       .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
-                      .store_max = (uint64_t)store_gb * 1000000000ull / STORE_ENTRY};
+                      .store_max = (uint64_t)store_gb * 1000000000ull / STORE_ENTRY, .blocks = nf.linear ? &bn : NULL};
     cfg.bt_routers = bt_routers(!strcmp(nf.chain, "main"), no_bt, routers, nrouters, &cfg.nbt_routers);
     char idhex[65];
     dht *d = dht_create(&cfg, err, sizeof err);

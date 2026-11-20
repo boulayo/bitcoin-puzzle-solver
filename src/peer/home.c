@@ -9,6 +9,7 @@
  * most HELLO_SESSIONS of them run at a time, one per partner, and a slot whose partner proved nothing is given back: they never take the
  * slots of the pairs the table alerted. */
 #include "home.h"
+#include "linear.h"
 #include "btc.h"
 #include "chain_rpc.h"
 #include "dbg.h"
@@ -1062,6 +1063,7 @@ int home_run(const home_cfg *cfg)
      * which shows a key it finds: nobody else may go in */
     if (!sys_mkdir(h->dir) || !sys_private(h->dir))
         return fprintf(stderr, "%s must be a folder of this user that nobody else can open (chmod 700 it)\n", h->dir), 1;
+    if (h->nf.linear) return linear_run(cfg, &h->nf, h->dir);   /* a puzzle without a public key: blocks, claims, no payout */
     snprintf(h->limitpath, sizeof h->limitpath, "%s/failed-signings", h->dir);
     snprintf(h->paidpath, sizeof h->paidpath, "%s/paid", h->dir);
     snprintf(h->foundpath, sizeof h->foundpath, "%s/FOUND.txt", h->dir);

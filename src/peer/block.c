@@ -9,10 +9,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool block_bits_ok(unsigned bits) { return (bits >= 34 && bits <= 37) || (bits >= 42 && bits <= 45); }
+
+static unsigned proof_bytes(unsigned bits) { return bits < 40 ? 4 : 5; }   /* bytes 8 to 11, or 8 to 12, of the hash160 */
+
 int block_min_proofs(unsigned bits)
 {
-    const int mean = bits >= 40 ? 1 << (bits - 40) : 0;
+    const int mean = block_bits_ok(bits) ? 1 << (bits - 8 * proof_bytes(bits)) : 0;
     return mean / 4 > 1 ? mean / 4 : 1;
+}
+
+void block_key(const block_net *net, uint64_t index, uint8_t key[32])
+{
+    uint8_t m[sizeof BLOCK_CLAIM_KEY_TAG - 1 + 32 + 8];
+    memcpy(m, BLOCK_CLAIM_KEY_TAG, sizeof BLOCK_CLAIM_KEY_TAG - 1);
+    memcpy(m + sizeof BLOCK_CLAIM_KEY_TAG - 1, net->fp, 32);
+    for (int i = 0; i < 8; i++) m[sizeof m - 8 + i] = (uint8_t)(index >> (56 - 8 * i));
+    pz_sha256(m, sizeof m, key);
 }
 
 bool block_proof_key(const secp256k1_context *ctx, const block_net *net, const uint8_t key[32])
@@ -23,7 +36,7 @@ bool block_proof_key(const secp256k1_context *ctx, const block_net *net, const u
     if (!secp256k1_ec_pubkey_create(ctx, &p, key)) return false;
     secp256k1_ec_pubkey_serialize(ctx, pub, &n, &p, SECP256K1_EC_COMPRESSED);
     pz_hash160(pub, sizeof pub, h);
-    return !memcmp(h + 8, net->h160 + 8, 5) && memcmp(h, net->h160, 20) != 0;   /* never the key of the prize itself */
+    return !memcmp(h + 8, net->h160 + 8, proof_bytes(net->bits)) && memcmp(h, net->h160, 20) != 0;   /* never the key of the prize itself */
 }
 
 /* the first key of a block; false when the block is past the order of the group */
@@ -31,7 +44,7 @@ static bool block_first(const block_net *net, uint64_t index, pz_u256 *first)
 {
     pz_u256 s, d = pz_u256_from_u64(index);
     pz_u256_from_be(&s, net->start);
-    if (net->bits < BLOCK_BITS_MIN || net->bits > BLOCK_BITS_MAX || index >> (64 - net->bits)) return false;
+    if (!block_bits_ok(net->bits) || index >> (64 - net->bits)) return false;
     d = pz_u256_shl(&d, net->bits);
     pz_u256_add(first, &s, &d);
     return pz_u256_cmp(first, &s) >= 0 && pz_u256_cmp(first, &pz_secp256k1_n) < 0;

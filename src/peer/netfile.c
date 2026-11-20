@@ -4,7 +4,9 @@
  * the value do not count. The canonical form of a part is its lines rebuilt as "key=value", sorted bytewise and joined with '\n': the
  * same file reformatted by hand has the same fingerprint. */
 #include "netfile.h"
+#include "block.h"
 #include "../puzzles.h"
+#include <pzcore/address.h>
 #include <pzcore/ec.h>
 #include <pzcore/hash.h>
 #include <stdio.h>
@@ -14,7 +16,9 @@
 #define LINE_MAX_LEN 256
 #define MAX_LINES    96
 
-static const char *const DEFINING[] = {"net", "puzzle", "pubkey", "range", "jumpseed", "schema", "dpbits", "chain"};
+static const char *const DEFINING[] = {"net", "puzzle", "pubkey", "range", "jumpseed", "schema", "dpbits", "chain", "address", "blockbits"};
+#define KANGAROO 0xff              /* the keys each kind of network needs, by their place in DEFINING */
+#define LINEAR (1 | 2 | 8 | 128 | 256 | 512)
 static const char *const OPTIONAL[] = {"prize", "entry", "electrum", "checkpoint"};
 #define NIMM (sizeof DEFINING / sizeof *DEFINING)
 
@@ -128,10 +132,18 @@ static bool set_defining(netfile *nf, int k, const char *v, char *err, size_t er
         if (!small_uint(v, 60, &u) || u < 8) return fail(err, errlen, "dpbits must be 8 to 60, not", v);
         nf->dpbits = u;
         return true;
-    default:
+    case 7:
         if (strcmp(v, "main") && strcmp(v, "test") && strcmp(v, "signet") && strcmp(v, "regtest"))
             return fail(err, errlen, "chain must be main, test, signet or regtest, not", v);
         strcpy(nf->chain, v);
+        return true;
+    case 8:                                                    /* checked against the chain at the end */
+        if (strlen(v) >= sizeof nf->address) return fail(err, errlen, "invalid address", v);
+        strcpy(nf->address, v);
+        return true;
+    default:
+        if (!small_uint(v, 64, &u) || !block_bits_ok(u)) return fail(err, errlen, "blockbits must be 34 to 37 or 42 to 45, not", v);
+        nf->blockbits = u;
         return true;
     }
 }
@@ -179,7 +191,16 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen)
             return fail(err, errlen, "unknown key", k);
         }
     }
-    for (size_t i = 0; i < NIMM; i++) if (!seen[i]) return fail(err, errlen, "missing key", DEFINING[i]);
+    nf->linear = seen[8];
+    const unsigned want = nf->linear ? LINEAR : KANGAROO;
+    for (size_t i = 0; i < NIMM; i++) {
+        if (!seen[i] && want >> i & 1) return fail(err, errlen, "missing key", DEFINING[i]);
+        if (seen[i] && !(want >> i & 1)) return fail(err, errlen, nf->linear ? "a key a network with an address does not take:" : "a key a network with a public key does not take:", DEFINING[i]);
+    }
+    uint8_t raw[32];                                           /* P2PKH: version 0 on the main chain, 0x6f on the others */
+    if (nf->linear && (pz_base58check_decode(nf->address, raw, sizeof raw) != 21 || raw[0] != (strcmp(nf->chain, "main") ? 0x6f : 0)))
+        return fail(err, errlen, "the address is not a P2PKH address of the chain:", nf->address);
+    if (nf->linear) memcpy(nf->h160, raw + 1, 20);
     char canon_imm[NIMM * LINE_MAX_LEN];
     size_t li = 0;
     (void)join_sorted(imm, nimm, canon_imm, sizeof canon_imm, &li);   /* fits: NIMM lines of LINE_MAX_LEN at most */
@@ -221,22 +242,34 @@ bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen)
     const puzzle_info *p = NULL;
     for (int i = 0; i < PZ_NUM_PUZZLES && !p; i++)
         if (n ? PZ_PUZZLES[i].n == n : PZ_PUZZLES[i].pubkey[0] && !PZ_PUZZLES[i].privkey[0]) p = &PZ_PUZZLES[i];
-    if (!p || !p->pubkey[0]) {
-        snprintf(err, errlen, n ? "puzzle %d: not in the table, or its public key is not known (a network needs it)" : "no open puzzle with a public key", n);
+    if (!p || (!p->pubkey[0] && !p->address[0])) {
+        snprintf(err, errlen, n ? "puzzle %d: not in the table" : "no open puzzle with a public key", n);
         return false;
     }
+    char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], text[600];
+    pz_u256 lo = pz_u256_pow2((unsigned)p->n - 1), hi = pz_u256_pow2((unsigned)p->n), one = pz_u256_from_u64(1);
+    pz_u256_sub(&hi, &hi, &one);
+    if (!p->pubkey[0]) {                                       /* a linear search: the address, blocks of 2^44 keys */
+        snprintf(text, sizeof text, "net=p%d\npuzzle=%d\naddress=%s\nrange=%s:%s\nblockbits=44\nchain=main\n", p->n, p->n, p->address,
+                 pz_u256_to_hex(&lo, a), pz_u256_to_hex(&hi, b));
+        return netfile_parse(text, nf, err, errlen);
+    }
     uint8_t pub[33], seed[32], m[12 + 33] = "pznet1/jumps";
-    char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], js[65], text[600];
+    char js[65];
     if (!hex_exact(p->pubkey, pub, 33)) return fail(err, errlen, "a public key of the table of the puzzles", NULL);
     memcpy(m + 12, pub, 33);
     pz_sha256(m, sizeof m, seed);
     for (int i = 0; i < 32; i++) snprintf(js + 2 * i, 3, "%02x", seed[i]);
-    pz_u256 lo = pz_u256_pow2((unsigned)p->n - 1), hi = pz_u256_pow2((unsigned)p->n), one = pz_u256_from_u64(1);
-    pz_u256_sub(&hi, &hi, &one);
     const int dp = (p->n - 1) / 2 - 44 > 8 ? (p->n - 1) / 2 - 44 : 8;
     snprintf(text, sizeof text, "net=p%d\npuzzle=%d\npubkey=%s\nrange=%s:%s\njumpseed=%s\nschema=net-06\ndpbits=%d\nchain=main\n", p->n, p->n, p->pubkey,
              pz_u256_to_hex(&lo, a), pz_u256_to_hex(&hi, b), js, dp);
     return netfile_parse(text, nf, err, errlen);
+}
+
+void netfile_blocks(const netfile *nf, block_net *out)
+{
+    memcpy(out->fp, nf->fp, 32), memcpy(out->h160, nf->h160, 20), out->bits = nf->blockbits;
+    pz_u256_to_be(&nf->start, out->start);
 }
 
 bool netfile_get(const char *path, int n, netfile *nf, char *err, size_t errlen)

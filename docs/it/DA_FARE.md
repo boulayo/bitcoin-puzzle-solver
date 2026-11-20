@@ -99,8 +99,8 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 | C1 | Record corto (senza firma su ogni record, un terzo dello spazio): sì | fatto il 18 novembre: 66 byte (34 in una STORE, dove il proprietario è chi la manda; 38 nell'archivio, col numero del proprietario), con i bit di zeri del punto |
 | C2 | Ripubblicazione leggera: sì | fatto il 18 novembre: un punto va solo ai custodi che non aveva all'ultima ripubblicazione; senza nodi arrivati o andati non parte niente |
 | C2b | Bit di zeri adattivi: sì | fatto il 18 novembre: la casa li sceglie dalla grandezza della rete (al minimo quelli del file della rete, al massimo 8 di più) e li cambia quando la rete diventa 4 volte più grande o più piccola |
-| C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | da fare. Richiede che ogni motore di ricerca di pzsolve (CPU e schede video) riporti le chiavi che servono da prova di lavoro: senza quella prova chiunque potrebbe dichiarare fatti dei blocchi mai cercati |
-| C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | da fare. Il pool: MARA Slipstream, gratuito e aperto a tutti da agosto 2026, con un'interfaccia per i programmi; MARA trova il 4-6% dei blocchi, quindi circa 3 ore di attesa. Con la quota dell'autore l'invio dovrebbe diventare automatico: da decidere quando si fa C3 (serve HTTPS: il `curl` del sistema o l'OpenSSL di pzsign) |
+| C3 | Ricerca lineare condivisa: sì. Nessuna transazione automatica, la chiave resta a chi la trova | **fatto il 20 novembre:** la rete di ogni puzzle senza chiave pubblica è nel programma (`pzpeer run --puzzle 71`, blocchi di 2^44 chiavi); la casa sceglie a caso un blocco che nessuno ha dichiarato, lo fa cercare a pzsolve con le chiavi quasi giuste, e pubblica la dichiarazione con le prove ai 5 custodi del blocco; quando tutti i blocchi guardati sono dichiarati, ripassa quelli dichiarati. Provata con un nodo e due case (`tests/peer/e2e_linear.sh`). Mancano i controlli a campione (servono un protocollo loro): senza, una dichiarazione falsa ritarda la chiave fino al secondo passaggio |
+| C4 | Chiave trovata senza chiave pubblica nota: avviso sempre; invio riservato a un pool di mining **solo se l'utente lo chiede** | **fatto il 20 novembre:** `pzpeer sweep --private` manda la transazione firmata a MARA Slipstream e a nient'altro, con il `curl` del sistema (`--pool URL` per un altro pool). L'indirizzo del servizio non è documentato da MARA: è quello che usano la sua pagina e i programmi di altri. Provato con un finto pool; mai con quello vero. La quota dell'autore non c'è, per scelta: la chiave resta a chi la trova |
 
 ### D. Rilascio
 
@@ -229,7 +229,7 @@ il pezzo per primo può tenersi il suo e prenderle da solo: al #140 circa 300 eu
 
 | | Cosa | Stato |
 |---|---|---|
-| L1 | La stima del tempo nella ricerca lineare condivisa: dai blocchi rivendicati nella rete, come per i punti del canguro (NETWORK.md 11) | Da fare insieme a C3 |
+| L1 | La stima del tempo nella ricerca lineare condivisa: dai blocchi rivendicati nella rete, come per i punti del canguro (NETWORK.md 11) | **Fatto:** ogni 10 minuti la riga con i blocchi dichiarati dalla casa e quelli della rete (le dichiarazioni tenute × nodi / 5) |
 | L2 | La stima la vede solo una casa che accetta connessioni (solo quella custodisce punti) | Si potrebbe chiedere il conteggio a qualche custode; per ora no |
 | L3 | Bit ignoti in più gruppi separati: `--step` copre un solo blocco | Più campagne, una per ogni valore del gruppo più piccolo |
 | L4 | BSGS può riportare la chiave giusta poco oltre la fine dell'intervallo (anche senza passo) | Innocuo: la chiave è sempre quella giusta |

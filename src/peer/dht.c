@@ -222,6 +222,9 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
         ans[0] = DHT_PROOF;
         return 1 + 64;
     }
+    case DHT_CLAIM:
+    case DHT_CLAIM_GET:
+        return claim_answer(d, c, m, len, ans);
     default:
         return 0;
     }
@@ -566,6 +569,11 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         return NULL;
     }
     store_limits(d->custody, d->cfg.store_max, d->cfg.store_max / OWNER_SHARE);
+    path_of(d, "claims.bin", path, sizeof path);
+    if (cfg->blocks && !(d->claims = claims_open(path, cfg->net->fp, err, errlen))) {
+        dht_stop(d);
+        return NULL;
+    }
     const bool own = own_open(d, err, errlen);
     if (!own || !(d->mb = mbox_new(MBOX_CAP, MBOX_PER_OWNER))) {
         if (own) snprintf(err, errlen, "out of memory");
@@ -627,6 +635,7 @@ void dht_stop(dht *d)
     if (d->started) save_peers(d);
     for (job *j = d->jhead, *nx; j; j = nx) nx = j->next, free(j);
     store_close(d->custody);
+    claims_close(d->claims);
     if (d->ownfd >= 0) (void)sys_sync(d->ownfd), close(d->ownfd);
     free(d->cc.e);
     mbox_free(d->mb);

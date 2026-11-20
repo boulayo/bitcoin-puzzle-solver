@@ -317,7 +317,7 @@ Deciso: si fa, senza transazioni automatiche. La chiave resta a chi la trova, ch
 
 **Quando la chiave viene trovata.** pzsolve avvisa di non spenderla con un portafoglio, e `pzpeer sweep` prepara e firma la transazione senza inviarla: la si consegna a un pool di mining che accetta transazioni riservate. Questa parte c'è già.
 
-**Stato:** fatti l'avviso, `pzpeer sweep`, la modifica ai motori (`hunt --near`, provata su tutti i motori CPU e sul percorso delle schede video con il driver simulato, mai su una scheda vera) e la dichiarazione di un blocco con la sua verifica. Da fare: il file di una rete lineare, il registro delle dichiarazioni nella tabella, la casa che cerca blocco per blocco, i controlli a campione.
+**Stato (20 novembre):** fatti l'avviso, `pzpeer sweep` con l'invio riservato a MARA Slipstream su richiesta (`--private`), la modifica ai motori (`hunt --near`, provata su tutti i motori CPU e sul percorso delle schede video con il driver simulato, mai su una scheda vera), la dichiarazione di un blocco con la sua verifica, il file di una rete lineare e le reti dei puzzle senza chiave pubblica nel programma, il registro delle dichiarazioni nella tabella (messaggi `CLAIM` e `CLAIM_GET`), la casa che cerca blocco per blocco. Le prove di lavoro: le chiavi con 32 bit uguali per blocchi di 2^34-2^37, con 40 bit per blocchi di 2^42-2^45 (16 in media a 2^36 e 2^44). Da fare: i controlli a campione.
 
 ---
 

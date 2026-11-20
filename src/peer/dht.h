@@ -22,6 +22,7 @@
 #ifndef PZPEER_DHT_H
 #define PZPEER_DHT_H
 
+#include "block.h"
 #include "net.h"
 #include "record.h"
 #include "store.h"
@@ -38,7 +39,8 @@
 /* the messages (docs/en/NETWORK.md 7.4): an answer is its request + 1 */
 enum {
     DHT_PING = 1, DHT_PONG, DHT_FIND_NODE, DHT_NODES, DHT_STORE, DHT_STORED, DHT_ALERT, DHT_OK, DHT_MBOX_GET, DHT_MBOX, DHT_POSSESS,
-    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_PROVE, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31   /* PROVE is answered with MBOX */
+    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_PROVE, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31,   /* PROVE is answered with MBOX */
+    DHT_CLAIM = 32, DHT_CLAIMED, DHT_CLAIM_GET, DHT_CLAIMS   /* the claims of the blocks of a linear search (docs/en/NETWORK.md 11) */
 };
 
 /* the status of a record in STORED; COINCIDENCE asks the owner for PROVE before the custodian alerts anyone */
@@ -92,6 +94,7 @@ typedef struct {
     bool portmap;                  /* ask the router of the LAN to let the listening port in (portmap.h) */
     const char *router;            /* tests: the address of that router; NULL: the one of the default route */
     bool verbose;                  /* what the node does, on stderr */
+    const block_net *blocks;       /* a linear search: the claims of its blocks are kept (claims.bin) and answered; NULL: none */
 } dht_config;
 
 #define DHT_STORE_DEFAULT (1ull << 27) /* records of a custodian: 5 GB on disk, an index of 2 GB in memory at most */
@@ -115,6 +118,13 @@ int dht_publish(dht *d, record *recs, int n);
 /* The own records again now (the maintenance thread does it every republish_s), each to the custodians it did not have at the last
  * republish (all: to every custodian, as at the first contacts after none). The copies sent. */
 uint64_t dht_republish(dht *d, bool all);
+
+/* A claim of a block of this node: to the DHT_KSTORE custodians of the key of its block (block_key). The custodians that took it. */
+int dht_claim_publish(dht *d, const block_claim *c);
+/* The claims of a block the custodians of its key hold, checked, one an owner, at most max; -1 when no custodian answered. */
+int dht_claims_of(dht *d, uint64_t index, block_claim *out, int max);
+/* The claims this node keeps as a custodian. */
+uint64_t dht_claims_held(dht *d);
 
 /* The want (at most DHT_K) nodes closest to target, this one included when it listens, nearest first: an iterative lookup. */
 int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want);

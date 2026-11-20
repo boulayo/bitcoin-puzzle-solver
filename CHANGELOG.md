@@ -6,6 +6,14 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- pzpeer: the shared linear search (docs/en/NETWORK.md 11), for a puzzle whose public key is not known. Its network is in the program
+  (`pzpeer run --puzzle 71`: its address, blocks of 2^44 keys), or a file gives `address=` and `blockbits=`. The home picks a block
+  nobody claimed, has `pzsolve hunt --near` scan it, and publishes the claim of the block with its proof keys to the 5 custodians of the
+  block, which keep it and answer who asks (`CLAIM`, `CLAIM_GET`); when every block it looks at is claimed, it scans a claimed one again.
+  A key found stays with the home. `pzpeer node` keeps the claims of such a network too. Proof keys of 32 bits for blocks of 2^34 to
+  2^37 keys, of 40 bits for blocks of 2^42 to 2^45.
+- `pzpeer sweep --private`: the signed transaction goes to MARA's Slipstream, a mining pool that does not show it in the public mempool,
+  through the `curl` of the system; `--pool URL` names another one. Without them it is printed and not sent, as before.
 - pzsolve `hunt --stop-with-input`: the end of standard input stops the campaign as a Ctrl-C does. `pzpeer run` starts pzsolve with a
   pipe it never writes, so a pzpeer that is killed or crashes no longer leaves a pzsolve searching on alone (its campaign taken, at the
   next start, by a search nobody reads).

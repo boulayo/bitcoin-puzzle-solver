@@ -22,8 +22,13 @@ typedef struct {
 bool sweep_tx(const session_chain *ch, const uint8_t sec[32], const uint8_t *to, size_t to_len, const payout_terms *author, sweep_info *info,
               btc_tx *tx);
 
-/* pzpeer sweep --to ADDRESS [--chain NAME] [--rpc ... | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]; the key (64 hex digits) is
- * read from the standard input, never from the command line, where the list of processes would show it. */
+/* The pool --private gives the transaction to: MARA's Slipstream, free and open to all since August 2026, which mines it without showing it
+ * in the public mempool. Its interface is not documented by MARA: this is the one its own page and the programs of others use. */
+#define SWEEP_POOL "https://slipstream.mara.com/api/transactions"
+
+/* pzpeer sweep --to ADDRESS [--chain NAME] [--rpc ... | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE] [--private | --pool URL]; the
+ * key (64 hex digits) is read from the standard input, never from the command line, where the list of processes would show it. Without
+ * --private or --pool the transaction is printed and NOT sent; with them it goes to that pool only, never to the public network. */
 int sweep_main(int argc, char **argv);
 
 #endif

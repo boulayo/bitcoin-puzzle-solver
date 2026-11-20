@@ -99,6 +99,7 @@ int64_t sys_size(int fd);
 bool sys_truncate(int fd, uint64_t size);
 bool sys_sync(int fd);                     /* what was written is on the disk */
 bool sys_replace(const char *from, const char *to);   /* from takes the place of to (which may exist), and stays there after a crash */
+bool sys_remove_dir(const char *path);     /* the files of a folder (not the folders in it), then the folder; true when it is gone */
 
 /* ---- the stop ---- */
 

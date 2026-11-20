@@ -4,6 +4,7 @@
  * and changes with every defining line, and the files that are refused. */
 #include "peertest.h"
 #include "netfile.h"
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 
 static const char BODY[] =
@@ -52,6 +53,19 @@ int main(void)
           !memcmp(a.pubkey33, m + 12, 33) && !memcmp(a.jumpseed, seed, 32) && a.start.w[2] == 1ull << 11 && a.end.w[2] == (1ull << 12) - 1);
     CHECK(netfile_puzzle(0, &b, err, sizeof err) && b.puzzle == 140 && !memcmp(a.fp, b.fp, 32));
     CHECK(netfile_puzzle(145, &b, err, sizeof err) && b.dpbits == 28 && memcmp(a.fp, b.fp, 32));
-    CHECK(!netfile_puzzle(71, &b, err, sizeof err) && !netfile_puzzle(161, &b, err, sizeof err));
+    CHECK(!netfile_puzzle(161, &b, err, sizeof err));
+    /* puzzle 71, without a public key: a linear network, of its address and blocks of 2^44 keys */
+    uint8_t h71[20];
+    CHECK(netfile_puzzle(71, &b, err, sizeof err) && b.linear && b.blockbits == 44 && !strcmp(b.net, "p71") && !strcmp(b.chain, "main") &&
+          pz_address_to_hash160(b.address, h71) && !memcmp(b.h160, h71, 20) && b.start.w[1] == 1ull << 6 && b.end.w[1] == (1ull << 7) - 1);
+    /* a linear file: the address must be of its chain, blockbits a size a claim can prove, and no key of the kangaroo */
+    static const char LIN[] = "net=lin\npuzzle=0\naddress=mmF9pY4RGQVXonKpcvvYPxkEgs42C3iSRz\nrange=1000:ffff\nblockbits=36\nchain=regtest\n";
+    char t[600];
+    CHECK(netfile_parse(LIN, &a, err, sizeof err) && a.linear && a.blockbits == 36);
+    snprintf(t, sizeof t, "%sdpbits=20\n", LIN);
+    CHECK(!netfile_parse(t, &b, err, sizeof err) && strstr(err, "does not take"));
+    CHECK(!netfile_parse("net=lin\npuzzle=0\naddress=mmF9pY4RGQVXonKpcvvYPxkEgs42C3iSRz\nrange=1000:ffff\nblockbits=40\nchain=regtest\n", &b, err, sizeof err));
+    CHECK(!netfile_parse("net=lin\npuzzle=0\naddress=mmF9pY4RGQVXonKpcvvYPxkEgs42C3iSRz\nrange=1000:ffff\nblockbits=36\nchain=main\n", &b, err, sizeof err));
+    CHECK(!netfile_parse("net=lin\npuzzle=0\naddress=mmF9pY4RGQVXonKpcvvYPxkEgs42C3iSRz\nrange=1000:ffff\nchain=regtest\n", &b, err, sizeof err));
     TEST_DONE("t_netfile");
 }

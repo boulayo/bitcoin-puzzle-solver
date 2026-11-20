@@ -18,7 +18,7 @@ int main(void)
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     secp256k1_keypair id, other;
     uint8_t sec[32], keys[6][32], enc[BLOCK_CLAIM_MAX];
-    block_net net = {.bits = 41};
+    block_net net = {.bits = 42};
     block_claim c, d;
     memset(net.fp, 7, 32), memset(net.h160, 0x11, 20);
     memcpy(net.h160 + 8, "\x08\xe1\xd9\xa1\x9a", 5);
@@ -27,11 +27,13 @@ int main(void)
     CHECK(secp256k1_keypair_create(ctx, &id, sec));
     pz_sha256((const uint8_t *)"another", 7, sec);
     CHECK(secp256k1_keypair_create(ctx, &other, sec));
-    CHECK(block_min_proofs(40) == 1 && block_min_proofs(43) == 2 && block_min_proofs(44) == 4 && block_min_proofs(48) == 64);
+    CHECK(block_min_proofs(36) == 4 && block_min_proofs(42) == 1 && block_min_proofs(43) == 2 && block_min_proofs(44) == 4 && block_min_proofs(45) == 8);
+    CHECK(!block_bits_ok(33) && block_bits_ok(34) && block_bits_ok(37) && !block_bits_ok(38) && !block_bits_ok(41) && block_bits_ok(42) && block_bits_ok(45) &&
+          !block_bits_ok(46) && block_min_proofs(34) == 1);
 
     key_of(0x800003d4338, keys[0]), key_of(0x80000068b68, keys[1]), key_of(0x80000068b68, keys[2]);   /* out of order, and one twice */
     key_of(0x80000068b69, keys[3]);                                                                  /* not a proof key */
-    key_of(0x7ffffffffff, keys[4]), key_of((1ull << 43) + (1ull << 41) + 5, keys[5]);               /* before and after the block */
+    key_of(0x7ffffffffff, keys[4]), key_of((1ull << 43) + (1ull << 42) + 5, keys[5]);               /* before and after the block */
     CHECK(block_proof_key(ctx, &net, keys[0]) && block_proof_key(ctx, &net, keys[1]) && !block_proof_key(ctx, &net, keys[3]));
     {                                                     /* the key of the prize itself is never a proof: it is never to be published */
         block_net prize = net;

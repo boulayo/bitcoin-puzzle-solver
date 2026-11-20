@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <spawn.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -355,4 +356,14 @@ void sys_on_stop(void (*fn)(int))
     sigaction(SIGINT, &sa, NULL), sigaction(SIGTERM, &sa, NULL);
     struct sigaction hup;                                      /* the terminal closing, unless started under nohup */
     if (sigaction(SIGHUP, NULL, &hup) == 0 && hup.sa_handler != SIG_IGN) sigaction(SIGHUP, &sa, NULL);
+}
+
+bool sys_remove_dir(const char *path)
+{
+    DIR *d = opendir(path);
+    char p[4200];
+    for (struct dirent *e; d && (e = readdir(d));)
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && (size_t)snprintf(p, sizeof p, "%s/%s", path, e->d_name) < sizeof p) (void)unlink(p);
+    if (d) closedir(d);
+    return rmdir(path) == 0 || errno == ENOENT;
 }

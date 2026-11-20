@@ -64,8 +64,10 @@ Layers of pzpeer, bottom up; each one only uses the ones above it in this list:
 | `spv.c` | block headers checked by their proof of work, Merkle branches |
 | `electrum.c` | a client of the Electrum protocol (plain TCP) |
 | `chain_spv.c` | the chain of a session without a node: several Electrum servers, every answer proven |
-| `sweep.c` | `pzpeer sweep`: the transaction that moves the coins of a key found by a linear search, signed and not sent |
-| `block.c` | the claim of a block of a shared linear search and its proof of work (section 11; not used by the daemon yet) |
+| `sweep.c` | `pzpeer sweep`: the transaction that moves the coins of a key found by a linear search, signed, and given to a mining pool only on request (`--private`) |
+| `block.c` | the claim of a block of a shared linear search and its proof of work (section 11) |
+| `claims.c`, `dht_claim.c` | the claims a custodian keeps, and the messages that store and ask them (section 11) |
+| `linear.c` | the home of a linear search: a free block, pzsolve on it, its claim (section 11) |
 | `home.c` | the daemon of a home: seed and keys, pzsolve, the feed of `dp.bin`, a session for every useful coincidence |
 | `main.c` | the commands |
 
@@ -173,8 +175,10 @@ public key is known and whose key is not (today 140). Its lines come from the pu
 puzzles fixed in 2015: nobody chose it, so nobody could have picked one that suits them, and everybody computes the same one. A home
 that starts the day it gets the program and one that starts a year later are on the same network, and the second meets the walks of the
 first. Knowing the seed before others is only being able to walk before them: the same work, which counts the same. The least zero
-bits are the delay rule of section 6 for a network of 2^40 walkers (a million GPUs): each home adds up to 8 to them. A network file is
-for tests (a puzzle of one's own, another chain) and for a puzzle that is not in the table.
+bits are the delay rule of section 6 for a network of 2^40 walkers (a million GPUs): each home adds up to 8 to them. A puzzle of the
+table whose public key is not known has the network of a linear search instead (section 11): `address=` (its P2PKH address, of its
+chain) and `blockbits=44` in place of `pubkey=`, `jumpseed=`, `schema=` and `dpbits=`. A network file is for tests (a puzzle of one's
+own, another chain) and for a puzzle that is not in the table.
 
 Their fingerprint `F = SHA256("pznet1/file" || canonical lines)` **is** the network: every key, record, message and the rendezvous key
 are bound to it, so two nodes are on the same network exactly when their files have the same `F`. Nobody signs a file. Whoever changes
@@ -369,6 +373,8 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 | 11 | POSSESS(record, nonce 32) | 12 PROOF(sig 64) |
 | 13 | RELAY(name 32, partner 32) (7.7) | 14 RELAYED, when the partner came; then the bytes of the partner's connection |
 | 15 | PROVE(the first 34 bytes of a record, proof 64), after a STORED that said 3 for it: the owner is the sender | 10 MBOX with the pairs of the record that waited for the proof (no proofs in them) |
+| 32 | CLAIM(a claim of a block, section 11), from its owner | 33 CLAIMED(status) |
+| 34 | CLAIM_GET(index 8) | 35 CLAIMS(n, n × (length 2, claim)), n ≤ 4 |
 | 16–31 | session messages (section 7.5) | |
 
 - The lengths are exact. In NODES each contact must have the ID of its identity, with the zero bits, a port, and an address the node may
@@ -893,7 +899,8 @@ in `t_session` with `PZ_REGTEST`.
 | `net.c`, `store.c`, `dht.c` | done (`t_net`, `t_store`, `t_dht`: 33 nodes in one process), with the limits of 7.3 and 7.4 and the relay of 7.7; what a public network still needs is in 7.8 |
 | `json.c`, `btc.c`, `btc_rpc.c`, `chain_rpc.c` | done (`t_json`, `t_btc`, `t_btc_rpc`, `t_chain_rpc`, `fuzz_peer`; `t_session` with `PZ_REGTEST` on Bitcoin Core 28.1; the coins also on a pruned node) |
 | `bt.c`, `portmap.c` | done (`t_bt`, `t_portmap`, `tests/peer/e2e_meet.sh`); not tried against the real table of BitTorrent nor a real router |
-| `sweep.c` | done (`tests/peer/e2e_sweep.sh`: the node would take the transaction, and pzpeer did not send it) |
+| `sweep.c` | done (`tests/peer/e2e_sweep.sh`: the node would take the transaction, and pzpeer did not send it); `--private` tried against a stand-in of the pool, not the real one |
+| `block.c`, `claims.c`, `dht_claim.c`, `linear.c` | done (`t_block`, `t_netfile`, `t_dht`; `tests/peer/e2e_linear.sh`: a node and two homes, two blocks of 2^34 keys, the key found and the claims held); the spot checks to come |
 | `spv.c`, `electrum.c`, `chain_spv.c` | done (`t_spv`, `t_chain_spv`, `PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh`); not tried against a public Electrum server |
 | pzsign, `signer.c`, `pieces.c`, `payout.c`, `session.c` | done (`make signer-test`; `t_pieces`, `t_payout`, `t_session`: the payout and the cancel, in memory and on regtest) |
 | `netfile.c`, `pzpeer netcheck` | done (`t_netfile`) |
@@ -959,7 +966,7 @@ What a Bitcoin node does is the model.
   address. Bitcoin Core also takes connections through a Tor onion service, with no open port and no address shown; in a table such as
   this one every node must reach every custodian, so a custodian behind Tor would serve only the nodes that have Tor too: not now.
 
-## 11. The shared linear search (under construction)
+## 11. The shared linear search
 
 A puzzle whose public key is not known is searched key by key, and the key is seen whole by whoever tries it: no prize can be split.
 What a network can do is keep two people from trying the same keys: a register of the blocks already tried. Tried once, the range
@@ -967,13 +974,19 @@ ends for sure, and in half the keys on average; nothing more than that is gained
 
 A register is worth what its entries are worth, so every entry carries a proof of work.
 
-**Near misses (done, in pzsolve).** Every CPU engine and GPU kernel compares bytes 8 to 11 of the hash160 of a key with the target's
+**Near misses (pzsolve).** Every CPU engine and GPU kernel compares bytes 8 to 11 of the hash160 of a key with the target's
 before the rest. A key that passes is a *near miss*: one key in 2^32. The engines report them (`scan_job.on_near`, the hits of the
 kernel), the host checks each on the CPU (`run_scan_candidate`, which also takes the key of the campaign from among them), and
 `hunt --near` writes them to `near.txt` of the campaign. Nothing else in pzsolve knows of a network.
 
-**The claim of a block (done, `block.c`, `t_block`).** The range is cut into blocks of 2^bits keys, 40 to 48. A *proof key* is a near
-miss with byte 12 of the target's too: one key in 2^40, about 16 in a block of 2^44. A claim is
+**The network.** A network file with `address=` (the P2PKH address of the puzzle, of its chain) and `blockbits=` in place of `pubkey=`,
+`jumpseed=`, `schema=` and `dpbits=` is a linear search; the network of every puzzle of the table without a known public key is in the
+program, with blocks of 2^44 keys (`pzpeer run --puzzle 71`, `pzpeer netcheck 71`). The range is cut into blocks of 2^blockbits keys
+from its start, the last one maybe shorter.
+
+**The claim of a block (`block.c`, `t_block`).** A *proof key* of a block is a near miss (blocks of 34 to 37 bits: bytes 8 to 11 of the
+target's) or a near miss with byte 12 of the target's too (42 to 45 bits): 16 in a block of 2^36 or 2^44 on average, 4 in one of 2^34
+(for tests). A claim is
 
 | Field | Bytes | |
 |---|---|---|
@@ -987,15 +1000,30 @@ and is valid with a good signature, increasing offsets inside the block, every k
 average number of them (an honest scan has fewer once in a thousand blocks, and that block is done again). Checking a claim costs
 some tens of hashes. A claim shows that most of the block was tried; it cannot show that no key was skipped.
 
-**The time a linear search needs**, once it runs on the network: the claims are records of the table like the points of the kangaroo,
-so a home estimates the blocks claimed in the whole network the same way (claims held × nodes / 5), and their rate; the key is in one of
-the blocks not yet tried, evenly, so the time to half the chance is half the blocks left over that rate, and to certainty all of them.
+**The register (`claims.c`, `dht_claim.c`).** A claim goes to the 5 nodes closest to `SHA256("pznet1/blockkey" || F || index)`, with
+`CLAIM(claim)` (type 32, answered `CLAIMED(status)`: 0 stored, 1 already there, 2 refused for now, 3 not valid), from its owner only
+(the owner in the claim is the identity of the connection), within the rate of the records of its address block, to a node that may be
+a custodian of that key, checked before it is kept. A custodian keeps at most 4 owners of a block, 2^21 claims in all, in `claims.bin`.
+`CLAIM_GET(index)` (34) is answered `CLAIMS(n, n × (length 2, claim))` (35), and whoever asks checks each claim itself.
 
-**To come.** The network file of a linear search (an address in place of the public key, the size of the blocks); the claims kept
-in the table like the records of the kangaroo; the home that picks a block nobody claimed, runs `pzsolve hunt -r BLOCK --near`,
-and publishes its claim; spot checks, where a node scans a random slice of a claimed block and asks the owner for its near misses
-of that slice (a near miss the owner cannot show is a proof of fraud that everyone can check); and a second pass over the claimed
-blocks when no free one is left, so that a false claim delays the key and does not hide it.
+**The home (`linear.c`).** `pzpeer run` on a linear network: no payout, no terms, no chain. The home picks a block at random, asks its
+custodians whether anyone claimed it, and tries another one while it is claimed (64 at most: then it scans a claimed one again, a
+second pass, so that a false claim delays the key and does not hide it); with many homes two seldom pick the same block. Then
+`pzsolve hunt -r BLOCK -a ADDRESS --near --stop-with-input` scans it (the campaign `campaigns/b<index>`, which a restart resumes:
+the block under way is in `block`); at its end the home makes the claim from `near.txt`, publishes it, keeps it in `claims.own`
+(sent again every day) and deletes the campaign. A key found stays in `FOUND.txt` of its campaign, and the home stops.
 
-**When the key is found** nothing is sent. pzsolve warns not to spend it through the public mempool, and `pzpeer sweep` makes and
-signs the transaction for the finder to give to a mining pool in private (`sweep.c`).
+**The time.** Every 10 minutes a line: the blocks this home claimed, and the claims the network holds, estimated as those this node
+keeps × nodes / 5 (a home that does not listen keeps none, and shows no estimate).
+
+**Not done.** Spot checks, where a node scans a random slice of a claimed block and asks the owner for its near misses of that slice (a
+near miss the owner cannot show would be a proof of fraud that everyone can check): they need a protocol of their own. Without them a
+false claim costs the network the time to its second pass.
+
+**When the key is found** nothing is sent. pzsolve and the home warn not to spend it through the public mempool: the transaction shows
+the public key, and with a key that short anyone finds the private key in seconds and sends the coins elsewhere first. `pzpeer sweep`
+makes and signs the transaction (`sweep.c`) and prints it; with `--private` it gives it to MARA's Slipstream, a pool that mines
+transactions without showing them (free and open to all since August 2026), and to nothing else: a `POST` of `{"tx_hex": ...}` to
+`https://slipstream.mara.com/api/transactions` through the `curl` of the system (Linux, macOS, and Windows since 10 have it), so that
+pzpeer needs no TLS of its own. That interface is not documented by MARA: it is the one its page and the programs of others use, and
+`--pool URL` gives another address.

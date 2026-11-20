@@ -7,12 +7,14 @@
  *   dht_store.c  the records: what a custodian takes, what this node publishes (own.bin, own.cust)
  *   dht_alert.c  the alerts of a coincidence, the proofs of possession, the mailboxes
  *   dht_relay.c  the relay, and the channel of a session (docs/en/NETWORK.md 7.7)
+ *   dht_claim.c  the claims of the blocks of a linear search (docs/en/NETWORK.md 11)
  * Each shared structure has its own mutex, and no lock is held across a connection: the routing table, the limits by address block, the
  * queue of accepted connections, the jobs, the alerts, the relays, the publishing. The stores and the mailbox lock themselves. */
 #ifndef PZPEER_DHT_PRIV_H
 #define PZPEER_DHT_PRIV_H
 
 #include "dht.h"
+#include "claims.h"
 #include "sys.h"
 #include "bt.h"
 #include <pthread.h>
@@ -107,6 +109,7 @@ struct dht {
     dht_contact me;
     char *dir, **boot;
     store *custody;
+    claims *claims;                /* a linear search: the claims kept as a custodian (NULL: none) */
     mbox *mb;
     atomic_bool stop;
     atomic_bool unplaced;          /* an own record went to no other node: the first contacts after none get all of them again */
@@ -234,6 +237,9 @@ void prove_to(dht *d, const dht_contact *c, const record *r);
 void job_alert_out(dht *d, const record *a, const record *b);
 void job_alert_own(dht *d, const record *a, const record *b);
 void retry_alerts(dht *d);
+
+/* dht_claim.c */
+size_t claim_answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, uint8_t *ans);
 
 /* dht_relay.c */
 bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len);

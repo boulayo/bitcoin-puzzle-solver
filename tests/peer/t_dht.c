@@ -60,6 +60,7 @@ typedef struct {
 static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0xd4, 0x7};
 static record_net net;
+static block_net bnet;             /* the claims of a linear search, kept by the same nodes (test_claims) */
 static uint8_t qp[32];             /* q' = k - base, the scalar of Q' (the tests know the key of their puzzle) */
 static node nodes[NODES];
 static record recs[RECS];
@@ -161,7 +162,7 @@ static dht_config node_cfg(node *n, int port)
         .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
         .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = timeout_ms, .handlers = 4,
         .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .allow_private = true, .relay_max = 2, .relay_bytes = 8u << 20, .relay_slot_s = 1,
-        .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL,
+        .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL, .blocks = &bnet,
     };
     return cfg;
 }
@@ -434,6 +435,38 @@ static void make_id(const char *label, home_identity *id)
     uint8_t seed[32];
     hashed(label, seed);
     CHECK(keys_identity(ctx, seed, FP, BITS, id));
+}
+
+/* A claim of a block (dht_claim.c): published by its owner, found by another node, refused from anyone but its owner. */
+static void test_claims(void)
+{
+    node *A = &nodes[3], *B = &nodes[27];
+    uint8_t key[32] = {0};
+    key[24] = 0x10, key[26] = 0x0c, key[31] = 0x39;
+    block_claim c, got[4];
+    CHECK(block_claim_make(ctx, &bnet, &A->id.kp, 3, (const uint8_t(*)[32])key, 1, &c));
+    CHECK(dht_claim_publish(A->d, &c) >= 4);
+    CHECK(dht_claims_of(B->d, 3, got, 4) == 1 && !memcmp(got[0].owner, A->id.xonly, 32) && got[0].n == 1);
+    CHECK(dht_claims_of(B->d, 4, got, 4) == 0);                 /* nobody claimed block 4 */
+    CHECK(dht_claim_publish(A->d, &c) >= 4);                    /* again: the same claim, kept once */
+    CHECK(dht_claims_of(B->d, 3, got, 4) == 1);
+    /* the same claim sent by another identity: a custodian takes a claim from its owner only */
+    home_identity cid;
+    make_id("claim thief", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    uint8_t k[32], req[1 + BLOCK_CLAIM_MAX], ans[2];
+    size_t n;
+    int who;
+    block_key(&bnet, 3, k);
+    CHECK(brute(k, 1, &who) == 1);
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(nodes[who].d);
+    req[0] = DHT_CLAIM;
+    const size_t len = 1 + block_claim_encode(&c, req + 1);
+    CHECK(!net_exchange(&cli, &a, nodes[who].id.xonly, req, len, ans, sizeof ans, &n, NULL));   /* not the owner */
+    printf("t_dht: a claim published, found, and refused from another identity\n");
 }
 
 /* A copy of another's point alerts nobody: the custodian waits for the proof of the owner that stored it. A real coincidence: the owner
@@ -1435,6 +1468,16 @@ int main(void)
     memcpy(qp, k, 32), memcpy(nb, base, 32);
     CHECK(secp256k1_ec_seckey_negate(ctx, nb) && secp256k1_ec_seckey_tweak_add(ctx, qp, nb));
     CHECK(sys_mkdir(ROOT));
+    {                                                          /* blocks of 2^42 keys from 2^60; the target has bytes 8 to 12 of a key of block 3 */
+        secp256k1_pubkey pk3;
+        uint8_t key[32] = {0}, pub[33];
+        size_t pl = 33;
+        memcpy(bnet.fp, FP, 32), bnet.bits = 42, bnet.start[24] = 0x10;
+        key[24] = 0x10, key[26] = 0x0c, key[31] = 0x39;        /* 2^60 + 3 * 2^42 + 0x39 */
+        CHECK(secp256k1_ec_pubkey_create(ctx, &pk3, key) && secp256k1_ec_pubkey_serialize(ctx, pub, &pl, &pk3, SECP256K1_EC_COMPRESSED));
+        pz_hash160(pub, 33, bnet.h160);
+        bnet.h160[0] ^= 0xff;                                  /* not the key of the prize itself */
+    }
     for (int i = 0; i < NODES; i++) {
         char label[32];
         uint8_t seed[32];
@@ -1466,6 +1509,7 @@ int main(void)
     printf("t_dht: %d records published by %d owners in %.1f s\n", RECS, OWNERS, (double)(ms() - t0) / 1000);
     test_coincidences();
     test_copied_point();
+    test_claims();
     test_malformed();
     test_restart();
     test_republish();
