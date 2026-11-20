@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #define MAX_SESSIONS 64
+#define PROVED_MAX 1024
 #define HELLO_SESSIONS 16          /* sessions started by a hello alone, without an alert of the table (the others always have room) */
 #define FAILS_MAX 10               /* failed signings of a home on a network, with any partner (project 4.6) */
 #define FAILS_PAIR_MAX 3           /* and with one pair */
@@ -85,9 +86,13 @@ typedef struct {
     FILE *dpr;                      /* dp.bin for the reads back */
     own_index own;
     sys_proc pzsolve;
+    int solve_in;                   /* its input, a pipe pzpeer never writes: closed, or with pzpeer gone, pzsolve saves and ends */
     pthread_mutex_t mu;             /* own, dpr, the sessions */
     pthread_cond_t cv;
     session_slot s[MAX_SESSIONS];
+    uint8_t proved[PROVED_MAX][64];  /* HOME/proved: the x of an own point and the id of the pair whose partner proved it, also from
+                                      * before a restart: no other pair on that point (slot_of) */
+    int nproved;
     int ended;                      /* sessions that ended, and how: for exit_when_done */
     bool paid;
     session_limit limit;            /* the failed signings, counted in the home folder */
@@ -243,6 +248,30 @@ static void paid_save(home *h)
     if (f) ok = fclose(f) == 0 && ok;
     else if (fd >= 0) close(fd);
     if (!ok || !sys_replace(tmp, h->paidpath)) remove(tmp), say(h, "cannot write %s: after a restart the pieces would not be exchanged", h->paidpath);
+}
+
+/* HOME/proved, a line "<x> <eid>" a pair, read at the start (proved_add with no pair) or added to (mu held) */
+static void proved_add(home *h, const session_slot *s)
+{
+    char path[1200], line[140];
+    snprintf(path, sizeof path, "%s/proved", h->dir);
+    if (!s) {
+        FILE *f = sys_fopen(path, "r");
+        uint8_t e[64];
+        while (f && h->nproved < PROVED_MAX && fgets(line, sizeof line, f))
+            if (strlen(line) >= 129 && line[64] == ' ' && btc_unhex(line, 64, e) && btc_unhex(line + 65, 64, e + 32)) memcpy(h->proved[h->nproved++], e, 64);
+        if (f) fclose(f);
+        return;
+    }
+    for (int i = 0; i < h->nproved; i++)
+        if (!memcmp(h->proved[i], s->mine.x, 32)) return;      /* the point has its pair already */
+    if (h->nproved == PROVED_MAX) return;
+    memcpy(h->proved[h->nproved], s->mine.x, 32), memcpy(h->proved[h->nproved] + 32, s->eid, 32), h->nproved++;
+    char a[65], b[65];
+    btc_hex(s->mine.x, 32, a), btc_hex(s->eid, 32, b);
+    FILE *f = sys_fopen(path, "a");
+    if (!f || fprintf(f, "%s %s\n", a, b) < 0 || fflush(f) || !sys_sync(fileno(f))) say(h, "cannot write %s", path);
+    if (f) fclose(f);
 }
 
 /* The pairs of HOME/paid back in their slots: they try the exchange of the pieces again soon, unless the key is in FOUND.txt already (then
@@ -444,6 +473,16 @@ static void last_line(const char *path, char *out, size_t cap)
     if (f) fclose(f);
 }
 
+/* pzsolve saves its state and ends (the end of its input is its Ctrl-C); with wait, this waits for that end. The status, or -1. */
+static int stop_pzsolve(home *h, bool wait)
+{
+    int st = -1;
+    sys_pipe_close(h->solve_in), h->solve_in = -1;
+    if (wait) (void)sys_proc_ended(h->pzsolve, true, &st);
+    h->pzsolve = 0;
+    return st;
+}
+
 static bool start_pzsolve(home *h, char *err, size_t errlen)
 {
     char key[1100], camp[1100];
@@ -462,12 +501,12 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
     snprintf(dp, sizeof dp, "%u", h->dp);
     snprintf(name, sizeof name, "net-%s", h->nf.net);
     const char *argv[64] = {h->cfg->pzsolve, "hunt", "-r", range, "-k", pub, "--dp-bits", dp, "--jump-seed", js, "--start-key", key,
-                            "-c", name, "-d", camp, "--ui", "log"};
-    int n = 18;
+                            "-c", name, "-d", camp, "--ui", "log", "--stop-with-input"};
+    int n = 19;
     for (int i = 0; i < h->cfg->nargs && n < 62; i++) argv[n++] = h->cfg->pzsolve_args[i];
     argv[n] = NULL;
     snprintf(h->logpath, sizeof h->logpath, "%s/pzsolve.out", h->dir);
-    if (!(h->pzsolve = sys_spawn(argv, h->logpath, NULL, NULL))) return snprintf(err, errlen, "cannot start %s", h->cfg->pzsolve), false;
+    if (!(h->pzsolve = sys_spawn(argv, h->logpath, &h->solve_in, NULL))) return snprintf(err, errlen, "cannot start %s", h->cfg->pzsolve), false;
     say(h, "pzsolve started, its output in %s", h->logpath);
     return true;
 }
@@ -658,8 +697,8 @@ static void *session_main(void *arg)
     pthread_mutex_unlock(&h->mu);
     const uint64_t paid_before = paid.paid_at;
     const bool had_key = paid.have_key;                         /* a session that gives the partner our piece again shows nothing new */
-    /* the chain and the own terms first: once the channel is open the partner's hello comes within seconds (and is waited for no
-     * longer), and a chain without a node takes longer than that to answer */
+    /* the own terms first: once the channel is open the partner's hello comes within seconds (and is waited for no longer); the chain
+     * is asked once the partner proved its point (session.c) */
     btc_rpc rpc = {0};
     chain_rpc crpc = {.rpc = &rpc, .chain = h->chain, .conf_target = 2, .fallback_feerate = 2000};
     session_cfg sc = {0};
@@ -668,12 +707,10 @@ static void *session_main(void *arg)
         snprintf(why, sizeof why, "--rpc: %s", rpc.err.msg);
         goto done;
     }
-    /* a chain that is behind would report coins that are not those of the chain */
-    if ((cfg->rpc ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&h->spv, why, sizeof why)) != 1) goto done;
     const session_chain chain = cfg->rpc ? chain_rpc_iface(&crpc) : chain_spv_iface(&h->spv);
     sc = (session_cfg){.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                        .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
-                       .feerate = chain.feerate(chain.ctx), .pzsign = cfg->pzsign, .pzsign_log = h->signlog, .limit = &h->limit, .proved = &proved,
+                       .pzsign = cfg->pzsign, .pzsign_log = h->signlog, .limit = &h->limit, .proved = &proved,
                        .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3, .paid = &paid, .say = session_say, .on_paid = session_on_paid, .user = &sy,
                        /* how often the chain is asked: public servers are not to be hammered */
                        .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
@@ -714,6 +751,7 @@ done:
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
     s->running = false, s->waiting = false, s->have_conn = false, s->conn = NULL;
     s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
+    if (proved) proved_add(h, s);
     /* again in 10 minutes if it did not pay, or paid without the pieces */
     s->retry_at = s->alerted && !paid.empty && (res != SESSION_PAID || !paid.have_key) && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
     /* a pair whose partner never proved anything gives its slot back, and so does one out of tries (an alert that comes again starts it
@@ -738,6 +776,7 @@ static session_slot *slot_of(home *h, const record *mine, const record *theirs, 
         if (h->s[i].used && !memcmp(h->s[i].eid, eid, 32)) return &h->s[i];
         make &= !(h->s[i].used && h->s[i].proved && !memcmp(h->s[i].mine.x, mine->x, 32));
     }
+    for (int i = 0; i < h->nproved; i++) make &= memcmp(h->proved[i], mine->x, 32) || !memcmp(h->proved[i] + 32, eid, 32);
     for (int i = 0; make && i < MAX_SESSIONS; i++)
         if (!h->s[i].used) {
             session_slot *s = &h->s[i];
@@ -1012,7 +1051,7 @@ int home_run(const home_cfg *cfg)
     home *h = &hs;
     char err[400];
     memset(h, 0, sizeof *h);
-    h->cfg = cfg;
+    h->cfg = cfg, h->solve_in = -1;
     pthread_mutex_init(&h->mu, NULL);
     pthread_cond_init(&h->cv, NULL);
     h->ctx = keys_ctx();
@@ -1052,7 +1091,7 @@ int home_run(const home_cfg *cfg)
     } else if (!light_chain(h, cfg, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!home_seed(h, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!keys_identity(h->ctx, h->seed, h->nf.fp, cfg->id_bits, &h->id)) return fprintf(stderr, "no identity\n"), 1;
-    paid_load(h);
+    paid_load(h), proved_add(h, NULL);
     /* the table: the entry lines of the file and the peers given */
     const char *boot[64];
     char entries[16][256];
@@ -1156,8 +1195,7 @@ int home_run(const home_cfg *cfg)
         int st;
         if (h->pzsolve && (paid_now || gone)) {                 /* nothing is left to search: the home stays on for the pieces */
             say(h, paid_now ? "the prize is paid: pzsolve stops" : "the puzzle address is empty, the prize has been taken: pzsolve stops");
-            sys_proc_interrupt(h->pzsolve), (void)sys_proc_ended(h->pzsolve, true, &st);
-            h->pzsolve = 0;
+            (void)stop_pzsolve(h, true);
         }
         if (h->pzsolve && sys_proc_ended(h->pzsolve, false, &st)) {
             char why[400];
@@ -1166,11 +1204,11 @@ int home_run(const home_cfg *cfg)
             if (solved_alone) say(h, "pzsolve found the key on its own: it is in %s", fpath);
             else say(h, "pzsolve ended with status %d: %s (all of it in %s); this home goes on as a custodian, without a search", st,
                      why[0] ? why : "no reason given", h->logpath);
-            h->pzsolve = 0;
+            (void)stop_pzsolve(h, false);
             solo = solved_alone, solo_at = mono_s() + cfg->solo_wait, searched = true;
         }
         if (h->pzsolve && next_dp && next_dp != h->dp && !paid_now && !gone) {   /* it saves its walkers, and goes on with the new zero bits */
-            sys_proc_interrupt(h->pzsolve), (void)sys_proc_ended(h->pzsolve, true, &st), h->pzsolve = 0;
+            (void)stop_pzsolve(h, true);
             set_dp(h, next_dp, dp_nodes);
             if (!start_pzsolve(h, err, sizeof err)) say(h, "%s: this home goes on as a custodian, without a search", err), searched = true;
         }
@@ -1197,8 +1235,7 @@ int home_run(const home_cfg *cfg)
         pthread_mutex_unlock(&h->mu);
         if (done && !busy) break;
     }
-    int st;
-    if (h->pzsolve) sys_proc_interrupt(h->pzsolve), (void)sys_proc_ended(h->pzsolve, true, &st);   /* it saves its state and ends */
+    if (h->pzsolve) (void)stop_pzsolve(h, true);                /* it saves its state and ends */
     if (!g_stop) g_stop = 1;                                    /* a session that waits for its channel gives up now */
     bool busy = true, paid = false;
     for (int wait = 0; busy && wait < 600; wait++) {            /* sessions under way end on their own: a payout is not cut in half */

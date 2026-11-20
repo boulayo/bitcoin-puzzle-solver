@@ -24,7 +24,7 @@ void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identit
     memset(cfg, 0, sizeof *cfg);
     cfg->ctx = ctx;
     cfg->self = self;
-    memcpy(cfg->prologue, "pznet3", 6);
+    memcpy(cfg->prologue, "pznet4", 6);
     memcpy(cfg->prologue + 6, fp, 32);
     cfg->id_bits = id_bits;
     cfg->port = port;
@@ -136,6 +136,8 @@ bool net_addr_public(const net_addr *a)
              (b[0] & 0xfe) == 0xfc || b[0] == 0xff ||                  /* unique local, multicast */
              (b[0] == 0xfe && (b[1] & 0x80) == 0x80) ||                /* link-local and the old site-local */
              (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8) ||   /* documentation */
+             (b[0] == 0x20 && b[1] == 0x02) ||                         /* 6to4 and Teredo: an IPv4 address inside, another block for */
+             (b[0] == 0x20 && b[1] == 0x01 && !b[2] && !b[3]) ||       /* the same machine (and both are out of use) */
              (b[0] == 0x01 && !memcmp(b + 1, ZERO, 7)));              /* discard-only (RFC 6666) */
 }
 

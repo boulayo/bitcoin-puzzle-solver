@@ -14,7 +14,8 @@
 
 #define ANS_MAX MBOX_LEN           /* the longest answer */
 #define JOBS_MAX 4096
-#define ALERT_JOBS_MAX 256         /* of them, the alerts a custodian sends */
+#define ALERT_JOBS_MAX 256         /* of them, the alerts a custodian sends, */
+#define ALERT_JOBS_BLOCK 8         /* ... and of those the ones for the records of one address block */
 #define IN_MS 2000                 /* the handshake and the request of a connection that comes in: they come at once */
 #define CONN_PER_BLOCK 4           /* connections of one address block queued or being answered at a time */
 #define LIM_SLOTS 4096             /* address blocks whose limits are remembered */
@@ -66,10 +67,12 @@ bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool det
 /* the entry of a block (l_mu held): found, or a free one, or the one used longest ago with no connection; NULL when all are busy */
 static lim_entry *lim_get(dht *d, const net_addr *a)
 {
-    uint8_t blk[16];
-    uint64_t h = 1469598103934665603ULL;                       /* FNV-1a: the blocks are not secret, the probes are few */
+    uint8_t blk[16], m[48], hh[32];
     net_addr_block(a, blk);
-    for (int i = 0; i < 16; i++) h = (h ^ blk[i]) * 1099511628211ULL;
+    memcpy(m, d->lim_key, 32), memcpy(m + 32, blk, 16);       /* keyed: blocks chosen to meet in one place and push each other out */
+    pz_sha256(m, sizeof m, hh);                                /* (back to a full share of tokens) would have to know the key */
+    uint64_t h;
+    memcpy(&h, hh, 8);
     lim_entry *best = NULL;                                    /* a free entry, else the idle one used longest ago */
     for (int p = 0; p < 8; p++) {
         lim_entry *e = &d->lim[(h + (uint64_t)p) & (LIM_SLOTS - 1)];
@@ -201,6 +204,13 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
         }
         return 2 + (size_t)n * DHT_MBOX_ENTRY;
     }
+    case DHT_PROVE: {
+        /* the owner's proof of a record it stored here that made a coincidence (custody_proved) */
+        uint8_t e[RECORD_LEN];
+        if (len != 1 + RECORD_WIRE + 64 || !lim_take(d, &c->addr, LIM_ALERT, 1)) return 0;
+        memcpy(e, m + 1, RECORD_WIRE), memcpy(e + RECORD_WIRE, c->remote, 32);
+        return record_decode(e, &r) ? custody_proved(d, &r, m + 1 + RECORD_WIRE, &c->addr, ans) : 0;
+    }
     case DHT_POSSESS: {
         uint8_t dd[32];
         /* only for a record of this node, as it signed it: the proof binds the identity of the asker (Noise told it) and its nonce */
@@ -271,8 +281,12 @@ bool job_push(dht *d, int kind, const record *a, const record *b, const dht_cont
     if (a) j->a = *a;
     if (b) j->b = *b;
     if (c) j->c = *c;
+    j->blocked = kind == JOB_ALERT_OUT && c && limited(d, &c->addr);
+    if (j->blocked) net_addr_block(&c->addr, j->block);
     pthread_mutex_lock(&d->j_mu);
-    const bool ok = d->jn < JOBS_MAX && (kind != JOB_ALERT_OUT || d->jn_alert < ALERT_JOBS_MAX) && !stopping(d);
+    int same = 0;                                              /* slow alerts of a few blocks cannot hold the whole queue */
+    for (const job *q = d->jhead; q && j->blocked; q = q->next) same += q->blocked && !memcmp(q->block, j->block, 16);
+    const bool ok = d->jn < JOBS_MAX && (kind != JOB_ALERT_OUT || (d->jn_alert < ALERT_JOBS_MAX && same < ALERT_JOBS_BLOCK)) && !stopping(d);
     if (ok) {
         job **at = &d->jhead;                                  /* this node's own alerts first, then the others' alerts, then the pings */
         while (*at && (*at)->kind <= kind) at = &(*at)->next;
@@ -371,12 +385,14 @@ static void *meet_main(void *arg)
     memcpy(bc.infohash, h, 20);
     const int64_t period = (int64_t)(d->cfg.rendezvous_s ? d->cfg.rendezvous_s : 900) * 1000;   /* that table forgets in half an hour */
     int64_t next_meet = 0, next_map = 0;
+    bool mapped = false;
+    char why[400];
     while (!stopping(d)) {
         const int64_t now = sys_now_ms();
         if (d->cfg.portmap && d->port && now >= next_map) {    /* a lease of two hours, asked again before half of it passes */
-            char why[400];
             const unsigned s = portmap(d->port, 7200, d->me.xonly, d->cfg.router, why, sizeof why);
             dlog(d, "router: %s", why);
+            mapped |= s != 0;
             next_map = now + (s ? 500LL * (s < 120 ? 120 : s) : 600000);
         }
         if (d->cfg.nbt_routers && now >= next_meet) {
@@ -395,6 +411,7 @@ static void *meet_main(void *arg)
         }
         sys_sleep_ms(200);
     }
+    if (mapped) (void)portmap(d->port, 0, d->me.xonly, d->cfg.router, why, sizeof why), dlog(d, "router: %s", why);   /* none left behind */
     return NULL;
 }
 
@@ -506,7 +523,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     d->relay_ms = 1000LL * (cfg->relay_s ? cfg->relay_s : 4 * 3600);
     d->slot_ms = 1000LL * (cfg->relay_slot_s ? cfg->relay_slot_s : 60);
     if (d->cfg.handlers <= 0) d->cfg.handlers = 8;
-    if (d->cfg.relay_max <= 0) d->cfg.relay_max = 8;
+    if (d->cfg.relay_max <= 0) d->cfg.relay_max = 32;
     if (!d->cfg.relay_bytes) d->cfg.relay_bytes = 32ull << 20;
     if (!d->cfg.store_max) d->cfg.store_max = DHT_STORE_DEFAULT;
     memcpy(d->me.id, cfg->self->id, 32);
@@ -531,8 +548,9 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     d->t0 = now;
     d->probe_ms = 1000LL * (cfg->probe_s ? cfg->probe_s : 120);
     atomic_init(&d->in_ms, now - REACH_MS + d->probe_ms);
-    if (!(d->lim = calloc(LIM_SLOTS, sizeof *d->lim)) || !(d->active = calloc((size_t)d->cfg.relay_max, sizeof *d->active))) {
-        snprintf(err, errlen, "out of memory");
+    if (!(d->lim = calloc(LIM_SLOTS, sizeof *d->lim)) || !(d->active = calloc((size_t)d->cfg.relay_max, sizeof *d->active)) ||
+        !sys_random(d->lim_key, sizeof d->lim_key)) {
+        snprintf(err, errlen, "out of memory, or no randomness from the system");
         dht_stop(d);
         return NULL;
     }

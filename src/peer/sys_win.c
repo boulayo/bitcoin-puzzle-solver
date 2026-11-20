@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <bcrypt.h>
 #include <iphlpapi.h>
+#include <sddl.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
@@ -178,16 +179,14 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     /* the three standard handles of the child: the pipes, the log, or copies of those of pzpeer that the child can inherit */
     for (int i = 0; ok && i < 3; i++) {
         if (to && i == 0) ok = CreatePipe(&std[0], &in_w, &inherit, 0) && SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
-        else if (to && i == 1) ok = CreatePipe(&out_r, &std[1], &inherit, 0) && SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
-        else if (to && log && i == 2)                         /* the errors of a child with pipes, to the log */
-            std[2] = CreateFileA(log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        else if (log && i == 0) std[0] = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, NULL);
-        else if (log && i == 1)
-            std[1] = CreateFileA(log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        else if (log) {
+        else if (from && i == 1) ok = CreatePipe(&out_r, &std[1], &inherit, 0) && SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+        else if (log && i == 2 && !from) {                    /* the errors with the output, in the log */
             std[2] = std[1];
             continue;
-        } else {
+        } else if (log && i == 0) std[0] = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, NULL);
+        else if (log)                                          /* the output, or the errors of a child whose output is a pipe */
+            std[i] = CreateFileA(log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        else {
             const HANDLE own = GetStdHandle(i == 0 ? STD_INPUT_HANDLE : i == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
             if (own && own != INVALID_HANDLE_VALUE && !DuplicateHandle(me, own, me, &std[i], 0, TRUE, DUPLICATE_SAME_ACCESS)) std[i] = NULL;
         }
@@ -212,7 +211,8 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
         return 0;
     }
     CloseHandle(pi.hThread);
-    if (to) *to = pipe_fd(in_w), *from = pipe_fd(out_r);
+    if (to) *to = pipe_fd(in_w);
+    if (from) *from = pipe_fd(out_r);
     return (sys_proc)pi.hProcess;
 }
 
@@ -270,7 +270,17 @@ static bool is_dir(const char *path)
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-bool sys_mkdir(const char *path) { return CreateDirectoryA(path, NULL) || is_dir(path); }
+/* A folder made here is for this user alone: its owner and the system, with nothing taken from the folder above (which may let anyone
+ * on the machine read), and what is made inside it takes the same */
+bool sys_mkdir(const char *path)
+{
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, FALSE};
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorA("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", SDDL_REVISION_1, &sa.lpSecurityDescriptor, NULL))
+        return false;
+    const bool made = CreateDirectoryA(path, &sa);
+    LocalFree(sa.lpSecurityDescriptor);
+    return made || is_dir(path);
+}
 bool sys_private(const char *path) { return is_dir(path); }
 
 static int open_flags(const char *path, int flags)

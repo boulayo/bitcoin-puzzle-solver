@@ -619,6 +619,19 @@ bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool me
     return done(c, &d, ok, "gettxout");
 }
 
+bool btc_rpc_inmempool(btc_rpc *c, const uint8_t txid[32], bool *in)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    jw_init(&w);
+    jw_arr(&w);
+    put_hash(&w, txid);
+    jw_end(&w);
+    if ((*in = call(c, false, "getmempoolentry", &w, &d, &res))) return done(c, &d, true, "getmempoolentry");
+    return c->err.kind == BTC_RPC_ERPC && c->err.code == -5;  /* "Transaction not in mempool" */
+}
+
 bool btc_rpc_estimatesmartfee(btc_rpc *c, unsigned target, uint64_t *sat_per_kvb)
 {
     json_w w;

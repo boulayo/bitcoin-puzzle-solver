@@ -65,3 +65,13 @@ void pieces_eid(const record_net *net, const record pair[2], uint8_t eid[32])
     for (int i = 0; i < 2; i++) record_name(&pair[i], m + 42 + i * RECORD_LEN);   /* not the zero bits, which tell of the walk */
     pz_sha256(m, sizeof m, eid);
 }
+
+int pieces_first(const record_net *net, const record pair[2])
+{
+    uint8_t m[12 + 32 + 32 + 2], h[32];
+    const int lo = pair[0].t < pair[1].t ? 0 : 1;
+    memcpy(m, "pznet1/first", 12), memcpy(m + 12, net->fp, 32), memcpy(m + 44, pair[0].x, 32);
+    m[76] = (uint8_t)(int8_t)pair[lo].t, m[77] = (uint8_t)(int8_t)pair[1 - lo].t;
+    pz_sha256(m, sizeof m, h);
+    return h[31] & 1 ? 1 - lo : lo;
+}

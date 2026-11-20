@@ -101,6 +101,8 @@ bool pz_console_is_own(void);
 /* ---- secrets and the hardening of the process ---- */
 /* Whether standard input is a terminal (a console on Windows). */
 bool pz_stdin_is_terminal(void);
+/* Bytes from standard input, as they come: their number, 0 at its end, -1 on an error. */
+long pz_stdin_read(void *p, size_t n);
 /* Reads one line (without its end of line) into buf, which holds cap bytes. Standard input a terminal: prompt (on the terminal, not on stdout)
  * and the line is read with the echo off; the terminal is put back on every way out, a stop signal (Ctrl-C, SIGTERM, SIGHUP; Windows: a console
  * event) included. Standard input not a terminal (a script, a test): the next line of it, no prompt. allow_tty: when standard input is not

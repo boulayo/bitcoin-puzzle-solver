@@ -24,20 +24,26 @@ Sulle macchine Windows e macOS della CI i test di pzpeer passano (su Windows anc
 La mia revisione non sostituisce quella di specialisti. **Da decidere:** se farla fare prima di usare bitcoin veri. **Consiglio:** sì, prima del #140.
 
 La revisione interna di novembre (quattro revisori indipendenti: firma, sessione e pagamento, rete, risolutore) ha portato alle correzioni
-del ramo. Restano questi punti di progetto, da chiudere prima del #140:
-- chi attacca può scegliere se essere F o S rifirmando il proprio record: serve un passo di impegno e rivelazione dei nonce;
-- ~~un partner può far ripartire la coppia con annullamenti ripetuti per un giorno, e ogni giro costa una commissione al premio~~: fatto il 14 novembre, al massimo 5 pagamenti non riusciti per punto (3.8);
-- avvisi falsi della tabella (record con una x copiata) possono occupare i 64 posti delle sessioni per un giorno;
-- i limiti per blocco di indirizzi sono larghi, e il conteggio si azzera con collisioni di FNV;
-- ~~la custodia predefinita arriva a 2^28 record (37 GB)~~: fatto il 18 novembre, 2^27 record in 5 GB col record corto;
-- un saluto fa interrogare i server Electrum prima di qualunque prova;
-- gli identificativi delle richieste verso BitTorrent sono prevedibili, e gli indirizzi IPv6 6to4 e Teredo non sono filtrati;
-- il tempo con cui P1 fallisce dice quale firma del lotto non andava (al più log2(n+1) bit);
-- i valori segreti possono restare nelle riserve di memoria dei numeri grandi di OpenSSL;
-- le azioni della CI non sono fissate per hash, e `check_binary.sh` ha una sola lista per tutti i programmi;
-- la regola "un punto, una coppia provata" vive in memoria e ricomincia a ogni riavvio della casa;
-- con un nodo proprio, un riordino di blocchi che riporta in mempool la prima transazione mentre anche la seconda è lì sembra una spesa
-  confermata.
+del ramo. I punti di progetto che restavano, chiusi il 20 novembre salvo dove è scritto:
+- ~~chi attacca può scegliere se essere F o S~~: F ora viene dal punto e dai due tipi di canguro (`pieces_first`), che nessuno sceglie;
+  una nuova identità cambia l'ordine delle case, non F. Più semplice dell'impegno e rivelazione, e senza il problema di chi abbandona
+  dopo aver visto il numero dell'altro;
+- ~~un partner può far ripartire la coppia con annullamenti ripetuti~~: fatto il 14 novembre (3.8);
+- ~~avvisi falsi della tabella (record con una x copiata)~~: il custode avvisa solo dopo la prova di chi ha depositato il record (E1);
+- ~~il conteggio per blocco si azzera con collisioni di FNV~~: la tabella dei limiti usa un hash con una chiave segreta del nodo;
+- ~~la custodia predefinita a 2^28 record~~: fatto il 18 novembre;
+- ~~un saluto fa interrogare i server Electrum prima di qualunque prova~~: la catena si interroga solo dopo le prove, e la commissione
+  viaggia in un messaggio dopo di esse (`S_FEE`);
+- ~~gli identificativi delle richieste verso BitTorrent sono prevedibili, e 6to4 e Teredo non sono filtrati~~: ogni giro ha 4 byte a caso
+  nell'identificativo; gli indirizzi 6to4 e Teredo non contano come pubblici;
+- ~~il tempo con cui P1 fallisce dice quale firma non andava~~: pzsign controlla tutte le firme prima di fermarsi;
+- i valori segreti possono restare nelle riserve di memoria dei numeri grandi di OpenSSL: **accettato**. pzsign vive pochi secondi, non
+  lascia file di core e su Linux nessun altro processo lo può leggere; bloccare la sua memoria (mlock) lo farebbe fallire con i messaggi
+  grandi della firma, e cambiare l'allocazione dentro cb-mpc vorrebbe una modifica della libreria;
+- ~~le azioni della CI non sono fissate per hash, e `check_binary.sh` ha una sola lista~~: fissate per hash; ogni programma ha la sua
+  lista di DLL;
+- ~~la regola "un punto, una coppia provata" vive in memoria~~: ora è anche nel file `proved` della casa;
+- ~~con un nodo proprio, un riordino di blocchi sembra una spesa confermata~~: una transazione tornata nel mempool non conta come spesa.
 
 ### 1.3 La prova pubblica con due o tre computer
 Quando vuoi farla: un puzzle di 60–64 bit creato da noi, con un premio piccolo, e `--debug FILE` su ogni computer. I file di debug non contengono segreti: me li puoi far leggere così come sono.
@@ -112,19 +118,19 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 
 ### 3.1 Sicurezza, da fare prima di una rete con denaro vero
 
-| | Rilievo | Rimedio proposto |
+| | Rilievo | Stato |
 |---|---|---|
-| E1 | Un avviso con un punto copiato costa alla vittima circa 50 connessioni, e riempie la sua cassetta finché non arriva una prova | Il custode chiede a chi ha depositato il record una prova di possesso legata al custode, prima di avvisare (circa 30 righe) |
-| E2 | Le cassette di una casa che non ascolta stanno sui 5 nodi più vicini a un nome pubblico: chi mette nodi lì le controlla | Più cassette, scelte anche con un segreto condiviso fra le due case; connessioni tenute aperte al posto delle interrogazioni |
-| E3 | Una coppia arrivata dopo può sostituire la prima transazione di una coppia arrivata prima | Prima transazione sempre alla commissione massima |
-| E4 | Chi fa fallire le firme blocca un punto (3 fallimenti) senza pagare nulla | I fallimenti si dimenticano col tempo; un tentativo costa qualcosa a chi lo chiede |
-| E5 | Un server Electrum lento allunga ogni lettura della catena | Un limite di tempo per server e per operazione |
-| E6 | Il partner può imporre fino a 1000 sat/vB e fermarsi dopo la prima transazione | Un tetto più basso, o la commissione presa dal blocco |
-| E7 | Il generatore del seme accredita 256 bit al tempo anche con un orologio senza rumore | Togliere i rami che dipendono dai dati nella parte cronometrata, oppure stimare sulla differenza di due ripetizioni |
-| E8 | pzsign: 126 MB per un solo messaggio dentro il limite di dimensione | Un limite agli elementi per fase |
-| E9 | Windows: la cartella predefinita `pznet-NOME` prende i permessi della cartella madre (il seme di un nodo non passa più dalla riga di comando: sta in `node.seed`) | Permessi espliciti |
-| E10 | La mappatura UPnP "senza fine" non viene mai tolta | Toglierla all'uscita |
-| E11 | Una casa (`pzpeer run`) chiede da sola al router di aprire la porta, con UPnP (decisione A4). Bitcoin Core ha tolto UPnP nella 29.0 e dalla 30.0 chiede da solo al router, ma con PCP o NAT-PMP: un messaggio binario corto verso il router, senza la ricerca sulla rete di casa e senza l'XML di UPnP | **Deciso e fatto:** come Bitcoin Core 30, apertura accesa di default, chiesta prima con PCP e NAT-PMP e poi con UPnP per i router che parlano solo quello (`portmap.c`, `t_portmap`; il router si trova da solo su Linux, Windows e macOS). Da provare con un router vero |
+| E1 | Un avviso con un punto copiato costava alla vittima circa 50 connessioni, e riempiva la sua cassetta | **Fatto (20 novembre):** il custode risponde `COINCIDENCE` e aspetta la prova di chi ha depositato il record (`PROVE`, legata al custode); senza prova non avvisa nessuno |
+| E2 | Le cassette di una casa che non ascolta stanno sui 5 nodi più vicini a un nome pubblico: chi mette nodi lì le controlla | **Fatto (20 novembre):** la risposta a `PROVE` porta le coppie al proprietario direttamente dal custode del suo punto; la ripubblicazione a tutti i custodi (al più una settimana) porta ogni coincidenza anche con le cassette in mano a un attaccante. Le cassette restano una scorciatoia |
+| E3 | Una coppia arrivata dopo può sostituire la prima transazione di una coppia arrivata prima | **Lasciato com'è, per scelta:** la commissione massima sulla prima sposterebbe solo la gara sulla seconda (anche l'altra coppia sa spendere l'uscita del premio), costerebbe troppo ai premi piccoli, e un programma modificato può sempre pagare di più. Fra due coppie oneste vince chi conferma prima |
+| E4 | Chi fa fallire le firme blocca un punto (3 fallimenti) senza pagare nulla | **Da decidere (con K3):** dimenticare i fallimenti col tempo apre di nuovo la strada a un difetto della firma che perda un bit a ogni fallimento |
+| E5 | Un server Electrum lento allungava ogni lettura della catena | **Fatto:** oltre al limite di una chiamata, 60 secondi per server per tutta un'operazione |
+| E6 | Il partner può imporre fino a 1000 sat/vB e fermarsi dopo la prima transazione | **Fatto (14 novembre):** una commissione oltre 4 volte la propria è rifiutata, e al massimo 5 pagamenti non riusciti per punto |
+| E7 | Il generatore del seme accreditava bit al tempo anche con un orologio senza rumore | **Fatto:** ogni misura del tempo fa lo stesso lavoro, agli stessi indirizzi e senza salti che dipendono dai dati; su una macchina senza rumore i tempi sono tutti uguali e i test della sorgente la rifiutano |
+| E8 | pzsign: 126 MB per un solo messaggio dentro il limite di dimensione | **Accettato** (come K5): solo memoria, una firma alla volta, il processo finisce subito dopo |
+| E9 | Windows: la cartella della casa prendeva i permessi della cartella madre | **Fatto:** la cartella nasce per il solo proprietario (e il sistema), senza ereditare nulla |
+| E10 | La mappatura UPnP "senza fine" non veniva mai tolta | **Fatto:** all'uscita la casa chiede al router di chiudere la porta (PCP, NAT-PMP o UPnP) |
+| E11 | Apertura della porta come Bitcoin Core 30 | Fatto prima (PCP e NAT-PMP, poi UPnP). Da provare con un router vero |
 
 ### 3.2 Sprechi
 
@@ -187,12 +193,12 @@ della campagna, la cifratura fallita che chiudeva la campagna. Restano aperti:
 
 | | Rilievo | Rimedio proposto |
 |---|---|---|
-| J1 | 16 blocchi di indirizzi tengono occupati i 32 posti d'attesa di un relay (e 8 blocchi gli 8 relay attivi per ore): le coppie dietro router di tutta la rete non si incontrano | Molti più posti d'attesa (sono solo connessioni aperte), uno per blocco |
-| J2 | Pochi blocchi di indirizzi possono tenere piena la coda degli avvisi da custode con lavori lenti | Un tetto di avvisi in coda per blocco di chi li manda |
-| J3 | 256 monetine di polvere mandate all'indirizzo del puzzle fra la prima e la seconda transazione nascondono la seconda alla catena leggera: niente denaro perso, ma il pagamento risulta fallito | Contare solo le transazioni che spendono dall'indirizzo, oppure cercare direttamente la seconda transazione |
-| J4 | Un pzpeer ucciso (memoria finita, crash) lascia pzsolve acceso; al riavvio il secondo pzsolve trova la campagna occupata | Leggere il PID nel file `lock` della campagna e fermare quello rimasto |
-| J5 | Il "chiudi alla nascita" dei descrittori arriva un attimo dopo la loro creazione: un figlio avviato in quell'attimo ne eredita uno | `SOCK_CLOEXEC`, `pipe2` su Linux, `POSIX_SPAWN_CLOEXEC_DEFAULT` su macOS |
-| J6 | La cartella della casa è controllata, poi i file si riaprono per nome | Aprire la cartella una volta e lavorare dentro di essa |
+| J1 | 16 blocchi di indirizzi tenevano occupati i 32 posti d'attesa di un relay (e 4 blocchi gli 8 relay attivi) | **Fatto:** 256 posti d'attesa (sono solo connessioni aperte, senza thread) e 32 relay attivi; con 2 per blocco ne servono 128 e 16 |
+| J2 | Pochi blocchi di indirizzi potevano tenere piena la coda degli avvisi da custode con lavori lenti | **Fatto:** al massimo 8 avvisi in coda per i record di un blocco |
+| J3 | 256 monetine di polvere mandate all'indirizzo del puzzle fra la prima e la seconda transazione nascondono la seconda alla catena leggera: niente denaro perso, ma il pagamento risulta fallito | **Aperto.** Ogni voce della storia va scaricata per sapere se spende: un tetto serve sempre, e chi manda la polvere lo supera pagando. Con un nodo proprio il problema non c'è |
+| J4 | Un pzpeer ucciso (memoria finita, crash) lasciava pzsolve acceso | **Fatto, meglio del rimedio proposto:** pzpeer dà a pzsolve un canale in ingresso che non scrive mai (`--stop-with-input`); quando pzpeer finisce, anche ucciso, il canale si chiude e pzsolve salva lo stato e si ferma, come a un Ctrl-C. Provato con `kill -9`: fermo dopo 2 secondi |
+| J5 | Il "chiudi alla nascita" dei descrittori arrivava un attimo dopo la loro creazione | **Fatto:** `SOCK_CLOEXEC`, `accept4`, `pipe2` e `fopen "e"` su Linux, `POSIX_SPAWN_CLOEXEC_DEFAULT` su macOS |
+| J6 | La cartella della casa è controllata, poi i file si riaprono per nome | **Accettato:** la cartella è dell'utente e nessun altro la può aprire, quindi nessun altro può scambiare i file nel frattempo; `openat` non esiste su Windows |
 | J7 | Su macOS `fsync` non arriva fino al disco: un'interruzione di corrente subito dopo il primo avvio poteva perdere il seme nuovo | **Fatto**: `F_FULLFSYNC` per il seme, lo stato delle sessioni e la custodia |
 | J8 | Il controllo della monetina minuscola di `t_session` falliva a volte (i pagamenti erano giusti) | **Fatto**: quando la metà dispari dava un satoshi in meno a F, la differenza senza segno del test diventava enorme |
 
@@ -208,8 +214,8 @@ tentativi. Restano aperti:
 
 | | Rilievo | Rimedio proposto |
 |---|---|---|
-| K1 | Chi attacca sceglie se essere F o S rifirmando il proprio record (2 tentativi in media) | Moneta a due: il saluto porta l'impronta di un numero a caso, la prova lo rivela, F viene da entrambi |
-| K2 | Una copia vecchia della prima transazione, mandata prima di quella nuova, ferma la sessione per un giorno (ora conta come un pagamento non riuscito, al massimo 5) | Riconoscere una prima transazione uguale con altre firme e proseguire con quella |
+| K1 | Chi attacca sceglieva se essere F o S cambiando identità (2 tentativi in media) | **Fatto:** F viene dal punto e dai due tipi (`pieces_first`); nessuna delle due case lo può scegliere |
+| K2 | Una copia vecchia della prima transazione, minata al posto di quella nuova, fermava la sessione per un giorno | **Fatto:** quando le monete della prima sono spese in un blocco e passano altri 2 blocchi senza di essa, la sessione si ferma e riprova dopo 10 minuti dalle monete di allora (un pagamento non riuscito, al massimo 5) |
 | K3 | Un partner che manda messaggi rovinati fa contare un fallimento alla casa onesta: con i punti di una fusione può arrivare a 10 e la casa non firma più su quella rete | **Da decidere**: dimenticare i fallimenti dopo un tempo (per esempio 10 ogni 30 giorni) oppure tenerli per sempre come oggi |
 | K4 | Le prove di cb-mpc sulla chiave Paillier e sulla cifratura del pezzo hanno un margine di 2^-50 per tentativo, non 2^-128 | Nessuno: con i limiti dei fallimenti resta vicino a 3·2^-50. Scritto in NETWORK.md 7.6 |
 | K5 | Un messaggio costruito ad arte fa riservare alla libreria circa 120 MB prima di essere rifiutato | Accettato (solo memoria, una firma alla volta); oppure una modifica locale di cb-mpc |

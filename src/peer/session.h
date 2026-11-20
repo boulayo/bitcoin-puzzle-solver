@@ -10,12 +10,12 @@
 #include <pthread.h>
 
 #define SESSION_MSG_MAX 65535               /* a Noise frame */
-#define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 427 bytes at most */
+#define SESSION_HELLO_MAX 512               /* the first message of a session: a hello, 419 bytes at most */
 
 /* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
  * while a session waits for blocks, and is skipped by the reader. After the payout S_SECOND carries the second transaction (empty from
- * a side that does not have it) and S_PIECE the secret piece of a side. */
-enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE, S_SECOND };
+ * a side that does not have it) and S_PIECE the secret piece of a side. S_FEE, after the proofs, the fee rate a side proposes. */
+enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE, S_SECOND, S_FEE };
 
 typedef struct {
     void *ctx;
@@ -41,6 +41,9 @@ typedef struct {
     /* the transactions of the mempool that pay to or spend from a P2PKH script, -1 when the chain cannot be asked: a light chain does not
      * show a coin whose spend waits in the mempool. NULL: coins shows those coins (a node's scan of its set) */
     int (*pending)(void *ctx, const uint8_t spk[BTC_P2PKH_LEN]);
+    /* 1 when the chain is up to date (one that is behind reports coins that are not the chain's), else 0 with the reason; asked only once
+     * the partner proved its point, so a stranger's hello makes this home ask its chain nothing. NULL: always */
+    int (*ready)(void *ctx, char *why, size_t cap);
 } session_chain;
 
 #define SESSION_PRIZES_MAX 16
@@ -87,8 +90,6 @@ typedef struct {
     size_t pay_len;
     uint64_t min_feerate, max_feerate;      /* the fee rate this home proposes is twice the estimate of its chain, within these (satoshis
                                              * per 1000 virtual bytes); the higher of the two homes is taken, and one above max ends the session */
-    uint64_t feerate;                       /* the estimate of the chain, asked before the channel opened (the partner waits seconds for
-                                             * the hello, and a chain without a node can take longer); 0: asked at the hello */
     payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
     int nprizes;
     const char *pzsign;                    /* the signer */

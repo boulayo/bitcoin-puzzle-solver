@@ -245,14 +245,17 @@ static bytes run(const job_t& j, link_t& l) {
     if (size_t(got.size()) != 64 * msgs.size()) throw fail{"the partner gave " + std::to_string(got.size()) + " bytes of signatures"};
     rs.assign(got.data(), got.data() + got.size());
   }
-  // the check that counts: a signature that does not verify, or whose s is not low, never leaves, not even toward the partner
+  // the check that counts: a signature that does not verify, or whose s is not low, never leaves, not even toward the partner. Every one
+  // is checked before the end: stopping at the first bad one would tell the partner, by the time, which one it was
   const bn_t half = n >> 1;
+  size_t bad = msgs.size();
   for (size_t k = 0; k < msgs.size(); k++) {
     const bn_t r = bn_t::from_bin(mem_t(&rs[64 * k], 32)), s = bn_t::from_bin(mem_t(&rs[64 * k + 32], 32));
-    if (r <= 0 || r >= n || s <= 0 || s > half ||
-        crypto::ecc_pub_key_t(j.key).verify(msgs[k], crypto::ecdsa_signature_t(curve(), r, s).to_der()))
-      throw fail{"signature " + std::to_string(k) + " does not verify"};
+    const bool ok = r > 0 && r < n && s > 0 && s <= half &&
+                    !crypto::ecc_pub_key_t(j.key).verify(msgs[k], crypto::ecdsa_signature_t(curve(), r, s).to_der());
+    if (!ok && bad == msgs.size()) bad = k;
   }
+  if (bad < msgs.size()) throw fail{"signature " + std::to_string(bad) + " does not verify"};
   if (job.is_p1()) check(l.send(1 - j.i, mem_t(rs.data(), int(rs.size()))), l, "sending the signatures");   // only once they verify
   fprintf(stderr, "pzsign[%d]: %zu signatures in %.2f s\n", j.i, msgs.size(), seconds_since(t0));
   return rs;

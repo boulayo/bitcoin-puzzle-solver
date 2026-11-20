@@ -88,7 +88,7 @@ jobs:
       - name: A test build is not gated
         if: ${{ !(github.ref_type == 'tag' || inputs.publish) }}
         run: echo "test build (no publish), the CI of the commit is not checked"
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.ref_type == 'tag' || inputs.publish
       - name: ci.yml completed successfully on the commit being released
         if: github.ref_type == 'tag' || inputs.publish
@@ -121,7 +121,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       build: ${{ steps.v.outputs.build }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - id: v
         env:
           PUBLISH: ${{ github.ref_type == 'tag' || inputs.publish }}
@@ -154,7 +154,7 @@ jobs:
           - { os: macos,   arch: x86_64, runner: macos-15 }       # cross-compiled (MACOS_ARCH=x86_64), self-tested under Rosetta
           - { os: windows, arch: x86_64, runner: ubuntu-24.04 }      # cross-compiled
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install MinGW-w64
         if: matrix.os == 'windows'
         run: tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix zip
@@ -217,7 +217,7 @@ jobs:
           export OUT=dist-release
           tools/package_release.sh --pack "$BIN" ${{ matrix.os }} ${{ matrix.arch }}
           ls -l dist-release
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: pzsolve-${{ needs.version.outputs.build }}-${{ matrix.os }}-${{ matrix.arch }}
           path: dist-release/*
@@ -227,7 +227,7 @@ jobs:
         run: grep -nE 'error:|Error [0-9]+|undefined (reference|symbol)' build.log | head -100 || true
       - name: Keep the build log
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: build-log-${{ matrix.os }}-${{ matrix.arch }}
           path: build.log
@@ -239,7 +239,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: pzsolve-${{ needs.version.outputs.build }}-windows-x86_64
           path: pkg
@@ -275,7 +275,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: The tag must point to the commit that was built
         env:
           REPLACE: ${{ inputs.replace }}
@@ -294,7 +294,7 @@ jobs:
             echo "::error::the tag $TAG points to $TAGSHA but this run built $BUILT: the release is left as it is, because its files would not come from the tagged commit. To replace the files on purpose, run the workflow by hand with 'replace' ticked (the tag and the notes stay as they are)."
             exit 1
           fi
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: pzsolve-*
           path: dist-release

@@ -469,6 +469,7 @@ typedef struct {
     bool again;                       /* then a session of the pair that only exchanges the pieces, both giving theirs */
     bool taken;                       /* the prize was taken before the session: the address is empty */
     bool other;                       /* another pair's first transaction takes the prize output of this pair's first */
+    bool copy;                        /* an old copy of the first transaction, with other signatures, is mined in its place */
 } tcase;
 
 /* another pair of the same puzzle, whose key the test knows: once this pair's first transaction is in a block, its own first transaction
@@ -491,6 +492,23 @@ static void *other_pair(void *arg)
     btc_tx_init(&t);
     CHECK(btc_tx_add_in(&t, first, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&t, v - 2000, a->spk, BTC_P2PKH_LEN) && btc_sign_p2pkh(&t, 0, a->k));
     CHECK(ch_broadcast(NULL, &t));
+    return NULL;
+}
+
+/* An old copy of the pair's first transaction (the same outputs, other signatures, so another txid) mined in its place: as soon as the
+ * first spends the coin in the mempool, its outputs are renamed and put in the block that comes */
+static void *old_copy(void *arg)
+{
+    const uint8_t *coin = arg, copy[32] = {0xc0, 0x9e};
+    for (bool done = false; !done; usleep(1000)) {
+        pthread_mutex_lock(&chain.mu);
+        utxo *c = find(coin, 0), *f = c && c->spent ? find(c->by, 0) : NULL;
+        if ((done = f && !f->height)) {
+            for (int v = 1; v >= 0; v--) memcpy(find(c->by, (uint32_t)v)->txid, copy, 32);
+            memcpy(c->by, copy, 32);
+        }
+        pthread_mutex_unlock(&chain.mu);
+    }
     return NULL;
 }
 
@@ -559,15 +577,13 @@ static void run_case(const tcase *tc, const char *bin)
         memcpy(r[i].x, c + 1, 32), memcpy(r[i].owner, xo[i], 32), r[i].dp = net.dpbits;
     }
     record pair[2];
-    uint8_t eid[32];
     CHECK(pieces_order(&r[0], &r[1], pair));
-    pieces_eid(&net, pair, eid);
     uint8_t fm[11 + 64], own[32], paid_key[32];                 /* the keys of the pair in the files of the limit: its point, the same for both */
     memcpy(fm, "pznet1/fail", 11), memcpy(fm + 11, net.fp, 32), memcpy(fm + 43, r[0].x, 32);
     pz_sha256(fm, sizeof fm, own);
     memcpy(fm, "pznet1/paid", 11);
     pz_sha256(fm, sizeof fm, paid_key);
-    const int F_home = !memcmp(pair[eid[31] & 1].owner, xo[0], 32) ? 0 : 1, S_home = 1 - F_home;
+    const int F_home = !memcmp(pair[pieces_first(&net, pair)].owner, xo[0], 32) ? 0 : 1, S_home = 1 - F_home;
     for (int i = 0; i < 2; i++) {
         session_cfg *g = &h[i].cfg;
         memset(g, 0, sizeof *g);
@@ -587,7 +603,7 @@ static void run_case(const tcase *tc, const char *bin)
             CHECK(rpc_client(&rpcs[i]));
             crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = tc->fee ? tc->fee : i && tc->fee_far ? tc->fee_far : g_fee[i]};
             chn[i].in = chain_rpc_iface(&crpc[i]);
-        } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending};
+        } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending, NULL};
         chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0, chn[i].ghost = tc->ghost;
         if (tc->pieces) g->paid = &paid[i], g->reveal_conf = 2;
         chn[i].slow_ms = i ? 0 : tc->slow_ms;
@@ -616,7 +632,7 @@ static void run_case(const tcase *tc, const char *bin)
     }
     session_chain ifc[2];
     for (int i = 0; i < 2; i++) {
-        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin, fl_pending};
+        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin, fl_pending, NULL};
         h[i].cfg.chain = &ifc[i];
     }
     if (tc->fee) g_fee[0] = g_fee[1] = tc->fee;
@@ -627,9 +643,10 @@ static void run_case(const tcase *tc, const char *bin)
     pthread_t th[2], ot;
     other_arg oa = {coin_txid, puzzle_spk, k};
     if (tc->other) pthread_create(&ot, NULL, other_pair, &oa);
+    if (tc->copy) pthread_create(&ot, NULL, old_copy, coin_txid);
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
-    if (tc->other) pthread_join(ot, NULL);
+    if (tc->other || tc->copy) pthread_join(ot, NULL);
     g_fee[0] = 2000, g_fee[1] = 3000;
     q_drain(&q[0]), q_drain(&q[1]);
     static const char *const RES[] = {"paid", "cancelled", "failed"};
@@ -736,7 +753,7 @@ static void run_copied(const char *bin, unsigned terms)
     queue q[2] = {{.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}, {.mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER}};
     end e[2] = {{.in = &q[0], .out = &q[1]}, {.in = &q[1], .out = &q[0]}};
     session_chan chan = {&e[0], q_send, q_recv};
-    session_chain chn = {NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending};
+    session_chain chn = {NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending, NULL};
     session_cfg *g = &h.cfg;
     memset(g, 0, sizeof *g);
     g->ctx = ctx, g->net = &net, g->identity = &h.id, g->mine = mine, g->theirs = theirs;
@@ -751,12 +768,11 @@ static void run_copied(const char *bin, unsigned terms)
     pthread_t th;
     pthread_create(&th, NULL, run_home, &h);
     /* the thief: its hello, then a proof it could not make */
-    uint8_t m[1 + 2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 2 + BTC_P2PKH_LEN] = {S_HELLO}, proof[1 + 64] = {S_PROOF};
+    uint8_t m[1 + 2 * RECORD_LEN + 32 + BTC_P2PKH_LEN + 2 + BTC_P2PKH_LEN] = {S_HELLO}, proof[1 + 64] = {S_PROOF};
     record_encode(&theirs, m + 1), record_encode(&mine, m + 1 + RECORD_LEN);
-    m[1 + 2 * RECORD_LEN + 32 + 6] = 0x0b, m[1 + 2 * RECORD_LEN + 32 + 7] = 0xb8;   /* 3000 */
-    p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 40);
-    m[1 + 2 * RECORD_LEN + 40 + BTC_P2PKH_LEN] = (uint8_t)terms, m[1 + 2 * RECORD_LEN + 41 + BTC_P2PKH_LEN] = BTC_P2PKH_LEN;
-    p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 42 + BTC_P2PKH_LEN);
+    p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 32);
+    m[1 + 2 * RECORD_LEN + 32 + BTC_P2PKH_LEN] = (uint8_t)terms, m[1 + 2 * RECORD_LEN + 33 + BTC_P2PKH_LEN] = BTC_P2PKH_LEN;
+    p2pkh_of(sec, m + 1 + 2 * RECORD_LEN + 34 + BTC_P2PKH_LEN);
     hashed("not a proof", proof + 1), hashed("really not", proof + 33);
     CHECK(q_send(&e[1], m, sizeof m) && q_send(&e[1], proof, sizeof proof));
     pthread_join(th, NULL);
@@ -841,9 +857,12 @@ int main(void)
         /* another pair's first transaction takes the prize output, back to the address: this pair is not paid, and gives no piece (before,
          * it took the spend for its payout, and with a light chain gave its piece once the other pair's payout was in the mempool) */
         {.name = "another pair takes the prize output", .expect = OTHER, .pieces = true, .other = true},
+        /* an old copy of the first transaction is mined instead of the new one: the pair gives up two blocks later (before, it waited
+         * 144 blocks, a day, for a transaction that could no longer come) */
+        {.name = "an old copy of the first is mined", .expect = OTHER, .copy = true, .why = "spent by another transaction"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++)
-        if (!regtest || (!cases[i].taken && !cases[i].other)) run_case(&cases[i], bin);   /* a node cannot be changed behind the test's back */
+        if (!regtest || (!cases[i].taken && !cases[i].other && !cases[i].copy)) run_case(&cases[i], bin);   /* a node cannot be changed behind the test's back */
     run_copied(marker, PAYOUT_TERMS);
     run_copied(marker, 0);                                      /* a hello whose terms no version knows */
     pthread_mutex_lock(&chain.mu);

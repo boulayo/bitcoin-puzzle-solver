@@ -51,7 +51,7 @@ static void *fake_main(void *arg)
         if (sys_wait(f->fd, false, sys_now_ms() + 100) <= 0) continue;
         const long n = sys_recvfrom(f->fd, m, sizeof m, &from);
         if (n <= 0 || !bt_dict_get(m, (size_t)n, "a", &a, &an) || !bt_dict_get(m, (size_t)n, "t", &v, &vn) || !bt_string(v, vn, &tid, &tn) ||
-            tn != 2 || !bt_dict_get(m, (size_t)n, "q", &v, &vn) || !bt_string(v, vn, &q, &qn))
+            tn != 6 || !bt_dict_get(m, (size_t)n, "q", &v, &vn) || !bt_string(v, vn, &q, &qn))
             continue;
         token_for(f, &from, tok);
         if (f->kind == GARBAGE) {
@@ -106,8 +106,8 @@ static void *fake_main(void *arg)
                 out[l++] = 'e';
             }
         }
-        l += (size_t)sprintf((char *)out + l, "e1:t2:");
-        out[l++] = tid[0], out[l++] = (uint8_t)(tid[1] ^ (f->kind == WRONG_TID));
+        l += (size_t)sprintf((char *)out + l, "e1:t6:");
+        memcpy(out + l, tid, 6), out[l + 5] ^= (uint8_t)(f->kind == WRONG_TID), l += 6;   /* WRONG_TID: not the secret of the round */
         l += (size_t)sprintf((char *)out + l, "1:y1:re");
         (void)sys_sendto(f->fd, out, l, &from);
     }

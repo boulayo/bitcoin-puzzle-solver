@@ -75,11 +75,21 @@ static int prepared(int fd)
     return fd;
 }
 
+/* Closed on exec from its birth where the system can (Linux): a child started by another thread at the moment between the call and
+ * fcntl would inherit it. On macOS POSIX_SPAWN_CLOEXEC_DEFAULT (sys_spawn) gives a child only what is meant for it. */
+#ifdef __linux__
+int sys_socket(int family, int type) { return prepared(socket(family, type | SOCK_CLOEXEC, 0)); }
+#else
 int sys_socket(int family, int type) { return prepared(socket(family, type, 0)); }
+#endif
 
 int sys_accept(int lfd, struct sockaddr *from, socklen_t *len)
 {
+#ifdef __linux__
+    const int fd = accept4(lfd, from, len, SOCK_CLOEXEC);
+#else
     const int fd = accept(lfd, from, len);
+#endif
     return fd < 0 ? (errno == ECONNABORTED ? SYS_AGAIN : again()) : prepared(fd);
 }
 
@@ -187,6 +197,11 @@ bool sys_gateway(struct in_addr *gw) { (void)gw; return false; }
  * the end of its input */
 static bool pipe_cloexec(int p[2])
 {
+#ifdef __linux__
+    if (pipe2(p, O_CLOEXEC) == 0) return true;
+    p[0] = p[1] = -1;
+    return false;
+#endif
     if (pipe(p) != 0) return false;
     if (fcntl(p[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(p[1], F_SETFD, FD_CLOEXEC) == 0) return true;
     close(p[0]), close(p[1]);
@@ -200,27 +215,31 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     pid_t pid = 0;
     posix_spawn_file_actions_t fa;
     posix_spawnattr_t at;
-    if (to && (!pipe_cloexec(in) || !pipe_cloexec(out))) return sys_close(in[0]), sys_close(in[1]), 0;
+    if ((to && !pipe_cloexec(in)) || (from && !pipe_cloexec(out)))
+        return sys_close(in[0]), sys_close(in[1]), sys_close(out[0]), sys_close(out[1]), 0;
     if (to) signal(SIGPIPE, SIG_IGN);                          /* a child that died is an error of the write, not the end of pzpeer */
     posix_spawn_file_actions_init(&fa);
     posix_spawnattr_init(&at);
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT);   /* macOS: nothing but 0, 1 and 2 reaches it */
+#else
     posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
+#endif
     posix_spawnattr_setpgroup(&at, 0);
-    if (to) {                                                  /* the copies on 0 and 1 stay open across exec, the originals do not */
-        posix_spawn_file_actions_adddup2(&fa, in[0], 0);
-        posix_spawn_file_actions_adddup2(&fa, out[1], 1);
-        if (log) posix_spawn_file_actions_addopen(&fa, 2, log, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
-    } else if (log) {
-        posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-        posix_spawn_file_actions_addopen(&fa, 1, log, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
-        posix_spawn_file_actions_adddup2(&fa, 1, 2);
-    }
+    const int app = O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW;
+    if (to) posix_spawn_file_actions_adddup2(&fa, in[0], 0);   /* the copies on 0 and 1 stay open across exec, the originals do not */
+    else if (log) posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+    if (from) posix_spawn_file_actions_adddup2(&fa, out[1], 1);
+    else if (log) posix_spawn_file_actions_addopen(&fa, 1, log, app, 0600);
+    if (log && from) posix_spawn_file_actions_addopen(&fa, 2, log, app, 0600);
+    else if (log) posix_spawn_file_actions_adddup2(&fa, 1, 2);
     const int rc = posix_spawnp(&pid, argv[0], &fa, &at, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     posix_spawnattr_destroy(&at);
     sys_close(in[0]), sys_close(out[1]);
     if (rc != 0) return sys_close(in[1]), sys_close(out[0]), errno = rc, 0;
-    if (to) *to = in[1], *from = out[0];
+    if (to) *to = in[1];
+    if (from) *from = out[0];
     return pid;
 }
 
@@ -292,9 +311,15 @@ int sys_open_rw(const char *path) { return open(path, O_RDWR | O_CREAT | O_CLOEX
 
 FILE *sys_fopen(const char *path, const char *mode)
 {
+#ifdef __linux__
+    char m[8];
+    snprintf(m, sizeof m, "%se", mode);                        /* "e": O_CLOEXEC from the open */
+    return fopen(path, m);
+#else
     FILE *f = fopen(path, mode);
     if (f) (void)fcntl(fileno(f), F_SETFD, FD_CLOEXEC);
     return f;
+#endif
 }
 
 long sys_pread(int fd, void *p, size_t n, uint64_t off) { return (long)pread(fd, p, n, (off_t)off); }

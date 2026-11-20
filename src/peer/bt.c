@@ -88,7 +88,7 @@ typedef struct {
 typedef struct {
     const bt_config *cfg;
     int fd;
-    uint8_t me[20];
+    uint8_t me[20], secret[4];     /* secret: in the transaction ID of every query, so a forged answer cannot guess it */
     node n[NODES_MAX];
     int nn, asked;
     net_addr *out;
@@ -133,7 +133,7 @@ static void add_peer(round_t *r, const uint8_t *p)
     r->out[r->nout++] = a;
 }
 
-/* a query to node i: its number is the transaction ID */
+/* a query to node i: its number and the secret of the round are the transaction ID */
 static void send_query(round_t *r, int i, bool announce)
 {
     uint8_t m[256 + TOKEN_MAX];
@@ -148,19 +148,20 @@ static void send_query(round_t *r, int i, bool announce)
         l += (size_t)snprintf((char *)m + l, sizeof m - l, "4:porti%ue5:token%zu:", (unsigned)r->cfg->port, n->tlen);
         memcpy(m + l, n->token, n->tlen), l += n->tlen;
     }
-    l += (size_t)snprintf((char *)m + l, sizeof m - l, "e1:q%s1:t2:", announce ? "13:announce_peer" : "9:get_peers");
+    l += (size_t)snprintf((char *)m + l, sizeof m - l, "e1:q%s1:t6:", announce ? "13:announce_peer" : "9:get_peers");
     m[l++] = (uint8_t)(i >> 8), m[l++] = (uint8_t)i;
+    memcpy(m + l, r->secret, 4), l += 4;
     l += (size_t)snprintf((char *)m + l, sizeof m - l, "1:y1:qe");
     (void)sys_sendto(r->fd, m, l, &n->a);
 }
 
-/* One packet. An answer counts when its transaction ID is the number of a node asked and it comes from that node's address. Returns the
- * node, or -1. */
+/* One packet. An answer counts when its transaction ID is the number of a node asked with the secret of the round, and it comes from
+ * that node's address. Returns the node, or -1. */
 static int take(round_t *r, const uint8_t *m, size_t len, const struct sockaddr_in *from)
 {
     const uint8_t *v, *s, *res;
     size_t vn, sn, rn;
-    if (!bt_dict_get(m, len, "t", &v, &vn) || !bt_string(v, vn, &s, &sn) || sn != 2) return -1;
+    if (!bt_dict_get(m, len, "t", &v, &vn) || !bt_string(v, vn, &s, &sn) || sn != 6 || memcmp(s + 2, r->secret, 4)) return -1;
     const int i = s[0] << 8 | s[1];
     if (i >= r->nn || !r->n[i].asked || r->n[i].a.sin_addr.s_addr != from->sin_addr.s_addr || r->n[i].a.sin_port != from->sin_port) return -1;
     if (!bt_dict_get(m, len, "r", &res, &rn)) return -1;       /* an error, or a query of theirs */
@@ -223,7 +224,7 @@ int bt_rendezvous(const bt_config *cfg, net_addr *out, int max, int *announced)
     round_t r = {0};                                           /* about 30 KB */
     r.cfg = cfg, r.out = out, r.max = max < BT_PEERS_MAX ? max : BT_PEERS_MAX;
     if (announced) *announced = 0;
-    if (!sys_random(r.me, sizeof r.me) || (r.fd = sys_socket(AF_INET, SOCK_DGRAM)) < 0) return -1;
+    if (!sys_random(r.me, sizeof r.me) || !sys_random(r.secret, sizeof r.secret) || (r.fd = sys_socket(AF_INET, SOCK_DGRAM)) < 0) return -1;
     for (int i = 0; i < cfg->nrouters; i++) {
         char host[256];
         const char *colon = strrchr(cfg->routers[i], ':');

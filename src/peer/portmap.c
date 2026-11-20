@@ -149,7 +149,21 @@ static bool upnp(char *body, uint16_t port, unsigned lease_s, const char *ssdp, 
     }
     if (!ctl[0] || strpbrk(ctl, " \r\n") || strpbrk(type, "\"\r\n")) return fail(why, cap, "the router has no service that opens ports");
 
-    /* 3. the mapping; a router that only takes mappings without end (error 725) is asked for one */
+    /* 3. the mapping; a router that only takes mappings without end (error 725) is asked for one. Lease 0: the mapping goes */
+    if (!lease_s) {
+        const int sl = snprintf(soap, sizeof soap,
+            "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+            "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:DeletePortMapping xmlns:u=\"%s\">"
+            "<NewRemoteHost></NewRemoteHost><NewExternalPort>%u</NewExternalPort><NewProtocol>TCP</NewProtocol>"
+            "</u:DeletePortMapping></s:Body></s:Envelope>\r\n", type, (unsigned)port);
+        rl = snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: text/xml; charset=\"utf-8\"\r\n"
+                      "SOAPAction: \"%s#DeletePortMapping\"\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+                      ctl, inet_ntoa(router.sin_addr), ntohs(router.sin_port), type, sl, soap);
+        const bool ok = sl > 0 && (size_t)sl < sizeof soap && rl > 0 && (size_t)rl < sizeof req && http(&router, req, (size_t)rl, body, BODY_MAX, &local) &&
+                        !strncmp(body, "HTTP/1.", 7) && !strncmp(body + 8, " 200", 4);
+        snprintf(why, cap, ok ? "the router at %s closed port %u" : "the router at %s did not close port %u", inet_ntoa(router.sin_addr), (unsigned)port);
+        return ok;
+    }
     for (int attempt = 0; attempt < 2; attempt++) {
         const int sl = snprintf(soap, sizeof soap,
             "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
@@ -224,6 +238,7 @@ static unsigned pcp(const struct sockaddr_in *router, uint16_t port, unsigned le
     sys_close(fd);
     if (!n) snprintf(why, cap, "%s: no answer from %s", proto, inet_ntoa(router->sin_addr));
     else if (result) snprintf(why, cap, "%s: the router refused (result %u)", proto, result);
+    else if (!lease_s) return snprintf(why, cap, "the router at %s closed port %u (%s)", inet_ntoa(router->sin_addr), (unsigned)port, proto), 1;
     else if (inner != port || outer != port || !life) snprintf(why, cap, "%s: the router offers port %u instead", proto, outer);
     else return snprintf(why, cap, "the router at %s sends port %u to this machine for %u s (%s)", inet_ntoa(router->sin_addr),
                          (unsigned)port, life, proto), life < lease_s ? life : lease_s;     /* never asked again later than meant */
@@ -243,7 +258,7 @@ unsigned portmap(uint16_t port, unsigned lease_s, const uint8_t nonce[12], const
         if ((got = pcp(&at, port, lease_s, nonce, first, sizeof first))) return snprintf(why, cap, "%s", first), got;
     }
     char *body = malloc(BODY_MAX);
-    if (body && upnp(body, port, lease_s, router, second, sizeof second)) got = lease_s;
+    if (body && upnp(body, port, lease_s, router, second, sizeof second)) got = lease_s ? lease_s : 1;
     else if (!body) snprintf(second, sizeof second, "out of memory");
     free(body);
     if (got) snprintf(why, cap, "%s (UPnP)", second);

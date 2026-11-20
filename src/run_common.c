@@ -46,6 +46,28 @@ void run_install_signals(run_ctx *r)
     pz_on_interrupt(on_signal);
 }
 
+/* --stop-with-input: the end of standard input stops the run as a first Ctrl-C does (never as a second one: the program that started
+ * pzsolve may have asked it to stop already) */
+static void *input_main(void *arg)
+{
+    char b[256];
+    (void)arg;
+    while (pz_stdin_read(b, sizeof b) > 0) {}
+    if (atomic_load(&g_sig_count) == 0) atomic_store(&g_first_sig_ms, mono_ms()), atomic_store(&g_sig_count, 1);
+    if (g_run) atomic_store(&g_run->stop, 1);
+    return NULL;
+}
+
+void run_stop_with_input(void)
+{
+    pthread_t th;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&th, &at, input_main, NULL) != 0) pz_die("--stop-with-input: cannot start a thread");
+    pthread_attr_destroy(&at);
+}
+
 bool run_interrupted(void) { return atomic_load(&g_sig_count) > 0; }
 
 void run_init(run_ctx *r)

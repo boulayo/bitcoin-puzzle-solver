@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* session.c - the session of a coincidence (see session.h). The steps, each a message both sides send and then read:
- *   hello   the pair, a nonce, the fee rate proposed, the tiny-coin script, the version of the terms and the payout script;
+ *   hello   the pair, a nonce, the tiny-coin script, the version of the terms and the payout script;
  *   proof   the proof of possession of the own record, over the partner's nonce (it shows the distance, hence the piece);
+ *   fee     the fee rate proposed, once the chain was found up to date: neither is asked before the partner proved its point;
  *   plan    the hash of the first transaction each side built on its own; then the two-party signing, the broadcast, one confirmation;
  *   plan    the hash of the second; F gives the signature of its tiny coin, then the two-party signing in which S gets the whole signature
  *           first (it plays the party of pzsign that gets the signatures and gives them to the other); then S broadcasts, and F waits
  *           cancel_blocks blocks for the prize to move and else cancels.
- * Party 0 owns the smaller identity; F (the party whose tiny coin goes into the second transaction) is the last bit of the session id. */
+ * Party 0 owns the smaller identity; F (the party whose tiny coin goes into the second transaction) comes from the point and the types
+ * (pieces_first), which neither side can choose. */
 #include "dbg.h"
 #include "session.h"
 #include "net.h"
@@ -23,7 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define HELLO_FIXED (2 * RECORD_LEN + 32 + 8 + BTC_P2PKH_LEN + 2)
+#define HELLO_FIXED (2 * RECORD_LEN + 32 + BTC_P2PKH_LEN + 2)
 #define CHUNK 65000                         /* a piece of a pzsign message in one S_SIGNER */
 _Static_assert(1 + HELLO_FIXED + BTC_SPK_MAX <= SESSION_HELLO_MAX, "a hello fits in SESSION_HELLO_MAX");
 #define HELLO_MS 30000                      /* the longest wait for the hello and the proof of the partner, which it makes at once */
@@ -162,7 +164,7 @@ static bool hello(sess *s)
         return fail(s, "not a useful coincidence");
     s->me = memcmp(s->pair[0].owner, s->my_x, 32) == 0 ? 0 : 1;
     pieces_eid(c->net, s->pair, s->eid);
-    s->F = s->eid[31] & 1;
+    s->F = pieces_first(c->net, s->pair);
     const int you = 1 - s->me;
     uint8_t m[HELLO_FIXED + BTC_SPK_MAX], in[sizeof m], coin_spk[BTC_P2PKH_LEN];
     size_t n;
@@ -170,15 +172,10 @@ static bool hello(sess *s)
      * must never repeat (a signing id names the parties of pzsign, and a pair can have more than one session) */
     if (!sys_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
     if (!p2pkh_of(c->ctx, c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
-    /* twice what the chain estimates, and never little: these transactions move a prize, and no fee is large beside it */
-    uint64_t fr = 2 * (c->feerate ? c->feerate : c->chain->feerate(c->chain->ctx));
-    if (fr < c->min_feerate) fr = c->min_feerate;
-    if (fr > c->max_feerate) fr = c->max_feerate;
     record_encode(&c->mine, m);
     record_encode(&c->theirs, m + RECORD_LEN);
     memcpy(m + 2 * RECORD_LEN, s->nonce[s->me], 32);
-    for (int b = 0; b < 8; b++) m[2 * RECORD_LEN + 32 + b] = (uint8_t)(fr >> (56 - 8 * b));
-    memcpy(m + 2 * RECORD_LEN + 40, coin_spk, BTC_P2PKH_LEN);
+    memcpy(m + 2 * RECORD_LEN + 32, coin_spk, BTC_P2PKH_LEN);
     m[HELLO_FIXED - 2] = PAYOUT_TERMS;
     m[HELLO_FIXED - 1] = (uint8_t)c->pay_len;
     memcpy(m + HELLO_FIXED, c->pay_spk, c->pay_len);
@@ -192,22 +189,14 @@ static bool hello(sess *s)
     pz_hash160(c->pubkey33, 33, h160);
     btc_script_p2pkh(h160, t->puzzle_spk);
     memcpy(t->coin_spk[s->me], coin_spk, BTC_P2PKH_LEN);
-    memcpy(t->coin_spk[you], in + 2 * RECORD_LEN + 40, BTC_P2PKH_LEN);
+    memcpy(t->coin_spk[you], in + 2 * RECORD_LEN + 32, BTC_P2PKH_LEN);
     if (!btc_script_is_p2pkh(t->coin_spk[you], BTC_P2PKH_LEN, NULL)) return fail(s, "the tiny coin of the partner is not P2PKH");
     memcpy(t->pay_spk[s->me], c->pay_spk, c->pay_len), t->pay_len[s->me] = c->pay_len;
     memcpy(t->pay_spk[you], in + HELLO_FIXED, in[HELLO_FIXED - 1]), t->pay_len[you] = in[HELLO_FIXED - 1];
     if (!standard_spk(t->pay_spk[you], t->pay_len[you]) || !standard_spk(c->pay_spk, c->pay_len)) return fail(s, "a payout address is not standard");
-    const uint64_t theirs = be64(in + 2 * RECORD_LEN + 32);
-    const bool only_pieces = c->paid && c->paid->paid_at;       /* the fee rates do not matter */
-    /* the higher of the two, but not one far above this home's: every try of the payout pays it from the prize, and so does a tiny coin */
-    if (theirs > 4 * fr && !only_pieces) return fail(s, "the partner's fee rate %llu is more than 4 times this home's %llu", (unsigned long long)theirs, (unsigned long long)fr);
-    t->feerate = fr > theirs ? fr : theirs;
     t->first = s->F;
     const unsigned v = in[HELLO_FIXED - 2] < PAYOUT_TERMS ? in[HELLO_FIXED - 2] : PAYOUT_TERMS;   /* the older of the two versions */
     if (!payout_author(v, t)) return fail(s, "the partner gives terms of the payout this home does not know (version %u)", v);
-    dbg("session %s terms: party %d, F is party %d, fee rate mine %llu theirs %llu sat/kvB, tiny coin %llu sat", s->tag, s->me, s->F,
-        (unsigned long long)fr, (unsigned long long)theirs, (unsigned long long)payout_tiny(t));
-    if (t->feerate > c->max_feerate && !only_pieces) return fail(s, "fee rate %llu above the limit %llu", (unsigned long long)t->feerate, (unsigned long long)c->max_feerate);
     /* the proofs of possession: each over the nonce of the other */
     uint8_t proof[64], their_proof[64];
     if (!record_prove(c->ctx, c->net, &c->mine, c->d, c->partner, s->nonce[you], proof)) return fail(s, "the distance does not fit the record");
@@ -217,6 +206,28 @@ static bool hello(sess *s)
     if (c->proved) *c->proved = true;
     note(s, "the partner proved it holds the other piece of the key");
     return true;
+}
+
+/* The fee rate of the payout, after the proofs: the chain is asked only then, so a stranger's hello costs this home nothing of it.
+ * Twice what the chain estimates, and never little: these transactions move a prize, and no fee is large beside it. The higher of the
+ * two homes, but not one far above this home's: every try of the payout pays it from the prize, and so does a tiny coin. */
+static bool fees(sess *s)
+{
+    const session_cfg *c = s->c;
+    uint8_t m[8], in[8];
+    size_t n;
+    uint64_t fr = 2 * c->chain->feerate(c->chain->ctx);
+    if (fr < c->min_feerate) fr = c->min_feerate;
+    if (fr > c->max_feerate) fr = c->max_feerate;
+    for (int b = 0; b < 8; b++) m[b] = (uint8_t)(fr >> (56 - 8 * b));
+    if (!send_msg(s, S_FEE, m, 8) || !recv_msg(s, S_FEE, in, 8, &n)) return false;
+    const uint64_t theirs = n == 8 ? be64(in) : 0;
+    if (n != 8 || theirs > 4 * fr) return fail(s, "the partner's fee rate %llu is more than 4 times this home's %llu", (unsigned long long)theirs, (unsigned long long)fr);
+    s->t.feerate = fr > theirs ? fr : theirs;
+    dbg("session %s terms: party %d, F is party %d, fee rate mine %llu theirs %llu sat/kvB, tiny coin %llu sat", s->tag, s->me, s->F,
+        (unsigned long long)fr, (unsigned long long)theirs, (unsigned long long)payout_tiny(&s->t));
+    return s->t.feerate <= c->max_feerate ||
+           fail(s, "fee rate %llu above the limit %llu", (unsigned long long)s->t.feerate, (unsigned long long)c->max_feerate);
 }
 
 /* ---- the plan of a transaction: both build it, both compare its hash ---- */
@@ -504,14 +515,17 @@ static bool sign_jointly(sess *s, btc_tx *tx, size_t n, char tag)
 /* Waits until output vout of txid has at least `conf` confirmations (or, conf < 0, until it is spent), for at most `blocks` new blocks
  * counted from the first height the chain gives (0 is no answer: a wait counted from it would end at once), and at most (blocks + 6)
  * times block_ms: a node that stops would keep the session for ever. Meanwhile an S_ALIVE now and then keeps the channel from being cut
- * as idle (the partner may have closed it: that is no error). */
-static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, uint64_t blocks)
+ * as idle (the partner may have closed it: that is no error). With gone, the wait also ends, false, when that output is spent in a block
+ * and two more blocks came without txid: the coins the first transaction spends went another way (an old copy of it with other
+ * signatures, which the partner kept and sent, or the payout of another pair), and waiting a day for a transaction that can no longer
+ * come would only hold the pair. */
+static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, uint64_t blocks, const btc_in *gone)
 {
     const session_chain *ch = s->c->chain;
     const int every = s->c->alive_ms > 0 ? s->c->alive_ms : ALIVE_MS;
     const int64_t end = sys_now_ms() + (int64_t)(blocks + 6) * block_ms(s);
     int64_t alive = sys_now_ms() + every;
-    uint64_t until = 0, last_h = 0;
+    uint64_t until = 0, last_h = 0, spent_at = 0;
     int last_k = -3;
     for (;;) {
         const uint64_t h = ch->height(ch->ctx);
@@ -520,6 +534,11 @@ static bool wait_for(sess *s, const uint8_t txid[32], uint32_t vout, int conf, u
         if (k != last_k || h != last_h) dbg("session %s wait: height %llu, output %s...:%u is %d (wanted %d)", s->tag, (unsigned long long)h,
                                             dbg_hex(txid, 32), vout, k, conf), last_k = k, last_h = h;
         if (k != -2 && (conf < 0 ? k == -1 : k >= conf)) return true;
+        if (gone && k < 1 && h) {
+            if (ch->confirmations(ch->ctx, gone->prev_txid, gone->prev_vout) != -1) spent_at = 0;
+            else if (!spent_at) spent_at = h;
+            else if (h >= spent_at + 2) return fail(s, "the coins of the puzzle were spent by another transaction");
+        }
         if ((until && h >= until) || sys_now_ms() >= end) return false;
         if (sys_now_ms() >= alive) (void)send_msg(s, S_ALIVE, NULL, 0), alive = sys_now_ms() + every;
         sys_sleep_ms(s->c->poll_ms);
@@ -717,8 +736,11 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     else snprintf(s.tag, sizeof s.tag, "%s", dbg_hex(c->mine.x, 32));
     if (!hello(&s)) return SESSION_FAILED;
     s.wait_ms = c->timeout_ms;
+    char cw[300];                                               /* the chain, once the partner proved its point */
+    if (c->chain->ready && c->chain->ready(c->chain->ctx, cw, sizeof cw) != 1) return fail(&s, "%s", cw), SESSION_FAILED;
     /* an earlier session paid: only the pieces, unless coins came to the address since, which are paid out first */
     if (c->paid && c->paid->paid_at && exchange(&s) != PIECES_COINS) return SESSION_PAID;
+    if (!fees(&s)) return SESSION_FAILED;
     const session_chain *ch = c->chain;
     /* the first transaction: the coins of the puzzle back to its address, and the tiny coins */
     payout_coin coins[64];
@@ -740,7 +762,7 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     dbg("session %s broadcast of the first: %s", s.tag, ch->broadcast(ch->ctx, &a) ? "taken" : "not taken");   /* both send it: the second to arrive is a duplicate */
     btc_hash_to_hex(aid, hex);
     note(&s, "first transaction sent, the prize back to the puzzle address: %s", hex);
-    if (!wait_for(&s, aid, 0, 1, 144)) return fail(&s, "the first transaction was not confirmed"), SESSION_FAILED;
+    if (!wait_for(&s, aid, 0, 1, 144, &a.in[0])) return s.why[0] ? SESSION_FAILED : (fail(&s, "the first transaction was not confirmed"), SESSION_FAILED);
     note(&s, "first transaction confirmed");
     /* the second: F gives the signature of its tiny coin, then the joint signature, which S gets first */
     if (!payout_second(&s.t, &a, &b) || !plan(&s, &b)) return SESSION_FAILED;
@@ -763,13 +785,13 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
         char va[32];
         note(&s, "second transaction sent, %s BTC to each payout address and %s BTC (%u%%) to the author of pzpeer: %s",
              btc_amount(b.out[s.me].value, v), btc_amount(b.out[2].value, va), s.t.author_pct, hex);
-        return wait_for(&s, aid, 0, -1, 144) ? paid(&s, aid, &b, true)
+        return wait_for(&s, aid, 0, -1, 144, NULL) ? paid(&s, aid, &b, true)
                                             : (snprintf(why, whylen, "the second transaction did not go through"), SESSION_FAILED);
     }
     if (s.me != s.F) return snprintf(why, whylen, "the joint signature of the second transaction failed"), SESSION_FAILED;
     /* F without the whole signature: S may hold it. F waits for the prize to move, and else spends its tiny coin, which makes it worthless */
     note(&s, "the partner has the signature of the second transaction: %d blocks for it to send it, else the cancel", c->cancel_blocks);
-    if (wait_for(&s, aid, 0, -1, (uint64_t)c->cancel_blocks)) return paid(&s, aid, &b, false);
+    if (wait_for(&s, aid, 0, -1, (uint64_t)c->cancel_blocks, NULL)) return paid(&s, aid, &b, false);
     if (!payout_cancel(&s.t, &a, &x) || !btc_sign_p2pkh(&x, 0, c->coin_sec)) return fail(&s, "no cancel"), SESSION_FAILED;
     uint8_t xid[32];
     btc_tx_txid(&x, xid);
@@ -779,11 +801,11 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     note(&s, "the cancel: the tiny coin of this home to its payout address, which voids the second transaction");
     for (int k = 0; k < 144 && sys_now_ms() < end; k++) {
         dbg("session %s broadcast of the cancel: %s", s.tag, ch->broadcast(ch->ctx, &x) ? "taken" : "not taken");
-        if (wait_for(&s, xid, 0, 1, 1)) {
+        if (wait_for(&s, xid, 0, 1, 1, NULL)) {
             snprintf(why, whylen, "the partner held the second transaction back: cancelled with the tiny coin");
             return SESSION_CANCELLED;
         }
-        if (wait_for(&s, aid, 0, -1, 0)) return paid(&s, aid, &b, false);   /* it moved in the meantime */
+        if (wait_for(&s, aid, 0, -1, 0, NULL)) return paid(&s, aid, &b, false);   /* it moved in the meantime */
     }
     snprintf(why, whylen, "the cancel did not confirm in 144 blocks");
     return SESSION_FAILED;

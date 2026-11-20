@@ -4,7 +4,9 @@
 #
 #   tools/check_binary.sh linux BINARY      no glibc symbol newer than 2.34 and no __isoc23_* symbol (the code avoids both, so that the
 #                                           binary starts on older distributions)
-#   tools/check_binary.sh windows BINARY    imports only DLLs that are part of Windows (kernel32, msvcrt, advapi32, bcrypt, ws2_32, crypt32, user32, iphlpapi)
+#   tools/check_binary.sh windows BINARY    imports only DLLs that are part of Windows, and of them only those the program needs: kernel32,
+#                                           msvcrt, advapi32 and bcrypt; pzpeer also ws2_32 and iphlpapi; pzsign also crypt32, user32 and
+#                                           ws2_32 (a DLL that comes in unasked is a change to look at)
 #
 # One line on stdout and exit status 0 when the binary passes. When it does not, the reason is printed (on stderr, or as a GitHub
 # Actions error annotation when it runs there) and the status is 1. Status 2: the check could not be made (usage, missing file or
@@ -37,9 +39,14 @@ case "$kind" in
     objdump=${OBJDUMP:-x86_64-w64-mingw32-objdump}
     command -v "$objdump" >/dev/null 2>&1 || die "$objdump not found"
     imports=$("$objdump" -p "$bin") || die "$objdump -p failed on $bin"
-    bad=$(grep 'DLL Name' <<<"$imports" | grep -viE 'kernel32|msvcrt|advapi32|bcrypt|ws2_32|crypt32|user32|iphlpapi' | sed 's/.*DLL Name: *//' | paste -sd, - || true)
+    allowed='kernel32|msvcrt|advapi32|bcrypt'
+    case "$(basename "$bin" .exe)" in
+      pzpeer*) allowed="$allowed|ws2_32|iphlpapi" ;;
+      pzsign*) allowed="$allowed|crypt32|user32|ws2_32" ;;
+    esac
+    bad=$(sed -n 's/.*DLL Name: *//p' <<<"$imports" | grep -viE "^($allowed)\.dll$" | paste -sd, - || true)
     if [ -n "$bad" ]; then
-      fail "$(basename "$bin") depends on a DLL that is not part of Windows: ${bad//,/, }"
+      fail "$(basename "$bin") imports a DLL that is not part of Windows, or not one it needs: ${bad//,/, }"
     fi
     names=$(sed -n 's/.*DLL Name: *//p' <<<"$imports" | paste -sd, -)
     echo "imports only system DLLs${names:+: ${names//,/, }}"

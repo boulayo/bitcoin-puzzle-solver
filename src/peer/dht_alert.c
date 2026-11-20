@@ -277,6 +277,30 @@ void retry_alerts(dht *d)
     for (int i = 0; i < n; i++) (void)job_push(d, JOB_ALERT_OWN, &pairs[i][0], &pairs[i][1], NULL);
 }
 
+/* The pairs of an MBOX answer (from a mailbox, or from a custodian after PROVE) that concern this node: each new one, and each that
+ * brings the other owner's proof, becomes an alert. False when the answer is malformed. */
+static bool mbox_take(dht *d, const uint8_t *ans, size_t len, int *fresh)
+{
+    if (len < 2 || ans[0] != DHT_MBOX || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY) return false;
+    for (int p = 0; p < ans[1]; p++) {
+        const uint8_t *q = ans + 2 + (size_t)p * DHT_MBOX_ENTRY, flags = q[PAIR_LEN];
+        record r[2];
+        uint8_t h[32];
+        bool theirs_ok;
+        if (!record_decode(q, &r[0]) || !record_decode(q + RECORD_LEN, &r[1]) || flags > 3) continue;
+        const int me = mine(d, &r[0]) ? 0 : mine(d, &r[1]) ? 1 : -1;
+        if (me < 0) continue;
+        pair_hash(&r[0], &r[1], h);
+        const int st = alert_state(d, h, &theirs_ok);
+        if (st > AL_WAIT || (st < 0 && !pair_ok(d, &r[0], &r[1]))) continue;   /* the checks only of a new pair */
+        /* the other owner's proof for this node, when the mailbox has it */
+        const uint8_t *pf = flags & (1 << (1 - me)) ? q + PAIR_LEN + 1 + (size_t)(1 - me) * 64 : NULL;
+        if (pf && (theirs_ok || !record_proof_ok(d->cfg.ctx, d->cfg.net, &r[1 - me], d->me.xonly, h, pf))) pf = NULL;
+        if (st < 0 || pf) *fresh += alert_in(d, &r[1 - me], &r[me], pf);
+    }
+    return true;
+}
+
 int dht_mbox_poll(dht *d)
 {
     uint8_t k[32], req[33];
@@ -290,29 +314,34 @@ int dht_mbox_poll(dht *d)
     for (int i = 0; i < m && ans && !stopping(d); i++) {
         size_t len;
         if (is_me(d, mb[i].id)) continue;                      /* what came here was handled when it came */
-        const bool ok = exchange(d, &mb[i], req, sizeof req, ans, MBOX_LEN, &len) && len >= 2 && ans[1] <= DHT_MBOX_MAX &&
-                        len == 2 + (size_t)ans[1] * DHT_MBOX_ENTRY;
-        heard(d, &mb[i], ok);
-        for (int p = 0; ok && p < ans[1]; p++) {
-            const uint8_t *q = ans + 2 + (size_t)p * DHT_MBOX_ENTRY, flags = q[PAIR_LEN];
-            record r[2];
-            uint8_t h[32];
-            bool theirs_ok;
-            if (!record_decode(q, &r[0]) || !record_decode(q + RECORD_LEN, &r[1]) || flags > 3) continue;
-            const int me = mine(d, &r[0]) ? 0 : mine(d, &r[1]) ? 1 : -1;
-            if (me < 0) continue;
-            pair_hash(&r[0], &r[1], h);
-            const int st = alert_state(d, h, &theirs_ok);
-            if (st > AL_WAIT || (st < 0 && !pair_ok(d, &r[0], &r[1]))) continue;   /* the signatures only of a new pair */
-            /* the other owner's proof for this node, when the mailbox has it */
-            const uint8_t *pf = flags & (1 << (1 - me)) ? q + PAIR_LEN + 1 + (size_t)(1 - me) * 64 : NULL;
-            if (pf && (theirs_ok || !record_proof_ok(d->cfg.ctx, d->cfg.net, &r[1 - me], d->me.xonly, h, pf))) pf = NULL;
-            if (st < 0 || pf) fresh += alert_in(d, &r[1 - me], &r[me], pf);
-        }
+        heard(d, &mb[i], exchange(d, &mb[i], req, sizeof req, ans, MBOX_LEN, &len) && mbox_take(d, ans, len, &fresh));
     }
     free(ans);
     if (fresh) dlog(d, "%d alerts from the mailboxes", fresh);
     return fresh;
+}
+
+/* The nonce of PROVE: fixed, so the owner makes the proof without a round trip. The proof binds the custodian as the asker, so a copy of
+ * it convinces that custodian alone, of what is true. */
+const uint8_t CUSTODY_NONCE[32];
+
+/* A custodian told COINCIDENCE for r: PROVE to it, and the pairs it answers become alerts of this node */
+void prove_to(dht *d, const dht_contact *c, const record *r)
+{
+    uint8_t dd[32], req[1 + RECORD_WIRE + 64], e[RECORD_LEN], *ans = malloc(MBOX_LEN);
+    size_t len;
+    int fresh = 0;
+    bool ok = ans && d->cfg.own_distance && d->cfg.own_distance(d->cfg.user, r->x, r->t, dd) &&
+              record_prove(d->cfg.ctx, d->cfg.net, r, dd, c->xonly, CUSTODY_NONCE, req + 1 + RECORD_WIRE);
+    pz_secure_zero(dd, sizeof dd);
+    if (ok) {
+        req[0] = DHT_PROVE;
+        record_encode(r, e), memcpy(req + 1, e, RECORD_WIRE);
+        ok = exchange(d, c, req, sizeof req, ans, MBOX_LEN, &len) && mbox_take(d, ans, len, &fresh);
+        heard(d, c, ok);
+    }
+    free(ans);
+    if (fresh) dlog(d, "%d alerts from a custodian of the point", fresh);
 }
 
 int dht_local_mbox(dht *d, const uint8_t owner[32], mbox_pair *pairs, int max) { return mbox_get(d->mb, owner, pairs, max); }

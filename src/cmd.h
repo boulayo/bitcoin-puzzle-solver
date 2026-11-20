@@ -26,7 +26,7 @@ typedef struct {
     char step[80];                /* --step: only the keys START + i * STEP of the range */
     int threads, chunk_bits, dp_bits;
     double mem_gb;
-    bool no_cpu, no_gpu, quiet, verbose, retune, keep_awake, near;
+    bool no_cpu, no_gpu, quiet, verbose, retune, keep_awake, near, stop_input;
     char part[PART_TEXT];
     int node, nfiles;
     bool node_given;              /* --node was given, 0 included */

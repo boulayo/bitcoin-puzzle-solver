@@ -523,6 +523,9 @@ Se il computer va in sospensione o in ibernazione mentre una campagna gira:
   esclusa dopo più di 3 fallimenti di fila, o più di 40 in tutto (dieci minuti di lanci buoni dopo un fallimento azzerano il conteggio, così un
   portatile che va in sospensione ogni notte tiene la sua scheda);
 * `hunt --keep-awake` impedisce a Windows (e a macOS, con `caffeinate`) di sospendersi finché la campagna gira (la sospensione torna possibile alla fine). Su Linux: `systemd-inhibit`.
+* `hunt --stop-with-input` ferma la campagna come un Ctrl-C (lo stato è salvato) quando l'ingresso standard finisce. Serve a un
+  programma che avvia pzsolve: gli dà un canale su cui non scrive mai, e quando quel programma finisce, anche ucciso o andato in
+  crash, il canale si chiude e pzsolve finisce con lui invece di cercare da solo (lo fa `pzpeer run`).
 
 Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoint è ogni 60 s.
 

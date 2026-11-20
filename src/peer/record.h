@@ -14,8 +14,8 @@
 
 #define RECORD_LEN 66              /* type, zero bits, x, owner: in alerts, mailboxes, sessions and proofs */
 #define RECORD_WIRE 34             /* the same without the owner: in a STORE, whose sender is the owner */
-#define RECORD_DP_MAX 64
-#define RECORD_DP_MORE 8           /* zero bits a home may add to the network's (home.c): a record claims at most these more */           /* the most zero bits a record may claim */
+#define RECORD_DP_MAX 64           /* the most zero bits a record may claim */
+#define RECORD_DP_MORE 8           /* zero bits a home may add to the network's (home.c): a record claims at most these more */
 
 typedef struct {
     int t;                         /* 0 tame, +1 or -1 wild */

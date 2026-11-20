@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #define RESEND_MS (3600 * 1000LL)  /* a custodian alerts the same pair at most once an hour (a republished record alerts again) */
+#define PROVE_MS (600 * 1000LL)    /* a coincidence waits this long for the proof of the owner that stored it */
 
 /* ---- custody ---- */
 
@@ -40,11 +41,41 @@ static void sent_forget(dht *d, const uint8_t h[32])
     pthread_mutex_unlock(&d->a_mu);
 }
 
+/* the alert of a coincidence: a job that tells both owners and their mailboxes, not within RESEND_MS of the last one. from: the address
+ * of the owner that proved a (NULL: this node's own) */
+static void coin_alert(dht *d, const record *a, const record *b, const net_addr *from)
+{
+    uint8_t h[32];
+    dht_contact src;
+    memset(&src, 0, sizeof src);
+    if (from) src.addr = *from;
+    pair_hash(a, b, h);
+    if (!sent_check(d, h)) return;
+    if (job_push(d, JOB_ALERT_OUT, a, b, from ? &src : NULL)) dlog(d, "coincidence (%s): alerting the owners", a->t == b->t ? "merge" : "useful");
+    else sent_forget(d, h);
+}
+
+/* A coincidence of a record r that came from its owner: held until the owner proves r (PROVE), for PROVE_MS. A copy of another's point
+ * cannot be proved, so it alerts nobody (before, each such copy cost its victim an alert, about 50 connections). Full: the oldest goes. */
+static void prove_wait_add(dht *d, const record *r, const record *other)
+{
+    const int64_t now = sys_now_ms();
+    pthread_mutex_lock(&d->a_mu);
+    int at = 0;
+    for (int i = 0; i < d->npw; i++)
+        if (now - d->pw[i].at < PROVE_MS) d->pw[at++] = d->pw[i];
+    d->npw = at;
+    if (d->npw == PROVE_MAX) memmove(d->pw, d->pw + 1, (PROVE_MAX - 1) * sizeof *d->pw), d->npw--;
+    d->pw[d->npw++] = (prove_wait){.r = *r, .other = *other, .at = now};
+    pthread_mutex_unlock(&d->a_mu);
+}
+
 /* A record for the custody of this node: its status for STORED. from: the address of the owner that sent it, NULL for this node's own.
  * A record of another node is taken only when this node may be one of its custodians, and within the rate of the sender's block. Each
- * coincidence becomes a job that alerts the owners and their mailboxes, also for a duplicate (a republished record alerts again, at most
- * once an hour: an alert lost on the way comes back). Each alert costs this node lookups and a dozen connections, so the coincidences of
- * one block are limited too, and each record alerts at most two pairs: more owners of one x are a flood, not walks. */
+ * coincidence of a record of another node waits for its owner's proof (COINCIDENCE, then PROVE), also for a duplicate: a republished
+ * record alerts again, at most once an hour, and its owner hears of the coincidence from this node itself. Each alert costs this node
+ * lookups and a dozen connections, so the coincidences of one block are limited too, and each record alerts at most two pairs: more
+ * owners of one x are a flood, not walks. A record this node does not keep because it is full is told COINCIDENCE all the same. */
 int custody_put(dht *d, const record *r, const net_addr *from)
 {
     uint8_t k[32];
@@ -55,22 +86,54 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     if (from && !responsible(d, k)) return DHT_ST_FAR;
     if (from && !lim_take(d, from, LIM_REC, 1)) return DHT_ST_FULL;
     const store_status s = store_put(d->custody, r, &held, others, 2, &no);
-    if (s == STORE_FULL) held = *r;                            /* not kept, but its coincidences are alerted all the same */
+    if (s == STORE_FULL) held = *r;
+    int waits = 0;
     for (int i = 0; i < no; i++) {
-        uint8_t h[32];
-        pair_hash(&held, &others[i], h);
-        if ((!from || lim_take(d, from, LIM_COIN, 1)) && sent_check(d, h)) {
-            if (job_push(d, JOB_ALERT_OUT, &held, &others[i], NULL)) dlog(d, "coincidence (%s): alerting the owners", held.t == others[i].t ? "merge" : "useful");
-            else sent_forget(d, h);
-        }
+        if (!from) coin_alert(d, &held, &others[i], NULL);     /* this node's own: nothing to prove */
+        else if (lim_take(d, from, LIM_COIN, 1)) prove_wait_add(d, &held, &others[i]), waits++;
     }
+    if (waits && (s == STORE_OK || s == STORE_DUP || s == STORE_FULL)) return DHT_ST_COINCIDENCE;
     switch (s) {
-    case STORE_OK: return no ? DHT_ST_COINCIDENCE : DHT_ST_STORED;
+    case STORE_OK: return DHT_ST_STORED;
     case STORE_DUP: return DHT_ST_DUP;
     case STORE_INVALID: return DHT_ST_INVALID;
     case STORE_FULL: return DHT_ST_FULL;
     default: return DHT_ST_FAILED;
     }
+}
+
+/* PROVE: the proof of the owner of r (the sender) for this custodian. The coincidences of r that wait for it are alerted, and the answer
+ * (MBOX, into ans) gives them to the owner, so it hears of them from a custodian of its point and not only from its mailboxes, which
+ * nodes placed near their key could keep from it. 0 when nothing waits for r, or the proof is wrong. */
+size_t custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, uint8_t *ans)
+{
+    record pairs[DHT_MBOX_MAX][2];
+    uint8_t a[RECORD_LEN], b[RECORD_LEN];
+    int n = 0;
+    bool any = false;
+    record_encode(r, a);
+    pthread_mutex_lock(&d->a_mu);
+    for (int i = 0; i < d->npw && !any; i++) record_encode(&d->pw[i].r, b), any = record_same(a, b);
+    pthread_mutex_unlock(&d->a_mu);
+    if (!any || !record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return 0;
+    pthread_mutex_lock(&d->a_mu);
+    int at = 0;
+    for (int i = 0; i < d->npw; i++) {
+        record_encode(&d->pw[i].r, b);
+        if (!record_same(a, b)) d->pw[at++] = d->pw[i];
+        else if (n < DHT_MBOX_MAX) pairs[n][0] = d->pw[i].r, pairs[n][1] = d->pw[i].other, n++;
+    }
+    d->npw = at;
+    pthread_mutex_unlock(&d->a_mu);
+    ans[0] = DHT_MBOX, ans[1] = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        uint8_t *q = ans + 2 + (size_t)i * DHT_MBOX_ENTRY;
+        coin_alert(d, &pairs[i][0], &pairs[i][1], from);
+        const bool swap = memcmp(pairs[i][0].owner, pairs[i][1].owner, 32) > 0;   /* in the order of their owners, as in MBOX */
+        record_encode(&pairs[i][swap], q), record_encode(&pairs[i][!swap], q + RECORD_LEN);
+        memset(q + PAIR_LEN, 0, 1 + 2 * 64);
+    }
+    return 2 + (size_t)n * DHT_MBOX_ENTRY;
 }
 
 /* ---- the custodians of a key ---- */
@@ -288,6 +351,7 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
                 if (got && (st[q] == DHT_ST_STORED || st[q] == DHT_ST_DUP || st[q] == DHT_ST_COINCIDENCE))
                     held[i2] |= me ? 1 : 3, has[i2][jdx[q]] = true;
                 else if (!got || st[q] == DHT_ST_FAR) cc_stale(&d->cc, ts[i2], true);   /* dead, or not a custodian: a new lookup */
+                if (got && !me && st[q] == DHT_ST_COINCIDENCE) prove_to(d, &t, &recs[i2]);
             }
         }
     for (int i = 0; ok && i < n; i++) {

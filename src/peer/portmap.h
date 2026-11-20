@@ -13,7 +13,8 @@
 /* Asks the router to send the TCP port `port` to this machine, the same port outside, for lease_s seconds. nonce: 12 bytes that stay the
  * same for this node (PCP renews a mapping only for the nonce that made it). router: NULL for the router of the default route and the
  * multicast search of UPnP; tests give the address of a router of theirs, which takes all three. The seconds the router keeps the port
- * open (to be asked again before half of them pass), 0 when it does not; what happened in why. */
+ * open (to be asked again before half of them pass), 0 when it does not; what happened in why. lease_s 0 closes the port that an earlier
+ * call opened (not 0 when the router did). */
 unsigned portmap(uint16_t port, unsigned lease_s, const uint8_t nonce[12], const char *router, char *why, size_t cap);
 
 #endif

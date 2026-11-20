@@ -6,6 +6,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- pzsolve `hunt --stop-with-input`: the end of standard input stops the campaign as a Ctrl-C does. `pzpeer run` starts pzsolve with a
+  pipe it never writes, so a pzpeer that is killed or crashes no longer leaves a pzsolve searching on alone (its campaign taken, at the
+  next start, by a search nobody reads).
 - pzpeer: the network of every puzzle with a known public key is in the program: `pzpeer run --puzzle N`, and with neither `--puzzle`
   nor `--network` the first puzzle still open (today 140). Its jump seed is `SHA256("pznet1/jumps" || public key)`, its least zero
   bits `max(8, (N - 1) / 2 - 44)`, its chain the main one; `pzpeer netcheck 140` prints it. A network file stays for tests and for
@@ -95,6 +98,25 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
+- pzpeer, before a network with real coins (docs/en/NETWORK.md; the prologue is `pznet4`, so earlier versions do not talk to this one):
+  - F, the party whose tiny coin goes into the second transaction, comes from the point and the two types of the pair, which the walks
+    fixed: a home could choose its part with a new identity (about two tries).
+  - A custodian alerts a coincidence only once the owner that stored the record proved it (`COINCIDENCE`, then `PROVE`, a proof for that
+    custodian): a copy of another home's point alerts nobody. The answer gives the owner the pairs at once, from a custodian of its own
+    point, so mailboxes that nodes placed near their key keep from a home cannot hide its coincidences for more than a week.
+  - The fee rate comes after the proofs (`S_FEE`), and the chain is asked only then: a stranger's hello made a home ask its chain.
+  - Each operation of the light chain has 60 seconds per server in all; the limits by address block live in a table keyed with a secret
+    (FNV let chosen blocks push each other out, back to a full share); at most 8 queued custodian alerts for the records of one block;
+    256 waiting places and 32 relays at a relay; the transaction IDs of the BitTorrent client carry a secret of the round; 6to4 and
+    Teredo addresses are not public; descriptors are closed on exec from their birth (Linux) and a child gets only its own (macOS);
+    the folder of a home on Windows is for its owner alone; the router is asked to close the port at the end.
+  - A pair waits no longer for a first transaction whose coins were spent by another (an old copy of it with other signatures): two
+    blocks after, it gives up and tries again. The rule "one point, one proved pair" is kept on disk (`proved`). With an own node, a
+    first transaction that a reorganisation put back in the mempool is no spend in a block. pzsign checks every signature of a batch
+    before it stops on a bad one, so the time does not tell which one it was.
+- The seed generator: every sample of the timing jitter is the same work, at the same addresses and with no branch on the data, so the
+  deltas of a machine without noise are all the same and its health tests refuse the source (before, the work itself made them vary).
+- CI: the actions are named by the hash of their commit; `check_binary.sh` checks each Windows program against the DLLs it needs.
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.
 - The two-party payout, after a review of the signing (docs/en/NETWORK.md 7.5): a payout counts from the signing of its first

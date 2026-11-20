@@ -13,7 +13,7 @@
 enum { GOOD, PERMANENT_ONLY, REFUSES, ELSEWHERE, NO_SERVICE, ENDLESS, ABSOLUTE_CTL, PCP, NATPMP, PCP_OTHER_PORT };
 
 static int g_udp, g_tcp;
-static atomic_int g_kind, g_maps, g_pcp_maps;
+static atomic_int g_kind, g_maps, g_pcp_maps, g_deletes;
 static uint8_t g_pcp_req[60];      /* the last PCP request (under g_mu) */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;   /* g_last */
 static uint16_t g_port;            /* of the HTTP side */
@@ -105,6 +105,8 @@ static void *http_main(void *arg)
                 pthread_mutex_unlock(&g_mu);
                 g_maps++;
             }
+        } else if (!strncmp(req, "POST /ctl ", 10) && strstr(req, "#DeletePortMapping\"") && strstr(req, "<NewExternalPort>4242</NewExternalPort>")) {
+            g_deletes++;
         } else status = 404;
         char ctl[64];
         snprintf(ctl, sizeof ctl, g_kind == ABSOLUTE_CTL ? "http://127.0.0.1:%u/ctl" : "ctl", g_port);
@@ -150,6 +152,9 @@ int main(void)
     CHECK(last_has("<NewExternalPort>4242</NewExternalPort>") && last_has("<NewInternalPort>4242</NewInternalPort>") &&
           last_has("<NewInternalClient>127.0.0.1</NewInternalClient>") && last_has("<NewProtocol>TCP</NewProtocol>") &&
           last_has("<NewLeaseDuration>7200</NewLeaseDuration>"));
+    CHECK(portmap(4242, 0, nonce, router, why, sizeof why) == 1 && g_deletes == 1 && strstr(why, "closed port 4242"));   /* at the end */
+    g_kind = PCP;
+    CHECK(portmap(4240, 0, nonce, router, why, sizeof why) == 1 && strstr(why, "closed port 4240 (PCP)"));
     g_kind = ABSOLUTE_CTL;
     CHECK(portmap(4243, 7200, nonce, router, why, sizeof why) && g_maps == 2 && last_has("<NewExternalPort>4243<"));
     g_kind = PERMANENT_ONLY;

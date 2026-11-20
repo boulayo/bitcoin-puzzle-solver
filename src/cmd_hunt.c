@@ -947,7 +947,9 @@ int cmd_hunt(int argc, char **argv)
     if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
     if (resuming) encrypt_on_resume(&o, r);
     pz_log_set_file(r->path_log);
-    run_install_signals(r);   /* before the measurement of the machine, which takes minutes: a Ctrl-C ends it and cleans up instead of killing the program */
+    run_install_signals(r);
+    if (o.stop_input) run_stop_with_input();
+    /* the signals before the measurement of the machine, which takes minutes: a Ctrl-C ends it and cleans up instead of killing the program */
     int thr_full;
     if (!apply_options(&o, r, &thr_full)) {
         pz_log(PZ_LOG_INFO, "interrupted during the measurement of the machine: the search was not started");

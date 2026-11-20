@@ -246,8 +246,8 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - Transport: TCP, `Noise_XX_secp256k1_ChaChaPoly_SHA256`.
   - DH: libsecp256k1 ECDH, output `SHA256(compressed shared point)`, as in BOLT 8.
   - Static keys are the identity keys (compressed points on the wire, x-only identity = their x).
-  - Prologue: `"pznet3" || F`, so peers of another network, or of earlier versions of the protocol (the short record, then records
-    named without their zero bits), fail the handshake.
+  - Prologue: `"pznet4" || F`, so peers of another network, or of earlier versions of the protocol (the short record, records named
+    without their zero bits, then PROVE, the fee rate after the proofs and F from the point), fail the handshake.
   - The three handshake messages have fixed lengths, so they travel without a length: 33 bytes (`e`), 98 (`e`, `ee`, `s`, `es`, an
     empty payload), 67 (`s`, `se`, and as payload the port the initiator listens on, 2 bytes, 0 when it does not accept connections).
     The responder puts the initiator in its routing table with the address it sees and that port.
@@ -313,7 +313,15 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
   leave an entry whole in length and wrong in content. One that fails there, or names an owner the owners file has not, is not indexed. The records a coincidence is made of are checked again when they are read back, so a record
   damaged in the middle of the file never becomes an alert.
 - Same x, different owners: a coincidence. Same type: a merge (both walkers should restart). Different types: useful. Both kinds are
-  alerted the same way; the owners tell them apart by the types. The custodian sends `ALERT(record1, record2)` to both owners (found
+  alerted the same way; the owners tell them apart by the types. A coincidence that a record of another node made waits for that
+  owner's proof first: the custodian answers `COINCIDENCE` (status 3) and the owner sends `PROVE(record, proof)`, its proof of possession
+  for the custodian (the asker is the custodian, the nonce 32 zero bytes: a copy of it convinces that custodian alone, of what is true).
+  Only a proof that checks out makes the alerts go, and the answer, an `MBOX` with the pairs, tells the owner of them at once, from a
+  custodian of its own point. So a copy of another home's point, which its sender cannot prove, alerts nobody (before, each copy cost its
+  victim an alert, about 50 connections, and a place in its mailboxes), and an owner hears of the coincidences of its records without
+  its mailboxes: those of a home that does not listen sit near a public key, where nodes placed there could keep its alerts from it; now
+  the next republish to every custodian (at most a week) brings each coincidence anyway. A coincidence waits 10 minutes for its proof,
+  256 at most. The custodian sends `ALERT(record1, record2)` to both owners (found
   by their node IDs) and to the mailboxes of each (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`). A record that comes again
   (a duplicate) with a coincidence alerts again, at most once an hour for a pair: an alert lost on the way comes back with the next
   republish to every custodian (once a week, 7.4), or sooner from a mailbox. A record the custodian does not keep because it is full is still alerted. Each alert costs the custodian four lookups and a
@@ -360,12 +368,14 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 | 9 | MBOX_GET(owner 32) | 10 MBOX(n, n × (record, record, flags, proof 64, proof 64)), n ≤ 64, the newest first; the records in the order of their owners, bit i of flags set when the proof of the owner of record i is there (else zeros) |
 | 11 | POSSESS(record, nonce 32) | 12 PROOF(sig 64) |
 | 13 | RELAY(name 32, partner 32) (7.7) | 14 RELAYED, when the partner came; then the bytes of the partner's connection |
+| 15 | PROVE(the first 34 bytes of a record, proof 64), after a STORED that said 3 for it: the owner is the sender | 10 MBOX with the pairs of the record that waited for the proof (no proofs in them) |
 | 16–31 | session messages (section 7.5) | |
 
 - The lengths are exact. In NODES each contact must have the ID of its identity, with the zero bits, a port, and an address the node may
   dial; no address twice (one address with two identities is no honest table), at most 4 contacts of one address block. The ip is IPv6,
   an IPv4 address as `::ffff:a.b.c.d`. Any other answer is refused whole.
-- STORED statuses: 0 stored, 1 duplicate, 2 invalid, 3 stored and a coincidence (alerts follow), 4 the custodian could not write it,
+- STORED statuses: 0 stored, 1 duplicate, 2 invalid, 3 a coincidence that waits for PROVE (the record stored, already there, or not
+  kept because the custodian is full), 4 the custodian could not write it,
   5 refused for now (the custodian is full, or the owner's share, or the owners of its x, or its address block is over its rate), 6 not
   a custodian of it (it knows 10 nodes closer to its key). A record counts as held for 0, 1 and 3.
 - Addresses. On a public network (the chain of the network file is `main`) a node dials and keeps only public addresses: not
@@ -383,10 +393,13 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most, for the 2 seconds the handshake and the request of a connection have) |
   | records stored from one block | 50 a second, 100 000 at once (a home that was alone sends them all) |
   | ALERTs received from one block | 2 a second, 64 at once (checked before the records and the proof) |
-  | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs |
+  | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs, 8 of them for the records of one block |
+  | PROVE from one block | as ALERTs (2 a second, 64 at once), checked before the proof |
   | relays (waiting or under way) of the homes of one block; waits of one identity | 2; 2 |
 
-  The rates are buckets of tokens, kept for 4096 blocks (an entry with no connection is reused, the one used longest ago).
+  The rates are buckets of tokens, kept for 4096 blocks (an entry with no connection is reused, the one used longest ago). The place of a
+  block in that table comes from a hash keyed with a secret of the node: blocks chosen to land in one place and push each other out,
+  each back with a full share of tokens, would have to know it (it was FNV, without a key).
 - POSSESS is answered only for a record of the node itself, with its signature; the proof binds the asker's identity, which the
   handshake told. A node that cannot prove closes the connection.
 - The routing table: buckets by the number of leading bits an ID shares with the node's own, the least recently seen contact first. A
@@ -450,24 +463,29 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 
 Between the two homes, over a Noise channel between their identities (`src/peer/session.c`, run in a thread with the channel and the
 chain given as interfaces). Party 0 is the owner with the smaller identity; `eid = SHA256("pznet1/eid" || F || record_0 || record_1)`;
-F, the party whose tiny coin goes into the second transaction, is the last bit of `eid`, S the other. Every step is a message both sides
-send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`, and 24 and 25, `S_PIECE` and `S_SECOND`; an
+F, the party whose tiny coin goes into the second transaction, is the record of the smaller type when the last bit of
+`SHA256("pznet1/first" || F || x || the two types, the smaller first)` is 0 and the other when it is 1; S is the other party. The point
+and the types come from the walks, so neither home can choose its part (it was the last bit of `eid`, and a home could change it with a
+new identity, about two tries). Every step is a message both sides
+send and then read (types 16 to 22: `S_HELLO`, `S_PROOF`, `S_PLAN`, `S_SIGNER`, `S_SIGNED`, `S_TINYSIG`, `S_ABORT`, and 24 to 26, `S_PIECE`, `S_SECOND` and `S_FEE`; an
 `S_ABORT` with its reason can come instead of any of them; type 23, `S_ALIVE`, empty, goes every minute while a side waits for blocks, so
 that NATs and relays do not cut the channel as idle, and the reader skips it):
 
-1. `S_HELLO`: my record, your record, a nonce, the fee rate I propose (8 bytes), the script of my tiny coin, the latest version of the
-   terms of the payout I know (1 byte), my payout script. Each side
+1. `S_HELLO`: my record, your record, a nonce, the script of my tiny coin, the latest version of the terms of the payout I know (1 byte),
+   my payout script. Each side
    checks the records, that they are a useful coincidence, that they belong to the two ends of the channel and that the other hello is
-   about the same pair. The fee rate is the higher of the two. Each proposes twice the estimate of its chain for a confirmation within 2 blocks, at
-   least 20 and at most 1000 sat/vB: these transactions move a prize, and no such fee is large beside it. A rate above the home's
-   limit ends the session, and so does a partner's rate more than 4 times the home's own: every try of the payout pays it from the
-   prize. The tiny coin, F's only (the script S sends is not used), grows with the rate: twice the fee of F's cancel and the dust limit,
+   about the same pair. The tiny coin, F's only (the script S sends is not used), grows with the fee rate (step 2): twice the fee of F's cancel and the dust limit,
    10 000 satoshis at least, so F can cancel at any rate (were its coin worth less than that fee, S could hold the second transaction
    back with nothing to fear). It comes from the prize, and the second transaction spends it with the prize: the share of the author
    of what its fee leaves, the rest half each (below); the payout scripts must be of standard addresses. The pair pays by the older of
    the two versions of the terms; one that neither home knows ends the session. The nonce is 32 bytes from the system, new in every session: the partner's
    proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
-2. `S_PROOF`: the proof of possession of my record over your nonce. It shows the distance, hence the piece, so no other proof of the piece
+2. `S_PROOF`: the proof of possession of my record over your nonce. Then, and not before, each side asks its chain whether it is up to
+   date and what fee it estimates, and sends `S_FEE`, the fee rate it proposes (8 bytes): a stranger's hello makes a home ask its chain
+   nothing (before, the rate came in the hello, and the chain was asked for it). The fee rate is the higher of the two. Each proposes
+   twice the estimate of its chain for a confirmation within 2 blocks, at least 20 and at most 1000 sat/vB: these transactions move a
+   prize, and no such fee is large beside it. A rate above the home's limit ends the session, and so does a partner's rate more than 4
+   times the home's own: every try of the payout pays it from the prize. It shows the distance, hence the piece, so no other proof of the piece
    is needed. The pieces (`src/peer/pieces.c`): with `D = t0 − t1`, `x0 = base − d0/D`, `x1 = d1/D` (mod n); either public piece is
    computed by anyone from the record (`d·G = R − t·Q'`), and `X0 + X1 = P`. The hello and the proof of the partner are awaited 30 s at
    most (it makes them at once); every later message 5 minutes. Until the partner proved its distance a wait counts from its start,
@@ -680,7 +698,7 @@ neither can dial the other, a node that listens joins their connections (`src/pe
   identity) initiates, and each side checks that the other's static key is the partner (the initiator before it shows its own). The
   relay sees ephemeral keys and ciphertext only: it can stop or delay the channel, not read or change it. The session then runs on it as
   on a direct one.
-- **Limits at the relay:** 8 relays under way at once and 32 homes waiting; 2 relays (waiting or under way) per address block of the
+- **Limits at the relay:** 32 relays under way at once and 256 homes waiting (a waiting home is an open connection, without a thread; with 2 per block, 16 and 128 blocks to take them all, where 8 and 32 took 4 and 16); 2 relays (waiting or under way) per address block of the
   homes, counted for the home that waits and for the one that joins it, and 2 waits per identity; 32 MiB per relay, both ways together
   (a session moves about 100 KB, the largest message of pzsign 36 KB); 4 hours per relay (the channel stays open while the session
   waits for the confirmation of its first transaction), and 3 minutes without a byte (a session says it is alive every minute): pairs

@@ -399,6 +399,15 @@ bool pz_stdin_is_terminal(void)
     return h != INVALID_HANDLE_VALUE && h != NULL && GetConsoleMode(h, &m);
 }
 
+long pz_stdin_read(void *p, size_t n)
+{
+    DWORD got = 0;
+    const HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return -1;
+    if (!ReadFile(h, p, n > 0x10000 ? 0x10000 : (DWORD)n, &got, NULL)) return GetLastError() == ERROR_BROKEN_PIPE ? 0 : -1;
+    return (long)got;
+}
+
 static HANDLE volatile g_con_in;
 static volatile DWORD g_con_mode;
 

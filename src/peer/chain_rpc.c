@@ -78,9 +78,13 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
     chain_rpc *c = ctx;
     bool found;
     btc_utxo u;
+    bool pooled;
     if (!btc_rpc_gettxout(c->rpc, txid, vout, true, &found, &u)) return -2;
     if (!found && !btc_rpc_gettxout(c->rpc, txid, vout, false, &found, &u)) return -2;   /* spent in the mempool only: not yet */
-    return found ? (int)u.confirmations : -1;
+    if (found) return (int)u.confirmations;
+    /* in no block's set: spent in a block, unless the transaction itself is back in the mempool (a reorganisation took its block away,
+     * and its spend waits there too): that is no spend in a block */
+    return !btc_rpc_inmempool(c->rpc, txid, &pooled) ? -2 : pooled ? 0 : -1;
 }
 
 /* The height has no value for "unknown", and a session counts blocks from it: a 0 after a call that failed would end a wait of a
@@ -119,4 +123,6 @@ static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t 
 }
 
 /* the node's scan reads its set of coins, which a spend in the mempool does not change: no pending to look at */
-session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, NULL}; }
+static int ready(void *ctx, char *why, size_t cap) { return chain_rpc_ready(ctx, why, cap); }
+
+session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, NULL, ready}; }

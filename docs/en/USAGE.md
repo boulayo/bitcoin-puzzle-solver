@@ -522,6 +522,9 @@ If the computer goes to sleep or hibernates while a campaign is running:
   failures in a row, or more than 40 in all (ten minutes of good launches after a failure reset that count, so that a laptop that sleeps every night
   keeps its card);
 * `hunt --keep-awake` prevents Windows (and macOS, through `caffeinate`) from going to sleep while the campaign runs (sleep becomes possible again at the end). On Linux: `systemd-inhibit`.
+* `hunt --stop-with-input` stops the campaign as a Ctrl-C does (the state is saved) when standard input ends. It is for a program that
+  starts pzsolve: it gives pzsolve a pipe it never writes, and when that program ends, also killed or crashed, the pipe closes and
+  pzsolve ends with it instead of searching on alone (`pzpeer run` does so).
 
 The state on disk is never at risk: every write is atomic and the checkpoint is every 60 s.
 

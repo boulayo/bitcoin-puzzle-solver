@@ -27,7 +27,8 @@
 #define REACH_MS 3600000           /* a node believes its port open for this long after a connection came in */
 #define QUEUE_MAX 64               /* accepted connections waiting for a handler: more are closed at once */
 #define SENT_MAX 256               /* pairs a custodian remembers having alerted */
-#define RELAY_WAITING 32           /* homes waiting at this relay for their partner */
+#define PROVE_MAX 256              /* coincidences a custodian holds until the owner that stored a record of them proves it */
+#define RELAY_WAITING 256          /* homes waiting at this relay for their partner: open connections, no thread (2 a block: 128 blocks to fill) */
 #define QUERY_STACK (256 << 10)
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
@@ -54,7 +55,9 @@ typedef struct job {
     struct job *next;
     int kind;
     record a, b;
-    dht_contact c;
+    dht_contact c;                 /* JOB_PING: the contact; JOB_ALERT_OUT: the sender of the record (its address), when there is one */
+    bool blocked;                  /* counted against the address block of c */
+    uint8_t block[16];
 } job;
 
 typedef struct own_alert own_alert;
@@ -77,6 +80,11 @@ typedef struct {
     uint8_t h[32];
     int64_t at;
 } sent_alert;
+
+typedef struct {
+    record r, other;               /* r came from its owner, who has to prove it */
+    int64_t at;
+} prove_wait;
 
 typedef struct {
     int fd;
@@ -109,6 +117,7 @@ struct dht {
     bucket b[DHT_BUCKETS];
     pthread_mutex_t l_mu;          /* the limits by address block */
     lim_entry *lim;
+    uint8_t lim_key[32];           /* of the places of the blocks in lim */
     pthread_mutex_t q_mu;          /* accepted connections */
     pthread_cond_t q_cv;
     pending q[QUEUE_MAX];
@@ -122,6 +131,8 @@ struct dht {
     int nalerts, calerts;
     sent_alert sent[SENT_MAX];
     int nsent;
+    prove_wait pw[PROVE_MAX];
+    int npw;
     pthread_mutex_t r_mu;          /* the relays */
     pthread_cond_t r_cv;
     relay_slot waiting[RELAY_WAITING], *active;
@@ -210,6 +221,7 @@ void save_peers(dht *d);
 
 /* dht_store.c */
 int custody_put(dht *d, const record *r, const net_addr *from);
+size_t custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, uint8_t *ans);
 bool own_open(dht *d, char *err, size_t errlen);
 
 /* dht_alert.c */
@@ -217,6 +229,8 @@ bool owner_ok(const dht *d, const record *r);
 bool pair_ok(const dht *d, const record *a, const record *b);
 void pair_hash(const record *a, const record *b, uint8_t h[32]);
 bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof);
+extern const uint8_t CUSTODY_NONCE[32];
+void prove_to(dht *d, const dht_contact *c, const record *r);
 void job_alert_out(dht *d, const record *a, const record *b);
 void job_alert_own(dht *d, const record *a, const record *b);
 void retry_alerts(dht *d);

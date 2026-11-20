@@ -16,6 +16,7 @@
 #define COINS_MAX 256
 
 #define RETRY_MS 600000            /* a server that did not answer is tried again after ten minutes */
+#define OP_MS 60000                /* the calls of one operation on one server, all together */
 
 /* the servers of one operation: e is the connections of the chain, held until close_all */
 typedef struct {
@@ -171,6 +172,7 @@ static void open_all(servers *s, chain_spv *c)
         }
         s->up[i] = s->e[i].fd >= 0;
         s->nup += s->up[i];
+        s->e[i].until = sys_now_ms() + OP_MS;
     }
     if (c->headers_path && tip_of(c, &after) && (!had || after != before)) {
         pthread_mutex_lock(&c->mu);
@@ -179,7 +181,11 @@ static void open_all(servers *s, chain_spv *c)
     }
 }
 
-static void close_all(servers *s) { pthread_mutex_unlock(&s->c->io); }
+static void close_all(servers *s)
+{
+    for (int i = 0; i < s->c->nservers; i++) s->e[i].until = 0;
+    pthread_mutex_unlock(&s->c->io);
+}
 
 static bool is_coinbase(const uint8_t *raw, size_t len)
 {
@@ -474,7 +480,9 @@ static int pending(void *ctx, const uint8_t spk[BTC_P2PKH_LEN])
     return n;
 }
 
-session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, pending}; }
+static int ready(void *ctx, char *why, size_t cap) { return chain_spv_ready(ctx, why, cap); }
+
+session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, pending, ready}; }
 
 int chain_spv_ready(chain_spv *c, char *why, size_t cap)
 {

@@ -316,11 +316,14 @@ static answer ans_misc(const char *method, const char *params, int nth)
         if (nth == 0) return (answer){"\"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16\"", NULL};
         return (answer){NULL, e[(nth - 1) % 4]};
     }
-    if (!strcmp(method, "gettxout")) {   /* spent in a block (none with the mempool nor without), a failure, spent in the mempool only */
-        if (nth <= 1 || (nth == 3 && strstr(params, "true"))) return (answer){"null", NULL};
+    if (!strcmp(method, "gettxout")) {   /* spent in a block (none with the mempool nor without), a failure, spent in the mempool only,
+                                          * then none again: the transaction is back in the mempool */
+        if (nth <= 1 || (nth == 3 && strstr(params, "true")) || nth >= 5) return (answer){"null", NULL};
         if (nth == 2) return (answer){NULL, "{\"code\":-8,\"message\":\"x\"}"};
         return (answer){"{\"confirmations\":3,\"value\":1.0,\"scriptPubKey\":{\"hex\":\"51\"},\"coinbase\":false}", NULL};
     }
+    if (!strcmp(method, "getmempoolentry"))   /* not there; then there, after a reorganisation */
+        return nth ? (answer){"{\"vsize\":200}", NULL} : (answer){NULL, "{\"code\":-5,\"message\":\"Transaction not in mempool\"}"};
     if (!strcmp(method, "estimatesmartfee")) {
         if (strcmp(params, "[2]")) return (answer){NULL, "{\"code\":-8,\"message\":\"wrong target\"}"};
         if (nth == 0) return (answer){"{\"feerate\":0.00004321,\"blocks\":2}", NULL};
@@ -346,6 +349,7 @@ static void test_misc(void)
     CHECK(!CH.broadcast(CH.ctx, &tx) && !CH.broadcast(CH.ctx, &tx));
     CHECK(CH.confirmations(CH.ctx, id, 0) == -1 && CH.confirmations(CH.ctx, id, 0) == -2);
     CHECK(CH.confirmations(CH.ctx, id, 0) == 3);   /* spent in the mempool only: still there (the spend may leave the mempools) */
+    CHECK(CH.confirmations(CH.ctx, id, 0) == 0);   /* its block was taken away and it waits in the mempool with its spend: no spend in a block */
     CHECK(CH.feerate(CH.ctx) == 4321 && CH.feerate(CH.ctx) == 2000);   /* satoshis per 1000 virtual bytes; the fallback */
     btc_rpc_done(&R);
 }

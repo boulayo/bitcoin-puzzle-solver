@@ -108,6 +108,8 @@ static const char *hunt_text(void)
 "                          accordingly [off]. It does not use or update the machine tuning; with -t the X%% is computed on the\n"
 "                          given threads\n"
 "      --keep-awake        Windows and macOS: prevent the system from going to sleep while the campaign runs\n"
+"      --stop-with-input   stop as at a Ctrl-C (the state is saved) when standard input ends: a program that starts pzsolve\n"
+"                          gives it a pipe, and pzsolve stops when that program ends, also when it is killed\n"
 "      --near              linear search: write every near miss to near.txt of the campaign, one key a line. A near miss is a key\n"
 "                          whose hash160 has bytes 8 to 11 of the target's, one key in 2^32: whoever scanned a range knows its\n"
 "                          near misses and nobody else does, so they prove the scan to whoever checks them [off]\n"
@@ -310,7 +312,7 @@ void pz_usage_error(const char *cmd, const char *fmt, ...)
 
 static const char *g_cmd = "";
 
-enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY, O_STEP };
+enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY, O_STEP, O_STOPIN };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"pubkey", 1, 0, 'k'},
@@ -320,7 +322,7 @@ static const struct option long_opts[] = {
     {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN},
     {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"near", 0, 0, O_NEAR}, {"node", 1, 0, O_NODE},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
-    {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"step", 1, 0, O_STEP}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
+    {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"step", 1, 0, O_STEP}, {"stop-with-input", 0, 0, O_STOPIN}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
     {0, 0, 0, 0}};
 
 /* The options removed in 1.23.0 and what takes their place: each one is refused with its own message, not as an unknown option. The
@@ -478,6 +480,7 @@ void parse_opts(int argc, char **argv, opts_t *o)
         case O_NOGPU: o->no_gpu = true; break;
         case O_RETUNE: o->retune = true; break;
         case O_AWAKE: o->keep_awake = true; break;
+        case O_STOPIN: o->stop_input = true; break;
         case O_NEAR: o->near = true; break;
         case O_PART: {
             part_spec ps;

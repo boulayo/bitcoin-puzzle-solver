@@ -108,9 +108,9 @@ static void test_addr(void)
     static const char *const NOT_PUBLIC[] = {"0.1.2.3:1", "10.0.0.1:1", "100.64.0.1:1", "100.127.255.255:1", "127.0.0.1:1", "169.254.1.1:1",
         "172.16.0.1:1", "172.31.9.9:1", "192.168.1.1:1", "192.0.2.5:1", "198.18.0.1:1", "198.51.100.7:1", "203.0.113.9:1", "224.0.0.1:1",
         "255.255.255.255:1", "[::]:1", "[::1]:1", "[fc00::1]:1", "[fd12::1]:1", "[fe80::1]:1", "[ff02::1]:1", "[2001:db8::1]:1",
-        "[::1.2.3.4]:1", "[100::1]:1", "[fec0::1]:1"};
+        "[::1.2.3.4]:1", "[100::1]:1", "[fec0::1]:1", "[2002:c000:204::1]:1", "[2001:0:4136:e378::1]:1"};
     static const char *const PUBLIC[] = {"1.2.3.4:1", "8.8.8.8:53", "100.63.0.1:1", "100.128.0.1:1", "172.32.0.1:1", "192.0.1.1:1",
-        "198.20.0.1:1", "223.255.255.1:1", "[2001:4860::8888]:1", "[2a00:1450::1]:1", "[::ffff:9.9.9.9]:1"};
+        "198.20.0.1:1", "223.255.255.1:1", "[2001:4860::8888]:1", "[2a00:1450::1]:1", "[::ffff:9.9.9.9]:1", "[2001:1::1]:1"};
     for (size_t i = 0; i < sizeof NOT_PUBLIC / sizeof *NOT_PUBLIC; i++)
         if (!net_parse_addr(NOT_PUBLIC[i], &a) || net_addr_public(&a)) printf("FAIL %s:%d: %s is public\n", __FILE__, __LINE__, NOT_PUBLIC[i]), fails++;
     for (size_t i = 0; i < sizeof PUBLIC / sizeof *PUBLIC; i++)
@@ -292,7 +292,7 @@ static void test_drip(void)
     noise_hs hs;
     uint8_t e[32], m[NOISE_HS_MAX], pl[NOISE_PAYLOAD_MAX], prologue[38], port[2] = {0, 0};
     size_t n, plen;
-    memcpy(prologue, "pznet3", 6), memcpy(prologue + 6, FP, 32);
+    memcpy(prologue, "pznet4", 6), memcpy(prologue + 6, FP, 32);
     memset(e, 7, sizeof e);
     CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, e));
     sys_sleep_ms(2 * SHORT_MS);

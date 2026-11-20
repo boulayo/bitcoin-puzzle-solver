@@ -38,10 +38,10 @@
 /* the messages (docs/en/NETWORK.md 7.4): an answer is its request + 1 */
 enum {
     DHT_PING = 1, DHT_PONG, DHT_FIND_NODE, DHT_NODES, DHT_STORE, DHT_STORED, DHT_ALERT, DHT_OK, DHT_MBOX_GET, DHT_MBOX, DHT_POSSESS,
-    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31
+    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_PROVE, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31   /* PROVE is answered with MBOX */
 };
 
-/* the status of a record in STORED */
+/* the status of a record in STORED; COINCIDENCE asks the owner for PROVE before the custodian alerts anyone */
 enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_COINCIDENCE, DHT_ST_FAILED, DHT_ST_FULL, DHT_ST_FAR };
 
 typedef struct {
@@ -81,7 +81,7 @@ typedef struct {
     bool allow_private;            /* a test network (or --allow-private): loopback and private addresses are taken, and not limited.
                                     * A public network refuses them in answers and in the table, so no answer sends it into the LAN */
     uint64_t store_max;            /* records this node keeps as a custodian; 0: DHT_STORE_DEFAULT. An owner gets 1/16 of them at most */
-    int relay_max;                 /* relays at once (a node that listens is a relay); 0: 8 */
+    int relay_max;                 /* relays at once (a node that listens is a relay); 0: 32 */
     uint64_t relay_bytes;          /* bytes of one relay, both ways together; 0: 32 MiB */
     unsigned relay_s;              /* the life of one relay; 0: 4 hours */
     unsigned relay_slot_s;         /* the slot of time that picks the relay of a pair (docs/en/NETWORK.md 7.7); 0: 60 */

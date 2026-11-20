@@ -50,7 +50,9 @@ bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *do
 {
     *doc = (json_doc){0};
     *result = NULL;
-    const int64_t deadline = sys_now_ms() + e->timeout_ms;
+    int64_t deadline = sys_now_ms() + e->timeout_ms;
+    if (e->until && deadline > e->until) deadline = e->until;
+    if (e->until && sys_now_ms() >= e->until) return false;
     const char *pt = "[]";
     size_t pl = 2, bl = 0;
     bool ok = e->fd >= 0 && (!params || (pt = jw_done(params, &pl)) != NULL);

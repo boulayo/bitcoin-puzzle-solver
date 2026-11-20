@@ -394,6 +394,13 @@ bool pz_console_is_own(void) { return false; }
 
 bool pz_stdin_is_terminal(void) { return isatty(0); }
 
+long pz_stdin_read(void *p, size_t n)
+{
+    ssize_t r;
+    while ((r = read(0, p, n)) < 0 && errno == EINTR) {}
+    return (long)r;
+}
+
 /* The terminal that pz_read_secret has put in no-echo mode, for the handler of the stop signals: tcsetattr is among the functions a signal handler may call. */
 static struct termios g_tio_saved;
 static volatile sig_atomic_t g_tio_fd = -1;

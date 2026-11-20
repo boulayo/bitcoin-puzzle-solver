@@ -429,6 +429,67 @@ static void test_coincidences(void)
     }
 }
 
+static void make_id(const char *label, home_identity *id)
+{
+    uint8_t seed[32];
+    hashed(label, seed);
+    CHECK(keys_identity(ctx, seed, FP, BITS, id));
+}
+
+/* A copy of another's point alerts nobody: the custodian waits for the proof of the owner that stored it. A real coincidence: the owner
+ * that proves its record hears of the pair from the custodian itself, in the answer to PROVE. */
+static void test_copied_point(void)
+{
+    node *P = &nodes[21], *Q = &nodes[23], *R = &nodes[25];
+    uint8_t dP[32], xP[32], dR[32], d2[32], x2[32], nq[32], k[32];
+    record rP, rQ, rR;
+    hashed("copied", dP), even_point(dP, xP);
+    give_point(P, 0, xP, dP);
+    CHECK(publish_one(P, 0, xP, &rP));
+    CHECK(publish_one(Q, 1, xP, &rQ));                         /* Q copies P's point as a wild one: it cannot prove it */
+    nap(3000);
+    CHECK(in_mailboxes(P->id.xonly, &rP, &rQ) == 0 && in_mailboxes(Q->id.xonly, &rP, &rQ) == 0);
+    CHECK(alerts_of(P, NULL, NULL, NULL) == 0);
+    /* the real one, by hand: R stores a wild point, then an owner of its own the same x tame, which it proves */
+    hashed("proved by hand", d2), even_point(d2, x2);
+    memcpy(nq, qp, 32);
+    CHECK(secp256k1_ec_seckey_negate(ctx, nq));
+    memcpy(dR, d2, 32);
+    CHECK(secp256k1_ec_seckey_tweak_add(ctx, dR, nq));
+    give_point(R, 1, x2, dR);
+    CHECK(publish_one(R, 1, x2, &rR));
+    home_identity cid;
+    make_id("prover", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    record mine = {.t = 0, .dp = net.dpbits};
+    memcpy(mine.x, x2, 32), memcpy(mine.owner, cid.xonly, 32);
+    int who;
+    store_key(x2, k);
+    CHECK(brute(k, 1, &who) == 1);
+    node *cu = &nodes[who];
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(cu->d);
+    uint8_t req[1 + RECORD_WIRE + 64], e[RECORD_LEN], ans[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY], zero[32] = {0};
+    size_t n;
+    record_encode(&mine, e);
+    req[0] = DHT_STORE, req[1] = 1, memcpy(req + 2, e, RECORD_WIRE);
+    CHECK(net_exchange(&cli, &a, cu->id.xonly, req, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL) && n == 3 && ans[2] == DHT_ST_COINCIDENCE);
+    req[0] = DHT_PROVE, memcpy(req + 1, e, RECORD_WIRE);
+    CHECK(record_prove(ctx, &net, &mine, d2, P->id.xonly, zero, req + 1 + RECORD_WIRE));   /* for another asker: refused */
+    CHECK(!net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL));
+    CHECK(record_prove(ctx, &net, &mine, d2, cu->id.xonly, zero, req + 1 + RECORD_WIRE));
+    CHECK(net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 2 + DHT_MBOX_ENTRY && ans[0] == DHT_MBOX && ans[1] == 1);
+    record g0, g1;
+    CHECK(record_decode(ans + 2, &g0) && record_decode(ans + 2 + RECORD_LEN, &g1));
+    CHECK((same(&g0, &mine) && same(&g1, &rR)) || (same(&g0, &rR) && same(&g1, &mine)));
+    CHECK(!net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL));   /* nothing waits any more */
+    const int64_t t0 = ms();                                   /* and the custodian alerted R's mailboxes */
+    while (ms() - t0 < 10000 && in_mailboxes(R->id.xonly, &rR, &mine) == 0) nap(50);
+    CHECK(in_mailboxes(R->id.xonly, &rR, &mine) > 0);
+}
+
 static void test_malformed(void)
 {
     home_identity cid;
@@ -646,13 +707,6 @@ static void test_eviction(void)
 }
 
 /* ---- the limits ---- */
-
-static void make_id(const char *label, home_identity *id)
-{
-    uint8_t seed[32];
-    hashed(label, seed);
-    CHECK(keys_identity(ctx, seed, FP, BITS, id));
-}
 
 /* a node of its own, with no callbacks: a public network's (allow_private false) or a test network's; started when port is not 0 */
 static dht *scratch(const char *name, bool allow_private, int port, int boot, home_identity *id)
@@ -1411,6 +1465,7 @@ int main(void)
     test_estimate();
     printf("t_dht: %d records published by %d owners in %.1f s\n", RECS, OWNERS, (double)(ms() - t0) / 1000);
     test_coincidences();
+    test_copied_point();
     test_malformed();
     test_restart();
     test_republish();

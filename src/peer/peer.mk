@@ -30,7 +30,7 @@ $(SECP_LIB): $(SECP_OBJ)
 # sys.h has one implementation per system (sys_posix.c, sys_win.c) and sys.c for what the two share
 ifeq ($(WIN),1)
 PEER_SYS   := sys sys_win
-PEER_LIBS   = $(LIBLDLIBS) -lws2_32 -liphlpapi
+PEER_LIBS   = $(LIBLDLIBS) -lws2_32 -liphlpapi -ladvapi32
 else
 PEER_SYS   := sys sys_posix
 PEER_LIBS   = $(LIBLDLIBS)

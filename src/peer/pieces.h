@@ -20,5 +20,9 @@ bool pieces_secret(const secp256k1_context *ctx, const record_net *net, const ui
                    const uint8_t d[32], uint8_t piece[32]);
 /* The id of the session of a pair: SHA256("pznet1/eid" || F || record 0 || record 1), their zero bits set to 0. */
 void pieces_eid(const record_net *net, const record pair[2], uint8_t eid[32]);
+/* F, the party whose tiny coin goes into the second transaction: the last bit of SHA256("pznet1/first" || F || x || the two types, the
+ * smaller first) picks the record of the smaller type (0) or of the larger (1). The point and the types come from the walks, so neither
+ * home can choose its part: a new identity changes the order of the parties and the id of the session, not this. */
+int pieces_first(const record_net *net, const record pair[2]);
 
 #endif

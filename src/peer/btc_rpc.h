@@ -100,6 +100,8 @@ typedef struct {
 bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height);
 /* gettxout: *found false when the output is spent or never was; with mempool, a spend in the mempool counts as spent */
 bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool mempool, bool *found, btc_utxo *out);
+/* Whether the node has the transaction in its mempool (getmempoolentry); false when it could not be asked. */
+bool btc_rpc_inmempool(btc_rpc *c, const uint8_t txid[32], bool *in);
 /* estimatesmartfee: satoshis per 1000 virtual bytes to confirm within target blocks, or 0 when the node has no estimate (a node that
  * has just started, regtest) */
 bool btc_rpc_estimatesmartfee(btc_rpc *c, unsigned target, uint64_t *sat_per_kvb);
