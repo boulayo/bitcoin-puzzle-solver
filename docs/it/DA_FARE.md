@@ -157,7 +157,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | G4 | I nove `eng_*.c` e i sei `h160_*.c` cambiano solo per le definizioni: un file per famiglia compilato più volte | −150 |
 | G5 | `rt.c`: tredici scelte fra CUDA e OpenCL diventano una tabella di funzioni | −40 |
 | G6 | Tre riempimenti di SHA-256 in pzcore (hash.c, kdf.c): uno | −40 |
-| G7 | La copia di cb-mpc tiene 7400 righe che pzsign non usa | −7400 (nessun cambio ai sorgenti usati) |
+| G7 | La copia di cb-mpc tiene 7400 righe che pzsign non usa | **Fatto (20 novembre):** tolti 16 sorgenti e 46 intestazioni, 7418 righe; nessun sorgente usato cambia, e le prove della firma passano |
 | G8 | Togliere i numeri di sequenza dei record (con C1) | fatto il 18 novembre, con C1 |
 
 ### 3.4 Documenti da allineare

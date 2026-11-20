@@ -9,9 +9,10 @@
 each protocol, and the library had two audits by Cure53 in 2024 (in its repository, `docs/`). pzsign uses its two-party ECDSA
 (`ecdsa2pc`).
 
-The copy holds `include/`, `include-internal/` and the sources of `src/cbmpc/{core,crypto,zk,protocol}` (the sources of the public
-C++ and C interfaces, the tests, the benchmarks and the documents are left out; their headers and the protocols pzsign does not use
-are still there, a fifth of the lines, and a third of the objects is never linked), and the files of libsecp256k1 that
+The copy holds the sources of `src/cbmpc/{core,crypto,zk,protocol}` that pzsign links, and the headers of `include/` and
+`include-internal/` that they include (the sources of the public C++ and C interfaces, the tests, the benchmarks and the documents are
+left out; since 2026-11-20 also the protocols pzsign does not use and their headers, about 7400 lines: other ECDSA and EdDSA and
+Schnorr protocols, HD keysets, oblivious transfer, PVE, TDH2, ML-KEM, which no object of pzsign needed), and the files of libsecp256k1 that
 `base_ecc_secp256k1.cpp` includes, from Coinbase's own copy of it (`vendors/secp256k1`, MIT, [COPYING](cb-mpc/vendors/secp256k1/COPYING)).
 The `CMakeLists.txt` files are left out too: the Makefile builds the sources (`src/peer/peer.mk`).
 
