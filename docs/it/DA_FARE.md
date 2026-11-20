@@ -55,6 +55,9 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 - prova della cifratura su un Windows vero;
 - cancellare i rami di prova vecchi su GitHub (`test-122`, `test-123`, `test-1231`, `test-1232`, `test-gpu-*`, `fix-intel-cl`);
 - misurare la velocità di pzsolve su una RTX 4090 (ipotesi I10: tutti i tempi dipendono da questo numero).
+- `t_session` con il vero pzsign si è fermato una volta sul Mac arm64 della CI (20 novembre, giro 77, dopo 38 minuti), e non si è
+  ripetuto (giri 78 e 79, e otto prove insieme su Linux). Ora un caso che dura più di 5 minuti fa fallire la prova con il suo nome: se
+  ricapita, si sa dove guardare.
 
 ---
 
