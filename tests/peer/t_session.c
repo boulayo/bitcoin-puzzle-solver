@@ -16,6 +16,7 @@
 #include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include <pthread.h>
+#include <signal.h>
 #include <secp256k1_extrakeys.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -386,6 +387,18 @@ static void q_drain(queue *q)
 /* ---- the files of a case: a folder of its own ---- */
 
 static char g_dir[64];
+static const char *g_case = "";                               /* the case under way, for the watchdog */
+
+/* a case that hangs fails with its name, instead of holding the run until the CI stops it */
+static void watchdog(int sig)
+{
+    static const char m[] = "t_session: FAIL: still running after 5 minutes: ";
+    (void)sig;
+    (void)!write(2, m, sizeof m - 1), (void)!write(2, g_case, strlen(g_case)), (void)!write(2, "\n", 1);
+    _exit(1);
+}
+
+static void watch(const char *name) { g_case = name, alarm(300); }
 
 static const char *in_dir(const char *name, char *out, size_t cap)
 {
@@ -789,6 +802,8 @@ int main(void)
         printf("t_session: skipped (set PZSIGN)\n");
         return 0;
     }
+    setvbuf(stdout, NULL, _IOLBF, 0);                           /* each case shows when it ends, also through a pipe */
+    signal(SIGALRM, watchdog);
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     snprintf(g_dir, sizeof g_dir, "/tmp/t_session.XXXXXX");
     CHECK(mkdtemp(g_dir) != NULL);
@@ -862,9 +877,10 @@ int main(void)
         {.name = "an old copy of the first is mined", .expect = OTHER, .copy = true, .why = "spent by another transaction"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++)
-        if (!regtest || (!cases[i].taken && !cases[i].other && !cases[i].copy)) run_case(&cases[i], bin);   /* a node cannot be changed behind the test's back */
-    run_copied(marker, PAYOUT_TERMS);
-    run_copied(marker, 0);                                      /* a hello whose terms no version knows */
+        if (!regtest || (!cases[i].taken && !cases[i].other && !cases[i].copy)) watch(cases[i].name), run_case(&cases[i], bin);   /* a node cannot be changed behind the test's back */
+    watch("copied x"), run_copied(marker, PAYOUT_TERMS);
+    watch("no terms of the payout"), run_copied(marker, 0);     /* a hello whose terms no version knows */
+    alarm(0);
     pthread_mutex_lock(&chain.mu);
     chain.stop = true;
     pthread_mutex_unlock(&chain.mu);
