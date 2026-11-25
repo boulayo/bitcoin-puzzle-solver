@@ -15,8 +15,8 @@
 
 #define ANS_MAX MBOX_LEN           /* the longest answer */
 #define JOBS_MAX 4096
-#define ALERT_JOBS_MAX 256         /* of them, the alerts a custodian sends, */
-#define ALERT_JOBS_BLOCK 8         /* ... and of those the ones for the records of one address block */
+#define ALERT_JOBS_MAX 256         /* of them, the alerts a custodian sends */
+#define ALERT_JOBS_BLOCK 8         /* alerts of each kind from one address block (a custodian's: for the records of that block) */
 #define IN_MS 2000                 /* the handshake and the request of a connection that comes in: they come at once */
 #define CONN_PER_BLOCK 4           /* connections of one address block queued or being answered at a time */
 #define LIM_SLOTS 4096             /* address blocks whose limits are remembered */
@@ -30,7 +30,7 @@
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
 static const double LIM_RATE[LIM_KINDS] = {20, 50, 2, 1.0 / 60};      /* per second: connections, records, alerts in, coincidences */
-static const double LIM_BURST[LIM_KINDS] = {100, 100000, 64, 8};       /* a home that was alone sends all its records at once */
+static const double LIM_BURST[LIM_KINDS] = {100, 100000, 64, COIN_BURST};   /* a home that was alone sends all its records at once */
 
 struct lim_entry {
     uint8_t block[16];
@@ -65,7 +65,8 @@ bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool det
 
 /* ---- addresses and the limits by block ---- */
 
-/* the entry of a block (l_mu held): found, or a free one, or the one used longest ago with no connection; NULL when all are busy */
+/* the entry of a block (l_mu held), its tokens refilled: found, or a free one, or the one used longest ago with no connection; NULL when
+ * all are busy */
 static lim_entry *lim_get(dht *d, const net_addr *a)
 {
     uint8_t blk[16], m[48], hh[32];
@@ -75,9 +76,15 @@ static lim_entry *lim_get(dht *d, const net_addr *a)
     uint64_t h;
     memcpy(&h, hh, 8);
     lim_entry *best = NULL;                                    /* a free entry, else the idle one used longest ago */
+    const int64_t now = sys_now_ms();
     for (int p = 0; p < 8; p++) {
         lim_entry *e = &d->lim[(h + (uint64_t)p) & (LIM_SLOTS - 1)];
-        if (e->used && !memcmp(e->block, blk, 16)) return e;
+        if (e->used && !memcmp(e->block, blk, 16)) {
+            const double dt = (double)(now - e->at) / 1000;
+            for (int k = 0; k < LIM_KINDS; k++) e->tok[k] = e->tok[k] + dt * LIM_RATE[k] < LIM_BURST[k] ? e->tok[k] + dt * LIM_RATE[k] : LIM_BURST[k];
+            e->at = now;
+            return e;
+        }
         if (!e->used) {
             if (!best || best->used) best = e;
         } else if (!e->conns && (!best || (best->used && e->at < best->at))) {
@@ -89,60 +96,61 @@ static lim_entry *lim_get(dht *d, const net_addr *a)
     memcpy(best->block, blk, 16);
     best->used = true;
     for (int k = 0; k < LIM_KINDS; k++) best->tok[k] = LIM_BURST[k];
-    best->at = sys_now_ms();
+    best->at = now;
     return best;
 }
 
-static void lim_refill(lim_entry *e)
-{
-    const int64_t now = sys_now_ms();
-    const double dt = (double)(now - e->at) / 1000;
-    for (int k = 0; k < LIM_KINDS; k++) e->tok[k] = e->tok[k] + dt * LIM_RATE[k] < LIM_BURST[k] ? e->tok[k] + dt * LIM_RATE[k] : LIM_BURST[k];
-    e->at = now;
-}
-
-/* n tokens of a kind from the block of a: false when it has used its share */
-bool lim_take(dht *d, const net_addr *a, int kind, double n)
+/* n tokens of a kind from the block of a, and conns more of its connections at a time: 1 for one that comes (at most CONN_PER_BLOCK: a
+ * peer that opens connections and says nothing holds at most that many handlers), -1 for one that ends. False when the block has used
+ * its share. */
+static bool lim(dht *d, const net_addr *a, int kind, double n, int conns)
 {
     if (!limited(d, a)) return true;
     pthread_mutex_lock(&d->l_mu);
     lim_entry *e = lim_get(d, a);
-    bool ok = e != NULL;
-    if (ok) lim_refill(e);
-    if (ok && (ok = e->tok[kind] >= n)) e->tok[kind] -= n;
+    const bool ok = e && e->tok[kind] >= n && e->conns + conns >= 0 && e->conns + conns <= CONN_PER_BLOCK;
+    if (ok) e->tok[kind] -= n, e->conns += conns;
     pthread_mutex_unlock(&d->l_mu);
     return ok;
 }
 
-/* an accepted connection: within the rate of its block and CONN_PER_BLOCK at a time (a peer that opens connections and says nothing
- * holds at most that many handlers) */
-static bool lim_conn_open(dht *d, const net_addr *a)
-{
-    if (!limited(d, a)) return true;
-    pthread_mutex_lock(&d->l_mu);
-    lim_entry *e = lim_get(d, a);
-    bool ok = e != NULL;
-    if (ok) lim_refill(e);
-    if (ok && (ok = e->conns < CONN_PER_BLOCK && e->tok[LIM_CONN] >= 1)) e->tok[LIM_CONN] -= 1, e->conns++;
-    pthread_mutex_unlock(&d->l_mu);
-    return ok;
-}
-
-static void lim_conn_close(dht *d, const net_addr *a)
-{
-    if (!limited(d, a)) return;
-    pthread_mutex_lock(&d->l_mu);
-    lim_entry *e = lim_get(d, a);
-    if (e && e->conns > 0) e->conns--;
-    pthread_mutex_unlock(&d->l_mu);
-}
+bool lim_take(dht *d, const net_addr *a, int kind, double n) { return lim(d, a, kind, n, 0); }
 
 /* ---- answers ---- */
+
+/* the node at the other end of a connection, at the address it came from and the port it told */
+static dht_contact conn_contact(const net_conn *c)
+{
+    dht_contact ct;
+    memcpy(ct.id, c->remote_id, 32);
+    memcpy(ct.xonly, c->remote, 32);
+    ct.addr = c->addr;
+    return ct;
+}
+
+/* MBOX: the pairs, each with the flags of its proofs and the proofs (zeros for one that did not come); its length */
+static size_t mbox_encode(const mbox_pair *p, int n, uint8_t *ans)
+{
+    ans[0] = DHT_MBOX, ans[1] = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        uint8_t *q = ans + 2 + (size_t)i * DHT_MBOX_ENTRY;
+        record_encode(&p[i].r[0], q), record_encode(&p[i].r[1], q + RECORD_LEN);
+        q[PAIR_LEN] = (uint8_t)(p[i].has[0] | p[i].has[1] << 1);
+        for (int k = 0; k < 2; k++) {
+            if (p[i].has[k]) memcpy(q + PAIR_LEN + 1 + 64 * k, p[i].proof[k], 64);
+            else memset(q + PAIR_LEN + 1 + 64 * k, 0, 64);
+        }
+    }
+    return 2 + (size_t)n * DHT_MBOX_ENTRY;
+}
 
 /* The answer to a request into ans (ANS_MAX bytes): its length, 0 for a malformed request (the connection is closed without one). */
 static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, uint8_t *ans)
 {
     record r, r2;
+    /* A linear search has no records: any x on the curve with the zero bits passes the checks of one, with no walk (at 64 zero bits too),
+     * so a node of such a network takes none, and no alert or proof of one */
+    if (d->cfg.blocks && (m[0] == DHT_STORE || m[0] == DHT_ALERT || m[0] == DHT_PROVE || m[0] == DHT_POSSESS)) return 0;
     switch (m[0]) {
     case DHT_PING:
         if (len != 1) return 0;
@@ -169,48 +177,44 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
         if (len < 2 || m[1] == 0 || len != 2 + (size_t)m[1] * RECORD_WIRE) return 0;
         ans[0] = DHT_STORED, ans[1] = m[1];
         for (int i = 0; i < m[1]; i++) {
-            uint8_t e[RECORD_LEN];
-            memcpy(e, m + 2 + (size_t)i * RECORD_WIRE, RECORD_WIRE), memcpy(e + RECORD_WIRE, c->remote, 32);
-            ans[2 + i] = (uint8_t)(record_decode(e, &r) ? custody_put(d, &r, &c->addr) : DHT_ST_INVALID);
+            const bool ok = record_wire_decode(m + 2 + (size_t)i * RECORD_WIRE, c->remote, &r);
+            ans[2 + i] = (uint8_t)(ok ? custody_put(d, &r, &c->addr) : DHT_ST_INVALID);
         }
         return 2 + (size_t)m[1];
     case DHT_ALERT: {
         /* the pair, and maybe the proof of the owner of the first record for the owner of the second over the pair (7.3); the rate
          * of the block first, before the checks that cost */
         const bool with = len == 1 + PAIR_LEN + 64;
+        const dht_contact from = conn_contact(c);
         uint8_t h[32];
         if ((len != 1 + PAIR_LEN && !with) || !lim_take(d, &c->addr, LIM_ALERT, 1) || !record_decode(m + 1, &r) ||
             !record_decode(m + 1 + RECORD_LEN, &r2) || !pair_ok(d, &r, &r2))
             return 0;
         pair_hash(&r, &r2, h);
         if (with && !record_proof_ok(d->cfg.ctx, d->cfg.net, &r, r2.owner, h, m + 1 + PAIR_LEN)) return 0;
-        (void)alert_in(d, &r, &r2, with ? m + 1 + PAIR_LEN : NULL);
+        (void)alert_in(d, &r, &r2, with ? m + 1 + PAIR_LEN : NULL, &from);
         ans[0] = DHT_OK;
         return 1;
     }
     case DHT_MBOX_GET: {
         mbox_pair pairs[DHT_MBOX_MAX];
         if (len != 33) return 0;
-        const int n = mbox_get(d->mb, m + 1, pairs, DHT_MBOX_MAX);
-        ans[0] = DHT_MBOX, ans[1] = (uint8_t)n;
-        for (int i = 0; i < n; i++) {
-            uint8_t *q = ans + 2 + (size_t)i * DHT_MBOX_ENTRY;
-            record_encode(&pairs[i].r[0], q);
-            record_encode(&pairs[i].r[1], q + RECORD_LEN);
-            q[PAIR_LEN] = (uint8_t)(pairs[i].has[0] | pairs[i].has[1] << 1);
-            for (int k = 0; k < 2; k++) {
-                if (pairs[i].has[k]) memcpy(q + PAIR_LEN + 1 + 64 * k, pairs[i].proof[k], 64);
-                else memset(q + PAIR_LEN + 1 + 64 * k, 0, 64);
-            }
-        }
-        return 2 + (size_t)n * DHT_MBOX_ENTRY;
+        return mbox_encode(pairs, mbox_get(d->mb, m + 1, pairs, DHT_MBOX_MAX), ans);
     }
     case DHT_PROVE: {
-        /* the owner's proof of a record it stored here that made a coincidence (custody_proved) */
-        uint8_t e[RECORD_LEN];
-        if (len != 1 + RECORD_WIRE + 64 || !lim_take(d, &c->addr, LIM_ALERT, 1)) return 0;
-        memcpy(e, m + 1, RECORD_WIRE), memcpy(e + RECORD_WIRE, c->remote, 32);
-        return record_decode(e, &r) ? custody_proved(d, &r, m + 1 + RECORD_WIRE, &c->addr, ans) : 0;
+        /* the owner's proofs of records it stored here that made a coincidence (custody_proved), at most COIN_BURST: a STORED tells no
+         * more. A token of the ALERTs of the block for each, before the proofs are checked */
+        mbox_pair pairs[COIN_BURST * (STORE_X_OWNERS - 1)];
+        const int n = len >= 2 ? m[1] : 0;
+        int np = 0;
+        if (n < 1 || n > COIN_BURST || len != 2 + (size_t)n * PROVE_ENTRY || !lim_take(d, &c->addr, LIM_ALERT, n)) return 0;
+        for (int i = 0; i < n; i++) {
+            const uint8_t *q = m + 2 + (size_t)i * PROVE_ENTRY;
+            const int k = record_wire_decode(q, c->remote, &r) ? custody_proved(d, &r, q + RECORD_WIRE, &c->addr, pairs + np) : -1;
+            if (k < 0) return 0;
+            np += k;
+        }
+        return mbox_encode(pairs, np, ans);
     }
     case DHT_POSSESS: {
         uint8_t dd[32];
@@ -264,10 +268,7 @@ static void serve(dht *d, int fd, const net_addr *from, uint8_t *req, uint8_t *a
     }
     const size_t n = answer(d, c, req, len, ans);
     if (n && net_send(c, ans, n)) {
-        dht_contact ct;                                        /* a node that asks is alive: a contact, once it answers at its port */
-        memcpy(ct.id, c->remote_id, 32);
-        memcpy(ct.xonly, c->remote, 32);
-        ct.addr = c->addr;
+        const dht_contact ct = conn_contact(c);                /* a node that asks is alive: a contact, once it answers at its port */
         rt_asked(d, &ct);
     }
     net_close(c);
@@ -285,16 +286,14 @@ bool job_push(dht *d, int kind, const record *a, const record *b, const dht_cont
     if (a) j->a = *a;
     if (b) j->b = *b;
     if (c) j->c = *c;
-    j->blocked = kind == JOB_ALERT_OUT && c && limited(d, &c->addr);
+    j->blocked = kind != JOB_PING && c && limited(d, &c->addr);
     if (j->blocked) net_addr_block(&c->addr, j->block);
     pthread_mutex_lock(&d->j_mu);
     int same = 0;                                              /* slow alerts of a few blocks cannot hold the whole queue */
-    for (const job *q = d->jhead; q && j->blocked; q = q->next) same += q->blocked && !memcmp(q->block, j->block, 16);
-    const bool ok = d->jn < JOBS_MAX && (kind != JOB_ALERT_OUT || (d->jn_alert < ALERT_JOBS_MAX && same < ALERT_JOBS_BLOCK)) && !stopping(d);
+    job **at = &d->jhead;
+    for (; *at; at = &(*at)->next) same += j->blocked && (*at)->blocked && (*at)->kind == kind && !memcmp((*at)->block, j->block, 16);
+    const bool ok = d->jn < JOBS_MAX && same < ALERT_JOBS_BLOCK && (kind != JOB_ALERT_OUT || d->jn_alert < ALERT_JOBS_MAX) && !stopping(d);
     if (ok) {
-        job **at = &d->jhead;                                  /* this node's own alerts first, then the others' alerts, then the pings */
-        while (*at && (*at)->kind <= kind) at = &(*at)->next;
-        j->next = *at;
         *at = j;
         d->jn++;
         d->jn_alert += kind == JOB_ALERT_OUT;
@@ -305,18 +304,32 @@ bool job_push(dht *d, int kind, const record *a, const record *b, const dht_cont
     return ok;
 }
 
+/* The next job (j_mu held): the oldest of the kind whose turn it is, else of the next kind that has one. The kinds take turns, so the
+ * alerts of a custodian and the pings do not wait behind a flood of alerts for this node, nor these behind them. */
+static job *job_next(dht *d)
+{
+    for (int k = 0; k < JOB_KINDS; k++) {
+        const int kind = (d->jturn + k) % JOB_KINDS;
+        for (job **at = &d->jhead; *at; at = &(*at)->next)
+            if ((*at)->kind == kind) {
+                job *j = *at;
+                *at = j->next;
+                d->jturn = kind + 1;
+                d->jn--;
+                d->jn_alert -= kind == JOB_ALERT_OUT;
+                return j;
+            }
+    }
+    return NULL;
+}
+
 static void *jobs_main(void *arg)
 {
     dht *d = arg;
     for (;;) {
         pthread_mutex_lock(&d->j_mu);
         while (!d->jhead && !stopping(d)) pthread_cond_wait(&d->j_cv, &d->j_mu);
-        job *j = stopping(d) ? NULL : d->jhead;
-        if (j) {
-            d->jhead = j->next;
-            d->jn--;
-            d->jn_alert -= j->kind == JOB_ALERT_OUT;
-        }
+        job *j = stopping(d) ? NULL : job_next(d);
         pthread_mutex_unlock(&d->j_mu);
         if (!j) return NULL;
         if (j->kind == JOB_ALERT_OUT) job_alert_out(d, &j->a, &j->b);
@@ -334,7 +347,7 @@ static void *accept_main(void *arg)
         const int fd = net_accept(d->lfd, 100, &from);
         if (fd == -2) sys_sleep_ms(50);                                      /* out of descriptors: let the handlers close some */
         if (fd < 0) continue;
-        if (!lim_conn_open(d, &from)) {                        /* its block has its share of the handlers, or of the rate */
+        if (!lim(d, &from, LIM_CONN, 1, 1)) {                  /* its block has its share of the handlers, or of the rate */
             net_close_fd(fd);
             continue;
         }
@@ -348,7 +361,7 @@ static void *accept_main(void *arg)
         pthread_mutex_unlock(&d->q_mu);
         if (!room) {                                           /* busy: the dialler tries another node */
             net_close_fd(fd);
-            lim_conn_close(d, &from);
+            (void)lim(d, &from, LIM_CONN, 0, -1);
         }
     }
     return NULL;
@@ -368,7 +381,7 @@ static void *handler_main(void *arg)
         if (!go) break;
         if (req && ans) serve(d, p.fd, &p.from, req, ans);
         else net_close_fd(p.fd);
-        lim_conn_close(d, &p.from);
+        (void)lim(d, &p.from, LIM_CONN, 0, -1);
     }
     free(req);
     free(ans);
@@ -563,18 +576,15 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
         dht_stop(d);
         return NULL;
     }
-    set_aside(d, "store.bin", "PZSTORE2"), set_aside(d, "own.bin", "PZOWN002");
-    path_of(d, "store.bin", path, sizeof path);
-    if (!(d->custody = store_open(path, cfg->ctx, cfg->net, err, errlen))) {
+    if (!cfg->blocks) set_aside(d, "store.bin", "PZSTORE2");
+    set_aside(d, "own.bin", "PZOWN002");
+    path_of(d, cfg->blocks ? "claims.bin" : "store.bin", path, sizeof path);   /* a linear search keeps claims, and no records (answer) */
+    if (cfg->blocks ? !(d->claims = claims_open(path, cfg->net->fp, err, errlen))
+                    : !(d->custody = store_open(path, cfg->ctx, cfg->net, err, errlen))) {
         dht_stop(d);
         return NULL;
     }
-    store_limits(d->custody, d->cfg.store_max, d->cfg.store_max / OWNER_SHARE);
-    path_of(d, "claims.bin", path, sizeof path);
-    if (cfg->blocks && !(d->claims = claims_open(path, cfg->net->fp, err, errlen))) {
-        dht_stop(d);
-        return NULL;
-    }
+    if (d->custody) store_limits(d->custody, d->cfg.store_max, d->cfg.store_max / OWNER_SHARE);
     const bool own = own_open(d, err, errlen);
     if (!own || !(d->mb = mbox_new(MBOX_CAP, MBOX_PER_OWNER))) {
         if (own) snprintf(err, errlen, "out of memory");

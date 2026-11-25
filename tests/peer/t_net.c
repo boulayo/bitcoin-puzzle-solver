@@ -115,7 +115,8 @@ static void test_addr(void)
         if (!net_parse_addr(NOT_PUBLIC[i], &a) || net_addr_public(&a)) printf("FAIL %s:%d: %s is public\n", __FILE__, __LINE__, NOT_PUBLIC[i]), fails++;
     for (size_t i = 0; i < sizeof PUBLIC / sizeof *PUBLIC; i++)
         if (!net_parse_addr(PUBLIC[i], &a) || !net_addr_public(&a)) printf("FAIL %s:%d: %s is not public\n", __FILE__, __LINE__, PUBLIC[i]), fails++;
-    /* blocks: the /24 of IPv4, the /32 of IPv6 (what one provider gets: a /48 is one customer of it), the whole address otherwise; never the port */
+    /* blocks: the /24 of IPv4, the /32 of IPv6 (what one provider gets: a /48 is one customer of it), the whole address of a loopback,
+     * private or link-local one; never the port */
     net_addr b;
     uint8_t ka[16], kb[16];
     CHECK(net_parse_addr("1.2.3.4:1", &a) && net_parse_addr("1.2.3.200:9", &b));
@@ -130,9 +131,24 @@ static void test_addr(void)
     CHECK(net_parse_addr("[2a00:1451:4001:1::1]:1", &b));
     net_addr_block(&b, kb);
     CHECK(memcmp(ka, kb, 16) != 0);
-    CHECK(net_parse_addr("127.0.0.1:1", &a) && net_parse_addr("127.0.0.2:1", &b));
-    net_addr_block(&a, ka), net_addr_block(&b, kb);
-    CHECK(memcmp(ka, kb, 16) != 0);
+    /* the whole address for a machine or a LAN of its own; a /24 or a /32 for any other, public or not: one IPv4 behind 6to4 has 2^80
+     * addresses, and before each was a block (100 000 records stored from each of two of them) */
+    static const char *const OWN[][2] = {{"127.0.0.1:1", "127.0.0.2:1"}, {"10.0.0.1:1", "10.0.0.2:1"}, {"192.168.1.1:1", "192.168.1.2:1"},
+        {"172.16.0.1:1", "172.16.0.2:1"}, {"169.254.0.1:1", "169.254.0.2:1"}, {"[::1]:1", "[::2]:1"}, {"[fd12::1]:1", "[fd12::2]:1"},
+        {"[fe80::1]:1", "[fe80::2]:1"}};
+    static const char *const SHARED[][2] = {{"[2002:102:304::1]:1", "[2002:102:304::2]:1"}, {"[2002:102:304::1]:1", "[2002:102:ff04:1::1]:1"},
+        {"[2001:0:4136:e378::1]:1", "[2001:0:5ef5:79fd::2]:1"}, {"100.64.0.1:1", "100.64.0.2:1"}, {"192.0.2.1:1", "192.0.2.2:1"},
+        {"[2001:db8::1]:1", "[2001:db8:1::2]:1"}};
+    for (size_t i = 0; i < sizeof OWN / sizeof *OWN; i++) {
+        CHECK(net_parse_addr(OWN[i][0], &a) && net_parse_addr(OWN[i][1], &b));
+        net_addr_block(&a, ka), net_addr_block(&b, kb);
+        if (!memcmp(ka, kb, 16)) printf("FAIL %s:%d: %s and %s in one block\n", __FILE__, __LINE__, OWN[i][0], OWN[i][1]), fails++;
+    }
+    for (size_t i = 0; i < sizeof SHARED / sizeof *SHARED; i++) {
+        CHECK(net_parse_addr(SHARED[i][0], &a) && net_parse_addr(SHARED[i][1], &b));
+        net_addr_block(&a, ka), net_addr_block(&b, kb);
+        if (memcmp(ka, kb, 16)) printf("FAIL %s:%d: %s and %s not in one block\n", __FILE__, __LINE__, SHARED[i][0], SHARED[i][1]), fails++;
+    }
 }
 
 static void test_exchange(void)
@@ -292,7 +308,7 @@ static void test_drip(void)
     noise_hs hs;
     uint8_t e[32], m[NOISE_HS_MAX], pl[NOISE_PAYLOAD_MAX], prologue[38], port[2] = {0, 0};
     size_t n, plen;
-    memcpy(prologue, "pznet4", 6), memcpy(prologue + 6, FP, 32);
+    memcpy(prologue, "pznet5", 6), memcpy(prologue + 6, FP, 32);
     memset(e, 7, sizeof e);
     CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, e));
     sys_sleep_ms(2 * SHORT_MS);

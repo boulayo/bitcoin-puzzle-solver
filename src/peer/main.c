@@ -91,7 +91,7 @@ static int puzzle_of(const char *s)
 }
 
 /* The network of a file, or of a puzzle when path is NULL, for the checks of records, or of claims (bn) on a linear one, which has no
- * records (its nodes refuse them, dht.c) */
+ * records: its nodes take none (dht.c, answer) */
 static bool load_net(const secp256k1_context *ctx, const char *path, int puzzle, netfile *nf, record_net *net, block_net *bn)
 {
     char err[300];
@@ -261,7 +261,8 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         sys_sleep_ms(200);
         if (tick % 300 == 0) {                                 /* every minute */
             const int c = dht_count(d);
-            printf("%s %d contact%s, %llu records held\n", stamp(ts), c, c == 1 ? "" : "s", (unsigned long long)dht_local_count(d));
+            printf("%s %d contact%s, %llu %s held\n", stamp(ts), c, c == 1 ? "" : "s",
+                   (unsigned long long)(nf.linear ? dht_claims_held(d) : dht_local_count(d)), nf.linear ? "claims" : "records");
             fflush(stdout);
         }
     }

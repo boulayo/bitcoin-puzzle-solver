@@ -24,7 +24,7 @@ void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identit
     memset(cfg, 0, sizeof *cfg);
     cfg->ctx = ctx;
     cfg->self = self;
-    memcpy(cfg->prologue, "pznet4", 6);
+    memcpy(cfg->prologue, "pznet5", 6);
     memcpy(cfg->prologue + 6, fp, 32);
     cfg->id_bits = id_bits;
     cfg->port = port;
@@ -136,15 +136,30 @@ bool net_addr_public(const net_addr *a)
              (b[0] & 0xfe) == 0xfc || b[0] == 0xff ||                  /* unique local, multicast */
              (b[0] == 0xfe && (b[1] & 0x80) == 0x80) ||                /* link-local and the old site-local */
              (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8) ||   /* documentation */
-             (b[0] == 0x20 && b[1] == 0x02) ||                         /* 6to4 and Teredo: an IPv4 address inside, another block for */
-             (b[0] == 0x20 && b[1] == 0x01 && !b[2] && !b[3]) ||       /* the same machine (and both are out of use) */
+             (b[0] == 0x20 && b[1] == 0x02) ||                         /* 6to4 and Teredo: out of use, an IPv4 address inside */
+             (b[0] == 0x20 && b[1] == 0x01 && !b[2] && !b[3]) ||
              (b[0] == 0x01 && !memcmp(b + 1, ZERO, 7)));              /* discard-only (RFC 6666) */
 }
 
+/* an address of this machine or of its LAN, which the internet does not route: loopback, private (RFC 1918, RFC 4193), link-local
+ * (and the old site-local) */
+static bool addr_local(const net_addr *a)
+{
+    const uint8_t *b = a->ip;
+    static const uint8_t LOOP6[16] = {[15] = 1};
+    if (!memcmp(b, V4MAPPED, 12))
+        return b[12] == 10 || b[12] == 127 || (b[12] == 169 && b[13] == 254) || (b[12] == 172 && (b[13] & 0xf0) == 16) ||
+               (b[12] == 192 && b[13] == 168);
+    return !memcmp(b, LOOP6, 16) || (b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0x80) == 0x80);
+}
+
+/* A local address is a block of its own: there each one is a host (the nodes of a test, a LAN). Any other is its /24 or /32, public or
+ * not: an address the internet routes to its sender, such as 6to4 or Teredo with an IPv4 address inside, must not give one machine a
+ * block for each address (2^80 of them for an IPv4 behind 6to4). */
 void net_addr_block(const net_addr *a, uint8_t block[16])
 {
     memcpy(block, a->ip, 16);
-    if (!net_addr_public(a)) return;
+    if (addr_local(a)) return;
     if (!memcmp(a->ip, V4MAPPED, 12)) block[15] = 0;
     else memset(block + 4, 0, 12);
 }

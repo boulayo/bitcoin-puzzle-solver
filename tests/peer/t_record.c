@@ -160,10 +160,16 @@ static void test_record(void)
     CHECK(record_check(ctx, &net, &r));
     record_encode(&r, enc);
     CHECK(enc[0] == (uint8_t)(int8_t)r.t && enc[1] == 0 && !memcmp(enc + 2, r.x, 32) && !memcmp(enc + RECORD_WIRE, id.xonly, 32));
-    uint8_t enc2[RECORD_LEN];
+    uint8_t enc2[RECORD_LEN], wire[RECORD_WIRE];
     CHECK(record_decode(enc, &back) && record_check(ctx, &net, &back));
     record_encode(&back, enc2);
     CHECK(!memcmp(enc2, enc, RECORD_LEN));                       /* compared by the encoding: the struct has padding */
+    record_wire_encode(&r, wire);                               /* the first bytes alone, and the owner apart (a STORE, own.bin) */
+    CHECK(!memcmp(wire, enc, RECORD_WIRE) && record_wire_decode(wire, id.xonly, &back));
+    record_encode(&back, enc2);
+    CHECK(!memcmp(enc2, enc, RECORD_LEN));
+    wire[0] = 2;
+    CHECK(!record_wire_decode(wire, id.xonly, &back));
     uint8_t e2[RECORD_LEN];
     memcpy(e2, enc, sizeof e2), e2[0] = 2;
     CHECK(!record_decode(e2, &back));                           /* no such type */

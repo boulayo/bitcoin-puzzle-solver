@@ -193,7 +193,7 @@ int linear_run(const home_cfg *cfg, const netfile *nf, const char *dir)
     if (!have_id) return fprintf(stderr, "no identity\n"), 1;
     snprintf(path, sizeof path, "%s/own_claims.bin", dir);
     if (!(l.own = claims_open(path, nf->fp, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
-    record_net rn = {.dpbits = RECORD_DP_MAX};                 /* a linear network has no records: its nodes refuse them (dht.c) */
+    record_net rn = {.dpbits = RECORD_DP_MAX};                 /* a linear network has no records: its nodes take none (dht.c, answer) */
     memcpy(rn.fp, nf->fp, 32);
     const char *boot[64];
     char entries[16][NETFILE_LINE_MAX];

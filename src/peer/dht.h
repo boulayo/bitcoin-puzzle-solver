@@ -15,9 +15,10 @@
  * pairs a mailbox keeps, the alerts an owner remembers, the relays.
  *
  * Threads: one accepts, a bounded pool handles the connections (one request and its answer, or a session handed to on_session), one runs
- * the jobs that take time (the alerts of a custodian, the proofs of an alert, the ping of the oldest contact of a full bucket), one keeps
- * the node fresh (bucket refresh, republish of the own records, mailbox polls, the alerts that wait for a proof, peers.txt), one per
- * relay under way. The callbacks run on those threads: they must be thread-safe and must not call dht_stop. Every other function may be
+ * the jobs that take time (the alerts of a custodian, the proofs of an alert, the ping of the oldest contact of a full bucket: each kind
+ * in turn), one keeps the node fresh (bucket refresh, republish of the own records, mailbox polls, the alerts that wait for a proof,
+ * peers.txt), one per relay under way; a publish stores to 16 custodians at a time, each on a thread, and a lookup asks DHT_ALPHA nodes
+ * at a time. The callbacks run on those threads: they must be thread-safe and must not call dht_stop. Every other function may be
  * called from any thread. */
 #ifndef PZPEER_DHT_H
 #define PZPEER_DHT_H
@@ -36,10 +37,10 @@
 #define DHT_ANY_PORT (-1)          /* listen_port: any free port (tests; dht_port tells which) */
 #define DHT_MBOX_ENTRY (2 * RECORD_LEN + 1 + 2 * 64)   /* a pair in MBOX: the two records, which proofs follow, the two proofs */
 
-/* the messages (docs/en/NETWORK.md 7.4): an answer is its request + 1 */
+/* the messages (docs/en/NETWORK.md 7.4): an answer is its request + 1, but MBOX answers PROVE */
 enum {
     DHT_PING = 1, DHT_PONG, DHT_FIND_NODE, DHT_NODES, DHT_STORE, DHT_STORED, DHT_ALERT, DHT_OK, DHT_MBOX_GET, DHT_MBOX, DHT_POSSESS,
-    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_PROVE, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31,   /* PROVE is answered with MBOX */
+    DHT_PROOF, DHT_RELAY, DHT_RELAYED, DHT_PROVE, DHT_SESSION_FIRST = 16, DHT_SESSION_LAST = 31,
     DHT_CLAIM = 32, DHT_CLAIMED, DHT_CLAIM_GET, DHT_CLAIMS   /* the claims of the blocks of a linear search (docs/en/NETWORK.md 11) */
 };
 
@@ -59,7 +60,8 @@ typedef struct {
     unsigned id_bits;              /* leading zero bits of a node ID: NODE_ID_ZERO_BITS on a real network */
     const char *listen_host;       /* numeric; NULL: every address */
     int listen_port;               /* 0: no listening (the node dials out and polls its mailboxes); DHT_ANY_PORT: a free one */
-    const char *dir;               /* data folder: store.bin (custody), own.bin and own.cust (own records), peers.txt */
+    const char *dir;               /* data folder: store.bin (custody; claims.bin on a linear search), own.bin and own.cust (own records),
+                                    * peers.txt */
     const char *const *bootstrap;  /* "host:port": the entry= lines of the network file, --peer (peers.txt is read by the node) */
     int nbootstrap;
     /* An alert for this node, after both proofs of possession: mine is this node's record, theirs the other owner's; merge when they
@@ -94,7 +96,8 @@ typedef struct {
     bool portmap;                  /* ask the router of the LAN to let the listening port in (portmap.h) */
     const char *router;            /* tests: the address of that router; NULL: the one of the default route */
     bool verbose;                  /* what the node does, on stderr */
-    const block_net *blocks;       /* a linear search: the claims of its blocks are kept (claims.bin) and answered; NULL: none */
+    const block_net *blocks;       /* a linear search: the claims of its blocks are kept (claims.bin) and answered, and no records (any x
+                                    * with the zero bits passes their checks, with no walk); NULL: a search of records, without claims */
 } dht_config;
 
 #define DHT_STORE_DEFAULT (1ull << 27) /* records of a custodian: 5 GB on disk, an index of 2 GB in memory at most */
@@ -112,8 +115,9 @@ uint16_t dht_port(const dht *d);    /* 0 when the node does not listen */
 
 /* Publishes points of this node: the caller sets t, dp and x of each record, the node sets the owner. They go to the DHT_KSTORE nodes
  * closest to their K, found with a lookup of the last hour near K when one shows them, else with a new one, and are kept in own.bin for
- * the republish. After a restart the caller may give its records again from the first: those own.bin has in the same order are not sent
- * again (nor counted). The records sent now that at least one custodian holds. */
+ * the republish, 16 custodians at a time (a slow one holds one thread). After a restart the caller may give its records again from the
+ * first: those own.bin has in the same order are not sent again (nor counted). The records sent now that at least one custodian holds.
+ * It does not wait for a republish under way. */
 int dht_publish(dht *d, record *recs, int n);
 /* The own records again now (the maintenance thread does it every republish_s), each to the custodians it did not have at the last
  * republish (all: to every custodian, as at the first contacts after none). The copies sent. */

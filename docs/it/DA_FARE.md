@@ -271,7 +271,7 @@ Nessun modo di rubare il premio. Tutto quello che segue è corretto, con una pro
 | | Cosa | Com'è ora |
 |---|---|---|
 | 1 | Ricerca lineare: con blocchi da 2^44 si potevano dichiarare solo i primi 2^20 blocchi (1 su 64 per il puzzle 71) | `block_range` e `block_count` in `block.c`, un solo calcolo; rifiutati solo i blocchi oltre la fine dell'intervallo |
-| 2 | La risposta di un custode alla prova di un punto veniva sempre scartata | corretta, e da quella risposta si prendono solo le coppie del punto provato |
+| 2 | La risposta di un custode alla prova di un punto veniva sempre scartata | corretta; da quella risposta si prendono solo le coppie dei punti provati, al più 7 per punto |
 | 3 | Con la catena leggera, server che non mostrano monete facevano credere preso il premio | una risposta vuota dei server non prova niente: la sessione finisce e una successiva richiede |
 | 4 | Una riga vecchia dei fallimenti, già al limite, non riceveva mai la data | scritta anche quando la firma viene rifiutata |
 | 5 | La prova bloccata sul Mac (vedi 1.5) | la copia nell'invio stesso; il filo dell'altra coppia finisce con il caso |
@@ -279,22 +279,22 @@ Nessun modo di rubare il premio. Tutto quello che segue è corretto, con una pro
 | 7 | `--part` dopo `--` faceva dichiarare mezzi blocchi | rifiutato |
 | 8 | Una dichiarazione falsa costava un quarto di blocco | metà; nel secondo giro si rifà per primo il blocco con meno chiavi di prova, mai uno della casa stessa |
 | 9 | Una dichiarazione si copiava con identità nuove senza cercare | un altro proprietario è tenuto solo con una chiave di prova che manca alle dichiarazioni già tenute |
-| 10 | Un nodo della ricerca lineare accettava record del canguro (5 GB di disco gratis) | rifiutati |
-| 11 | 6to4 e Teredo: ogni indirizzo era un blocco a sé (limiti aggirati) | contano come gli altri indirizzi IPv6 |
+| 10 | Un nodo della ricerca lineare accettava record del canguro (5 GB di disco gratis) | rifiutati, con gli avvisi e le prove; niente `store.bin` |
+| 11 | 6to4 e Teredo: ogni indirizzo era un blocco a sé (limiti aggirati) | ogni indirizzo non locale conta col suo /24 (IPv4) o /32 (IPv6): 6to4 e Teredo come gli altri |
 | 12 | Un custode ostile fermava la pubblicazione per un'attesa a record | una sola prova per custode, con tutti i suoi record |
-| 13 | Avvisi falsi con un record vero intasavano il filo di lavoro della vittima | un tetto per blocco di indirizzi, i lavori a turno, una sola ricerca dell'altro proprietario |
-| 14 | Due copie piantate nascondevano il vero proprietario | il custode tiene tutti gli "altri" del punto |
+| 13 | Avvisi falsi con un record vero intasavano il filo di lavoro della vittima | al più 8 lavori per blocco di indirizzi, anche nei nuovi tentativi; i lavori a turno, una sola ricerca dell'altro proprietario |
+| 14 | Due copie piantate nascondevano il vero proprietario | il custode tiene tutti gli "altri" del punto (fino a 7) e li dà nella risposta a `PROVE` |
 | 15 | Una casa riavviata prima del blocco della seconda transazione dimenticava il pagamento | la seconda transazione è salvata appena firmata, e ogni sessione comincia scambiandola: chi non l'ha la prende dall'altro |
 | 16 | S mandava la seconda transazione una volta sola, e dopo l'annullamento aspettava 144 blocchi | mandata di nuovo a ogni blocco; S smette di aspettare quando F annulla |
 | 17 | Un pzsign che non parte faceva contare tentativi di pagamento | non conta, la sessione dice perché e avvisa il partner; all'avvio si prova `pzsign version` |
 | 18 | Lo scambio dei pezzi non si chiudeva se le due case avevano già speso le loro uscite | conta anche l'uscita dell'autore |
 | 19 | La monetina di F restava sulla sua chiave nei fallimenti | F la manda al suo indirizzo alla sessione dopo, quando nessuna seconda transazione la può più prendere |
 | 20 | pzpeer aspettava pzsolve senza limite | un minuto, poi l'interruzione, poi la chiusura forzata |
-| 21 | La ripubblicazione dei record bloccava il ciclo della casa | fra un pacchetto e l'altro passa chi aspetta |
+| 21 | La ripubblicazione dei record bloccava il ciclo della casa | nessun blocco tenuto durante una connessione: una pubblicazione non aspetta più la ripubblicazione |
 | 22 | Ricerca lineare: registro della casa, slot illeggibili, ripubblicazione, scelta del blocco | registro della casa nel formato dei custodi (`own_claims.bin`), slot rotti tagliati, ripubblicazione due minuti dopo l'avvio e poi ogni giorno, una per giro |
 | 23 | pzsolve: `--node` nel suggerimento di ripresa | aggiunto. `--dp-bits` diverso su una campagna di rete: **lasciato**, perché è pzpeer stesso a cambiarlo (con `dpbits.txt`) |
 | 24 | Seme: il controllo dei 64 campioni non separava il rumore | ogni campione misura lo stesso lavoro; una macchina senza rumore vede la fonte rifiutata, e il seme della casa si fa allora con un TPM o su un altro computer |
-| 25 | Pubblicazione lenta (una connessione alla volta) | in parallelo, e la ripubblicazione ordinata per chiave |
+| 25 | Pubblicazione lenta (una connessione alla volta) | 16 custodi alla volta, e la ripubblicazione in ordine di chiave (a 1000 nodi un pacchetto va a circa 9 custodi invece di 695) |
 | 26 | Apertura del registro quadratica | un solo ordinamento |
 | 27 | La variante del canguro scelta da un solo campione | tre campioni alternati per forma |
 | 28 | Le attese chiedevano la catena a ogni giro | una volta per blocco; l'esame dell'indirizzo solo quando decide qualcosa |

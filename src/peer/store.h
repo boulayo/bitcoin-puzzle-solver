@@ -63,11 +63,17 @@ void store_key(const uint8_t x[32], uint8_t k[32]);
 
 /* A coincidence: two valid records with the same x from different owners. */
 bool store_pair_ok(const secp256k1_context *ctx, const record_net *net, const record *a, const record *b);
+/* The records of the pair (a, b) in the order of their owners, the smaller x-only identity first, as a pair is named, kept and carried
+ * (MBOX): out[0] and out[1]. The place of a in it. */
+int pair_order(const record *a, const record *b, record out[2]);
+/* SHA256("pznet1/pair" || the names of the two records in that order): the name of a pair, whichever order it came in; also the nonce
+ * of the proof an owner sends for a pair (docs/en/NETWORK.md 7.3). */
+void pair_hash(const record *a, const record *b, uint8_t h[32]);
 
 /* The mailbox: alert pairs kept for their owners, in memory, at most cap in all and per_owner of one owner (of the owner that has
  * too many, else of all, the oldest pair that no owner proved goes first, then the oldest). Two owners at one point with the same types
- * are one pair, whatever the zero bits of their records. A pair is kept in the order of its owners (the smaller x-only identity first), whatever order
- * it came in, with the proof of possession of each owner when one came (docs/en/NETWORK.md 7.3: over the pair, for the other owner). The
+ * are one pair, whatever the zero bits of their records. A pair is kept in the order of its owners (pair_order), whatever order it came
+ * in, with the proof of possession of each owner when one came (docs/en/NETWORK.md 7.3: over the pair, for the other owner). The
  * mailbox keeps what it is given: the caller checks pairs and proofs. */
 typedef struct mbox mbox;
 

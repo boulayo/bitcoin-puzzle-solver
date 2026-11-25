@@ -104,6 +104,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   slower form for a whole run after a busy moment).
 - pzpeer: one function writes a file whole or not at all (`sys_new_file`), one stops a child (`sys_proc_stop`), one reads the optional
   lines of a network file (`netfile_opt`), one tells the owner (`home_say`); `pzcore` keeps the only hex functions and SHA-256 padding.
+- pzpeer: a publish stores to 16 custodians at a time, and the republish sends `own.bin` in the order of the keys, 65,536 records at a
+  time: a batch of 255 records reaches about 9 custodians at 1000 nodes instead of about 695. The jobs of a node take turns by kind,
+  oldest first (before, its own alerts always came first). PROVE carries up to 8 records, and a session starts with `S_SECOND`: the
+  prologue is `pznet5`.
 - Faster scalar engines: the batch inversion multiplies in two interleaved chains (a quarter less time with BMI2/ADX, a tenth
   without), and the straight-line addition and subtraction are used on every x86-64 build, not only with BMI2/ADX. Measured on one
   thread: kangaroo step BMI2/ADX 9.4 to 10.9 M steps/s, portable 7.2 to 8.2 M; linear baseline 4.62 to 4.74 M keys/s, avx512
@@ -111,9 +115,15 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
+- pzpeer: the answer to PROVE gives every other owner of the x (up to 7), so copies planted under two identities before the real record
+  can no longer hide a coincidence; the owner takes from that answer only the pairs of the records it proved, at most 7 each (before,
+  any 64 pairs of any of its records). The alert jobs of one address block hold 8 places in the queue, retries included, and the other
+  owner is looked up once a job (before, one address kept a real alert behind up to 1024 forged ones). 6to4, Teredo and every other
+  address that is not local count by their /24 or /32 block (before, one IPv4 behind 6to4 had 2^80 blocks). A node of a linear search
+  takes no records, ALERT, PROVE or POSSESS, and has no `store.bin` (before, anyone could fill its 5 GB).
 - pzpeer: the failed signings of a network count for 30 days from the first of them, then start again; those of an own point
   count for ever, as before. A partner that spoils its messages could stop an honest home on a network for ever; now for a month at most.
-- pzpeer, before a network with real coins (docs/en/NETWORK.md; the prologue is `pznet4`, so earlier versions do not talk to this one):
+- pzpeer, before a network with real coins (docs/en/NETWORK.md; the prologue is `pznet5`, so earlier versions do not talk to this one):
   - F, the party whose tiny coin goes into the second transaction, comes from the point and the two types of the pair, which the walks
     fixed: a home could choose its part with a new identity (about two tries).
   - A custodian alerts a coincidence only once the owner that stored the record proved it (`COINCIDENCE`, then `PROVE`, a proof for that
@@ -157,6 +167,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- pzpeer: the owner takes the answer to PROVE (an MBOX, not the type of the request + 1; before, it refused it and counted the custodian
+  as failed, so it never heard of its pairs from a custodian of its point). One PROVE goes to each custodian with every record it said
+  COINCIDENCE for, at most 8 (before, a custodian that said so for every record and then kept silent held the home 10 s a record). A
+  publish no longer waits for a republish under way: no lock is held across a connection. `pzpeer node` on a linear network shows the
+  claims it holds.
 - pzpeer, the shared linear search: a block whose index needs more than 64 − blockbits bits could not be claimed (with blocks of 2^44
   keys, 63 of the 64 million blocks of puzzle 71): the blocks are those of the range, `block_range` in one place. The home keeps the
   blocks it scanned in `own_claims.bin`, a file of claims as the custodians keep (a write cut by a crash hid every claim after it; one

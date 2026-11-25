@@ -38,12 +38,17 @@ bool record_net_init(const secp256k1_context *ctx, record_net *net, const uint8_
 
 /* The type, the zero bits, x and the owner; the first RECORD_WIRE bytes are a record in a STORE. */
 void record_encode(const record *r, uint8_t out[RECORD_LEN]);
+/* Those first RECORD_WIRE bytes alone: a record where its owner is known (the sender of a STORE or a PROVE, own.bin, an entry of a
+ * custodian, whose owner is in its file of owners). */
+void record_wire_encode(const record *r, uint8_t out[RECORD_WIRE]);
 /* The bytes that name a record wherever it counts (the hello, the name of a pair, a proof, the session): its encoding with the zero bits
  * at 0. Two custodians may hold one point of one owner with other zero bits (the first copy each got), and it is the same record. */
 void record_name(const record *r, uint8_t out[RECORD_LEN]);
 bool record_same(const uint8_t a[RECORD_LEN], const uint8_t b[RECORD_LEN]);   /* two encodings, whatever their zero bits */
 /* Format only: the type and the zero bits. */
 bool record_decode(const uint8_t in[RECORD_LEN], record *r);
+/* A record from its first RECORD_WIRE bytes and its owner; format only, as record_decode. */
+bool record_wire_decode(const uint8_t in[RECORD_WIRE], const uint8_t owner[32], record *r);
 /* Whether x has the zero bits of a distinguished point: bits 64 to 64 + dpbits - 1, as pzsolve tests x.n[1]. */
 bool record_dp_ok(const uint8_t x[32], unsigned dpbits);
 /* The checks on arrival: x on the curve with the zero bits it claims, at least the network's, and an owner that is a key. */

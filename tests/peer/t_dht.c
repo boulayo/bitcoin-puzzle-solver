@@ -8,9 +8,11 @@
  * refused: false zero bits, far from the custodian), a node stopped and started again (its store and its peers come
  * back), the eviction of the oldest contact of a full bucket. The limits: a public network refuses loopback, a NODES answer aimed at one
  * address or block is refused, the table keeps few contacts per block and answers an address once, idle connections hold few handlers,
- * a flood of alerts that will never be proved does not shut out a real one. The relay: two homes that do not listen get their alerts
- * through their mailboxes and run a stand-in session through a relay; a relay's limits (a wait without partner, a third party, relays
- * at once, bytes); a relay stopped while it copies. */
+ * a flood of alerts that will never be proved does not shut out a real one, nor do forged alerts of one block. Copies of a point planted
+ * at its custodians do not hide a real coincidence with it. A custodian that lies to PROVE: its answer brings only the pairs of the
+ * records proved, its silence costs one timeout, and its slowness does not hold a publish behind a republish. A linear search keeps
+ * claims and no records. The relay: two homes that do not listen get their alerts through their mailboxes and run a stand-in session
+ * through a relay; a relay's limits (a wait without partner, a third party, relays at once, bytes); a relay stopped while it copies. */
 #include "dht.h"
 #include "store.h"
 #include "sys.h"
@@ -26,6 +28,7 @@
 static int fails;
 static unsigned probe_s;           /* of the next node made (0: the default) */
 static int timeout_ms = 2000;      /* of the next node made */
+static const block_net *linear;    /* of the next node made: the blocks of a linear search (NULL: a network of records) */
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
 #define BITS 4                     /* zero bits of a node ID in this network */
@@ -51,8 +54,8 @@ typedef struct {
     char dir[64], boot[32];
     const char *bootv[1];
     pthread_mutex_t mu;
-    point pts[4];
-    int npts, alerts;
+    point pts[32];
+    int npts, alerts, slow_ms;     /* slow_ms: own_distance takes that long (the cost of a job, without a network to spend it on) */
     record mine, theirs;
     bool merge;
 } node;
@@ -60,7 +63,7 @@ typedef struct {
 static secp256k1_context *ctx;
 static const uint8_t FP[32] = {0xd4, 0x7};
 static record_net net;
-static block_net bnet;             /* the claims of a linear search, kept by the same nodes (test_claims) */
+static block_net bnet;             /* the claims of a linear search (test_linear) */
 static uint8_t qp[32];             /* q' = k - base, the scalar of Q' (the tests know the key of their puzzle) */
 static node nodes[NODES];
 static record recs[RECS];
@@ -122,6 +125,7 @@ static bool own_distance(void *user, const uint8_t x[32], int t, uint8_t d[32])
 {
     node *n = user;
     bool ok = false;
+    if (n->slow_ms) nap(n->slow_ms);
     pthread_mutex_lock(&n->mu);
     for (int i = 0; i < n->npts && !ok; i++)
         if (!memcmp(n->pts[i].x, x, 32) && n->pts[i].t == t) memcpy(d, n->pts[i].d, 32), ok = true;
@@ -145,7 +149,7 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
 static void clean_dir(const char *dir)
 {
     static const char *const FILES[] = {"store.bin", "store.bin.owners", "own.bin", "own.cust", "own.cust.tmp", "peers.txt",
-                                        "peers.txt.tmp"};
+                                        "peers.txt.tmp", "claims.bin"};
     char p[128];
     for (size_t i = 0; i < sizeof FILES / sizeof *FILES; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, FILES[i]);
@@ -162,7 +166,7 @@ static dht_config node_cfg(node *n, int port)
         .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
         .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = timeout_ms, .handlers = 4,
         .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .allow_private = true, .relay_max = 2, .relay_bytes = 8u << 20, .relay_slot_s = 1,
-        .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL, .blocks = &bnet,
+        .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL, .blocks = linear,
     };
     return cfg;
 }
@@ -237,6 +241,7 @@ static void give_point(node *n, int t, const uint8_t x[32], const uint8_t d[32])
     memcpy(r.owner, n->id.xonly, 32);
     CHECK(record_prove(ctx, &net, &r, d, nodes[0].id.xonly, nonce, sig));
     pthread_mutex_lock(&n->mu);
+    CHECK(n->npts < (int)(sizeof n->pts / sizeof *n->pts));
     point *p = &n->pts[n->npts++];
     memcpy(p->x, x, 32), memcpy(p->d, d, 32);
     p->t = t;
@@ -437,42 +442,6 @@ static void make_id(const char *label, home_identity *id)
     CHECK(keys_identity(ctx, seed, FP, BITS, id));
 }
 
-/* A claim of a block (dht_claim.c): published by its owner, found by another node, kept once; the same proof keys claimed by another
- * identity, which needs no scan, not kept; the claim refused from anyone but its owner. */
-static void test_claims(void)
-{
-    node *A = &nodes[3], *B = &nodes[27], *C = &nodes[12];
-    uint8_t key[2][32] = {{0}};
-    key[0][26] = 0x08, key[0][29] = 0x06, key[0][30] = 0x8b, key[0][31] = 0x68;   /* 0x80000068b68 and 0x800003d4338 (t_block.c) */
-    key[1][26] = 0x08, key[1][29] = 0x3d, key[1][30] = 0x43, key[1][31] = 0x38;
-    block_claim c, copy, got[4];
-    CHECK(block_claim_make(ctx, &bnet, &A->id.kp, 0, (const uint8_t(*)[32])key, 2, &c) && c.n == 2);
-    CHECK(dht_claim_publish(A->d, &c) >= 4);
-    CHECK(dht_claims_of(B->d, 0, got, 4) == 1 && !memcmp(got[0].owner, A->id.xonly, 32) && got[0].n == 2);
-    CHECK(dht_claims_of(B->d, 1, got, 4) == 0);                 /* nobody claimed block 1 */
-    CHECK(dht_claim_publish(A->d, &c) >= 4);                    /* again: the same claim, kept once */
-    CHECK(dht_claims_of(B->d, 0, got, 4) == 1);
-    CHECK(block_claim_make(ctx, &bnet, &C->id.kp, 0, (const uint8_t(*)[32])key, 2, &copy) && block_claim_check(ctx, &bnet, &copy));
-    CHECK(dht_claim_publish(C->d, &copy) >= 4 && dht_claims_of(B->d, 0, got, 4) == 1);   /* held already: not a second claim */
-    /* the same claim sent by another identity: a custodian takes a claim from its owner only */
-    home_identity cid;
-    make_id("claim thief", &cid);
-    net_cfg cli;
-    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
-    uint8_t k[32], req[1 + BLOCK_CLAIM_MAX], ans[2];
-    size_t n;
-    int who;
-    block_key(&bnet, 0, k);
-    CHECK(brute(k, 1, &who) == 1);
-    net_addr a;
-    CHECK(net_parse_addr("127.0.0.1:1", &a));
-    a.port = dht_port(nodes[who].d);
-    req[0] = DHT_CLAIM;
-    const size_t len = 1 + block_claim_encode(&c, req + 1);
-    CHECK(!net_exchange(&cli, &a, nodes[who].id.xonly, req, len, ans, sizeof ans, &n, NULL));   /* not the owner */
-    printf("t_dht: a claim published, found, and refused from another identity\n");
-}
-
 /* A copy of another's point alerts nobody: the custodian waits for the proof of the owner that stored it. A real coincidence: the owner
  * that proves its record hears of the pair from the custodian itself, in the answer to PROVE. */
 static void test_copied_point(void)
@@ -508,20 +477,19 @@ static void test_copied_point(void)
     net_addr a;
     CHECK(net_parse_addr("127.0.0.1:1", &a));
     a.port = dht_port(cu->d);
-    uint8_t req[1 + RECORD_WIRE + 64], e[RECORD_LEN], ans[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY], zero[32] = {0};
+    uint8_t req[2 + RECORD_WIRE + 64], ans[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY], zero[32] = {0};
     size_t n;
-    record_encode(&mine, e);
-    req[0] = DHT_STORE, req[1] = 1, memcpy(req + 2, e, RECORD_WIRE);
+    req[0] = DHT_STORE, req[1] = 1, record_wire_encode(&mine, req + 2);
     CHECK(net_exchange(&cli, &a, cu->id.xonly, req, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL) && n == 3 && ans[2] == DHT_ST_COINCIDENCE);
-    req[0] = DHT_PROVE, memcpy(req + 1, e, RECORD_WIRE);
-    CHECK(record_prove(ctx, &net, &mine, d2, P->id.xonly, zero, req + 1 + RECORD_WIRE));   /* for another asker: refused */
+    req[0] = DHT_PROVE;                                        /* PROVE(1, the record, the proof) */
+    CHECK(record_prove(ctx, &net, &mine, d2, P->id.xonly, zero, req + 2 + RECORD_WIRE));   /* for another asker: refused */
     CHECK(!net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL));
-    CHECK(record_prove(ctx, &net, &mine, d2, cu->id.xonly, zero, req + 1 + RECORD_WIRE));
+    CHECK(record_prove(ctx, &net, &mine, d2, cu->id.xonly, zero, req + 2 + RECORD_WIRE));
     CHECK(net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 2 + DHT_MBOX_ENTRY && ans[0] == DHT_MBOX && ans[1] == 1);
     record g0, g1;
     CHECK(record_decode(ans + 2, &g0) && record_decode(ans + 2 + RECORD_LEN, &g1));
     CHECK((same(&g0, &mine) && same(&g1, &rR)) || (same(&g0, &rR) && same(&g1, &mine)));
-    CHECK(!net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL));   /* nothing waits any more */
+    CHECK(net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 2 && ans[1] == 0);   /* nothing waits any more */
     const int64_t t0 = ms();                                   /* and the custodian alerted R's mailboxes */
     while (ms() - t0 < 10000 && in_mailboxes(R->id.xonly, &rR, &mine) == 0) nap(50);
     CHECK(in_mailboxes(R->id.xonly, &rR, &mine) > 0);
@@ -548,7 +516,7 @@ static void test_malformed(void)
     req[0] = 200;
     CHECK(!net_exchange(&cli, &a, NULL, req, 1, ans, sizeof ans, &n, NULL));                 /* an unknown type */
     req[0] = DHT_STORE, req[1] = 2;
-    record_encode(&recs[0], req + 2);
+    record_wire_encode(&recs[0], req + 2);
     CHECK(!net_exchange(&cli, &a, NULL, req, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL));   /* two records announced, one sent */
     req[1] = 0;
     CHECK(!net_exchange(&cli, &a, NULL, req, 2, ans, sizeof ans, &n, NULL));                 /* none */
@@ -587,11 +555,7 @@ static void test_malformed(void)
     mk[0].dp = 40;
     uint8_t big[2 + 3 * RECORD_LEN];
     big[0] = DHT_STORE, big[1] = 3;
-    for (int i = 0; i < 3; i++) {
-        uint8_t e[RECORD_LEN];
-        record_encode(&mk[i], e);
-        memcpy(big + 2 + i * RECORD_WIRE, e, RECORD_WIRE);
-    }
+    for (int i = 0; i < 3; i++) record_wire_encode(&mk[i], big + 2 + i * RECORD_WIRE);
     CHECK(net_exchange(&cli, &a, NULL, big, 2 + 3 * RECORD_WIRE, ans, sizeof ans, &n, NULL) && n == 5 && ans[0] == DHT_STORED && ans[1] == 3 &&
           ans[2] == DHT_ST_INVALID && ans[3] == DHT_ST_FAR && ans[4] == DHT_ST_STORED);
     home_identity nob;
@@ -803,6 +767,97 @@ static void seen_at(dht *d, const home_identity *id, const char *addr)
     memcpy(c.id, id->id, 32), memcpy(c.xonly, id->xonly, 32);
     CHECK(net_parse_addr(addr, &c.addr));
     dht_seen(d, &c);
+}
+
+/* the node with identity id, listening at port on 127.0.0.1, becomes a contact of d */
+static void seen_port(dht *d, const home_identity *id, uint16_t port)
+{
+    char addr[32];
+    snprintf(addr, sizeof addr, "127.0.0.1:%u", port);
+    seen_at(d, id, addr);
+}
+
+/* A linear search (docs/en/NETWORK.md 11) on six nodes of its own, as its network is not the one of the records: they keep the claims of
+ * its blocks, and no records. A claim published by its owner, found by another node, kept once; the same proof keys claimed by another
+ * identity, which needs no scan, not kept; the claim refused from anyone but its owner. A STORE, an
+ * ALERT and a PROVE are refused, and there is no store.bin: any x with the zero bits passes the checks of a record, with no walk (before,
+ * anyone could fill the 5 GB store of a node of a linear search, which has no use for records). */
+enum { LINEAR = 6 };
+
+static void linear_checks(dht *const ln[LINEAR], const home_identity ids[LINEAR], const char *dir0)
+{
+    dht *A = ln[1], *B = ln[5];
+    uint8_t key[2][32] = {{0}};
+    key[0][26] = 0x08, key[0][29] = 0x06, key[0][30] = 0x8b, key[0][31] = 0x68;   /* 0x80000068b68 and 0x800003d4338 (t_block.c) */
+    key[1][26] = 0x08, key[1][29] = 0x3d, key[1][30] = 0x43, key[1][31] = 0x38;
+    block_claim c, copy, got[4];
+    CHECK(block_claim_make(ctx, &bnet, &ids[1].kp, 0, (const uint8_t(*)[32])key, 2, &c) && c.n == 2);
+    CHECK(dht_claim_publish(A, &c) >= 4);
+    CHECK(dht_claims_of(B, 0, got, 4) == 1 && !memcmp(got[0].owner, ids[1].xonly, 32) && got[0].n == 2);
+    CHECK(dht_claims_of(B, 1, got, 4) == 0);                    /* nobody claimed block 1 */
+    CHECK(dht_claim_publish(A, &c) >= 4);                       /* again: the same claim, kept once */
+    CHECK(dht_claims_of(B, 0, got, 4) == 1);
+    CHECK(block_claim_make(ctx, &bnet, &ids[2].kp, 0, (const uint8_t(*)[32])key, 2, &copy) && block_claim_check(ctx, &bnet, &copy));
+    CHECK(dht_claim_publish(ln[2], &copy) >= 4 && dht_claims_of(B, 0, got, 4) == 1);   /* held already: not a second claim */
+    /* the same claim sent by another identity: a custodian takes a claim from its owner only */
+    home_identity cid;
+    make_id("claim thief", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    uint8_t k[32], req[1 + BLOCK_CLAIM_MAX], ans[8];
+    size_t n;
+    int who = 0;
+    block_key(&bnet, 0, k);
+    for (int i = 1; i < LINEAR; i++) who = closer(k, ids[i].id, ids[who].id) ? i : who;
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(ln[who]);
+    req[0] = DHT_CLAIM;
+    const size_t len = 1 + block_claim_encode(&c, req + 1);
+    CHECK(!net_exchange(&cli, &a, ids[who].xonly, req, len, ans, sizeof ans, &n, NULL));   /* not the owner */
+    /* no records: a STORE that a node of the records takes, an ALERT, a PROVE */
+    record r = recs[0], r2 = recs[0];
+    memcpy(r.owner, cid.xonly, 32), memcpy(r2.owner, ids[1].xonly, 32);
+    r2.t = r.t == 1 ? 0 : 1;
+    uint8_t m[1 + 2 * RECORD_LEN];
+    m[0] = DHT_STORE, m[1] = 1, record_wire_encode(&r, m + 2);
+    a.port = dht_port(nodes[0].d);
+    CHECK(net_exchange(&cli, &a, nodes[0].id.xonly, m, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL) && n == 3);
+    a.port = dht_port(ln[0]);
+    CHECK(!net_exchange(&cli, &a, ids[0].xonly, m, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL));
+    m[0] = DHT_ALERT, record_encode(&r, m + 1), record_encode(&r2, m + 1 + RECORD_LEN);
+    CHECK(!net_exchange(&cli, &a, ids[0].xonly, m, 1 + 2 * RECORD_LEN, ans, sizeof ans, &n, NULL));
+    m[0] = DHT_PROVE, m[1] = 1, record_wire_encode(&r, m + 2), memset(m + 2 + RECORD_WIRE, 1, 64);
+    CHECK(!net_exchange(&cli, &a, ids[0].xonly, m, 2 + RECORD_WIRE + 64, ans, sizeof ans, &n, NULL));
+    CHECK(dht_local_count(ln[0]) == 0 && file_size(dir0, "store.bin") < 0 && file_size(dir0, "claims.bin") > 0);
+    printf("t_dht: a linear search: a claim published, found, refused from another identity; no records\n");
+}
+
+static void test_linear(void)
+{
+    home_identity ids[LINEAR];
+    dht *ln[LINEAR];
+    char names[LINEAR][32], dir0[64];
+    bool up = true;
+    linear = &bnet;
+    for (int i = 0; i < LINEAR; i++) {
+        snprintf(names[i], sizeof names[i], "s-linear%d", i);
+        up &= (ln[i] = scratch(names[i], true, DHT_ANY_PORT, -1, &ids[i])) != NULL;
+    }
+    linear = NULL;
+    CHECK(up);
+    for (int i = 1; up && i < LINEAR; i++) seen_port(ln[i], &ids[0], dht_port(ln[0]));
+    for (const int64_t t0 = ms(); up && ms() - t0 < 10000; nap(50)) {
+        int full = 0;
+        for (int i = 0; i < LINEAR; i++) full += dht_count(ln[i]) == LINEAR - 1;
+        if (full == LINEAR) break;
+        for (int i = 1; i < LINEAR; i++) dht_refresh(ln[i]);
+    }
+    for (int i = 0; up && i < LINEAR; i++) CHECK(dht_count(ln[i]) == LINEAR - 1);
+    snprintf(dir0, sizeof dir0, ROOT "/%s", names[0]);
+    if (up) linear_checks(ln, ids, dir0);
+    for (int i = 0; i < LINEAR; i++)
+        if (ln[i]) scratch_end(ln[i], names[i]);
 }
 
 /* What a public network refuses, and the limits by address block: in NODES answers (loopback and private addresses, port 0, one address
@@ -1457,6 +1512,392 @@ static void test_relay_stop(void)
     net_close(a.c), net_close(b.c);
 }
 
+/* ---- coincidences against the attacks of custodians and senders ---- */
+
+/* d = d0 - q': the distance of the wild + point at the x of the tame point d0*G */
+static void wild_of(const uint8_t d0[32], uint8_t d[32])
+{
+    uint8_t nq[32];
+    memcpy(nq, qp, 32);
+    CHECK(secp256k1_ec_seckey_negate(ctx, nq));
+    memcpy(d, d0, 32);
+    CHECK(secp256k1_ec_seckey_tweak_add(ctx, d, nq));
+}
+
+static record rec_of(int t, const uint8_t x[32], const uint8_t owner[32])
+{
+    record r = {.t = t, .dp = net.dpbits};
+    memcpy(r.x, x, 32), memcpy(r.owner, owner, 32);
+    return r;
+}
+
+/* Copies of a point planted at all its custodians before its owner's record, under two identities (a custodian that saw the owner's
+ * STORE can plant them at the others before the owner's republish reaches them): a real coincidence with that point is still alerted to
+ * both owners. Before, the custodians gave the other owner of the pair the first two of the x, the copies, for ever. */
+static void test_planted_copies(void)
+{
+    node *A = &nodes[10], *B = &nodes[12];
+    uint8_t dA[32], dB[32], x[32], k[32];
+    int who[DHT_KSTORE];
+    hashed("planted", dA), even_point(dA, x), wild_of(dA, dB);
+    give_point(A, 0, x, dA), give_point(B, 1, x, dB);
+    store_key(x, k);
+    const int m = brute(k, DHT_KSTORE, who);
+    for (int c = 0; c < 2; c++) {
+        char label[32];
+        home_identity pid;
+        net_cfg cli;
+        snprintf(label, sizeof label, "planter %d", c);
+        make_id(label, &pid);
+        net_cfg_init(&cli, ctx, &pid, FP, BITS, 0, 2000);
+        const record cp = rec_of(1, x, pid.xonly);
+        uint8_t req[2 + RECORD_WIRE] = {DHT_STORE, 1}, ans[4];
+        size_t n;
+        record_wire_encode(&cp, req + 2);
+        for (int j = 0; j < m; j++) {
+            net_addr a;
+            CHECK(net_parse_addr("127.0.0.1:1", &a));
+            a.port = dht_port(nodes[who[j]].d);
+            CHECK(net_exchange(&cli, &a, nodes[who[j]].id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 3 &&
+                  ans[2] == (c ? DHT_ST_COINCIDENCE : DHT_ST_STORED));
+        }
+    }
+    record rA, rB, mine, theirs;
+    bool merge;
+    CHECK(publish_one(A, 0, x, &rA) && publish_one(B, 1, x, &rB));
+    const int64_t t0 = ms();
+    while (ms() - t0 < 20000 && (alerts_of(A, NULL, NULL, NULL) < 1 || alerts_of(B, NULL, NULL, NULL) < 1)) nap(50);
+    CHECK(alerts_of(A, &mine, &theirs, &merge) == 1 && same(&mine, &rA) && same(&theirs, &rB) && !merge);
+    CHECK(alerts_of(B, &mine, &theirs, &merge) == 1 && same(&mine, &rB) && same(&theirs, &rA) && !merge);
+    printf("t_dht: a coincidence behind two copies planted at every custodian, alerted in %.1f s\n", (double)(ms() - t0) / 1000);
+}
+
+/* A node of the table at an address of its own that answers as a custodian would, except: every record of a STORE is a coincidence, and
+ * PROVE gets the answer the test set (LIAR_PAIRS) or none (LIAR_SILENT: it holds the connection past the timeout of the asker); or every
+ * record of a STORE is stored, at once (LIAR_OK) or after a second (LIAR_SLOW). Each connection on a thread of its own. */
+enum { LIAR_OK, LIAR_PAIRS, LIAR_SILENT, LIAR_SLOW };
+
+typedef struct {
+    home_identity id;
+    net_cfg cfg;
+    int lfd;
+    uint16_t port;
+    pthread_t th;
+    atomic_int mode, proves, live;
+    atomic_bool stop;
+    pthread_mutex_t mu;
+    uint8_t mbox[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY];   /* LIAR_PAIRS: the answer to PROVE */
+    size_t mbox_len;
+} liar;
+
+typedef struct {
+    liar *l;
+    int fd;
+    net_addr from;
+} liar_conn;
+
+static void *liar_conn_main(void *arg)
+{
+    liar_conn *lc = arg;
+    liar *l = lc->l;
+    uint8_t *req = malloc(NOISE_FRAME_MAX), *ans = malloc(sizeof l->mbox);
+    size_t len, n = 0;
+    net_conn *c = net_handshake(&l->cfg, lc->fd, &lc->from);
+    const int mode = atomic_load(&l->mode);
+    if (c && req && ans && net_recv(c, req, NOISE_FRAME_MAX, &len) && len) {
+        if (req[0] == DHT_PING) ans[0] = DHT_PONG, n = 1;
+        else if (req[0] == DHT_FIND_NODE) ans[0] = DHT_NODES, ans[1] = 0, n = 2;
+        else if (req[0] == DHT_ALERT) ans[0] = DHT_OK, n = 1;
+        else if (req[0] == DHT_MBOX_GET) ans[0] = DHT_MBOX, ans[1] = 0, n = 2;
+        else if (req[0] == DHT_STORE && len >= 2) {
+            if (mode == LIAR_SLOW) nap(1000);
+            ans[0] = DHT_STORED, ans[1] = req[1], n = 2 + (size_t)req[1];
+            memset(ans + 2, mode == LIAR_OK || mode == LIAR_SLOW ? DHT_ST_STORED : DHT_ST_COINCIDENCE, req[1]);
+        } else if (req[0] == DHT_PROVE) {
+            atomic_fetch_add(&l->proves, 1);
+            if (mode == LIAR_SILENT) nap(timeout_ms + 500);
+            pthread_mutex_lock(&l->mu);
+            if (mode == LIAR_PAIRS) memcpy(ans, l->mbox, l->mbox_len), n = l->mbox_len;
+            pthread_mutex_unlock(&l->mu);
+        }
+        if (n) (void)net_send(c, ans, n);
+    }
+    net_close(c);
+    free(req), free(ans), free(lc);
+    atomic_fetch_sub(&l->live, 1);
+    return NULL;
+}
+
+static void *liar_main(void *arg)
+{
+    liar *l = arg;
+    while (!atomic_load(&l->stop)) {
+        net_addr from;
+        pthread_t th;
+        const int fd = net_accept(l->lfd, 100, &from);
+        liar_conn *lc = fd < 0 ? NULL : malloc(sizeof *lc);
+        if (fd >= 0 && !lc) net_close_fd(fd);
+        if (!lc) continue;
+        *lc = (liar_conn){l, fd, from};
+        atomic_fetch_add(&l->live, 1);
+        if (pthread_create(&th, NULL, liar_conn_main, lc) == 0) pthread_detach(th);
+        else atomic_fetch_sub(&l->live, 1), net_close_fd(fd), free(lc);
+    }
+    return NULL;
+}
+
+/* the answer of the liar to PROVE: an MBOX with these pairs, without proofs */
+static void liar_answer(liar *l, const mbox_pair *p, int n)
+{
+    pthread_mutex_lock(&l->mu);
+    l->mbox[0] = DHT_MBOX, l->mbox[1] = (uint8_t)n;
+    memset(l->mbox + 2, 0, (size_t)n * DHT_MBOX_ENTRY);
+    for (int i = 0; i < n; i++) {
+        record_encode(&p[i].r[0], l->mbox + 2 + (size_t)i * DHT_MBOX_ENTRY);
+        record_encode(&p[i].r[1], l->mbox + 2 + (size_t)i * DHT_MBOX_ENTRY + RECORD_LEN);
+    }
+    l->mbox_len = 2 + (size_t)n * DHT_MBOX_ENTRY;
+    pthread_mutex_unlock(&l->mu);
+}
+
+/* a pair as an MBOX carries it */
+static mbox_pair pair_of(const record *a, const record *b)
+{
+    mbox_pair p;
+    memset(&p, 0, sizeof p);
+    pair_order(a, b, p.r);
+    return p;
+}
+
+typedef struct {
+    dht *d;
+    int64_t end;
+} repub_job;
+
+static void *repub_main(void *arg)
+{
+    repub_job *j = arg;
+    (void)dht_republish(j->d, true);
+    j->end = ms();
+    return NULL;
+}
+
+static void lying_checks(node *O, node *P, liar *l)
+{
+    /* the answer to PROVE: O takes the pair of the record it proved (before, O refused every answer to PROVE: it waited for type 16), and
+     * not the pair of another point of O, which P could prove too (before, a custodian could bring 64 pairs of any records of O) */
+    uint8_t d[4][32], x[4][32], w[4][32];
+    for (int i = 0; i < 4; i++) {
+        char label[32];
+        snprintf(label, sizeof label, "lied %d", i);
+        hashed(label, d[i]), even_point(d[i], x[i]), wild_of(d[i], w[i]);
+        give_point(O, 0, x[i], d[i]), give_point(P, 1, x[i], w[i]);
+    }
+    record rO[4], rP[4], got, mine, theirs;
+    for (int i = 0; i < 4; i++) rO[i] = rec_of(0, x[i], O->id.xonly), rP[i] = rec_of(1, x[i], P->id.xonly);
+    mbox_pair pp[STORE_X_OWNERS] = {pair_of(&rO[0], &rP[0]), pair_of(&rO[1], &rP[1])};
+    bool merge;
+    liar_answer(l, pp, 2);
+    atomic_store(&l->mode, LIAR_PAIRS);
+    CHECK(publish_one(O, 0, x[0], &got));
+    int64_t t0 = ms();
+    while (ms() - t0 < 10000 && (alerts_of(O, NULL, NULL, NULL) < 1 || alerts_of(P, NULL, NULL, NULL) < 1)) nap(50);
+    CHECK(alerts_of(O, &mine, &theirs, &merge) == 1 && same(&mine, &rO[0]) && same(&theirs, &rP[0]));
+    CHECK(alerts_of(P, &mine, &theirs, &merge) == 1 && same(&mine, &rP[0]) && same(&theirs, &rO[0]));
+    /* more pairs for one record than a custodian keeps owners of its x: the answer is refused whole */
+    pp[0] = pair_of(&rO[2], &rP[2]);
+    for (int i = 1; i < STORE_X_OWNERS; i++) {
+        char label[32];
+        home_identity sy;
+        snprintf(label, sizeof label, "lied owner %d", i);
+        make_id(label, &sy);
+        const record q = rec_of(1, x[2], sy.xonly);
+        pp[i] = pair_of(&rO[2], &q);
+    }
+    liar_answer(l, pp, STORE_X_OWNERS);
+    CHECK(publish_one(O, 0, x[2], &got));
+    nap(1500);
+    CHECK(alerts_of(O, NULL, NULL, NULL) == 1 && alerts_of(P, NULL, NULL, NULL) == 1);
+    printf("t_dht: a custodian's answer to PROVE: the pair of the record proved taken, not one of another record, nor too many\n");
+
+    /* a custodian that leaves PROVE unanswered costs one timeout for a batch (before: one for each record, one after the other) */
+    record r20[20];
+    for (int i = 0; i < 20; i++) {
+        char label[32];
+        uint8_t di[32];
+        snprintf(label, sizeof label, "silent %d", i);
+        hashed(label, di), even_point(di, r20[i].x);
+        give_point(O, 0, r20[i].x, di);
+        r20[i].t = 0, r20[i].dp = net.dpbits;
+    }
+    atomic_store(&l->mode, LIAR_SILENT);
+    const int proves = atomic_load(&l->proves);
+    t0 = ms();
+    CHECK(dht_publish(O->d, r20, 20) == 20);
+    const int64_t took = ms() - t0;
+    printf("t_dht: 20 records to a custodian that does not answer PROVE in %.1f s\n", (double)took / 1000);
+    CHECK(took < 2 * timeout_ms + 1500 && atomic_load(&l->proves) == proves + 1);
+
+    /* a publish while a republish waits for a slow custodian: it does not wait for the republish (before, it waited for all of it) */
+    record *bulk = malloc(600 * sizeof *bulk), one;
+    for (int i = 0; bulk && i < 600; i++) {
+        char label[32];
+        uint8_t di[32];
+        snprintf(label, sizeof label, "bulk %d", i);
+        hashed(label, di), even_point(di, bulk[i].x);
+        bulk[i].t = i % 3 - 1, bulk[i].dp = net.dpbits;
+    }
+    atomic_store(&l->mode, LIAR_OK);
+    CHECK(bulk && dht_publish(O->d, bulk, 600) == 600);
+    free(bulk);
+    atomic_store(&l->mode, LIAR_SLOW);
+    repub_job rj = {O->d, 0};
+    pthread_t th;
+    const int64_t r0 = ms();
+    CHECK(pthread_create(&th, NULL, repub_main, &rj) == 0);
+    nap(300);
+    t0 = ms();
+    CHECK(publish_one(O, 1, x[3], &one));
+    const int64_t pub_end = ms();
+    pthread_join(th, NULL);
+    printf("t_dht: a publish of %.1f s during a republish of %.1f s to a slow custodian\n", (double)(pub_end - t0) / 1000, (double)(rj.end - r0) / 1000);
+    CHECK(pub_end - t0 < 2500 && rj.end > pub_end);
+}
+
+/* PROVE against a custodian that lies, on a network of three of its own: O publishes, P is the other owner of the points (it never
+ * publishes them: only the liar tells of the pairs), and the liar is a custodian of every key. */
+static void test_lying_custodian(void)
+{
+    static node tiny[2];
+    static liar l;
+    node *O = &tiny[0], *P = &tiny[1];
+    for (int i = 0; i < 2; i++) {
+        memset(&tiny[i], 0, sizeof tiny[i]);
+        pthread_mutex_init(&tiny[i].mu, NULL);
+        make_id(i ? "tiny P" : "tiny O", &tiny[i].id);
+        snprintf(tiny[i].dir, sizeof tiny[i].dir, ROOT "/%s", i ? "t-p" : "t-o");
+        clean_dir(tiny[i].dir);
+    }
+    memset(&l, 0, sizeof l);
+    pthread_mutex_init(&l.mu, NULL);
+    make_id("liar", &l.id);
+    l.lfd = net_listen("127.0.0.1", 0, &l.port);
+    net_cfg_init(&l.cfg, ctx, &l.id, FP, BITS, l.port, 2000);
+    const bool up = start_node(P, DHT_ANY_PORT, -1) && start_node(O, DHT_ANY_PORT, -1) && l.lfd >= 0 && pthread_create(&l.th, NULL, liar_main, &l) == 0;
+    CHECK(up);
+    if (up) {
+        seen_port(O->d, &P->id, dht_port(P->d)), seen_port(P->d, &O->id, dht_port(O->d));
+        for (int i = 0; i < 2; i++) {                           /* the liar asks each, which pings it and takes it */
+            net_addr a;
+            uint8_t ans[1];
+            size_t len;
+            CHECK(net_parse_addr("127.0.0.1:1", &a));
+            a.port = dht_port(tiny[i].d);
+            CHECK(net_exchange(&l.cfg, &a, tiny[i].id.xonly, (const uint8_t[]){DHT_PING}, 1, ans, 1, &len, NULL));
+        }
+        for (const int64_t t0 = ms(); ms() - t0 < 5000 && (dht_count(O->d) < 2 || dht_count(P->d) < 2); nap(20)) {}
+        CHECK(dht_count(O->d) == 2 && dht_count(P->d) == 2);
+        lying_checks(O, P, &l);
+    }
+    atomic_store(&l.stop, true);
+    if (up) pthread_join(l.th, NULL);
+    while (atomic_load(&l.live)) nap(20);
+    net_close_fd(l.lfd);
+    for (int i = 0; i < 2; i++) {
+        dht_stop(tiny[i].d);
+        clean_dir(tiny[i].dir);
+        pthread_mutex_destroy(&tiny[i].mu);
+    }
+    pthread_mutex_destroy(&l.mu);
+}
+
+/* An exchange from the source address src of this machine (127.0.0.2: another address block than the one of 127.0.0.1), as
+ * net_exchange makes it; false also when the system has no such address. */
+static bool exchange_from(const char *src, const net_cfg *cfg, uint16_t port, const uint8_t expect[32], const uint8_t *req, size_t rlen,
+                          uint8_t *ans, size_t cap, size_t *alen)
+{
+    struct sockaddr_in s, t;
+    memset(&s, 0, sizeof s), memset(&t, 0, sizeof t);
+    s.sin_family = t.sin_family = AF_INET;
+    t.sin_port = htons(port);
+    t.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const int fd = sys_socket(AF_INET, SOCK_STREAM);
+    net_conn *c = calloc(1, sizeof *c);
+    bool ok = fd >= 0 && c && inet_pton(AF_INET, src, &s.sin_addr) == 1 && bind(fd, (const struct sockaddr *)&s, sizeof s) == 0;
+    if (ok) (void)connect(fd, (const struct sockaddr *)&t, sizeof t);   /* non-blocking: connected once it can be written */
+    ok = ok && sys_wait(fd, true, ms() + 2000) > 0;
+    if (!ok) {
+        sys_close(fd), free(c);
+        return false;
+    }
+    c->fd = fd, c->timeout_ms = cfg->timeout_ms;
+    ok = net_rehandshake(cfg, c, true, expect) && net_send(c, req, rlen) && net_recv(c, ans, cap, alen);
+    net_close(c);
+    return ok;
+}
+
+/* Forged alerts with a real record of a node, from one address block, on a public network (whose limits apply to loopback as to any
+ * address): they hold ALERT_JOBS_BLOCK (8) places of the queue of jobs, also when tried again, so a real alert from another block is
+ * checked after a few of them. Each job of an alert of the point costs 200 ms here (own_distance sleeps: on a real network it is the
+ * lookups and connections of the job). Before, the 64 forged alerts that one address sends at once were all queued before the real one:
+ * 13 s, and a flood that goes on kept it waiting. */
+static void test_alert_blocks(void)
+{
+    static node V;
+    char err[200];
+    memset(&V, 0, sizeof V);
+    pthread_mutex_init(&V.mu, NULL);
+    make_id("blocks victim", &V.id);
+    snprintf(V.dir, sizeof V.dir, ROOT "/s-blocks");
+    clean_dir(V.dir);
+    V.slow_ms = 100;
+    dht_config cfg = node_cfg(&V, DHT_ANY_PORT);
+    cfg.allow_private = false;
+    V.d = dht_create(&cfg, err, sizeof err);
+    CHECK(V.d && dht_start(V.d) >= 0);
+    uint8_t dV[32], dB[32], x[32], h[32], req[1 + 2 * RECORD_LEN + 64], ans[4];
+    size_t n;
+    hashed("blocks", dV), even_point(dV, x), wild_of(dV, dB);
+    give_point(&V, 0, x, dV);
+    const record rV = rec_of(0, x, V.id.xonly);
+    home_identity cid, bid;
+    make_id("blocks client", &cid), make_id("blocks partner", &bid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    int sent = 0;
+    for (int i = 0; V.d && i < 64 && sent == i; i++) {
+        char label[32];
+        home_identity sy;
+        snprintf(label, sizeof label, "blocks sybil %d", i);
+        make_id(label, &sy);
+        const record q = rec_of(1, x, sy.xonly);
+        req[0] = DHT_ALERT, record_encode(&rV, req + 1), record_encode(&q, req + 1 + RECORD_LEN);
+        sent += exchange_from("127.0.0.2", &cli, dht_port(V.d), V.id.xonly, req, 1 + 2 * RECORD_LEN, ans, sizeof ans, &n) && n == 1 && ans[0] == DHT_OK;
+    }
+    if (V.d && !sent) printf("t_dht: no address 127.0.0.2 on this machine: the alerts of two blocks not tried\n");
+    if (sent) {
+        CHECK(sent == 64);
+        const record rB = rec_of(1, x, bid.xonly);              /* the real one, from 127.0.0.1, with the proof of its other owner */
+        net_addr a;
+        CHECK(net_parse_addr("127.0.0.1:1", &a));
+        a.port = dht_port(V.d);
+        pair_hash(&rB, &rV, h);
+        req[0] = DHT_ALERT, record_encode(&rB, req + 1), record_encode(&rV, req + 1 + RECORD_LEN);
+        CHECK(record_prove(ctx, &net, &rB, dB, V.id.xonly, h, req + 1 + 2 * RECORD_LEN));
+        const int64_t t0 = ms();
+        CHECK(net_exchange(&cli, &a, V.id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 1);
+        while (ms() - t0 < 20000 && alerts_of(&V, NULL, NULL, NULL) < 1) nap(20);
+        record mine, theirs;
+        bool merge;
+        const int64_t took = ms() - t0;
+        CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rB) && took < 5000);
+        printf("t_dht: a real alert behind 64 forged ones from another block in %.1f s\n", (double)took / 1000);
+    }
+    dht_stop(V.d);
+    clean_dir(V.dir);
+    pthread_mutex_destroy(&V.mu);
+}
+
 int main(void)
 {
     const int64_t t_start = ms();
@@ -1506,15 +1947,18 @@ int main(void)
     printf("t_dht: %d records published by %d owners in %.1f s\n", RECS, OWNERS, (double)(ms() - t0) / 1000);
     test_coincidences();
     test_copied_point();
-    test_claims();
     test_malformed();
     test_restart();
     test_republish();
     test_eviction();
+    test_planted_copies();                                     /* after the eviction: its alerts that wait make lookups */
     test_policy();
     test_nodes_answer();
     test_slowloris();
     test_alert_flood();
+    test_alert_blocks();
+    test_lying_custodian();
+    test_linear();
     t0 = ms();
     test_relay_session();
     test_relay_limits();

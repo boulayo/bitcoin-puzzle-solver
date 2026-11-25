@@ -55,44 +55,47 @@ static void coin_alert(dht *d, const record *a, const record *b, const net_addr 
     else sent_forget(d, h);
 }
 
-/* A coincidence of a record r that came from its owner: held until the owner proves r (PROVE), for PROVE_MS. A copy of another's point
- * cannot be proved, so it alerts nobody (before, each such copy cost its victim an alert, about 50 connections). Full: the oldest goes. */
-static void prove_wait_add(dht *d, const record *r, const record *other)
+/* A record r that came from its owner and made a coincidence with others (n records of the other owners of its x): held until the owner
+ * proves r (PROVE), for PROVE_MS. A copy of another's point cannot be proved, so it alerts nobody (before, each such copy cost its victim
+ * an alert, about 50 connections). Full: the oldest goes. */
+static void prove_wait_add(dht *d, const record *r, const record *others, int n)
 {
     const int64_t now = sys_now_ms();
     pthread_mutex_lock(&d->a_mu);
     int at = 0;
-    for (int i = 0; i < d->npw; i++)
-        if (now - d->pw[i].at < PROVE_MS) d->pw[at++] = d->pw[i];
+    for (int i = 0; i < d->npw; i++)                           /* r again: with the others it has now */
+        if (now - d->pw[i].at < PROVE_MS && !same_record(&d->pw[i].r, r)) d->pw[at++] = d->pw[i];
     d->npw = at;
     if (d->npw == PROVE_MAX) memmove(d->pw, d->pw + 1, (PROVE_MAX - 1) * sizeof *d->pw), d->npw--;
-    d->pw[d->npw++] = (prove_wait){.r = *r, .other = *other, .at = now};
+    prove_wait *w = &d->pw[d->npw++];
+    w->r = *r, w->n = n, w->at = now;
+    memcpy(w->other, others, (size_t)n * sizeof *others);
     pthread_mutex_unlock(&d->a_mu);
 }
 
 /* A record for the custody of this node: its status for STORED. from: the address of the owner that sent it, NULL for this node's own.
- * A record of another node is taken only when this node may be one of its custodians, and within the rate of the sender's block. Each
+ * A record of another node is taken only when this node may be one of its custodians, and within the rate of the sender's block. A
  * coincidence of a record of another node waits for its owner's proof (COINCIDENCE, then PROVE), also for a duplicate: a republished
- * record alerts again, at most once an hour, and its owner hears of the coincidence from this node itself. Each alert costs this node
- * lookups and a dozen connections, so the coincidences of one block are limited too, and each record alerts at most two pairs: more
- * owners of one x are a flood, not walks. A record this node does not keep because it is full is told COINCIDENCE all the same. */
+ * record alerts again, at most once an hour, and its owner hears of the coincidence from this node itself. The coincidences of one block
+ * are limited, as each costs this node lookups and connections, and it alerts COIN_ALERTS pairs of a record at most (of this node's own
+ * too: the other custodians of it tell it of every pair). A record this node does not keep because it is full is told COINCIDENCE all
+ * the same. */
 int custody_put(dht *d, const record *r, const net_addr *from)
 {
     uint8_t k[32];
-    record held, others[2];
+    record held, others[STORE_X_OWNERS - 1];
     int no;
-    if (!owner_ok(d, r)) return DHT_ST_INVALID;
+    if (!d->custody || !owner_ok(d, r)) return DHT_ST_INVALID;
     store_key(r->x, k);
     if (from && !responsible(d, k)) return DHT_ST_FAR;
     if (from && !lim_take(d, from, LIM_REC, 1)) return DHT_ST_FULL;
-    const store_status s = store_put(d->custody, r, &held, others, 2, &no);
+    const store_status s = store_put(d->custody, r, &held, others, STORE_X_OWNERS - 1, &no);
     if (s == STORE_FULL) held = *r;
-    int waits = 0;
-    for (int i = 0; i < no; i++) {
-        if (!from) coin_alert(d, &held, &others[i], NULL);     /* this node's own: nothing to prove */
-        else if (lim_take(d, from, LIM_COIN, 1)) prove_wait_add(d, &held, &others[i]), waits++;
+    for (int i = 0; !from && i < no && i < COIN_ALERTS; i++) coin_alert(d, &held, &others[i], NULL);   /* its own: nothing to prove */
+    if (no && from && lim_take(d, from, LIM_COIN, 1)) {
+        prove_wait_add(d, &held, others, no);
+        return DHT_ST_COINCIDENCE;
     }
-    if (waits && (s == STORE_OK || s == STORE_DUP || s == STORE_FULL)) return DHT_ST_COINCIDENCE;
     switch (s) {
     case STORE_OK: return DHT_ST_STORED;
     case STORE_DUP: return DHT_ST_DUP;
@@ -102,38 +105,37 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     }
 }
 
-/* PROVE: the proof of the owner of r (the sender) for this custodian. The coincidences of r that wait for it are alerted, and the answer
- * (MBOX, into ans) gives them to the owner, so it hears of them from a custodian of its point and not only from its mailboxes, which
- * nodes placed near their key could keep from it. 0 when nothing waits for r, or the proof is wrong. */
-size_t custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, uint8_t *ans)
+/* the place of r among the coincidences that wait for a proof (a_mu held), -1 when it has none */
+static int prove_wait_at(const dht *d, const record *r)
 {
-    record pairs[DHT_MBOX_MAX][2];
-    uint8_t a[RECORD_LEN], b[RECORD_LEN];
-    int n = 0;
-    bool any = false;
-    record_encode(r, a);
+    for (int i = 0; i < d->npw; i++)
+        if (same_record(&d->pw[i].r, r)) return i;
+    return -1;
+}
+
+/* A record of PROVE: sig, the proof of the owner of r (the sender, at from) for this custodian. The coincidences of r that wait for it
+ * are alerted, the first COIN_ALERTS by this custodian itself, and all go into pairs (at most STORE_X_OWNERS - 1) for the answer: the owner
+ * hears of them from a custodian of its point, and not only from its mailboxes, which nodes placed near their key could keep from it, and
+ * of every other owner of that x: copies stored under other identities before the real record cannot hide it (the owner's proofs and
+ * POSSESS tell them apart). The number of pairs; 0 when nothing waits for r, -1 for a wrong proof. */
+int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, mbox_pair *pairs)
+{
+    prove_wait w;
     pthread_mutex_lock(&d->a_mu);
-    for (int i = 0; i < d->npw && !any; i++) record_encode(&d->pw[i].r, b), any = record_same(a, b);
+    const bool any = prove_wait_at(d, r) >= 0;
     pthread_mutex_unlock(&d->a_mu);
-    if (!any || !record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return 0;
+    if (!any) return 0;
+    if (!record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return -1;
     pthread_mutex_lock(&d->a_mu);
-    int at = 0;
-    for (int i = 0; i < d->npw; i++) {
-        record_encode(&d->pw[i].r, b);
-        if (!record_same(a, b)) d->pw[at++] = d->pw[i];
-        else if (n < DHT_MBOX_MAX) pairs[n][0] = d->pw[i].r, pairs[n][1] = d->pw[i].other, n++;
-    }
-    d->npw = at;
+    const int at = prove_wait_at(d, r);                        /* gone if another PROVE took it meanwhile */
+    if (at >= 0) w = d->pw[at], memmove(d->pw + at, d->pw + at + 1, (size_t)(d->npw - at - 1) * sizeof *d->pw), d->npw--;
     pthread_mutex_unlock(&d->a_mu);
-    ans[0] = DHT_MBOX, ans[1] = (uint8_t)n;
-    for (int i = 0; i < n; i++) {
-        uint8_t *q = ans + 2 + (size_t)i * DHT_MBOX_ENTRY;
-        coin_alert(d, &pairs[i][0], &pairs[i][1], from);
-        const bool swap = memcmp(pairs[i][0].owner, pairs[i][1].owner, 32) > 0;   /* in the order of their owners, as in MBOX */
-        record_encode(&pairs[i][swap], q), record_encode(&pairs[i][!swap], q + RECORD_LEN);
-        memset(q + PAIR_LEN, 0, 1 + 2 * 64);
+    for (int i = 0; at >= 0 && i < w.n; i++) {
+        if (i < COIN_ALERTS) coin_alert(d, &w.r, &w.other[i], from);
+        memset(&pairs[i], 0, sizeof *pairs);
+        pair_order(&w.r, &w.other[i], pairs[i].r);
     }
-    return 2 + (size_t)n * DHT_MBOX_ENTRY;
+    return at >= 0 ? w.n : 0;
 }
 
 /* ---- the custodians of a key ---- */
@@ -228,18 +230,23 @@ static int cc_find(const cc_list *l, const uint8_t k[32], int how, dht_contact o
  * shows only its own key). *t: the target of that lookup; used, when not NULL, gets it too (when it was whole). */
 static int custodians(dht *d, const uint8_t k[32], dht_contact out[DHT_KSTORE], uint8_t t[32], cc_list *used)
 {
-    cc_entry *e = NULL, f;
+    cc_entry *e, f;
     bool whole = true;
+    pthread_mutex_lock(&d->p_mu);
     int n = cc_find(&d->cc, k, CC_FRESH, out, &e);
+    if (n) f = *e;
+    pthread_mutex_unlock(&d->p_mu);
     if (!n) {
         memcpy(f.t, k, 32), f.at = sys_now_ms(), f.clean = true;
         if ((f.n = lookup_whole(d, k, f.c, DHT_K, &whole)) <= 0) return 0;
+        pthread_mutex_lock(&d->p_mu);
         if (whole) cc_put(&d->cc, &f);
-        e = &f, n = cc_cover(&f, k, out);
+        pthread_mutex_unlock(&d->p_mu);
+        n = cc_cover(&f, k, out);
     }
-    memcpy(t, e->t, 32);
-    const int at = used && whole ? cc_at(used, e->t) : 0;
-    if (used && whole && (at == used->n || memcmp(used->e[at].t, e->t, 32))) cc_put(used, e);
+    memcpy(t, f.t, 32);
+    const int at = used && whole ? cc_at(used, f.t) : 0;
+    if (used && whole && (at == used->n || memcmp(used->e[at].t, f.t, 32))) cc_put(used, &f);
     return n;
 }
 
@@ -267,19 +274,14 @@ bool own_open(dht *d, char *err, size_t errlen)
 
 static bool own_read(dht *d, uint64_t i, record *r)
 {
-    uint8_t e[RECORD_LEN];
-    memcpy(e + RECORD_WIRE, d->me.xonly, 32);
-    return sys_pread(d->ownfd, e, RECORD_WIRE, STORE_HDR + i * RECORD_WIRE) == RECORD_WIRE && record_decode(e, r);
+    uint8_t e[RECORD_WIRE];
+    return sys_pread(d->ownfd, e, RECORD_WIRE, STORE_HDR + i * RECORD_WIRE) == RECORD_WIRE && record_wire_decode(e, d->me.xonly, r);
 }
 
-static void own_append(dht *d, const record *recs, int n)
+static void own_append(dht *d, const record *recs, int n)  /* p_mu held */
 {
     uint8_t b[DHT_STORE_MAX * RECORD_WIRE];
-    for (int i = 0; i < n; i++) {
-        uint8_t e[RECORD_LEN];
-        record_encode(&recs[i], e);
-        memcpy(b + (size_t)i * RECORD_WIRE, e, RECORD_WIRE);
-    }
+    for (int i = 0; i < n; i++) record_wire_encode(&recs[i], b + (size_t)i * RECORD_WIRE);
     const size_t len = (size_t)n * RECORD_WIRE;
     if (sys_pwrite(d->ownfd, b, len, STORE_HDR + d->nown * RECORD_WIRE) == (long)len) d->nown += (uint64_t)n;
 }
@@ -294,71 +296,105 @@ typedef struct {
 } repub;
 
 #define REPUB_MISS_MAX 65536       /* keys of records not taken by all their custodians a republish remembers; beyond, own.cust is dropped */
+#define ST_NONE 0xff               /* no status: the custodian did not answer */
 
-/* At most DHT_STORE_MAX records: the custodians of each, then one STORE per custodian with all its records. The first nold of them go
- * only to custodians that are not those old shows (the last republish). A lookup that gave a custodian that did not take a record is
- * no clean one in used: the next republish sends the records it covers to all their custodians. The records that at least one custodian
- * holds. */
-static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold, repub *rp, uint64_t *copies)
+/* A batch on its way: its custodians, a group each, and what each record got from each of its custodians. */
+typedef struct {
+    dht *d;
+    const record *recs;
+    int n, ngroups;
+    atomic_int next;               /* the group the next worker takes */
+    int (*group)[DHT_KSTORE];      /* of record i at its custodian j: the group that sends it there, -1 for none */
+    uint8_t (*st)[DHT_KSTORE];     /* ... and its status there: what STORED said, ST_NONE */
+    dht_contact *cust;             /* of each group: the custodian */
+    bool *failed;                  /* ... and whether an exchange with it failed (STORE or PROVE) */
+} batch_run;
+
+/* A worker of a batch: one custodian after the other, the STORE of all its records, then one PROVE of those it told COINCIDENCE (at most
+ * COIN_BURST: an honest custodian tells no more). A slow or dead custodian holds one worker for one timeout, or two; before, the
+ * custodians were served one after the other, and a PROVE went for each record. */
+static void *store_main(void *arg)
+{
+    batch_run *b = *(batch_run **)arg;
+    dht *d = b->d;
+    uint8_t req[2 + DHT_STORE_MAX * RECORD_WIRE], ans[2 + DHT_STORE_MAX];
+    int at[DHT_STORE_MAX][2];
+    for (int g; !stopping(d) && (g = atomic_fetch_add(&b->next, 1)) < b->ngroups;) {
+        const dht_contact *t = &b->cust[g];
+        record coin[COIN_BURST];
+        int m = 0, nc = 0;
+        size_t len;
+        for (int i = 0; i < b->n; i++)
+            for (int j = 0; j < DHT_KSTORE; j++)
+                if (b->group[i][j] == g) at[m][0] = i, at[m++][1] = j;
+        req[0] = DHT_STORE, req[1] = (uint8_t)m;
+        for (int q = 0; q < m; q++) record_wire_encode(&b->recs[at[q][0]], req + 2 + (size_t)q * RECORD_WIRE);   /* the sender is the owner */
+        const bool me = is_me(d, t->id);
+        const bool got = me || (exchange(d, t, req, 2 + (size_t)m * RECORD_WIRE, ans, sizeof ans, &len) && len == 2 + (size_t)m && ans[1] == m);
+        if (!me) heard(d, t, got);
+        for (int q = 0; q < m; q++) {
+            const record *r = &b->recs[at[q][0]];
+            const uint8_t st = me ? (uint8_t)custody_put(d, r, NULL) : got ? ans[2 + q] : ST_NONE;
+            b->st[at[q][0]][at[q][1]] = st;
+            if (!me && st == DHT_ST_COINCIDENCE && nc < COIN_BURST) coin[nc++] = *r;
+        }
+        b->failed[g] = !got || (nc && !prove_to(d, t, coin, nc));
+    }
+    return NULL;
+}
+
+/* At most DHT_STORE_MAX records: the custodians of each, then one STORE per custodian with all its records, PARALLEL_MAX custodians at a
+ * time. A record with old set goes only to custodians that are not those prev shows (the last republish). A lookup that gave a custodian
+ * that did not take a record is no clean one in used: the next republish sends the records it covers to all their custodians. The
+ * records that at least one custodian holds. */
+static int send_batch(dht *d, const record *recs, const bool *old, int n, cc_list *prev, repub *rp, uint64_t *copies)
 {
     cc_list *used = rp ? &rp->used : NULL;
+    batch_run b = {.d = d, .recs = recs, .n = n};
     dht_contact (*cs)[DHT_KSTORE] = malloc((size_t)n * sizeof *cs);   /* the custodians of each record */
     uint8_t (*ts)[32] = calloc((size_t)n, sizeof *ts);         /* the lookup they come from */
     int *ncs = calloc((size_t)n, sizeof *ncs), done = 0;
-    bool (*sent)[DHT_KSTORE] = calloc((size_t)n, sizeof *sent), (*has)[DHT_KSTORE] = calloc((size_t)n, sizeof *has);
-    uint8_t *held = calloc((size_t)n, 1), *req = malloc(2 + DHT_STORE_MAX * RECORD_WIRE);
-    int *idx = malloc((size_t)n * DHT_KSTORE * sizeof *idx), *jdx = malloc((size_t)n * DHT_KSTORE * sizeof *jdx);
-    const bool ok = cs && ts && ncs && sent && has && held && req && idx && jdx;
+    b.group = malloc((size_t)n * sizeof *b.group), b.st = malloc((size_t)n * sizeof *b.st);
+    b.cust = malloc((size_t)n * DHT_KSTORE * sizeof *b.cust), b.failed = calloc((size_t)n * DHT_KSTORE, sizeof *b.failed);
+    const bool ok = cs && ts && ncs && b.group && b.st && b.cust && b.failed;
+    if (ok) memset(b.group, 0xff, (size_t)n * sizeof *b.group), memset(b.st, ST_NONE, (size_t)n * sizeof *b.st);
     for (int i = 0; ok && i < n && !stopping(d); i++) {
         uint8_t k[32];
         dht_contact had[DHT_KSTORE];
+        cc_entry *e;
         store_key(recs[i].x, k);
         ncs[i] = custodians(d, k, cs[i], ts[i], used);
-        cc_entry *e;
-        const int nh = i < nold ? cc_find(old, k, CC_ANY, had, &e) : 0;
-        for (int j = 0; j < ncs[i]; j++)                       /* those that had it at the last republish have it */
-            for (int h = 0; h < nh && !sent[i][j]; h++)
-                if (!memcmp(cs[i][j].id, had[h].id, 32)) sent[i][j] = has[i][j] = true, held[i] |= 2;
-    }
-    for (int i = 0; ok && i < n && !stopping(d); i++)
+        const int nh = old && old[i] ? cc_find(prev, k, CC_ANY, had, &e) : 0;
         for (int j = 0; j < ncs[i]; j++) {
-            if (sent[i][j]) continue;
-            const dht_contact t = cs[i][j];                    /* a custodian not served yet: all its records, in order */
-            int m = 0;
-            for (int i2 = i; i2 < n; i2++)
-                for (int j2 = 0; j2 < ncs[i2]; j2++)
-                    if (!sent[i2][j2] && !memcmp(cs[i2][j2].id, t.id, 32)) sent[i2][j2] = true, idx[m] = i2, jdx[m++] = j2;
-            uint8_t st[DHT_STORE_MAX], ans[2 + DHT_STORE_MAX];
-            const bool me = is_me(d, t.id);
-            bool got = true;
-            if (me) {
-                for (int q = 0; q < m; q++) st[q] = (uint8_t)custody_put(d, &recs[idx[q]], NULL);
-            } else {
-                size_t len;
-                req[0] = DHT_STORE, req[1] = (uint8_t)m;
-                for (int q = 0; q < m; q++) {                  /* the record without the owner, which the custodian knows */
-                    uint8_t e[RECORD_LEN];
-                    record_encode(&recs[idx[q]], e);
-                    memcpy(req + 2 + (size_t)q * RECORD_WIRE, e, RECORD_WIRE);
-                }
-                got = exchange(d, &t, req, 2 + (size_t)m * RECORD_WIRE, ans, sizeof ans, &len) && len == 2 + (size_t)m && ans[1] == m;
-                heard(d, &t, got);
-                if (got) memcpy(st, ans + 2, (size_t)m);
-                if (got && copies) *copies += (uint64_t)m;
+            int h = 0, g = 0;
+            while (h < nh && memcmp(cs[i][j].id, had[h].id, 32)) h++;
+            while (g < b.ngroups && memcmp(b.cust[g].id, cs[i][j].id, 32)) g++;
+            if (h < nh) {
+                b.st[i][j] = DHT_ST_DUP;                       /* it had it at the last republish: it has it */
+                continue;
             }
-            for (int q = 0; q < m; q++) {
-                const int i2 = idx[q];
-                if (got && (st[q] == DHT_ST_STORED || st[q] == DHT_ST_DUP || st[q] == DHT_ST_COINCIDENCE))
-                    held[i2] |= me ? 1 : 3, has[i2][jdx[q]] = true;
-                else if (!got || st[q] == DHT_ST_FAR) cc_stale(&d->cc, ts[i2], true);   /* dead, or not a custodian: a new lookup */
-                if (got && !me && st[q] == DHT_ST_COINCIDENCE) prove_to(d, &t, &recs[i2]);
-            }
+            if (g == b.ngroups) b.cust[b.ngroups++] = cs[i][j];
+            b.group[i][j] = g;
         }
+    }
+    atomic_init(&b.next, 0);
+    batch_run *w[PARALLEL_MAX];
+    for (int i = 0; i < PARALLEL_MAX; i++) w[i] = &b;
+    if (ok) parallel(store_main, w, sizeof *w, b.ngroups < PARALLEL_MAX ? b.ngroups : PARALLEL_MAX);
+    pthread_mutex_lock(&d->p_mu);
     for (int i = 0; ok && i < n; i++) {
-        done += held[i] != 0;
-        if (!(held[i] & 2)) atomic_store(&d->unplaced, true);  /* on this node alone, or nowhere */
+        int held = 0;                                          /* 1: on this node, 2: on another */
         bool all = !stopping(d) && ncs[i] > 0;
-        for (int j = 0; j < ncs[i]; j++) all &= has[i][j];
+        for (int j = 0; j < ncs[i]; j++) {
+            const int g = b.group[i][j], st = b.st[i][j];
+            const bool me = is_me(d, cs[i][j].id), has = st == DHT_ST_STORED || st == DHT_ST_DUP || st == DHT_ST_COINCIDENCE;
+            held |= has ? (me ? 1 : 3) : 0;
+            all &= has;
+            if (copies && g >= 0 && !me && st != ST_NONE) (*copies)++;
+            if (g >= 0 && (b.failed[g] || st == DHT_ST_FAR)) cc_stale(&d->cc, ts[i], true);   /* dead, or not a custodian: a new lookup */
+        }
+        done += held != 0;
+        if (!(held & 2)) atomic_store(&d->unplaced, true);     /* on this node alone, or nowhere */
         if (rp && !all) {                                      /* the next republish sends it to all its custodians */
             cc_stale(used, ts[i], false);
             if (rp->nmiss == rp->cap && rp->cap < REPUB_MISS_MAX) {
@@ -370,7 +406,8 @@ static int send_batch(dht *d, const record *recs, int n, cc_list *old, int nold,
             rp->nmiss++;
         }
     }
-    free(cs), free(ts), free(ncs), free(sent), free(has), free(held), free(req), free(idx), free(jdx);
+    pthread_mutex_unlock(&d->p_mu);
+    free(cs), free(ts), free(ncs), free(b.group), free(b.st), free(b.cust), free(b.failed);
     return done;
 }
 
@@ -380,24 +417,23 @@ int dht_publish(dht *d, record *recs, int n)
 {
     int done = 0, skip = 0;
     record r;
-    uint8_t a[RECORD_LEN], b[RECORD_LEN];
-    pthread_mutex_lock(&d->p_mu);
     for (int i = 0; i < n; i++) memcpy(recs[i].owner, d->me.xonly, 32);
     /* after a restart the home gives its records again from the first: those that own.bin has, in the same order, went out then. The
      * first that differs (another dp.bin) ends that, and own.bin is cut there: the records after it are not the home's any more */
-    for (; skip < n && d->replay < d->replay_end; skip++, d->replay++) {
-        const bool same = own_read(d, d->replay, &r) && (record_name(&r, a), record_name(&recs[skip], b), !memcmp(a, b, RECORD_LEN));
-        if (!same) {
+    pthread_mutex_lock(&d->p_mu);
+    for (; skip < n && d->replay < d->replay_end; skip++, d->replay++)
+        if (!own_read(d, d->replay, &r) || !same_record(&r, &recs[skip])) {
             own_cut(d, d->replay);
             break;
         }
-    }
+    pthread_mutex_unlock(&d->p_mu);
     for (int o = skip; o < n && !stopping(d); o += DHT_STORE_MAX) {
         const int m = n - o < DHT_STORE_MAX ? n - o : DHT_STORE_MAX;
-        done += send_batch(d, recs + o, m, NULL, 0, NULL, NULL);
+        done += send_batch(d, recs + o, NULL, m, NULL, NULL, NULL);
+        pthread_mutex_lock(&d->p_mu);
         if (!stopping(d)) own_append(d, recs + o, m);     /* cut by a stop: given again after the restart */
+        pthread_mutex_unlock(&d->p_mu);
     }
-    pthread_mutex_unlock(&d->p_mu);
     return done;
 }
 
@@ -460,34 +496,50 @@ static void own_cut(dht *d, uint64_t n)
     remove(path);
 }
 
+#define REPUB_WINDOW 65536         /* records of own.bin a republish sorts by their keys at a time */
+
+typedef struct {
+    uint8_t k[32];
+    record r;
+    bool old;                      /* own.bin had it at the last republish */
+} keyed;
+
+static int by_key(const void *a, const void *b) { return memcmp(((const keyed *)a)->k, ((const keyed *)b)->k, 32); }
+
 /* The records of own.bin again, to the custodians each did not have at the last republish: the nodes that joined since, or that moved
  * up among the closest of a key as others left. The records published since, and those of a lookup whose custodians did not all take
  * them, go to all their custodians; and every record does when all is set (the first contacts after none) or once a week (a custodian
  * that lost its store gets it back, and so does an alert lost on the way: a record that comes again alerts its coincidence again). The
- * lookups are new: those kept are dropped. The copies sent. */
+ * records go by REPUB_WINDOW, in the order of their keys, so a batch has keys that follow each other and few custodians: in the order
+ * of own.bin (of discovery) its keys were random, and at 1000 nodes a batch went to about 700 custodians. The lookups are new: those kept
+ * are dropped. The copies sent. */
 uint64_t dht_republish(dht *d, bool all)
 {
-    cc_list old = {0};
+    cc_list prev = {0};
     repub rp = {0};
-    uint64_t before = 0, full = 0, copies = 0, i = 0;
+    uint64_t before = 0, full = 0, copies = 0;
     const uint64_t now = wall_us() / 1000000;
     if (!rt_count(d)) return atomic_store(&d->unplaced, true), 0;   /* nobody to send them to: at the first contacts */
     record *batch = malloc(DHT_STORE_MAX * sizeof *batch);
-    cust_load(d, &old, &before, &full);
+    bool old[DHT_STORE_MAX];
+    cust_load(d, &prev, &before, &full);
     pthread_mutex_lock(&d->p_mu);
     const uint64_t total = d->nown, cuts = d->ncut;
     d->cc.n = 0;
     pthread_mutex_unlock(&d->p_mu);
+    const int wn = total < REPUB_WINDOW ? (int)total + 1 : REPUB_WINDOW;
+    keyed *win = malloc((size_t)wn * sizeof *win);
     if (all || before > total || now - full >= REPUBLISH_FULL_S) before = 0, full = now;   /* to every custodian */
-    while (batch && i < total && !stopping(d)) {
+    for (uint64_t i = 0; win && batch && i < total && !stopping(d);) {
         int m = 0;
-        const uint64_t first = i;
-        pthread_mutex_lock(&d->p_mu);
-        for (; i < total && m < DHT_STORE_MAX; i++)
-            if (own_read(d, i, &batch[m])) m++;
-        const uint64_t nold = first < before ? before - first : 0;   /* those the last republish had */
-        (void)send_batch(d, batch, m, &old, nold < (uint64_t)m ? (int)nold : m, &rp, &copies);
-        pthread_mutex_unlock(&d->p_mu);
+        for (; i < total && m < wn; i++)                       /* past a cut of own.bin meanwhile, nothing is read */
+            if (own_read(d, i, &win[m].r)) store_key(win[m].r.x, win[m].k), win[m++].old = i < before;
+        qsort(win, (size_t)m, sizeof *win, by_key);
+        for (int o = 0; o < m && !stopping(d); o += DHT_STORE_MAX) {
+            const int k = m - o < DHT_STORE_MAX ? m - o : DHT_STORE_MAX;
+            for (int j = 0; j < k; j++) batch[j] = win[o + j].r, old[j] = win[o + j].old;
+            (void)send_batch(d, batch, old, k, &prev, &rp, &copies);
+        }
     }
     /* a record that not all its custodians took goes to all of them next time: no lookup kept may show it held, whichever covers it */
     cc_entry *e;
@@ -497,20 +549,21 @@ uint64_t dht_republish(dht *d, bool all)
     pthread_mutex_lock(&d->p_mu);
     const bool same = d->ncut == cuts;                          /* own.bin was not cut meanwhile (dht_publish after a restart) */
     pthread_mutex_unlock(&d->p_mu);
-    if (batch && !stopping(d) && same && rp.nmiss <= rp.cap) cust_save(d, &rp.used, total, full);
+    if (win && batch && !stopping(d) && same && rp.nmiss <= rp.cap) cust_save(d, &rp.used, total, full);
     else if (!same || rp.nmiss > rp.cap) {
         char path[4200];
         cust_path(d, path, sizeof path);
         remove(path);
     }
     dlog(d, "republished %llu records: %llu copies sent", (unsigned long long)total, (unsigned long long)copies);
-    free(batch), free(old.e), free(rp.used.e), free(rp.miss);
+    free(win), free(batch), free(prev.e), free(rp.used.e), free(rp.miss);
     return copies;
 }
 
-int dht_local_records(dht *d, const uint8_t x[32], record *out, int max) { return store_find(d->custody, x, out, max); }
+/* a node of a linear search has no store */
+int dht_local_records(dht *d, const uint8_t x[32], record *out, int max) { return d->custody ? store_find(d->custody, x, out, max) : 0; }
 
-uint64_t dht_local_count(dht *d) { return store_count(d->custody); }
+uint64_t dht_local_count(dht *d) { return d->custody ? store_count(d->custody) : 0; }
 
-double dht_local_weight(dht *d) { return (double)store_weight(d->custody); }
+double dht_local_weight(dht *d) { return d->custody ? (double)store_weight(d->custody) : 0; }
 

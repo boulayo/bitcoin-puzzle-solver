@@ -18,24 +18,31 @@ bool record_net_init(const secp256k1_context *ctx, record_net *net, const uint8_
            secp256k1_ec_pubkey_negate(ctx, &bg) && secp256k1_ec_pubkey_combine(ctx, &net->qp, both, 2);
 }
 
-void record_encode(const record *r, uint8_t out[RECORD_LEN])
+void record_wire_encode(const record *r, uint8_t out[RECORD_WIRE])
 {
     out[0] = (uint8_t)(int8_t)r->t;
     out[1] = (uint8_t)r->dp;
     memcpy(out + 2, r->x, 32);
+}
+
+void record_encode(const record *r, uint8_t out[RECORD_LEN])
+{
+    record_wire_encode(r, out);
     memcpy(out + RECORD_WIRE, r->owner, 32);
 }
 
-bool record_decode(const uint8_t in[RECORD_LEN], record *r)
+bool record_wire_decode(const uint8_t in[RECORD_WIRE], const uint8_t owner[32], record *r)
 {
     const int t = (int8_t)in[0];
     if (t < -1 || t > 1 || in[1] > RECORD_DP_MAX) return false;
     r->t = t;
     r->dp = in[1];
     memcpy(r->x, in + 2, 32);
-    memcpy(r->owner, in + RECORD_WIRE, 32);
+    memcpy(r->owner, owner, 32);
     return true;
 }
+
+bool record_decode(const uint8_t in[RECORD_LEN], record *r) { return record_wire_decode(in, in + RECORD_WIRE, r); }
 
 bool record_dp_ok(const uint8_t x[32], unsigned dpbits)
 {

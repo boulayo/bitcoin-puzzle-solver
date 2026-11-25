@@ -153,21 +153,17 @@ static owner_slot *owner_add(store *st, const uint8_t id[32])
 
 static void entry_encode(const record *r, uint32_t num, uint8_t e[STORE_ENTRY])
 {
-    uint8_t b[RECORD_LEN];
-    record_encode(r, b);
-    memcpy(e, b, RECORD_WIRE);                              /* the type, the zero bits and x: the record of a STORE */
+    record_wire_encode(r, e);                                  /* the type, the zero bits and x: the record of a STORE */
     for (int i = 0; i < 4; i++) e[RECORD_WIRE + i] = (uint8_t)(num >> (8 * i));
 }
 
 static bool entry_decode(const store *st, const uint8_t e[STORE_ENTRY], record *r)
 {
-    uint8_t b[RECORD_LEN];
     uint32_t num = 0;
     for (int i = 0; i < 4; i++) num |= (uint32_t)e[RECORD_WIRE + i] << (8 * i);
     static const uint8_t none[32];
     if (num >= st->nids || !memcmp(st->ids[num], none, 32)) return false;   /* an owner whose line a crash lost */
-    memcpy(b, e, RECORD_WIRE), memcpy(b + RECORD_WIRE, st->ids[num], 32);
-    return record_decode(b, r);
+    return record_wire_decode(e, st->ids[num], r);
 }
 
 static bool read_at(store *st, uint64_t i, record *r)
@@ -369,11 +365,27 @@ bool store_pair_ok(const secp256k1_context *ctx, const record_net *net, const re
     return !memcmp(a->x, b->x, 32) && memcmp(a->owner, b->owner, 32) != 0 && record_check(ctx, net, a) && record_check(ctx, net, b);
 }
 
+int pair_order(const record *a, const record *b, record out[2])
+{
+    const int who = memcmp(a->owner, b->owner, 32) > 0;
+    out[who] = *a, out[1 - who] = *b;
+    return who;
+}
+
+void pair_hash(const record *a, const record *b, uint8_t h[32])
+{
+    uint8_t m[11 + 2 * RECORD_LEN] = "pznet1/pair";
+    record p[2];
+    pair_order(a, b, p);
+    record_name(&p[0], m + 11), record_name(&p[1], m + 11 + RECORD_LEN);
+    pz_sha256(m, sizeof m, h);
+}
+
 /* ---- the mailbox ---- */
 
 typedef struct {
     mbox_pair p;
-    uint8_t h[32];                 /* SHA256("pznet1/pair" || both records), to find a pair again */
+    uint8_t h[32];                 /* its name (pair_hash), to find a pair again */
 } mentry;
 
 struct mbox {
@@ -437,13 +449,8 @@ bool mbox_put(mbox *m, const record *a, const record *b, const uint8_t proof[64]
 {
     mentry e;
     memset(&e, 0, sizeof e);
-    const int who = memcmp(a->owner, b->owner, 32) > 0;      /* the place of a's owner, whose proof this is */
-    e.p.r[who] = *a;
-    e.p.r[1 - who] = *b;
-    uint8_t buf[11 + 2 * RECORD_LEN] = "pznet1/pair";
-    record_name(&e.p.r[0], buf + 11);
-    record_name(&e.p.r[1], buf + 11 + RECORD_LEN);
-    pz_sha256(buf, sizeof buf, e.h);
+    const int who = pair_order(a, b, e.p.r);                  /* the place of a's owner, whose proof this is */
+    pair_hash(a, b, e.h);
     pthread_mutex_lock(&m->mu);
     size_t at = m->n;
     for (size_t i = 0; i < m->n && at == m->n; i++)

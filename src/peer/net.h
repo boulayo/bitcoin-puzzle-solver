@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* net.h - TCP and the encrypted channel between two nodes (docs/en/NETWORK.md 7.1). One TCP connection per exchange: connect, the Noise XX
- * handshake with the prologue "pznet4" || F, one request frame, one answer frame, close. A session (messages 16 to 31) keeps its connection
+ * handshake with the prologue "pznet5" || F, one request frame, one answer frame, close. A session (messages 16 to 31) keeps its connection
  * and goes on with frames; a relay keeps those of the two homes it joins (below). The sockets are those of sys.h (sys_posix.c,
  * sys_win.c), and every wait has a deadline: a peer that stops talking costs a timeout, never a thread.
  *
@@ -35,7 +35,7 @@ typedef struct {
 typedef struct {
     const secp256k1_context *ctx;
     const home_identity *self;
-    uint8_t prologue[38];          /* "pznet4" || F */
+    uint8_t prologue[38];          /* "pznet5" || F */
     unsigned id_bits;              /* leading zero bits a node ID must have: NODE_ID_ZERO_BITS on a real network */
     uint16_t port;                 /* the port this node listens on, told to the nodes it dials; 0 when it does not listen */
     int timeout_ms;
@@ -64,8 +64,8 @@ void net_addr_str(const net_addr *a, char *out, size_t cap);
 /* Whether a is an address of the public internet: not unspecified, loopback, private (RFC 1918, RFC 4193), shared (RFC 6598), link-local,
  * benchmarking, documentation, multicast or reserved. A node of a public network dials and keeps only these (docs/en/NETWORK.md 7.4). */
 bool net_addr_public(const net_addr *a);
-/* The block of an address, for the limits by block: the /24 of a public IPv4 address, the /32 of a public IPv6 one, the whole address of
- * one that is not public; the port does not count. 16 bytes. */
+/* The block of an address, for the limits by block: the whole address of a loopback, private or link-local one (a machine, or a LAN, of
+ * its own), else the /24 of an IPv4 address and the /32 of an IPv6 one (6to4 and Teredo too); the port does not count. 16 bytes. */
 void net_addr_block(const net_addr *a, uint8_t block[16]);
 
 /* A listening socket on a numeric address (NULL or "": every address, IPv6 and IPv4, or IPv4 alone where there is no IPv6), port 0 for a

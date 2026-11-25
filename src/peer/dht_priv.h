@@ -11,8 +11,8 @@
  *   dht_claim.c  the claims of the blocks of a linear search (docs/en/NETWORK.md 11): those a custodian keeps (claims.c, claims.bin),
  *                CLAIM and CLAIM_GET
  * Each shared structure has its own mutex, and no lock is held across a connection: the routing table, the limits by address block, the
- * queue of accepted connections, the jobs, the alerts, the relays, the publishing, the addresses found in the table of BitTorrent. The
- * stores, the claims and the mailbox lock themselves. */
+ * queue of accepted connections, the jobs, the alerts, the relays, own.bin and the lookups kept for publishing, the addresses found in the
+ * table of BitTorrent. The stores, the claims and the mailbox lock themselves. */
 #ifndef PZPEER_DHT_PRIV_H
 #define PZPEER_DHT_PRIV_H
 
@@ -32,7 +32,12 @@
 #define REACH_MS 3600000           /* a node believes its port open for this long after a connection came in */
 #define QUEUE_MAX 64               /* accepted connections waiting for a handler: more are closed at once */
 #define SENT_MAX 256               /* pairs a custodian remembers having alerted */
-#define PROVE_MAX 256              /* coincidences a custodian holds until the owner that stored a record of them proves it */
+#define PROVE_MAX 256              /* records with a coincidence a custodian holds until the owner that stored them proves them */
+#define COIN_BURST 8               /* records with a coincidence of one address block a custodian takes at once (LIM_COIN): the most an
+                                    * honest custodian tells in one STORED, and the records of one PROVE */
+#define COIN_ALERTS 2              /* pairs of a record a custodian alerts itself (each costs it lookups and a dozen connections) */
+#define PROVE_ENTRY (RECORD_WIRE + 64)   /* a record in PROVE: its first bytes and its owner's proof */
+#define PARALLEL_MAX 16            /* arguments of parallel(): the custodians a publish stores to at a time */
 #define RELAY_WAITING 256          /* homes waiting at this relay for their partner: open connections, no thread (2 a block: 128 blocks to fill) */
 #define QUERY_STACK (256 << 10)
 
@@ -54,14 +59,14 @@ typedef struct {
     int64_t looked;                /* the last lookup in the range of the bucket */
 } bucket;
 
-enum { JOB_ALERT_OWN, JOB_ALERT_OUT, JOB_PING };   /* in the order the queue serves them */
+enum { JOB_ALERT_OWN, JOB_ALERT_OUT, JOB_PING, JOB_KINDS };   /* the kinds take turns, the oldest job of each first */
 
 typedef struct job {
     struct job *next;
     int kind;
     record a, b;
-    dht_contact c;                 /* JOB_PING: the contact; JOB_ALERT_OUT: the sender of the record (its address), when there is one */
-    bool blocked;                  /* counted against the address block of c */
+    dht_contact c;                 /* JOB_PING: the contact; an alert: the node it came from (its address), when there is one */
+    bool blocked;                  /* an alert counted against the address block of c */
     uint8_t block[16];
 } job;
 
@@ -87,7 +92,9 @@ typedef struct {
 } sent_alert;
 
 typedef struct {
-    record r, other;               /* r came from its owner, who has to prove it */
+    record r;                      /* it came from its owner, who has to prove it */
+    record other[STORE_X_OWNERS - 1];   /* the records of the other owners of its x */
+    int n;
     int64_t at;
 } prove_wait;
 
@@ -130,8 +137,8 @@ struct dht {
     int qhead, qn;
     pthread_mutex_t j_mu;          /* jobs */
     pthread_cond_t j_cv;
-    job *jhead;
-    int jn, jn_alert;
+    job *jhead;                    /* the oldest first */
+    int jn, jn_alert, jturn;       /* the jobs, of them the alerts of a custodian; the kind whose turn it is */
     pthread_mutex_t a_mu;          /* alerts of this node, alerts sent as a custodian */
     own_alert *alerts;
     int nalerts, calerts;
@@ -144,7 +151,7 @@ struct dht {
     relay_slot waiting[RELAY_WAITING], *active;
     int nactive;
     uint64_t relays_done;
-    pthread_mutex_t p_mu;          /* publishing: one batch at a time; and what follows */
+    pthread_mutex_t p_mu;          /* publishing: own.bin and what follows, the lookups kept (never across an exchange) */
     int ownfd;                     /* own.bin */
     uint64_t nown, replay, replay_end;   /* its records; those a restart may give again (dht_publish) */
     uint64_t ncut;                 /* the times own.bin was cut (a republish under way does not save own.cust then) */
@@ -180,6 +187,14 @@ static inline bool is_me(const dht *d, const uint8_t id[32]) { return !memcmp(id
 
 static inline bool mine(const dht *d, const record *r) { return !memcmp(r->owner, d->me.xonly, 32); }
 
+/* whether a and b are one record, whatever their zero bits */
+static inline bool same_record(const record *a, const record *b)
+{
+    uint8_t ea[RECORD_LEN], eb[RECORD_LEN];
+    record_encode(a, ea), record_encode(b, eb);
+    return record_same(ea, eb);
+}
+
 /* An address a node may dial and keep: any port but 0, and on a public network a public address. A NODES answer that points elsewhere
  * would make this node connect into its own LAN. */
 static inline bool addr_ok(const dht *d, const net_addr *a) { return a->port != 0 && (d->cfg.allow_private || net_addr_public(a)); }
@@ -205,15 +220,21 @@ void dlog(const dht *d, const char *fmt, ...) __attribute__((format(SYS_PRINTF, 
 bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool detached);
 bool lim_take(dht *d, const net_addr *a, int kind, double n);
 void path_of(const dht *d, const char *name, char *out, size_t cap);
+/* A job at the end of the queue. c: the contact of JOB_PING; of an alert, the node it came from (NULL: none), whose address block holds
+ * at most ALERT_JOBS_BLOCK of the queued alerts of each kind. False when the queue has no room for it. */
 bool job_push(dht *d, int kind, const record *a, const record *b, const dht_contact *c);
 
 /* dht_table.c */
+/* fn on each of n (at most PARALLEL_MAX) arguments at once: the first on this thread, the others on threads of their own */
+void parallel(void *(*fn)(void *), void *args, size_t size, int n);
 void rt_seen(dht *d, const dht_contact *c);     /* it answered */
 void rt_asked(dht *d, const dht_contact *c);    /* it asked */
 void rt_failed(dht *d, const uint8_t id[32]);
 int rt_closest(dht *d, const uint8_t t[32], dht_contact *out, int max);
 int rt_count(dht *d);
 bool responsible(dht *d, const uint8_t key[32]);
+/* One request to a contact, dialled with its identity, and its answer, whose type must be the one of that request: its own + 1, MBOX
+ * for PROVE. */
 bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uint8_t *ans, size_t cap, size_t *alen);
 void heard(dht *d, const dht_contact *c, bool ok);
 void job_ping(dht *d, const dht_contact *c);
@@ -227,16 +248,15 @@ void save_peers(dht *d);
 
 /* dht_store.c */
 int custody_put(dht *d, const record *r, const net_addr *from);
-size_t custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, uint8_t *ans);
+int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, mbox_pair *pairs);
 bool own_open(dht *d, char *err, size_t errlen);
 
 /* dht_alert.c */
 bool owner_ok(const dht *d, const record *r);
 bool pair_ok(const dht *d, const record *a, const record *b);
-void pair_hash(const record *a, const record *b, uint8_t h[32]);
-bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof);
+bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, const dht_contact *from);
 extern const uint8_t CUSTODY_NONCE[32];
-void prove_to(dht *d, const dht_contact *c, const record *r);
+bool prove_to(dht *d, const dht_contact *c, const record *r, int n);
 void job_alert_out(dht *d, const record *a, const record *b);
 void job_alert_own(dht *d, const record *a, const record *b);
 void retry_alerts(dht *d);

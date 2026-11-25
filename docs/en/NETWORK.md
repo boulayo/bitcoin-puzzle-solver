@@ -259,8 +259,9 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - Transport: TCP, `Noise_XX_secp256k1_ChaChaPoly_SHA256`.
   - DH: libsecp256k1 ECDH, output `SHA256(compressed shared point)`, as in BOLT 8.
   - Static keys are the identity keys (compressed points on the wire, x-only identity = their x).
-  - Prologue: `"pznet4" || F`, so peers of another network, or of earlier versions of the protocol (the short record, records named
-    without their zero bits, then PROVE, the fee rate after the proofs and F from the point), fail the handshake.
+  - Prologue: `"pznet5" || F`, so peers of another network, or of earlier versions of the protocol (the short record, records named
+    without their zero bits, then PROVE, the fee rate after the proofs and F from the point, then a PROVE of several records), fail the
+    handshake.
   - The three handshake messages have fixed lengths, so they travel without a length: 33 bytes (`e`), 98 (`e`, `ee`, `s`, `es`, an
     empty payload), 67 (`s`, `se`, and as payload the port the initiator listens on, 2 bytes, 0 when it does not accept connections).
     The responder puts the initiator in its routing table with the address it sees and that port.
@@ -322,24 +323,35 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
     70 % load, 11 to 23 bytes a record, that is 30 to 60 % of the 38 bytes of its entry in the file: for the default 2 GB at most, two
     fifths of the file, and 3 GB for the moment of its last doubling, while the old table is still there), at most 1/16 of them of one
     owner, at most 8 owners of one x, and owners in all one per 256 records it may hold and 1024 more (an identity costs little).
-  The checks that cost nothing come first, the curve last.
+  The checks that cost nothing come first, the curve last. A node of a linear search (section 11) takes no record at all, and no
+  `ALERT`, `PROVE` or `POSSESS`, and has no `store.bin`: any x on the curve with the zero bits passes the checks of 7.2 with no walk (64
+  zero bits too), and no walk of that network makes records. Before, anyone could fill its 5 GB.
 - `store.bin` is the custodian's own file, so its records are not checked again when it is opened, except the last 1024: a crash can
   leave an entry whole in length and wrong in content. One that fails there, or names an owner the owners file has not, is not indexed. The records a coincidence is made of are checked again when they are read back, so a record
   damaged in the middle of the file never becomes an alert.
 - Same x, different owners: a coincidence. Same type: a merge (both walkers should restart). Different types: useful. Both kinds are
   alerted the same way; the owners tell them apart by the types. A coincidence that a record of another node made waits for that
-  owner's proof first: the custodian answers `COINCIDENCE` (status 3) and the owner sends `PROVE(record, proof)`, its proof of possession
-  for the custodian (the asker is the custodian, the nonce 32 zero bytes: a copy of it convinces that custodian alone, of what is true).
-  Only a proof that checks out makes the alerts go, and the answer, an `MBOX` with the pairs, tells the owner of them at once, from a
-  custodian of its own point. So a copy of another home's point, which its sender cannot prove, alerts nobody (before, each copy cost its
-  victim an alert, about 50 connections, and a place in its mailboxes), and an owner hears of the coincidences of its records without
-  its mailboxes: those of a home that does not listen sit near a public key, where nodes placed there could keep its alerts from it; now
-  the next republish to every custodian (at most a week) brings each coincidence anyway. A coincidence waits 10 minutes for its proof,
-  256 at most. The custodian sends `ALERT(record1, record2)` to both owners (found
+  owner's proof first: the custodian answers `COINCIDENCE` (status 3) and the owner sends one `PROVE` with its proof of possession of
+  each record of the STORE that got it (at most 8, the most a custodian says 3 for in one STORED: 7.4), for the custodian (the asker is
+  the custodian, the nonce 32 zero bytes: a copy of it convinces that custodian alone, of what is true). Only a proof that checks out
+  makes the alerts go, and the answer, an `MBOX` with the pairs, tells the owner of them at once, from a custodian of its own point: the
+  pairs of each record proved with every other owner of its x. So a copy of another home's point, which its sender cannot prove, alerts
+  nobody (before, each copy cost its victim an alert, about 50 connections, and a place in its mailboxes), and an owner hears of the
+  coincidences of its records without its mailboxes: those of a home that does not listen sit near a public key, where nodes placed
+  there could keep its alerts from it; now the next republish to every custodian (at most a week) brings each coincidence anyway. Every
+  other owner, not the first two of the x: a custodian that learned a point from its owner's STORE can store copies of it under two
+  identities at the other custodians before the owner's republish reaches them, and before, a real coincidence with that point was
+  told with the copies only, for ever. The owner's proofs and `POSSESS` tell the copies apart. The owner takes from that answer only
+  the pairs of the records it proved, at most 7 for each (the owners a custodian keeps for one x, less one), or none: a custodian cannot
+  make alerts of the owner's other points. (Before, the owner refused every such answer, whose type was not its request's + 1, and
+  counted it as a failure of the custodian.) A record with a coincidence waits 10 minutes for its proof, 256 at most. The custodian
+  sends `ALERT(record1, record2)` to both owners (found
   by their node IDs) and to the mailboxes of each (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`). A record that comes again
   (a duplicate) with a coincidence alerts again, at most once an hour for a pair: an alert lost on the way comes back with the next
-  republish to every custodian (once a week, 7.4), or sooner from a mailbox. A record the custodian does not keep because it is full is still alerted. Each alert costs the custodian four lookups and a
-  dozen connections, so a record alerts at most 2 pairs, and the coincidences of the records of one address block are limited (7.4).
+  republish to every custodian (once a week, 7.4), or sooner from a mailbox. A record the custodian does not keep because it is full is
+  still alerted. Each alert costs the custodian four lookups and a dozen connections, so it alerts at most 2 pairs of a record itself
+  (its owner, told of all, sends its own proof to each other owner), and the records with a coincidence of one address block are limited
+  (7.4).
 - A node that receives an `ALERT` checks both records (7.2, same x, different owners). It keeps the pair as a mailbox when it may
   be a mailbox of one of the owners (the rule of the custodian above, for the key of the mailbox), in memory: the last 4096 pairs, at
   most 64 of one owner (a flood of the pairs of one owner pushes out its own). Two owners at one point are one pair whatever the
@@ -355,8 +367,12 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
   each other through their mailboxes (before, both alerts waited for a day and no session could start).
 - An alert that waits is tried again after a minute, then twice as late each time up to an hour, for a day; a wrong proof drops it. A
   node remembers 1024 alerts: when they are all waiting, the oldest goes, so a flood of alerts that will never be proved (copies of a
-  home's points by identities that do not answer) cannot shut out the next real one, which is tried at once; an alert pushed out comes
-  back with a mailbox poll, or the next republish to every custodian.
+  home's points by identities that do not answer) cannot shut out the next real one, whose job is queued at once; an alert pushed out
+  comes back with a mailbox poll, or the next republish to every custodian. The alerts that came from one address block hold at most 8
+  places in the queue of the jobs, also when they are tried again, and the kinds of jobs take turns (the alerts of the node, those it
+  sends as a custodian, the pings): a forged alert with a real record of a home (an owner made up with a hash grind of 16 bits, the x
+  known to any custodian of it) costs the home a lookup of that owner, one of its mailboxes and their ALERTs, and before, the 2 a second
+  of one address kept a real alert behind up to 1024 of them, and the pings behind those.
 - An owner asks its 5 mailboxes for its pairs (`MBOX_GET`): at start, every hour while the others reach it, and every minute when
   they do not (it does not listen, or nothing comes in at its port).
 
@@ -371,7 +387,8 @@ table, a walker of another home that meets one is on a path walked already.
 
 ### 7.4 Kademlia
 
-k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type; an answer is its request + 1; `n` is one byte):
+k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type; an answer is its request + 1, but MBOX answers PROVE;
+`n` is one byte):
 
 | Type | Message | Answer |
 |---|---|---|
@@ -382,7 +399,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
 | 9 | MBOX_GET(owner 32) | 10 MBOX(n, n × (record, record, flags, proof 64, proof 64)), n ≤ 64, the newest first; the records in the order of their owners, bit i of flags set when the proof of the owner of record i is there (else zeros) |
 | 11 | POSSESS(record, nonce 32) | 12 PROOF(sig 64) |
 | 13 | RELAY(name 32, partner 32) (7.7) | 14 RELAYED, when the partner came; then the bytes of the partner's connection |
-| 15 | PROVE(the first 34 bytes of a record, proof 64), after a STORED that said 3 for it: the owner is the sender | 10 MBOX with the pairs of the record that waited for the proof (no proofs in them) |
+| 15 | PROVE(n, n × (the first 34 bytes of a record, proof 64)), 1 ≤ n ≤ 8, records a STORED said 3 for: the owner is the sender | 10 MBOX with the pairs of those records that waited for the proof, each with every other owner of its x (no proofs in them) |
 | 32 | CLAIM(a claim of a block, section 11), from its owner | 33 CLAIMED(status) |
 | 34 | CLAIM_GET(index 8) | 35 CLAIMS(n, n × (length 2, claim)), n ≤ 4 |
 | 16–31 | session messages (section 7.5) | |
@@ -399,8 +416,10 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   A NODES answer that points elsewhere is refused (it would make the node connect into the user's own LAN), and so is a contact that
   asks from such an address (it is answered, not kept). On a test network (`test`, `signet`, `regtest`, or `--allow-private`) they are
   taken, and the limits by block below do not apply to them: the nodes of a test are on one machine.
-- The limits by address block: the /24 of an IPv4 address, the /32 of an IPv6 one (what one provider gets: with /48, one of them had
-  65 536 blocks), the whole address of one that is not public (on a public network). They apply to public addresses everywhere, and to all addresses on a public network.
+- The limits by address block: the whole address of a loopback, private or link-local one (a machine or a LAN of its own), else the /24
+  of an IPv4 address and the /32 of an IPv6 one, public or not (what one provider gets: with /48, one of them had 65 536 blocks). Before,
+  any address that is not public was a block of its own, 6to4 and Teredo too, which carry an IPv4 address: one IPv4 had 2^80 blocks
+  behind 6to4, each with its own share. They apply to public addresses everywhere, and to all addresses on a public network.
 
   | Limit | Value |
   |---|---|
@@ -409,8 +428,9 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most, for the 2 seconds the handshake and the request of a connection have) |
   | records stored from one block | 50 a second, 100 000 at once (a home that was alone sends them all) |
   | ALERTs received from one block | 2 a second, 64 at once (checked before the records and the proof) |
-  | coincidences alerted for the records of one block | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs, 8 of them for the records of one block |
-  | PROVE from one block | as ALERTs (2 a second, 64 at once), checked before the proof |
+  | records with a coincidence from one block (a STORED says 3 for 8 at most) | one a minute, 8 at once; and 256 alerts of a custodian waiting in its jobs, 8 of them for the records of one block |
+  | alerts of the node from one block waiting in its jobs (also when tried again) | 8 |
+  | records proved in PROVE from one block | as ALERTs (2 a second, 64 at once), one each, checked before the proofs |
   | relays (waiting or under way) of the homes of one block; waits of one identity | 2; 2 |
 
   The rates are buckets of tokens, kept for 4096 blocks (an entry with no connection is reused, the one used longest ago). The place of a
@@ -426,7 +446,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   within the limits by block: one attacker's nodes, on its few networks, cannot fill a bucket or the table (project 4.2). A known
   contact that moves to a block that has its share keeps its old address.
 - A node that asks tells its port itself, so it is not taken at its word: the node asked pings it at that address (3 seconds, one
-  ping at a time for a bucket, behind the alerts that wait) and takes it when it answers. A node that does not listen (port 0) is never
+  ping at a time for a bucket, in turn with the alerts that wait) and takes it when it answers. A node that does not listen (port 0) is never
   put in a table: it dials out, publishes, polls its mailboxes, and is never a custodian. A home whose router lets nothing in listens
   in vain, and must live the same way: a node counts its port open for an hour after a connection of another node came in (and for its
   first two minutes). Without one it tells port 0, takes no place in its own lookups, polls its mailboxes every minute and dials its
@@ -439,7 +459,10 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   keep pointing at new nodes cannot make a lookup endless). A lookup asks at most 4 nodes of one address block: answers that all point
   at one network, a victim or the attacker's own, do not make the node dial it more. The result counts the node itself when it listens.
   `want` is 20 to find nodes, 5 to find the custodians of a record or the mailboxes of an owner.
-- Publishing: the custodians of each record, then one STORE per custodian with all its records. A lookup finds the 20 nodes closest to
+- Publishing: the custodians of each record, then one STORE per custodian with all its records, 16 custodians at a time, and after it
+  one PROVE with the records it said 3 for. A dead or slow custodian holds one of the 16 for a timeout, or two (before, the custodians of
+  a batch were served one after the other, and a PROVE went for each record, so a custodian that said 3 for every record and then kept
+  silent froze the home for 10 s a record). A lookup finds the 20 nodes closest to
   a target T, and the node keeps it for an hour: the custodians of a key K near T come from it, with no lookup of their own, when it
   shows that they are the 5 closest of all. A node it does not have is at least D from T, D the distance of the farthest it has; with
   `d(T, K) < 2^b`, a XOR with it changes only the bits of a distance below b, so that node is at least D with those bits cleared from
@@ -456,8 +479,12 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   `dp.bin`). A `store.bin` or `own.bin` of an earlier version (another magic) is set aside as `.old`, with its file of owners.
 - The republish, two minutes after the start and then every day: the custodians of each record again, with new lookups, and a record
   goes only to those it did not have at the last republish: the nodes that joined since, or that moved up among the closest of a key as
-  others left. `own.cust` keeps what the last republish saw: the records `own.bin` had, the time of the last republish to every
-  custodian, and its clean lookups (target and IDs), those whose custodians all took every record they were given; a record that not
+  others left. It reads `own.bin` 65 536 records at a time and sends them in the order of their keys: a batch of 255 has keys that
+  follow each other and goes to a few custodians (in a simulation, 5, 9 and 47 at 100, 1000 and 10 000 nodes), where the records in
+  the order they were found have random keys (100, 695 and 1183 custodians: a weekly republish of 10^6 records took about 10 days at
+  1000 nodes). Publishing does not hold a lock across an exchange: a publish goes on while a republish waits for a custodian.
+  `own.cust` keeps what the last republish saw: the records `own.bin` had, the time of the last republish to every custodian, and its
+  clean lookups (target and IDs), those whose custodians all took every record they were given; a record that not
   all its custodians took (one refused, or did not answer) makes unclean every lookup that would show it held, and the records those cover
   go to all their custodians the next time. The records
   published since go to all their custodians too. With no node come or gone it sends nothing (`t_dht`: 486 copies, then 0, then 20
@@ -473,7 +500,8 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   the one after the deepest that has contacts).
 - Threads: one accepts connections, 8 answer them (a connection that finds them all busy and 64 waiting is closed, and so is one whose
   block is over its limits), one runs the jobs that take time (the alerts of a custodian, the proofs of an alert, the ping of a full
-  bucket), one does the periodic work above, one copies the bytes of each relay under way (7.7).
+  bucket: each kind in turn, the oldest first), one does the periodic work above, one copies the bytes of each relay under way (7.7);
+  a publish has 16 of its own while it stores a batch, and a lookup 3.
 
 ### 7.5 The session of a coincidence
 
@@ -798,8 +826,8 @@ asked in that way. A router that speaks neither is asked by UPnP IGD: a search o
 `AddPortMapping`; a router that only takes mappings without end gets one. Nothing the router says there is followed out of the LAN:
 its description and its control address must be at the address its answer came from, and that address must not be a public one.
 The line `router:` of the log says which way worked, or why none did. It is on by default so that a home takes its part of the custody
-without its owner doing anything; the mapping lasts two hours after pzpeer stops. A node that does not listen still
-searches, publishes and signs (through the relay, 7.7); it is not a custodian.
+without its owner doing anything; pzpeer deletes the mapping when it stops (one left by a crash lasts its two hours). A node that does
+not listen still searches, publishes and signs (through the relay, 7.7); it is not a custodian.
 
 `t_bt` and `t_portmap` run against a table and a router made in the tests (one that speaks PCP, one that only speaks NAT-PMP, the UPnP ones); `tests/peer/e2e_meet.sh` starts three nodes that are given
 no address and find each other through `tests/peer/bt_table.py`. Not tried yet against the real table of BitTorrent nor a real

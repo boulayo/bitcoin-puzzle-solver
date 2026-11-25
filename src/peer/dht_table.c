@@ -17,7 +17,7 @@
 #define RT_BLOCK_TABLE 4           /* ... in the table, and in one NODES answer */
 #define RESP_SLACK (2 * DHT_KSTORE) /* a custodian or a mailbox that knows this many nodes closer to the key is not one of it */
 #define BOOT_TRY 64                /* addresses tried at a bootstrap, BOOT_BATCH at a time (so a list of dead addresses costs a few timeouts) */
-#define BOOT_BATCH 16
+#define BOOT_BATCH PARALLEL_MAX
 #define BOOT_WANT 8                /* ... until this many answered */
 #define PEERS_MAX 1024
 
@@ -28,12 +28,11 @@ typedef struct {
 } boot_addr;
 
 
-/* fn on each of n (at most BOOT_BATCH) arguments at once: the first on this thread, the others on threads of their own, or on this one
- * when a thread cannot be made. The workers of a lookup and the pings of a bootstrap. */
-static void parallel(void *(*fn)(void *), void *args, size_t size, int n)
+/* An argument whose thread cannot be made runs on this one. The workers of a lookup and of a publish, the pings of a bootstrap. */
+void parallel(void *(*fn)(void *), void *args, size_t size, int n)
 {
-    pthread_t th[BOOT_BATCH];
-    bool started[BOOT_BATCH] = {false};
+    pthread_t th[PARALLEL_MAX];
+    bool started[PARALLEL_MAX] = {false};
     for (int i = 1; i < n; i++) started[i] = spawn(&th[i], fn, (char *)args + (size_t)i * size, QUERY_STACK, false);
     if (n > 0) fn(args);
     for (int i = 1; i < n; i++) {
@@ -254,13 +253,10 @@ bool responsible(dht *d, const uint8_t key[32])
 
 /* ---- exchanges ---- */
 
-/* One request to a contact, dialled with its identity, and its answer, whose type must be the request's + 1. */
 bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uint8_t *ans, size_t cap, size_t *alen)
 {
-    net_conn *k = dht_dial(d, c);
-    const bool ok = k && net_send(k, req, rlen) && net_recv(k, ans, cap, alen) && *alen >= 1 && ans[0] == req[0] + 1;
-    net_close(k);
-    return ok;
+    return net_exchange(dial_cfg(d), &c->addr, c->xonly, req, rlen, ans, cap, alen, NULL) && *alen >= 1 &&
+           ans[0] == (req[0] == DHT_PROVE ? DHT_MBOX : req[0] + 1);
 }
 
 /* what the routing table learns from an exchange whose answer was checked */

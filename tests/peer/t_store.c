@@ -349,6 +349,16 @@ static void test_mbox(void)
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && mbox_get(m, idb.xonly, pairs, 4) == 1 && mbox_get(m, idc.xonly, pairs, 4) == 0);
     const bool a_first = memcmp(ida.xonly, idb.xonly, 32) < 0;   /* kept in the order of the owners */
     CHECK(same(&pairs[0].r[0], a_first ? &a : &b) && same(&pairs[0].r[1], a_first ? &b : &a) && !pairs[0].has[0] && !pairs[0].has[1]);
+    record ord[2];                                              /* that order, and the name of a pair, whichever order it comes in */
+    uint8_t h1[32], h2[32];
+    CHECK(pair_order(&a, &b, ord) == !a_first && same(&ord[0], &pairs[0].r[0]) && same(&ord[1], &pairs[0].r[1]));
+    CHECK(pair_order(&b, &a, ord) == a_first && same(&ord[0], &pairs[0].r[0]));
+    pair_hash(&a, &b, h1), pair_hash(&b, &a, h2);
+    CHECK(!memcmp(h1, h2, 32));
+    record a9 = a;
+    a9.dp += 1;                                                 /* the name of a record has no zero bits */
+    pair_hash(&a9, &b, h2);
+    CHECK(!memcmp(h1, h2, 32));
     /* a proof of each owner, kept with the pair at the place of its owner; the same again is nothing new */
     uint8_t pa[64], pb[64];
     memset(pa, 0xa, 64), memset(pb, 0xb, 64);
