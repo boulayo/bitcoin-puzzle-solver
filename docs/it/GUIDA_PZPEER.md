@@ -108,7 +108,7 @@ tests/peer/e2e_linear.sh
 ```
 
 Un nodo e due case su due blocchi di 2^34 chiavi, la chiave nel secondo. Passa quando la seconda casa trova la chiave e la prima finisce il
-suo blocco e lo rivendica (`E2E LINEAR PASSED`). Non serve bitcoind: la ricerca lineare non paga niente. Circa 7 minuti.
+suo blocco e lo rivendica (`E2E LINEAR PASSED`). Non serve bitcoind: la ricerca lineare non paga niente. Dai 7 ai 10 minuti.
 
 ### 3.6 La transazione di una chiave trovata
 
@@ -147,11 +147,11 @@ entry=192.168.1.10:28140
 ciascun computer:
 
 ```sh
-./pzpeer run --network prova.txt --no-bt --allow-private
+./pzpeer run --network prova.txt --no-bt --no-portmap --allow-private
 ```
 
-`--no-bt` tiene la prova fuori dalla tabella pubblica di BitTorrent, `--allow-private` accetta gli indirizzi della rete locale. Le righe da
-aspettarsi:
+`--no-bt` tiene la prova fuori dalla tabella pubblica di BitTorrent, `--no-portmap` non chiede al router di aprire la porta verso
+internet, `--allow-private` accetta gli indirizzi della rete locale. Le righe da aspettarsi:
 
 ```
 home on the linear network prova38 (1HBtApAFA9B2YZw3G2YKSMCtb3dVnjuNe2, blocks of 2^34 keys, 8 of them): 1 contact, ...
@@ -160,7 +160,7 @@ block 5 scanned and claimed with 4 proof keys: 2 custodians hold the claim
 ```
 
 Una casa salta i blocchi che un'altra ha già rivendicato. La chiave del puzzle 38 sta nel blocco 0: la casa che lo
-prende scrive `THE KEY OF THE PUZZLE IS IN ...FOUND.txt` e si ferma. Un blocco con poche chiavi di prova può finire con `not claimed`: è
+prende scrive `THE KEY OF THE PUZZLE IS IN ...FOUND.txt` e si ferma; l'altra continua con i blocchi rimasti e va fermata a mano. Un blocco con poche chiavi di prova può finire con `not claimed`: è
 normale (circa una volta su dieci con blocchi di 2^34), la casa non lo rifà e un'altra può rifarlo. Ctrl-C ferma una casa; ripartita,
 riprende il blocco che aveva in corso. Alla fine si può cancellare la cartella `pznet-prova38`.
 
