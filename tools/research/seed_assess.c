@@ -599,10 +599,10 @@ static void collect(uint8_t *s, uint32_t *d, size_t n, unsigned nbits, int raw, 
         exit(2);
     }
     if (!raw)
-        for (int i = 0; i < 32; i++) jit_sample(&j);
+        for (int i = 0; i < 32; i++) jit_same(&j);
     const double t0 = now_ms();
     for (size_t i = 0; i < n; i++) {
-        const uint32_t v = (uint32_t)jit_sample(&j);
+        const uint32_t v = (uint32_t)jit_same(&j);
         if (d) d[i] = v;
         s[i] = (uint8_t)(v & ((1u << nbits) - 1));
     }

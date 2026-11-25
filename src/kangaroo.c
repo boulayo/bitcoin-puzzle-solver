@@ -409,7 +409,9 @@ static int pick_dp_bits(kang_state *ks, u64 max_entries)
     int dp = dp_ov > dp_mem ? dp_ov : dp_mem;
     if (dp < 2) dp = 2;
     if (dp > 60) dp = 60;
-    if (ks->net) return (int)r->cfg.dp_bits;   /* the network's, whatever this home's walkers and memory would pick: every home logs the same points */
+    /* the value pzpeer gives, whatever this home's walkers and memory would pick: the points of dp.bin are the records of the network. It
+     * may change from one run to the next (pzpeer's dpbits.txt says from which record of dp.bin, docs/en/NETWORK.md 6) */
+    if (ks->net) return (int)r->cfg.dp_bits;
     if (r->cfg.dp_bits) {
         /* a walker reaches a distinguished point every 2^dp steps: after the collision every walker still has to get
          * there, so K * 2^dp must stay well below sqrt(W), otherwise the search costs many times its expected effort */
@@ -540,7 +542,7 @@ int kang_configure(kang_state *ks, int k_gpu_total)
            pz_fmt_si((double)(ks->expected_steps / ldexpl(1.0L, dp)), dps_text, sizeof dps_text));
     pz_log(PZ_LOG_DEBUG, "kangaroo: W = 2^%.1Lf, mean jump %.3Le, expected effort %.2Lf x sqrt(W)", log2l(pz_u256_to_ld(&ks->W)), mean, ks->expected_steps / ks->sqrtW);
     /* every computer of a shared campaign compares it, node 0 (the one that usually receives the merges) too; log.txt always has it */
-    kang_jump_id(ks->jump_tag, jid);
+    pz_hex_encode(ks->jump_tag, 4, jid);
     pz_log(r->node_given ? PZ_LOG_INFO : PZ_LOG_DEBUG, "kangaroo: jump table id %s (computers working on the same campaign must show the same id)", jid);
     return 0;
 }
@@ -632,6 +634,25 @@ static u32 i192_mod_u32(const i192 *a, u32 m)
     return neg && rem ? m - rem : rem;
 }
 
+/* The point d*G + cq of a walker in Jacobian form, cq its c*Q' with its sign (NULL for a tame walker). False when it is the point at
+ * infinity because d = 0 on a tame walker; the other one, d*G = -cq, is left to pz_gej_to_ge to find. */
+static bool walker_point(const i192 *d, const pz_ge *cq, pz_gej *p)
+{
+    const bool neg = i192_is_neg(d);
+    i192 m = *d;
+    if (neg) i192_neg(&m);
+    const pz_u256 mag = {{m.w[0], m.w[1], m.w[2], 0}};
+    if (pz_u256_is_zero(&mag)) {
+        if (!cq) return false;
+        pz_gej_set_ge(p, cq);
+        return true;
+    }
+    pz_ec_mul_g_j(p, &mag);                               /* 0 < mag < 2^192: never the point at infinity */
+    if (neg) pz_fe_neg(&p->y, &p->y);
+    if (cq) pz_gej_add_ge(p, p, cq);
+    return true;
+}
+
 /* A start of species sp, E = c*x + u: the point c*Qp + u*G, in Jacobian form, and u. False when it cannot be used (u = 0 on a
  * tame walker). The point is at infinity when c*x + u = 0: start_at_infinity handles that. */
 static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz_gej *p, i192 *d)
@@ -648,21 +669,8 @@ static bool start_species(kang_state *ks, const kang_species *sp, u64 rng[4], pz
     const pz_u256 back = pz_u256_from_u64((i192_mod_u32(&u, KANG_MOD) + KANG_MOD - sp->res) % KANG_MOD);
     const i192 b = i192_from_signed(false, &back);
     i192_sub(&u, &u, &b);                                 /* down to the residue of the species */
-    const bool neg = i192_is_neg(&u);
-    i192 m = u;
-    if (neg) i192_neg(&m);
-    const pz_u256 mag = {{m.w[0], m.w[1], m.w[2], 0}};
-    const pz_ge *cq = sp->coef == 3 ? &ks->Q3 : &ks->Qp;
-    if (pz_u256_is_zero(&mag)) {
-        if (sp->coef == 0) return false;
-        pz_gej_set_ge(p, cq);
-    } else {
-        pz_ec_mul_g_j(p, &mag);                           /* 0 < mag < 2^192: never the point at infinity */
-        if (neg) pz_fe_neg(&p->y, &p->y);
-        if (sp->coef != 0) pz_gej_add_ge(p, p, cq);
-    }
     *d = u;
-    return true;
+    return walker_point(&u, sp->coef ? (sp->coef == 3 ? &ks->Q3 : &ks->Qp) : NULL, p);
 }
 
 /* A start c*Qp + u*G at infinity: c*x + u = 0, so x = -u / c, which is the key when it is a whole number in the interval. */
@@ -783,38 +791,10 @@ void kang_restart_one(kang_state *ks, kang_worker *w, int i) { kang_restart_rng(
 
 void kang_init_herd(kang_state *ks, kang_worker *w) { kang_start_range(ks, w, 0, w->K, w->rng); }
 
-typedef struct { kang_state *ks; kang_worker *w; int from, to; u64 rng[4]; } init_task;
-
-static void *init_thread(void *p)
-{
-    init_task *t = p;
-    kang_start_range(t->ks, t->w, t->from, t->to, t->rng);
-    return NULL;
-}
-
-/* Initializes a (large) herd with several threads, each using its own random stream. */
-void kang_init_herd_parallel(kang_state *ks, kang_worker *w, int nthreads, u64 stream)
-{
-    if (nthreads < 1) nthreads = 1;
-    if (nthreads > 32) nthreads = 32;
-    pthread_t th[32];
-    init_task tk[32];
-    int per = (w->K + nthreads - 1) / nthreads;
-    for (int t = 0; t < nthreads; t++) {
-        tk[t].ks = ks;
-        tk[t].w = w;
-        tk[t].from = t * per < w->K ? t * per : w->K;
-        tk[t].to = (t + 1) * per < w->K ? (t + 1) * per : w->K;
-        krng_seed(tk[t].rng, ks->r->cfg.seed, "init", ks->epoch, stream * 64 + (u64)t);
-        pthread_create(&th[t], NULL, init_thread, &tk[t]);
-    }
-    for (int t = 0; t < nthreads; t++) pthread_join(th[t], NULL);
-}
-
 /* ---------------- the herd across stops ---------------- */
 
-#define HERD_MAGIC "PZHERD2\n"
-#define HERD_HDR 28              /* the magic, the tag of the jump table, the number of groups, 3 zero bytes, the tag of the groups, the epoch */
+#define HERD_MAGIC "PZHERD3\n"
+#define HERD_HDR 28              /* the magic, the tag of the jump table, the number of groups, 3 zero bytes, the tag of the groups, the node */
 #define HERD_REC 26              /* d (24 bytes, little-endian), the group, the sign (1: negative) */
 
 static void herd_path(const kang_state *ks, char *out, size_t cap) { snprintf(out, cap, "%s/herd.bin", ks->r->cfg.dir); }
@@ -822,8 +802,8 @@ static void herd_path(const kang_state *ks, char *out, size_t cap) { snprintf(ou
 /* the residue mod KANG_MOD of the walkers of group g */
 static u32 grp_res(const kang_state *ks, int g) { return ks->spec[ks->grp_band[ks->grp_first[g]]].res; }
 
-/* the header: the jump table, the groups (their coefficients and residues) and the epoch (session and node) of the run that wrote it */
-static void herd_header(const kang_state *ks, u64 epoch, u8 h[HERD_HDR])
+/* the header: the jump table, the groups (their coefficients and residues) and the --node of the computer that wrote it */
+static void herd_header(const kang_state *ks, u8 h[HERD_HDR])
 {
     u8 gs[2 * KANG_GRP_MAX], t[32];
     memset(h, 0, HERD_HDR);
@@ -831,12 +811,15 @@ static void herd_header(const kang_state *ks, u64 epoch, u8 h[HERD_HDR])
     for (int g = 0; g < ks->ngrp; g++) gs[2 * g] = ks->grp_coef[g], gs[2 * g + 1] = (u8)grp_res(ks, g);
     pz_sha256(gs, (size_t)(2 * ks->ngrp), t);
     memcpy(h + 16, t, 4);
-    for (int b = 0; b < 8; b++) h[20 + b] = (u8)(epoch >> (8 * b));
+    for (int b = 0; b < 8; b++) h[20 + b] = (u8)((u64)ks->r->node >> (8 * b));
 }
 
-/* The walkers of herd.bin, when the run just before this one of this computer wrote it (the session before, the same --node): a copy of
- * the folder on another computer, or a file a run that did not stop well left (a kill, a crash: the walkers then walked on past it), would
- * walk again where walkers walked already. Each kept by group, so that every worker gets back the mix of kang_worker_new. */
+/* The walkers of herd.bin, when it was written for this walk (the same jump table and groups) by this computer (the same --node). The file
+ * holds walkers that nobody walks: kang_herd_start removes it when it takes the first of them, and kang_herd_save writes it again when the
+ * run stops well. So a run that ends otherwise (a kill, a crash: its walkers walked on past the file) leaves none, and nothing walks again
+ * where walkers walked already; a run that ends before (no compute device, a log it cannot use) leaves it as it was, for the next. A copy
+ * of the folder on another computer takes the walkers only with the same --node, which would repeat everything anyway. Each kept by group,
+ * so that every worker gets back the mix of kang_worker_new. */
 void kang_herd_load(kang_state *ks)
 {
     char path[640];
@@ -844,8 +827,8 @@ void kang_herd_load(kang_state *ks)
     herd_path(ks, path, sizeof path);
     FILE *f = fopen(path, "rb");
     if (!f) return;
-    herd_header(ks, ks->epoch - 1, want);
-    const bool ok = fread(h, 1, HERD_HDR, f) == HERD_HDR && !memcmp(h, want, HERD_HDR);
+    herd_header(ks, want);
+    const bool head = fread(h, 1, HERD_HDR, f) == HERD_HDR, ok = head && !memcmp(h, want, HERD_HDR), other_node = head && !ok && !memcmp(h, want, 20);
     size_t cap = 0;
     while (ok && fread(e, 1, HERD_REC, f) == HERD_REC) {
         kang_hrec r = {{{0, 0, 0}}, e[24], e[25] ? -1 : 1};
@@ -862,7 +845,12 @@ void kang_herd_load(kang_state *ks)
     pz_secure_zero(e, sizeof e);
     char n[32];
     if (ks->nhin) pz_log(PZ_LOG_INFO, "kangaroo: %s walkers of the last run go on from where they stopped (%s)", pz_fmt_u64(ks->nhin, n, sizeof n), path);
-    else if (!ok) pz_log(PZ_LOG_INFO, "kangaroo: %s is not of the run before this one of this computer: its walkers start anew", path);
+    else if (other_node) {                                        /* a forgotten --node: this run repeats the starts of another computer */
+        unsigned long long node = 0;
+        for (int b = 0; b < 8; b++) node |= (unsigned long long)h[20 + b] << (8 * b);
+        pz_log(PZ_LOG_WARN, "kangaroo: %s holds the walkers of --node %llu, and this run is --node %u: they start anew, and the file is replaced "
+               "when it stops (if this computer is node %llu, stop and resume with --node %llu)", path, node, ks->r->node, node, node);
+    } else if (!ok) pz_log(PZ_LOG_INFO, "kangaroo: %s is of another walk (another jump table or layout of the walkers): its walkers start anew", path);
     /* by group: a counting sort */
     kang_hrec *by = ks->nhin ? pz_xmalloc(ks->nhin * sizeof *by) : NULL;
     size_t at = 0;
@@ -880,22 +868,10 @@ void kang_herd_load(kang_state *ks)
 /* The point of a saved walker, d*G + sigma*c*Q'; false when it is at infinity (d = 0 on a tame walker) */
 static bool herd_point(const kang_state *ks, const kang_hrec *h, pz_gej *p)
 {
-    const bool neg = i192_is_neg(&h->d);
-    i192 m = h->d;
-    if (neg) i192_neg(&m);
-    const pz_u256 mag = {{m.w[0], m.w[1], m.w[2], 0}};
     const u8 c = ks->grp_coef[h->grp];
     pz_ge cq = c == 3 ? ks->Q3 : ks->Qp;
     if (h->sigma < 0) pz_ge_neg(&cq, &cq);
-    if (pz_u256_is_zero(&mag)) {
-        if (!c) return false;
-        pz_gej_set_ge(p, &cq);
-        return true;
-    }
-    pz_ec_mul_g_j(p, &mag);
-    if (neg) pz_fe_neg(&p->y, &p->y);
-    if (c) pz_gej_add_ge(p, p, &cq);
-    return true;
+    return walker_point(&h->d, c ? &cq : NULL, p);
 }
 
 typedef struct { kang_state *ks; kang_worker *w; const kang_hrec *slot; const u8 *has; int from, to; u64 rng[4]; } herd_task;
@@ -941,11 +917,18 @@ void kang_herd_start(kang_state *ks, kang_worker *w, int nthreads, u64 stream)
     kang_hrec *slot = NULL;
     u8 *has = NULL;
     pthread_mutex_lock(&ks->hmu);                                 /* each slot takes a saved walker of its own group, when one is left */
+    bool first = true;                                            /* no worker has taken one yet */
+    for (int g = 0; g < ks->ngrp; g++) first &= ks->gnext[g] == 0;
     for (int i = 0; i < w->K && ks->nhin; i++) {
         const int g = w->spec[i];
         if (ks->gnext[g] == ks->gn[g]) continue;
         if (!slot) slot = pz_xmalloc((size_t)w->K * sizeof *slot), has = pz_xcalloc((size_t)w->K, 1);
         slot[i] = ks->hin[ks->gfirst[g] + ks->gnext[g]++], has[i] = 1;
+    }
+    if (first && slot) {                                          /* they walk on from here: a run that does not stop well must leave no file */
+        char path[640];
+        herd_path(ks, path, sizeof path);
+        remove(path);
     }
     bool left = false;
     for (int g = 0; g < ks->ngrp; g++) left |= ks->gnext[g] < ks->gn[g];
@@ -1005,7 +988,7 @@ void kang_herd_save(kang_state *ks)
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = pz_fopen_private(tmp, false);                       /* the distances lead to the key, as those of dp.bin */
     u8 h[HERD_HDR], e[HERD_REC];
-    herd_header(ks, ks->epoch, h);
+    herd_header(ks, h);
     bool ok = f && fwrite(h, 1, HERD_HDR, f) == HERD_HDR;
     for (size_t i = 0; ok && i < ks->nhout; i++) ok = herd_write(f, &ks->hout[i], e);
     for (int g = 0; ok && ks->hin && g < ks->ngrp; g++)          /* the saved walkers no worker took, for a later run with more */

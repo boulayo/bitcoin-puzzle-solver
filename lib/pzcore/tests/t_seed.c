@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_seed.c - the seed generator: the cutoffs of its health tests recomputed from SP 800-90B, the tests on good and broken data, the
- * TPM's answers and a file that stands for its device, known answers of the mixing, every source broken in turn, the longer jitter
- * collection, the caller's source, a malicious source against the mixing, and the statistics of a few thousand seeds.
+ * TPM's answers and a file that stands for its device, known answers of the mixing, every source broken in turn (the jitter by simulated
+ * timers, machines without noise among them), the longer jitter collection, the caller's source, a malicious source against the mixing,
+ * and the statistics of a few thousand seeds. The real jitter of the machine may be refused, on a machine whose timing is too quiet.
  * It includes seed.c with PZ_SEED_TEST, which adds the fault hooks (g_fault) the library does not have. -v prints every case. */
 #define PZ_SEED_TEST 1
 #include "../src/seed.c"
@@ -13,6 +14,7 @@
 
 static int g_verbose;
 static char g_tpm[600], g_nodev[600];          /* the file that stands for the TPM, and a path where there is none */
+static bool g_quiet;                           /* the timing of this machine shows too little noise: its jitter source is refused */
 
 static void reset(void)
 {
@@ -273,9 +275,10 @@ static bool reason_has(const pz_seed_report *r, const char *alts)
 static pz_seed_status run_case(const fcase *c, uint8_t seed[32], pz_seed_report *r)
 {
     reset();
-    g_fault.os = c->os, g_fault.jit = c->jit, g_fault.key = 0x4141414141414141ULL;
-    g_fault.hw = c->hw ? c->hw : HWF_GOOD;     /* a working CPU generator unless the case breaks it: the same results on every machine */
-    if (c->jit && c->jit != JF_FIRSTBAD) g_fault.walk = 16;      /* simulated timers: the walk itself does not matter */
+    g_fault.os = c->os, g_fault.key = 0x4141414141414141ULL;
+    g_fault.hw = c->hw ? c->hw : HWF_GOOD;     /* a working CPU generator and jitter unless the case breaks them: the same results on */
+    g_fault.jit = c->jit ? c->jit : JF_GOOD;   /* every machine, a quiet one too */
+    g_fault.walk = 16;                         /* simulated timers: the walk itself does not matter */
     fake_tpm(c->tpm);
     int kind = c->caller;
     pz_seed_opts o = {NULL, &kind, "gpu", 512, 128, c->flags, c->max_ms};
@@ -313,10 +316,12 @@ static void test_cases(void)
         /* jitter: excluded alone, the TPM gives the 128 bits */
         {"jitter timer constant", 0, 0, JF_CONST, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "does not advance"},
         {"jitter timer runs backwards", 0, 0, JF_BACK, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "not monotonic"},
-        {"jitter constant delta", 0, 0, JF_STEP, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "the same work always"},   /* refused before its rounds */
-        {"jitter two deltas in turn", 0, 0, JF_ALTERNATE, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "live estimate"},
-        {"jitter 4096-tick timer", 0, 0, JF_COARSE, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "variation|repetition"},
-        {"jitter 1 random bit per sample", 0, 0, JF_LOWENT, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "live estimate"},
+        {"jitter constant delta", 0, 0, JF_STEP, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little noise: 0 of"},
+        {"jitter two deltas in turn", 0, 0, JF_ALTERNATE, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little noise: live estimate"},
+        {"jitter 4096-tick timer", 0, 0, JF_COARSE, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little noise"},
+        {"jitter 1 random bit per sample", 0, 0, JF_LOWENT, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little noise: live estimate"},
+        {"jitter no noise, 16-tick timer", 0, 0, JF_BEAT16, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little noise"},   /* the beat of */
+        {"jitter no noise, 24-tick timer", 0, 0, JF_BEAT24, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, X, U, "too little noise"},   /* work and tick */
         {"jitter attacker-known (passes)", 0, 0, JF_ATTACKER, 0, 0, 0, 0, PZ_SEED_OK, U, A, U, U, NULL},
         /* the TPM: used, excluded or absent alone */
         {"TPM good", 0, 0, 0, TPM_GOOD, 0, 0, 0, PZ_SEED_OK, U, U, U, U, "32 commands"},
@@ -328,7 +333,7 @@ static void test_cases(void)
         /* jitter and TPM short: the longer collection, then the end */
         {"jitter fails, no TPM: longer, then none", 0, 0, JF_ALTERNATE, 0, 0, 0, 150, PZ_SEED_E_SHORT, U, A, X, U, "rounds|another computer"},
         {"jitter timer dead, no TPM", 0, 0, JF_CONST, 0, 0, 0, 0, PZ_SEED_E_SHORT, U, A, X, U, "does not advance"},
-        {"jitter first round bad, no TPM", 0, 0, JF_FIRSTBAD, 0, 0, 0, 60000, PZ_SEED_OK, U, A, U, U, "round 2"},      /* real rounds: time for the second on a slow machine */
+        {"jitter first round bad, no TPM", 0, 0, JF_FIRSTBAD, 0, 0, 0, 0, PZ_SEED_OK, U, A, U, U, "round 2"},
         {"jitter fails, no TPM, degraded allowed", 0, 0, JF_ALTERNATE, 0, 0, PZ_SEED_ALLOW_DEGRADED, 50, PZ_SEED_OK, U, A, X, U, NULL},
         {"cpu-rng and jitter fail, no TPM", 0, HWF_ALLONES, JF_STEP, 0, 0, 0, 50, PZ_SEED_E_SHORT, X, A, X, U, "give 0 bits"},
         /* the caller's source */
@@ -376,15 +381,25 @@ static void test_cases(void)
 
 /* ---- a normal run, and what the report and the memory keep ---- */
 
+/* The real sources of this machine, with no TPM. Its jitter is used, or refused for too little noise: then there is no seed by the rules
+ * (the 128 counted bits would need a TPM or the caller's source), and with degraded allowed the OS and the CPU's generator make one. */
 static void test_normal(void)
 {
+    static const pz_seed_opts degraded = {NULL, NULL, NULL, 0, 0, PZ_SEED_ALLOW_DEGRADED, 1};
     uint8_t seed[32], seed2[32];
     pz_seed_report r;
     reset();
-    const pz_seed_status rc = pz_seed_generate(seed, NULL, &r);
-    CHECK(rc == PZ_SEED_OK && !all_zero(seed, 32));
-    CHECK(r.src[PZ_SEED_SRC_OS].state == PZ_SEED_USED && r.src[PZ_SEED_SRC_JITTER].state == PZ_SEED_USED && r.counted >= 128 && !r.degraded);
-    CHECK(r.jitter_rounds == 1 && r.jitter_h >= 1);
+    pz_seed_status rc = pz_seed_generate(seed, NULL, &r);
+    const pz_seed_source *j = &r.src[PZ_SEED_SRC_JITTER];
+    g_quiet = j->state == PZ_SEED_EXCLUDED && strstr(j->reason, "too little noise");
+    if (g_quiet) {
+        CHECK(rc == PZ_SEED_E_SHORT && all_zero(seed, 32) && strstr(r.error, "too little noise"));
+        rc = pz_seed_generate(seed, &degraded, &r);
+        CHECK(rc == PZ_SEED_OK && !all_zero(seed, 32) && r.degraded && r.src[PZ_SEED_SRC_OS].state == PZ_SEED_USED);
+    } else {
+        CHECK(rc == PZ_SEED_OK && !all_zero(seed, 32));
+        CHECK(r.src[PZ_SEED_SRC_OS].state == PZ_SEED_USED && j->state == PZ_SEED_USED && r.counted >= 128 && !r.degraded && r.jitter_h >= 1);
+    }
     printf("  this machine: %.1f ms (cpu-rng %s %.2f ms, jitter %.1f ms, os %.3f ms); jitter: %s; memory locked: %s\n", r.ms,
            r.src[PZ_SEED_SRC_CPU].method, r.src[PZ_SEED_SRC_CPU].ms, r.src[PZ_SEED_SRC_JITTER].ms, r.src[PZ_SEED_SRC_OS].ms,
            r.src[PZ_SEED_SRC_JITTER].reason, r.locked ? "yes" : "no");
@@ -402,7 +417,7 @@ static void test_normal(void)
         for (int i = 0; i < PZ_SEED_NSRC; i++) leak |= strstr(r.src[i].reason, piece) || strstr(r.src[i].method, piece);
     }
     CHECK(!leak);
-    CHECK(pz_seed_generate(seed2, NULL, &r) == PZ_SEED_OK && memcmp(seed, seed2, 32) != 0);
+    CHECK(pz_seed_generate(seed2, &degraded, &r) == PZ_SEED_OK && memcmp(seed, seed2, 32) != 0);   /* with or without the jitter */
 #if defined(__linux__) && defined(MADV_WIPEONFORK)
     bool locked;                               /* a forked child sees the secret pages as zeros */
     uint8_t *p = map_pages(4096, true, &locked);
@@ -461,22 +476,37 @@ static void test_attacker(void)
     CHECK(memcmp(a, b, 32) != 0);
     printf("  malicious cpu-rng: sets a XOR combiner to its target; through HKDF the same value gives %u leading zero bits, and 2^16 "
            "tries with every other input known give %u\n", direct, best);
-    /* the OS attacker-known and the same in every run, jitter real: the seeds still differ */
+    /* the OS attacker-known and the same in every run, jitter real: the seeds still differ. A generation that a quiet moment of the machine
+     * leaves without jitter makes no seed and is left out (after 5 of them, 3 s each, the loop ends); a machine that is too quiet
+     * (test_normal) does not run this. */
+    if (g_quiet) {
+        printf("  OS attacker-known, jitter real: not run, the jitter of this machine is refused\n");
+        reset();
+        return;
+    }
     enum { R = 100 };
     uint8_t seeds[R][32];
     long ones = 0;
     bool dup = false;
+    int n = 0, quiet = 0;
     for (int i = 0; i < R; i++) {
         pz_seed_report rep;
         reset();
         g_fault.os = OSF_ATTACKER, g_fault.key = 42;
-        CHECK(pz_seed_generate(seeds[i], NULL, &rep) == PZ_SEED_OK);
-        for (int k = 0; k < 32; k++) ones += __builtin_popcount(seeds[i][k]);
-        for (int j = 0; j < i; j++) dup |= !memcmp(seeds[i], seeds[j], 32);
+        const pz_seed_status rc = pz_seed_generate(seeds[n], NULL, &rep);
+        if (rc == PZ_SEED_E_SHORT && strstr(rep.src[PZ_SEED_SRC_JITTER].reason, "too little noise")) {
+            if (++quiet == 5) break;
+            continue;
+        }
+        CHECK(rc == PZ_SEED_OK);
+        for (int k = 0; k < 32; k++) ones += __builtin_popcount(seeds[n][k]);
+        for (int j = 0; j < n; j++) dup |= !memcmp(seeds[n], seeds[j], 32);
+        n++;
     }
-    const double z = (ones - R * 128.0) / sqrt(R * 64.0);
-    CHECK(!dup && fabs(z) < 5);
-    printf("  OS attacker-known and the same each time, jitter real: %d seeds, %s, ones z = %.2f\n", R, dup ? "DUPLICATES" : "all distinct", z);
+    const double z = (ones - n * 128.0) / sqrt((n ? n : 1) * 64.0);
+    CHECK(n > 0 && !dup && fabs(z) < 5);
+    printf("  OS attacker-known and the same each time, jitter real: %d seeds (%d left without jitter), %s, ones z = %.2f\n", n, quiet,
+           dup ? "DUPLICATES" : "all distinct", z);
     reset();
 }
 
@@ -525,7 +555,7 @@ static void test_harden(void)
 {
     uint8_t seed[32];
     pz_seed_report r;
-    const pz_seed_opts o = {NULL, NULL, NULL, 0, 0, PZ_SEED_HARDEN, 0};
+    const pz_seed_opts o = {NULL, NULL, NULL, 0, 0, PZ_SEED_HARDEN | PZ_SEED_ALLOW_DEGRADED, 1};   /* a seed whatever the jitter */
     reset();
     CHECK(pz_seed_generate(seed, &o, &r) == PZ_SEED_OK);
 #if defined(__linux__)

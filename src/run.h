@@ -134,6 +134,7 @@ static inline double run_session_elapsed(const run_ctx *r) { return pz_mono() - 
 /* common */
 void run_init(run_ctx *r);
 int run_alloc_worker(run_ctx *r, const char *name, char kind);
+/* Ctrl-C, SIGTERM, SIGHUP and a closing console stop r (run_interrupted); NULL before r is freed: they no longer reach it */
 void run_install_signals(run_ctx *r);
 /* --stop-with-input: a thread that waits for the end of standard input, then stops the run like a first Ctrl-C. A program that starts
  * pzsolve gives it a pipe it never writes: when that program ends, killed or crashed too, the pipe closes and pzsolve saves and ends. */

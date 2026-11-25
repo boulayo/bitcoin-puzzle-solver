@@ -76,8 +76,11 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out);
  * the prefix (used when a worker is interrupted). */
 void sched_complete(sched_t *s, const claim_t *c, u64 covered);
 
-/* Persistence (text, with checksum). */
+/* Persistence (text, with checksum). sched_save writes the state as it is now to path (the one before kept as path.bak); sched_snapshot
+ * takes that text (*len bytes, to free) for sched_write to write later, when something else must reach the disk first. */
 int sched_save(sched_t *s, const char *path);
+char *sched_snapshot(sched_t *s, size_t *len);
+int sched_write(const char *snap, size_t len, const char *path);
 /* 0 loaded; 1 the file is missing; -1 unreadable or damaged; -2 intact but it belongs to another campaign, another seed or another share
  * of the order. Checkpoints written before the seed was recorded (no seed_id line) are accepted. */
 int sched_load(sched_t *s, const char *path, char *err, size_t errlen);

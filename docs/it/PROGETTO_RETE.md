@@ -293,10 +293,11 @@ Esempio sul #71 (stima: 6 miliardi di chiavi al secondo per GPU):
 **Come funziona:**
 - l'intervallo è diviso in blocchi grandi: da 2^34 a 2^37 chiavi, con chiavi di prova da 32 bit, o da 2^42 a 2^45, con chiavi di prova da 40 bit (da secondi a ore di una GPU); le reti nel programma usano 2^44;
 - ognuno sceglie a caso un blocco non ancora fatto. Non servono prenotazioni: finché restano molti blocchi, due persone scelgono lo stesso molto di rado;
-- finito un blocco, lo dichiara nella stessa rete dei punti, con una **prova di lavoro**: le sue chiavi di prova, quelle il cui hash160 ha 32 o 40 bit uguali a quelli del bersaglio (i byte dall'8 all'11, o dall'8 al 12), 16 in media in un blocco di 2^36 o di 2^44. Chi non ha davvero provato tutte le chiavi non le conosce;
-- chiunque può ricontrollare un pezzetto a caso di un blocco altrui. Se trova una chiave di prova che manca dalla dichiarazione, ha una **prova di frode** che tutti possono verificare: i blocchi di quell'identità tornano da fare.
+- finito un blocco, lo dichiara nella stessa rete dei punti, con una **prova di lavoro**: le sue chiavi di prova, quelle il cui hash160 ha 32 o 40 bit uguali a quelli del bersaglio (i byte dall'8 all'11, o dall'8 al 12), 16 in media in un blocco di 2^36 o di 2^44. Chi non ha davvero provato tutte le chiavi non le conosce. Una dichiarazione vale con almeno metà delle chiavi attese (8 su 16): un blocco onesto su cento circa ne ha meno, la casa lo tiene per sé come fatto e non lo rifà, ma non lo può dichiarare, e altri lo possono rifare;
+- le stesse chiavi di prova le trova chiunque cerchi quel blocco, quindi chi copia una dichiarazione con un'altra identità non porta niente di nuovo, e i custodi la rifiutano; una seconda dichiarazione dello stesso blocco la tengono solo se porta chiavi che le altre non hanno;
+- chiunque può ricontrollare un pezzetto a caso di un blocco altrui. Se trova una chiave di prova che manca dalla dichiarazione, ha una **prova di frode** che tutti possono verificare: i blocchi di quell'identità tornano da fare (non ancora fatto).
 
-**Perché mentire non paga.** Dichiarare fatto un blocco non fatto (per tenerselo) richiede le prove di lavoro, cioè farlo davvero.
+**Perché mentire non paga.** Dichiarare fatto un blocco non fatto (per tenerselo) richiede le prove di lavoro: in media almeno metà del blocco va cercata davvero. E quando i blocchi liberi finiscono, si ripassano per primi quelli le cui dichiarazioni mostrano meno chiavi di prova: una dichiarazione falsa ne mostra poche.
 
 **Perché condividere conviene.** Chi legge il registro senza pubblicare i propri blocchi vince solo un po' più spesso (circa 1,1 volte la sua quota con il 10 % della potenza). Per togliere anche questo vantaggio: i nodi danno il registro aggiornato solo a chi ha pubblicato lavoro verificato di recente, come fanno le reti di scambio di file. Non è una garanzia matematica, è un incentivo.
 

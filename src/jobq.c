@@ -22,10 +22,8 @@ static bool u128_from_hex(const char *s, u128 *out)
     size_t n = strlen(s);
     if (!n || n > 32) return false;
     for (size_t i = 0; i < n; i++) {
-        int c = s[i], d;
-        if (c >= '0' && c <= '9') d = c - '0';
-        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-        else return false;
+        const int d = pz_hex_digit((unsigned char)s[i]);
+        if (d < 0) return false;
         v = v << 4 | (u128)d;
     }
     *out = v;
@@ -368,7 +366,7 @@ static bool state_file_valid(const char *path)
     return ok;
 }
 
-int sched_save(sched_t *s, const char *path)
+char *sched_snapshot(sched_t *s, size_t *len)
 {
     pthread_mutex_lock(&s->mu);
     size_t cap = 1024 + strlen(s->part_text) + s->ndone * 80;
@@ -386,12 +384,25 @@ int sched_save(sched_t *s, const char *path)
     pz_sha256((u8 *)buf, (size_t)n, dg);
     pz_hex_encode(dg, 8, hx);
     n += snprintf(buf + n, 64, "crc=%s\n", hx);
+    *len = (size_t)n;
+    return buf;
+}
+
+int sched_write(const char *snap, size_t len, const char *path)
+{
     /* keep one backup of the previous checkpoint, but never rotate a damaged file over a good backup */
     char bak[1100];
     snprintf(bak, sizeof bak, "%s.bak", path);
     if (state_file_valid(path)) pz_rename_replace(path, bak);
-    int rc = pz_write_file_atomic(path, buf, (size_t)n, 0644);
-    free(buf);
+    return pz_write_file_atomic(path, snap, len, 0644);
+}
+
+int sched_save(sched_t *s, const char *path)
+{
+    size_t n;
+    char *snap = sched_snapshot(s, &n);
+    const int rc = sched_write(snap, n, path);
+    free(snap);
     return rc;
 }
 

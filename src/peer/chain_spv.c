@@ -17,7 +17,7 @@
 #define COINS_MAX 256
 
 #define RETRY_MS 600000            /* a server that did not answer is tried again after ten minutes */
-#define OP_MS 60000                /* the calls of one operation on one server, all together */
+#define OP_MS 60000                /* the calls of one server in its turn of an operation, all together */
 
 /* the servers of one operation: e is the connections of the chain, held until close_all */
 typedef struct {
@@ -182,6 +182,13 @@ static void open_all(servers *s, chain_spv *c)
     }
 }
 
+/* server i's turn in an operation: OP_MS for its calls from now on, the servers being asked one after another */
+static bool turn(servers *s, int i)
+{
+    if (s->up[i]) s->e[i].until = sys_now_ms() + OP_MS;
+    return s->up[i];
+}
+
 static void close_all(servers *s)
 {
     for (int i = 0; i < s->c->nservers; i++) s->e[i].until = 0;
@@ -278,7 +285,7 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
         json_w w;
         json_doc d;
         const json_val *res;
-        if (!s.up[i]) continue;
+        if (!turn(&s, i)) continue;
         jw_init(&w);
         jw_arr(&w), put_hash(&w, sh), jw_end(&w);
         if (!electrum_call(&s.e[i], "blockchain.scripthash.listunspent", &w, &d, &res)) continue;
@@ -324,7 +331,7 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
     for (int j = 0; j < n; j++)                                /* listed by some, not by others: spent, if one of those proves it */
         for (int i = 0; i < c->nservers; i++) {
             uint64_t h = 0;
-            if (!(answered >> i & 1) || (out[j].listed >> i & 1)) continue;
+            if (!(answered >> i & 1) || (out[j].listed >> i & 1) || !turn(&s, i)) continue;
             if (scan_history(c, &s.e[i], spk, BTC_P2PKH_LEN, out[j].coin.txid, out[j].coin.vout, &h)) {
                 out[j--] = out[--n];
                 break;
@@ -354,18 +361,6 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     return n;
 }
 
-static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
-{
-    found_coin *f = malloc(COINS_MAX * sizeof *f);
-    if (!f) return -1;
-    const int n = gather(ctx, spk, f, COINS_MAX);
-    int r = n < 0 ? -1 : 0;
-    for (int i = 0; i < n; i++)
-        if (!memcmp(f[i].coin.txid, txid, 32) && f[i].coin.vout == vout) *out = f[i].coin, r = 1;
-    free(f);
-    return r;
-}
-
 static bool broadcast(void *ctx, const btc_tx *tx)
 {
     chain_spv *c = ctx;
@@ -380,7 +375,7 @@ static bool broadcast(void *ctx, const btc_tx *tx)
         json_w w;
         json_doc d;
         const json_val *res;
-        if (!s.up[i]) continue;
+        if (!turn(&s, i)) continue;
         jw_init(&w);
         jw_arr(&w), jw_hex(&w, raw, n), jw_end(&w);
         if (electrum_call(&s.e[i], "blockchain.transaction.broadcast", &w, &d, &res)) json_free(&d);
@@ -404,14 +399,14 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
     bool spent = false;
     open_all(&s, c);
     for (int i = 0; i < c->nservers && !raw; i++)
-        if (s.up[i]) (void)get_tx(&s.e[i], txid, &raw, &len);
+        if (turn(&s, i)) (void)get_tx(&s.e[i], txid, &raw, &len);
     if (!raw || !tip_of(c, &tip) || !btc_prevout(raw, len, txid, vout, &value, &spk, &spk_len)) {
         free(raw);
         close_all(&s);
         return -2;                                             /* no server shows the transaction: that says nothing */
     }
     for (int i = 0; i < c->nservers && !spent; i++)
-        if (s.up[i]) spent = scan_history(c, &s.e[i], spk, spk_len, txid, vout, &height);
+        if (turn(&s, i)) spent = scan_history(c, &s.e[i], spk, spk_len, txid, vout, &height);
     free(raw);
     close_all(&s);
     return spent ? -1 : height && height <= tip ? (int)(tip - height + 1) : 0;
@@ -441,7 +436,7 @@ static uint64_t feerate(void *ctx)
         json_w w;
         json_doc d;
         const json_val *res;
-        if (!s.up[i]) continue;
+        if (!turn(&s, i)) continue;
         jw_init(&w);
         jw_arr(&w), jw_u64(&w, 2), jw_end(&w);                 /* within 2 blocks (project 4.5) */
         if (!electrum_call(&s.e[i], "blockchain.estimatefee", &w, &d, &res)) continue;
@@ -468,7 +463,7 @@ static int pending(void *ctx, const uint8_t spk[BTC_P2PKH_LEN])
         json_w w;
         json_doc d;
         const json_val *res;
-        if (!s.up[i]) continue;
+        if (!turn(&s, i)) continue;
         jw_init(&w);
         jw_arr(&w), put_hash(&w, sh), jw_end(&w);
         if (!electrum_call(&s.e[i], "blockchain.scripthash.get_mempool", &w, &d, &res)) continue;
@@ -483,7 +478,8 @@ static int pending(void *ctx, const uint8_t spk[BTC_P2PKH_LEN])
 
 static int ready(void *ctx, char *why, size_t cap) { return chain_spv_ready(ctx, why, cap); }
 
-session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, pending, ready}; }
+/* no coin: the prizes of the network file are among the coins the servers list, and one outside the largest ones is never paid out */
+session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, NULL, pending, ready}; }
 
 int chain_spv_ready(chain_spv *c, char *why, size_t cap)
 {

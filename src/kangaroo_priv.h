@@ -122,7 +122,7 @@ typedef struct kang_state {
     run_ctx *r;
     pz_u256 W;                      /* interval width */
     u8 jump_tag[4];              /* first 4 bytes of the SHA-256 of the jump table, equal on all computers of a campaign: in the header of the log,
-                                  * and in hex (kang_jump_id) the id the messages show */
+                                  * and in hex (pz_hex_encode) the id the messages show */
     pz_u256 base;                   /* key = base + x */
     pz_ge Qp;                       /* pubkey - base*G */
     pz_ge Q3;                       /* 3*Qp */
@@ -220,7 +220,8 @@ typedef struct kang_worker {
 /* The herd across stops (docs/en/ALGORITHMS.md 4.7): when a run stops, every walker's distance, sign and group go to herd.bin in the
  * campaign folder, and the next run takes them back: its point is d*G + sigma*c*Q', and it walks on from there. Without it a stop throws
  * away every walker's steps since its last distinguished point, K * 2^dp steps on average, which with many walkers and many zero bits is
- * most of the work. The file tells the jump table it was made with: walkers of another table start anew. */
+ * most of the work. The file tells the jump table it was made with and the --node of its computer: walkers of another table or another
+ * computer start anew. It is removed while its walkers walk (kang_herd_load). */
 void kang_herd_load(kang_state *ks);
 void kang_herd_start(kang_state *ks, kang_worker *w, int nthreads, u64 stream);   /* the saved walkers first, new starts for the rest */
 void kang_herd_put(kang_state *ks, kang_worker *w);                                /* the walkers of w, to be saved */
@@ -309,7 +310,6 @@ int kang_log_class(const u8 magic[6]);
  * beginning of one of ours, another campaign's or not a log, an older layout, a newer version, this campaign's with another jump table, or
  * a read error. */
 enum { KANG_HDR_OK, KANG_HDR_SHORT, KANG_HDR_FOREIGN, KANG_HDR_OLDER, KANG_HDR_NEWER, KANG_HDR_OTHER_JUMPS, KANG_HDR_READ_ERR };
-void kang_jump_id(const u8 tag[4], char out[9]);                                         /* the id of a jump table, in hex */
 FILE *kang_log_create(kang_state *ks, const char *path, const u8 fp[32]);               /* a log with the current header; sets log_hdr */
 bool kang_log_push(kang_state *ks, const dp_rec *rec, u64 *idx);                         /* mu held: false when there was no room; *idx: its index in the log */
 bool kang_log_get(kang_state *ks, u64 idx, dp_rec *out);                                 /* mu held: the record at index idx of the log, from the buffers or the file */
@@ -321,7 +321,6 @@ int kang_kind_coef(unsigned k);                                                 
 kang_worker *kang_worker_new(kang_state *ks, int K, u64 stream);
 void kang_worker_free(kang_worker *w);
 void kang_restart_one(kang_state *ks, kang_worker *w, int i);
-void kang_init_herd_parallel(kang_state *ks, kang_worker *w, int nthreads, u64 stream);
 void kang_init_herd(kang_state *ks, kang_worker *w);
 
 /* Inserts DPs into the shared table. dup_out[k] is set for records that

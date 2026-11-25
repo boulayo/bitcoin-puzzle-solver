@@ -91,7 +91,7 @@ static int puzzle_of(const char *s)
 }
 
 /* The network of a file, or of a puzzle when path is NULL, for the checks of records, or of claims (bn) on a linear one, which has no
- * records: none has all the zero bits a record there must have */
+ * records (its nodes refuse them, dht.c) */
 static bool load_net(const secp256k1_context *ctx, const char *path, int puzzle, netfile *nf, record_net *net, block_net *bn)
 {
     char err[300];
@@ -184,7 +184,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
 {
     const char *network = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
     int puzzle = 0;
-    char entries[16][256], dirname[48], seedpath[1100], err[300];
+    char entries[16][NETFILE_LINE_MAX], dirname[48], seedpath[1100], err[300];
     int nb = 0, npeer = 0;
     long port = DEFAULT_PORT, store_gb = 0;
     bool verbose = false, allow_private = false, no_bt = false, portmap = true;
@@ -235,17 +235,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
         fprintf(stderr, "no identity from this seed\n");
         return 1;
     }
-    for (const char *p = nf.opts; *p && nb < 16;) {             /* the entry= lines of the network file, then --peer */
-        const char *e = strchr(p, '\n');
-        const size_t l = e ? (size_t)(e - p) : strlen(p);
-        if (l > 6 && l - 6 < sizeof entries[0] && !strncmp(p, "entry=", 6)) {
-            memcpy(entries[nb], p + 6, l - 6);
-            entries[nb][l - 6] = 0;
-            boot[nb] = entries[nb];
-            nb++;
-        }
-        p += l + (e != NULL);
-    }
+    while (nb < 16 && netfile_opt(&nf, "entry", nb, entries[nb], sizeof entries[nb])) boot[nb] = entries[nb], nb++;   /* then --peer */
     for (int i = 0; i < npeer; i++) boot[nb++] = peers[i];
     dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
                       .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .portmap = portmap,
@@ -300,7 +290,7 @@ static int cmd_run(int argc, char **argv)
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt, but not what pzpeer gives it itself */
             static const char *const OWN[] = {"--puzzle", "--range", "--address", "--pubkey", "--campaign", "--dir", "--seed", "--mode", "--step",
-                                              "--dp-bits", "--jump-seed", "--start-key", "--ui"};
+                                              "--part", "--dp-bits", "--jump-seed", "--start-key", "--ui"};   /* --part: half a block would be claimed */
             for (int j = i + 1; j < argc; j++) {
                 const char *o = argv[j];
                 const size_t l = strcspn(o, "=");                 /* pzsolve takes a long option by any unique start of its name */
@@ -308,7 +298,7 @@ static int cmd_run(int argc, char **argv)
                 if (o[0] == '-' && o[1] != '-')                    /* short ones, also grouped (-qk) or with their value (-k02aa) */
                     for (const char *c = o + 1; *c && isalpha((unsigned char)*c) && !own; c++) own = strchr("prakcdsm", *c) != NULL;
                 for (size_t k = 0; !own && o[0] == '-' && o[1] == '-' && l > 2 && k < sizeof OWN / sizeof *OWN; k++) own = !strncmp(o, OWN[k], l);
-                if (own) return bad("run", "%s after --: pzpeer gives pzsolve the range, the key, the walk and the folder itself", o);
+                if (own) return bad("run", "%s after --: pzpeer gives pzsolve the range, the part, the key, the walk and the folder itself", o);
             }
             cfg.pzsolve_args = (const char *const *)argv + i + 1, cfg.nargs = argc - i - 1;
             break;

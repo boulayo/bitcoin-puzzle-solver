@@ -595,7 +595,7 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
         const int rc = kang_merge_file(ks, path, &st);
         if (rc != KANG_HDR_OK) {
             char ours[9];
-            kang_jump_id(ks->jump_tag, ours);
+            pz_hex_encode(ks->jump_tag, 4, ours);
             if (rc == KANG_HDR_READ_ERR)
                 say_wrapped("  %s: %s\n", path, access(path, F_OK) != 0 ? "does not exist" : "cannot read the file");
             else if (rc == KANG_HDR_OTHER_JUMPS)

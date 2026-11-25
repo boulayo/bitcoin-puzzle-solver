@@ -253,14 +253,18 @@ is released, under a lock of its own, so a slow disk does not stall the search t
 2^22 records) and the write is tried again; a record cut short at the end of the file is cut off at the next start.
 
 On resume the table is rebuilt from the file, and the walkers go on from where they stopped: when a run stops, every walker's distance `d`,
-sign and group go to `herd.bin` (a header of 28 bytes: the magic `"PZHERD2\n"`, the jump table id, the number of groups and a tag of their
-coefficients and residues, the session and `--node` of the run; then 26 bytes a walker), synced to the disk before it replaces the last one,
+sign and group go to `herd.bin` (a header of 28 bytes: the magic `"PZHERD3\n"`, the jump table id, the number of groups and a tag of their
+coefficients and residues, the `--node` of the computer; then 26 bytes a walker), synced to the disk before it replaces the last one,
 and the next run puts each one back at its point `d·G + σ·c·Q'` (the GPU walkers are read back from the device, 65536 at a time). Without it
 a stop threw away every walker's steps since its last DP, `K·2^dp` steps on average: with millions of walkers and many zero bits that is most
 of the work. A walker goes back to a slot of its own group, so that every herd keeps the mix of species of a new one: the next run may have
 more walkers (new starts where a group has none left) or fewer (the others wait in the file for a later run), and other `--dp-bits`. The file
-is taken only by the next session of the same computer: a copy of the folder on another computer, or a file a run that did not stop well
-left behind (a `kill -9`, a second Ctrl-C, a crash, the power: its walkers walked on past it), would walk again where walkers walked already.
+holds walkers that nobody walks: the run that takes the first of them removes it, and writes it again when it stops. So a run that does not
+stop well (a `kill -9`, a second Ctrl-C, a crash, the power) leaves no file, and its walkers, which walked on past it, never walk again where
+they walked; a run that ends before it takes them (no compute device, a GPU self-test or a kernel build interrupted, a `dp.bin` it cannot use)
+leaves the file as it was, and the next run takes it, whatever its session. It is taken only with the same jump table, groups and `--node`:
+a copy of the folder on another computer, which has a `--node` of its own, starts its walkers anew (with the same `--node` it would repeat
+every start of the first computer anyway), and a run with another `--node` than the file's says so (a computer that forgot its `--node`).
 Those runs start their walkers anew from new points (a different random stream for each session and each `--node`), and the old trails remain
 useful because each of their later DPs is already in the table. So only a run that does not stop well loses work, what every stop lost
 before `herd.bin`: each walker's steps since its last DP in `dp.bin`, about `K·2^dp` steps (the buffer is written at every checkpoint,

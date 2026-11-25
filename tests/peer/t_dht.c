@@ -437,19 +437,23 @@ static void make_id(const char *label, home_identity *id)
     CHECK(keys_identity(ctx, seed, FP, BITS, id));
 }
 
-/* A claim of a block (dht_claim.c): published by its owner, found by another node, refused from anyone but its owner. */
+/* A claim of a block (dht_claim.c): published by its owner, found by another node, kept once; the same proof keys claimed by another
+ * identity, which needs no scan, not kept; the claim refused from anyone but its owner. */
 static void test_claims(void)
 {
-    node *A = &nodes[3], *B = &nodes[27];
-    uint8_t key[32] = {0};
-    key[24] = 0x10, key[26] = 0x0c, key[31] = 0x39;
-    block_claim c, got[4];
-    CHECK(block_claim_make(ctx, &bnet, &A->id.kp, 3, (const uint8_t(*)[32])key, 1, &c));
+    node *A = &nodes[3], *B = &nodes[27], *C = &nodes[12];
+    uint8_t key[2][32] = {{0}};
+    key[0][26] = 0x08, key[0][29] = 0x06, key[0][30] = 0x8b, key[0][31] = 0x68;   /* 0x80000068b68 and 0x800003d4338 (t_block.c) */
+    key[1][26] = 0x08, key[1][29] = 0x3d, key[1][30] = 0x43, key[1][31] = 0x38;
+    block_claim c, copy, got[4];
+    CHECK(block_claim_make(ctx, &bnet, &A->id.kp, 0, (const uint8_t(*)[32])key, 2, &c) && c.n == 2);
     CHECK(dht_claim_publish(A->d, &c) >= 4);
-    CHECK(dht_claims_of(B->d, 3, got, 4) == 1 && !memcmp(got[0].owner, A->id.xonly, 32) && got[0].n == 1);
-    CHECK(dht_claims_of(B->d, 4, got, 4) == 0);                 /* nobody claimed block 4 */
+    CHECK(dht_claims_of(B->d, 0, got, 4) == 1 && !memcmp(got[0].owner, A->id.xonly, 32) && got[0].n == 2);
+    CHECK(dht_claims_of(B->d, 1, got, 4) == 0);                 /* nobody claimed block 1 */
     CHECK(dht_claim_publish(A->d, &c) >= 4);                    /* again: the same claim, kept once */
-    CHECK(dht_claims_of(B->d, 3, got, 4) == 1);
+    CHECK(dht_claims_of(B->d, 0, got, 4) == 1);
+    CHECK(block_claim_make(ctx, &bnet, &C->id.kp, 0, (const uint8_t(*)[32])key, 2, &copy) && block_claim_check(ctx, &bnet, &copy));
+    CHECK(dht_claim_publish(C->d, &copy) >= 4 && dht_claims_of(B->d, 0, got, 4) == 1);   /* held already: not a second claim */
     /* the same claim sent by another identity: a custodian takes a claim from its owner only */
     home_identity cid;
     make_id("claim thief", &cid);
@@ -458,7 +462,7 @@ static void test_claims(void)
     uint8_t k[32], req[1 + BLOCK_CLAIM_MAX], ans[2];
     size_t n;
     int who;
-    block_key(&bnet, 3, k);
+    block_key(&bnet, 0, k);
     CHECK(brute(k, 1, &who) == 1);
     net_addr a;
     CHECK(net_parse_addr("127.0.0.1:1", &a));
@@ -1468,16 +1472,9 @@ int main(void)
     memcpy(qp, k, 32), memcpy(nb, base, 32);
     CHECK(secp256k1_ec_seckey_negate(ctx, nb) && secp256k1_ec_seckey_tweak_add(ctx, qp, nb));
     CHECK(sys_mkdir(ROOT));
-    {                                                          /* blocks of 2^42 keys from 2^60; the target has bytes 8 to 12 of a key of block 3 */
-        secp256k1_pubkey pk3;
-        uint8_t key[32] = {0}, pub[33];
-        size_t pl = 33;
-        memcpy(bnet.fp, FP, 32), bnet.bits = 42, bnet.start[24] = 0x10;
-        key[24] = 0x10, key[26] = 0x0c, key[31] = 0x39;        /* 2^60 + 3 * 2^42 + 0x39 */
-        CHECK(secp256k1_ec_pubkey_create(ctx, &pk3, key) && secp256k1_ec_pubkey_serialize(ctx, pub, &pl, &pk3, SECP256K1_EC_COMPRESSED));
-        pz_hash160(pub, 33, bnet.h160);
-        bnet.h160[0] ^= 0xff;                                  /* not the key of the prize itself */
-    }
+    /* blocks of 2^42 keys from 2^43, four of them; the target has bytes 8 to 12 of the two proof keys of t_block.c, in block 0 */
+    memcpy(bnet.fp, FP, 32), bnet.bits = 42, bnet.start[26] = 0x08, memset(bnet.end + 26, 0xff, 6), bnet.end[26] = 0x17;
+    memset(bnet.h160, 0x11, 20), memcpy(bnet.h160 + 8, "\x08\xe1\xd9\xa1\x9a", 5);
     for (int i = 0; i < NODES; i++) {
         char label[32];
         uint8_t seed[32];

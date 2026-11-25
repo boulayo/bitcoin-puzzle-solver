@@ -97,6 +97,13 @@ int main(void)
     CHECK(payout_cancel(&t, &a, &c) && c.n_in == 1 && c.n_out == 1 && c.in[0].prev_vout == b.in[1].prev_vout);
     CHECK(!memcmp(c.out[0].script, t.pay_spk[1], t.pay_len[1]) && c.out[0].value > PAYOUT_TINY_MIN - 1000);
     CHECK(btc_sign_p2pkh(&c, 0, coin[1]) && btc_verify_p2pkh(&c, 0, t.coin_spk[1], BTC_P2PKH_LEN));
+    /* F's tiny coins of earlier tries, together: one output, the fee of their inputs off; not when they do not pay it */
+    payout_coin tiny[2] = {{.vout = 1, .value = PAYOUT_TINY_MIN}, {.vout = 1, .value = PAYOUT_TINY_MIN}};
+    tiny[1].txid[0] = 1;
+    CHECK(payout_sweep(&t, tiny, 2, &c) && c.n_in == 2 && c.n_out == 1 && !memcmp(c.out[0].script, t.pay_spk[1], t.pay_len[1]));
+    CHECK(c.out[0].value > 2 * PAYOUT_TINY_MIN - 2000 && c.out[0].value < 2 * PAYOUT_TINY_MIN && !payout_sweep(&t, tiny, 0, &c));
+    tiny[0].value = tiny[1].value = 300;
+    CHECK(!payout_sweep(&t, tiny, 2, &c));
     /* refusals: nothing worth spending, a first transaction that is not one */
     CHECK(!payout_first(&t, coins, 2, &a2, &used));
     btc_tx bad = a;

@@ -119,7 +119,11 @@ static bool g_kround_ok[NKROUNDS];      /* supported by this CPU and equal to th
 static bool g_kmix;                     /* the threads after the first of a core run the scalar step (kround_choose_mix) */
 static double g_kmix_gain;              /* the mixed layout against the uniform one at the start-up measurement, 0 when not measured */
 
-/* Steps per second of `fn` on one thread (a short run on a test herd). */
+/* Each form of the step that a start compares is timed KROUND_SAMPLES times, the forms in turn, and keeps its best: a busy moment of the
+ * machine slows a sample or two, seldom every sample of one form, and a single sample let it pick the slower form for a whole run. */
+#define KROUND_SAMPLES 3
+
+/* Steps per second of `fn` on one thread (a run of 0.05 s on a test herd: one of the KROUND_SAMPLES). */
 static double kround_rate(kang_round_fn fn)
 {
     kang_state *ks = kang_make_test_state(60, 1);
@@ -136,7 +140,7 @@ static double kround_rate(kang_round_fn fn)
         steps += (u64)w->K;
         w->ndp = w->nrestart = 0;
         t = pz_mono();
-    } while (t - t0 < 0.12);
+    } while (t - t0 < 0.05);
     kang_worker_free(w);
     kang_free_test_state(ks);
     return (double)steps / (t - t0);
@@ -193,6 +197,23 @@ static double kbench_run(kang_state *ks, const sysinfo_t *s, int n, const kang_r
     return total;
 }
 
+/* The rates of two layouts of n threads (thread i of layout v runs fn[v][i] on CPU position pos[i]), the best of KROUND_SAMPLES samples
+ * of each taken in turn; 0 when there is no test state. */
+static void kbench_layouts(const sysinfo_t *s, int n, kang_round_fn *const fn[2], const int *pos, double rate[2])
+{
+    rate[0] = rate[1] = 0;
+    kang_state *ks = kang_make_test_state(60, 1);
+    if (!ks) return;
+    ks->P.dp_mask = ~0ULL >> 8;
+    ks->P.cap_since = ~0ULL;
+    for (int k = 0; k < KROUND_SAMPLES; k++)
+        for (int v = 0; v < 2; v++) {
+            const double r = kbench_run(ks, s, n, fn[v], pos, 0.15);
+            if (r > rate[v]) rate[v] = r;
+        }
+    kang_free_test_state(ks);
+}
+
 /* The IFMA step comes in two forms that do the same (kv_bwd_step): one vector at a time, or two, which keeps the units busier
  * when a core runs a single thread but gains nothing when the sibling thread fills the gaps. So when one of the two has won, they
  * are timed again with every logical CPU busy, and the pair is kept only if it is faster there too. Only variants that kround_pick
@@ -205,19 +226,11 @@ static void kround_choose_pair(void)
     sysinfo_t s;
     sysinfo_detect(&s);
     const int n = s.ncpu > 64 ? 64 : s.ncpu;
-    kang_state *ks = kang_make_test_state(60, 1);
-    if (!ks) { g_kround = one; return; }
-    ks->P.dp_mask = ~0ULL >> 8;
-    ks->P.cap_since = ~0ULL;
     int pos[64] = {0};
-    kang_round_fn fns[64] = {0};
-    for (int i = 0; i < n; i++) pos[i] = i;
+    kang_round_fn f1[64] = {0}, f2[64] = {0};
+    for (int i = 0; i < n; i++) pos[i] = i, f1[i] = KROUNDS[one].fn, f2[i] = KROUNDS[two].fn;
     double r[2];
-    for (int v = 0; v < 2; v++) {
-        for (int i = 0; i < n; i++) fns[i] = KROUNDS[v ? two : one].fn;
-        r[v] = kbench_run(ks, &s, n, fns, pos, 0.15);
-    }
-    kang_free_test_state(ks);
+    kbench_layouts(&s, n, (kang_round_fn *const[2]){f1, f2}, pos, r);
     if (g_env.kang_verbose)
         fprintf(stderr, "kangaroo CPU: IFMA with %d threads: one vector %.2f, two vectors %.2f M steps/s\n", n, r[0] / 1e6, r[1] / 1e6);
     g_kround = r[1] > r[0] * 1.03 ? two : one;
@@ -239,7 +252,7 @@ bool kang_slot_is_sibling(const sysinfo_t *s, int slot)
 
 /* On cores with SMT the first thread can run the chosen (vector) step and the others the scalar BMI2/ADX one, which uses the
  * integer multiplier instead of the vector unit: +14 % on a Zen runner without AVX-512, a loss elsewhere. PZ_KANG_MIX=0 or 1
- * decides; unset, the two layouts are timed with every thread of whole cores busy (at most 64), twice and interleaved, and the
+ * decides; unset, the two layouts are timed with every thread of whole cores busy (at most 64), as kbench_layouts does, and the
  * mixed one is kept when it is faster by the margin of kang_mix_wanted. `measured`: kround_pick has checked the variants (the
  * scalar step is checked here otherwise, when it is wanted). */
 static void kround_choose_mix(bool measured)
@@ -265,16 +278,9 @@ static void kround_choose_mix(bool measured)
                 mix[n++] = j == 0 ? KROUNDS[g_kround].fn : KROUNDS[vx86].fn;
             }
         }
-        kang_state *ks = kang_make_test_state(60, 1);
-        if (!ks) return;
-        ks->P.dp_mask = ~0ULL >> 8;
-        ks->P.cap_since = ~0ULL;
-        for (int rep = 0; rep < 2; rep++) {
-            const double u = kbench_run(ks, &s, n, uni, pos, 0.15), m = kbench_run(ks, &s, n, mix, pos, 0.15);
-            if (u > ru) ru = u;
-            if (m > rm) rm = m;
-        }
-        kang_free_test_state(ks);
+        double r[2];
+        kbench_layouts(&s, n, (kang_round_fn *const[2]){uni, mix}, pos, r);
+        ru = r[0], rm = r[1];
         if (g_env.kang_verbose)
             fprintf(stderr, "kangaroo CPU: %d threads: %s on all %.2f, mixed with %s %.2f M steps/s\n", n, KROUNDS[g_kround].name, ru / 1e6,
                     KROUNDS[vx86].name, rm / 1e6);
@@ -378,9 +384,17 @@ static void kround_pick(void)
             continue;
         }
         g_kround_ok[i] = true;
-        double r = kround_rate(KROUNDS[i].fn);
-        if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, r / 1e6);
-        if (r > best * 1.03) { best = r; g_kround = i; }
+    }
+    double rate[NKROUNDS] = {0};
+    for (int k = 0; k < KROUND_SAMPLES; k++)
+        for (int i = 0; i < NKROUNDS; i++) {
+            const double r = g_kround_ok[i] ? kround_rate(KROUNDS[i].fn) : 0;
+            if (r > rate[i]) rate[i] = r;
+        }
+    for (int i = 0; i < NKROUNDS; i++) {
+        if (!g_kround_ok[i]) continue;
+        if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, rate[i] / 1e6);
+        if (rate[i] > best * 1.03) { best = rate[i]; g_kround = i; }
     }
     kround_choose_pair();
     kround_choose_mix(true);

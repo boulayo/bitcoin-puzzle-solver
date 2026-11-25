@@ -51,6 +51,9 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
 bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx);
 /* The cancel of party F: its tiny coin of the first transaction to its own payout address, less the fee. */
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx);
+/* F's tiny coins (n of them, at most BTC_MAX_IN) to its own payout address, less the fee; false when they do not pay it and more than
+ * the dust limit. Unsigned: each input is F's coin key. */
+bool payout_sweep(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx);
 /* The satoshis of a tiny coin: twice the fee of F's cancel at the fee rate of the terms and the dust limit, PAYOUT_TINY_MIN at least. F
  * can therefore always cancel, whatever the rate; were its coin worth less than that fee, S could hold the second transaction back for free. */
 uint64_t payout_tiny(const payout_terms *t);

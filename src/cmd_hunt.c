@@ -408,6 +408,8 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
 static void check_options_for_campaign(const opts_t *o, const campaign_cfg *c, const run_ctx *r, bool fresh)
 {
     if (o->node && c->mode != MODE_KANGAROO) pz_die("--node is only used with the kangaroo (in linear search split the range with -r)");
+    if (o->near && c->mode != MODE_LINEAR)
+        pz_die("--near is only used in linear search (-m linear): the kangaroo and BSGS do not try every key, they have no near misses");
     if (fresh && c->mode == MODE_BSGS) run_bsgs_check(c, &r->sys, !o->no_cpu, mem_bytes(o->mem_gb), o->table, NULL);
 }
 
@@ -609,15 +611,16 @@ bool print_already_found(const run_ctx *r)
 /* The line that tells how to resume an interrupted campaign. */
 static void print_resume_hint(const run_ctx *r, const char *dir)
 {
-    char byp[32];
+    char byp[32], node[32] = "";
     snprintf(byp, sizeof byp, "p%d", r->cfg.puzzle);
+    if (r->node) snprintf(node, sizeof node, " --node %u", r->node);   /* without it this computer would be node 0, and repeat its starts */
     const bool other_dir = strcmp(dir, "campaigns") != 0;
     if (r->cfg.net)                                 /* its seed is not on disk: only the start key brings it back */
         printf("\nCampaign interrupted. pzpeer resumes it (its starts come from a start key that is not on disk).\n");
     else if (r->cfg.puzzle && !strcmp(r->cfg.name, byp))
-        printf("\nCampaign interrupted. Resume with:  pzsolve hunt -p %d%s%s\n", r->cfg.puzzle, other_dir ? " -d " : "", other_dir ? dir : "");
+        printf("\nCampaign interrupted. Resume with:  pzsolve hunt -p %d%s%s%s\n", r->cfg.puzzle, other_dir ? " -d " : "", other_dir ? dir : "", node);
     else
-        printf("\nCampaign interrupted. Resume with:  pzsolve hunt -c %s%s%s\n", r->cfg.name, other_dir ? " -d " : "", other_dir ? dir : "");
+        printf("\nCampaign interrupted. Resume with:  pzsolve hunt -c %s%s%s%s\n", r->cfg.name, other_dir ? " -d " : "", other_dir ? dir : "", node);
 }
 
 /* Whether the campaign has already covered its whole range (or its whole --part): the state of its last session, if the saved state is
@@ -863,6 +866,16 @@ void forget_position(const run_ctx *r)
     }
 }
 
+/* The end of a command that installed the signals: no signal, and no end of the input of --stop-with-input (its thread is detached), may
+ * reach the run once it is freed. Returns status. */
+static int release_run(run_ctx *r, int status)
+{
+    run_install_signals(NULL);
+    pz_log_set_file(NULL);
+    free(r);
+    return status;
+}
+
 /* The end of a session: the last save, the reports, the final frame, then the found key or what is left to do. Returns the exit status. */
 static int end_session(run_ctx *r, const opts_t *o, int rc)
 {
@@ -891,10 +904,7 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
     if (atomic_load(&r->found)) {
         print_found_banner(r);
         onfound_wait();                               /* the box is out; the program ends when the command has (at most 120 s) */
-        const int st = r->found_seal_failed || r->found_write_failed ? PZ_EXIT_ERROR : PZ_EXIT_FOUND;
-        pz_log_set_file(NULL);
-        free(r);
-        return st;
+        return release_run(r, r->found_seal_failed || r->found_write_failed ? PZ_EXIT_ERROR : PZ_EXIT_FOUND);
     }
     int status = PZ_EXIT_NOT_FOUND;
     if (finished) {
@@ -911,10 +921,7 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
         /* a stop that no signal asked for: the workers ended on their own (every GPU failed and the CPU is off), the log says why */
         status = run_interrupted() ? PZ_EXIT_INTERRUPTED : PZ_EXIT_ERROR;
     }
-    if (rc) status = PZ_EXIT_ERROR;
-    pz_log_set_file(NULL);
-    free(r);
-    return status;
+    return release_run(r, rc ? PZ_EXIT_ERROR : status);
 }
 
 int cmd_hunt(int argc, char **argv)
@@ -955,9 +962,7 @@ int cmd_hunt(int argc, char **argv)
         pz_log(PZ_LOG_INFO, "interrupted during the measurement of the machine: the search was not started");
         print_resume_hint(r, o.dir);
         pz_interrupt_done();
-        pz_log_set_file(NULL);
-        free(r);
-        return PZ_EXIT_INTERRUPTED;
+        return release_run(r, PZ_EXIT_INTERRUPTED);
     }
     log_session_header(&o, r, resuming, thr_full);
     announce_encrypt(r);
@@ -970,9 +975,12 @@ int cmd_hunt(int argc, char **argv)
         pz_die("cannot save the session in %s: a shared walk would draw the same starts again at the next run", r->cfg.dir);
     reserve_space(r);
     r->t_start = pz_mono();
-    if (o.near && r->cfg.mode == MODE_LINEAR) {
+    if (o.near) {                                   /* a linear search (check_options_for_campaign) */
         char path[700];
         snprintf(path, sizeof path, "%s/near.txt", r->cfg.dir);
+        if (r->prev_units_total && !file_exists(path))
+            pz_log(PZ_LOG_WARN, "--near: the keys scanned before this session left no near misses (%s is new): only what is scanned from now "
+                   "on writes them", path);
         if (!(r->near = pz_fopen_private(path, true))) pz_die("cannot write %s: %s", path, strerror(errno));
     }
     if (o.keep_awake && !pz_prevent_sleep(true)) pz_log(PZ_LOG_WARN, "--keep-awake: not supported on this system (on Linux use 'systemd-inhibit pzsolve hunt ...')");

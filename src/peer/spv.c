@@ -223,17 +223,13 @@ static const char MAGIC[8] = "PZHDR1\n";
 
 bool spv_save(const spv_chain *c, const char *path)
 {
-    char tmp[1100];
     uint8_t head[8 + 1 + 8 + 32];
-    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) return false;
-    FILE *f = fopen(tmp, "wb");
-    if (!f) return false;
+    FILE *f = sys_new_file(path, false);
     memcpy(head, MAGIC, 8);
     head[8] = (uint8_t)c->chain;
     for (int b = 0; b < 8; b++) head[9 + b] = (uint8_t)(c->base >> (8 * b));
     memcpy(head + 17, c->cp, 32);
-    const bool ok = fwrite(head, 1, sizeof head, f) == sizeof head && fwrite(c->hdr, SPV_HEADER, c->n, f) == c->n;
-    return (fclose(f) == 0) && ok && sys_replace(tmp, path);
+    return sys_new_file_done(f, path, f && fwrite(head, 1, sizeof head, f) == sizeof head && fwrite(c->hdr, SPV_HEADER, c->n, f) == c->n);
 }
 
 bool spv_load(spv_chain *c, const char *path, uint64_t now)

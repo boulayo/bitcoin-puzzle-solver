@@ -55,8 +55,9 @@
 #define TPM_CALLS      32          /* 1024 bytes: a full window of the byte tests, as the other full-entropy sources give */
 #define TPM_RESP       (12 + TPM_CHUNK)
 #define JIT_SAMPLES    4096        /* per round */
-#define JIT_MEM        (1u << 20)  /* larger than L1: the walk meets the latencies of L2 and L3 */
-#define JIT_MAX_WALK   (1u << 14)  /* bounds the time of a sample when the timer is coarse */
+#define JIT_PILOT      256         /* samples of the calibration at each length of the walk */
+#define JIT_MEM        (1u << 20)  /* larger than L1: a long walk meets the latencies of L2 and L3 */
+#define JIT_MAX_WALK   (1u << 14)  /* bounds the time of a sample when the timer is coarse or the machine quiet */
 #define BITS_NEEDED    128
 
 /* The cutoffs of the health tests, from SP 800-90B 4.4 for the claimed min-entropy H and false-alarm probability alpha (t_seed.c
@@ -68,13 +69,13 @@ enum { B_RCT = 6, B_APT = 26, B_FREQ = 29, B_Z2X100 = 5103, J_RCT = 61, J_APT = 
 #ifdef PZ_SEED_TEST
 enum { OSF_FAIL = 1, OSF_SHORT, OSF_ZERO, OSF_REPEAT, OSF_ENOSYS, OSF_HALFZERO, OSF_ATTACKER };
 enum { HWF_ALLONES = 1, HWF_NOCARRY, HWF_REPEAT, HWF_ZERO, HWF_HALFZERO, HWF_SEEDFAIL, HWF_ATTACKER, HWF_ABSENT, HWF_GOOD };
-enum { JF_CONST = 1, JF_BACK, JF_STEP, JF_ALTERNATE, JF_COARSE, JF_LOWENT, JF_ATTACKER, JF_FIRSTBAD };
+enum { JF_CONST = 1, JF_BACK, JF_STEP, JF_ALTERNATE, JF_COARSE, JF_LOWENT, JF_ATTACKER, JF_FIRSTBAD, JF_BEAT16, JF_BEAT24, JF_GOOD };
 static struct {
     int os, hw, jit;
     const char *tpm_path;          /* a file that stands for the TPM device */
     uint32_t walk;                 /* the jitter walk, without calibration */
     uint64_t key;                  /* the attacker's sources are a public function of it */
-    uint64_t n, jn, t, t0;         /* the state of the simulated generators and timer */
+    uint64_t n, jn, t;             /* the state of the simulated generators and timer */
     unsigned round;
 } g_fault;
 static uint64_t fault_rnd(uint64_t i)          /* splitmix64 of key + i */
@@ -494,10 +495,12 @@ static void src_caller(pz_seed_source *s, chunk *c, arena *a, const pz_seed_opts
 
 /* ---- jitter: CPU timing jitter ----
  * One raw sample is the timer delta around a fixed workload: a public xorshift walk through JIT_MEM bytes, one cache line per step,
- * with a read-modify-write and two branches on the data at each step. The walk starts from a constant, so no entropy is claimed for
- * anything but the timing; unlike jitterentropy, its length never depends on earlier timer values, which would chain the samples. That
- * walk goes on from sample to sample, so on a machine without noise its deltas would still vary, by the work alone: before it counts,
- * the same work (the same addresses, no branch on the data) is timed 64 times, and a source whose deltas are then all equal is refused. */
+ * with a read-modify-write at each step. Every sample does the same work, the walk from its first step with no branch on the data, so
+ * only noise makes two samples differ, and the health tests and the live estimate measure that noise and nothing else (a walk that went
+ * on from sample to sample, with branches on the data, varied by its work too, also on a machine without noise, and its deltas
+ * overstated the noise). No entropy is claimed for anything but the timing; unlike jitterentropy, the length of the walk never depends
+ * on the timer values of the rounds, which would chain the samples. A machine whose timing shows too little noise has the source
+ * refused: its seeds need the TPM or the caller's source for the 128 counted bits (pz_seed_generate). */
 #if defined(__x86_64__)
 #define TIMER_NAME "rdtsc"
 static inline uint64_t timer_now(void)
@@ -549,9 +552,11 @@ static uint64_t fault_timer(int which)
     case JF_CONST: return 123456789;                              /* does not advance */
     case JF_BACK: return *t -= 5;                                 /* runs backwards */
     case JF_COARSE: *t += which == 2 ? 37 : which == 0 ? 50 : 1000 + (fault_rnd(g_fault.jn++) & 63); return *t & ~(uint64_t)0xfff;
-    case JF_FIRSTBAD:                                             /* the first round has a constant delta, the next ones are real */
-        if (which == 2 || g_fault.round != 1) return timer_now();
-        return which == 0 ? (g_fault.t0 = timer_now()) : g_fault.t0 + 1000;
+    case JF_BEAT16: case JF_BEAT24: {                             /* no noise: the same work, 1007 ticks of a clock that a timer of */
+        const uint64_t g = g_fault.jit == JF_BEAT16 ? 16 : 24;    /* 16 or 24 ticks reads: the deltas beat between two values */
+        *t += which == 2 ? 1 : which == 0 ? 50 : 1007;
+        return *t / g * g;
+    }
     default: break;
     }
     if (which == 2) return *t += 1;
@@ -559,49 +564,22 @@ static uint64_t fault_timer(int which)
     const uint64_t i = g_fault.jn++;
     switch (g_fault.jit) {
     case JF_STEP: return *t += 1000;                              /* a constant delta */
+    case JF_FIRSTBAD: if (g_fault.round == 1) return *t += 1000;  /* the first round as JF_STEP, the next ones as JF_GOOD */
+        break;
     case JF_ALTERNATE: return *t += 1000 + (i & 1);               /* two values in turn: passes the RCT and the APT */
     case JF_LOWENT: return *t += 1000 + 3 * (fault_rnd(i) & 1);   /* one random bit per sample */
-    default: return *t += 900 + (fault_rnd(i) & 0x3ff);           /* JF_ATTACKER: random-looking and known to the attacker */
+    default: break;
     }
+    return *t += 900 + (fault_rnd(i) & 0x3ff);                    /* JF_GOOD, JF_ATTACKER: random-looking (and known to the attacker) */
 }
 #define jt_now(which) (g_fault.jit ? fault_timer(which) : timer_now())
 #else
 #define jt_now(which) timer_now()
 #endif
 
-typedef struct { volatile uint8_t *mem; uint32_t walk, x; } jitter;
+typedef struct { volatile uint8_t *mem; uint32_t walk; } jitter;
 
-static uint64_t jit_sample(jitter *j)
-{
-    volatile uint8_t *m = j->mem;
-    uint32_t x = j->x;
-    uint64_t acc = 0;
-    const uint64_t t0 = jt_now(0);
-    for (uint32_t i = 0; i < j->walk; i++) {
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        const size_t idx = ((size_t)x * 64u + (x >> 26)) & (JIT_MEM - 1);
-        const uint8_t v = m[idx];
-        if (v & 1) {                                   /* the empty asm keeps the branches branches */
-            __asm__ __volatile__("");
-            acc += v;
-        } else {
-            acc ^= (uint64_t)v << (i & 31);
-        }
-        if (x & 0x100) {
-            __asm__ __volatile__("");
-            acc = acc << 1 | acc >> 63;
-        }
-        m[idx] = (uint8_t)(v + 1 + (acc & 1));
-    }
-    const uint64_t t1 = jt_now(1);
-    j->x = x;
-    m[0] ^= (uint8_t)acc;
-    return t1 - t0;
-}
-
-/* The same work every time: the walk from its first step, without a branch on the data. Only noise makes two of these differ. */
+/* One sample: the walk from its first step, without a branch on the data, the same work every time. */
 static uint64_t jit_same(jitter *j)
 {
     volatile uint8_t *m = j->mem;
@@ -620,46 +598,6 @@ static uint64_t jit_same(jitter *j)
     const uint64_t t1 = jt_now(1);
     m[0] ^= (uint8_t)acc;
     return t1 - t0;
-}
-
-static bool jit_init(jitter *j, char *method, size_t mn, char *why, size_t wn)
-{
-    snprintf(method, mn, "%s", TIMER_NAME);
-    uint64_t prev = jt_now(2), gran = UINT64_MAX;
-    unsigned back = 0;
-    for (int i = 0; i < 1000; i++) {
-        const uint64_t t = jt_now(2);
-        if (t < prev) back++;
-        else if (t > prev && t - prev < gran) gran = t - prev;    /* equal reads of a coarse timer are not a granule */
-        prev = t;
-    }
-    if (back > 3) return why_set(why, wn, "the timer is not monotonic (%u steps back in 1000 reads)", back);
-    if (gran == UINT64_MAX) return why_set(why, wn, "the timer does not advance");
-    bool locked;
-    if (!(j->mem = map_pages(JIT_MEM, false, &locked))) return why_set(why, wn, "no memory for the walk");
-    memset((void *)j->mem, 0x5a, JIT_MEM);    /* every page touched now, so that page faults do not distort the calibration */
-    j->x = 0x2545f491u;
-    /* the walk doubles until the median delta is at least 64 granules of the timer, so that small variations are resolved */
-    for (j->walk = 16; j->walk < JIT_MAX_WALK; j->walk *= 2) {
-#ifdef PZ_SEED_TEST
-        if (g_fault.walk) {
-            j->walk = g_fault.walk;
-            break;
-        }
-#endif
-        unsigned above = 0;
-        for (int i = 0; i < 32; i++) jit_sample(j);
-        for (int i = 0; i < 129; i++) above += jit_sample(j) >= 64 * gran;
-        if (above >= 65) break;
-    }
-    snprintf(method, mn, "%s, walk %u", TIMER_NAME, j->walk);
-    bool varies = false;
-    for (uint64_t i = 0, first = 0; i < 64 && !varies; i++) {
-        const uint64_t t = jit_same(j);
-        varies = i && t != first;
-        if (!i) first = t;
-    }
-    return varies || why_set(why, wn, "the same work always takes the same time: no noise to measure");
 }
 
 /* The live min-entropy estimate of the 8-bit samples (the low byte of each delta): the lower of SP 800-90B's most-common-value
@@ -696,6 +634,44 @@ static double jit_live(const uint32_t *d, size_t n)
     return mcv < 8 * markov ? mcv : 8 * markov;
 }
 
+static bool jit_init(jitter *j, char *method, size_t mn, char *why, size_t wn)
+{
+    snprintf(method, mn, "%s", TIMER_NAME);
+    uint64_t prev = jt_now(2), gran = UINT64_MAX;
+    unsigned back = 0;
+    for (int i = 0; i < 1000; i++) {
+        const uint64_t t = jt_now(2);
+        if (t < prev) back++;
+        else if (t > prev && t - prev < gran) gran = t - prev;    /* equal reads of a coarse timer are not a granule */
+        prev = t;
+    }
+    if (back > 3) return why_set(why, wn, "the timer is not monotonic (%u steps back in 1000 reads)", back);
+    if (gran == UINT64_MAX) return why_set(why, wn, "the timer does not advance");
+    bool locked;
+    if (!(j->mem = map_pages(JIT_MEM, false, &locked))) return why_set(why, wn, "no memory for the walk");
+    memset((void *)j->mem, 0x5a, JIT_MEM);    /* every page touched now, so that page faults do not distort the calibration */
+    /* The walk doubles until its median delta is at least 64 granules of the timer, so that small variations are resolved, and the live
+     * estimate of its deltas reaches 2 bits per sample, twice what a round needs: a longer walk meets more noise, so a coarse timer or a
+     * quiet machine gets a longer one. Nothing past the mapping refuses the source (src_jitter unmaps it after the rounds): the rounds
+     * decide, on samples of their own. */
+    uint32_t d[JIT_PILOT];
+    for (j->walk = 16; j->walk < JIT_MAX_WALK; j->walk *= 2) {
+#ifdef PZ_SEED_TEST
+        if (g_fault.walk) {
+            j->walk = g_fault.walk;
+            break;
+        }
+#endif
+        unsigned above = 0;
+        for (int i = 0; i < 32; i++) jit_same(j);
+        for (int i = 0; i < JIT_PILOT; i++) above += (d[i] = (uint32_t)jit_same(j)) >= 64 * gran;
+        if (2 * above > JIT_PILOT && jit_live(d, JIT_PILOT) >= 2) break;
+    }
+    pz_secure_zero(d, sizeof d);
+    snprintf(method, mn, "%s, walk %u", TIMER_NAME, j->walk);
+    return true;
+}
+
 /* One round of JIT_SAMPLES samples into d, with its health tests: the number of samples that are not stuck, or 0 and the reason.
  * A sample is stuck when its delta, or the second or third difference, is zero (jitterentropy's test). */
 static unsigned jit_round(jitter *j, uint32_t *d, double *h, char *why, size_t wn)
@@ -703,11 +679,11 @@ static unsigned jit_round(jitter *j, uint32_t *d, double *h, char *why, size_t w
 #ifdef PZ_SEED_TEST
     g_fault.round++;
 #endif
-    for (int i = 0; i < 32; i++) jit_sample(j);               /* warm-up, not used */
+    for (int i = 0; i < 32; i++) jit_same(j);                 /* warm-up, not used */
     unsigned good = 0, stuck = 0, stuck_max = 0, run = 0, run_max = 0, same = 0, same_max = 0;
     uint32_t pd = 0, pd2 = 0;
     for (unsigned i = 0; i < JIT_SAMPLES; i++) {
-        const uint32_t v = (uint32_t)jit_sample(j), d2 = v - pd, d3 = d2 - pd2;
+        const uint32_t v = (uint32_t)jit_same(j), d2 = v - pd, d3 = d2 - pd2;
         const bool st = v == 0 || d2 == 0 || d3 == 0;
         d[i] = v;
         pd = v;
@@ -722,10 +698,10 @@ static unsigned jit_round(jitter *j, uint32_t *d, double *h, char *why, size_t w
     }
     *h = jit_live(d, JIT_SAMPLES);
     if (stuck_max >= J_RCT || good < JIT_SAMPLES / 10)
-        return why_set(why, wn, "too little variation: %u of %u samples not stuck, longest stuck run %u", good, JIT_SAMPLES, stuck_max);
-    if (run_max >= J_RCT) return why_set(why, wn, "repetition count test (a value %u times in a row, cutoff %d)", run_max, J_RCT);
-    if (same_max >= J_APT) return why_set(why, wn, "adaptive proportion test (%u of 1024, cutoff %d)", same_max, J_APT);
-    if (!(*h >= 1.0)) return why_set(why, wn, "too little variation: live estimate %.3f bits per sample, below 1", *h);
+        return why_set(why, wn, "too little noise: %u of %u samples not stuck, longest stuck run %u", good, JIT_SAMPLES, stuck_max);
+    if (run_max >= J_RCT) return why_set(why, wn, "too little noise: repetition count test (a value %u times in a row, cutoff %d)", run_max, J_RCT);
+    if (same_max >= J_APT) return why_set(why, wn, "too little noise: adaptive proportion test (%u of 1024, cutoff %d)", same_max, J_APT);
+    if (!(*h >= 1.0)) return why_set(why, wn, "too little noise: live estimate %.3f bits per sample, below 1", *h);
     return good;
 }
 

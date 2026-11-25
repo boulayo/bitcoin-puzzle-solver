@@ -19,7 +19,7 @@
 
 /* The campaign that a stop signal stops, and the signals received. A signal handler is given no argument, so these two are process-wide: there
  * is one campaign per process (the self-tests and measurements make runs of their own, which no signal reaches). */
-static run_ctx *g_run;
+static _Atomic(run_ctx *) g_run;
 static _Atomic int g_sig_count;
 static _Atomic long long g_first_sig_ms;
 
@@ -37,13 +37,14 @@ static void on_signal(void)
     } else if (now - atomic_load(&g_first_sig_ms) > 500) {
         _exit(PZ_EXIT_INTERRUPTED);
     }
-    if (g_run) atomic_store(&g_run->stop, 1);
+    run_ctx *r = atomic_load(&g_run);
+    if (r) atomic_store(&r->stop, 1);
 }
 
 void run_install_signals(run_ctx *r)
 {
-    g_run = r;
-    pz_on_interrupt(on_signal);
+    atomic_store(&g_run, r);
+    if (r) pz_on_interrupt(on_signal);
 }
 
 /* --stop-with-input: the end of standard input stops the run as a first Ctrl-C does (never as a second one: the program that started
@@ -53,8 +54,12 @@ static void *input_main(void *arg)
     char b[256];
     (void)arg;
     while (pz_stdin_read(b, sizeof b) > 0) {}
-    if (atomic_load(&g_sig_count) == 0) atomic_store(&g_first_sig_ms, mono_ms()), atomic_store(&g_sig_count, 1);
-    if (g_run) atomic_store(&g_run->stop, 1);
+    if (atomic_load(&g_sig_count) == 0) {
+        pz_log(PZ_LOG_INFO, "standard input ended: stopping (--stop-with-input)");
+        atomic_store(&g_first_sig_ms, mono_ms()), atomic_store(&g_sig_count, 1);
+    }
+    run_ctx *r = atomic_load(&g_run);
+    if (r) atomic_store(&r->stop, 1);
     return NULL;
 }
 
@@ -773,6 +778,11 @@ void run_reporter_loop(run_ctx *r)
             next_ckpt = now + r->checkpoint_interval;
         }
     }
+    /* a stop that was asked for: what follows can take seconds (the walkers of a GPU are read back, millions of them), and a second Ctrl-C
+     * then quits at once */
+    if (run_interrupted() && !atomic_load(&r->found))
+        pz_log(PZ_LOG_INFO, "stopping: %s", r->cfg.mode == MODE_KANGAROO ? "saving the state and the walkers (Ctrl-C again quits without them)"
+                                                                       : "saving the state (Ctrl-C again quits without saving)");
     if (use_est && r->remember_rate) {
         const double sus = rate_est_sustained(&est, pz_mono());
         if (sus > 0) r->remember_rate(r, sus);

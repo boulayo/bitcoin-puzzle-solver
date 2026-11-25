@@ -257,8 +257,6 @@ static int log_foreign(const kang_state *ks)
     return -1;
 }
 
-void kang_jump_id(const u8 tag[4], char out[9]) { snprintf(out, 9, "%02x%02x%02x%02x", tag[0], tag[1], tag[2], tag[3]); }
-
 /* Reads and judges the header of an open log, from its start: KANG_HDR_OK leaves the file after the header (*hlen bytes); *size is the size of
  * the file and hdr holds what was read (the magic, and the jump table of a log of KANG_HDR_OTHER_JUMPS). A read error keeps errno. The magic
  * says how long the header is; a file shorter than that is looked at as it is: a creation that did not finish (disk full, power cut) leaves
@@ -342,8 +340,8 @@ int kang_load_log(kang_state *ks)
     }
     if (hc == KANG_HDR_OTHER_JUMPS) {
         char theirs[9], ours[9];
-        kang_jump_id(hdr + 38, theirs);
-        kang_jump_id(ks->jump_tag, ours);
+        pz_hex_encode(hdr + 38, 4, theirs);
+        pz_hex_encode(ks->jump_tag, 4, ours);
         pz_log(PZ_LOG_ERR, "file %s was written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet; it is "
                "left as it is: move it away to start the distinguished points again", ks->log_path, theirs, ours);
         return -1;
@@ -383,7 +381,7 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st)
     kang_log_fp(ks, fp);
     const int hc = log_read_header(ks, f, fp, &size, &hlen, hdr);
     if (hc != KANG_HDR_OK) {
-        if (hc == KANG_HDR_OTHER_JUMPS) kang_jump_id(hdr + 38, st->jump_id);
+        if (hc == KANG_HDR_OTHER_JUMPS) pz_hex_encode(hdr + 38, 4, st->jump_id);
         fclose(f);
         return hc;
     }

@@ -95,13 +95,19 @@ static void linear_progress(run_ctx *r, progress_info *pi)
 
 static int linear_checkpoint(run_ctx *r)
 {
-    if (r->near) {                                  /* the near misses of the blocks about to be recorded as scanned: on the disk first */
+    /* The near misses of the blocks the state records as scanned go to the disk first. A block is completed after its near misses were
+     * written, so those of every block of a snapshot are in near.txt before the snapshot is taken: the sync after it has them all (a block
+     * that completed between a sync and a later snapshot would be recorded with its near misses still in the page cache). */
+    size_t n;
+    char *snap = sched_snapshot(r->sched, &n);
+    if (r->near) {
         pthread_mutex_lock(&r->found_mu);
         const bool ok = fflush(r->near) == 0 && !ferror(r->near) && pz_fd_sync(fileno(r->near)) == 0;
         pthread_mutex_unlock(&r->found_mu);
-        if (!ok) return -1;
+        if (!ok) return free(snap), -1;
     }
-    int rc = sched_save(r->sched, r->path_state);
+    int rc = sched_write(snap, n, r->path_state);
+    free(snap);
     u64 session = 0;
     for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
     run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + session);

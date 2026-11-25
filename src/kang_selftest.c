@@ -8,6 +8,7 @@
 #ifndef _WIN32
 #include <signal.h>
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 int kang_round_selftest(void)
@@ -116,7 +117,7 @@ static int merge_selftest(void)
 #define MCHK(cond) do { if (cond) { fails++; printf("  merge: check failed at line %d: %s\n", __LINE__, #cond); } } while (0)
     kang_merge_stats a = {0}, a2 = {0}, b = {0}, c = {0}, d = {0};
     char want_id[9];
-    snprintf(want_id, sizeof want_id, "%02x%02x%02x%02x", tag[0], tag[1], tag[2], tag[3]);
+    pz_hex_encode(tag, 4, want_id);
     MCHK(kang_load_log(ks) < 0);               /* 1: a new log was created */
     MCHK(kang_merge_file(ks, pa, &a) != KANG_HDR_OK || a.read != 3 || a.added != 3 || a.solved);       /* A alone does not solve */
     MCHK(kang_merge_file(ks, pa, &a2) != KANG_HDR_OK || a2.read != 3 || a2.added != 0 || a2.dups != 3); /* again: all known */
@@ -227,9 +228,10 @@ static int range_selftest(void)
     return fails;
 }
 
-/* The herd across stops: a herd walks, is saved to herd.bin and read back, and herds of other sizes take it (one with two threads, as a GPU
- * does): every walker taken back is the same point with the same distance, sign and group, the rest start anew; a file of another jump
- * table is not taken. */
+/* The herd across stops: a herd walks, is saved to herd.bin and read back two sessions later (the one between died before its walkers
+ * moved), and herds of other sizes take it (one with two threads, as a GPU does): every walker taken back is the same point with the same
+ * distance, sign and group, the rest start anew; the first one taken removes the file (a run that does not stop well leaves none); a file
+ * of another jump table or another --node is not taken. */
 static bool same_walker(kang_worker *a, int i, kang_worker *b, int j)
 {
     pz_fe ax = a->x[i], ay = a->y[i], bx = b->x[j], by = b->y[j];
@@ -256,10 +258,14 @@ static int herd_selftest(void)
     kang_herd_put(ks, w);
     kang_herd_save(ks);
     ks->nhout = 0;
-    ks->epoch++;                                            /* the next session of this computer */
+    ks->epoch += 2;                                         /* two sessions later: the one between ended before it took the walkers */
     kang_herd_load(ks);
     HCHK(ks->nhin == (size_t)K);
+    char path[700];
+    snprintf(path, sizeof path, "%s/herd.bin", ks->r->cfg.dir);
+    HCHK(access(path, F_OK) == 0);                          /* loaded, not taken yet: still there for a run that would end now */
     kang_herd_start(ks, a, 2, 7);                           /* 150 slots, each with a saved walker of its group while the file has one */
+    HCHK(access(path, F_OK) != 0);                          /* taken: removed */
     kang_herd_start(ks, b, 1, 8);                           /* 100 slots: the rest, and new starts where its group has none left */
     int same = 0, fresh = 0, used[200] = {0};
     for (int pass = 0; pass < 2; pass++) {
@@ -276,13 +282,20 @@ static int herd_selftest(void)
     for (int i = 0; i < 150; i++) mix[0][a->kind[i]]++, mix[1][fresh_a->kind[i]]++;
     kang_worker_free(fresh_a);
     HCHK(same + fresh == 250 && same >= 190 && !memcmp(mix[0], mix[1], sizeof mix[0]));
+    kang_herd_put(ks, a), kang_herd_put(ks, b), kang_herd_save(ks);   /* this run stops well */
     ks->jump_tag[0] ^= 1;                                   /* another jump table: the file is not taken */
     free(ks->hin), ks->hin = NULL, ks->nhin = 0;
     kang_herd_load(ks);
     HCHK(ks->nhin == 0);
-    ks->jump_tag[0] ^= 1, ks->epoch += 5;                   /* nor a file of another session (a crash, a copy on another computer) */
+    ks->jump_tag[0] ^= 1, ks->r->node = 1;                  /* nor by another computer (a copy of the folder) */
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                                    /* the warning of a forgotten --node */
     kang_herd_load(ks);
+    pz_log_set_quiet(was_quiet);
     HCHK(ks->nhin == 0);
+    ks->r->node = 0, ks->epoch += 5;                        /* this computer takes it in any later session */
+    kang_herd_load(ks);
+    HCHK(ks->nhin >= 250);
     kang_worker_free(w), kang_worker_free(a), kang_worker_free(b);
     kang_free_test_state(ks);
     pz_result_line("kangaroo, walkers kept across a stop", "%s", fails ? "FAILED" : "OK");

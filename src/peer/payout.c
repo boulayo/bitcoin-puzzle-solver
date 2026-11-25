@@ -35,12 +35,12 @@ size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least)
     return k;
 }
 
-/* the output of F's cancel and its fee */
-static uint64_t cancel_out(const payout_terms *t, btc_out *out)
+/* the output of F's cancel and its fee, for a cancel of n tiny coins */
+static uint64_t cancel_out(const payout_terms *t, size_t n, btc_out *out)
 {
     *out = (btc_out){.script_len = (uint8_t)t->pay_len[t->first]};
     memcpy(out->script, t->pay_spk[t->first], t->pay_len[t->first]);
-    return btc_fee(btc_vsize_p2pkh(1, out, 1), t->feerate);
+    return btc_fee(btc_vsize_p2pkh(n, out, 1), t->feerate);
 }
 
 /* The outputs of the second transaction from what it spends: of what the fee leaves, the share of the author at 2 and the rest half each,
@@ -60,7 +60,7 @@ static bool second_values(const payout_terms *t, uint64_t all, uint64_t v[3])
 uint64_t payout_tiny(const payout_terms *t)
 {
     btc_out out;
-    const uint64_t need = 2 * cancel_out(t, &out) + 546;
+    const uint64_t need = 2 * cancel_out(t, 1, &out) + 546;
     return need > PAYOUT_TINY_MIN ? need : PAYOUT_TINY_MIN;
 }
 
@@ -112,12 +112,21 @@ bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
 
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx)
 {
-    uint8_t txid[32];
+    payout_coin c = {.vout = 1};
+    if (!first_ok(t, first) || t->pay_len[t->first] > BTC_SPK_MAX || !btc_tx_txid(first, c.txid)) return false;
+    c.value = payout_tiny(t);
+    return payout_sweep(t, &c, 1, tx);
+}
+
+bool payout_sweep(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx)
+{
     btc_out out;
-    if (!first_ok(t, first) || t->pay_len[t->first] > BTC_SPK_MAX || !btc_tx_txid(first, txid)) return false;
-    const uint64_t fee = cancel_out(t, &out);
+    uint64_t all = 0;
+    bool ok = n && n <= BTC_MAX_IN && t->pay_len[t->first] <= BTC_SPK_MAX;
     btc_tx_init(tx);
-    return btc_tx_add_in(tx, txid, 1, BTC_SEQUENCE_FINAL) && btc_tx_add_out(tx, payout_tiny(t) - fee, out.script, out.script_len);
+    for (size_t i = 0; ok && i < n; i++) all += coins[i].value, ok = btc_tx_add_in(tx, coins[i].txid, coins[i].vout, BTC_SEQUENCE_FINAL);
+    const uint64_t fee = ok ? cancel_out(t, n, &out) : 0;
+    return ok && all >= fee + 546 && btc_tx_add_out(tx, all - fee, out.script, out.script_len);
 }
 
 bool payout_digests(const btc_tx *tx, const uint8_t puzzle_spk[BTC_P2PKH_LEN], size_t n, uint8_t (*digests)[32])

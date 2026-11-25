@@ -9,8 +9,9 @@
  *   tpm      TPM2_GetRandom, 32 x 32 bytes, through /dev/tpmrm0 or /dev/tpm0 (Linux) or TBS (Windows): 128 bits. No TPM, or no
  *            permission to use it, means the source is skipped, not an error.
  *   caller   the source the caller passes in pz_seed_opts (for example GPU timing jitter): the bits it claims, at most 256.
- *   jitter   CPU timing jitter: rounds of 4096 timer deltas, each around a fixed walk through 1 MiB of memory. 0.5 bit per sample
- *            that is not stuck, at most 256, and the live estimate of the round must reach 1 bit per sample.
+ *   jitter   CPU timing jitter: rounds of 4096 timer deltas, each around the same walk through 1 MiB of memory (longer where the timer
+ *            is coarse or the machine quiet), so that they differ by noise alone. 0.5 bit per sample that is not stuck, at most 256,
+ *            and the live estimate of the round must reach 1 bit per sample; a machine whose timing is too quiet has it refused.
  *   os       getrandom (Linux), getentropy (macOS, BSD), BCryptGenRandom (Windows): 1024 bytes in two calls, 256 bits. Read last,
  *            so that its output spends the least time in memory.
  * The system context (process ids, clocks, host name, boot id, OS and CPU) is public and credited 0 bits: it only makes the salt.
@@ -35,7 +36,8 @@
  * Memory: the raw output of every source is kept in one region locked in RAM (mlock, VirtualLock), left out of core dumps and seen
  * as zeros by a forked child (Linux), and wiped before it is unmapped. The report holds counts and reasons, never data.
  * Unlike the rest of pzcore this module talks to the operating system: it maps pages, reads the TPM device and the clock, and on
- * Windows needs bcrypt (tbs.dll is loaded at run time). Thread-safe; one call takes about 15 ms. */
+ * Windows needs bcrypt (tbs.dll is loaded at run time). Thread-safe; one call takes about 10 ms where the jitter passes at once, up to
+ * max_ms more where it does not and nothing else gives the 128 bits. */
 #ifndef PZCORE_SEED_H
 #define PZCORE_SEED_H
 

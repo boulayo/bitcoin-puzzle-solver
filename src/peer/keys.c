@@ -112,18 +112,13 @@ int keys_file_read(const char *path, uint8_t out[32], char *err, size_t errlen)
 /* through a new file, synced, that takes the place of the old one: a crash leaves either */
 bool keys_file_write(const char *path, const uint8_t v[32])
 {
-    char tmp[1100], hex[66];
-    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp) return false;
-    (void)remove(tmp);                                         /* a leftover of a crash, or a link put there */
-    const int fd = sys_create_secret(tmp);
-    if (fd < 0) return false;
+    char hex[66];
+    FILE *f = sys_new_file(path, true);
     pz_hex_encode(v, 32, hex);
     hex[64] = '\n';
-    bool ok = write(fd, hex, 65) == 65 && sys_sync(fd);
-    ok = close(fd) == 0 && ok;
+    const bool ok = sys_new_file_done(f, path, f && fwrite(hex, 1, 65, f) == 65);
     pz_secure_zero(hex, sizeof hex);
-    if (!ok || !sys_replace(tmp, path)) return remove(tmp), false;
-    return true;
+    return ok;
 }
 
 int keys_seed_file(const char *path, uint8_t out[32], char *err, size_t errlen)

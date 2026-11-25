@@ -408,7 +408,7 @@ int main(void)
 
     chain_spv c;
     session_chain ch;
-    payout_coin coins[8], one;
+    payout_coin coins[8];
     char why[200];
     uint8_t fid[32], f2id[32];
     memcpy(fid, W.t[ifund].txid, 32), memcpy(f2id, W.t[ifund2].txid, 32);
@@ -417,7 +417,7 @@ int main(void)
     view(&c, &ch, &honest, NULL, NULL);
     CHECK(chain_spv_ready(&c, why, sizeof why) == 1 && ch.height(ch.ctx) == 4);
     CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 1 && coins[0].value == 100000000 && !memcmp(coins[0].txid, fid, 32) && coins[0].vout == 0);
-    CHECK(ch.coin(ch.ctx, fid, 0, pspk, &one) == 1 && one.value == 100000000 && ch.coin(ch.ctx, f2id, 0, pspk, &one) == 0);
+    CHECK(!ch.coin);                                           /* the prizes are among the coins listed */
     CHECK(ch.confirmations(ch.ctx, fid, 0) == 4 && ch.confirmations(ch.ctx, f2id, 0) == -1 && ch.confirmations(ch.ctx, other, 0) == -2);
     CHECK(ch.feerate(ch.ctx) == 3000);
     c.max_tip_age = 3600;                                      /* the last block is two days old */

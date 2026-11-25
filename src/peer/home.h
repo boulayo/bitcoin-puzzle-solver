@@ -8,6 +8,12 @@
 
 #include <stdbool.h>
 
+#define PZSOLVE_STOP_MS 60000      /* a stopped pzsolve saves its state (the walkers of a GPU too) within this, or is interrupted */
+
+/* A line for the owner of the home on the terminal, with the time, and into the debug log (home_say_secret: not into it). */
+void home_say(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void home_say_secret(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
 typedef struct {
     const char *network;            /* the network file; NULL: the network of puzzle (written in the program) */
     int puzzle;                     /* 0: the first open puzzle with a public key */

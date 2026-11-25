@@ -101,7 +101,7 @@ pzsolve uses it for the seed of every new campaign.
 | CPU generator: RDSEED, else RDRAND (x86-64); RNDRRS, else RNDR (arm64) | 128 words; 1024 from RDRAND or RNDR | 128 (RNDR 64) | no |
 | TPM 2.0: `TPM2_GetRandom` on `/dev/tpmrm0` or `/dev/tpm0` (Linux), TBS (Windows) | 32 × 32 bytes | 128 | yes |
 | the caller's source (GPU timing jitter from pzsolve or pzpeer, later) | fixed by the caller, at most 64 KiB | what it claims, at most 256 | yes |
-| CPU timing jitter: timer deltas around a fixed walk through 1 MiB | rounds of 4096 samples | 0.5 per sample that is not stuck, at most 256 | yes |
+| CPU timing jitter: timer deltas around the same walk through 1 MiB | rounds of 4096 samples | 0.5 per sample that is not stuck, at most 256 | yes |
 | OS generator: getrandom, getentropy, BCryptGenRandom | 2 × 512 bytes | 256 | mandatory |
 | system context: process ids, clocks, host, boot id, OS, CPU | | 0: it is the public salt | |
 
@@ -127,22 +127,24 @@ pzsolve uses it for the seed of every new campaign.
   is unmapped; `PZ_SEED_HARDEN` also turns core files off and makes the process non-dumpable. The report gives the bits and the reasons
   of each source, never data.
 
-The walk of the samples goes on from one to the next, with branches on the data, so on a machine without noise its deltas would vary
-by the work alone. So before the rounds the same work (the same addresses, no branch on the data) is timed 64 times: when all those
-deltas are equal there is no noise to measure, and the source is refused (since 2026-11-20). Timing that same work for every sample
-was tried: it varies too little on the machines of the CI (0.6 to 1.1 bits a sample), and a lower threshold let timers without noise
-pass the tests.
+Every sample times the same work, the walk from its first step with the same addresses and no branch on the data, so only noise makes
+two samples differ and the health tests and the live estimate measure that noise and nothing else (since 2026-11-25). Before, the walk
+went on from one sample to the next with branches on the data: its deltas varied by the work too, also on a machine without noise, and a
+noiseless machine behind a timer coarser than its clock passed by the beat between work and tick. The walk now doubles until the median
+delta is at least 64 granules of the timer and a pilot of 256 samples shows at least 2 bits a sample, up to 2^14 steps; a machine whose
+timing still shows too little noise has the source refused ("too little noise"), and its home seed then needs a TPM (or must be made on
+another computer and copied).
 
 **Measured** on 2026-11-08 on the development machine, a VM (Intel Xeon at 2.3 GHz, 4 vCPUs under KVM, Linux 6.18), with
 `tools/research/seed_assess.c`, which runs the generator's own collector:
 
 | | |
 |---|---|
-| Min-entropy of the jitter, 10^6 samples | **6.61 bits per 8-bit sample** (lowest estimator: t-tuple; MCV 6.89, 8 × Markov 6.78). The prototype measured 6.44 on the same kind of VM |
+| Min-entropy of the jitter, 10^6 samples | **4.84 bits per 8-bit sample** with the same work in every sample (lowest estimator: LRS; 2026-11-25). The walk that varied from sample to sample measured 6.61, which counted its work as noise |
 | Samples for 128 bits | 39 at a safety factor of 2, 78 at 4. The generator credits 0.5 bit per sample, 13 times less, and needs 256 |
 | Restart test (SP 800-90B 3.1.4), 1000 processes × 1000 samples, H_I = 6 | sanity check passed (a value at most 30 times at one position, cutoff 36); min(H_rows, H_columns) = 6.44 |
 | Live estimate, 1000 generations | 5.70 to 6.13 bits per sample, median 5.99 (the threshold is 1); 4058 to 4090 samples of 4096 not stuck; no second round ever needed |
-| Time of a seed | median 9.7 ms, 99% under 14 ms (the jitter is 97% of it); with the other 3 vCPUs busy, median 22 ms, live estimate unchanged |
+| Time of a seed | median 9.7 ms, 99% under 14 ms (the jitter is 97% of it); with the other 3 vCPUs busy, median 22 ms, live estimate unchanged. With the same work, 7 to 11 ms, live estimate 4.2 to 5.6 |
 | Elsewhere | under Wine 5.9 to 6.0 bits per sample, and TBS answers "no TPM"; under qemu-aarch64 (RNDRRS, emulated counter) 3.0, which says nothing of real arm64 |
 | `lib/pzcore/tests/t_seed.c` | 39 cases of broken, missing and attacker-known sources, all as the rules say; a malicious CPU generator sets a XOR combiner to its target, and with every other input known 2^16 tries fix 13 to 17 bits of the HKDF seed (about log2 of the work); 2000 seeds with only the OS honest: no duplicate, bits and bytes balanced |
 
@@ -495,8 +497,11 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    the two versions of the terms; one that neither home knows ends the session. The nonce is 32 bytes from the system, new in every session: the partner's
    proof is made over it, and the two nonces make the ids of the signings (step 5), which must never repeat.
 2. `S_PROOF`: the proof of possession of my record over your nonce. Then, and not before, each side asks its chain whether it is up to
-   date and what fee it estimates, and sends `S_FEE`, the fee rate it proposes (8 bytes): a stranger's hello makes a home ask its chain
-   nothing (before, the rate came in the hello, and the chain was asked for it). The fee rate is the higher of the two. Each proposes
+   date, and sends `S_SECOND`: the second transaction of a payout of this pair it signed in an earlier session (empty when none). A side
+   without one takes the partner's, checked as in step 7; when either has one, the session settles that payout (steps 6 to 8) instead of
+   making a new one: a home stopped after it signed a second transaction, or one that lost its record of it, still gets paid and its
+   key. Then each side asks what fee its chain estimates, and sends `S_FEE`, the fee rate it proposes (8 bytes): a stranger's hello makes
+   a home ask its chain nothing (before, the rate came in the hello, and the chain was asked for it). The fee rate is the higher of the two. Each proposes
    twice the estimate of its chain for a confirmation within 2 blocks, at least 20 and at most 1000 sat/vB: these transactions move a
    prize, and no such fee is large beside it. A rate above the home's limit ends the session, and so does a partner's rate more than 4
    times the home's own: every try of the payout pays it from the prize. It shows the distance, hence the piece, so no other proof of the piece
@@ -505,8 +510,12 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    most (it makes them at once); every later message 5 minutes. Until the partner proved its distance a wait counts from its start,
    and `S_ALIVE` does not move it; after, each `S_ALIVE` gives another wait, for 2 hours at most (the partner's chain may be behind).
 3. `S_PLAN`: `SHA256("pznet1/plan" || the first transaction)`, which each side built on its own from the confirmed coins of the puzzle
-   (section 8); a different hash stops the session. Then the two-party signing of its inputs (step 5; only now, when the partner has
-   proved its distance and builds the same transaction), the broadcast by both, and one confirmation.
+   (section 8); a different hash stops the session. A light chain whose servers show no coin at the puzzle address proves nothing (the
+   servers may hide them): the session ends and a later one asks again, while on a node of its own an empty address means the prize was
+   taken. Then the two-party signing of its inputs (step 5; only now, when the partner has proved its distance and builds the same
+   transaction), the broadcast by both, sent again at every block, and one confirmation. F first sends to its payout address its tiny
+   coins of earlier sessions of the pair whose first transaction's prize output is spent in a block (a failure or a restart left them:
+   no second transaction can take them any more).
 4. `S_PLAN` again for the second transaction, built from the first; then F sends `S_TINYSIG`, the scriptSig of its tiny coin, which S checks.
 5. The two-party signing: pzsign on each side, its messages (0x81) relayed as `S_SIGNER(more, bytes)` in pieces of at most 65 000 bytes,
    `more` = 1 on all but the last piece; `S_SIGNED(status)` ends the messages of a side. Each signing has its id
@@ -518,20 +527,23 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    check failed (project 4.6); the `S_SIGNED` with no signatures that follows stops the partner. A signing ends when no whole message
    of the partner came for 5 minutes, and after 15 minutes in all, whatever else comes on the channel (one more wait at most);
    signatures that verify are kept whatever the partner sends after them, or however it leaves.
-6. S sends the second transaction. F waits 3 blocks for the prize to move; if it does not, F sends the cancel, its tiny coin to its payout
-   address, and the transaction S may be holding is worth nothing; it sends the cancel again at every block until it is in a block, or
-   the prize moves. A spend counts only once it is in a block: one in the mempool can still leave it, and S hold the second transaction
-   again. F also sends the second transaction itself when it got the whole signature, and then does not cancel. A wait for n blocks counts them from the first height the node gives, and gives up after
-   (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the session ends instead of waiting for
-   ever, and F, then, tries its cancel.
+6. S keeps the second transaction (`HOME/paid`) and sends it, again at every block until the prize moves; it stops waiting when F's tiny
+   coin is spent alone in a block, the cancel, which voids it. F waits 3 blocks for the prize to move; if it does not, F sends the cancel,
+   its tiny coin to its payout address, and the transaction S may be holding is worth nothing; it sends the cancel again at every block
+   until it is in a block, or the prize moves. A spend counts only once it is in a block: one in the mempool can still leave it, and S
+   hold the second transaction again. F also sends the second transaction itself when it got the whole signature, and then does not
+   cancel. A wait asks the chain once a block (and again while it does not answer); a wait for n blocks counts them from the first height
+   the node gives, and gives up after (n + 6) × 20 minutes if the chain stops (a node that stops answering keeps its last height): the
+   session ends instead of waiting for ever, and F, then, tries its cancel. A wait also gives up two blocks after the coins it waits on
+   went another way in a block (an old copy of the first transaction, another pair's).
 7. The payout counts only when the spend of output 0 of the first transaction is this pair's second transaction: another pair's first
    transaction can spend it too, the prize going back to the puzzle address. With the whole signature a side checks that its second
-   transaction is in a block; F without it checks that the prize did not come back to the address. Then `S_SECOND`: the second
-   transaction, signed, from each side that has it (empty otherwise); F takes S's, checked (it spends outputs 0 and 1 of the first, pays
-   the two payout addresses, and both its inputs are validly signed, which only the two homes together can do for the first).
+   transaction is in a block; F without it checks that the prize did not come back to the address. The second transaction F gets in the
+   `S_SECOND` of a later session is checked: it spends outputs 0 and 1 of one first transaction (the one F saw paid, if it saw it), pays
+   the two payout addresses and the author, and both its inputs are validly signed, which only the two homes together can do for the first.
 8. `S_PIECE`, once the payout is settled: the secret piece of the side, 32 bytes. Settled means 6 confirmations of the second transaction,
-   proven by a block that holds it (when both its outputs are spent already and its depth cannot be read, the state must have held for 6
-   blocks in a row), output 0 of the first spent in a block, no transaction of the mempool that touches the puzzle address (a light chain
+   proven by a block that holds it (by its outputs, the author's among them, which is seldom spent soon; when all three are spent already
+   and its depth cannot be read, the state must have held for 6 blocks in a row), output 0 of the first spent in a block, no transaction of the mempool that touches the puzzle address (a light chain
    does not show a coin whose spend waits there), and less than 100 000 satoshis at the address: the key protects nothing more. Coins of
    100 000 satoshis or more that came to the address after the payout are paid out first, by a new payout of the pair, and the pieces
    follow. Each side checks the piece it gets against the public piece of the partner's record, adds the two, and checks that the sum is
@@ -540,7 +552,8 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    (the prizes of 2015 and of July 2017 are there too: 1.40 BCH and 1.40 BSV at #140, about 300 euros in November 2026, against 14 BTC)
    and whatever comes to the address later. Six confirmations: a reorganization of more blocks has not happened since 2013, and the
    partner would have to make one to take the prize back (a reorganization that takes the second transaction out starts the count again);
-   the exchange waits (6 + 6) blocks of 20 minutes at most.
+   the exchange waits (6 + 6) blocks of 20 minutes at most. A second transaction of an earlier session that is in no block yet is sent
+   again at every block meanwhile; one whose coins went another way (F's cancel, another pair) is forgotten, and a later session pays anew.
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
 failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
@@ -580,8 +593,8 @@ pzsolve encrypted is not read, and its line says so. The terms are shown
 at the first start of a home, which asks to accept them (or `--accept-terms`), and in one line at every start.
 
 **After the payout** (`src/peer/home.c`). The pair, the first and the second transaction and the height go into `HOME/paid`, a line
-each, as soon as the payout is known (before the wait for its confirmations), so that the pieces are still exchanged after a restart: a
-session of a pair in that file only exchanges them (hello, proofs, `S_SECOND`, `S_PIECE`). It is tried
+each, as soon as the second transaction is signed (height 0 until it is seen in a block), so that the payout is settled and the pieces
+still exchanged after a restart: a session of a pair in that file only does that (hello, proofs, `S_SECOND`, `S_PIECE`). It is tried
 again every 10 minutes for a day, until the key is known. The key goes into `HOME/FOUND.txt` and on the terminal, as pzsolve does; when the
 campaign of pzsolve encrypts its key (`--encrypt-pubkey` or `--encrypt-password` after `--`, the public key in its `campaign.conf`), the
 file and the terminal carry only the encrypted line, which `pzsolve decrypt-key` opens. With the prize paid pzsolve has nothing more to
@@ -859,8 +872,11 @@ On the main chain:
 `pzpeer run` without `--rpc` reads the chain from Electrum servers: the `electrum=host:port` lines of the network file and those of
 `--electrum HOST:PORT`, 8 at most; a network of the main chain with none of either uses a built-in list of eight public servers of
 different operators, and the block 969696 as its checkpoint. The connections stay open from one question to the next (a session asks
-every 15 seconds while it waits for a block), and a server that does not answer is left alone for ten minutes. None is trusted: nothing a server says is believed without a proof, and what a lying server can
-still do is hide things, which is a delay and never a wrong payment. The connection is plain TCP, one JSON object a line; as every
+once a block while it waits for one, and the height every 15 seconds); the servers are asked one after another, each with a minute for
+its calls of an operation, and one that does not answer is left alone for ten minutes. None is trusted: nothing a server says is
+believed without a proof, and what a lying server can still do is hide things, which is a delay and never a wrong payment: servers that
+show no coin at the puzzle address do not make the home take the prize for gone (7.5, step 3). The prizes of the network file need no
+lookup of their own here: they are among the coins the servers list, and one outside the largest is never paid out. The connection is plain TCP, one JSON object a line; as every
 answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
 client) and `chain_spv.c`, a second `session_chain` beside `chain_rpc.c`; a node of one's own stays the stronger choice, as it also
 checks the rules that the proof of work alone does not (below).
@@ -995,7 +1011,7 @@ kernel), the host checks each on the CPU (`run_scan_candidate`, which also takes
 **The network.** A network file with `address=` (the P2PKH address of the puzzle, of its chain) and `blockbits=` in place of `pubkey=`,
 `jumpseed=`, `schema=` and `dpbits=` is a linear search; the network of every puzzle of the table without a known public key is in the
 program, with blocks of 2^44 keys (`pzpeer run --puzzle 71`, `pzpeer netcheck 71`). The range is cut into blocks of 2^blockbits keys
-from its start, the last one maybe shorter.
+from its start, the last one maybe shorter (`block_range`, `block_count`): puzzle 71 has 2^26 of them.
 
 **The claim of a block (`block.c`, `t_block`).** A *proof key* of a block is a near miss (blocks of 34 to 37 bits: bytes 8 to 11 of the
 target's) or a near miss with byte 12 of the target's too (42 to 45 bits): 16 in a block of 2^36 or 2^44 on average, 4 in one of 2^34
@@ -1009,29 +1025,39 @@ target's) or a near miss with byte 12 of the target's too (42 to 45 bits): 16 in
 | offsets | 6 each | of the proof keys in the block, increasing |
 | signature | 64 | BIP340, by the owner, over `SHA256("pznet1/block" \|\| F \|\| the fields before it)` |
 
-and is valid with a good signature, increasing offsets inside the block, every key a proof key, and at least a quarter of the
-average number of them (an honest scan has fewer once in a thousand blocks, and that block is done again). Checking a claim costs
-some tens of hashes. A claim shows that most of the block was tried; it cannot show that no key was skipped.
+and is valid with a good signature, increasing offsets inside the block, every key a proof key, and at least half the average number
+of them (`block_min_proofs`: 8 at 36 and 44 bits), so that a false claim costs half a block of work on average. An honest scan has
+fewer in about one block in a hundred at 36 and 44 bits (one in ten at 34 and 42, one in a thousand at 37 and 45): its claim is kept
+by its home, which does not scan that block again, but not taken by the custodians, and other homes may scan it again. Those blocks
+cost little of the time to the key, which they do not hide (whoever scans one finds the key in it). Checking a claim costs some tens of
+hashes. A claim shows that at least half of the block was tried, on average; it cannot show that no key was skipped.
 
 **The register (`claims.c`, `dht_claim.c`).** A claim goes to the 5 nodes closest to `SHA256("pznet1/blockkey" || F || index)`, with
-`CLAIM(claim)` (type 32, answered `CLAIMED(status)`: 0 stored, 1 already there, 2 refused for now, 3 not valid), from its owner only
-(the owner in the claim is the identity of the connection), within the rate of the records of its address block, to a node that may be
-a custodian of that key, checked before it is kept. A custodian keeps at most 4 owners of a block, 2^21 claims in all, in `claims.bin`.
-`CLAIM_GET(index)` (34) is answered `CLAIMS(n, n × (length 2, claim))` (35), and whoever asks checks each claim itself.
+`CLAIM(claim)` (type 32, answered `CLAIMED(status)`: 0 stored, 1 already held from this owner, 2 nothing new, 3 refused (not a
+custodian of that key, the rate, 4 owners of the block already, the store full), 4 not valid or not written), from its owner only (the
+owner in the claim is the identity of the connection), within the rate of the records of its address block, checked before it is
+kept. The first three leave the claim held. A custodian keeps at most 4 owners of a block, and another owner only with a proof key
+that the claims it holds of the block lack: the proof keys of a block are the same for whoever scans it, so a claim copied under a new
+identity, which costs nothing, brings none ("nothing new"), while the scan of a block that a false claim covered brings the keys the
+false claim left out. 2^21 claims in all, in `claims.bin`; a slot that cannot be read (a write cut by a crash) ends the file there at the
+next start. `CLAIM_GET(index)` (34) is answered `CLAIMS(n, n × (length 2, claim))` (35), and whoever asks checks each claim itself.
 
-**The home (`linear.c`).** `pzpeer run` on a linear network: no payout, no terms, no chain. The home picks a block at random, asks its
-custodians whether anyone claimed it, and tries another one while it is claimed (64 at most: then it scans a claimed one again, a
-second pass, so that a false claim delays the key and does not hide it); with many homes two seldom pick the same block. Then
-`pzsolve hunt -r BLOCK -a ADDRESS --near --stop-with-input` scans it (the campaign `campaigns/b<index>`, which a restart resumes:
-the block under way is in `block`); at its end the home makes the claim from `near.txt`, publishes it, keeps it in `claims.own`
-(sent again every day) and deletes the campaign. A key found stays in `FOUND.txt` of its campaign, and the home stops.
+**The home (`linear.c`).** `pzpeer run` on a linear network: no payout, no terms, no chain. The home picks a block at random that it
+did not scan itself, asks its custodians whether anyone claimed it, and tries another one while it is claimed. After 64 claimed ones,
+the second pass: of those 64, the one whose claims show the fewest proof keys is scanned again, so that a false claim, which shows few,
+delays the key and does not hide it. With many homes two seldom pick the same block. Then `pzsolve hunt -r BLOCK -a ADDRESS --near
+--stop-with-input` scans it (the campaign `campaigns/b<index>`, which a restart resumes: the block under way is in `block`); at its end
+the home makes the claim from `near.txt`, keeps it in `own_claims.bin` (a file of claims as above: the blocks this home scanned),
+publishes it when it has enough proof keys, and deletes the campaign. Its claims go to their custodians again from two minutes after a
+start, one a turn of the loop, and then every day. A key found stays in `FOUND.txt` of its campaign, and the home stops. Options of
+pzsolve after `--` are refused when pzpeer sets them itself, `--part` among them (half a block would be claimed).
 
-**The time.** Every 10 minutes a line: the blocks this home claimed, and the claims the network holds, estimated as those this node
-keeps × nodes / 5 (a home that does not listen keeps none, and shows no estimate).
+**The time.** Every 10 minutes a line: the blocks this home scanned, and the claims the network holds, estimated as those this node
+keeps × nodes / 5 (a home that does not listen keeps none, and shows no estimate). A block has one claim, seldom more.
 
 **Not done.** Spot checks, where a node scans a random slice of a claimed block and asks the owner for its near misses of that slice (a
 near miss the owner cannot show would be a proof of fraud that everyone can check): they need a protocol of their own. Without them a
-false claim costs the network the time to its second pass.
+false claim costs the network the time to its second pass, which takes the blocks with the fewest proof keys first.
 
 **When the key is found** nothing is sent. pzsolve and the home warn not to spend it through the public mempool: the transaction shows
 the public key, and with a key that short anyone finds the private key in seconds and sends the coins elsewhere first. `pzpeer sweep`

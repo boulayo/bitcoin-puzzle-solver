@@ -55,9 +55,10 @@ Una rete che divide premi fra sconosciuti: avvertenze, responsabilità, eventual
 - prova della cifratura su un Windows vero;
 - cancellare i rami di prova vecchi su GitHub (`test-122`, `test-123`, `test-1231`, `test-1232`, `test-gpu-*`, `fix-intel-cl`);
 - misurare la velocità di pzsolve su una RTX 4090 (ipotesi I10: tutti i tempi dipendono da questo numero).
-- `t_session` con il vero pzsign si è fermato una volta sul Mac arm64 della CI (20 novembre, giro 77, dopo 38 minuti), e non si è
-  ripetuto (giri 78 e 79, e otto prove insieme su Linux). Ora un caso che dura più di 5 minuti fa fallire la prova con il suo nome: se
-  ricapita, si sa dove guardare.
+- ~~`t_session` con il vero pzsign si è fermato una volta sul Mac arm64 della CI~~ (20 novembre): era la prova, non il programma. Nel
+  caso "una vecchia copia della prima transazione" un filo della prova aspettava di vederla nella mempool, e se il blocco arrivava
+  prima aspettava per sempre (riprodotto: una volta su 471). Ora la copia prende il posto della transazione nel momento stesso in cui
+  è mandata (3.11, punto 5).
 
 ---
 
@@ -262,6 +263,45 @@ all'indirizzo dell'autore anche quando una casa trova la chiave da sola.
 | N3 | La parte attesa del premio, come la stima del tempo, la vede solo una casa che accetta connessioni | Come L2 |
 | N4 | Nella prova con tre case le coincidenze fra case diverse erano dieci volte più rare del previsto | **Causa trovata, corretto.** Con 14 bit di zeri ogni casa trovava circa 900 punti al secondo e ne pubblicava qualche centinaio: la rete ne vedeva solo dal 16 al 36%, e gli incontri crescono col quadrato dei punti visti. Il cammino è giusto: due pzsolve affiancati, confrontando tutti i punti, si incontrano quanto previsto. La prova ora usa 16 bit (la rete vede tutti i punti, la coppia paga al primo tentativo), e la casa avvisa quando ha punti in attesa di pubblicazione |
 | N5 | Quanti punti al secondo può pubblicare una casa | Qualche centinaio su questa macchina di prova. Sulla rete del #140, con 30 bit di zeri, basta per decine di schede video in una stessa casa; oltre, la casa pubblica in ritardo (e lo dice). Dal 18 novembre una casa non fa più una ricerca per punto (F2): nella prova con tre case la rete vede tutti i punti anche con 14 bit di zeri. E con i bit di zeri adattivi (C2b) una rete grande ha molti meno punti per casa |
+
+### 3.11 Dalla revisione del 20 novembre (quattro revisori), corretto il 25 novembre
+
+Nessun modo di rubare il premio. Tutto quello che segue è corretto, con una prova per ciascun punto dove si poteva.
+
+| | Cosa | Com'è ora |
+|---|---|---|
+| 1 | Ricerca lineare: con blocchi da 2^44 si potevano dichiarare solo i primi 2^20 blocchi (1 su 64 per il puzzle 71) | `block_range` e `block_count` in `block.c`, un solo calcolo; rifiutati solo i blocchi oltre la fine dell'intervallo |
+| 2 | La risposta di un custode alla prova di un punto veniva sempre scartata | corretta, e da quella risposta si prendono solo le coppie del punto provato |
+| 3 | Con la catena leggera, server che non mostrano monete facevano credere preso il premio | una risposta vuota dei server non prova niente: la sessione finisce e una successiva richiede |
+| 4 | Una riga vecchia dei fallimenti, già al limite, non riceveva mai la data | scritta anche quando la firma viene rifiutata |
+| 5 | La prova bloccata sul Mac (vedi 1.5) | la copia nell'invio stesso; il filo dell'altra coppia finisce con il caso |
+| 6 | pzsolve: un avvio fallito faceva buttare il branco salvato | `herd.bin` non dipende più dal numero di sessione, e viene cancellato quando il primo camminatore riparte |
+| 7 | `--part` dopo `--` faceva dichiarare mezzi blocchi | rifiutato |
+| 8 | Una dichiarazione falsa costava un quarto di blocco | metà; nel secondo giro si rifà per primo il blocco con meno chiavi di prova, mai uno della casa stessa |
+| 9 | Una dichiarazione si copiava con identità nuove senza cercare | un altro proprietario è tenuto solo con una chiave di prova che manca alle dichiarazioni già tenute |
+| 10 | Un nodo della ricerca lineare accettava record del canguro (5 GB di disco gratis) | rifiutati |
+| 11 | 6to4 e Teredo: ogni indirizzo era un blocco a sé (limiti aggirati) | contano come gli altri indirizzi IPv6 |
+| 12 | Un custode ostile fermava la pubblicazione per un'attesa a record | una sola prova per custode, con tutti i suoi record |
+| 13 | Avvisi falsi con un record vero intasavano il filo di lavoro della vittima | un tetto per blocco di indirizzi, i lavori a turno, una sola ricerca dell'altro proprietario |
+| 14 | Due copie piantate nascondevano il vero proprietario | il custode tiene tutti gli "altri" del punto |
+| 15 | Una casa riavviata prima del blocco della seconda transazione dimenticava il pagamento | la seconda transazione è salvata appena firmata, e ogni sessione comincia scambiandola: chi non l'ha la prende dall'altro |
+| 16 | S mandava la seconda transazione una volta sola, e dopo l'annullamento aspettava 144 blocchi | mandata di nuovo a ogni blocco; S smette di aspettare quando F annulla |
+| 17 | Un pzsign che non parte faceva contare tentativi di pagamento | non conta, la sessione dice perché e avvisa il partner; all'avvio si prova `pzsign version` |
+| 18 | Lo scambio dei pezzi non si chiudeva se le due case avevano già speso le loro uscite | conta anche l'uscita dell'autore |
+| 19 | La monetina di F restava sulla sua chiave nei fallimenti | F la manda al suo indirizzo alla sessione dopo, quando nessuna seconda transazione la può più prendere |
+| 20 | pzpeer aspettava pzsolve senza limite | un minuto, poi l'interruzione, poi la chiusura forzata |
+| 21 | La ripubblicazione dei record bloccava il ciclo della casa | fra un pacchetto e l'altro passa chi aspetta |
+| 22 | Ricerca lineare: registro della casa, slot illeggibili, ripubblicazione, scelta del blocco | registro della casa nel formato dei custodi (`own_claims.bin`), slot rotti tagliati, ripubblicazione due minuti dopo l'avvio e poi ogni giorno, una per giro |
+| 23 | pzsolve: `--node` nel suggerimento di ripresa | aggiunto. `--dp-bits` diverso su una campagna di rete: **lasciato**, perché è pzpeer stesso a cambiarlo (con `dpbits.txt`) |
+| 24 | Seme: il controllo dei 64 campioni non separava il rumore | ogni campione misura lo stesso lavoro; una macchina senza rumore vede la fonte rifiutata, e il seme della casa si fa allora con un TPM o su un altro computer |
+| 25 | Pubblicazione lenta (una connessione alla volta) | in parallelo, e la ripubblicazione ordinata per chiave |
+| 26 | Apertura del registro quadratica | un solo ordinamento |
+| 27 | La variante del canguro scelta da un solo campione | tre campioni alternati per forma |
+| 28 | Le attese chiedevano la catena a ogni giro | una volta per blocco; l'esame dell'indirizzo solo quando decide qualcosa |
+
+Sul punto 8: con la soglia a metà, un blocco onesto su cento circa non si può dichiarare. La casa che l'ha cercato lo tiene per sé e
+non lo rifà, ma altre case lo possono riprendere: il tempo atteso per la chiave cresce di meno dell'1%, la fine del primo giro un po'
+di più (quei blocchi vengono ripresi più volte).
 
 ### 3.5 Librerie
 

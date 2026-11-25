@@ -16,6 +16,7 @@
 #include <stdint.h>
 
 #define NETFILE_OPTS_MAX 4096    /* the canonical optional lines */
+#define NETFILE_LINE_MAX 256     /* a line of the file */
 
 typedef struct {
     /* the lines that define the network */
@@ -48,6 +49,9 @@ bool netfile_load(const char *path, netfile *nf, char *err, size_t errlen);
 bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen);
 /* What the checks of the claims need of a linear network. */
 void netfile_blocks(const netfile *nf, block_net *out);
+/* The value of the i-th optional line "key=value" (0 the first, in the canonical order), into out; NULL when there is no such line, or
+ * when it does not fit (NETFILE_LINE_MAX always fits). */
+const char *netfile_opt(const netfile *nf, const char *key, int i, char *out, size_t cap);
 /* The network of the file at path, or of puzzle n when path is NULL. */
 bool netfile_get(const char *path, int n, netfile *nf, char *err, size_t errlen);
 

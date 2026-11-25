@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # The shared linear search on one machine (docs/en/NETWORK.md 11): a custodian node and two homes (pzpeer run on a network with an address,
-# each with its pzsolve) over two blocks of 2^34 keys, the key of the test in block 1. It passes when the key is found, in FOUND.txt of the
-# home that scanned block 1, and the claim of block 0, with its proof keys, is held by the node. The two homes start together, when no
-# block is claimed yet, so they may scan the same block first; a block is about 5 minutes of 2 threads, the test 10 at most. No bitcoind:
-# a linear search pays nothing.
+# each with its pzsolve) over two blocks of 2^34 keys, the key of the test in block 1. Home a starts on block 0 and home b on block 1 (the
+# file "block" of a home is the block it resumes). It passes when home b finds the key, in FOUND.txt, and home a ends block 0: claimed,
+# with its claim held by the node, or, about one time in ten at this size, with fewer proof keys than a claim needs (then not claimed,
+# and said so). A block is about 5 minutes of 2 threads. No bitcoind: a linear search pays nothing.
 # Usage: tests/peer/e2e_linear.sh    (pzsolve and pzpeer built)
 set -u
 BIN=$(pwd)/build
 DIR=$(mktemp -d /tmp/pzlin.XXXXXX)
-trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$DIR"' EXIT
+stop() { kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; }
+trap 'stop; rm -rf "$DIR"' EXIT
 PORT=${PZ_E2E_PORT:-31000}
 START=$((1 << 40))
 K=$(python3 -c "import random; print(hex($START + (1 << 34) + random.SystemRandom().randrange(1 << 34)))")   # in block 1
@@ -26,29 +27,36 @@ printf 'net=lin%d\npuzzle=0\naddress=%s\nrange=%x:%x\nblockbits=34\nchain=regtes
 "$BIN/pzpeer" node --network "$DIR/net.txt" --dir "$DIR/n" --listen $PORT --no-portmap > "$DIR/n.log" 2>&1 &
 sleep 2
 port=$PORT
+block=0
 for h in a b; do
     port=$((port + 1))
-    timeout 900 "$BIN/pzpeer" run --network "$DIR/net.txt" --dir "$DIR/$h" --listen $port --no-portmap \
+    mkdir -m 700 "$DIR/$h" && echo $block > "$DIR/$h/block"
+    timeout 1200 "$BIN/pzpeer" run --network "$DIR/net.txt" --dir "$DIR/$h" --listen $port --no-portmap \
         --pzsolve "$BIN/pzsolve" --debug "$DIR/$h.debug" -- -t 2 --no-gpu > "$DIR/$h.log" 2>&1 &
-    eval "P_$h=\$!"
+    block=$((block + 1))
     sleep 1
 done
-found=
-for t in $(seq 1 900); do
-    for h in a b; do ls "$DIR/$h"/campaigns/b*/FOUND.txt >/dev/null 2>&1 && found=$h; done
-    [ -n "$found" ] && break
+found= ended=
+for t in $(seq 1 1200); do
+    [ -f "$DIR/b/campaigns/b1/FOUND.txt" ] && found=1
+    ended=$(grep -h "block 0 scanned" "$DIR/a.log" | head -1)
+    [ -n "$found" ] && [ -n "$ended" ] && break
     sleep 1
 done
 sleep 3
-kill $P_a $P_b 2>/dev/null; wait $P_a $P_b 2>/dev/null
+stop
 for h in a b; do echo "--- home $h"; sed 's/^/   /' "$DIR/$h.log" | grep -v "^   *$" | tail -8; done
-claimed=$(grep -h "block 0 scanned and claimed" "$DIR/a.log" "$DIR/b.log" | head -1)
-held=$(( $(stat -c %s "$DIR/n/claims.bin" 2>/dev/null || echo 40) > 40 ))
-if [ -n "$found" ] && grep -qi "$(printf '%x' "$K" | sed 's/^0*//')" "$DIR/$found"/campaigns/b1/FOUND.txt && [ -n "$claimed" ] && [ "$held" = 1 ]; then
-    echo "   the key found by home $found; $claimed; the node holds the claims"
+held=$(( $(wc -c < "$DIR/n/claims.bin" 2>/dev/null || echo 40) > 40 ))
+case "$ended" in
+*"and claimed"*) claimed=$held ;;
+*"not claimed"*) claimed=1; echo "   block 0 had too few proof keys to be claimed (about one time in ten with blocks of 2^34 keys)" ;;
+*) claimed=0 ;;
+esac
+if [ -n "$found" ] && grep -qi "$(printf '%x' "$K" | sed 's/^0*//')" "$DIR/b/campaigns/b1/FOUND.txt" && [ "$claimed" = 1 ]; then
+    echo "   the key found by home b; $ended; the node holds the claims: $held"
     echo "E2E LINEAR PASSED"
     exit 0
 fi
-echo "E2E LINEAR FAILED (found: ${found:-none}; block 0 claimed: ${claimed:-no}; claims at the node: $held; files in $DIR)"
+echo "E2E LINEAR FAILED (key found: ${found:-no}; block 0: ${ended:-not ended}; claims at the node: $held; files in $DIR)"
 trap - EXIT
 exit 1

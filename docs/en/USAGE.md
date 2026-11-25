@@ -69,7 +69,8 @@ line of the help:
 * `--near` (linear search) writes every **near miss** to `near.txt` of the campaign, one key a line: a key whose hash160 has bytes 8 to 11
   of the target's. One key in 2^32 is one, the engines find them on their way at no cost, and only whoever tried every key of a range
   knows them all: they are the proof, for whoever checks them, that the range was scanned. A block scanned again after a stop writes
-  its near misses again.
+  its near misses again. The kangaroo and BSGS do not try every key: with them `--near` is refused. Given for the first time to a
+  campaign that has already scanned keys, it warns that those have no near misses in `near.txt`.
 
 * `--encrypt-pubkey`, `--encrypt-password` and `--on-found` encrypt the key that is found and run a command when it is: section 11.
 * `--jump-seed HEX` and `--start-key FILE` make a shared walk, the kangaroo of the shared network ([NETWORK.md](NETWORK.md), in
@@ -139,7 +140,7 @@ campaigns/NAME/
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
   herd.bin        kangaroo: where every walker stood when the run stopped, so that the next run of this computer goes on from there
-                  (another computer, or a run after a crash, starts its walkers anew; deleted once the key is found)
+                  (removed while they walk: another --node, or a run after a crash, starts its walkers anew; deleted once the key is found)
   session.txt     total time and sessions
   report.txt      readable report, rewritten every minute with the checkpoint (the first time 2 s after the start, and at the end)
   status.json     state for external programs (includes time left and probabilities), rewritten with report.txt
@@ -149,10 +150,12 @@ campaigns/NAME/
   FOUND.txt       only when the key is found (permissions 0600 on Linux and macOS; on Windows it inherits the folder's rights); with --encrypt-pubkey it holds the encrypted line, not the key (section 11)
 ```
 
-* **Stopping**: Ctrl-C, `kill` or closing the terminal (SIGHUP; under `nohup` it is ignored). The state is saved. A second
+* **Stopping**: Ctrl-C, `kill` or closing the terminal (SIGHUP; under `nohup` it is ignored). The state is saved, and a kangaroo saves
+  its walkers (the log says `stopping: saving the state and the walkers`; reading back the walkers of a GPU can take seconds). A second
   Ctrl-C after half a second exits at once (and loses at most the last minute of work; a kangaroo also loses the steps of its walkers
   since their last distinguished points, section 9.2).
-* **Resuming**: the same command (`hunt -p N`, or `hunt -c NAME`). The seed and the parameters that define the search
+* **Resuming**: the same command (`hunt -p N`, or `hunt -c NAME`, with the same `--node` for a kangaroo: the line printed at the stop
+  gives it). The seed and the parameters that define the search
   cannot change: if you give `-s`, `-r`, `-a`, `-k`, `-m`, `--chunk-bits`, `--bsgs-entries` or `--encrypt-pubkey` different from those of the
   existing campaign, the program **refuses** with an error (it does not silently ignore them); you can however change threads, GPUs,
   ISA, memory and the look of the panel. **`pzsolve list`** shows all the campaigns and their state.
@@ -436,8 +439,9 @@ and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](htt
   engine that got it wrong would be excluded.
 * The compute threads go first on different physical cores, one per core, and only beyond the number of cores on the second SMT thread of a
   core (on Windows the assignment is a hint to the system, which may move the threads).
-* The kangaroo on the CPU uses the same SIMD lanes as the linear search; the variant is chosen by measuring, after a bit-by-bit comparison
-  with the reference one. `bench` says which one is in use and measures every variant with 1 thread, one thread per physical core and all the
+* The kangaroo on the CPU uses the same SIMD lanes as the linear search; the variant is chosen by measuring (three short samples of each,
+  taken in turn, the best of each counted: a busy moment of the machine does not decide it), after a bit-by-bit comparison with the
+  reference one. `bench` says which one is in use and measures every variant with 1 thread, one thread per physical core and all the
   logical threads. On hyper-threaded cores the **mixed** mode (the lane step on the first thread of each core, the scalar step on its SMT
   sibling) is chosen by itself when it measures faster; `PZ_KANG_MIX=0` or `=1` turns it off or on.
 * The kangaroo wastes less with more RAM (a large `--mem` allows lower `dp-bits`); BSGS is limited only by RAM.
@@ -524,15 +528,18 @@ If the computer goes to sleep or hibernates while a campaign is running:
   failures in a row, or more than 40 in all (ten minutes of good launches after a failure reset that count, so that a laptop that sleeps every night
   keeps its card);
 * `hunt --keep-awake` prevents Windows (and macOS, through `caffeinate`) from going to sleep while the campaign runs (sleep becomes possible again at the end). On Linux: `systemd-inhibit`.
-* `hunt --stop-with-input` stops the campaign as a Ctrl-C does (the state is saved) when standard input ends. It is for a program that
-  starts pzsolve: it gives pzsolve a pipe it never writes, and when that program ends, also killed or crashed, the pipe closes and
-  pzsolve ends with it instead of searching on alone (`pzpeer run` does so).
+* `hunt --stop-with-input` stops the campaign as a Ctrl-C does (the state is saved) when standard input ends, and the log says
+  `standard input ended: stopping (--stop-with-input)`. It is for a program that starts pzsolve: it gives pzsolve a pipe it never
+  writes, and when that program ends, also killed or crashed, the pipe closes and pzsolve ends with it instead of searching on alone
+  (`pzpeer run` does so).
 
 The state on disk is never at risk: every write is atomic and the checkpoint is every 60 s. The walkers of a kangaroo are saved in
 `herd.bin` when the campaign stops (Ctrl-C, `kill`, the closing of the terminal, the end of the input of `--stop-with-input`), and the next
-run goes on from where they stood. A run that ends without stopping (a crash, `kill -9`, a power cut, a battery that runs out during the
-sleep, a second Ctrl-C) saves none: the next run starts its walkers anew, and their steps since their last distinguished points are lost,
-about `walkers × 2^dp-bits` (ALGORITHMS.md section 4.7).
+run goes on from where they stood, also after starts that ended before their walkers moved (no compute device, an interrupted GPU
+self-test). A run that ends without stopping (a crash, `kill -9`, a power cut, a battery that runs out during the sleep, a second Ctrl-C)
+saves none; nor does a GPU whose device failed and was not recovered before the stop, even when the stop saves the other walkers (a
+device that is recovered starts a new herd, above, and saves that one). The next run starts those walkers anew, and their steps since
+their last distinguished points are lost, about `walkers × 2^dp-bits` (ALGORITHMS.md section 4.7).
 
 ### 9.3 Symptoms
 

@@ -222,7 +222,7 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     posix_spawn_file_actions_init(&fa);
     posix_spawnattr_init(&at);
 #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
-    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT);   /* macOS: nothing but 0, 1 and 2 reaches it */
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT);   /* macOS: only what the actions below give */
 #else
     posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
 #endif
@@ -234,6 +234,11 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
     else if (log) posix_spawn_file_actions_addopen(&fa, 1, log, app, 0600);
     if (log && from) posix_spawn_file_actions_addopen(&fa, 2, log, app, 0600);
     else if (log) posix_spawn_file_actions_adddup2(&fa, 1, 2);
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+    const bool set[3] = {to || log, from || log, log != NULL};
+    for (int k = 0; k < 3; k++)                                /* what has no pipe and no log is pzpeer's own (curl's answer, its errors) */
+        if (!set[k]) posix_spawn_file_actions_addinherit_np(&fa, k);
+#endif
     const int rc = posix_spawnp(&pid, argv[0], &fa, &at, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     posix_spawnattr_destroy(&at);

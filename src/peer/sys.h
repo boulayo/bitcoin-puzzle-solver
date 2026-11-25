@@ -78,6 +78,9 @@ sys_proc sys_spawn(const char *const argv[], const char *log, int *to, int *from
 int sys_proc_ended(sys_proc p, bool block, int *status);
 void sys_proc_interrupt(sys_proc p);   /* asks it to stop, as a Ctrl-C would */
 void sys_proc_kill(sys_proc p);
+/* Stops a child that ends at the end of its input (pzsolve --stop-with-input): *in closed (and set to -1), then up to grace_ms for it to
+ * end, then an interrupt, ten seconds more, then a kill. Its exit status, or -1. */
+int sys_proc_stop(sys_proc p, int *in, int grace_ms);
 /* The ends of the pipes of sys_spawn: all n bytes, or false (sys_pipe_read: also when nothing comes for timeout_ms). */
 bool sys_pipe_write(int fd, const void *p, size_t n);
 bool sys_pipe_read(int fd, void *p, size_t n, int timeout_ms);
@@ -99,6 +102,11 @@ int64_t sys_size(int fd);
 bool sys_truncate(int fd, uint64_t size);
 bool sys_sync(int fd);                     /* what was written is on the disk */
 bool sys_replace(const char *from, const char *to);   /* from takes the place of to (which may exist), and stays there after a crash */
+/* A file written whole or not at all, for what a crash must not cut: sys_new_file opens path.tmp to write, made anew (a leftover or a
+ * link there is removed first), with secret for this user alone and without a buffer (a secret is not left in one); sys_new_file_done
+ * puts it in the place of path, on the disk, when ok says its writes went well, and else removes it. False when path was not replaced. */
+FILE *sys_new_file(const char *path, bool secret);
+bool sys_new_file_done(FILE *f, const char *path, bool ok);
 bool sys_remove_dir(const char *path);     /* the files of a folder (not the folders in it), then the folder; true when it is gone */
 
 /* ---- the stop ---- */

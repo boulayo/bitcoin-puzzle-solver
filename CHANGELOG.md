@@ -99,6 +99,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Changed
 
+- pzsolve: a stop logs `stopping: saving the state and the walkers (Ctrl-C again quits without them)`, and the end of the input of
+  `--stop-with-input` logs why. The kangaroo CPU step is chosen from three interleaved samples of each form (one sample could pick the
+  slower form for a whole run after a busy moment).
+- pzpeer: one function writes a file whole or not at all (`sys_new_file`), one stops a child (`sys_proc_stop`), one reads the optional
+  lines of a network file (`netfile_opt`), one tells the owner (`home_say`); `pzcore` keeps the only hex functions and SHA-256 padding.
 - Faster scalar engines: the batch inversion multiplies in two interleaved chains (a quarter less time with BMI2/ADX, a tenth
   without), and the straight-line addition and subtraction are used on every x86-64 build, not only with BMI2/ADX. Measured on one
   thread: kangaroo step BMI2/ADX 9.4 to 10.9 M steps/s, portable 7.2 to 8.2 M; linear baseline 4.62 to 4.74 M keys/s, avx512
@@ -124,9 +129,16 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
     blocks after, it gives up and tries again. The rule "one point, one proved pair" is kept on disk (`proved`). With an own node, a
     first transaction that a reorganisation put back in the mempool is no spend in a block. pzsign checks every signature of a batch
     before it stops on a bad one, so the time does not tell which one it was.
-- The seed generator times the same work 64 times before the rounds of the timing jitter (the same addresses, no branch on the data):
-  when the deltas are all equal there is no noise to measure, and the source is refused. The walk of the rounds varies by the work
-  too, so a machine without noise could pass its health tests.
+- The jitter source of the seed generator times the same work in every sample (the same addresses, no branch on the data), so its
+  health tests and its live estimate measure noise only; the walk grows until that work shows noise, and a machine whose timing is too
+  quiet has the source refused ("too little noise"), its home seed then made with a TPM or on another computer. Before, the walk varied by its work too, and a
+  noiseless machine behind a coarse timer passed.
+- pzpeer, the shared linear search: a claim needs half the average number of proof keys (a false claim costs half a block, not a
+  quarter); a custodian keeps another owner's claim of a block only when it brings a proof key the claims it holds lack, so a claim
+  copied under a new identity, which costs no scan, is not kept; when every block looked at is claimed, the one whose claims show the
+  fewest proof keys is scanned again, never one of the home itself; `--part` after `--` is refused (half a block would be claimed).
+- pzpeer: a light chain whose servers show no coin at the puzzle address no longer makes the home take the prize for gone and stop its
+  search: an empty answer of servers proves nothing (they may hide the coins), and a later session asks again.
 - CI: the actions are named by the hash of their commit; `check_binary.sh` checks each Windows program against the DLLs it needs.
 - `dp.bin` of a kangaroo campaign, whose distances lead to the key, is made for the user alone (mode 0600), as `FOUND.txt`
   already was.
@@ -145,6 +157,30 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- pzpeer, the shared linear search: a block whose index needs more than 64 − blockbits bits could not be claimed (with blocks of 2^44
+  keys, 63 of the 64 million blocks of puzzle 71): the blocks are those of the range, `block_range` in one place. The home keeps the
+  blocks it scanned in `own_claims.bin`, a file of claims as the custodians keep (a write cut by a crash hid every claim after it; one
+  in `claims.bin` stopped the node from starting: it is cut there now), sends its claims again from two minutes after a start, one a
+  turn of its loop (before, only after a day without a stop, all at once), keeps a block with too few proof keys as scanned without
+  claiming it, and no longer saves the block it was picking when it is stopped. `claims.bin` opens with one sort (it was quadratic).
+- pzpeer, the session: the second transaction is kept on disk as soon as it is signed, and every session of a pair starts with what
+  each side has of it (`S_SECOND`): a home stopped before its block, or one that lost its record, is still paid and gets its key (before,
+  the two homes failed at every try). The transactions of a payout and the cancel go to the chain again at every block; S stops waiting
+  for the second transaction once F's cancel is in a block (before, 144 blocks); a wait asks the chain once a block. A pzsign that does
+  not start counts no try of the payout, and the session says why and tells the partner (before, an empty reason); `pzpeer run` checks
+  `pzsign version` at its start. The exchange of the pieces settles when both homes spent their payout already (the output of the
+  author shows the second transaction in a block). F's tiny coins left by earlier sessions of a pair go to its payout address once no
+  second transaction can take them. A line of `failed-signings` without its date that is at the limit gets its date. pzpeer stops
+  pzsolve within a minute, then interrupts it, then kills it (before, it could wait for ever). With Electrum servers each server has its
+  own minute for its calls of an operation (a slow first one used it for all).
+- pzsolve: the kangaroo no longer throws away its saved walkers when a start ends before they move (no compute device, an interrupted
+  GPU self-test or kernel build, a `dp.bin` it cannot use): `herd.bin` is taken by any later session of the same `--node`, and removed
+  once its walkers walk, so a run that does not stop well still leaves none. The line that says how to resume a kangaroo gives its
+  `--node`, and a resume with another one is told. `--near` is refused outside the linear search, and given late it warns that the
+  keys already scanned have no near misses; the state is taken before `near.txt` is synced. The signal handler and the
+  `--stop-with-input` thread no longer reach the run once it is freed.
+- The test of the session no longer hangs one time in about 500 (the case of an old copy of the first transaction waited for a
+  moment that a fast block could skip); a case that runs more than 5 minutes fails with its name.
 - The time estimates of a campaign of the shared network (pzsolve, and the network line of pzpeer) take the measured cost of its
   walk, 1.18·√W (net-06), not the 1.06·√W of a campaign alone: they were about a tenth short.
 - `--near`: the near misses are on the disk before the blocks they prove are recorded as scanned (a power cut left blocks marked

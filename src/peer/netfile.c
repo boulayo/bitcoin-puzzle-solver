@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LINE_MAX_LEN 256
 #define MAX_LINES    96
 
 static const char *const DEFINING[] = {"net", "puzzle", "pubkey", "range", "jumpseed", "schema", "dpbits", "chain", "address", "blockbits"};
@@ -136,14 +135,14 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen)
 {
     memset(nf, 0, sizeof *nf);
     static const uint8_t TAG[] = "pznet1/file";
-    char buf[MAX_LINES][LINE_MAX_LEN];
+    char buf[MAX_LINES][NETFILE_LINE_MAX];
     char *imm[NIMM], *opt[MAX_LINES];
     int nimm = 0, nopt = 0, nlines = 0;
     bool seen[NIMM] = {false};
     for (const char *p = text; *p;) {
         const char *e = strchr(p, '\n');
         const size_t len = e ? (size_t)(e - p) : strlen(p);
-        char line[LINE_MAX_LEN];
+        char line[NETFILE_LINE_MAX];
         if (len >= sizeof line) return fail(err, errlen, "a line is too long", NULL);
         memcpy(line, p, len);
         line[len] = 0;
@@ -162,7 +161,7 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen)
         while (*v == ' ' || *v == '\t') v++;
         if (nlines == MAX_LINES) return fail(err, errlen, "too many lines", NULL);
         char *canon = buf[nlines++];
-        if (snprintf(canon, LINE_MAX_LEN, "%s=%s", k, v) >= LINE_MAX_LEN) return fail(err, errlen, "a line is too long", NULL);   /* never: it was one */
+        if (snprintf(canon, NETFILE_LINE_MAX, "%s=%s", k, v) >= NETFILE_LINE_MAX) return fail(err, errlen, "a line is too long", NULL);   /* never: it was one */
         int i;
         if ((i = key_index(k, DEFINING, NIMM)) >= 0) {
             if (seen[i]) return fail(err, errlen, "repeated key", k);
@@ -185,9 +184,9 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen)
     if (nf->linear && (pz_base58check_decode(nf->address, raw, sizeof raw) != 21 || raw[0] != (strcmp(nf->chain, "main") ? 0x6f : 0)))
         return fail(err, errlen, "the address is not a P2PKH address of the chain:", nf->address);
     if (nf->linear) memcpy(nf->h160, raw + 1, 20);
-    char canon_imm[NIMM * LINE_MAX_LEN];
+    char canon_imm[NIMM * NETFILE_LINE_MAX];
     size_t li = 0;
-    (void)join_sorted(imm, nimm, canon_imm, sizeof canon_imm, &li);   /* fits: NIMM lines of LINE_MAX_LEN at most */
+    (void)join_sorted(imm, nimm, canon_imm, sizeof canon_imm, &li);   /* fits: NIMM lines of NETFILE_LINE_MAX at most */
     uint8_t *m = malloc(sizeof TAG - 1 + li);
     if (!m) return fail(err, errlen, "out of memory", NULL);
     memcpy(m, TAG, sizeof TAG - 1);
@@ -205,7 +204,7 @@ bool netfile_load(const char *path, netfile *nf, char *err, size_t errlen)
         snprintf(err, errlen, "cannot open the network file %s", path);
         return false;
     }
-    const size_t cap = MAX_LINES * LINE_MAX_LEN + 1;   /* more than any valid file holds */
+    const size_t cap = MAX_LINES * NETFILE_LINE_MAX + 1;   /* more than any valid file holds */
     char *text = malloc(cap + 1);
     if (!text) {
         fclose(f);
@@ -253,7 +252,23 @@ bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen)
 void netfile_blocks(const netfile *nf, block_net *out)
 {
     memcpy(out->fp, nf->fp, 32), memcpy(out->h160, nf->h160, 20), out->bits = nf->blockbits;
-    pz_u256_to_be(&nf->start, out->start);
+    pz_u256_to_be(&nf->start, out->start), pz_u256_to_be(&nf->end, out->end);
+}
+
+const char *netfile_opt(const netfile *nf, const char *key, int i, char *out, size_t cap)
+{
+    const size_t kl = strlen(key);
+    for (const char *p = nf->opts; *p;) {
+        const char *e = strchr(p, '\n');
+        const size_t l = e ? (size_t)(e - p) : strlen(p);
+        if (l > kl && p[kl] == '=' && !strncmp(p, key, kl) && !i--) {
+            if (l - kl - 1 >= cap) return NULL;
+            memcpy(out, p + kl + 1, l - kl - 1), out[l - kl - 1] = 0;
+            return out;
+        }
+        p += l + (e != NULL);
+    }
+    return NULL;
 }
 
 bool netfile_get(const char *path, int n, netfile *nf, char *err, size_t errlen)

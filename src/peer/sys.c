@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* sys.c - the part of sys.h that is the same on every system: the waits built on the calls that do not wait. */
+/* sys.c - the part of sys.h that is the same on every system: the waits built on the calls that do not wait, the files written whole,
+ * the end of a child. */
 #include "sys.h"
 #include <string.h>
+#include <unistd.h>
 
 int sys_wait(int fd, bool to_write, int64_t deadline)
 {
@@ -52,4 +54,44 @@ int sys_connect_host(const char *host, const char *port, int64_t deadline)
     for (const struct addrinfo *ai = res; ai && fd < 0; ai = ai->ai_next) fd = sys_connect(ai->ai_addr, (socklen_t)ai->ai_addrlen, deadline);
     freeaddrinfo(res);
     return fd;
+}
+
+int sys_proc_stop(sys_proc p, int *in, int grace_ms)
+{
+    int st = -1;
+    if (*in >= 0) sys_pipe_close(*in), *in = -1;
+    for (int step = 0; step < 2; step++) {
+        for (const int64_t until = sys_now_ms() + (step ? 10000 : grace_ms); sys_now_ms() < until; sys_sleep_ms(100))
+            if (sys_proc_ended(p, false, &st)) return st;
+        if (step) sys_proc_kill(p);
+        else sys_proc_interrupt(p);
+    }
+    (void)sys_proc_ended(p, true, &st);
+    return st;
+}
+
+static bool tmp_of(const char *path, char *tmp, size_t cap) { return (size_t)snprintf(tmp, cap, "%s.tmp", path) < cap; }
+
+FILE *sys_new_file(const char *path, bool secret)
+{
+    char tmp[4200];
+    if (!tmp_of(path, tmp, sizeof tmp)) return NULL;
+    (void)remove(tmp);
+    if (!secret) return sys_fopen(tmp, "wb");
+    const int fd = sys_create_secret(tmp);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "wb");
+    if (f) setvbuf(f, NULL, _IONBF, 0);
+    else if (fd >= 0) close(fd);
+    return f;
+}
+
+bool sys_new_file_done(FILE *f, const char *path, bool ok)
+{
+    char tmp[4200];
+    if (!f) return false;
+    ok = ok && fflush(f) == 0 && sys_sync(fileno(f));
+    ok = fclose(f) == 0 && ok;
+    if (!tmp_of(path, tmp, sizeof tmp)) return false;
+    if (!(ok = ok && sys_replace(tmp, path))) (void)remove(tmp);
+    return ok;
 }

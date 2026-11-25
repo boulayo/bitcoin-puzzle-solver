@@ -115,6 +115,30 @@ static void t_seed(void)
     sched_free(a); sched_free(same); sched_free(other); sched_free(old); sched_free(bad);
 }
 
+/* A snapshot is the state when it was taken: a block completed afterwards is not in what sched_write writes from it (the near misses of
+ * the linear search are synced between the two, run_linear.c), and the text is the one sched_save writes. */
+static void t_snapshot(void)
+{
+    char err[300];
+    campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);
+    sched_t *a = sched_new(&c), *b = sched_new(&c);
+    claim_t c1, c2;
+    CHECK(sched_claim(a, 4096, &c1) == CLAIM_OK && sched_claim(a, 4096, &c2) == CLAIM_OK);
+    sched_complete(a, &c1, c1.nkeys);
+    size_t n;
+    char *snap = sched_snapshot(a, &n);
+    sched_complete(a, &c2, c2.nkeys);
+    CHECK(sched_write(snap, n, PZ_TEST_DIR "/t_jobq_snap.state") == 0);
+    CHECK(sched_load(b, PZ_TEST_DIR "/t_jobq_snap.state", err, sizeof err) == 0 && sched_keys_done(b) == 4096 && sched_keys_done(a) == 8192);
+    free(snap);
+    CHECK(sched_save(b, PZ_TEST_DIR "/t_jobq_snap2.state") == 0);
+    snap = sched_snapshot(b, &n);
+    char *t = pz_read_file(PZ_TEST_DIR "/t_jobq_snap2.state", NULL);
+    CHECK(t && strlen(t) == n && !memcmp(t, snap, n));
+    free(t), free(snap);
+    sched_free(a), sched_free(b);
+}
+
 /* ---- the configuration of a campaign ---- */
 
 static void t_cfg(void)
@@ -547,6 +571,7 @@ int main(void)
     t_locate_wide();
     t_parts();
     t_seed();
+    t_snapshot();
     t_cfg();
     printf(fails ? "t_jobq: %d FAILED\n" : "t_jobq: OK\n", fails);
     return fails != 0;

@@ -118,6 +118,24 @@ $BIN hunt -c kres -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/kres/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "${K#0x}" ] && ok "kangaroo: key found after resuming" || bad "kangaroo resume: expected ${K#0x} found '$GOT'"
 
+echo "== kangaroo: the walkers across a stop, across a start that ends before they move, and the --node of the line that says how to resume"
+K=$(rndkey 80 8081); PUB=$(field $K pub); A=$(field $K addr)   # a range the key cannot be found in within minutes
+KW=(-p 80 -a "$A" -k "$PUB" -m kangaroo --dp-bits 12 --mem 0.05 -c kherd -d "$DIR" --ui log --no-gpu -t 1)
+OUT=$(run_until 'running "$DIR/kherd"' $BIN hunt "${KW[@]}" --node 2 2>&1)
+grep -q "stopping: saving the state and the walkers (Ctrl-C again quits without them)" <<<"$OUT" && [ -s "$DIR/kherd/herd.bin" ] \
+  && ok "a stop says that it saves the walkers, and herd.bin is written" || bad "stop of a kangaroo: $(tail -3 <<<"$OUT")"
+grep -q "Resume with:  pzsolve hunt -c kherd -d $DIR --node 2\$" <<<"$OUT" && ok "the line that says how to resume has --node 2" || bad "resume line: $(grep Resume <<<"$OUT")"
+# a start that ends after it saved its session number, before its walkers moved: a dp.bin of another jump table stops it
+cp "$DIR/kherd/dp.bin" "$DIR/kherd.dp"; printf '\377' | dd of="$DIR/kherd/dp.bin" bs=1 seek=38 conv=notrunc 2>/dev/null
+OUT=$($BIN hunt "${KW[@]}" --node 2 2>&1); RC=$?
+mv "$DIR/kherd.dp" "$DIR/kherd/dp.bin"
+[ $RC = 2 ] && grep -q "cannot use the distinguished-point file" <<<"$OUT" && [ -s "$DIR/kherd/herd.bin" ] \
+  && ok "a start that fails before the walkers move leaves herd.bin" || bad "failed start: rc=$RC $(tail -2 <<<"$OUT")"
+OUT=$(run_until 'running "$DIR/kherd"' $BIN hunt "${KW[@]}" --node 2 2>&1)
+grep -q "4,096 walkers of the last run go on from where they stopped" <<<"$OUT" && ok "the start after it takes the walkers back" || bad "walkers after a failed start: $(grep -i walkers <<<"$OUT")"
+OUT=$(run_until 'running "$DIR/kherd"' $BIN hunt "${KW[@]}" 2>&1)
+grep -q "holds the walkers of --node 2, and this run is --node 0" <<<"$OUT" && ok "a resume that forgot its --node is told" || bad "--node forgotten: $(grep -i walkers <<<"$OUT")"
+
 echo "== kangaroo: a file size limit (ulimit -f) fails the writes of dp.bin, which is handled like a full disk; it does not kill the program"
 K=$(rndkey 80 8080); PUB=$(field $K pub); A=$(field $K addr)   # a range the key cannot be found in within minutes; a flood of points reaches the limit at once
 rm -rf "$DIR/xfsz"
@@ -156,6 +174,14 @@ grep -qi "$NK" "$DIR/nearkey/FOUND.txt" 2>/dev/null && ! grep -qi "$NK" "$DIR/ne
   && ok "--near: the key found is in FOUND.txt and not in near.txt, which is 0600" || bad "--near with the key: near.txt '$(cat "$DIR/nearkey/near.txt" 2>/dev/null)', mode $NM"
 $BIN hunt -a $NA -r 1000000700000:10000007fffff -c nonear -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ ! -e "$DIR/nonear/near.txt" ] && ok "without --near no near.txt" || bad "near.txt without --near"
+# --near given for the first time to a campaign that has scanned keys: those have no near misses, and the log says so
+run_until 'running "$DIR/latenear"' $BIN hunt -p 71 -m linear -c latenear -d "$DIR" --ui log -q --no-gpu -t 1 >/dev/null 2>&1
+OUT=$(run_until 'running "$DIR/latenear"' $BIN hunt -c latenear -d "$DIR" --near --ui log -q --no-gpu -t 1 2>&1)
+grep -q "the keys scanned before this session left no near misses" <<<"$OUT" && ok "--near on a campaign under way: the keys scanned before are said to have none" || bad "late --near: $OUT"
+# --stop-with-input: the end of the input stops the run as a Ctrl-C does, and the log says why
+OUT=$(timeout -k 30 -s INT 300 $BIN hunt -c latenear -d "$DIR" --near --ui log --no-gpu -t 1 --stop-with-input </dev/null 2>&1); RC=$?
+[ $RC = 130 ] && grep -q "standard input ended: stopping (--stop-with-input)" <<<"$OUT" && ok "--stop-with-input: the end of the input stops the run, the log says why" \
+  || bad "--stop-with-input: rc=$RC $(tail -2 <<<"$OUT")"
 LO=$((0x7000000000+12345)); W=1000003; HI=$((LO+W-1))
 for K in $LO $HI $((LO+W/2)) $((LO+777777)); do
   KH=$(printf '0x%x' $K); P=$(field $KH pub); A=$(field $KH addr); rm -rf "$DIR/cusk"
@@ -429,7 +455,7 @@ for kopts in "-m kangaroo" "-m auto"; do
 done
 
 echo "== invalid options: clear error and no half-created campaign left behind"
-for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50"; do
+for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "-m kangaroo --near" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50"; do
   rm -rf "$DIR/opt"
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done

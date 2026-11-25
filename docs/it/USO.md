@@ -69,7 +69,8 @@ Quello che richiede più di una riga dell'aiuto:
 * `--near` (ricerca lineare) scrive ogni **quasi giusta** in `near.txt` della campagna, una chiave per riga: una chiave il cui hash160 ha
   i byte da 8 a 11 uguali a quelli del bersaglio. Lo è una chiave su 2^32, i motori le incontrano comunque senza costo, e le conosce tutte
   solo chi ha provato ogni chiave di un intervallo: sono la prova, per chi le controlla, che l'intervallo è stato cercato. Un blocco
-  rifatto dopo un'interruzione riscrive le sue.
+  rifatto dopo un'interruzione riscrive le sue. Il canguro e il BSGS non provano ogni chiave: con loro `--near` è rifiutato. Dato per la
+  prima volta a una campagna che ha già scandito chiavi, avvisa che quelle non hanno quasi giuste in `near.txt`.
 
 * `--encrypt-pubkey`, `--encrypt-password` e `--on-found` cifrano la chiave trovata ed eseguono un comando quando viene trovata: sezione 11.
 * `--jump-seed HEX` e `--start-key FILE` fanno un cammino condiviso, il canguro della rete condivisa ([NETWORK.md](../en/NETWORK.md),
@@ -140,7 +141,8 @@ campaigns/NOME/
   state.dat       checkpoint della ricerca (insieme di intervalli completati, con checksum; .bak = precedente)
   dp.bin          canguro: log append-only dei punti distinti (per riprendere)
   herd.bin        canguro: dove si trovava ogni canguro quando la corsa si è fermata, perché la corsa dopo di questo computer riparta da lì
-                  (un altro computer, o una corsa dopo un arresto brusco, li fa partire da capo; cancellato quando la chiave è trovata)
+                  (tolto mentre camminano: un altro --node, o una corsa dopo un arresto brusco, li fa partire da capo; cancellato quando la
+                  chiave è trovata)
   session.txt     tempo totale e sessioni
   report.txt      report leggibile, riscritto ogni minuto con il checkpoint (la prima volta 2 s dopo l'avvio, e alla fine)
   status.json     stato per programmi esterni (include tempi residui e probabilità), riscritto con report.txt
@@ -150,10 +152,12 @@ campaigns/NOME/
   FOUND.txt       solo a chiave trovata (permessi 0600 su Linux e macOS; su Windows eredita i diritti della cartella); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
 ```
 
-* **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato. Un secondo
-  Ctrl-C dopo mezzo secondo esce subito (e perde al massimo l'ultimo minuto di lavoro; un canguro perde anche i passi dei suoi
-  camminatori dai loro ultimi punti distinti, sezione 9.2).
-* **Riprendere**: lo stesso comando (`hunt -p N`, oppure `hunt -c NOME`). Il seed e i parametri che definiscono la ricerca non
+* **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato, e un canguro
+  salva i suoi camminatori (il log dice `stopping: saving the state and the walkers`; rileggere i camminatori di una GPU può richiedere
+  secondi). Un secondo Ctrl-C dopo mezzo secondo esce subito (e perde al massimo l'ultimo minuto di lavoro; un canguro perde anche i
+  passi dei suoi camminatori dai loro ultimi punti distinti, sezione 9.2).
+* **Riprendere**: lo stesso comando (`hunt -p N`, oppure `hunt -c NOME`, con lo stesso `--node` per un canguro: la riga stampata
+  all'arresto lo riporta). Il seed e i parametri che definiscono la ricerca non
   possono cambiare: se dai `-s`, `-r`, `-a`, `-k`, `-m`, `--chunk-bits`, `--bsgs-entries` o `--encrypt-pubkey` diversi da quelli della campagna
   esistente il programma **rifiuta** con un errore (non li ignora in silenzio); puoi invece cambiare thread, GPU, ISA, memoria e
   aspetto del pannello. **`pzsolve list`** mostra tutte le campagne e il loro stato.
@@ -437,7 +441,8 @@ e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](https:/
   chiave nota: un motore che sbagliasse verrebbe escluso.
 * I thread di calcolo vanno prima su core fisici diversi, uno per core, e solo oltre il numero dei core sul secondo thread SMT di un core (su
   Windows l'assegnazione è un suggerimento al sistema, che può spostare i thread).
-* Il canguro sulla CPU usa le stesse corsie SIMD della ricerca lineare; la variante viene scelta misurando, dopo un confronto bit per bit con
+* Il canguro sulla CPU usa le stesse corsie SIMD della ricerca lineare; la variante viene scelta misurando (tre brevi campioni di ognuna,
+  a turno, contando il migliore di ciascuna: un momento in cui la macchina è occupata non decide), dopo un confronto bit per bit con
   quella di riferimento. `bench` indica quale è in uso e misura ogni variante con 1 thread, un thread per core fisico e tutti i thread logici.
   Sui core con hyper-threading la modalità **mista** (il passo a corsie sul primo thread di ogni core, quello scalare sul suo gemello SMT) viene
   scelta da sola quando misura più veloce; `PZ_KANG_MIX=0` o `=1` la spegne o la impone.
@@ -525,15 +530,19 @@ Se il computer va in sospensione o in ibernazione mentre una campagna gira:
   esclusa dopo più di 3 fallimenti di fila, o più di 40 in tutto (dieci minuti di lanci buoni dopo un fallimento azzerano il conteggio, così un
   portatile che va in sospensione ogni notte tiene la sua scheda);
 * `hunt --keep-awake` impedisce a Windows (e a macOS, con `caffeinate`) di sospendersi finché la campagna gira (la sospensione torna possibile alla fine). Su Linux: `systemd-inhibit`.
-* `hunt --stop-with-input` ferma la campagna come un Ctrl-C (lo stato è salvato) quando l'ingresso standard finisce. Serve a un
-  programma che avvia pzsolve: gli dà un canale su cui non scrive mai, e quando quel programma finisce, anche ucciso o andato in
-  crash, il canale si chiude e pzsolve finisce con lui invece di cercare da solo (lo fa `pzpeer run`).
+* `hunt --stop-with-input` ferma la campagna come un Ctrl-C (lo stato è salvato) quando l'ingresso standard finisce, e il log dice
+  `standard input ended: stopping (--stop-with-input)`. Serve a un programma che avvia pzsolve: gli dà un canale su cui non scrive mai,
+  e quando quel programma finisce, anche ucciso o andato in crash, il canale si chiude e pzsolve finisce con lui invece di cercare da
+  solo (lo fa `pzpeer run`).
 
 Lo stato su disco non è mai a rischio: ogni scrittura è atomica e il checkpoint è ogni 60 s. I camminatori di un canguro sono salvati in
 `herd.bin` quando la campagna si ferma (Ctrl-C, `kill`, la chiusura del terminale, la fine dell'ingresso di `--stop-with-input`), e la
-corsa dopo riparte da dove erano. Una corsa che finisce senza fermarsi (un crash, `kill -9`, la corrente che manca, una batteria che si
-scarica durante la sospensione, un secondo Ctrl-C) non ne salva nessuno: la corsa dopo fa ripartire i camminatori da capo, e si perdono
-i loro passi dagli ultimi punti distinti, circa `camminatori × 2^dp-bits` (ALGORITHMS.md sezione 4.7, in inglese).
+corsa dopo riparte da dove erano, anche dopo avvii finiti prima che i camminatori si muovessero (nessun dispositivo di calcolo, un
+self-test della GPU interrotto). Una corsa che finisce senza fermarsi (un crash, `kill -9`, la corrente che manca, una batteria che si
+scarica durante la sospensione, un secondo Ctrl-C) non ne salva nessuno; e nemmeno una GPU il cui dispositivo è andato in errore e non
+si è ripreso prima dell'arresto, anche quando l'arresto salva gli altri camminatori (un dispositivo che si riprende comincia un branco
+nuovo, sopra, e salva quello). La corsa dopo fa ripartire quei camminatori da capo, e si perdono i loro passi dagli ultimi punti distinti,
+circa `camminatori × 2^dp-bits` (ALGORITHMS.md sezione 4.7, in inglese).
 
 ### 9.3 Sintomi
 

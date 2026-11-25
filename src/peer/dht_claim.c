@@ -46,12 +46,12 @@ int dht_claim_publish(dht *d, const block_claim *c)
     for (int i = 0; i < m && !stopping(d); i++) {
         size_t n;
         if (is_me(d, cs[i].id)) {
-            took += claims_put(d->claims, c) <= CLAIM_DUP;
+            took += claims_put(d->claims, c) <= CLAIM_COPY;
             continue;
         }
         const bool ok = exchange(d, &cs[i], req, len, ans, sizeof ans, &n) && n == 2 && ans[0] == DHT_CLAIMED;
         heard(d, &cs[i], ok);
-        took += ok && ans[1] <= CLAIM_DUP;
+        took += ok && ans[1] <= CLAIM_COPY;
     }
     return took;
 }
@@ -81,9 +81,9 @@ int dht_claims_of(dht *d, uint64_t index, block_claim *out, int max)
             }
         }
         for (int j = 0; j < n && got < max; j++) {             /* a custodian is not trusted: each claim checked, one an owner */
-            bool seen = cl[j].index != index || !block_claim_check(d->cfg.ctx, d->cfg.blocks, &cl[j]);
+            bool seen = cl[j].index != index;
             for (int h = 0; h < got && !seen; h++) seen = !memcmp(out[h].owner, cl[j].owner, 32);
-            if (!seen) out[got++] = cl[j];
+            if (!seen && block_claim_check(d->cfg.ctx, d->cfg.blocks, &cl[j])) out[got++] = cl[j];
         }
     }
     free(ans);

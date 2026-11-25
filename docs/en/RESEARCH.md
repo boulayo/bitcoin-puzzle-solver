@@ -1420,7 +1420,7 @@ where RAM does not set `dp_bits`, for twice the table and twice `dp.bin`); the l
 family of the banded zones is 0.2 % better than schema 3 in the exact model and about 1 ± 0.35 % in the walk model, and the curve does not
 separate the two: the bar of the question is not reached.
 
-**What a resumed campaign needs, and what is a schema.** The jump table id (`kang_jump_id`) covers the 272 jumps, which depend on the seed and
+**What a resumed campaign needs, and what is a schema.** The jump table id (`jump_tag` of the kangaroo state) covers the 272 jumps, which depend on the seed and
 `W` only. On resume the walkers do not take up their old walks: every session draws new starts (the herd streams are seeded with the session
 number, `kang_worker_new`), and the points of the earlier sessions stay useful because the new walks run on the same jump table with the same
 coefficients and residues, so a new trail meets an old one as the trails of two threads do. The shares of the species and the bands decide how
