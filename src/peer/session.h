@@ -38,8 +38,8 @@ typedef struct {
     /* one output of a P2PKH script (a prize of the network file): 1 when it is confirmed, unspent and spendable, with its value in out;
      * 0 when it is not; -1 when the chain cannot be asked. NULL: not offered */
     int (*coin)(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out);
-    /* the transactions of the mempool that pay to or spend from a P2PKH script, -1 when the chain cannot be asked: a light chain does not
-     * show a coin whose spend waits in the mempool. NULL: coins shows those coins (a node's scan of its set) */
+    /* the spends of a P2PKH script that wait in the mempool (0: none), -1 when the chain cannot be asked: a light chain does not show a
+     * coin whose spend waits there. NULL: coins shows those coins (a node's scan of its set) */
     int (*pending)(void *ctx, const uint8_t spk[BTC_P2PKH_LEN]);
     /* 1 when the chain is up to date (one that is behind reports coins that are not the chain's), else 0 with the reason; asked only once
      * the partner proved its point, so a stranger's hello makes this home ask its chain nothing. NULL: always */
@@ -63,11 +63,12 @@ typedef struct {
 } session_limit;
 
 /* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets
- * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces. Once the payout has its confirmations
- * and nothing of value is left at the puzzle address, the two sides give each other their pieces, and each has the key. */
+ * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces (unless coins came to the address since:
+ * a new payout of them, whose second, once signed, is what the record holds, paid_at 0 again). Once the payout has its confirmations and
+ * nothing of value is left at the puzzle address, the two sides give each other their pieces, and each has the key. */
 #define PAID_TX_MAX 600                     /* a second transaction: two signed P2PKH inputs and three outputs, about 430 bytes */
 typedef struct {
-    uint64_t paid_at;                       /* the height at which the prize was seen spent in a block; 0: not paid */
+    uint64_t paid_at;                       /* the height at which the prize was seen spent in a block, by second when it is known; 0: not seen */
     uint8_t first[32];                      /* the txid of the first transaction, whose output 0 the payout spent */
     uint8_t second[PAID_TX_MAX];            /* the second transaction, signed (second_len 0: not known here yet) */
     size_t second_len;
@@ -104,7 +105,6 @@ typedef struct {
     int alive_ms;                           /* how often S_ALIVE goes to the partner while waiting for a block (0: every minute) */
     int block_ms;                           /* a wait for n blocks gives up after (n + 6) times this, if the chain stops (0: 20 minutes) */
     int cancel_blocks;                      /* the blocks F waits for the second transaction before it cancels (3) */
-    bool withhold;                          /* tests only: as S, do not send the second transaction (the test channel also drops S's last message) */
     session_paid *paid;                     /* the payout of the pair, read and written (NULL: the pieces are not exchanged) */
     int reveal_conf;                        /* the confirmations of the payout before the pieces are exchanged (0: 6) */
     void (*say)(void *user, const char *line);   /* the steps that matter to the owner, one short line each (NULL: none) */

@@ -27,6 +27,11 @@ typedef struct {
     const char *headers_path;                 /* where they are kept between runs (NULL: nowhere) */
     uint64_t fallback_feerate;                /* when no server gives an estimate: satoshis per 1000 virtual bytes */
     int timeout_ms;                           /* of one call to a server; 0: 10000 */
+    int op_ms;                                /* the time of the calls of one server in one operation, its headers included; 0: 60000 */
+    int tip_ms;                               /* the height is asked of the servers at most this often, in ms (0: at every call); any
+                                               * operation asks it too */
+    int64_t synced;                           /* when it was asked last (mu) */
+    struct spv_spends *spends;                /* the inputs of the transactions looked into for a spend (made at the first; io) */
     unsigned max_tip_age;                     /* a chain whose last block is older than this many seconds is not ready (0: any) */
 } chain_spv;
 

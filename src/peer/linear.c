@@ -79,10 +79,9 @@ static uint64_t pick(lin *l, bool *again)
 static void republish(lin *l, int64_t *next)
 {
     block_claim c;
-    const uint64_t n = claims_count(l->own);
-    for (; l->repub < n && claims_at(l->own, l->repub, &c); l->repub++)
+    while (claims_at(l->own, l->repub++, &c))
         if (c.n >= block_min_proofs(l->bn.bits)) {            /* a block with too few proof keys is kept, not claimed */
-            l->repub_sent++, l->repub_held += dht_claim_publish(l->d, &c) > 0, l->repub++;
+            l->repub_sent++, l->repub_held += dht_claim_publish(l->d, &c) > 0;
             return;
         }
     if (l->repub_sent) home_say("the claims of this home sent again: %u of %u held by the network", l->repub_held, l->repub_sent);
@@ -209,7 +208,7 @@ int linear_run(const home_cfg *cfg, const netfile *nf, const char *dir)
     if (!(l.d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), claims_close(l.own), 1;
     sys_on_stop(on_signal);
     const int nc = dht_start(l.d);
-    if (nc < 0) return fprintf(stderr, "cannot listen\n"), dht_stop(l.d), claims_close(l.own), 1;
+    if (nc < 0) return dht_stop(l.d), claims_close(l.own), 1;   /* dht_start said why */
     home_say("home on the linear network %s (%s, blocks of 2^%u keys, %llu of them): %d contact%s, %llu blocks scanned by this home before",
         nf->net, nf->address, nf->blockbits, (unsigned long long)l.nblocks, nc, nc == 1 ? "" : "s", (unsigned long long)claims_count(l.own));
     uint64_t i = 0;

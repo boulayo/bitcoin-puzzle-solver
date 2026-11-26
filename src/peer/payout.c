@@ -64,7 +64,7 @@ uint64_t payout_tiny(const payout_terms *t)
     return need > PAYOUT_TINY_MIN ? need : PAYOUT_TINY_MIN;
 }
 
-bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx, size_t *used)
+bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx)
 {
     payout_coin take[64];
     if (t->first != 0 && t->first != 1) return false;
@@ -78,7 +78,6 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
         if (total + take[i].value > BTC_MAX_MONEY || !btc_tx_add_in(tx, take[i].txid, take[i].vout, BTC_SEQUENCE_FINAL)) return false;
         total += take[i].value;
     }
-    *used = tx->n_in;
     btc_out out[2] = {{0}};                                     /* the outputs as they will be, for the size */
     for (int k = 0; k < 2; k++) {
         out[k].script_len = BTC_P2PKH_LEN;

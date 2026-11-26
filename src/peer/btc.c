@@ -14,9 +14,7 @@
 
 /* ---- libsecp256k1 ---- */
 
-/* One context for the whole process, made on first use; after that it is only read, which libsecp256k1 allows from any number of
- * threads. Randomizing it blinds the signing against side channels; without the entropy it still signs correctly, so a failure
- * there is ignored (and randomizing a context made here cannot fail). */
+/* the context of the process (keys_ctx): only read, which libsecp256k1 allows from any number of threads */
 static const secp256k1_context *ctx(void) { return keys_ctx(); }
 
 /* ---- bytes ---- */
@@ -107,6 +105,12 @@ bool btc_script_is_p2pkh(const uint8_t *spk, size_t len, uint8_t h160[20])
         return false;
     if (h160) memcpy(h160, spk + 3, 20);
     return true;
+}
+
+bool btc_script_standard(const uint8_t *p, size_t n)
+{
+    return btc_script_is_p2pkh(p, n, NULL) || (n == 23 && p[0] == 0xa9 && p[1] == 20 && p[22] == 0x87) || (n == 22 && p[0] == 0 && p[1] == 20) ||
+           (n == 34 && (p[0] == 0 || p[0] == 0x51) && p[1] == 32);
 }
 
 const char *btc_amount(uint64_t sat, char out[32])

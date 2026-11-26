@@ -49,7 +49,7 @@ int dht_claim_publish(dht *d, const block_claim *c)
             took += claims_put(d->claims, c) <= CLAIM_COPY;
             continue;
         }
-        const bool ok = exchange(d, &cs[i], req, len, ans, sizeof ans, &n) && n == 2 && ans[0] == DHT_CLAIMED;
+        const bool ok = exchange(d, &cs[i], req, len, ans, sizeof ans, &n) && n == 2;
         heard(d, &cs[i], ok);
         took += ok && ans[1] <= CLAIM_COPY;
     }
@@ -71,7 +71,7 @@ int dht_claims_of(dht *d, uint64_t index, block_claim *out, int max)
         if (is_me(d, cs[i].id)) n = claims_get(d->claims, index, cl, CLAIMS_PER_BLOCK), answered++;
         else {
             const bool ok = exchange(d, &cs[i], req, sizeof req, ans, 2 + CLAIMS_PER_BLOCK * (2 + BLOCK_CLAIM_MAX), &len) && len >= 2 &&
-                            ans[0] == DHT_CLAIMS && ans[1] <= CLAIMS_PER_BLOCK;
+                            ans[1] <= CLAIMS_PER_BLOCK;
             heard(d, &cs[i], ok);
             answered += ok;
             for (size_t at = 2, j = 0; ok && j < ans[1] && at + 2 <= len; j++) {

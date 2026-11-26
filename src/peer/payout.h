@@ -44,8 +44,8 @@ bool payout_author(unsigned version, payout_terms *t);
 size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least);
 
 /* The first transaction from the coins of the puzzle: the largest first (ties by outpoint), at most PAYOUT_MAX_COINS, without the coins worth
- * less than 3 times the fee of their input. *used: how many were taken. False when what is taken does not pay the fee and the tiny coins. */
-bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx, size_t *used);
+ * less than 3 times the fee of their input. False when what is taken does not pay the fee and the tiny coins. */
+bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx);
 /* The second transaction, from the first as it was confirmed: a legacy txid covers the signatures, and a third party can still change the
  * encoding of one before a miner takes it, so the second is built only from the first that is in a block. */
 bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx);

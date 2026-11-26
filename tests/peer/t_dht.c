@@ -526,6 +526,11 @@ static void test_malformed(void)
     CHECK(!net_exchange(&cli, &a, NULL, req, 1 + 2 * RECORD_LEN, ans, sizeof ans, &n, NULL));   /* two records that are no coincidence */
     req[0] = DHT_MBOX_GET;
     CHECK(!net_exchange(&cli, &a, NULL, req, 34, ans, sizeof ans, &n, NULL));
+    memcpy(req + 1, nodes[1].id.xonly, 32);                                                  /* the mailbox of another owner: */
+    CHECK(!net_exchange(&cli, &a, NULL, req, 33, ans, sizeof ans, &n, NULL));                /* its points are not for the asker */
+    memcpy(req + 1, cid.xonly, 32);
+    CHECK(net_exchange(&cli, &a, NULL, req, 33, ans, sizeof ans, &n, NULL) && n == 2 && ans[0] == DHT_MBOX && ans[1] == 0);
+    memset(req + 1, 0, 32);
     req[0] = DHT_SESSION_FIRST + 1;
     CHECK(net_exchange(&cli, &a, NULL, req, 5, ans, sizeof ans, &n, NULL) && n == 5);        /* a session: the test's echo */
     /* well formed, refused record by record: zero bits that x has not, a record whose key is far from node 0 (node 0 knows many nodes
@@ -777,6 +782,28 @@ static void seen_port(dht *d, const home_identity *id, uint16_t port)
     seen_at(d, id, addr);
 }
 
+/* A known contact moves to the address it answered at only when its own failed since it last answered: a node that names it at an
+ * address of its own, which passes the bytes on to it, cannot take its place in the table and then cut it out. Before, any answer
+ * moved it. A contact whose address stopped answering moves. */
+static void test_moved_contact(void)
+{
+    home_identity id;
+    dht *d = scratch("s-moved", true, DHT_ANY_PORT, -1, &id);
+    if (!d) return;
+    dht_contact cs[64], out[DHT_K];
+    int n, at = -1;
+    seen_port(d, &nodes[1].id, dht_port(nodes[1].d));
+    seen_at(d, &nodes[1].id, "127.0.0.1:1");                   /* answered elsewhere: it stays */
+    n = dht_contacts(d, cs, 64);
+    CHECK(has(cs, n, nodes[1].id.id, &at) && cs[at].addr.port == dht_port(nodes[1].d));
+    seen_at(d, &nodes[2].id, "127.0.0.1:1");                   /* where nobody listens: a lookup finds it dead there */
+    (void)dht_lookup(d, nodes[2].id.id, out, DHT_K);
+    seen_port(d, &nodes[2].id, dht_port(nodes[2].d));          /* then it answers at its address: it moves */
+    n = dht_contacts(d, cs, 64);
+    CHECK(has(cs, n, nodes[2].id.id, &at) && cs[at].addr.port == dht_port(nodes[2].d));
+    scratch_end(d, "s-moved");
+}
+
 /* A linear search (docs/en/NETWORK.md 11) on six nodes of its own, as its network is not the one of the records: they keep the claims of
  * its blocks, and no records. A claim published by its owner, found by another node, kept once; the same proof keys claimed by another
  * identity, which needs no scan, not kept; the claim refused from anyone but its owner. A STORE, an
@@ -830,7 +857,18 @@ static void linear_checks(dht *const ln[LINEAR], const home_identity ids[LINEAR]
     m[0] = DHT_PROVE, m[1] = 1, record_wire_encode(&r, m + 2), memset(m + 2 + RECORD_WIRE, 1, 64);
     CHECK(!net_exchange(&cli, &a, ids[0].xonly, m, 2 + RECORD_WIRE + 64, ans, sizeof ans, &n, NULL));
     CHECK(dht_local_count(ln[0]) == 0 && file_size(dir0, "store.bin") < 0 && file_size(dir0, "claims.bin") > 0);
-    printf("t_dht: a linear search: a claim published, found, refused from another identity; no records\n");
+    /* nor a relay: that search has no sessions (before, a home waited there as at any node) */
+    uint8_t rq[65] = {DHT_RELAY};
+    int waiting, active;
+    uint64_t done;
+    memcpy(rq + 33, ids[2].xonly, 32);
+    net_conn *rc = net_dial(&cli, &a, ids[0].xonly);
+    CHECK(rc && net_send(rc, rq, sizeof rq));
+    nap(300);
+    dht_relays(ln[0], &waiting, &active, &done);
+    CHECK(waiting == 0 && active == 0);
+    net_close(rc);
+    printf("t_dht: a linear search: a claim published, found, refused from another identity; no records, no relay\n");
 }
 
 static void test_linear(void)
@@ -1305,13 +1343,15 @@ static void *stand_in_main(void *arg)
     return NULL;
 }
 
+/* the relays done by the nodes: all of them, also E and LATE, which listen and may be the relay of a slot (before, only the first N
+ * were counted, and a channel relayed by one of those two failed the count, as seen once on a Mac) */
 static uint64_t relays_done(void)
 {
     uint64_t sum = 0;
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < NODES; i++) {
         int w, a;
-        uint64_t dn;
-        dht_relays(nodes[i].d, &w, &a, &dn);
+        uint64_t dn = 0;
+        if (nodes[i].d) dht_relays(nodes[i].d, &w, &a, &dn);
         sum += dn;
     }
     return sum;
@@ -1344,7 +1384,6 @@ static void test_relay_session(void)
     /* the channel, both at once, as the two sessions would ask for it */
     uint8_t name[32];
     hashed("the eid of U and W", name);
-    const uint64_t done0 = relays_done();
     chan_job ju = {Un->d, Wn->id.xonly, name, NULL, 0, 0}, jw = {Wn->d, Un->id.xonly, name, NULL, 0, 0};
     pthread_t tu, tw;
     t0 = ms();
@@ -1363,6 +1402,9 @@ static void test_relay_session(void)
         CHECK(su.done == 40 && sw.done == 40);
         printf("t_dht: a stand-in session of 2 x 2.4 MB through the relay in %.1f s\n", (double)(ms() - t0) / 1000);
     }
+    /* the relay of this channel ends when its homes close it. Counted from here: a relay that joined one of them to a partner already
+     * gone at the end of a slot, or whose end-to-end handshake failed, ended long before */
+    const uint64_t done0 = relays_done();
     net_close(ju.c), net_close(jw.c);
     for (t0 = ms(); ms() - t0 < 5000 && relays_done() == done0; nap(20)) {}
     CHECK(relays_done() == done0 + 1);
@@ -1531,9 +1573,11 @@ static record rec_of(int t, const uint8_t x[32], const uint8_t owner[32])
     return r;
 }
 
-/* Copies of a point planted at all its custodians before its owner's record, under two identities (a custodian that saw the owner's
- * STORE can plant them at the others before the owner's republish reaches them): a real coincidence with that point is still alerted to
- * both owners. Before, the custodians gave the other owner of the pair the first two of the x, the copies, for ever. */
+/* Copies of a point planted at all its custodians before its owner's record, under as many identities as a custodian keeps owners of
+ * one x (a custodian that saw the owner's STORE can plant them at the others before the owner's republish reaches them): the owner's
+ * record, refused for a full x, is kept once it is proved, and a real coincidence with that point is still alerted to both owners.
+ * Before, two copies kept the pair from the other owner for ever (the custodians gave it the first two of the x), and then seven (the
+ * first seven), and eight kept the owner's record out. */
 static void test_planted_copies(void)
 {
     node *A = &nodes[10], *B = &nodes[12];
@@ -1542,8 +1586,16 @@ static void test_planted_copies(void)
     hashed("planted", dA), even_point(dA, x), wild_of(dA, dB);
     give_point(A, 0, x, dA), give_point(B, 1, x, dB);
     store_key(x, k);
-    const int m = brute(k, DHT_KSTORE, who);
-    for (int c = 0; c < 2; c++) {
+    dht_contact cs[DHT_KSTORE];                                 /* the custodians A finds: node E of the eviction may be one */
+    const int m = dht_lookup(A->d, k, cs, DHT_KSTORE);
+    bool known = m == DHT_KSTORE;
+    for (int j = 0; j < m; j++) {
+        for (who[j] = 0; who[j] < NODES && (!nodes[who[j]].d || memcmp(nodes[who[j]].id.id, cs[j].id, 32)); who[j]++) {}
+        known &= who[j] < NODES;
+    }
+    CHECK(known);
+    if (!known) return;
+    for (int c = 0; c < STORE_X_OWNERS; c++) {
         char label[32];
         home_identity pid;
         net_cfg cli;
@@ -1569,7 +1621,7 @@ static void test_planted_copies(void)
     while (ms() - t0 < 20000 && (alerts_of(A, NULL, NULL, NULL) < 1 || alerts_of(B, NULL, NULL, NULL) < 1)) nap(50);
     CHECK(alerts_of(A, &mine, &theirs, &merge) == 1 && same(&mine, &rA) && same(&theirs, &rB) && !merge);
     CHECK(alerts_of(B, &mine, &theirs, &merge) == 1 && same(&mine, &rB) && same(&theirs, &rA) && !merge);
-    printf("t_dht: a coincidence behind two copies planted at every custodian, alerted in %.1f s\n", (double)(ms() - t0) / 1000);
+    printf("t_dht: a coincidence behind %d copies planted at every custodian, alerted in %.1f s\n", STORE_X_OWNERS, (double)(ms() - t0) / 1000);
 }
 
 /* A node of the table at an address of its own that answers as a custodian would, except: every record of a STORE is a coincidence, and
@@ -1695,7 +1747,7 @@ static void lying_checks(node *O, node *P, liar *l)
     }
     record rO[4], rP[4], got, mine, theirs;
     for (int i = 0; i < 4; i++) rO[i] = rec_of(0, x[i], O->id.xonly), rP[i] = rec_of(1, x[i], P->id.xonly);
-    mbox_pair pp[STORE_X_OWNERS] = {pair_of(&rO[0], &rP[0]), pair_of(&rO[1], &rP[1])};
+    mbox_pair pp[STORE_X_OWNERS + 1] = {pair_of(&rO[0], &rP[0]), pair_of(&rO[1], &rP[1])};
     bool merge;
     liar_answer(l, pp, 2);
     atomic_store(&l->mode, LIAR_PAIRS);
@@ -1706,7 +1758,7 @@ static void lying_checks(node *O, node *P, liar *l)
     CHECK(alerts_of(P, &mine, &theirs, &merge) == 1 && same(&mine, &rP[0]) && same(&theirs, &rO[0]));
     /* more pairs for one record than a custodian keeps owners of its x: the answer is refused whole */
     pp[0] = pair_of(&rO[2], &rP[2]);
-    for (int i = 1; i < STORE_X_OWNERS; i++) {
+    for (int i = 1; i <= STORE_X_OWNERS; i++) {
         char label[32];
         home_identity sy;
         snprintf(label, sizeof label, "lied owner %d", i);
@@ -1714,7 +1766,7 @@ static void lying_checks(node *O, node *P, liar *l)
         const record q = rec_of(1, x[2], sy.xonly);
         pp[i] = pair_of(&rO[2], &q);
     }
-    liar_answer(l, pp, STORE_X_OWNERS);
+    liar_answer(l, pp, STORE_X_OWNERS + 1);
     CHECK(publish_one(O, 0, x[2], &got));
     nap(1500);
     CHECK(alerts_of(O, NULL, NULL, NULL) == 1 && alerts_of(P, NULL, NULL, NULL) == 1);
@@ -1836,56 +1888,84 @@ static bool exchange_from(const char *src, const net_cfg *cfg, uint16_t port, co
     return ok;
 }
 
-/* Forged alerts with a real record of a node, from one address block, on a public network (whose limits apply to loopback as to any
- * address): they hold ALERT_JOBS_BLOCK (8) places of the queue of jobs, also when tried again, so a real alert from another block is
- * checked after a few of them. Each job of an alert of the point costs 200 ms here (own_distance sleeps: on a real network it is the
- * lookups and connections of the job). Before, the 64 forged alerts that one address sends at once were all queued before the real one:
- * 13 s, and a flood that goes on kept it waiting. */
+/* V, a node alone on a public network (whose limits apply to loopback as to any address), started; its jobs of an alert of its own
+ * points cost about 2 * slow_ms (own_distance sleeps: on a real network it is the lookups and connections of the job) */
+static bool victim(node *V, const char *name, int slow_ms)
+{
+    char err[200];
+    memset(V, 0, sizeof *V);
+    pthread_mutex_init(&V->mu, NULL);
+    make_id(name, &V->id);
+    snprintf(V->dir, sizeof V->dir, ROOT "/%s", name);
+    clean_dir(V->dir);
+    V->slow_ms = slow_ms;
+    dht_config cfg = node_cfg(V, DHT_ANY_PORT);
+    cfg.allow_private = false;
+    V->d = dht_create(&cfg, err, sizeof err);
+    CHECK(V->d && dht_start(V->d) >= 0);
+    return V->d != NULL;
+}
+
+static void victim_end(node *V)
+{
+    dht_stop(V->d);
+    clean_dir(V->dir);
+    pthread_mutex_destroy(&V->mu);
+}
+
+/* ALERT(a, b), with the proof of the owner of a when there is one, to V from the loopback address src (each one a block of its own):
+ * whether V took it */
+static bool alert_from(const char *src, const net_cfg *cli, const node *V, const record *a, const record *b, const uint8_t *proof)
+{
+    uint8_t req[1 + 2 * RECORD_LEN + 64], ans[4];
+    size_t n;
+    req[0] = DHT_ALERT, record_encode(a, req + 1), record_encode(b, req + 1 + RECORD_LEN);
+    if (proof) memcpy(req + 1 + 2 * RECORD_LEN, proof, 64);
+    return exchange_from(src, cli, dht_port(V->d), V->id.xonly, req, 1 + 2 * RECORD_LEN + (proof ? 64 : 0), ans, sizeof ans, &n) && n == 1 &&
+           ans[0] == DHT_OK;
+}
+
+/* the real alert of the point x of V (its distance dV) with a wild other owner, with that owner's proof, from 127.0.0.1 */
+static record real_alert(const net_cfg *cli, const node *V, const char *partner, const uint8_t x[32], const uint8_t dV[32])
+{
+    uint8_t dB[32], h[32], proof[64];
+    home_identity bid;
+    make_id(partner, &bid), wild_of(dV, dB);
+    const record rV = rec_of(0, x, V->id.xonly), rB = rec_of(1, x, bid.xonly);
+    pair_hash(&rB, &rV, h);
+    CHECK(record_prove(ctx, &net, &rB, dB, V->id.xonly, h, proof) && alert_from("127.0.0.1", cli, V, &rB, &rV, proof));
+    return rB;
+}
+
+/* Forged alerts with a real record of a node, from one address block: they hold ALERT_JOBS_BLOCK (8) places of the queue of jobs, also
+ * when tried again, so a real alert from another block is checked after a few of them (100 ms each here). Before, the 64 forged alerts
+ * that one address sends at once were all queued before the real one: 13 s, and a flood that goes on kept it waiting. */
 static void test_alert_blocks(void)
 {
     static node V;
-    char err[200];
-    memset(&V, 0, sizeof V);
-    pthread_mutex_init(&V.mu, NULL);
-    make_id("blocks victim", &V.id);
-    snprintf(V.dir, sizeof V.dir, ROOT "/s-blocks");
-    clean_dir(V.dir);
-    V.slow_ms = 100;
-    dht_config cfg = node_cfg(&V, DHT_ANY_PORT);
-    cfg.allow_private = false;
-    V.d = dht_create(&cfg, err, sizeof err);
-    CHECK(V.d && dht_start(V.d) >= 0);
-    uint8_t dV[32], dB[32], x[32], h[32], req[1 + 2 * RECORD_LEN + 64], ans[4];
-    size_t n;
-    hashed("blocks", dV), even_point(dV, x), wild_of(dV, dB);
+    if (!victim(&V, "s-blocks", 100)) return;
+    uint8_t dV[32], x[32];
+    hashed("blocks", dV), even_point(dV, x);
     give_point(&V, 0, x, dV);
     const record rV = rec_of(0, x, V.id.xonly);
-    home_identity cid, bid;
-    make_id("blocks client", &cid), make_id("blocks partner", &bid);
+    home_identity cid;
+    make_id("blocks client", &cid);
     net_cfg cli;
     net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
     int sent = 0;
-    for (int i = 0; V.d && i < 64 && sent == i; i++) {
+    for (int i = 0; i < 64 && sent == i; i++) {
         char label[32];
         home_identity sy;
         snprintf(label, sizeof label, "blocks sybil %d", i);
         make_id(label, &sy);
         const record q = rec_of(1, x, sy.xonly);
-        req[0] = DHT_ALERT, record_encode(&rV, req + 1), record_encode(&q, req + 1 + RECORD_LEN);
-        sent += exchange_from("127.0.0.2", &cli, dht_port(V.d), V.id.xonly, req, 1 + 2 * RECORD_LEN, ans, sizeof ans, &n) && n == 1 && ans[0] == DHT_OK;
+        sent += alert_from("127.0.0.2", &cli, &V, &rV, &q, NULL);
     }
-    if (V.d && !sent) printf("t_dht: no address 127.0.0.2 on this machine: the alerts of two blocks not tried\n");
+    if (!sent) printf("t_dht: no address 127.0.0.2 on this machine: the alerts of two blocks not tried\n");
     if (sent) {
         CHECK(sent == 64);
-        const record rB = rec_of(1, x, bid.xonly);              /* the real one, from 127.0.0.1, with the proof of its other owner */
-        net_addr a;
-        CHECK(net_parse_addr("127.0.0.1:1", &a));
-        a.port = dht_port(V.d);
-        pair_hash(&rB, &rV, h);
-        req[0] = DHT_ALERT, record_encode(&rB, req + 1), record_encode(&rV, req + 1 + RECORD_LEN);
-        CHECK(record_prove(ctx, &net, &rB, dB, V.id.xonly, h, req + 1 + 2 * RECORD_LEN));
         const int64_t t0 = ms();
-        CHECK(net_exchange(&cli, &a, V.id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 1);
+        const record rB = real_alert(&cli, &V, "blocks partner", x, dV);
         while (ms() - t0 < 20000 && alerts_of(&V, NULL, NULL, NULL) < 1) nap(20);
         record mine, theirs;
         bool merge;
@@ -1893,9 +1973,60 @@ static void test_alert_blocks(void)
         CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rB) && took < 5000);
         printf("t_dht: a real alert behind 64 forged ones from another block in %.1f s\n", (double)took / 1000);
     }
-    dht_stop(V.d);
-    clean_dir(V.dir);
-    pthread_mutex_destroy(&V.mu);
+    victim_end(&V);
+}
+
+/* A real alert whose job waits behind slow ones (8 forged alerts of a point of V, from one block, 0.8 s each) while 1152 alerts of 18
+ * other blocks fill the table of alerts (1024): its job in the queue keeps it there, and it is checked when its turn comes. Before, the
+ * flood pushed it out first, its job found nothing, and V never got the alert. */
+static void test_alert_queue(void)
+{
+    static node V;
+    if (!victim(&V, "s-queue", 400)) return;
+    uint8_t dV[32], x[32], dF[32], xf[32];
+    hashed("queue", dV), even_point(dV, x);
+    hashed("queue flood", dF), even_point(dF, xf);             /* a point of V's that V does not know: a job of its alert is quick */
+    give_point(&V, 0, x, dV);
+    const record rV = rec_of(0, x, V.id.xonly), rF = rec_of(0, xf, V.id.xonly);
+    home_identity cid;
+    make_id("queue client", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    bool ok = true;
+    for (int i = 0; i < 8 && ok; i++) {
+        char label[32];
+        home_identity sy;
+        snprintf(label, sizeof label, "queue slow %d", i);
+        make_id(label, &sy);
+        const record q = rec_of(1, x, sy.xonly);
+        ok = alert_from("127.0.0.20", &cli, &V, &rV, &q, NULL);
+    }
+    if (!ok) {
+        printf("t_dht: no address 127.0.0.20 on this machine: the alert behind a flood not tried\n");
+        victim_end(&V);
+        return;
+    }
+    const int64_t t0 = ms();
+    const record rB = real_alert(&cli, &V, "queue partner", x, dV);
+    int sent = 0;
+    for (int b = 2; b < 20; b++)
+        for (int i = 0; i < 64; i++) {
+            char label[48], src[24];
+            home_identity sy;
+            snprintf(label, sizeof label, "queue flood %d %d", b, i), snprintf(src, sizeof src, "127.0.0.%d", b);
+            make_id(label, &sy);
+            const record q = rec_of(1, xf, sy.xonly);
+            sent += alert_from(src, &cli, &V, &rF, &q, NULL);
+        }
+    const int64_t flood = ms() - t0;
+    CHECK(sent == 18 * 64);
+    while (ms() - t0 < 30000 && alerts_of(&V, NULL, NULL, NULL) < 1) nap(20);
+    record mine, theirs;
+    bool merge;
+    CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rB));
+    printf("t_dht: a real alert behind 8 slow jobs and %d alerts of 18 blocks (sent in %.1f s), checked in %.1f s\n", sent,
+           (double)flood / 1000, (double)(ms() - t0) / 1000);
+    victim_end(&V);
 }
 
 int main(void)
@@ -1951,12 +2082,14 @@ int main(void)
     test_restart();
     test_republish();
     test_eviction();
+    test_moved_contact();
     test_planted_copies();                                     /* after the eviction: its alerts that wait make lookups */
     test_policy();
     test_nodes_answer();
     test_slowloris();
     test_alert_flood();
     test_alert_blocks();
+    test_alert_queue();
     test_lying_custodian();
     test_linear();
     t0 = ms();

@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_sys.c - the layer over the operating system (sys.h), the same checks on Linux, macOS and Windows: the clock and the random source;
- * TCP and UDP on the loopback with their deadlines; child processes, which are this program started again with a word that says what to
- * do (their pipes, their log, their exit status, a stop request, a kill, and that a child does not inherit the pipe of another); the files
- * of secrets, their replacement, and the files read and written at an offset. */
+ * TCP and UDP on the loopback with their deadlines, and 400 sockets at once; child processes, which are this program started again with a
+ * word that says what to do (their pipes, their log, their exit status, a stop request, a kill, and that a child does not inherit the
+ * pipe of another); the lock of a folder, between processes; the files of secrets, their replacement, and the files read and written at
+ * an offset. */
 #include "peertest.h"
 #include <signal.h>
 #include <unistd.h>
@@ -77,8 +78,15 @@ static volatile sig_atomic_t g_asked;
 static void asked(int sig) { (void)sig, g_asked = 1; }
 
 /* what this program does when it is started as a child */
-static int child(const char *what)
+static int child(const char *what, const char *dir)
 {
+    if (!strcmp(what, "hold")) {                               /* the lock of dir, until the end of its input; status 0 */
+        if (sys_lock_dir(dir) != 1) return 1;
+        fputs("held", stdout), fflush(stdout);
+        while (getchar() != EOF) {}
+        return 0;
+    }
+    if (!strcmp(what, "take")) return 4 + sys_lock_dir(dir);  /* 5 taken, 4 held by another, 3 no lock */
     if (!strcmp(what, "echo")) {                               /* its input in capitals, to the end of the input; status 7 */
         for (int ch; (ch = getchar()) != EOF;) putchar(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
         return 7;
@@ -144,6 +152,37 @@ static void test_processes(const char *self, const char *dir)
     CHECK(remove(log) == 0);
 }
 
+/* The lock of a folder: another process does not get it while the first runs, and gets it once that one ended however it ended */
+static void test_lock(const char *self, const char *dir)
+{
+    char sub[300], lock[320], text[8] = "";
+    int to = -1, from = -1, st = 0;
+    snprintf(sub, sizeof sub, "%s/locked", dir), snprintf(lock, sizeof lock, "%s/lock", sub);
+    CHECK(sys_mkdir(sub));
+    const char *const hold[] = {self, "child", "hold", sub, NULL}, *const take[] = {self, "child", "take", sub, NULL};
+    const sys_proc h = sys_spawn(hold, NULL, &to, &from);
+    CHECK(h && sys_pipe_read(from, text, 4, 10000) && !memcmp(text, "held", 4));
+    sys_proc p = sys_spawn(take, NULL, NULL, NULL);
+    CHECK(p && sys_proc_ended(p, true, &st) == 1 && st == 4);
+    sys_pipe_close(to);
+    CHECK(sys_proc_ended(h, true, &st) == 1 && st == 0);
+    sys_pipe_close(from);
+    p = sys_spawn(take, NULL, NULL, NULL);
+    CHECK(p && sys_proc_ended(p, true, &st) == 1 && st == 5);
+    CHECK(remove(lock) == 0 && rmdir(sub) == 0);
+}
+
+/* As many sockets as a busy node holds (a relay of 256 waits, and the rest): more than the 256 files macOS gives a process */
+static void test_many_files(void)
+{
+    enum { MANY = 400 };
+    int fd[MANY], ok = 0;
+    sys_more_files();
+    for (int i = 0; i < MANY; i++) ok += (fd[i] = sys_socket(AF_INET, SOCK_DGRAM)) >= 0;
+    for (int i = 0; i < MANY; i++) sys_close(fd[i]);
+    CHECK(ok == MANY);
+}
+
 static void test_files(const char *dir)
 {
     char path[300], tmp[300], buf[32] = "";
@@ -172,11 +211,13 @@ static void test_files(const char *dir)
 int main(int argc, char **argv)
 {
     char dir[200];
-    if (argc == 3 && !strcmp(argv[1], "child")) return child(argv[2]);
+    if (argc >= 3 && !strcmp(argv[1], "child")) return child(argv[2], argc > 3 ? argv[3] : "");
     test_time_random();
     test_sockets();
+    test_many_files();
     CHECK(pt_tmpdir("t_sys", dir, sizeof dir));
     test_processes(argv[0], dir);
+    test_lock(argv[0], dir);
     test_files(dir);
     CHECK(rmdir(dir) == 0);
     struct in_addr gw;                                         /* shown, not checked: a machine may have no default route */

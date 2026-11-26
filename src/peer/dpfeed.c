@@ -79,6 +79,7 @@ bool dpfeed_open(dpfeed *df, const char *path)
     uint8_t hdr[DPBIN_HDR];
     df->f = sys_fopen(path, "rb");                             /* the distances of the home: not for the programs pzpeer starts */
     if (!df->f) return false;
+    setvbuf(df->f, NULL, _IONBF, 0);                            /* nor in a buffer of stdio: dpfeed_read wipes its own */
     if (fread(hdr, 1, sizeof hdr, df->f) != sizeof hdr || memcmp(hdr, "PZDP5\n", 6) != 0) {
         dpfeed_close(df);
         return false;
@@ -103,12 +104,14 @@ uint64_t dpfeed_waiting(dpfeed *df)
 int dpfeed_read(const secp256k1_context *ctx, const record_net *net, dpfeed *df, own_point *out, int max)
 {
     int n = 0;
-    uint8_t rec[DPBIN_REC];
+    uint8_t rec[64][DPBIN_REC];
     if (fseeko(df->f, (off_t)(DPBIN_HDR + df->next * DPBIN_REC), SEEK_SET) != 0) return 0;
-    while (n < max && fread(rec, 1, sizeof rec, df->f) == sizeof rec) {   /* up to the end, or to a record being written */
-        if (dpfeed_point(ctx, net, rec, &out[n])) out[n++].index = df->next;
-        else df->bad++;
-        df->next++;
+    for (size_t want = 0, got = 0; n < max && got == want;) {  /* up to the end, or to a record being written */
+        want = max - n < 64 ? (size_t)(max - n) : 64;
+        got = fread(rec, DPBIN_REC, want, df->f);
+        for (size_t i = 0; i < got; i++, df->next++)
+            if (dpfeed_point(ctx, net, rec[i], &out[n])) out[n++].index = df->next;
+            else df->bad++;
     }
     clearerr(df->f);                                           /* the next call sees what pzsolve appended meanwhile */
     pz_secure_zero(rec, sizeof rec);

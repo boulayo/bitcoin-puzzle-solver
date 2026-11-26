@@ -179,6 +179,19 @@ static void print_alert(void *user, const record *mine, const record *theirs, bo
     fflush(stdout);
 }
 
+/* The folder of a home or a node, before anything is written in it: for this user alone (a home keeps there its seed, the distances of
+ * every point and the output of pzsolve, which shows a key it finds), and for this process alone (two pzpeer on one folder would write
+ * over each other's records, journals and sessions) */
+static bool own_dir(const char *dir)
+{
+    if (!sys_mkdir(dir) || !sys_private(dir))
+        return fprintf(stderr, "%s must be a folder of this user that nobody else can open (on Linux and macOS: chmod 700 it)\n", dir), false;
+    const int got = sys_lock_dir(dir);
+    if (got < 0) fprintf(stderr, "%s: cannot make its lock file\n", dir);
+    else if (!got) fprintf(stderr, "%s is the folder of another pzpeer that runs now: one pzpeer a folder (--dir gives another)\n", dir);
+    return got > 0;
+}
+
 /* A node for manual tests of the network: no points of its own (no dp.bin, no sessions), so it is a custodian and a mailbox only. */
 static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
 {
@@ -224,7 +237,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     home_identity id;
     if (!load_net(ctx, network, puzzle, &nf, &net, &bn)) return 1;
     if (!dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), dir = dirname;
-    if (!sys_mkdir(dir) || !sys_private(dir)) return fprintf(stderr, "%s must be a folder of this user that nobody else can open\n", dir), 1;
+    if (!own_dir(dir)) return 1;
     snprintf(seedpath, sizeof seedpath, "%s/node.seed", dir);          /* its identity, as the keys of a Bitcoin node in its folder */
     const int got = keys_seed_file(seedpath, seed, err, sizeof err);
     if (!got) return fprintf(stderr, "%s\n", err), 1;
@@ -252,10 +265,9 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     sys_on_stop(on_signal);
     const int n = dht_start(d);
     pz_hex_encode(id.xonly, 32, idhex);
-    char ts[16];
-    if (n < 0) fprintf(stderr, "cannot listen on port %ld\n", port);
-    else if (port) printf("%s node %s, listening on port %u, %d contact%s\n", stamp(ts), idhex, dht_port(d), n, n == 1 ? "" : "s");
-    else printf("%s node %s, not listening, %d contact%s\n", stamp(ts), idhex, n, n == 1 ? "" : "s");
+    char ts[16], how[40] = "not listening";
+    if (port) snprintf(how, sizeof how, "listening on port %u", dht_port(d));
+    if (n >= 0) printf("%s node %s, %s, %d contact%s\n", stamp(ts), idhex, how, n, n == 1 ? "" : "s");   /* else dht_start said why */
     fflush(stdout);
     for (int tick = 1; n >= 0 && !interrupted; tick++) {
         sys_sleep_ms(200);
@@ -345,7 +357,11 @@ static int cmd_run(int argc, char **argv)
     }
     cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
-    return home_run(&cfg);
+    netfile nf;
+    char err[300], dirname[48];
+    if (!netfile_get(cfg.network, cfg.puzzle, &nf, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
+    if (!cfg.dir) snprintf(dirname, sizeof dirname, "pznet-%.31s", nf.net), cfg.dir = dirname;
+    return own_dir(cfg.dir) ? home_run(&cfg) : 1;
 }
 
 int main(int argc, char **argv)
@@ -359,6 +375,7 @@ int main(int argc, char **argv)
         return 0;
     }
     (void)pz_seed_harden();                                     /* the home seed, the pieces, the keys of the tiny coins: no core file */
+    sys_more_files();
     const secp256k1_context *ctx = keys_ctx();
     const int rc = argc == 4 && !strcmp(argv[1], "dpcheck")  ? cmd_dpcheck(ctx, argv[2], argv[3])
                  : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2])

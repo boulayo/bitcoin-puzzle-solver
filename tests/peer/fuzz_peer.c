@@ -1,17 +1,24 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* fuzz_peer.c - a mutation fuzzer of the readers of hostile input in pzpeer, for a given number of seconds (make peer-fuzz, best under
- * the sanitizers). Seeds: replies of bitcoind and results of pzsign, transactions of the main chain and of the vectors, HTTP replies.
- * Mutations: bytes changed, inserted, removed, cut, repeated, spliced from another seed, and tokens of each grammar (escapes,
- * surrogates, long numbers, CompactSize lengths at their limits, chunk sizes). Besides staying in their buffers, the readers must agree:
+ * the sanitizers). Seeds: replies of bitcoind and results of pzsign, transactions of the main chain and of the vectors, HTTP replies,
+ * records, claims of blocks and network files. Mutations: bytes changed, inserted, removed, cut, repeated, spliced from another seed,
+ * and tokens of each grammar (escapes, surrogates, long numbers, CompactSize lengths at their limits, chunk sizes, keys of a network
+ * file). Besides staying in their buffers, the readers must agree:
  *   JSON: a document that parses is written again with the writer and parses to the same tree;
  *   transactions: what btc_tx_parse takes has the txid of btc_txid and serializes back to its legacy form; btc_prevout gives every
  *     output inside the bytes; a mutated signed input that btc_verify_p2pkh accepts is the original one;
- *   HTTP: a reply read in random pieces gives what it gives read at once (the reader of btc_rpc.c is included here for that).
+ *   HTTP: a reply read in random pieces gives what it gives read at once (the reader of btc_rpc.c is included here for that);
+ *   records and claims (what the table takes from the network): what decodes encodes back to the same bytes, and the checks take it;
+ *   network files: one that parses has the same fingerprint and options with "\r\n" at the ends of its lines and a comment after them.
  * Usage: fuzz_peer [SECONDS [SEED]]. Exit status 1 on the first disagreement, with the input in hex. */
 #include "../../src/peer/btc_rpc.c"
+#include "block.h"
 #include "btc_vectors.h"
+#include "keys.h"
+#include "netfile.h"
 #include "peertest.h"
+#include "record.h"
 #include <time.h>
 
 #define NV(a) (sizeof (a) / sizeof (a)[0])
@@ -389,6 +396,99 @@ static void fuzz_http(buf *seeds, size_t ns)
     free(b.p);
 }
 
+/* ---- records, claims, network files ---- */
+
+static const token WIRE_TOKENS[] = {T("\x00"), T("\x01"), T("\xff"), T("\x80"), T("\x02"), T("\x40"), T("\x41"), T("\x7f"), T("\x00\x00\x00\x00")};
+
+static record_net g_net;
+static block_net g_blocks;
+static unsigned long g_rec_taken, g_rec_runs, g_claim_taken, g_claim_runs, g_net_parsed, g_net_runs;
+
+/* a record (RECORD_LEN bytes, or the RECORD_WIRE of a STORE): what decodes is those bytes again; the checks take it */
+static void fuzz_record(buf *seeds, size_t ns)
+{
+    buf b;
+    const buf *s = &seeds[below(ns)];
+    load(&b, s->p, s->len, s->len + 64);
+    for (int m = 1 + (int)below(3); m; m--) mutate(&b, WIRE_TOKENS, NV(WIRE_TOKENS), seeds, ns);
+    uint8_t in[RECORD_LEN], out[RECORD_LEN];
+    record r;
+    g_rec_runs++;
+    if (b.len == RECORD_LEN || b.len == RECORD_WIRE) {
+        memcpy(in, b.p, b.len);
+        static const uint8_t SENDER[32] = {2};                 /* the owner of the records of a STORE */
+        const bool ok = b.len == RECORD_LEN ? record_decode(in, &r) : record_wire_decode(in, SENDER, &r);
+        if (ok) {
+            g_rec_taken++;
+            record_encode(&r, out);
+            if (memcmp(in, out, b.len)) dump("record: decoded, not the same bytes", b.p, b.len);
+            (void)record_check(keys_ctx(), &g_net, &r);
+        }
+    }
+    free(b.p);
+}
+
+/* a claim of a block: what decodes, of exactly its length, is its bytes again; the checks take it */
+static void fuzz_claim(buf *seeds, size_t ns)
+{
+    buf b;
+    const buf *s = &seeds[below(ns)];
+    load(&b, s->p, s->len, s->len + 256);
+    for (int m = 1 + (int)below(4); m; m--) mutate(&b, WIRE_TOKENS, NV(WIRE_TOKENS), seeds, ns);
+    uint8_t *in = malloc(b.len ? b.len : 1), out[BLOCK_CLAIM_MAX];
+    memcpy(in, b.p, b.len);
+    block_claim c;
+    g_claim_runs++;
+    if (block_claim_decode(in, b.len, &c)) {
+        g_claim_taken++;
+        if (block_claim_encode(&c, out) != b.len || memcmp(in, out, b.len)) dump("claim: decoded, not the same bytes", b.p, b.len);
+        (void)block_claim_check(keys_ctx(), &g_blocks, &c);
+        (void)block_claims_keys(&c, 1);
+    }
+    free(in);
+    free(b.p);
+}
+
+static const token NET_TOKENS[] = {
+    T("\n"), T("="), T("#"), T(" "), T("\t"), T("\r"), T(":"), T("net="), T("puzzle="), T("pubkey="), T("range="), T("jumpseed="),
+    T("schema=net-06"), T("dpbits="), T("chain=main"), T("chain=regtest"), T("address="), T("blockbits="), T("entry=127.0.0.1:1"),
+    T("prize="), T("checkpoint="), T("ffffffffffffffffffffffffffffffff"), T("0"), T("60"), T("256"), T("\x00"),
+};
+
+static const char *const NET_SEEDS[] = {
+    "# a test network\nnet=t1\npuzzle=0\npubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrange=1000:ffff\n"
+    "jumpseed=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\nschema=net-06\ndpbits=8\nchain=regtest\nentry=h:1\n",
+    "net=lin\npuzzle=0\naddress=mmF9pY4RGQVXonKpcvvYPxkEgs42C3iSRz\nrange=1000:ffff\nblockbits=36\nchain=regtest\nelectrum=a:1\n",
+};
+
+/* a network file: one that parses parses the same with "\r\n" at the ends of its lines (when they still fit) and a comment after them */
+static void fuzz_netfile(buf *seeds, size_t ns)
+{
+    buf b;
+    const buf *s = &seeds[below(ns)];
+    load(&b, s->p, s->len, s->len + 256);
+    for (int m = 1 + (int)below(4); m; m--) mutate(&b, NET_TOKENS, NV(NET_TOKENS), seeds, ns);
+    char *t = malloc(b.len + 1), *u = malloc(2 * b.len + 16), err[300];   /* u: t with "\r\n", and the comment */
+    memcpy(t, b.p, b.len), t[b.len] = 0;
+    size_t n = 0, line = 0, longest = 0;
+    for (const char *p = t; *p; p++) {
+        if (*p == '\n') u[n++] = '\r', line = 0;
+        else if (++line > longest) longest = line;
+        u[n++] = *p;
+    }
+    static const char END[] = "\n# the end\n";
+    memcpy(u + n, END, sizeof END);
+    netfile a, c;
+    g_net_runs++;
+    if (netfile_parse(t, &a, err, sizeof err)) {
+        g_net_parsed++;
+        if (longest + 1 < NETFILE_LINE_MAX && (!netfile_parse(u, &c, err, sizeof err) || memcmp(a.fp, c.fp, 32) || a.opts_len != c.opts_len ||
+                                                memcmp(a.opts, c.opts, a.opts_len)))
+            dump("network file: another fingerprint with \"\\r\\n\" and a comment", b.p, b.len);
+    }
+    free(t), free(u), free(b.p);
+}
+
 int main(int argc, char **argv)
 {
     const double seconds = argc > 1 ? atof(argv[1]) : 10;
@@ -416,6 +516,27 @@ int main(int argc, char **argv)
     uint8_t spk[BTC_P2PKH_LEN];
     CHECK(btc_tx_parse(&signed_tx, ts[NV(MAIN_TX) + NV(TX_VEC)].p, ts[NV(MAIN_TX) + NV(TX_VEC)].len));
     CHECK(pt_unhex(SIGN_VEC[0].spk[0], spk, sizeof spk) == BTC_P2PKH_LEN && btc_verify_p2pkh(&signed_tx, 0, spk, sizeof spk));
+    /* records of the three types, and claims of 0, 3 and 64 proof keys; a network of records and one of blocks for their checks */
+    uint8_t pub[33], base[32] = {[31] = 2};                     /* the key G, the start 2: Q' = -G */
+    CHECK(pt_unhex("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", pub, 33) == 33);
+    CHECK(record_net_init(keys_ctx(), &g_net, (const uint8_t *)"fingerprint of the fuzzed network", 8, pub, base));
+    g_blocks.bits = 36, g_blocks.start[27] = 0x10, memset(g_blocks.end + 26, 0xff, 6);
+    buf rs[6], cs[3], nfs[NV(NET_SEEDS)];
+    for (int i = 0; i < 3; i++) {
+        record r = {.t = i - 1, .dp = 8 + (unsigned)i};
+        uint8_t e[RECORD_LEN];
+        CHECK(sys_random(r.x, 32) && sys_random(r.owner, 32));
+        record_encode(&r, e);
+        load(&rs[2 * i], e, RECORD_LEN, 0), load(&rs[2 * i + 1], e, RECORD_WIRE, 0);
+    }
+    for (int i = 0; i < 3; i++) {
+        block_claim c = {.index = 7u << i, .n = i ? (i == 1 ? 3 : BLOCK_PROOFS_MAX) : 0};
+        uint8_t e[BLOCK_CLAIM_MAX];
+        for (int k = 0; k < c.n; k++) c.off[k] = 1000u * (uint64_t)k + 5;
+        CHECK(sys_random(c.owner, 32) && sys_random(c.sig, 64));
+        load(&cs[i], e, block_claim_encode(&c, e), 0);
+    }
+    for (size_t i = 0; i < NV(NET_SEEDS); i++) load(&nfs[i], NET_SEEDS[i], strlen(NET_SEEDS[i]), 0);
     if (g_fails) return 1;
     struct timespec t0, t;
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -428,12 +549,19 @@ int main(int argc, char **argv)
         fuzz_json(js, NV(js));
         fuzz_tx(ts, nts);
         fuzz_http(hs, NV(hs));
+        fuzz_record(rs, NV(rs));
+        fuzz_claim(cs, NV(cs));
+        fuzz_netfile(nfs, NV(nfs));
         if (!(rounds & 7)) fuzz_sig(&signed_tx, spk);
     }
-    printf("fuzz_peer: OK, %lu rounds: JSON %lu (%lu parsed), transactions %lu (%lu parsed, %lu hashed), HTTP %lu (%lu complete)\n", rounds,
-           g_json_runs, g_json_parsed, g_tx_runs, g_tx_parsed, g_tx_hashed, g_http_runs, g_http_done);
+    printf("fuzz_peer: OK, %lu rounds: JSON %lu (%lu parsed), transactions %lu (%lu parsed, %lu hashed), HTTP %lu (%lu complete), records %lu "
+           "(%lu taken), claims %lu (%lu taken), network files %lu (%lu parsed)\n", rounds, g_json_runs, g_json_parsed, g_tx_runs, g_tx_parsed,
+           g_tx_hashed, g_http_runs, g_http_done, g_rec_runs, g_rec_taken, g_claim_runs, g_claim_taken, g_net_runs, g_net_parsed);
     for (size_t i = 0; i < NV(js); i++) free(js[i].p);
     for (size_t i = 0; i < NV(hs); i++) free(hs[i].p);
     for (size_t i = 0; i < nts; i++) free(ts[i].p);
+    for (size_t i = 0; i < NV(rs); i++) free(rs[i].p);
+    for (size_t i = 0; i < NV(cs); i++) free(cs[i].p);
+    for (size_t i = 0; i < NV(nfs); i++) free(nfs[i].p);
     return 0;
 }

@@ -4,6 +4,7 @@
  * the C runtime, opened so that other programs can read it meanwhile (pzpeer reads the dp.bin that pzsolve writes). */
 #include "sys.h"
 #include <windows.h>
+#include <aclapi.h>
 #include <bcrypt.h>
 #include <iphlpapi.h>
 #include <sddl.h>
@@ -270,18 +271,51 @@ static bool is_dir(const char *path)
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-/* A folder made here is for this user alone: its owner and the system, with nothing taken from the folder above (which may let anyone
- * on the machine read), and what is made inside it takes the same */
+/* The rights of a folder for this user alone (LocalFree it; NULL on failure): the user of this process and the system, nothing taken
+ * from the folder above (which may let anyone on the machine read), passed on to what is inside. The user's own SID and not the owner's:
+ * a folder made from an elevated shell belongs to the group of the administrators, which the same user without elevation is not, and
+ * before, that user was shut out of its own folder. */
+static PSECURITY_DESCRIPTOR private_sd(void)
+{
+    union { TOKEN_USER u; BYTE b[TOKEN_USER_MAX_SIZE]; } tu;
+    HANDLE tok;
+    DWORD n;
+    char *sid = NULL, sddl[256];
+    PSECURITY_DESCRIPTOR sd = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return NULL;
+    if (GetTokenInformation(tok, TokenUser, &tu, sizeof tu, &n) && ConvertSidToStringSidA(tu.u.User.Sid, &sid)) {
+        snprintf(sddl, sizeof sddl, "D:P(A;OICI;FA;;;%s)(A;OICI;FA;;;SY)", sid);
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(sddl, SDDL_REVISION_1, &sd, NULL)) sd = NULL;
+        LocalFree(sid);
+    }
+    CloseHandle(tok);
+    return sd;
+}
+
+/* A folder made here is for this user alone, and what is made inside it takes the same */
 bool sys_mkdir(const char *path)
 {
-    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, FALSE};
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorA("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", SDDL_REVISION_1, &sa.lpSecurityDescriptor, NULL))
-        return false;
-    const bool made = CreateDirectoryA(path, &sa);
+    SECURITY_ATTRIBUTES sa = {sizeof sa, private_sd(), FALSE};
+    const bool made = sa.lpSecurityDescriptor && CreateDirectoryA(path, &sa);
     LocalFree(sa.lpSecurityDescriptor);
     return made || is_dir(path);
 }
-bool sys_private(const char *path) { return is_dir(path); }
+
+/* A folder, not a link to one, made this user's alone: its rights are set again (a folder made by hand took those of the one above),
+ * which takes the right to change them, and the folder of another user does not give it. Before, any folder passed. */
+bool sys_private(const char *path)
+{
+    const DWORD a = GetFileAttributesA(path);
+    PSECURITY_DESCRIPTOR sd = private_sd();
+    PACL dacl = NULL;
+    BOOL present = FALSE, defaulted = FALSE;
+    const bool ok = a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) && !(a & FILE_ATTRIBUTE_REPARSE_POINT) && sd &&
+                    GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present &&
+                    SetNamedSecurityInfoA((char *)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL,
+                                          NULL, dacl, NULL) == ERROR_SUCCESS;
+    LocalFree(sd);
+    return ok;
+}
 
 static int open_flags(const char *path, int flags)
 {
@@ -348,3 +382,14 @@ bool sys_remove_dir(const char *path)
     if (h != INVALID_HANDLE_VALUE) FindClose(h);
     return RemoveDirectoryA(path) || GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
 }
+
+int sys_lock_dir(const char *dir)
+{
+    char path[4200];
+    snprintf(path, sizeof path, "%s\\lock", dir);
+    /* kept open and shared with nobody, not inherited: the system closes it with the process */
+    const HANDLE h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    return h != INVALID_HANDLE_VALUE ? 1 : GetLastError() == ERROR_SHARING_VIOLATION ? 0 : -1;
+}
+
+void sys_more_files(void) {}

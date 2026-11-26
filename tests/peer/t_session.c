@@ -8,8 +8,8 @@
  * at which F could not cancel; the limit of failed signings; a partner that copied the x of a record and cannot prove it; a pzsign that
  * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
  * After a payout the pieces: both get the key; a partner that keeps its piece, or gives a wrong one, which leaves only this side without
- * it, and a later session that gives it; coins left at the puzzle address, which hold the exchange.
- * Needs PZSIGN; without it it says it was skipped. */
+ * it, and a later session that gives it; coins left at the puzzle address, which hold the exchange, and a later payout of them whose
+ * second S keeps; every output of the second spent before a later session. Needs PZSIGN; without it it says it was skipped. */
 #include "peertest.h"
 #include "chain_rpc.h"
 #include "session.h"
@@ -127,8 +127,8 @@ static uint64_t ch_height(void *c)
     return h;
 }
 
-/* the transactions of the mempool that touch a script: an output to it not mined, or one of its outputs spent by a transaction not mined
- * (ch_coins leaves such an output out, as an Electrum server does) */
+/* the spends of a script in the mempool: its outputs spent by a transaction not mined (ch_coins leaves such an output out, as an Electrum
+ * server does) */
 static int ch_pending(void *c, const uint8_t spk[BTC_P2PKH_LEN])
 {
     (void)c;
@@ -136,7 +136,7 @@ static int ch_pending(void *c, const uint8_t spk[BTC_P2PKH_LEN])
     pthread_mutex_lock(&chain.mu);
     for (int i = 0; i < chain.n; i++) {
         const utxo *u = &chain.u[i], *by = u->spent ? find(u->by, 0) : NULL;
-        if (u->spk_len == BTC_P2PKH_LEN && !memcmp(u->spk, spk, BTC_P2PKH_LEN) && (!u->height || (by && !by->height))) n++;
+        if (u->spk_len == BTC_P2PKH_LEN && !memcmp(u->spk, spk, BTC_P2PKH_LEN) && by && !by->height) n++;
     }
     pthread_mutex_unlock(&chain.mu);
     return n;
@@ -167,6 +167,7 @@ typedef struct {
     bool ghost;                        /* once the puzzle address is empty, it shows a coin of 1 BTC (sent there after the payout) */
     int refuse;                        /* the next sends of a second transaction it refuses (a node that is down for a moment) */
     bool stop_at_second;               /* it stops once a second transaction is sent: the home is stopped before its block */
+    uint64_t fee;                      /* the rate it estimates, whatever the chain says (0: the chain's) */
     uint64_t at;
 } flaky;
 
@@ -192,7 +193,7 @@ static int fl_conf(void *c, const uint8_t txid[32], uint32_t vout)
     const int k = f->in.confirmations(f->in.ctx, txid, vout);
     return f->frozen && k > 0 ? 0 : k;
 }
-static uint64_t fl_feerate(void *c) { flaky *f = c; return f->in.feerate(f->in.ctx); }
+static uint64_t fl_feerate(void *c) { flaky *f = c; return f->fee ? f->fee : f->in.feerate(f->in.ctx); }
 static uint64_t fl_height(void *c)
 {
     flaky *f = c;
@@ -474,16 +475,16 @@ static void p2pkh_of(const uint8_t sec[32], uint8_t spk[BTC_P2PKH_LEN])
     btc_script_p2pkh(h, spk);
 }
 
-enum { PAYOUT, CANCEL, NOTHING, FIRST, TAKEN, OTHER };   /* what the chain must show at the end (FIRST: the first transaction alone; TAKEN: the
-                                                  * prize spent by someone else before) */
+enum { PAYOUT, CANCEL, NOTHING, FIRST, TAKEN, OTHER, COINS };   /* what the chain must show at the end (FIRST: the first transaction alone;
+                                                  * TAKEN: the prize spent by someone else before; COINS: the payout, and the coin that came
+                                                  * after it at the address, F's cancel having voided the second of its payout) */
 
 typedef struct {
     const char *name;
     int expect;
     int s_last, f_last;               /* LAST_*: what S and F do to their last message of the second signing */
-    bool s_withholds;                 /* S keeps the second transaction */
     uint64_t fee;                     /* the fee rate the chains of both homes estimate (0: the usual) */
-    uint64_t fee_far;                 /* the fee rate the chain of home 1 alone estimates */
+    uint64_t fee_far;                 /* the fee rate the chain of home 1 estimates, home 0's the usual */
     bool unproved;                    /* the session ends before the proofs */
     int lost_heights;                 /* answers about the height each chain loses at first */
     unsigned limit[2];                /* failures already counted on the network by home 0, and for the pair by home 1 */
@@ -509,6 +510,10 @@ typedef struct {
     bool restart_s;                   /* S's chain stops once S sends the second: then a later session, the chain back, settles it */
     bool f_forgets;                   /* F loses its record of the payout before the later session */
     bool spend_payouts;               /* both homes spend their payout before the later session */
+    bool spend_author;                /* and the output of the author is spent too */
+    bool slow_F;                      /* the slow scan is F's, not home 0's */
+    bool coins_after;                 /* a coin comes to the puzzle address once the second is in a block; a later session pays it out, and
+                                       * S keeps that second and its last message */
     bool memory;                      /* only on the chain in memory, not on a node */
 } tcase;
 
@@ -536,8 +541,25 @@ static void *other_pair(void *arg)
     return NULL;
 }
 
-/* each home spends its output of the second transaction (to its own address again), mined at the next block */
-static void spend_payouts(const session_paid *p, const home h[2], const char *label)
+/* the coin that comes to the puzzle address after the payout: sent as soon as the second transaction of the pair is in a block */
+typedef struct { const uint8_t *coin, *spk, *seed; atomic_bool done; } after_arg;
+static void *coin_after(void *arg)
+{
+    after_arg *a = arg;
+    for (bool in = false; !in; usleep(2000)) {
+        if (atomic_load(&a->done)) return NULL;
+        pthread_mutex_lock(&chain.mu);
+        const utxo *c = find(a->coin, 0), *f = c && c->spent ? find(c->by, 0) : NULL, *b = f && f->spent ? find(f->by, 0) : NULL;
+        in = b && b->height;
+        pthread_mutex_unlock(&chain.mu);
+    }
+    fund(a->spk, a->seed);
+    return NULL;
+}
+
+/* each home spends its output of the second transaction (to its own address again), mined at the next block; with author, the output of
+ * the author is spent too, by a transaction of its own */
+static void spend_payouts(const session_paid *p, const home h[2], const char *label, bool author)
 {
     btc_tx b, t;
     uint8_t bid[32];
@@ -551,6 +573,10 @@ static void spend_payouts(const session_paid *p, const home h[2], const char *la
         CHECK(btc_tx_add_in(&t, bid, v, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&t, b.out[v].value - 1000, h[i].cfg.pay_spk, BTC_P2PKH_LEN) &&
               btc_sign_p2pkh(&t, 0, ps) && ch_broadcast(NULL, &t));
     }
+    pthread_mutex_lock(&chain.mu);
+    utxo *u = find(bid, 2);
+    if (author) u->spent = true, memset(u->by, 0xa7, 32), add_utxo(u->by, 0, 1, (const uint8_t[]){0x6a}, 1, chain.tip);
+    pthread_mutex_unlock(&chain.mu);
     usleep(500000);                                             /* mined */
 }
 
@@ -643,13 +669,14 @@ static void run_case(const tcase *tc, const char *bin)
         chan[i] = (session_chan){&e[i], q_send, q_recv};
         if (regtest) {                                          /* each home its own client of the node */
             CHECK(rpc_client(&rpcs[i]));
-            crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = tc->fee ? tc->fee : i && tc->fee_far ? tc->fee_far : g_fee[i]};
+            crpc[i] = (chain_rpc){.rpc = &rpcs[i], .chain = BTC_REGTEST, .fallback_feerate = tc->fee ? tc->fee : g_fee[i]};
             chn[i].in = chain_rpc_iface(&crpc[i]);
         } else chn[i].in = (session_chain){i ? (void *)1 : NULL, ch_coins, ch_broadcast, ch_conf, ch_height, ch_feerate, ch_coin, ch_pending, NULL};
         chn[i].lost = tc->lost_heights, chn[i].frozen = tc->frozen, chn[i].scan_fails = tc->scan_fails, chn[i].at = 0, chn[i].ghost = tc->ghost;
         chn[i].refuse = i == S_home ? tc->refuse_s : 0, chn[i].stop_at_second = i == S_home && tc->restart_s;
+        chn[i].fee = tc->fee_far ? (i ? tc->fee_far : g_fee[0]) : 0;   /* the two rates, also on a node with an estimate of its own */
         if (tc->pieces || tc->restart_s) g->paid = &paid[i], g->reveal_conf = 2;
-        chn[i].slow_ms = i ? 0 : tc->slow_ms;
+        chn[i].slow_ms = (tc->slow_F ? i == F_home : i == 0) ? tc->slow_ms : 0;
         g->block_ms = i == S_home && tc->restart_s ? 10 : tc->block_ms;   /* a stopped chain ends S's waits soon */
         if (tc->scan_fails) {                                   /* the prize, as a line of the network file gives it */
             payout_coin pc[64];
@@ -680,17 +707,21 @@ static void run_case(const tcase *tc, const char *bin)
         h[i].cfg.chain = &ifc[i];
     }
     if (tc->fee) g_fee[0] = g_fee[1] = tc->fee;
-    if (tc->fee_far) g_fee[1] = tc->fee_far;
-    h[S_home].cfg.withhold = tc->s_withholds;
     e[S_home].last_b = tc->s_last, e[F_home].last_b = tc->f_last;
     e[1].piece = tc->piece1;
     pthread_t th[2], ot;
     other_arg oa = {coin_txid, puzzle_spk, k, false};
     if (tc->other) pthread_create(&ot, NULL, other_pair, &oa);
+    uint8_t after_txid[32];
+    char al[128];
+    snprintf(al, sizeof al, "%s after", label), hashed(al, after_txid);
+    after_arg aa = {coin_txid, puzzle_spk, after_txid, false};
+    if (tc->coins_after) pthread_create(&ot, NULL, coin_after, &aa);
     if (tc->copy) g_copy = coin_txid;
     for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
     if (tc->other) atomic_store(&oa.done, true), pthread_join(ot, NULL);
+    if (tc->coins_after) atomic_store(&aa.done, true), pthread_join(ot, NULL);
     g_copy = NULL;
     g_fee[0] = 2000, g_fee[1] = 3000;
     q_drain(&q[0]), q_drain(&q[1]);
@@ -704,20 +735,28 @@ static void run_case(const tcase *tc, const char *bin)
         CHECK(strstr(h[0].why, w) || strstr(h[1].why, w));
     } else if (tc->pieces) {
         /* home 1 has home 0's piece whatever it does with its own; home 0 has the key only when home 1 gave the right piece */
-        const bool want[2] = {!tc->ghost && tc->piece1 == PIECE_GIVEN, !tc->ghost};
+        const bool later = tc->ghost || tc->coins_after, want[2] = {!later && tc->piece1 == PIECE_GIVEN, !later};
         for (int i = 0; i < 2; i++) {
             CHECK(paid[i].paid_at > 0 && paid[i].have_key == want[i]);
             if (want[i]) CHECK(!memcmp(paid[i].key, k, 32));
         }
         if (tc->piece1 == PIECE_KEPT) CHECK(strstr(h[0].why, "no piece from the partner") != NULL);
         if (tc->piece1 == PIECE_WRONG) CHECK(strstr(h[0].why, "not the right one") != NULL);
-        if (tc->ghost) CHECK(strstr(h[0].why, "paid out first") && strstr(h[1].why, "paid out first"));
+        if (later) CHECK(strstr(h[0].why, "paid out first") && strstr(h[1].why, "paid out first"));
+    }
+    if (tc->coins_after) {                                      /* a later session pays out the coin that came; S keeps its second */
+        e[S_home].last_b = LAST_DROPPED, e[S_home].plans = e[S_home].msgs = 0, chn[S_home].refuse = 1000;
+        for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
+        for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
+        q_drain(&q[0]), q_drain(&q[1]);
+        printf("  %s, later: F %s (%s), S %s (%s)\n", tc->name, RES[h[F_home].res], h[F_home].why, RES[h[S_home].res], h[S_home].why);
+        CHECK(!paid[S_home].paid_at && paid[S_home].second_len);   /* the record of S: that second, in no block (its exchange sees it void) */
     }
     if (tc->again) {                                            /* a later session of the pair: no payout, only the pieces */
         e[1].piece = PIECE_GIVEN;
         chn[S_home].frozen = chn[S_home].stop_at_second = false, chn[S_home].at = 0, h[S_home].cfg.block_ms = tc->block_ms;
         if (tc->f_forgets) memset(&paid[F_home], 0, sizeof paid[F_home]);
-        if (tc->spend_payouts) spend_payouts(&paid[0], h, label);
+        if (tc->spend_payouts) spend_payouts(&paid[0], h, label, tc->spend_author);
         for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, run_home, &h[i]);
         for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
         q_drain(&q[0]), q_drain(&q[1]);
@@ -751,6 +790,9 @@ static void run_case(const tcase *tc, const char *bin)
         CHECK(at_puzzle > 99900000 && at_puzzle < 100000000 && pay[0] == 0 && pay[1] == 0 && coin_left[F_home] && !coin_left[S_home]);
     } else if (tc->expect == OTHER) {
         CHECK(at_puzzle > 99900000 && pay[0] == 0 && pay[1] == 0 && coin_left[F_home]);   /* the prize is back at the address */
+    } else if (tc->expect == COINS) {                           /* the first payout, and the coin that came later under the joint key */
+        CHECK(h[F_home].res == SESSION_CANCELLED && h[S_home].res == SESSION_FAILED && !coin_left[F_home]);
+        CHECK(at_puzzle > 99800000 && at_puzzle < 100000000 && pay[S_home] > 44900000 && pay[S_home] < 45000000);
     } else if (tc->expect == NOTHING) {
         CHECK(h[0].res == SESSION_FAILED && h[1].res == SESSION_FAILED);
         CHECK(at_puzzle == 100000000 && pay[0] == 0 && pay[1] == 0 && !coin_left[0] && !coin_left[1]);   /* nothing was signed */
@@ -764,7 +806,8 @@ static void run_case(const tcase *tc, const char *bin)
         CHECK(fails_of(limpath[i], net.fp) == (i || tc->limit_old ? 0 : tc->limit[0]) + failed);
         CHECK(fails_of(limpath[i], own) == (i ? tc->limit[1] : 0) + failed);
         /* a payout counts from the signing of its first transaction until it pays */
-        CHECK(fails_of(limpath[i], paid_key) == (tc->expect == CANCEL || tc->expect == FIRST || tc->expect == OTHER || (tc->bin[0] && failed) ? 1u : 0u));
+        CHECK(fails_of(limpath[i], paid_key) ==
+              (tc->expect == CANCEL || tc->expect == FIRST || tc->expect == OTHER || tc->expect == COINS || (tc->bin[0] && failed) ? 1u : 0u));
         pthread_mutex_destroy(&lim[i].mu);
         pthread_cond_destroy(&lim[i].cv);
         remove(limpath[i]);
@@ -872,16 +915,18 @@ int main(void)
     pthread_create(&m, NULL, miner, NULL);
     const tcase cases[] = {
         {.name = "payout", .expect = PAYOUT, .lost_heights = 1},
-        {.name = "held back", .expect = CANCEL, .s_last = LAST_DROPPED, .s_withholds = true},
+        /* S keeps the second transaction (the chain never has it) and its last message: F cancels, and S stops waiting at once (before,
+         * for 144 blocks) */
+        {.name = "held back", .expect = CANCEL, .s_last = LAST_DROPPED, .refuse_s = 1000, .why = "with its tiny coin"},
         /* S holds back and keeps the channel alive: F stops waiting all the same (before, every S_ALIVE gave it another wait, for ever) */
-        {.name = "held back, the channel kept alive", .expect = CANCEL, .s_last = LAST_PUMP, .s_withholds = true},
+        {.name = "held back, the channel kept alive", .expect = CANCEL, .s_last = LAST_PUMP, .refuse_s = 1000},
         /* F sends garbage after its last message: S keeps the signatures it has (before, it threw them away and F cancelled) */
         {.name = "F sends garbage after its last message", .expect = PAYOUT, .f_last = LAST_JUNK},
         /* F stops, or sends garbage, instead of its last message: S's last one must not come back (it did before: F had the signature) */
         {.name = "F stops at its last message", .expect = CANCEL, .f_last = LAST_ABORT, .fails_S = 1},
         {.name = "F damages its last message", .expect = CANCEL, .f_last = LAST_DAMAGED, .fails_S = 1},
         /* a high rate and S holds back: the tiny coin is larger, and F can still cancel (with a coin of a fixed size it could not) */
-        {.name = "held back at a high fee rate", .expect = CANCEL, .s_last = LAST_DROPPED, .s_withholds = true, .fee = 60000},
+        {.name = "held back at a high fee rate", .expect = CANCEL, .s_last = LAST_DROPPED, .refuse_s = 1000, .fee = 60000},
         /* a partner whose rate is far above this home's: refused before anything (it would pay it from the prize at every try) */
         {.name = "a fee rate far above this home's", .expect = NOTHING, .fee_far = 60000, .unproved = true, .why = "more than 4 times"},
         /* one home at its limit (on the network, or for the pair): it stops before the plan, and the other counts no failure */
@@ -894,6 +939,8 @@ int main(void)
         /* one home reads its coins for longer than the other waits for a message: its S_ALIVE keeps the other there (before, the other
          * gave up, and the slow one then counted a failed signing that nobody answered) */
         {.name = "a scan slower than the partner's wait", .expect = PAYOUT, .slow_ms = 9000, .timeout_ms = 6000},
+        /* the same for the scans of F, which reads the coins of its tiny coins first (before, with no S_ALIVE: S gave up) */
+        {.name = "F's scans slower than the partner's wait", .expect = PAYOUT, .slow_ms = 9000, .timeout_ms = 6000, .slow_F = true},
         /* the scan fails (dust): the prize of the network file is paid all the same (before, no coin of the puzzle to spend) */
         {.name = "the scan fails", .expect = PAYOUT, .scan_fails = true},
         /* the chain stops after the first transaction: the wait for its block ends (before, never) */
@@ -905,6 +952,10 @@ int main(void)
         {.name = "the partner gives a wrong piece", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_WRONG},
         /* coins come to the puzzle address after the payout: the key would open them, so no piece is given */
         {.name = "coins at the address after the payout", .expect = PAYOUT, .pieces = true, .ghost = true, .block_ms = 400},
+        /* a coin sent there for real, then a later session that pays it out, whose second S keeps: S's record is of that payout, in no
+         * block (before, it kept the height of the first, and its exchange neither sent that second again nor saw it void) */
+        {.name = "a payout of coins that came later, held back", .expect = COINS, .pieces = true, .coins_after = true, .block_ms = 400,
+         .memory = true},
         /* the prize was taken before: the session says so, and the home stops searching (home.c) */
         {.name = "the prize already taken", .expect = TAKEN, .pieces = true, .taken = true, .node = true},
         /* the same through servers: an empty answer proves nothing (they may hide the coins), and the home goes on */
@@ -917,8 +968,6 @@ int main(void)
         {.name = "an old copy of the first is mined", .expect = OTHER, .copy = true, .why = "spent by another transaction"},
         /* a send of the second refused once: it goes to the chain again at the next block (F waits long enough not to cancel first) */
         {.name = "the second refused once", .expect = PAYOUT, .s_last = LAST_DROPPED, .refuse_s = 1, .cancel_blocks = 8, .memory = true},
-        /* the second never taken: F cancels, and S stops waiting at once (before, for 144 blocks) */
-        {.name = "the second never taken", .expect = CANCEL, .s_last = LAST_DROPPED, .refuse_s = 1000, .why = "with its tiny coin", .memory = true},
         /* S stops before the block of its second (its chain stops then): it kept the second, and a later session settles the payout */
         {.name = "S stops before the block of its second", .expect = PAYOUT, .restart_s = true, .again = true, .memory = true},
         /* F loses its record of the payout: S gives the second again in a later session, and F gets its key */
@@ -926,6 +975,9 @@ int main(void)
         /* both homes moved their share before a later session: the share of the author still shows the second in a block */
         {.name = "the payouts spent before the pieces", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_KEPT, .again = true, .spend_payouts = true,
          .memory = true},
+        /* and the author its share: no output shows the block of the second, which this home saw paid (before, the pieces never came) */
+        {.name = "every output of the second spent before the pieces", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_KEPT, .again = true,
+         .spend_payouts = true, .spend_author = true, .block_ms = 400, .memory = true},
         /* a pzsign that does not start: nothing could be signed, so neither home counts a failed signing or a try of the payout */
         {.name = "a pzsign that does not start", .expect = NOTHING, .bin = {"/nonexistent/pzsign", "/nonexistent/pzsign"}, .why = "did not start"},
     };

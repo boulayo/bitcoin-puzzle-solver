@@ -51,9 +51,8 @@ int main(void)
         coins[i].value = i == 3 ? 100000000 : i < 2 ? 500 : 50000 + 1000 * (uint64_t)i;
     }
     btc_tx a, b, c;
-    size_t used;
-    CHECK(payout_first(&t, coins, 10, &a, &used));
-    CHECK(used == PAYOUT_MAX_COINS && a.n_in == 8 && a.n_out == 2);
+    CHECK(payout_first(&t, coins, 10, &a));
+    CHECK(a.n_in == PAYOUT_MAX_COINS && a.n_out == 2);
     CHECK(!memcmp(a.in[0].prev_txid, coins[3].txid, 32));        /* the largest first */
     uint64_t in = 0;
     for (size_t i = 0; i < a.n_in; i++) {
@@ -73,7 +72,7 @@ int main(void)
     btc_tx a2;                                                   /* the same terms and coins in another order: the same transaction */
     payout_coin rev[10];
     for (int i = 0; i < 10; i++) rev[i] = coins[9 - i];
-    CHECK(payout_first(&t, rev, 10, &a2, &used) && a2.n_in == 8);
+    CHECK(payout_first(&t, rev, 10, &a2) && a2.n_in == 8);
     for (size_t i = 0; i < 8; i++) CHECK(!memcmp(a2.in[i].prev_txid, a.in[i].prev_txid, 32) && a2.in[i].prev_vout == a.in[i].prev_vout);
     /* the second: the prize and the tiny coin of F (party 1), which came from the prize: 10% to the author, the rest half each */
     uint8_t aid[32];
@@ -89,7 +88,7 @@ int main(void)
     btc_tx b2;
     CHECK(payout_second(&other, &a, &b2) && memcmp(b2.out[2].script, b.out[2].script, t.author_len));
     other.author_len = 0;
-    CHECK(!payout_second(&other, &a, &b2) && !payout_first(&other, coins, 10, &a2, &used));
+    CHECK(!payout_second(&other, &a, &b2) && !payout_first(&other, coins, 10, &a2));
     CHECK(btc_sign_p2pkh(&b, 0, puzzle) && btc_sign_p2pkh(&b, 1, coin[1]));
     CHECK(btc_verify_p2pkh(&b, 0, t.puzzle_spk, BTC_P2PKH_LEN) && btc_verify_p2pkh(&b, 1, t.coin_spk[1], BTC_P2PKH_LEN));
     CHECK(!btc_verify_p2pkh(&b, 1, t.coin_spk[0], BTC_P2PKH_LEN));
@@ -105,7 +104,7 @@ int main(void)
     tiny[0].value = tiny[1].value = 300;
     CHECK(!payout_sweep(&t, tiny, 2, &c));
     /* refusals: nothing worth spending, a first transaction that is not one */
-    CHECK(!payout_first(&t, coins, 2, &a2, &used));
+    CHECK(!payout_first(&t, coins, 2, &a2));
     btc_tx bad = a;
     bad.out[1].value++;
     CHECK(!payout_second(&t, &bad, &b) && !payout_cancel(&t, &bad, &c));
@@ -114,10 +113,10 @@ int main(void)
     hot.feerate = 500000;                                        /* 500 sat/vB */
     btc_tx ha, hc;
     CHECK(payout_tiny(&t) == PAYOUT_TINY_MIN && payout_tiny(&hot) > 150000);
-    CHECK(payout_first(&hot, coins, 10, &ha, &used) && ha.n_out == 2 && ha.out[1].value == payout_tiny(&hot));
+    CHECK(payout_first(&hot, coins, 10, &ha) && ha.n_out == 2 && ha.out[1].value == payout_tiny(&hot));
     CHECK(payout_cancel(&hot, &ha, &hc) && hc.out[0].value > payout_tiny(&hot) / 2 && !payout_cancel(&hot, &a, &hc));
     hot.first = 2;
-    CHECK(!payout_first(&hot, coins, 10, &ha, &used) && !payout_cancel(&hot, &ha, &hc));
+    CHECK(!payout_first(&hot, coins, 10, &ha) && !payout_cancel(&hot, &ha, &hc));
     /* a first transaction only when its prize pays for the second: at 25 sat/vB with P2PKH payouts the second needs more than a tiny coin
      * (before, a prize of a few hundred satoshis more than the tiny coin had its first transaction and never a second) */
     payout_terms w = t;
@@ -127,7 +126,7 @@ int main(void)
         payout_coin one = coins[3];
         btc_tx f, s2;
         one.value = v;
-        const bool first = payout_first(&w, &one, 1, &f, &used);
+        const bool first = payout_first(&w, &one, 1, &f);
         built += first;
         CHECK(!first || payout_second(&w, &f, &s2));
     }

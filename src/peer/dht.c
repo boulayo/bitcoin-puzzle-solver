@@ -197,14 +197,16 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
         return 1;
     }
     case DHT_MBOX_GET: {
+        /* the owner's own pairs, to the owner only: they show the points of its coincidences, real ones that a flood of forged alerts
+         * would use (dht_alert.c) */
         mbox_pair pairs[DHT_MBOX_MAX];
-        if (len != 33) return 0;
+        if (len != 33 || memcmp(m + 1, c->remote, 32)) return 0;
         return mbox_encode(pairs, mbox_get(d->mb, m + 1, pairs, DHT_MBOX_MAX), ans);
     }
     case DHT_PROVE: {
         /* the owner's proofs of records it stored here that made a coincidence (custody_proved), at most COIN_BURST: a STORED tells no
          * more. A token of the ALERTs of the block for each, before the proofs are checked */
-        mbox_pair pairs[COIN_BURST * (STORE_X_OWNERS - 1)];
+        mbox_pair pairs[COIN_BURST * STORE_X_OWNERS];
         const int n = len >= 2 ? m[1] : 0;
         int np = 0;
         if (n < 1 || n > COIN_BURST || len != 2 + (size_t)n * PROVE_ENTRY || !lim_take(d, &c->addr, LIM_ALERT, n)) return 0;
@@ -444,15 +446,9 @@ static void *maint_main(void *arg)
             next_boot = t0 + BOOT_RETRY_MS, next_retry = t0 + 1000;
     bool alone = !rt_count(d);
     if (next_refresh > t0 + d->refresh_ms) next_refresh = t0 + d->refresh_ms;
-    pthread_mutex_lock(&d->m_mu);
-    while (!stopping(d)) {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 200 * 1000000;
-        if (ts.tv_nsec >= 1000000000) ts.tv_sec++, ts.tv_nsec -= 1000000000;
-        (void)pthread_cond_timedwait(&d->m_cv, &d->m_mu, &ts);
-        if (stopping(d)) break;
-        pthread_mutex_unlock(&d->m_mu);
+    /* in slices of 200 ms, on the clock that only goes forward: before, a wait until a time of the wall clock lasted as long again as
+     * the clock was set back meanwhile */
+    for (sys_sleep_ms(200); !stopping(d); sys_sleep_ms(200)) {
         const int64_t now = sys_now_ms();
         if (now >= next_boot) {
             if (!rt_count(d)) (void)bootstrap(d);                /* alone: the bootstrap list and peers.txt again */
@@ -484,9 +480,7 @@ static void *maint_main(void *arg)
             (void)dht_republish(d, met);
             next_repub = sys_now_ms() + d->republish_ms;
         }
-        pthread_mutex_lock(&d->m_mu);
     }
-    pthread_mutex_unlock(&d->m_mu);
     return NULL;
 }
 
@@ -555,9 +549,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     pthread_mutex_init(&d->r_mu, NULL);
     pthread_cond_init(&d->r_cv, NULL);
     pthread_mutex_init(&d->p_mu, NULL);
-    pthread_mutex_init(&d->m_mu, NULL);
     pthread_mutex_init(&d->f_mu, NULL);
-    pthread_cond_init(&d->m_cv, NULL);
     const int64_t now = sys_now_ms();
     for (int i = 0; i < DHT_BUCKETS; i++) d->b[i].looked = now;
     net_cfg_init(&d->ncfg, cfg->ctx, cfg->self, cfg->net->fp, cfg->id_bits, 0, cfg->timeout_ms);
@@ -594,28 +586,37 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     return d;
 }
 
+/* the end of a start that failed, and why, on stderr */
+static int start_failed(const char *why) { return fprintf(stderr, "pzpeer: %s\n", why), -1; }
+
 int dht_start(dht *d)
 {
     if (d->started) return -1;
     if (d->cfg.listen_port != 0) {
         const uint16_t want = d->cfg.listen_port == DHT_ANY_PORT ? 0 : (uint16_t)d->cfg.listen_port;
-        if ((d->lfd = net_listen(d->cfg.listen_host, want, &d->port)) < 0) return -1;
+        if ((d->lfd = net_listen(d->cfg.listen_host, want, &d->port)) < 0) {
+            char why[300];
+            snprintf(why, sizeof why, "cannot listen on port %u: %s (another program may have it: --listen PORT takes another, --listen 0 "
+                     "does not listen)", (unsigned)want, sys_net_why());
+            return start_failed(why);
+        }
         d->ncfg.port = d->me.addr.port = d->port;
     }
     d->started = true;
-    if (!(d->th_handlers = calloc((size_t)d->cfg.handlers, sizeof *d->th_handlers))) return -1;
+    if (!(d->th_handlers = calloc((size_t)d->cfg.handlers, sizeof *d->th_handlers))) return start_failed("out of memory");
     if (d->lfd >= 0) {
         while (d->nhandlers < d->cfg.handlers && spawn(&d->th_handlers[d->nhandlers], handler_main, d, HANDLER_STACK, false)) d->nhandlers++;
         d->has_accept = d->nhandlers > 0 && spawn(&d->th_accept, accept_main, d, HANDLER_STACK, false);
     }
     d->has_jobs = spawn(&d->th_jobs, jobs_main, d, HANDLER_STACK, false);
-    if ((d->lfd >= 0 && !d->has_accept) || !d->has_jobs) return -1;
+    if ((d->lfd >= 0 && !d->has_accept) || !d->has_jobs) return start_failed("cannot start the threads of the node");
     const int n = bootstrap(d);
     if (n) (void)dht_mbox_poll(d);                             /* the alerts that came while this node was away */
     d->has_maint = spawn(&d->th_maint, maint_main, d, HANDLER_STACK, false);
     if (d->cfg.nbt_routers || (d->cfg.portmap && d->port)) d->has_meet = spawn(&d->th_meet, meet_main, d, HANDLER_STACK, false);
+    if (!d->has_maint) return start_failed("cannot start the threads of the node");
     dlog(d, "started, %s, %d contacts", d->port ? "listening" : "not listening", n);
-    return d->has_maint ? n : -1;
+    return n;
 }
 
 void dht_stop(dht *d)
@@ -628,9 +629,6 @@ void dht_stop(dht *d)
     pthread_mutex_lock(&d->j_mu);
     pthread_cond_broadcast(&d->j_cv);
     pthread_mutex_unlock(&d->j_mu);
-    pthread_mutex_lock(&d->m_mu);
-    pthread_cond_broadcast(&d->m_cv);
-    pthread_mutex_unlock(&d->m_mu);
     if (d->has_accept) pthread_join(d->th_accept, NULL);
     net_close_fd(d->lfd);                                      /* new connections are refused from here on */
     for (int i = 0; i < d->nhandlers; i++) pthread_join(d->th_handlers[i], NULL);
@@ -667,9 +665,7 @@ void dht_stop(dht *d)
     pthread_mutex_destroy(&d->r_mu);
     pthread_cond_destroy(&d->r_cv);
     pthread_mutex_destroy(&d->p_mu);
-    pthread_mutex_destroy(&d->m_mu);
     pthread_mutex_destroy(&d->f_mu);
-    pthread_cond_destroy(&d->m_cv);
     free(d);
 }
 

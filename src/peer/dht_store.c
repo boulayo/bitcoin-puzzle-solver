@@ -79,17 +79,17 @@ static void prove_wait_add(dht *d, const record *r, const record *others, int n)
  * record alerts again, at most once an hour, and its owner hears of the coincidence from this node itself. The coincidences of one block
  * are limited, as each costs this node lookups and connections, and it alerts COIN_ALERTS pairs of a record at most (of this node's own
  * too: the other custodians of it tell it of every pair). A record this node does not keep because it is full is told COINCIDENCE all
- * the same. */
+ * the same, and kept once its owner proves it when its x was full (custody_proved). */
 int custody_put(dht *d, const record *r, const net_addr *from)
 {
     uint8_t k[32];
-    record held, others[STORE_X_OWNERS - 1];
+    record held, others[STORE_X_OWNERS];
     int no;
     if (!d->custody || !owner_ok(d, r)) return DHT_ST_INVALID;
     store_key(r->x, k);
     if (from && !responsible(d, k)) return DHT_ST_FAR;
     if (from && !lim_take(d, from, LIM_REC, 1)) return DHT_ST_FULL;
-    const store_status s = store_put(d->custody, r, &held, others, STORE_X_OWNERS - 1, &no);
+    const store_status s = store_put(d->custody, r, &held, others, STORE_X_OWNERS, &no);
     if (s == STORE_FULL) held = *r;
     for (int i = 0; !from && i < no && i < COIN_ALERTS; i++) coin_alert(d, &held, &others[i], NULL);   /* its own: nothing to prove */
     if (no && from && lim_take(d, from, LIM_COIN, 1)) {
@@ -113,11 +113,12 @@ static int prove_wait_at(const dht *d, const record *r)
     return -1;
 }
 
-/* A record of PROVE: sig, the proof of the owner of r (the sender, at from) for this custodian. The coincidences of r that wait for it
- * are alerted, the first COIN_ALERTS by this custodian itself, and all go into pairs (at most STORE_X_OWNERS - 1) for the answer: the owner
- * hears of them from a custodian of its point, and not only from its mailboxes, which nodes placed near their key could keep from it, and
- * of every other owner of that x: copies stored under other identities before the real record cannot hide it (the owner's proofs and
- * POSSESS tell them apart). The number of pairs; 0 when nothing waits for r, -1 for a wrong proof. */
+/* A record of PROVE: sig, the proof of the owner of r (the sender, at from) for this custodian. r is kept, also past the owners of its x
+ * that a store takes (copies planted under other identities before it cannot keep it out). The coincidences of r that wait for it are
+ * alerted, the first COIN_ALERTS by this custodian itself, and all go into pairs (at most STORE_X_OWNERS) for the answer: the owner hears
+ * of them from a custodian of its point, and not only from its mailboxes, which nodes placed near their key could keep from it, and of
+ * every other owner of that x (the owner's proofs and POSSESS tell the copies apart). The number of pairs; 0 when nothing waits for r,
+ * -1 for a wrong proof. */
 int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, mbox_pair *pairs)
 {
     prove_wait w;
@@ -130,6 +131,7 @@ int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_add
     const int at = prove_wait_at(d, r);                        /* gone if another PROVE took it meanwhile */
     if (at >= 0) w = d->pw[at], memmove(d->pw + at, d->pw + at + 1, (size_t)(d->npw - at - 1) * sizeof *d->pw), d->npw--;
     pthread_mutex_unlock(&d->a_mu);
+    if (at >= 0) (void)store_put_proved(d->custody, &w.r);
     for (int i = 0; at >= 0 && i < w.n; i++) {
         if (i < COIN_ALERTS) coin_alert(d, &w.r, &w.other[i], from);
         memset(&pairs[i], 0, sizeof *pairs);

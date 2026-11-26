@@ -9,6 +9,8 @@
 #include <spawn.h>
 #include <string.h>
 #include <dirent.h>
+#include <sys/file.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -53,7 +55,7 @@ bool sys_random(void *out, size_t n)
     }
     if (got == n) return true;
 #endif
-    FILE *f = fopen("/dev/urandom", "rb");
+    FILE *f = sys_fopen("/dev/urandom", "rb");
     if (!f) return false;
     got = fread(out, 1, n, f);
     fclose(f);
@@ -371,4 +373,24 @@ bool sys_remove_dir(const char *path)
         if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && (size_t)snprintf(p, sizeof p, "%s/%s", path, e->d_name) < sizeof p) (void)unlink(p);
     if (d) closedir(d);
     return rmdir(path) == 0 || errno == ENOENT;
+}
+
+int sys_lock_dir(const char *dir)
+{
+    char path[4200];
+    snprintf(path, sizeof path, "%s/lock", dir);
+    const int fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) return -1;
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0) return 1;          /* kept open: the system lets the lock go with the process */
+    const int held = errno == EWOULDBLOCK ? 0 : -1;
+    close(fd);
+    return held;
+}
+
+void sys_more_files(void)
+{
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur >= 4096) return;
+    rl.rlim_cur = rl.rlim_max < 4096 ? rl.rlim_max : 4096;
+    (void)setrlimit(RLIMIT_NOFILE, &rl);
 }

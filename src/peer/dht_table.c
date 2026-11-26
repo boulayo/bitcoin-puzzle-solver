@@ -140,8 +140,9 @@ static bool rt_room(const dht *d, const bucket *b, const net_addr *a, const uint
  * itself, and a home behind a router that lets nothing in tells a port nobody reaches: it is pinged at that address and enters when it
  * answers (job_ping). A full bucket pings its weakest contact (the one that failed most, the oldest among equals) and the new one waits:
  * Kademlia keeps the contacts that have lived longest, which an attacker cannot replace by flooding the node with new ones, nor by making
- * a good contact miss one answer. One ping at a time for a bucket. A known contact that moves keeps its old address when the new one's
- * block has its share. */
+ * a good contact miss one answer. One ping at a time for a bucket. A known contact moves to the address it answered at only when its own
+ * failed since it last answered, and the new one's block has its share: a node that names it at an address of its own, which passes the
+ * bytes on to it, would get its place and could then cut it from the table. */
 static void rt_note(dht *d, const dht_contact *c, bool answered)
 {
     if (is_me(d, c->id) || !addr_ok(d, &c->addr)) return;
@@ -153,7 +154,7 @@ static void rt_note(dht *d, const dht_contact *c, bool answered)
     if (at >= 0 && answered) {
         rt_entry e = b->e[at];
         rt_drop(b, at);
-        if ((memcmp(e.c.addr.ip, c->addr.ip, 16) || e.c.addr.port != c->addr.port) && rt_room(d, b, &c->addr, c->id)) {
+        if (e.fails && (memcmp(e.c.addr.ip, c->addr.ip, 16) || e.c.addr.port != c->addr.port) && rt_room(d, b, &c->addr, c->id)) {
             e.c.addr = c->addr;
             net_addr_block(&c->addr, e.block);
         }
@@ -478,9 +479,11 @@ net_conn *dht_dial(dht *d, const dht_contact *c) { return net_dial(dial_cfg(d), 
 
 /* ---- bootstrap, refresh, peers.txt ---- */
 
-/* peers.txt: the contacts, one per line, "address identity" */
+/* peers.txt: the contacts, one per line, "address identity". One writer at a time: the bootstraps of the maintenance thread and of the
+ * meeting thread may save at once, into the same file .tmp */
 void save_peers(dht *d)
 {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     dht_contact *cs = malloc(PEERS_MAX * sizeof *cs);
     char path[4096], tmp[4100];
     int n = 0;
@@ -491,7 +494,8 @@ void save_peers(dht *d)
     pthread_mutex_unlock(&d->rt_mu);
     path_of(d, "peers.txt", path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = n ? fopen(tmp, "w") : NULL;                      /* no contact: the old list is kept for the next start */
+    pthread_mutex_lock(&mu);
+    FILE *f = n ? sys_fopen(tmp, "w") : NULL;                  /* no contact: the old list is kept for the next start */
     if (f) {
         for (int i = 0; i < n; i++) {
             char a[64], h[65];
@@ -502,6 +506,7 @@ void save_peers(dht *d)
         if (fclose(f) == 0) (void)sys_replace(tmp, path);
         else (void)remove(tmp);
     }
+    pthread_mutex_unlock(&mu);
     free(cs);
 }
 
@@ -517,7 +522,7 @@ static int boot_list(dht *d, boot_addr *out, int max)
     const int half = n + (max - n) / 2;
     char path[4096], line[256];
     path_of(d, "peers.txt", path, sizeof path);
-    FILE *f = fopen(path, "r");
+    FILE *f = sys_fopen(path, "r");
     while (f && n < half && fgets(line, sizeof line, f)) {
         char *sp = strchr(line, ' ');
         if (!sp) continue;

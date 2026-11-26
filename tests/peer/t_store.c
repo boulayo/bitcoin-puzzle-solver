@@ -43,6 +43,15 @@ static record make(const home_identity *id, int t, const uint8_t x[32])
     return r;
 }
 
+static home_identity id_of(const char *label)
+{
+    uint8_t seed[32];
+    home_identity id;
+    hashed(label, seed);
+    CHECK(keys_identity(ctx, seed, FP, 4, &id));
+    return id;
+}
+
 /* a store is two files */
 static void wipe(void)
 {
@@ -239,6 +248,48 @@ static void test_limits(void)
     const record again = make(&first, 0, x);
     CHECK(store_put(st, &again, &mine, others, 4, &no) == STORE_OK);
     store_close(st);
+    wipe();
+}
+
+/* Copies of a point planted under other identities before its owner's record (a custodian that saw that record can plant them at the
+ * other custodians). With STORE_X_OWNERS - 1 the record is the last owner of a full x, and the next owner of the point is told of it,
+ * the newest first; with STORE_X_OWNERS it is refused, then kept once its owner proved it, and told first too. Those proved go past the
+ * cap up to twice as many owners. Before, the next owner was told of the copies only (the first seven), for ever. */
+static void test_planted(void)
+{
+    char err[200], label[32];
+    record mine, others[STORE_X_OWNERS], all[2 * STORE_X_OWNERS + 1];
+    int no;
+    for (int copies = STORE_X_OWNERS - 1; copies <= STORE_X_OWNERS; copies++) {
+        uint8_t x[32];
+        wipe();
+        store *st = store_open(PATH, ctx, &net, err, sizeof err);
+        CHECK(st != NULL);
+        if (!st) return;
+        snprintf(label, sizeof label, "planted %d", copies);
+        point_x(label, x);
+        for (int i = 0; i < copies; i++) {
+            snprintf(label, sizeof label, "copier %d", i);
+            const home_identity c = id_of(label);
+            const record r = make(&c, 1, x);
+            CHECK(store_put(st, &r, &mine, others, STORE_X_OWNERS, &no) == STORE_OK);
+        }
+        const record r1 = make(&ida, 0, x), r2 = make(&idb, 1, x);
+        const bool full = copies == STORE_X_OWNERS;
+        CHECK(store_put(st, &r1, &mine, others, STORE_X_OWNERS, &no) == (full ? STORE_FULL : STORE_OK) && no == copies);
+        CHECK(store_put_proved(st, &r1) == (full ? STORE_OK : STORE_DUP));
+        CHECK(store_put(st, &r2, &mine, others, STORE_X_OWNERS, &no) == STORE_FULL && no == STORE_X_OWNERS && same(&others[0], &r1));
+        CHECK(store_put_proved(st, &r2) == STORE_OK);
+        CHECK(store_put(st, &r2, &mine, others, STORE_X_OWNERS, &no) == STORE_DUP && same(&others[0], &r1));
+        for (int i = 0, held = copies + 2; full && i <= STORE_X_OWNERS; i++, held++) {
+            snprintf(label, sizeof label, "late %d", i);
+            const home_identity c = id_of(label);
+            const record r = make(&c, 0, x);
+            CHECK(store_put_proved(st, &r) == (held < 2 * STORE_X_OWNERS ? STORE_OK : STORE_FULL));
+        }
+        CHECK(store_find(st, x, all, 2 * STORE_X_OWNERS + 1) == (full ? 2 * STORE_X_OWNERS : copies + 2) && same(&all[full ? 6 : 0], &r2));
+        store_close(st);
+    }
     wipe();
 }
 
@@ -443,6 +494,7 @@ int main(void)
     }
     test_store();
     test_limits();
+    test_planted();
     test_damaged();
     test_lost_owner();
     test_mbox();

@@ -83,8 +83,9 @@ bool btc_rpc_init(btc_rpc *c, const char *host, unsigned port, const char *user,
 /* the credentials of c->cookie: one line, user:password, as the node writes it without a newline (a hand-made one may have one) */
 static bool read_cookie(btc_rpc *c)
 {
-    FILE *f = fopen(c->cookie, "rb");
+    FILE *f = sys_fopen(c->cookie, "rb");
     if (!f) return false;
+    setvbuf(f, NULL, _IONBF, 0);                                /* the password only in buf, which is wiped */
     char buf[BTC_RPC_AUTH_MAX + 4];
     size_t n = fread(buf, 1, sizeof buf, f);
     fclose(f);

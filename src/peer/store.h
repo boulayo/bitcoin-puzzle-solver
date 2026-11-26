@@ -8,8 +8,8 @@
  * K = SHA256("pznet1/key" || x) and the records of each owner; both are rebuilt from the files when they are opened, and an entry cut by
  * a crash at the end of a file is dropped. A store refuses a second record with the same x from the same owner. Records with the same x
  * from different owners are a coincidence: store_put gives them to the caller, which alerts. A custodian's store has limits
- * (store_limits): records in all, records of one owner, owners in all (one per 256 records it may hold, and 1024 more), owners of one x;
- * beyond them it is full.
+ * (store_limits): records in all, records of one owner, owners in all (one per 256 records it may hold, and 1024 more), owners of one x
+ * (STORE_X_OWNERS, and as many more whose owners proved them: store_put_proved); beyond them it is full.
  *
  * The files are ours, so the records are not checked again when they are opened, except the last STORE_CHECK_TAIL: a crash can leave an
  * entry that is whole in length but not in content. One that fails its check there is not indexed. The records store_put reports as a
@@ -25,7 +25,8 @@
 #define STORE_HDR 40
 #define STORE_ENTRY 38             /* an entry of the file: type, zero bits, x, the number of the owner */
 #define STORE_CHECK_TAIL 1024      /* records at the end of the file checked again when it is opened */
-#define STORE_X_OWNERS 8           /* owners of one x a store keeps: more are no walk of the network, but someone's flood */
+#define STORE_X_OWNERS 8           /* owners of one x a store keeps: more are no walk of the network, but someone's flood (or copies
+                                    * planted to fill the x before its owner's record: that one comes in with its proof) */
 
 typedef enum {
     STORE_OK,                      /* stored */
@@ -45,13 +46,17 @@ int64_t store_file(const char *path, const char magic[8], const uint8_t fp[32], 
  * cannot be read. */
 store *store_open(const char *path, const secp256k1_context *ctx, const record_net *net, char *err, size_t errlen);
 void store_close(store *st);
-/* The limits of a custodian (0: none): records in all, records of one owner. Owners of one x are at most STORE_X_OWNERS in any store. */
+/* The limits of a custodian (0: none): records in all, records of one owner. Owners of one x are at most STORE_X_OWNERS in any store
+ * (with those proved, twice as many). */
 void store_limits(store *st, uint64_t max_records, uint64_t max_per_owner);
 /* Checks and stores r. mine: the record of r's owner with r's x that the store now holds (r itself, or the earlier one for STORE_DUP;
- * not set for STORE_FULL). others: the records with the same x from other owners, at most max, their number in *nothers (0 unless
- * STORE_OK, STORE_DUP or STORE_FULL): with any, a coincidence. mine and others may be NULL when max is 0. */
+ * not set for STORE_FULL). others: the records with the same x from other owners, the newest first, at most max, their number in
+ * *nothers (0 unless STORE_OK, STORE_DUP or STORE_FULL): with any, a coincidence. mine and others may be NULL when max is 0. */
 store_status store_put(store *st, const record *r, record *mine, record *others, int max, int *nothers);
-/* The records with this x, at most max; their number. */
+/* store_put of a record whose owner proved it (its proof of possession checked out): taken also when its x has STORE_X_OWNERS owners,
+ * up to twice as many. Copies planted before the real record cannot keep it out, and the newest first shows it to the next owner. */
+store_status store_put_proved(store *st, const record *r);
+/* The records with this x, the newest first, at most max (and 2 * STORE_X_OWNERS); their number. */
 int store_find(store *st, const uint8_t x[32], record *out, int max);
 uint64_t store_count(store *st);
 /* The i-th record of the file (in the order they came); false past the end or for a damaged one. */

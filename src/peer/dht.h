@@ -107,7 +107,8 @@ typedef struct dht dht;
 /* Opens the stores of the data folder (made if missing). NULL, with the reason in err, when they cannot be opened. */
 dht *dht_create(const dht_config *cfg, char *err, size_t errlen);
 /* Listens, starts the threads and bootstraps (the bootstrap list, then peers.txt; then a lookup of the own ID): the contacts in the routing
- * table when it returns, -1 when the port cannot be listened on. A node with no contact keeps trying in the background. */
+ * table when it returns, -1 when the port cannot be listened on or a thread cannot start (why, on stderr). A node with no contact keeps
+ * trying in the background. */
 int dht_start(dht *d);
 /* Stops the threads, saves peers.txt and frees the node (started or not). */
 void dht_stop(dht *d);

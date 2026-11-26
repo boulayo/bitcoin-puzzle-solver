@@ -88,10 +88,11 @@ void sys_pipe_close(int fd);
 
 /* ---- files ----
  * On Linux and macOS a secret file belongs to this user and no one else can open it, and the calls below check it; on Windows the folder
- * decides who reads its files, and nothing is checked. */
+ * decides who reads its files, and sys_private makes the folder this user's alone. */
 
 bool sys_mkdir(const char *path);          /* one level, for this user alone when it is made; true when the folder is there */
-bool sys_private(const char *path);        /* whether path is a folder (not a link) of this user that nobody else can open */
+/* Whether path is a folder (not a link) of this user that nobody else can open; on Windows its rights are set so, when this user may */
+bool sys_private(const char *path);
 int sys_open_secret(const char *path);     /* to read: -1 with errno ENOENT when there is none, -2 when it is not a secret file (or a link) */
 int sys_create_secret(const char *path);   /* to write, new: -1 when it exists already */
 int sys_open_rw(const char *path);         /* to read and write, made for this user alone when it is not there */
@@ -108,6 +109,12 @@ bool sys_replace(const char *from, const char *to);   /* from takes the place of
 FILE *sys_new_file(const char *path, bool secret);
 bool sys_new_file_done(FILE *f, const char *path, bool ok);
 bool sys_remove_dir(const char *path);     /* the files of a folder (not the folders in it), then the folder; true when it is gone */
+/* The folder of a home or a node for this process alone, until it ends however it ends (its file "lock", held): 1 when it is, 0 when
+ * another process has it, -1 when the lock cannot be made. Two programs on one folder would write over each other's records and journals. */
+int sys_lock_dir(const char *dir);
+/* The files and sockets this process may have open, raised towards 4096 as far as the system lets (macOS gives 256): a node holds a
+ * socket for each relay, each wait at its relay and each connection queued. Nothing to do on Windows. */
+void sys_more_files(void);
 
 /* ---- the stop ---- */
 

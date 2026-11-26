@@ -17,6 +17,7 @@
 static const char MAGIC[8] = {'P', 'Z', 'S', 'T', 'O', 'R', 'E', '2'}, OMAGIC[8] = {'P', 'Z', 'O', 'W', 'N', 'E', 'R', '2'};
 #define EMPTY UINT32_MAX           /* a free slot of the index; a store holds fewer records than this */
 #define LOAD_CHUNK 1024            /* entries read at a time when the index is rebuilt */
+#define X_MAX (2 * STORE_X_OWNERS) /* records of one x read back: the owners a store takes, and as many more that their owners proved */
 
 typedef struct {
     uint8_t id[32];
@@ -172,15 +173,24 @@ static bool read_at(store *st, uint64_t i, record *r)
     return sys_pread(st->fd, e, STORE_ENTRY, STORE_HDR + i * STORE_ENTRY) == STORE_ENTRY && entry_decode(st, e, r);
 }
 
-/* the records with x: the slots of its 4-byte key, read back and compared */
-static int find_locked(store *st, const uint8_t x[32], record *out, int max)
+/* The records with x, the newest first (by their place in the file), at most X_MAX: the slots of its 4-byte key, read back and
+ * compared. The newest first: past STORE_X_OWNERS of an x, a record is there because its owner proved it (store_put_proved). */
+static int find_locked(store *st, const uint8_t x[32], record out[X_MAX])
 {
     if (!st->cap) return 0;
+    uint32_t num[X_MAX];                                       /* their entries */
     const uint32_t k = key4(x);
     int n = 0;
-    for (size_t s = (size_t)k & (st->cap - 1); st->idx[s] != EMPTY && n < max; s = (s + 1) & (st->cap - 1)) {
+    for (size_t s = (size_t)k & (st->cap - 1); st->idx[s] != EMPTY; s = (s + 1) & (st->cap - 1)) {
         record r;
-        if (st->keys[s] == k && read_at(st, st->idx[s], &r) && !memcmp(r.x, x, 32)) out[n++] = r;
+        const uint32_t e = st->idx[s];
+        if (st->keys[s] != k || !read_at(st, e, &r) || memcmp(r.x, x, 32)) continue;
+        int at = n;
+        while (at > 0 && num[at - 1] < e) at--;
+        if (at == X_MAX) continue;
+        if (n == X_MAX) n--;
+        memmove(out + at + 1, out + at, (size_t)(n - at) * sizeof *out), memmove(num + at + 1, num + at, (size_t)(n - at) * sizeof *num);
+        out[at] = r, num[at] = e, n++;
     }
     return n;
 }
@@ -287,13 +297,14 @@ void store_close(store *st)
     free(st);
 }
 
-store_status store_put(store *st, const record *r, record *mine, record *others, int max, int *nothers)
+/* store_put, and store_put_proved with proved */
+static store_status put(store *st, const record *r, bool proved, record *mine, record *others, int max, int *nothers)
 {
     *nothers = 0;
     if (!record_check(st->ctx, &st->net, r)) return STORE_INVALID;   /* outside the lock: the costly part */
-    record same[2 * STORE_X_OWNERS];                           /* room for a file written before the limit, or by hand */
+    record same[X_MAX];
     pthread_mutex_lock(&st->mu);
-    const int ns = find_locked(st, r->x, same, (int)(sizeof same / sizeof *same));
+    const int ns = find_locked(st, r->x, same);
     int held = -1;
     for (int i = 0; i < ns && held < 0; i++)
         if (!memcmp(same[i].owner, r->owner, 32)) held = i;
@@ -302,7 +313,7 @@ store_status store_put(store *st, const record *r, record *mine, record *others,
     if (held >= 0) {
         s = STORE_DUP;
         if (mine) *mine = same[held];
-    } else if ((st->max && st->count >= st->max) || (st->max_owner && o && o->n >= st->max_owner) || ns >= STORE_X_OWNERS ||
+    } else if ((st->max && st->count >= st->max) || (st->max_owner && o && o->n >= st->max_owner) || ns >= (proved ? X_MAX : STORE_X_OWNERS) ||
                (st->max && !o && st->oused >= st->max / 256 + 1024)) {     /* an identity costs little: owners take memory and disk */
         s = STORE_FULL;
     } else {
@@ -328,12 +339,25 @@ store_status store_put(store *st, const record *r, record *mine, record *others,
     return s;
 }
 
+store_status store_put(store *st, const record *r, record *mine, record *others, int max, int *nothers)
+{
+    return put(st, r, false, mine, others, max, nothers);
+}
+
+store_status store_put_proved(store *st, const record *r)
+{
+    int no;
+    return put(st, r, true, NULL, NULL, 0, &no);
+}
+
 int store_find(store *st, const uint8_t x[32], record *out, int max)
 {
+    record r[X_MAX];
     pthread_mutex_lock(&st->mu);
-    const int n = find_locked(st, x, out, max);
+    const int n = find_locked(st, x, r), k = n < max ? n : max;
     pthread_mutex_unlock(&st->mu);
-    return n;
+    memcpy(out, r, (size_t)k * sizeof *r);
+    return k;
 }
 
 uint64_t store_count(store *st)
@@ -383,14 +407,9 @@ void pair_hash(const record *a, const record *b, uint8_t h[32])
 
 /* ---- the mailbox ---- */
 
-typedef struct {
-    mbox_pair p;
-    uint8_t h[32];                 /* its name (pair_hash), to find a pair again */
-} mentry;
-
 struct mbox {
     pthread_mutex_t mu;
-    mentry *e;                     /* the oldest first */
+    mbox_pair *e;                  /* the oldest first */
     size_t cap, per_owner, n;
 };
 
@@ -415,7 +434,7 @@ void mbox_free(mbox *m)
     free(m);
 }
 
-static bool has_owner(const mentry *e, const uint8_t owner[32]) { return !memcmp(e->p.r[0].owner, owner, 32) || !memcmp(e->p.r[1].owner, owner, 32); }
+static bool has_owner(const mbox_pair *p, const uint8_t owner[32]) { return !memcmp(p->r[0].owner, owner, 32) || !memcmp(p->r[1].owner, owner, 32); }
 
 static void drop_at(mbox *m, size_t i)
 {
@@ -432,12 +451,12 @@ static void make_room(mbox *m, const uint8_t *owner, size_t limit)
     for (size_t i = m->n; i-- > 0;)
         if (!owner || has_owner(&m->e[i], owner)) {
             k++, oldest = i;
-            if (!m->e[i].p.has[0] && !m->e[i].p.has[1]) bare = i;
+            if (!m->e[i].has[0] && !m->e[i].has[1]) bare = i;
         }
     if (k >= limit) drop_at(m, bare < m->n ? bare : oldest);
 }
 
-/* the same owners at the same point with the same types: one pair, whatever the zero bits of its records */
+/* the same owners at the same point with the same types: one pair, whatever the zero bits of its records (a proof does not cover them) */
 static bool same_pair(const mbox_pair *p, const mbox_pair *q)
 {
     for (int i = 0; i < 2; i++)
@@ -447,31 +466,22 @@ static bool same_pair(const mbox_pair *p, const mbox_pair *q)
 
 bool mbox_put(mbox *m, const record *a, const record *b, const uint8_t proof[64])
 {
-    mentry e;
-    memset(&e, 0, sizeof e);
-    const int who = pair_order(a, b, e.p.r);                  /* the place of a's owner, whose proof this is */
-    pair_hash(a, b, e.h);
+    mbox_pair p;
+    memset(&p, 0, sizeof p);
+    const int who = pair_order(a, b, p.r);                    /* the place of a's owner, whose proof this is */
     pthread_mutex_lock(&m->mu);
-    size_t at = m->n;
-    for (size_t i = 0; i < m->n && at == m->n; i++)
-        if (same_pair(&m->e[i].p, &e.p)) at = i;
-    bool fresh = at == m->n;
-    /* the pair with other zero bits (a proof is over the records as they are): the one kept stays, unless only the new one is proved */
-    const bool other = !fresh && memcmp(m->e[at].h, e.h, 32);
-    if (other && (!proof || m->e[at].p.has[0] || m->e[at].p.has[1])) {
-        pthread_mutex_unlock(&m->mu);
-        return false;
-    }
+    size_t at = 0;
+    while (at < m->n && !same_pair(&m->e[at], &p)) at++;
+    bool fresh = at == m->n;                                   /* the pair with other zero bits: the one kept stays */
     if (fresh) {
-        make_room(m, e.p.r[0].owner, m->per_owner);
-        make_room(m, e.p.r[1].owner, m->per_owner);
+        make_room(m, p.r[0].owner, m->per_owner);
+        make_room(m, p.r[1].owner, m->per_owner);
         make_room(m, NULL, m->cap);
-        at = m->n++;
+        m->e[at = m->n++] = p;
     }
-    if (fresh || other) m->e[at] = e;
-    if (proof && !m->e[at].p.has[who]) {
-        m->e[at].p.has[who] = true;
-        memcpy(m->e[at].p.proof[who], proof, 64);
+    if (proof && !m->e[at].has[who]) {
+        m->e[at].has[who] = true;
+        memcpy(m->e[at].proof[who], proof, 64);
         fresh = true;
     }
     pthread_mutex_unlock(&m->mu);
@@ -483,7 +493,7 @@ int mbox_get(mbox *m, const uint8_t owner[32], mbox_pair *out, int max)
     int k = 0;
     pthread_mutex_lock(&m->mu);
     for (size_t i = m->n; i-- > 0 && k < max;)
-        if (has_owner(&m->e[i], owner)) out[k++] = m->e[i].p;
+        if (has_owner(&m->e[i], owner)) out[k++] = m->e[i];
     pthread_mutex_unlock(&m->mu);
     return k;
 }

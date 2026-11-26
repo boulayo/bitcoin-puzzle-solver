@@ -60,10 +60,11 @@ void relay_sweep(dht *d)
 }
 
 /* RELAY(name, partner) from a home on c: it waits here for the partner's RELAY(name, this home), within the limits; when the partner is
- * waiting, both get RELAYED and a thread of their own copies their bytes. True when this node keeps c (waiting, or relayed). */
+ * waiting, both get RELAYED and a thread of their own copies their bytes. True when this node keeps c (waiting, or relayed). A node of a
+ * linear search relays nothing: that search has no sessions, and its relays would serve strangers only. */
 bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
 {
-    if (len != 65 || !d->port || !memcmp(m + 33, c->remote, 32)) return false;
+    if (len != 65 || !d->port || d->cfg.blocks || !memcmp(m + 33, c->remote, 32)) return false;
     const uint8_t *name = m + 1, *to = m + 33;
     uint8_t blk[16];
     net_addr_block(&c->addr, blk);

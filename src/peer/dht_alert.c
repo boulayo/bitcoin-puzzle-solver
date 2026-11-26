@@ -19,7 +19,7 @@ struct own_alert {
     record mine, theirs;
     int state;
     bool mine_ok, theirs_ok;       /* the proofs checked: this node's own (it knows the distance), the other owner's */
-    bool busy;                     /* a job works on it */
+    bool queued, busy;             /* a job for it waits in the queue; a job works on it (one at a time) */
     bool has_from;                 /* it came from another node: from, whose address block its jobs count against, also when retried */
     dht_contact from;
     int tries;
@@ -67,21 +67,24 @@ static int alert_state(dht *d, const uint8_t h[32], bool *theirs_ok)
 }
 
 /* The alert of a pair with a record m of this node, from a node (NULL: this one) (a_mu held): found, or added (*fresh). When the table is
- * full the oldest one that is not waiting goes, else the oldest waiting one no job holds: a flood of alerts that will never be proved
- * (copies of this node's points by owners that do not answer) cannot shut out the next real one, whose job is queued at once (the
- * alerts of one address block hold ALERT_JOBS_BLOCK places in the queue, also when tried again); an alert pushed out comes back with a
- * mailbox poll, or the next republish to every custodian. NULL only without memory. */
+ * full the oldest one that is not waiting goes, else the oldest waiting one with no job queued, else the oldest no job works on: a flood
+ * of alerts that will never be proved (copies of this node's points by owners that do not answer) cannot shut out the next real one,
+ * whose job is queued at once and keeps it while it waits behind the jobs of the flood (the alerts of one address block hold
+ * ALERT_JOBS_BLOCK places in the queue, also when tried again). Before, a flood from two blocks pushed it out before its job came. An
+ * alert pushed out comes back with a mailbox poll, or the next republish to every custodian. NULL only without memory. */
 static own_alert *alert_add_locked(dht *d, const record *m, const record *t, const uint8_t h[32], const dht_contact *from, bool *fresh)
 {
     *fresh = false;
     own_alert *e = alert_find(d, h);
     if (e) return e;
     if (d->nalerts == ALERTS_MAX) {
-        int at = 0;
-        while (at < d->nalerts && d->alerts[at].state == AL_WAIT) at++;
-        if (at == d->nalerts)
-            for (at = 0; at < d->nalerts && d->alerts[at].busy; at++) {}
-        if (at == d->nalerts) return NULL;
+        int at = -1, rank = 3;                                 /* 0 done or refused, 1 waiting, 2 its job queued, 3 worked on */
+        for (int i = 0; i < d->nalerts && rank; i++) {
+            const own_alert *a = &d->alerts[i];
+            const int r = a->busy ? 3 : a->state != AL_WAIT ? 0 : a->queued ? 2 : 1;
+            if (r < rank) at = i, rank = r;
+        }
+        if (at < 0) return NULL;
         memmove(&d->alerts[at], &d->alerts[at + 1], (size_t)(d->nalerts - at - 1) * sizeof *d->alerts);
         d->nalerts--;
     }
@@ -103,6 +106,16 @@ static own_alert *alert_add_locked(dht *d, const record *m, const record *t, con
     return e;
 }
 
+/* the job of the alert h, which the caller marked queued: with no room in the queue the mark goes, and the maintenance thread retries it */
+static void alert_job(dht *d, const uint8_t h[32], const record *m, const record *t, const dht_contact *from)
+{
+    if (job_push(d, JOB_ALERT_OWN, m, t, from)) return;
+    pthread_mutex_lock(&d->a_mu);
+    own_alert *e = alert_find(d, h);
+    if (e) e->queued = false;
+    pthread_mutex_unlock(&d->a_mu);
+}
+
 /* A checked pair that came to this node (an ALERT, a mailbox, a custodian after PROVE, its own custody), with the proof of the owner of a
  * for the owner of b when one came (checked), from a node (NULL: this one): kept as a mailbox when this node may be a mailbox of one of
  * the owners, and an alert of this node when one record is its own, whose job counts against the address block of from. True for a new
@@ -119,9 +132,11 @@ bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, co
     pthread_mutex_lock(&d->a_mu);
     own_alert *e = alert_add_locked(d, m, t, h, from, &fresh);
     if (e && e->state == AL_WAIT && proof && t == a && !e->theirs_ok) e->theirs_ok = go = true;   /* the other owner proved its record */
+    const bool push = (fresh || go) && !e->queued && !e->busy; /* a job queued or under way sees the proof that came */
+    if (push) e->queued = true;
     pthread_mutex_unlock(&d->a_mu);
     if (fresh) dlog(d, "an alert for this node: checking the proofs");
-    if (fresh || go) (void)job_push(d, JOB_ALERT_OWN, m, t, from);   /* if the queue has no room, the maintenance thread retries it */
+    if (push) alert_job(d, h, m, t, from);
     return fresh;
 }
 
@@ -238,6 +253,7 @@ void job_alert_own(dht *d, const record *a, const record *b)
     pair_hash(a, b, h);
     pthread_mutex_lock(&d->a_mu);
     own_alert *p = alert_find(d, h);
+    if (p) p->queued = false;
     const bool go = p && p->state == AL_WAIT && !p->busy;
     if (go) p->busy = true, e = *p;
     pthread_mutex_unlock(&d->a_mu);
@@ -270,33 +286,28 @@ void job_alert_own(dht *d, const record *a, const record *b)
 
 void retry_alerts(dht *d)
 {
-    record pairs[16][2];
-    dht_contact from[16];
-    bool has[16];
+    own_alert due[16];
     int n = 0;
     const int64_t now = sys_now_ms();
     pthread_mutex_lock(&d->a_mu);
     for (int i = 0; i < d->nalerts; i++) {
         own_alert *e = &d->alerts[i];
-        if (e->state != AL_WAIT || e->busy || now < e->next) continue;
+        if (e->state != AL_WAIT || e->queued || e->busy || now < e->next) continue;
         if (now >= e->until) e->state = AL_REFUSED;
-        else if (n < 16) {
-            e->next = now + backoff_ms(d, e->tries + 1);
-            pairs[n][0] = e->mine, pairs[n][1] = e->theirs, from[n] = e->from, has[n++] = e->has_from;
-        }
+        else if (n < 16) e->next = now + backoff_ms(d, e->tries + 1), e->queued = true, due[n++] = *e;
     }
     pthread_mutex_unlock(&d->a_mu);
-    for (int i = 0; i < n; i++) (void)job_push(d, JOB_ALERT_OWN, &pairs[i][0], &pairs[i][1], has[i] ? &from[i] : NULL);
+    for (int i = 0; i < n; i++) alert_job(d, due[i].h, &due[i].mine, &due[i].theirs, due[i].has_from ? &due[i].from : NULL);
 }
 
 /* The pairs of an MBOX answer from c (a mailbox, or a custodian after PROVE) that concern this node: each new one, and each that brings
  * the other owner's proof, becomes an alert. After PROVE (the n records proved) only the pairs of those records count, at most as many
  * as a custodian keeps owners for them: the custodian cannot bring alerts of the other records of this node, nor more of them than it
- * may hold. False when the answer is malformed. */
+ * may hold. False when the answer is malformed (its type exchange checked). */
 static bool mbox_take(dht *d, const dht_contact *c, const uint8_t *ans, size_t len, const record *proved, int n, int *fresh)
 {
-    if (len < 2 || ans[0] != DHT_MBOX || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY ||
-        (proved && ans[1] > n * (STORE_X_OWNERS - 1)))
+    if (len < 2 || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY ||
+        (proved && ans[1] > n * STORE_X_OWNERS))
         return false;
     for (int p = 0; p < ans[1]; p++) {
         const uint8_t *q = ans + 2 + (size_t)p * DHT_MBOX_ENTRY, flags = q[PAIR_LEN];

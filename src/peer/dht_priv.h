@@ -93,7 +93,7 @@ typedef struct {
 
 typedef struct {
     record r;                      /* it came from its owner, who has to prove it */
-    record other[STORE_X_OWNERS - 1];   /* the records of the other owners of its x */
+    record other[STORE_X_OWNERS];  /* the records of the other owners of its x, the newest first */
     int n;
     int64_t at;
 } prove_wait;
@@ -156,8 +156,6 @@ struct dht {
     uint64_t nown, replay, replay_end;   /* its records; those a restart may give again (dht_publish) */
     uint64_t ncut;                 /* the times own.bin was cut (a republish under way does not save own.cust then) */
     cc_list cc;                    /* the lookups of the last hour */
-    pthread_mutex_t m_mu;          /* the sleep of the maintenance thread */
-    pthread_cond_t m_cv;
     pthread_mutex_t f_mu;          /* the addresses found in the table of BitTorrent, for the next bootstrap */
     net_addr found[BT_PEERS_MAX];
     int nfound;

@@ -236,7 +236,7 @@ bool spv_load(spv_chain *c, const char *path, uint64_t now)
 {
     uint8_t head[8 + 1 + 8 + 32], buf[SPV_HEADER];
     uint64_t base = 0, at = c->base;
-    FILE *f = fopen(path, "rb");
+    FILE *f = sys_fopen(path, "rb");
     if (!f) return false;
     bool ok = fread(head, 1, sizeof head, f) == sizeof head && !memcmp(head, MAGIC, 8) && head[8] == (uint8_t)c->chain;
     for (int b = 0; b < 8; b++) base |= (uint64_t)head[9 + b] << (8 * b);

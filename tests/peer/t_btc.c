@@ -120,7 +120,8 @@ static void test_address(void)
                 const bool same = on == ch || (ch == 1 && on == 2) || (ch == 2 && on == 1) || (f < 2 && ch && on);
                 const size_t n = btc_address_script((btc_chain)on, a[f], spk);
                 CHECK(n == (same ? len[f] : 0));
-                if (n) CHECK(spk[0] == lead[f][0] && spk[1] == lead[f][1] && !memcmp(spk + (f ? 2 : 3), prog, len[f] - (f == 0 ? 5 : f == 1 ? 3 : 2)));
+                if (n) CHECK(spk[0] == lead[f][0] && spk[1] == lead[f][1] && !memcmp(spk + (f ? 2 : 3), prog, len[f] - (f == 0 ? 5 : f == 1 ? 3 : 2)) &&
+                             btc_script_standard(spk, n));
             }
         /* witness programs that are valid addresses but no standard output we pay: version 1 of 20 or 40 bytes, versions 2 to 16 */
         pz_segwit_address_encode(a[5], sizeof a[5], F[ch].hrp, 1, prog, 40);
@@ -138,6 +139,10 @@ static void test_address(void)
     CHECK(btc_script_is_p2pkh(spk, 25, h1) && !memcmp(h1, prog, 20) && !btc_script_is_p2pkh(spk, 24, h1));
     spk[24] = 0xad;
     CHECK(!btc_script_is_p2pkh(spk, 25, h1));
+    /* a standard address and nothing else, as the payout script a partner gives: not that one, nor data, a witness version 2, a short one */
+    static const uint8_t data[3] = {0x6a, 1, 0}, v2[34] = {0x52, 32}, wsh[34] = {0, 32};
+    CHECK(!btc_script_standard(spk, 25) && !btc_script_standard(data, 3) && !btc_script_standard(v2, 34) && btc_script_standard(wsh, 34) &&
+          !btc_script_standard(wsh, 33));
 }
 
 /* the raw bytes of a vector */

@@ -50,9 +50,12 @@ bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *do
 {
     *doc = (json_doc){0};
     *result = NULL;
-    int64_t deadline = sys_now_ms() + e->timeout_ms;
-    if (e->until && deadline > e->until) deadline = e->until;
-    if (e->until && sys_now_ms() >= e->until) return false;
+    const int64_t t0 = sys_now_ms();
+    if (e->budget < 0) {                                       /* nothing sent: the connection stays for the next operation */
+        if (params) jw_free(params);
+        return false;
+    }
+    const int64_t deadline = t0 + (e->budget && e->budget < e->timeout_ms ? e->budget : e->timeout_ms);
     const char *pt = "[]";
     size_t pl = 2, bl = 0;
     bool ok = e->fd >= 0 && (!params || (pt = jw_done(params, &pl)) != NULL);
@@ -98,6 +101,7 @@ bool electrum_call(electrum *e, const char *method, json_w *params, json_doc *do
     }
     dbg("electrum fd %d %s: %s", e->fd, method, ok ? "ok" : answered ? "error" : "no answer");
     if (!answered) electrum_close(e);                          /* nothing more can be asked on a connection that lost an answer */
+    if (e->budget && (e->budget -= sys_now_ms() - t0) <= 0) e->budget = -1;
     return ok;
 }
 

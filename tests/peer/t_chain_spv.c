@@ -3,8 +3,8 @@
 /* t_chain_spv.c - the chain of a session on Electrum servers, against servers written here that speak the protocol over a small chain made
  * in the test (blocks mined at the difficulty of regtest, transactions signed with btc.c). One server is honest; the others lie, each in
  * one way: they hide a coin, list one that is spent, give a proof that proves nothing, announce blocks without work, say a coin is spent
- * with a transaction that is not signed, keep a transaction to themselves, quote an absurd fee. With an honest server next to them the
- * answers are the true ones; alone, a liar gets a delay and nothing else. */
+ * with a transaction that is not signed, keep a transaction to themselves, quote an absurd fee, list in the mempool a transaction they do
+ * not have, answer slowly. With an honest server next to them the answers are the true ones; alone, a liar gets a delay and nothing else. */
 #include "peertest.h"
 #include "chain_spv.h"
 #include "json.h"
@@ -26,7 +26,7 @@ static struct {
     pthread_mutex_t mu;
     uint8_t hdr[64][80];
     int nb;
-    wtx t[64];
+    wtx t[400];
     int nt;
     uint32_t t0;
 } W = {.mu = PTHREAD_MUTEX_INITIALIZER};
@@ -128,6 +128,9 @@ typedef struct {
     bool no_work;                  /* announces five blocks more, linked but without proof of work */
     bool drop_broadcast;           /* says it took a transaction and keeps it to itself */
     bool blind_mempool;            /* does not show the mempool */
+    bool phantom;                  /* lists in the mempool of every script a transaction it does not have */
+    int slow_ms;                   /* answers every call this late */
+    int slow_scan_ms;              /* answers its histories and proofs this late: each in time, and as many as it is asked */
     uint64_t fee;                  /* its estimate, satoshis per 1000 bytes */
 } lies;
 
@@ -138,7 +141,7 @@ typedef struct {
     pthread_t th;
     atomic_bool stop;
     char addr[32];
-    int broadcasts;
+    int broadcasts, gets;          /* the transactions it was sent, and asked for */
 } server;
 
 static bool tx_script(const wtx *t, size_t out, const uint8_t **spk, size_t *len)
@@ -164,15 +167,6 @@ static bool touches(const server *s, int i, const char *sh, int spent_by[16])
         char hex[65];
         sh_of(tx.out[o].script, tx.out[o].script_len, hex);
         hit |= !strcmp(hex, sh);
-        if (spent_by) {
-            spent_by[o] = -1;
-            for (int j = 0; j < W.nt; j++) {
-                btc_tx sp;
-                if (j == i || W.t[j].height < 0 || (s->l.blind_mempool && W.t[j].height == 0) || !btc_tx_parse(&sp, W.t[j].raw, W.t[j].len)) continue;   /* gone: spends nothing */
-                for (size_t k = 0; k < sp.n_in; k++)
-                    if (!memcmp(sp.in[k].prev_txid, W.t[i].txid, 32) && sp.in[k].prev_vout == o) spent_by[o] = j;
-            }
-        }
     }
     for (size_t k = 0; k < tx.n_in; k++)
         for (int j = 0; j < W.nt; j++) {
@@ -183,6 +177,15 @@ static bool touches(const server *s, int i, const char *sh, int spent_by[16])
             sh_of(spk, len, hex);
             hit |= !strcmp(hex, sh);
         }
+    for (size_t o = 0; hit && spent_by && o < tx.n_out; o++) {
+        spent_by[o] = -1;
+        for (int j = 0; j < W.nt; j++) {
+            btc_tx sp;
+            if (j == i || W.t[j].height < 0 || (s->l.blind_mempool && W.t[j].height == 0) || !btc_tx_parse(&sp, W.t[j].raw, W.t[j].len)) continue;   /* gone: spends nothing */
+            for (size_t k = 0; k < sp.n_in; k++)
+                if (!memcmp(sp.in[k].prev_txid, W.t[i].txid, 32) && sp.in[k].prev_vout == o) spent_by[o] = j;
+        }
+    }
     return hit;
 }
 
@@ -232,6 +235,7 @@ static bool answer(server *s, const char *method, const json_val *p, char *out, 
     }
     if (!strcmp(method, "blockchain.transaction.get")) {
         const int i = a0 ? find_tx(a0) : -1;
+        s->gets++;
         if (i < 0 || (s->l.blind_mempool && W.t[i].height == 0)) return false;
         strcat(out, "\""), hexcat(out, W.t[i].raw, W.t[i].len), strcat(out, "\"");
         return true;
@@ -284,6 +288,18 @@ static bool answer(server *s, const char *method, const json_val *p, char *out, 
             }
         return strcat(out, "]"), true;
     }
+    if (!strcmp(method, "blockchain.scripthash.get_mempool")) {
+        int n = 0;
+        strcat(out, "[");
+        if (s->l.phantom) strcat(out, "{\"tx_hash\": \"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\", \"height\": 0, \"fee\": 999}"), n++;
+        for (int i = 0; a0 && !s->l.blind_mempool && i < W.nt; i++) {
+            char hex[65];
+            if (W.t[i].height != 0 || !touches(s, i, a0, NULL)) continue;
+            btc_hash_to_hex(W.t[i].txid, hex);
+            snprintf(out + strlen(out), cap - strlen(out), "%s{\"tx_hash\": \"%s\", \"height\": 0, \"fee\": 999}", n++ ? ", " : "", hex);
+        }
+        return strcat(out, "]"), true;
+    }
     if (!strcmp(method, "blockchain.transaction.broadcast")) {
         btc_tx tx;
         uint8_t raw[600], id[32];
@@ -324,6 +340,9 @@ static void *serve(void *arg)
             len -= (size_t)(nl + 1 - in);
             if (!parsed) break;
             (void)json_u64(json_get(d.v, "id"), &id);
+            const char *m = json_str(json_get(d.v, "method"));
+            if (s->l.slow_ms || (s->l.slow_scan_ms && m && (strstr(m, "get_history") || strstr(m, "get_merkle"))))
+                sys_sleep_ms(s->l.slow_ms ? s->l.slow_ms : s->l.slow_scan_ms);
             pthread_mutex_lock(&W.mu);
             const bool ok = answer(s, json_str(json_get(d.v, "method")), json_get(d.v, "params"), out, CAP);
             pthread_mutex_unlock(&W.mu);
@@ -449,11 +468,13 @@ int main(void)
     CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.confirmations(ch.ctx, fid, 0) == 0 && ch.confirmations(ch.ctx, f2id, 0) == 0);
     chain_spv_free(&c);
 
-    /* blocks without work: not taken, the chain ends where the work ends */
+    /* blocks without work: not taken, the chain ends where the work ends, and the server that announced them is left alone (before, it
+     * was asked again at every operation, which it could hold for a minute each); next to an honest one the answers are the true ones */
     view(&c, &ch, &nowork, NULL, NULL);
-    CHECK(ch.height(ch.ctx) == 4);
-    CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 1);
-    CHECK(ch.confirmations(ch.ctx, fid, 0) == 4);
+    CHECK(ch.height(ch.ctx) == 4 && ch.coins(ch.ctx, pspk, coins, 8) == -1);
+    chain_spv_free(&c);
+    view(&c, &ch, &nowork, &honest, NULL);
+    CHECK(ch.height(ch.ctx) == 4 && ch.coins(ch.ctx, pspk, coins, 8) == 1 && ch.confirmations(ch.ctx, fid, 0) == 4);
     chain_spv_free(&c);
 
     /* no server at all */
@@ -505,7 +526,100 @@ int main(void)
     CHECK(ch.height(ch.ctx) == 6 && ch.confirmations(ch.ctx, pid, 0) == 2);
     chain_spv_free(&c);
 
+    /* the height is asked of the servers at most every tip_ms (sessions poll it); any other operation asks it as well */
+    view(&c, &ch, &honest, NULL, NULL);
+    c.tip_ms = 60000;
+    CHECK(ch.height(ch.ctx) == 6);
+    mine_block();
+    CHECK(ch.height(ch.ctx) == 6 && ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.height(ch.ctx) == 7);
+    chain_spv_free(&c);
+
+    /* dust between a coin and its spend: 260 transactions to its script in the blocks between (before, only the oldest 256 after the coin
+     * were looked into, and the spend stayed hidden). What each spends is kept: the next look asks the server for few of them again */
+    uint8_t dsec[32], dspk[BTC_P2PKH_LEN], did[32];
+    spk_of("dusted", dsec, dspk);
+    btc_tx dcoin, dspend;
+    btc_tx_init(&dcoin), btc_tx_init(&dspend);
+    CHECK(btc_tx_add_in(&dcoin, other, 7, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&dcoin, 3000000, dspk, BTC_P2PKH_LEN) && btc_tx_txid(&dcoin, did));
+    pthread_mutex_lock(&W.mu);
+    add_tx(&dcoin);
+    pthread_mutex_unlock(&W.mu);
+    mine_block();
+    for (int b = 0; b < 5; b++) {
+        pthread_mutex_lock(&W.mu);
+        for (int i = 0; i < 52; i++) {
+            const int tag = 1000 + 52 * b + i;
+            uint8_t prev[32];
+            btc_tx d;
+            btc_tx_init(&d);
+            pz_sha256((const uint8_t *)&tag, sizeof tag, prev);
+            CHECK(btc_tx_add_in(&d, prev, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&d, 546, dspk, BTC_P2PKH_LEN));
+            add_tx(&d);
+        }
+        pthread_mutex_unlock(&W.mu);
+        mine_block();
+    }
+    CHECK(btc_tx_add_in(&dspend, did, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&dspend, 2990000, aspk, BTC_P2PKH_LEN) && btc_sign_p2pkh(&dspend, 0, dsec));
+    pthread_mutex_lock(&W.mu);
+    add_tx(&dspend);
+    pthread_mutex_unlock(&W.mu);
+    mine_block();
+    view(&c, &ch, &honest, NULL, NULL);
+    CHECK(ch.confirmations(ch.ctx, did, 0) == -1);
+    pthread_mutex_lock(&W.mu);
+    const int gets = honest.gets;
+    pthread_mutex_unlock(&W.mu);
+    CHECK(ch.confirmations(ch.ctx, did, 0) == -1);
+    pthread_mutex_lock(&W.mu);
+    CHECK(honest.gets - gets < 60);
+    pthread_mutex_unlock(&W.mu);
+    chain_spv_free(&c);
+
+    /* a server that hides the coins and answers slowly, next to an honest one that lists 256 of them: it has op_ms for the whole
+     * operation (before, op_ms again for every coin it did not list: here a minute, on the main chain hours) */
+    server slow, phantom, slower;
+    start(&slow, (lies){.hide_unspent = true, .slow_scan_ms = 100});
+    view(&c, &ch, &slow, &honest, NULL);
+    c.op_ms = 2000;
+    const int64_t t1 = sys_now_ms();
+    CHECK(ch.coins(ch.ctx, dspk, coins, 8) >= 0 && sys_now_ms() - t1 < 20000);
+    chain_spv_free(&c);
+
+    /* the mempool of the puzzle address: what is only sent to it is no spend of it, nor is an id a server lists and does not give (before,
+     * any transaction there held the exchange of the pieces); a server with no time left to look into its list cannot tell; a spend that
+     * its key signed is one */
+    btc_tx fund3, dep, spend3;
+    uint8_t f3id[32];
+    btc_tx_init(&fund3), btc_tx_init(&dep), btc_tx_init(&spend3);
+    CHECK(btc_tx_add_in(&fund3, other, 9, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&fund3, 200000, pspk, BTC_P2PKH_LEN) && btc_tx_txid(&fund3, f3id));
+    CHECK(btc_tx_add_in(&dep, other, 10, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&dep, 150000, pspk, BTC_P2PKH_LEN));
+    CHECK(btc_tx_add_in(&spend3, f3id, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&spend3, 190000, aspk, BTC_P2PKH_LEN) && btc_sign_p2pkh(&spend3, 0, psec));
+    pthread_mutex_lock(&W.mu);
+    add_tx(&fund3);
+    pthread_mutex_unlock(&W.mu);
+    mine_block();
+    pthread_mutex_lock(&W.mu);
+    add_tx(&dep);
+    pthread_mutex_unlock(&W.mu);
+    start(&phantom, (lies){.phantom = true});
+    start(&slower, (lies){.slow_ms = 300});
+    view(&c, &ch, &honest, &phantom, NULL);
+    CHECK(ch.pending(ch.ctx, pspk) == 0);
+    chain_spv_free(&c);
+    view(&c, &ch, &slower, NULL, NULL);
+    CHECK(ch.height(ch.ctx) > 0);                              /* its headers, before its time is short */
+    c.op_ms = 750;                                             /* the time of two of its answers: none left for the transaction */
+    CHECK(ch.pending(ch.ctx, pspk) == 1);
+    chain_spv_free(&c);
+    pthread_mutex_lock(&W.mu);
+    add_tx(&spend3);
+    pthread_mutex_unlock(&W.mu);
+    view(&c, &ch, &honest, &phantom, NULL);
+    CHECK(ch.pending(ch.ctx, pspk) >= 1);
+    chain_spv_free(&c);
+
     stop(&honest), stop(&hider), stop(&stale), stop(&noproof), stop(&nowork), stop(&keeper), stop(&blind);
+    stop(&slow), stop(&phantom), stop(&slower);
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_chain_spv");
 }
