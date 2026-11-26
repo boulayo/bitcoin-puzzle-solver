@@ -9,8 +9,9 @@
 #   make signer      build/pzsign, the two-party signer (signer/, C++ on cb-mpc: needs a C++ compiler, and fetches and builds OpenSSL
 #                    the first time)
 #   make signer-test its tests: two pzsign sessions relayed by the test (signer/test.py)
-#   make BUILD=build/tsan SIGNER_SAN=-fsanitize=thread OSSL=build/openssl signer
-#                    pzsign under a sanitizer (cb-mpc and pzsign; the OpenSSL of the normal build, as it is), for its selftest
+#   make BUILD=build/tsan SIGNER_SAN=-fsanitize=thread SIGNER_LIBS="-lpthread -ldl" OSSL=build/openssl signer
+#                    pzsign under a sanitizer (cb-mpc and pzsign; the OpenSSL of the normal build, as it is), for its selftest; with the C++
+#                    library of the system, which the sanitizer follows (a static one gave it false reports)
 
 SECP_DIR   := lib/secp256k1
 SECP_FLAGS  = -std=c99 $(OPT) -g $(DEPLOY) -I$(SECP_DIR) -I$(SECP_DIR)/include -w \

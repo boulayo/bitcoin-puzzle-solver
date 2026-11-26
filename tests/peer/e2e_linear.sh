@@ -5,7 +5,8 @@
 # each with its pzsolve) over two blocks of 2^34 keys, the key of the test in block 1. Home a starts on block 0 and home b on block 1 (the
 # file "block" of a home is the block it resumes). It passes when home b finds the key, in FOUND.txt, and home a ends block 0: claimed,
 # with its claim held by the node, or, about one time in ten at this size, with fewer proof keys than a claim needs (then not claimed,
-# and said so). A block is about 5 minutes of 2 threads. No bitcoind: a linear search pays nothing.
+# and said so). A block is 5 to 20 minutes of 2 threads, by the machine (each home has 40 minutes). No bitcoind: a linear search pays
+# nothing.
 # Usage: tests/peer/e2e_linear.sh    (pzsolve and pzpeer built)
 set -u
 BIN=$(pwd)/build
@@ -31,13 +32,13 @@ block=0
 for h in a b; do
     port=$((port + 1))
     mkdir -m 700 "$DIR/$h" && echo $block > "$DIR/$h/block"
-    timeout 1200 "$BIN/pzpeer" run --network "$DIR/net.txt" --dir "$DIR/$h" --listen $port --no-portmap \
+    timeout 2400 "$BIN/pzpeer" run --network "$DIR/net.txt" --dir "$DIR/$h" --listen $port --no-portmap \
         --pzsolve "$BIN/pzsolve" --debug "$DIR/$h.debug" -- -t 2 --no-gpu > "$DIR/$h.log" 2>&1 &
     block=$((block + 1))
     sleep 1
 done
 found= ended=
-for t in $(seq 1 1200); do
+for t in $(seq 1 2400); do
     [ -f "$DIR/b/campaigns/b1/FOUND.txt" ] && found=1
     ended=$(grep -h "block 0 scanned" "$DIR/a.log" | head -1)
     [ -n "$found" ] && [ -n "$ended" ] && break

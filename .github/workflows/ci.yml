@@ -380,7 +380,7 @@ jobs:
       # the selftest of pzsign is the only place where two parties share a process: two threads (a session is one party a process)
       - name: pzsign under TSAN (its selftest, three times)
         run: |
-          make -j"$(nproc)" BUILD=build/tsan-signer SIGNER_SAN=-fsanitize=thread OSSL=build/openssl signer
+          make -j"$(nproc)" BUILD=build/tsan-signer SIGNER_SAN=-fsanitize=thread SIGNER_LIBS="-lpthread -ldl" OSSL=build/openssl signer
           for i in 1 2 3; do build/tsan-signer/pzsign selftest; done
 
   # The network on a node of its own: Bitcoin Core in regtest (the release of bitcoincore.org, checked against the hash of its
