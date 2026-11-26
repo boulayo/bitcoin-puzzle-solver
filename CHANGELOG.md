@@ -9,7 +9,7 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - pzpeer: `pzpeer netcheck N --chain` shows the coins of puzzle N as a home without a node sees them, from the Electrum servers of the
   program: the block headers since block 338688 fetched (kept in `pzchain`), each coin of the creator looked up and proven, then the scan
   of the address, each coin proven. It sends nothing: the check of a machine before a home runs on it without a node.
-  `tests/peer/mainnet.sh` runs it on puzzles 135 and 71 with a sweep that sends nothing, and the workflow `mainnet.yml` runs that on
+  `tests/peer/mainnet.sh` runs it on puzzles 140 and 71 with a sweep that sends nothing, and the workflow `mainnet.yml` runs that on
   Linux, macOS and Windows, by hand and once a week (its result depends on servers this project does not run, so it is apart from CI).
 - The release archives hold pzpeer and pzsign besides pzsolve (keep the three in one folder), with `licenses/` for the code they hold
   (libsecp256k1, cb-mpc, OpenSSL), `NOTICE` and `docs/en/NETWORK.md`; the release workflow builds and checks all three on its five
@@ -328,6 +328,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- pzpeer: `run --puzzle N`, `node --puzzle N` and `netcheck N` refuse a puzzle whose key is in the table (solved: a home would search
+  for a key everyone has). Before, they made a network for it.
 - pzpeer, the session: the two homes build the first transaction from the coins of the puzzle they both see (`S_COINS`, the outpoints
   each sees): two chains a block apart, or a coin that came to the address in a block during the session, gave two first transactions,
   and anyone could keep that up with a coin a block. What is left at the puzzle address after the payout counts at the rate of the

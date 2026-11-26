@@ -1,5 +1,5 @@
 # The main chain without a node of one's own (tests/peer/mainnet.sh): pzpeer on the public Electrum servers of the program, on Linux,
-# macOS and Windows. The block headers since block 338688 (some 640 000, minutes), the coins of the creator at puzzles 135 and 71 proven,
+# macOS and Windows. The block headers since block 338688 (some 640 000, minutes), the coins of the creator at puzzles 140 and 71 proven,
 # and a sweep built and not sent: nothing is sent and nothing costs anything. Its result depends on servers this project does not run, so
 # it is apart from CI: once a week, to see in time when the servers or their answers change, by hand, and at every push that changes
 # the code of the light chain.

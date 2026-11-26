@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # The main chain without a node of one's own, on the public Electrum servers of the program: the block headers since block 338688 fetched
-# and kept (pzchain/headers.bin), the coins of the creator at two open puzzles proven, and a sweep built, nothing sent. It costs nothing
+# and kept (pzchain/headers.bin), the coins of the creator at two open puzzles (140, 71) proven, and a sweep built, nothing sent. It costs nothing
 # and moves nothing: the check of a machine that will run a home without a node (docs/en/NETWORK.md 8.2).
 # Usage: tests/peer/mainnet.sh [PZPEER]    (default build/pzpeer; in a folder where pzchain may be made)
 set -u
 P=${1:-build/pzpeer}
 t0=$(date +%s)
-"$P" netcheck 135 --chain || { echo "MAINNET FAILED: puzzle 135"; exit 1; }   # a public key: the three coins of the creator, unspent
+"$P" netcheck 140 --chain || { echo "MAINNET FAILED: puzzle 140"; exit 1; }   # a public key: the three coins of the creator, unspent
 t1=$(date +%s)
 SECOND=$("$P" netcheck 71 --chain) || { echo "$SECOND"; echo "MAINNET FAILED: puzzle 71"; exit 1; }   # a linear search, dozens of coins
 echo "$SECOND"

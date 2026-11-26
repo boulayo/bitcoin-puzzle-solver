@@ -175,20 +175,20 @@ Per provare lo stesso su un computer solo: due cartelle e due porte, `--dir a --
 **Senza un nodo proprio**, prima di tutto una prova che il computer veda la catena dai server Electrum pubblici:
 
 ```sh
-./pzpeer netcheck 135 --chain
+./pzpeer netcheck 140 --chain
 ```
 
 Scarica le intestazioni dei blocchi dal 2015 (la prima volta qualche minuto, poi le tiene in `pzchain`) e mostra le tre monete che il
-creatore ha messo sul puzzle 135, ognuna `unspent ... proven`, poi le monete che trova sull'indirizzo, ognuna provata. Non spedisce
+creatore ha messo sul puzzle 140, ognuna `unspent ... proven`, poi le monete che trova sull'indirizzo, ognuna provata. Non spedisce
 niente e non costa niente. Se dice `no Electrum server answers`, il computer non raggiunge i server (porta 50001 chiusa da un firewall o
-dalla rete). `tests/peer/mainnet.sh` fa la stessa prova sui puzzle 135 e 71 e costruisce uno sweep che non spedisce; la CI la ripete
+dalla rete). `tests/peer/mainnet.sh` fa la stessa prova sui puzzle 140 e 71 e costruisce uno sweep che non spedisce; la CI la ripete
 ogni settimana su Linux, macOS e Windows.
 
 ### 5.1 Una casa su un puzzle con chiave pubblica
 
 ```sh
 ./pzpeer run                  # il primo puzzle aperto con chiave pubblica nota (oggi il 140)
-./pzpeer run --puzzle 135     # un altro
+./pzpeer run --puzzle 145     # un altro
 ```
 
 Alla prima partenza mostra i termini del pagamento e chiede di scrivere `yes`, poi chiede l'indirizzo di pagamento della casa (qualsiasi

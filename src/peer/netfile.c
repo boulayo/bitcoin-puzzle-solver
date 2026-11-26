@@ -229,6 +229,7 @@ bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen)
         snprintf(err, errlen, n ? "puzzle %d: not in the table" : "no open puzzle with a public key", n);
         return false;
     }
+    if (p->privkey[0]) return snprintf(err, errlen, "puzzle %d is solved: its key is public (pzsolve puzzle %d), there is nothing to search", n, n), false;
     char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], text[2400], js[65];
     pz_u256 lo = pz_u256_pow2((unsigned)p->n - 1), hi = pz_u256_pow2((unsigned)p->n), one = pz_u256_from_u64(1);
     pz_u256_sub(&hi, &hi, &one);

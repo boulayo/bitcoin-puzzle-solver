@@ -71,6 +71,7 @@ int main(void)
         CHECK(netfile_puzzle(n, &b, err, sizeof err) && netfile_opt(&b, "prize", 2, line, sizeof line) && !netfile_opt(&b, "prize", 3, line, sizeof line));
     CHECK(netfile_puzzle(145, &b, err, sizeof err) && b.dpbits == 28 && memcmp(a.fp, b.fp, 32));
     CHECK(!netfile_puzzle(161, &b, err, sizeof err));
+    CHECK(!netfile_puzzle(135, &b, err, sizeof err) && strstr(err, "solved"));   /* its key is public: a home would search for nothing */
     /* puzzle 71, without a public key: a linear network, of its address and blocks of 2^44 keys (and the three coins of the creator at
      * its address) */
     uint8_t h71[20];
