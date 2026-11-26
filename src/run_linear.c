@@ -17,9 +17,11 @@ typedef struct {
     int slot;
 } cpu_arg;
 
-static void on_cpu_hit(void *user, const pz_u256 *key)
+static void cpu_canary_init(run_ctx *r)
 {
-    run_scan_candidate((run_ctx *)user, key, "CPU");
+    char nm[64];
+    snprintf(nm, sizeof nm, "the CPU engine %s", r->engine ? r->engine->name : "-");
+    canary_init(&r->cpu_canary, nm);
 }
 
 static void *cpu_worker(void *p)
@@ -32,8 +34,9 @@ static void *cpu_worker(void *p)
     _Atomic int *flag = r->worker_stop ? &r->worker_stop[a->slot] : &r->stop;   /* bench: idles and interrupts this worker alone */
     job.stop = flag;
     job.progress = &r->ws[a->widx].units;
-    job.on_near = on_cpu_hit;
-    job.user = r;
+    claim_hits hits = {r, NULL, 0, "CPU"};
+    job.on_near = run_claim_hit;
+    job.user = &hits;
     u64 want = 1u << 22;
     while (!atomic_load(&r->stop)) {
         if (flag != &r->stop && atomic_load(flag)) { pz_sleep(0.01); continue; }
@@ -45,8 +48,9 @@ static void *cpu_worker(void *p)
             continue;
         }
         double t0 = pz_mono();
+        hits.c = &c, hits.near = 0;
         u64 cov = r->engine->scan(&job, &c.key_start, c.nkeys);
-        sched_complete(r->sched, &c, cov);
+        if (!canary_complete(&r->cpu_canary, r->sched, &c, cov, hits.near)) break;   /* the CPU engine misses keys */
         double dt = pz_mono() - t0;
         if (dt > 0.01 && cov == c.nkeys) {
             double w = (double)cov / dt * 3.0;      /* aim for ~3 s per claim */
@@ -147,6 +151,7 @@ int run_linear(run_ctx *r)
         pz_log(PZ_LOG_INFO, "CPU: %d compute threads (one core per OpenCL GPU is reserved to drive it)", ncpu_threads);
     }
     if (ncpu_threads > RUN_MAX_THREADS) ncpu_threads = RUN_MAX_THREADS;
+    cpu_canary_init(r);
     atomic_store(&r->active_workers, ncpu_threads + ngpu);
     if (ncpu_threads + ngpu == 0) pz_die("no compute device available (CPU disabled and no GPU)");
 
@@ -165,6 +170,9 @@ int run_linear(run_ctx *r)
 
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
     gpu_linear_join(gpus, ngpu);
+    if (atomic_load(&r->cpu_canary.condemned))
+        pz_log(PZ_LOG_ERR, "the CPU engine %s misses keys on this machine: run 'pzsolve selftest', and choose another one with PZ_ISA", r->engine->name);
+    canary_free(&r->cpu_canary);
     return 0;
 }
 
@@ -212,6 +220,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     if (total > RUN_MAX_THREADS) total = RUN_MAX_THREADS;
     const int full = threads > 0 ? total : (r->sys.ncpu > reserve ? r->sys.ncpu - reserve : 1);
     r->sched = sched_new(&r->cfg);
+    cpu_canary_init(r);
     _Atomic int *flags = pz_xcalloc((size_t)total, sizeof *flags);
     r->worker_stop = flags;
     r->worker_stop_n = total;
@@ -237,6 +246,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     for (int i = 0; i < total; i++) atomic_store(&flags[i], 1);
     for (int i = 0; i < total; i++) pthread_join(th[i], NULL);
     gpu_linear_join(gpus, ngpu);
+    canary_free(&r->cpu_canary);
     sched_free(r->sched);
     r->sched = NULL;
     r->worker_stop = NULL;

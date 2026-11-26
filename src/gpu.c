@@ -386,17 +386,17 @@ static int open_sessions(run_ctx *r, gpu_session **out, bool for_kangaroo)
 
 /* ---------------- linear worker ---------------- */
 
-static void cpu_support_hit(void *user, const pz_u256 *key) { run_scan_candidate((run_ctx *)user, key, "CPU (GPU support)"); }
-
-static void cpu_scan_claim(run_ctx *r, const claim_t *c, u64 *covered)
+/* The claim of h scanned on the CPU, its near misses counted in h; the keys covered. */
+static u64 cpu_scan_claim(run_ctx *r, claim_hits *h)
 {
     scan_job job;
     scan_job_init(&job, r->cfg.target_h160);
     job.stop = &r->stop;
-    job.user = r;
-    job.on_near = cpu_support_hit;
-    const cpu_engine *e = r->engine ? r->engine : cpu_engine_by_name("baseline");
-    *covered = e->scan(&job, &c->key_start, c->nkeys);
+    job.user = h;
+    job.on_near = run_claim_hit;
+    h->source = "CPU (GPU support)";
+    const cpu_engine *e = r->engine && !atomic_load(&r->cpu_canary.condemned) ? r->engine : cpu_engine_by_name("baseline");
+    return e->scan(&job, &h->c->key_start, h->c->nkeys);
 }
 
 /* ---------------- recovery after a device error ---------------- */
@@ -488,6 +488,10 @@ static void *gpu_linear_thread(void *p)
     uint32_t ngroups = 2;
     gpu_health health = {0};
     int boosted = 0;
+    canary cy;
+    char nm[sizeof cy.name];
+    snprintf(nm, sizeof nm, "GPU[%d] %s", s->info.index, s->info.name);
+    canary_init(&cy, nm);
     while (!atomic_load(&r->stop)) {
         boost_sync(&boosted);
         if (atomic_load(&s->paused)) { pz_sleep(0.01); continue; }
@@ -499,11 +503,11 @@ static void *gpu_linear_thread(void *p)
             pz_sleep(0.05);
             continue;
         }
+        claim_hits hits = {r, &c, 0, "GPU"};
         bool small = !(c.key_start.w[1] | c.key_start.w[2] | c.key_start.w[3]) && c.key_start.w[0] < (1u << 22);
         if (small) {
-            u64 cov = 0;
-            cpu_scan_claim(r, &c, &cov);
-            sched_complete(r->sched, &c, cov);
+            const u64 cov = cpu_scan_claim(r, &hits);
+            if (!canary_complete(&cy, r->sched, &c, cov, hits.near)) break;
             atomic_fetch_add(&r->ws[s->widx].units, cov);
             continue;
         }
@@ -524,18 +528,19 @@ static void *gpu_linear_thread(void *p)
         u64 covered = c.nkeys;
         if (L.err) {
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: numeric anomaly in the block, rescanning on the CPU", s->info.index, s->info.name);
-            cpu_scan_claim(r, &c, &covered);                   /* which reports every near miss of the block, those of the GPU too */
+            covered = cpu_scan_claim(r, &hits);                /* which reports every near miss of the block, those of the GPU too */
         } else {
             for (uint32_t i = 0; i < L.nhits; i++) {
                 pz_u256 k = c.key_start;
                 pz_u256_add_u64(&k, &k, L.hits[i]);
-                run_scan_candidate(r, &k, "GPU");
+                run_claim_hit(&hits, &k);
             }
         }
-        sched_complete(r->sched, &c, covered);
+        if (!canary_complete(&cy, r->sched, &c, covered, hits.near)) break;     /* the device misses keys */
         GPU_UNITS_STAMP(&r->ws[s->widx], c.nkeys);
         if (c.nkeys == (want & ~(u64)1023)) ngroups = gpu_launch_resize(ngroups, dt, s->launch_s, 0.005, 4096);
     }
+    canary_free(&cy);
     if (atomic_fetch_sub(s->active, 1) == 1) atomic_store(&r->stop, 1);
     return NULL;
 }

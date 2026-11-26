@@ -63,6 +63,8 @@ typedef struct sched {
     u128 cur_seq; bool cur_valid; pz_u256 cur_start; u64 cur_len;
     u128 keys_done;        /* exact count of keys covered (excluding fillers) */
     pz_u256 range_size;
+    vival *start; size_t nstart;   /* the done set as the session found it (sched_load), for sched_revert */
+    u128 start_keys;
 } sched_t;
 
 sched_t *sched_new(const campaign_cfg *cfg);
@@ -76,6 +78,11 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out);
 /* covered == nkeys marks the whole claim as done; smaller values mark only
  * the prefix (used when a worker is interrupted). */
 void sched_complete(sched_t *s, const claim_t *c, u64 covered);
+/* The keys of a completed claim, its n first ones from virtual position v, to be scanned again (a worker the canary condemned, canary.h):
+ * the visit fills the hole like that of a claim given back. */
+void sched_reopen(sched_t *s, u128 v, u64 n);
+/* Everything completed in this session to be scanned again: the done set as the checkpoint loaded it (nothing for a new campaign). */
+void sched_revert(sched_t *s);
 
 /* Persistence (text, with checksum). sched_save writes the state as it is now to path (the one before kept as path.bak); sched_snapshot
  * takes that text (*len bytes, to free) for sched_write to write later, when something else must reach the disk first. */

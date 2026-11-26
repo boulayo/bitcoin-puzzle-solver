@@ -451,6 +451,18 @@ static void t_scan_hits(void)
     set_target(r, 0x1000);
     CHECK(run_scan_candidate(r, &kg, "test") && atomic_load(&r->found));
     CHECK(!run_key_in_range(r, &kf) && run_key_in_range(r, &r->cfg.range_end) && !run_key_in_range(r, &pz_secp256k1_n));
+    /* the canary counts a near miss of a claim that the CPU confirms inside the claim, and nothing else */
+    claim_t cl = {.key_start = kg, .nkeys = 16};
+    claim_hits h = {r, &cl, 0, "test"};
+    const pz_u256 kx = pz_u256_from_u64(0x1003);
+    const int was_quiet = pz_log_quiet();
+    pz_log_set_quiet(2);                                                             /* the false candidate is logged */
+    run_claim_hit(&h, &kg);                                                          /* the key, a near miss, inside */
+    run_claim_hit(&h, &kx);                                                          /* not a near miss: the CPU says no */
+    cl.key_start = kx;
+    run_claim_hit(&h, &kg);                                                          /* a near miss before the claim */
+    pz_log_set_quiet(was_quiet);
+    CHECK(h.near == 1 && atomic_load(&r->hits_bad) == 1);
     free(r);
     pz_remove_tree(dir);
     pz_result_line("hits beyond the end of the range", "%s", g_fail == f0 ? "OK" : "FAILED");

@@ -13,7 +13,7 @@ lane arithmetic and the time-estimation model. Numbers are labeled as measured o
 ## Contents
 
 1. The problem
-2. Linear search (address only): 2.1 Arithmetic, 2.2 Vectorized hash160, 2.3 Edge cases
+2. Linear search (address only): 2.1 Arithmetic, 2.2 Vectorized hash160, 2.3 Edge cases, 2.4 The canary of silent misses
 3. Unique visiting order (seed)
 4. The interval kangaroo (public key known): 4.1 Setup, 4.2 Why it costs less, 4.3 Unproductive cycles,
    4.4 Parameters (chosen automatically), 4.7 Resuming
@@ -86,6 +86,22 @@ Zero denominators (tiny keys, e.g. center = 2·512) zero out the batch product: 
 check per group and the group is recomputed exactly (one scalar multiplication per key). Blocks that start below 2^22 are
 always scanned on the CPU, even when a GPU is present. Keys beyond the boundary of a block are never assigned twice: the
 scheduler knows the exact length of every block (the last one too, which is shorter in custom intervals).
+
+### 2.4 The canary of silent misses
+
+A key is a near miss (bytes 8 to 11 of its hash160 are the target's) with probability 2^-32, independently of the others, and every engine
+and kernel reports every near miss to the host, which checks it on the CPU. The near misses of K keys scanned by a correct worker are
+therefore a sum of K independent trials of mean 2^-32: what a worker that skips keys cannot match (`src/canary.c`). The workers are the CPU
+engine, counted once for all its threads, and each GPU; a near miss counts for the claim it lies in, and the keys of the claims a worker
+marks as scanned go into windows of 2^38 keys, λ = 64 expected. At the end of each window the count n of the window, and that of the
+session, are each held against the Chernoff bound `P(X ≤ n) ≤ e^(−λ (1 − a + a ln a))`, `a = n/λ`: below 10^-9 the worker is condemned. The bound
+is above the true probability, so a correct worker trips one of the two tests less often than once in 10^8 windows. A window condemns a worker that misses
+all its keys (n = 0: e^-64) or more than two thirds of them (n ≤ 20 of 64); the session, one that misses less, given enough keys: λ > 135 (2^39.1
+keys) for half of them, λ > 2540 (2^43.3 keys) for one lane of eight. A condemned worker stops, and its keys are scanned again: those of
+its window (the claims are listed), or everything the campaign marked as scanned in the session when the session condemned it (its
+earlier windows passed and cannot be told apart from the others' work). A claim it completes afterwards is given back. A window is
+judged only once it is full: a session shorter than 2^38 keys of a worker judges nothing, and a stop forgets the window under way. The
+kangaroo and BSGS have no near misses and no canary.
 
 ## 3. Unique visiting order (seed)
 

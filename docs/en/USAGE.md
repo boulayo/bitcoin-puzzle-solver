@@ -441,6 +441,14 @@ and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](htt
   The program picks the fastest engine (`PZ_ISA` imposes one, section 7.10); `bench` shows them all. Every engine, before being used, passes a quick check: a known
   key planted in turn in every window of a step (every lane of the `*v` engines) and at the keys where the code takes its own branches (the
   edges of a window, its centre and the two next to it); an engine that got one wrong would be excluded.
+* While a linear search runs, the near misses keep watch (the canary): every key is one with probability 2^-32, so the CPU engine (one count
+  for all its threads) and each GPU must find about one in 2^32 of the keys they mark as scanned. Every 2^38 keys of a worker (64 near
+  misses expected: about 90 s of a GPU at 3 G keys/s, 45 min of a CPU at 100 M keys/s) the count of those keys and the count of the session
+  are compared with what is expected; one so low that a correct worker would get it less than once in 10^9 means that the worker misses
+  keys. An error line says so, the worker is no longer used (the GPU is left out, the CPU threads stop) and its keys go back to be scanned
+  again: those 2^38, or, when only the whole session gives it away (a worker that misses a small share of its keys), every key scanned in
+  the session, since its own cannot be told apart from the others'. A correct worker is practically never caught: less than once in 10^8
+  windows. The kangaroo and BSGS have no near misses: the canary covers the linear search only.
 * The compute threads go first on different physical cores, one per core, and only beyond the number of cores on the second SMT thread of a
   core (on Windows the assignment is a hint to the system, which may move the threads).
 * The kangaroo on the CPU uses the same SIMD lanes as the linear search; the variant is chosen by measuring (three short samples of each,

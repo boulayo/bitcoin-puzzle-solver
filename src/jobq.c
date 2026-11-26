@@ -137,6 +137,7 @@ void sched_free(sched_t *s)
     if (!s) return;
     free(s->done);
     free(s->inflight);
+    free(s->start);
     pthread_mutex_destroy(&s->mu);
     free(s);
 }
@@ -296,6 +297,38 @@ void sched_complete(sched_t *s, const claim_t *c, u64 covered)
         add_done(s, c->v_start, c->v_start + covered);
         s->keys_done += covered;
     }
+    pthread_mutex_unlock(&s->mu);
+}
+
+void sched_reopen(sched_t *s, u128 v, u64 n)
+{
+    const u128 b = v + n;
+    pthread_mutex_lock(&s->mu);
+    size_t i = 0;
+    while (i < s->ndone && s->done[i].a < b) {
+        vival *d = &s->done[i];
+        if (d->b <= v) { i++; continue; }
+        s->keys_done -= (d->b < b ? d->b : b) - (d->a > v ? d->a : v);   /* a claim holds keys only, no filler */
+        if (d->a < v && d->b > b) {                                     /* [v, b) inside it: two pieces */
+            const u128 e = d->b;
+            d->b = v;
+            add_done(s, b, e);
+            break;
+        }
+        if (d->a < v) { d->b = v; i++; }
+        else if (d->b > b) { d->a = b; break; }
+        else { s->ndone--; memmove(d, d + 1, (s->ndone - i) * sizeof *d); }   /* all of it */
+    }
+    pthread_mutex_unlock(&s->mu);
+}
+
+void sched_revert(sched_t *s)
+{
+    pthread_mutex_lock(&s->mu);
+    if (s->nstart > s->capdone) s->done = pz_xrealloc(s->done, (s->capdone = s->nstart) * sizeof *s->done);
+    if (s->nstart) memcpy(s->done, s->start, s->nstart * sizeof *s->done);
+    s->ndone = s->nstart;
+    s->keys_done = s->start_keys;
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -506,6 +539,11 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
     }
     s->keys_done = kdone;
     s->next = first_gap(s);
+    free(s->start);
+    s->start = pz_xmalloc((s->ndone ? s->ndone : 1) * sizeof *s->start);
+    if (s->ndone) memcpy(s->start, s->done, s->ndone * sizeof *s->start);
+    s->nstart = s->ndone;
+    s->start_keys = kdone;
     free(text);
     return 0;
 }

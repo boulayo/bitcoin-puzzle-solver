@@ -6,6 +6,7 @@
 #include "campaign.h"
 #include "bsgs.h"
 #include "jobq.h"
+#include "canary.h"
 #include "cpu_engine.h"
 #include "sysinfo.h"
 #include "eta.h"
@@ -70,6 +71,7 @@ typedef struct run_ctx {
     /* options */
     int nthreads;
     const cpu_engine *engine;
+    canary cpu_canary;               /* linear search: the canary of the CPU engine, for all its threads (each GPU has its own) */
     bool use_cpu, use_gpu;
     int report_interval;             /* seconds between terminal updates */
     int checkpoint_interval;         /* seconds */
@@ -158,8 +160,13 @@ bool run_submit_key(run_ctx *r, const pz_u256 *index, const char *source);
 bool run_key_in_range(const run_ctx *r, const pz_u256 *index);
 /* A hit of the linear search. The engines scan whole lanes, so the last block of a range can reach a few keys past its end; a hit there is the
  * right key, but this campaign was not asked for it and whether its scan gets there depends on how the end of the range falls on the lanes. It
- * is ignored (false) with a line in the debug log, which does not show the key. Any other hit goes to run_submit_key. */
+ * is ignored (false) with a line in the debug log, which does not show the key. Any other hit that the CPU confirms is a near miss (true),
+ * written to near.txt, and the key itself goes to run_submit_key. */
 bool run_scan_candidate(run_ctx *r, const pz_u256 *index, const char *source);
+/* The near misses of a claim as its scan reports them (a scan_job's on_near, with a claim_hits as its user): those that run_scan_candidate
+ * confirms inside the claim are counted for the canary of the worker (canary.h). */
+typedef struct { run_ctx *r; const claim_t *c; u64 near; const char *source; } claim_hits;
+void run_claim_hit(void *user, const pz_u256 *index);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);

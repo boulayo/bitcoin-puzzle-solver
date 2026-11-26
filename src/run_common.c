@@ -284,7 +284,16 @@ bool run_scan_candidate(run_ctx *r, const pz_u256 *index, const char *source)
         fflush(r->near);
         pthread_mutex_unlock(&r->found_mu);
     }
-    return is_key && run_submit_key(r, index, source);
+    if (is_key) run_submit_key(r, index, source);
+    return true;
+}
+
+void run_claim_hit(void *user, const pz_u256 *index)
+{
+    claim_hits *h = user;
+    pz_u256 off;
+    pz_u256_sub(&off, index, &h->c->key_start);
+    if (run_scan_candidate(h->r, index, h->source) && !(off.w[1] | off.w[2] | off.w[3]) && off.w[0] < h->c->nkeys) h->near++;
 }
 
 /* The seed as the reports show it: a shared walk's is its start key, which stays in memory (docs/en/NETWORK.md 6). */

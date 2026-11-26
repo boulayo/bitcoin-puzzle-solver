@@ -443,6 +443,15 @@ e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](https:/
   Il programma sceglie il motore più veloce (`PZ_ISA` ne impone uno, sezione 7.10); `bench` li mostra tutti. Ogni motore, prima di essere usato, supera una verifica rapida: una
   chiave nota messa a turno in ogni finestra di un passo (ogni corsia dei motori `*v`) e sulle chiavi dove il codice prende una strada sua (i
   bordi di una finestra, il suo centro e le due accanto); un motore che ne sbagliasse una verrebbe escluso.
+* Mentre una ricerca lineare gira, le quasi giuste fanno da sentinella: ogni chiave lo è con probabilità 2^-32, quindi il motore CPU (un
+  conto solo per tutti i suoi thread) e ogni GPU devono trovarne circa una ogni 2^32 delle chiavi che segnano come cercate. Ogni 2^38 chiavi
+  di uno di loro (64 quasi giuste attese: circa 90 s di una GPU a 3 G chiavi/s, 45 min di una CPU a 100 M chiavi/s) il conto di quelle
+  chiavi e quello della sessione vengono confrontati con l'atteso; uno così basso che un motore corretto lo avrebbe meno di una volta su
+  10^9 vuol dire che quel motore salta chiavi. Una riga di errore lo dice, il motore non viene più usato (la GPU è esclusa, i thread della
+  CPU si fermano) e le sue chiavi tornano da cercare: quelle 2^38 o, quando lo tradisce solo la sessione intera (un motore che salta una
+  piccola parte delle chiavi), tutte le chiavi cercate nella sessione, perché le sue non si distinguono da quelle degli altri. Un motore
+  corretto non viene preso quasi mai: meno di una volta ogni 10^8 finestre. Il canguro e il BSGS non hanno quasi giuste: la
+  sentinella copre solo la ricerca lineare.
 * I thread di calcolo vanno prima su core fisici diversi, uno per core, e solo oltre il numero dei core sul secondo thread SMT di un core (su
   Windows l'assegnazione è un suggerimento al sistema, che può spostare i thread).
 * Il canguro sulla CPU usa le stesse corsie SIMD della ricerca lineare; la variante viene scelta misurando (tre brevi campioni di ognuna,
