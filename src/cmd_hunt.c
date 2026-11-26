@@ -25,30 +25,6 @@ static bool file_exists(const char *p) { struct stat st; return stat(p, &st) == 
 /* -s gives the seed (its 64 hex digits, or a text that is hashed); absent or "auto", a new campaign draws one */
 static bool seed_given(const opts_t *o) { return o->seed[0] && strcmp(o->seed, "auto") != 0; }
 
-/* --seed-file: the first line of the file, or of the standard input with "-" (without echo on a terminal), becomes the text of -s, so that the
- * seed stays out of the shell history and of the list of processes. Only that line is read from the standard input. */
-static void seed_from_file(opts_t *o)
-{
-    const char *f = o->seed_file;
-    if (!f[0]) return;
-    if (o->seed[0]) pz_die("-s and --seed-file give the same seed: use one of them");
-    int n;
-    if (!strcmp(f, "-")) {
-        if (o->encrypt_password) pz_die("--seed-file - and --encrypt-password both read the standard input: give the seed in a file");
-        n = pz_read_secret("Seed: ", o->seed, sizeof o->seed, false);
-    } else {
-        char *text = pz_read_file(f, NULL);
-        if (!text) pz_die("cannot read the seed %s: %s", f, strerror(errno));
-        const size_t len = strlen(text), line = strcspn(text, "\r\n");
-        n = line < sizeof o->seed ? (int)line : -2;
-        if (n > 0) memcpy(o->seed, text, line), o->seed[line] = 0;
-        pz_secure_zero(text, len);
-        free(text);
-    }
-    if (n == -2) pz_die("--seed-file %s: the seed is too long (at most %zu characters)", f, sizeof o->seed - 1);
-    if (n <= 0) pz_die("--seed-file %s: no seed (the first line is empty, or there is none)", f);
-}
-
 /* PZ_ISA: true when it imposes a CPU engine ("auto" and unset do not). Checked before a campaign directory is created, so a typo leaves
  * nothing behind. */
 static bool isa_forced(void)
@@ -831,12 +807,9 @@ static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
         say(PZ_LOG_INFO, "mode: kangaroo, shared walk (net-06) | start key id %s | public jumps, secret starts", idb);
     else
         say(PZ_LOG_INFO, "mode: kangaroo (known public key) | seed id %s | the seed determines jumps and starting positions", idb);
-    if (r->cfg.part[0]) {                        /* the seed is the user's own (-s, required with --part): it is never shown, its split id is */
-        char sid[9];
-        cfg_split_id(&r->cfg, sid);
-        pz_log(PZ_LOG_INFO, "part %s, split id %s: this computer scans only its shares of the blocks; every computer of the split must show this "
-               "split id (the same target, range, --step, --chunk-bits, number of shares and -s), with shares of its own", r->cfg.part, sid);
-    }
+    if (r->cfg.part[0])                          /* the seed is the user's own (-s, required with --part): it is never shown */
+        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --step, --chunk-bits "
+               "and -s, with the other shares", r->cfg.part);
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
     if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)%s", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes,
                                         PLURAL(r->engine->lanes), isa_forced() ? ", imposed by PZ_ISA" : "");
@@ -940,7 +913,6 @@ int cmd_hunt(int argc, char **argv)
 {
     opts_t o;
     parse_opts(argc, argv, &o);
-    seed_from_file(&o);
     shared_options(&o);
     pz_log_set_quiet(o.quiet);
     pz_log_set_verbose(o.verbose);

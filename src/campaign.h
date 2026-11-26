@@ -93,10 +93,6 @@ void seed_generate(u8 seed[32]);
 /* Parses a user seed: 64 hex digits are used verbatim, anything else is hashed. */
 void seed_from_text(const char *text, u8 seed[32]);
 void seed_to_id(const u8 seed[32], char id[17]);   /* short fingerprint */
-/* The split id of a --part campaign: 8 hex digits of a hash of what every computer of the split must share (the seed, the target, the range,
- * --step, the block size and the number of shares, not the shares). Computers that show different ids do not share out one order: their
- * shares overlap and leave gaps. */
-void cfg_split_id(const campaign_cfg *c, char id[9]);
 
 int cfg_save(const campaign_cfg *c, const char *path);
 /* Refuses (with the message in err) a format it does not know, a requires=X.Y.Z line above this version, and invalid values. */

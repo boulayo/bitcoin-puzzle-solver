@@ -174,25 +174,6 @@ void seed_to_id(const u8 seed[32], char id[17])
     pz_hex_encode(h, 8, id);
 }
 
-void cfg_split_id(const campaign_cfg *c, char id[9])
-{
-    part_spec ps;
-    char err[200];
-    u8 b[8 + 32 + 20 + 4 * 32 + 3], h[32];
-    const unsigned total = part_parse(c->part, &ps, err, sizeof err) ? ps.total : 0;
-    memcpy(b, "PZSPLIT1", 8);
-    memcpy(b + 8, c->seed, 32);
-    memcpy(b + 40, c->target_h160, 20);
-    pz_u256_to_be(&c->range_start, b + 60);
-    pz_u256_to_be(&c->range_end, b + 92);
-    pz_u256_to_be(&c->step, b + 124);                  /* zero without --step */
-    pz_u256_to_be(&c->step_base, b + 156);
-    b[188] = (u8)c->chunk_bits;
-    b[189] = (u8)(total >> 8), b[190] = (u8)total;
-    pz_sha256(b, sizeof b, h);
-    pz_hex_encode(h, 4, id);
-}
-
 /* ---- the shares of --part ---- */
 
 bool part_parse(const char *text, part_spec *out, char *err, size_t errn)

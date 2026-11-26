@@ -483,12 +483,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     else snprintf(amount, sizeof amount, "%s of %s %s", done, total, pi->unit);
     if (pi->forgotten) snprintf(pct, sizeof pct, "not kept"), snprintf(amount, sizeof amount, "the key is encrypted: how far the search got is not written");
     char partline[PART_TEXT + 200] = "";
-    if (r->cfg.part[0]) {
-        char sid[9];
-        cfg_split_id(&r->cfg, sid);
-        snprintf(partline, sizeof partline, "Part:           %s, split id %s  (this computer scans only its shares of the blocks; every computer of the "
-                 "split shows the same id)\n", r->cfg.part, sid);
-    }
+    if (r->cfg.part[0]) snprintf(partline, sizeof partline, "Part:           %s  (this computer scans only its shares of the blocks)\n", r->cfg.part);
     if (r->limit_pct) {
         const size_t pl = strlen(partline);
         snprintf(partline + pl, sizeof partline - pl, "Limit:          %d%% of the machine (fewer CPU threads and GPU work-items, always at full speed)\n", r->limit_pct);

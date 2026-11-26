@@ -91,9 +91,6 @@ static const char *hunt_text(void)
 "                          from the range and the target, so that the same command resumes it]\n"
 "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
 "  -s, --seed SEED         seed: 64 hex digits (used as they are) or any text (hashed); default or 'auto': generated at random\n"
-"      --seed-file FILE    the seed from the first line of FILE, taken as -s takes it, so that it stays out of the shell history and\n"
-"                          of the list of processes; '-': the standard input (typed without echo on a terminal; a file named '-'\n"
-"                          is ./-)\n"
 "\n"
 "METHOD\n"
 "  -m, --mode M            auto | linear | kangaroo | bsgs   [auto: linear without a public key or for a range of less\n"
@@ -120,8 +117,7 @@ static const char *hunt_text(void)
 "SEVERAL COMPUTERS (same -s, range and public key on all of them)\n"
 "      --part Q/T          linear search: the blocks of the visit order are divided into T shares and this computer scans share Q\n"
 "                          (counting from 0; several are allowed: 0,1/4 or 0-6/9) [without it: every block].\n"
-"                          A new campaign needs -s with it; the same -s and --chunk-bits on all the computers, which then show\n"
-"                          the same split id (log, report.txt, where)\n"
+"                          A new campaign needs -s with it; the same -s and --chunk-bits on all the computers\n"
 "      --node N            kangaroo: number of this computer (0..65535, 0 if there is only one): the kangaroos start from\n"
 "                          different points (see 'merge')\n"
 "\n"
@@ -316,7 +312,7 @@ void pz_usage_error(const char *cmd, const char *fmt, ...)
 
 static const char *g_cmd = "";
 
-enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY, O_STEP, O_STOPIN, O_SEEDFILE };
+enum { O_TABLE = 998, O_BSGSN = 997, O_UI = 999, O_NOCPU = 1000, O_NOGPU, O_GPU, O_CHUNK, O_DP, O_MEM, O_KEY, O_RETUNE, O_AWAKE, O_NEAR, O_NODE, O_PART, O_LIMIT, O_ENCPUB, O_ENCPW, O_ONFOUND, O_JUMPSEED, O_STARTKEY, O_STEP, O_STOPIN };
 
 static const struct option long_opts[] = {
     {"puzzle", 1, 0, 'p'}, {"range", 1, 0, 'r'}, {"address", 1, 0, 'a'}, {"pubkey", 1, 0, 'k'},
@@ -326,8 +322,7 @@ static const struct option long_opts[] = {
     {"key", 1, 0, O_KEY}, {"ui", 1, 0, O_UI}, {"table", 1, 0, O_TABLE}, {"bsgs-entries", 1, 0, O_BSGSN},
     {"retune", 0, 0, O_RETUNE}, {"keep-awake", 0, 0, O_AWAKE}, {"near", 0, 0, O_NEAR}, {"node", 1, 0, O_NODE},
     {"part", 1, 0, O_PART}, {"limit", 1, 0, O_LIMIT}, {"encrypt-pubkey", 1, 0, O_ENCPUB}, {"encrypt-password", 0, 0, O_ENCPW},
-    {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"step", 1, 0, O_STEP}, {"stop-with-input", 0, 0, O_STOPIN},
-    {"seed-file", 1, 0, O_SEEDFILE}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
+    {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"step", 1, 0, O_STEP}, {"stop-with-input", 0, 0, O_STOPIN}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
     {0, 0, 0, 0}};
 
 /* The options removed in 1.23.0 and what takes their place: each one is refused with its own message, not as an unknown option. The
@@ -479,7 +474,6 @@ void parse_opts(int argc, char **argv, opts_t *o)
             opt_copy("--dir", o->dir, sizeof o->dir, optarg);
             break;
         case 's': opt_copy("--seed", o->seed, sizeof o->seed, optarg); break;
-        case O_SEEDFILE: opt_copy("--seed-file", o->seed_file, sizeof o->seed_file, optarg); break;
         case 'm': {
             search_mode m;
             opt_copy("--mode", o->mode, sizeof o->mode, optarg);

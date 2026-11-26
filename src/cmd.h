@@ -38,7 +38,6 @@ typedef struct {
     char on_found[1024];          /* --on-found */
     char jump_seed[80];           /* --jump-seed: the public seed of the jumps of a shared walk (docs/en/NETWORK.md 6) */
     char start_key[600];          /* --start-key: the file with its secret start key */
-    char seed_file[600];          /* --seed-file: the file whose first line is the seed ("-": the standard input) */
     char table[600];
     u64 bsgs_entries;
     ui_mode ui;

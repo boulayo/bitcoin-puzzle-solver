@@ -318,24 +318,6 @@ $BIN hunt -r 1:fffff -a "$A" --part 0/2 -s split -c xp -d "$DIR" --ui log -q --n
 # a computer of a split without -s would draw its own order of the blocks: its share and the others' would overlap and leave gaps
 $BIN hunt -r 1:fffff -a "$A" --part 1/2 -c xq -d "$DIR" --ui log -q --no-gpu >"$DIR/xq.out" 2>&1; RC=$?
 [ $RC -eq 2 ] && [ ! -e "$DIR/xq" ] && grep -q "part needs -s" "$DIR/xq.out" && ok "a new share of a split without -s: refused, nothing created" || bad "share without -s: exit status $RC"
-# the split id: the same on every computer of a split, another one with another --chunk-bits; the seed of a file and of the standard input is
-# the seed of -s (the first line only), and another one on resume is refused
-splitid() { sed -n 's/^Part: .*split id \([0-9a-f]*\) .*/\1/p' "$DIR/$1/report.txt" 2>/dev/null; }
-$BIN hunt -r 1:fffff -a "$A" --part 1/2 -s split -c xp1 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-$BIN hunt -r 1:fffff -a "$A" --part 1/2 -s split --chunk-bits 20 -c xp2 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-[ -n "$(splitid xp)" ] && [ "$(splitid xp)" = "$(splitid xp1)" ] && [ -n "$(splitid xp2)" ] && [ "$(splitid xp2)" != "$(splitid xp)" ] &&
-  grep -q "split id $(splitid xp)" "$DIR/xp1/log.txt" && ok "split id: the same on both shares of a split, another with another --chunk-bits" ||
-  bad "split id: '$(splitid xp)' '$(splitid xp1)' '$(splitid xp2)'"
-printf 'split\n' > "$DIR/seed.txt"
-$BIN hunt -r 1:fffff -a "$A" --part 1/2 --seed-file "$DIR/seed.txt" -c xp3 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-printf 'split\r\nnot the seed\n' | $BIN hunt -r 1:fffff -a "$A" --part 1/2 --seed-file - -c xp4 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-SEEDL=$(grep '^seed=' "$DIR/xp1/campaign.conf" 2>/dev/null)
-[ -n "$SEEDL" ] && [ "$(grep '^seed=' "$DIR/xp3/campaign.conf")" = "$SEEDL" ] && [ "$(grep '^seed=' "$DIR/xp4/campaign.conf")" = "$SEEDL" ] &&
-  [ "$(splitid xp3)" = "$(splitid xp1)" ] && ok "--seed-file: the seed of a file and of the standard input is the one of -s" ||
-  bad "--seed-file: $(grep -h '^seed=' "$DIR"/xp[134]/campaign.conf 2>&1 | tr '\n' ' ')"
-printf 'other\n' > "$DIR/seed2.txt"
-OUT=$($BIN hunt -c xp1 -d "$DIR" --seed-file "$DIR/seed2.txt" --ui log -q --no-gpu 2>&1); RC=$?
-[ $RC -eq 2 ] && echo "$OUT" | grep -q "seed does not match" && ok "--seed-file: another seed on resume is refused" || bad "--seed-file on resume: rc=$RC $OUT"
 # --step: a key whose unknown bits are a block in the middle (16 bits above 20 known ones, under 12 known ones), found by every method; the
 # range shown with its step, a resume with another step refused, 'where' on a key of the steps and on one that is not
 SK=$(python3 -c "print(hex((0xa5c<<36)|(0xb7e1<<20)|0x12345))"); SR=a5c000012345:a5cffff12345
