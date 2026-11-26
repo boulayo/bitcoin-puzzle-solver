@@ -88,9 +88,12 @@ OUT=$($BIN hunt -p 20 -a "$A" -c nf -d "$DIR" --ui log -q --no-gpu 2>&1); RC=$?
 echo "$OUT" | grep -q "key (hex): *0x9a3b1" && echo "$OUT" | grep -q "NOT SAVED: .*FOUND.txt could not be written" && ! echo "$OUT" | grep -q "saved in" \
   && ok "the box shows the key and says that FOUND.txt was not written" || bad "FOUND.txt not written: rc=$RC $(echo "$OUT" | grep -E 'saved|SAVED|key \(hex\)' | tr '\n' ' ')"
 # a key that is on the screen only is an error, and its place is not recorded as searched: the next start, with the way clear, finds it
-# again (before, the state took the block for done and the campaign ended "completed without the key")
-[ "$RC" = 2 ] && [ ! -e "$DIR/nf/state.dat" ] && ok "a key that could not be saved: exit status 2, no state saved after the find" || bad "key not saved: rc=$RC, $(ls "$DIR/nf" | tr '\n' ' ')"
+# again (before, the state took the block for done and the campaign ended "completed without the key"); the reports do not call it found
 rmdir "$DIR/nf/FOUND.txt"
+[ "$RC" = 2 ] && $BIN where -c nf -d "$DIR" --key 9a3b1 | grep -q "state *not yet scanned" && ok "a key that could not be saved: exit status 2, its place not scanned in the state" \
+  || bad "key not saved: rc=$RC, $($BIN where -c nf -d "$DIR" --key 9a3b1 2>&1 | tail -1)"
+grep -q "^State: *STOPPED" "$DIR/nf/report.txt" && ! grep -q "KEY FOUND" "$DIR/nf/report.txt" && grep -q '"found": false' "$DIR/nf/status.json" && $BIN list -d "$DIR" | grep -q "^nf .* STOPPED " \
+  && ok "a key that could not be saved: report.txt, status.json and list say STOPPED, not FOUND" || bad "key not saved, the reports: $(grep -h -E '^State|KEY FOUND|"found"' "$DIR/nf/report.txt" "$DIR/nf/status.json" | tr '\n' ' ')"
 $BIN hunt -p 20 -a "$A" -c nf -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
 [ "$RC" = 0 ] && grep -qi "9a3b1" "$DIR/nf/FOUND.txt" && ok "the next start finds the key again and saves it" || bad "after a key that was not saved: rc=$RC"
 [ -s "$DIR/nf/reserve.bin" ] && [ "$(stat -c %a "$DIR/nf")" = 700 ] && ok "a campaign keeps two blocks of the disk for FOUND.txt, and its folder is its owner's alone (0700)" || bad "reserve.bin or the mode of the folder: $(stat -c %a "$DIR/nf") $(ls "$DIR/nf" | tr '\n' ' ')"
@@ -741,6 +744,25 @@ $BIN decrypt-key "$DIR/none.txt" >/dev/null 2>&1 </dev/null; [ $? -eq 2 ] && ok 
 $BIN hunt -c encl -d "$DIR" --ui log -q --no-gpu 2>&1 | grep -q "PZENC1:" && ok "an encrypted campaign that had found the key shows its FOUND.txt, which is the encrypted one" || bad "already found, encrypted"
 $BIN list -d "$DIR" 2>&1 | grep -q "^encl .* FOUND " && $BIN info -c encl -d "$DIR" 2>&1 | grep -q "found its key and encrypted it" \
   && ok "list shows it as FOUND, and info says why it has no report" || bad "list / info of an encrypted campaign that found its key: $($BIN info -c encl -d "$DIR" 2>&1 | head -2)"
+# an end between the find and the deletion (a second Ctrl-C, kill -9, a power cut) leaves the seed and the files of the search next to
+# FOUND.txt; here a FOUND.txt is put into campaigns that were stopped, which gives the same folder at once (a kill from --on-found is a race
+# with the deletion). The next hunt (linear), or merge (kangaroo), deletes them; before, both showed FOUND.txt and left them for ever
+K=$(rndkey 44 92); KM=$(rndkey 70 93); rm -rf "$DIR/enc9" "$DIR/enck9"
+run_until 'running "$DIR/enc9"' $BIN hunt -p 44 -a "$(field "$K" addr)" -c enc9 -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" >/dev/null 2>&1
+run_until 'running "$DIR/enck9"' $BIN hunt -p 70 -a "$(field "$KM" addr)" -k "$(field "$KM" pub)" -m kangaroo -c enck9 -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" >/dev/null 2>&1
+RC=""; for c in enc9 enck9; do cp "$DIR/encl/FOUND.txt" "$DIR/$c/"; grep -q '^seed=0\{64\}$' "$DIR/$c/campaign.conf" || [ ! -e "$DIR/$c/report.txt" ] || RC="$RC kept"; done
+OUT=$($BIN hunt -c enc9 -d "$DIR" --ui log -q --no-gpu 2>&1) && echo "$OUT" | grep -q "already found" && RC="$RC shown"
+OUT=$($BIN merge -c enck9 -d "$DIR" -f "$DIR/none.txt" 2>&1) && echo "$OUT" | grep -q "already found" && RC="$RC shown"
+for c in enc9 enck9; do [ "$(ls -A "$DIR/$c" | tr '\n' ' ')" = "FOUND.txt campaign.conf " ] && grep -q '^seed=0\{64\}$' "$DIR/$c/campaign.conf" && RC="$RC forgotten"; done
+[ "$RC" = " kept kept shown shown forgotten forgotten" ] && ok "an end before the deletion: the next hunt (linear) and merge (kangaroo) forget the seed and the files left behind" \
+  || bad "an end before the deletion:$RC, left $(ls -A "$DIR/enc9" "$DIR/enck9" | tr '\n' ' ')"
+# with --part the command carries -s, and after the find the campaign has no seed to compare it with: the same command shows FOUND.txt, and
+# 'where' says that the visit order went with the seed (before: a seed that "does not match", and an order made from the zero seed)
+rm -rf "$DIR/encs"
+for i in 1 2; do $BIN hunt -p 28 -c encs -d "$DIR" -m linear --part 1/2 -s myseed --ui log -q --no-gpu --encrypt-pubkey "$EPUB" >"$DIR/encs.out" 2>&1; RC=$?; done
+OUT=$($BIN where -c encs -d "$DIR" --key 8000000 2>&1); RCW=$?
+[ "$RC $RCW" = "0 2" ] && grep -q "already found" "$DIR/encs.out" && grep -q "^PZENC1:" "$DIR/encs.out" && echo "$OUT" | grep -q "found its key and encrypted it" \
+  && ok "an encrypted find with --part: the same command shows FOUND.txt, where says why there is no order" || bad "after an encrypted find with --part: rc $RC $RCW: $(tail -1 "$DIR/encs.out") $OUT"
 
 # a key that is refused: the program does not start and nothing is created
 for badkey in "zz" "02" "$(echo "$EPUB" | sed 's/^../05/')" "0200000000000000000000000000000000000000000000000000000000000000fe" "${EPUB}00"; do

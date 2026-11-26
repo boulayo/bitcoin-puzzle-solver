@@ -249,10 +249,11 @@ static char *list_text(const char *dir, const char *tmp)
     return pz_read_file(tmp, NULL);
 }
 
-/* The state `list` shows: the one status.json holds, but RUNNING only while a process holds the lock of the campaign. */
+/* The state `list` shows: the one status.json holds, but RUNNING only while a process holds the lock of the campaign, and FOUND only with
+ * FOUND.txt. */
 static void check_shown_states(const char *dir)
 {
-    static const char *const st[][2] = {{"RUNNING", "STOPPED"}, {"STOPPED", "STOPPED"}, {"COMPLETED", "COMPLETED"}, {"FOUND", "FOUND"}};
+    static const char *const st[][2] = {{"RUNNING", "STOPPED"}, {"STOPPED", "STOPPED"}, {"COMPLETED", "COMPLETED"}, {"FOUND", "STOPPED"}};
     char d[700], p[800], list_out[800];
     make_campaign(dir, "states", d, sizeof d);
     snprintf(p, sizeof p, "%s/status.json", d);
@@ -305,7 +306,8 @@ static void fuzz_list(const char *dir)
     }
 }
 
-/* The state shown by 'list' and 'info': FOUND.txt first, then the lock, and RUNNING in a file whose process is gone becomes STOPPED. */
+/* The state shown by 'list' and 'info': FOUND.txt first, then the lock, and RUNNING in a file whose process is gone becomes STOPPED, as
+ * FOUND does without FOUND.txt (a key that could not be saved). */
 static void check_shown_state(const char *dir)
 {
     CHECK(!strcmp(campaign_shown_state("RUNNING", false, false), "STOPPED"));
@@ -315,6 +317,7 @@ static void check_shown_state(const char *dir)
     CHECK(!strcmp(campaign_shown_state("NEW", false, false), "NEW"));
     CHECK(!strcmp(campaign_shown_state("RUNNING", true, true), "FOUND"));
     CHECK(!strcmp(campaign_shown_state("STOPPED", true, false), "FOUND"));
+    CHECK(!strcmp(campaign_shown_state("FOUND", false, false), "STOPPED"));
 
     char d[700], p[800];
     snprintf(d, sizeof d, "%s/view", dir);

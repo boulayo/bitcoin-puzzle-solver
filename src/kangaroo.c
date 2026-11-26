@@ -986,7 +986,7 @@ void kang_herd_save(kang_state *ks)
     char path[640], tmp[660];
     const run_ctx *r = ks->r;
     herd_path(ks, path, sizeof path);
-    if (atomic_load(&r->found) && !r->found_write_failed && !r->found_seal_failed) {   /* solved: nothing to go on with */
+    if (run_key_saved(r)) {   /* solved: nothing to go on with */
         remove(path);
         return;
     }

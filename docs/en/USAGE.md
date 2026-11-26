@@ -739,9 +739,13 @@ the statistics, `session.txt` and the log say how far the search got, which with
 walkers of a kangaroo, the near misses, the statistics, `session.txt`, `report.txt`, `status.json`, `log.txt`, and anything else that is there (keep nothing of
 your own in the folder of a campaign: a `--table` file belongs elsewhere). `FOUND.txt` and `campaign.conf` without its seed are all that stays. A file that
 cannot be deleted is named in an error on the terminal: delete it by hand. No last report is written and the panel leaves no last frame on the screen.
-Afterwards `list` shows the campaign as `FOUND`, without progress or speed, `info` shows its configuration and says that it keeps nothing else, and `hunt`
-shows `FOUND.txt`. A key that could not be encrypted is written nowhere, and then, as when `FOUND.txt` cannot be written, the campaign is left as it was, so that
-a new search finds the key again.
+Afterwards `list` shows the campaign as `FOUND`, without progress or speed, `info` shows its configuration and says that it keeps nothing else, `where` says
+that its visit order went with the seed, and `hunt` shows `FOUND.txt` (also when it is given the `-s` of the campaign, which there is no seed left to compare
+with). The files go at the end of the session, once the search has stopped (a kangaroo on a GPU reads its walkers back first, which can take seconds): if the
+program ends in between (a second Ctrl-C, `kill -9`, a power cut), the next `hunt` or `merge` of the campaign deletes them before it shows `FOUND.txt`. On
+Windows a console that is closed at the find waits for the deletion, for the few seconds Windows allows. A key that could not be encrypted is written nowhere,
+and then, as when `FOUND.txt` cannot be written, the campaign keeps its files, and its state does not count the place of the key as searched, so that a new
+search finds the key again; its reports and `list` say `STOPPED`, not `FOUND`.
 The folder of every campaign is its owner's alone (mode 0700; on Windows an access list of the user and the system only, which takes nothing from the folder
 above, so the folder must be on a disk that has access lists, NTFS), so that other users of the machine read none of this while the search runs, and the files
 of a campaign are never opened through a link (a folder copied from elsewhere could hold one that points at another file of the user).
@@ -761,6 +765,8 @@ of a campaign are never opened through a link (a folder copied from elsewhere co
 * **Swap**: the memory of the program can be written to a swap file or a hibernation file by the system. The password buffers and the key-derivation memory are locked
   in RAM when the limits of the system allow it (usually not for the 256 MiB of scrypt without privileges); the plain key is too short-lived to be likely to reach
   swap, but nothing here guarantees it. Use encrypted swap, or none.
+* **A machine lost at the find.** Between the find and the deletion (seconds) the folder still has what leads to the key (the seed, the state, the points):
+  a computer that is taken back, or loses its power, at that moment keeps it until a `hunt` or `merge` of the campaign runs on it.
 * **Another copy of the seed.** A copy of the folder made before the find holds it, so does every other computer of a `--part` split (they all need it), and a
   seed given with `-s` is in the history of the shell and, while the program runs, in the list of processes (`--seed-file` keeps it out of both): with a
   copy of what the program wrote while the search ran (a backup of the folder, the progress lines of a run in log mode on a terminal or redirected to a file),

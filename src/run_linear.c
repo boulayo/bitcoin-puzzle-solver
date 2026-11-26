@@ -114,6 +114,7 @@ static int linear_checkpoint(run_ctx *r)
     }
     int rc = sched_write(snap, n, r->path_state);
     if (back && rc == 0) rc = sched_write(snap, n, r->path_state);   /* twice: state.dat.bak, the state before, still has the keys given back as scanned */
+    if (rc == 0) sched_saved(r->sched);       /* only now: after a failure the reporter tries again (run_reporter_loop) */
     free(snap);
     run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + run_session_units(r));
     return rc;

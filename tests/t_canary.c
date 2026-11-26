@@ -82,13 +82,14 @@ static void t_correct(void)
 
 /* Broken workers, each from a fresh campaign: one that drops every key after 64 good windows (its last window goes back, the earlier
  * ones stay), one that drops half of them and one that drops a lane of eight (the session goes back: their earlier windows passed).
- * The keys given back are counted: the keys the workers counted, less those, are what is marked as scanned (the progress), and until the
- * state is written again they are known as not on disk yet, which is what makes the reporter save at once. */
+ * The keys given back are counted: the keys the workers counted, less those, are what is marked as scanned (the progress), and until a
+ * state is written again they are known as not on disk yet, which is what makes the reporter save at once (and again after a failure). */
 static void t_broken(void)
 {
-    char path[600], bak[620], err[200];
+    char path[600], bak[620], nowhere[620], err[200];
     snprintf(path, sizeof path, "%s/t_canary_back.state", PZ_TEST_DIR);
     snprintf(bak, sizeof bak, "%s.bak", path);
+    snprintf(nowhere, sizeof nowhere, "%s/no-such-folder/t_canary_back.state", PZ_TEST_DIR);
     const struct { double keep; u64 good, within; bool session; } cases[] = {
         {0.0, (u64)64 << 38, (u64)65 << 38, false},
         {0.5, 0, (u64)8 << 38, true},
@@ -109,6 +110,9 @@ static void t_broken(void)
         const u64 kd = sched_keys_done(s), window = good + bad - ((u64)1 << 38);
         CHECK(cases[i].session ? kd == 0 || kd == window : kd == window);
         CHECK(good + bad - sched_given_back(s, &unsaved) == kd && unsaved);
+        size_t len;                                                       /* a state that does not reach the disk leaves them to save */
+        free(sched_snapshot(s, &len, NULL));
+        CHECK(sched_save(s, nowhere) != 0 && sched_given_back(s, &unsaved) == good + bad - kd && unsaved);
         CHECK(sched_save(s, path) == 0 && sched_given_back(s, &unsaved) == good + bad - kd && !unsaved);
         sched_t *l = sched_new(&cfg);                                     /* the state on disk has the hole */
         CHECK(sched_load(l, path, err, sizeof err) == 0 && sched_keys_done(l) == kd);

@@ -81,6 +81,9 @@ int cmd_where(int argc, char **argv)
     snprintf(cdir, sizeof cdir, "%s/%s", o.dir, o.campaign);
     snprintf(p, sizeof p, "%s/campaign.conf", cdir);
     if (cfg_load(&c, p, err, sizeof err) != 0) pz_die("%s", err);
+    snprintf(p, sizeof p, "%s/FOUND.txt", cdir);
+    if (c.has_encrypt && access(p, F_OK) == 0)
+        pz_die("campaign '%s' found its key and encrypted it: its search is over, and the seed that gave its visit order is forgotten", o.campaign);
     pz_u256 given, key;
     if (!pz_u256_from_hex(&given, o.key)) pz_die("invalid key (hexadecimal digits expected)");
     if (c.mode == MODE_KANGAROO) pz_die("the campaign uses the kangaroo: it has no predetermined visit order, 'where' does not apply");

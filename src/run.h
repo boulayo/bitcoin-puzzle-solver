@@ -59,8 +59,8 @@ typedef struct run_ctx {
     bool found_valid;
     double found_time;
     char found_sealed[PZ_SEAL_TEXT_BUF];   /* the PZENC1 line of the found key when the campaign encrypts it (cfg.has_encrypt); the key itself is wiped then */
-    bool found_seal_failed;          /* the key was found but could not be encrypted: it was not written anywhere */
-    bool found_write_failed;         /* FOUND.txt could not be written (the log says why): the key is only on the screen */
+    _Atomic bool found_seal_failed;  /* the key was found but could not be encrypted: it was not written anywhere */
+    _Atomic bool found_write_failed; /* FOUND.txt could not be written (the log says why): the key is only on the screen */
     char on_found[1024];             /* hunt --on-found: the command to run once when the key is found (given on the command line each time, never stored) */
 
     worker_stat ws[MAX_WORKERS];
@@ -155,6 +155,9 @@ bool run_interrupted(void);
 /* Verifies a candidate against the campaign target and, if valid, records it and stops everything. Returns true if the key is correct. The
  * engines give the index of a key in the range (cfg_key_of): the key itself, but with --step START + i * STEP. */
 bool run_submit_key(run_ctx *r, const pz_u256 *index, const char *source);
+/* Whether the key was found and FOUND.txt has it: one that could not be encrypted or written is to be found again. The reporter asks it while
+ * the workers run. */
+static inline bool run_key_saved(const run_ctx *r) { return atomic_load(&r->found) && !r->found_write_failed && !r->found_seal_failed; }
 /* Whether the index lies in the range of the campaign (range_start to range_end, both included; the whole range, not the share of --part). */
 bool run_key_in_range(const run_ctx *r, const pz_u256 *index);
 /* A hit of the linear search. The engines scan whole lanes, so the last block of a range can reach a few keys past its end; a hit there is the

@@ -600,7 +600,7 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
         if (st.skipped) say_wrapped("  (%s points discarded because of the RAM limit: raise --mem)\n", pz_fmt_u64(st.skipped, c1, sizeof c1));
     }
     if (kang_flush_log(ks) != 0) { pz_log(PZ_LOG_ERR, "writing %s failed (disk full?)", ks->log_path); bad++; }
-    if (atomic_load(&r->found) && !r->found_write_failed && !r->found_seal_failed) {   /* solved: the walkers have nothing to go on with */
+    if (run_key_saved(r)) {   /* solved: the walkers have nothing to go on with */
         char herd[700];
         snprintf(herd, sizeof herd, "%s/herd.bin", r->cfg.dir);
         remove(herd);

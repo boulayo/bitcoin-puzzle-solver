@@ -83,10 +83,11 @@ static int cmp_rows(const void *a, const void *b) { return strcmp(((const row_t 
 
 const char *campaign_shown_state(const char *written, bool found, bool running)
 {
-    /* the files say "RUNNING" until the next write: if nobody holds the lock the process died without a final report */
+    /* the files say "RUNNING" until the next write: if nobody holds the lock the process died without a final report; and a key is found
+     * only when FOUND.txt has it */
     if (found) return "FOUND";
     if (running) return "RUNNING";
-    return !strcmp(written, "RUNNING") ? "STOPPED" : written;
+    return !strcmp(written, "RUNNING") || !strcmp(written, "FOUND") ? "STOPPED" : written;
 }
 
 static void fill_row(row_t *w, const char *base, time_t now)

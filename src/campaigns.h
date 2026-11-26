@@ -10,7 +10,8 @@
 int campaign_lock(const char *dir);
 /* The state to show for a campaign, given the one its files say (`written`: "RUNNING", "STOPPED", "COMPLETED"...), whether FOUND.txt
  * exists and whether some process holds the lock. The files say RUNNING until the next write, so a process that was killed leaves
- * it behind: without the lock the state is STOPPED. 'list' and 'info' both use it. Returns `written` itself or a constant. */
+ * it behind: without the lock the state is STOPPED, as it is for FOUND without FOUND.txt. 'list' and 'info' both use it. Returns
+ * `written` itself or a constant. */
 const char *campaign_shown_state(const char *written, bool found, bool running);
 /* A value of the status.json of the campaign in `dir` (a string without its quotes); false when there is none. */
 bool campaign_status_get(const char *dir, const char *key, char *out, size_t n);

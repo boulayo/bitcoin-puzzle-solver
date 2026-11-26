@@ -2,6 +2,7 @@
 /* jobq.c - interval-based work scheduler. See jobq.h. */
 #include "jobq.h"
 #include <pzcore/hash.h>
+#include <pzcore/seal.h>
 #include "platform.h"
 #include <errno.h>
 
@@ -139,6 +140,7 @@ void sched_free(sched_t *s)
     free(s->inflight);
     free(s->start);
     pthread_mutex_destroy(&s->mu);
+    pz_secure_zero(&s->perm, sizeof s->perm);      /* keyed with the seed: an encrypting campaign that found its key forgets it */
     free(s);
 }
 
@@ -291,6 +293,7 @@ void sched_complete(sched_t *s, const claim_t *c, u64 covered)
         }
     }
     if (covered > c->nkeys) covered = c->nkeys;
+    if (s->frozen) covered = 0;
     if (covered) {
         add_done(s, c->v_start, c->v_start + covered);
         s->keys_done += covered;
@@ -340,6 +343,13 @@ u128 sched_given_back(sched_t *s, bool *unsaved)
     if (unsaved) *unsaved = back != s->saved_back;
     pthread_mutex_unlock(&s->mu);
     return back;
+}
+
+void sched_freeze(sched_t *s)
+{
+    pthread_mutex_lock(&s->mu);
+    s->frozen = true;
+    pthread_mutex_unlock(&s->mu);
 }
 
 /* ---- what the run and the reports ask ---- */
@@ -430,7 +440,7 @@ char *sched_snapshot(sched_t *s, size_t *len, bool *back)
     for (size_t i = 0; i < s->ndone; i++) {
         n += snprintf(buf + n, cap - (size_t)n, "iv %s %s\n", u128_to_hex(s->done[i].a, h1), u128_to_hex(s->done[i].b, h2));
     }
-    s->saved_back = s->given_back;
+    s->snap_back = s->given_back;
     pthread_mutex_unlock(&s->mu);
     char hx[17];
     state_crc(buf, (size_t)n, hx);
@@ -448,12 +458,20 @@ int sched_write(const char *snap, size_t len, const char *path)
     return pz_write_file_atomic(path, snap, len, 0644);
 }
 
+void sched_saved(sched_t *s)
+{
+    pthread_mutex_lock(&s->mu);
+    s->saved_back = s->snap_back;
+    pthread_mutex_unlock(&s->mu);
+}
+
 int sched_save(sched_t *s, const char *path)
 {
     size_t n;
     char *snap = sched_snapshot(s, &n, NULL);
     const int rc = sched_write(snap, n, path);
     free(snap);
+    if (rc == 0) sched_saved(s);
     return rc;
 }
 

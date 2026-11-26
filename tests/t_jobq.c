@@ -139,6 +139,21 @@ static void t_snapshot(void)
     sched_free(a), sched_free(b);
 }
 
+/* After sched_freeze a claim that ends is not recorded: a key found that FOUND.txt could not take is in such a claim, and no state written
+ * afterwards may have its block as scanned. */
+static void t_freeze(void)
+{
+    campaign_cfg c = mkcfg(5000, 5000 + (1 << 20) - 1, 12);
+    sched_t *s = sched_new(&c);
+    claim_t c1, c2;
+    CHECK(sched_claim(s, 4096, &c1) == CLAIM_OK && sched_claim(s, 4096, &c2) == CLAIM_OK);
+    sched_complete(s, &c1, c1.nkeys);
+    sched_freeze(s);
+    sched_complete(s, &c2, c2.nkeys);
+    CHECK(sched_keys_done(s) == 4096);
+    sched_free(s);
+}
+
 /* ---- the configuration of a campaign ---- */
 
 static void t_cfg(void)
@@ -574,6 +589,7 @@ int main(void)
     t_parts();
     t_seed();
     t_snapshot();
+    t_freeze();
     t_cfg();
     printf(fails ? "t_jobq: %d FAILED\n" : "t_jobq: OK\n", fails);
     return fails != 0;

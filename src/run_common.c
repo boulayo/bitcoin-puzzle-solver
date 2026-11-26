@@ -234,6 +234,8 @@ bool run_submit_key(run_ctx *r, const pz_u256 *index, const char *source)
         atomic_store(&r->found, 1);
         atomic_store(&r->stop, 1);
         run_write_found(r);
+        /* FOUND.txt could not take the key: its block, which its worker completes after this, stays unscanned in every state saved */
+        if (r->sched && !run_key_saved(r)) sched_freeze(r->sched);
         if (r->cfg.has_encrypt) {
             pz_secure_zero(&r->found_key, sizeof r->found_key);   /* the plain key stays only in the copies that the callers of the search hold */
             char id[9];
@@ -552,7 +554,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         pz_fmt_si(r->ws[i].rate, rs, sizeof rs);
         n += snprintf(buf + n, bcap - (size_t)n, "  %-10s %12s %s/s\n", r->ws[i].name, rs, pi->unit);
     }
-    if (atomic_load(&r->found)) n += snprintf(buf + n, bcap - (size_t)n, "\nKEY FOUND: see %s\n", r->path_found);
+    if (!strcmp(state, "FOUND")) n += snprintf(buf + n, bcap - (size_t)n, "\nKEY FOUND: see %s\n", r->path_found);
     pz_write_file_atomic_ex(r->path_report, buf, (size_t)n, 0644, false);   /* derived from the state, rewritten every minute: no fsync */
     free(buf);
 
@@ -574,7 +576,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         PZ_VERSION, r->cfg.name, idb, r->cfg.part, r->limit_pct, r->cfg.puzzle, mode_name(r->cfg.mode), state, (long long)now, el,
         r->sessions, pi->unit, pi->done, pi->total, pi->fraction, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
         pj[0], pj[1], pj[2], pj[3], pj[4],
-        atomic_load(&r->found) ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad), r->walkers);
+        !strcmp(state, "FOUND") ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad), r->walkers);
     for (int i = 0; i < r->nws && (size_t)m + 300 < jcap; i++) {
         const double wr = r->ws[i].rate;
         m += snprintf(j + m, jcap - (size_t)m, "%s\n    {\"name\": \"%s\", \"kind\": \"%c\", \"rate\": %.1f, \"units\": %llu}", i ? "," : "",
@@ -672,7 +674,7 @@ void run_reporter_loop(run_ctx *r)
     const double term_period = m0 == UI_LOG ? 60.0 : (double)r->report_interval;
     double t_last = pz_mono(), prev_mono = t_last, prev_wall = pz_now();
     double next_term = t_last + (m0 == UI_LOG ? 10.0 : 1.0);   /* the first frame appears after a second (a minute-long wait would look hung) */
-    double next_files = t_last + 2, next_ckpt = t_last + r->checkpoint_interval, next_csv = t_last + 60;
+    double next_files = t_last + 2, next_ckpt = t_last + r->checkpoint_interval, next_csv = t_last + 60, t_ckpt = t_last - 5;   /* t_ckpt: the last checkpoint */
     progress_info pi;
     const double alpha = 0.35;
     const double alpha_eta = 1.0 - exp(-1.0 / 30.0);   /* BSGS only: ~30 s time constant for the estimates */
@@ -767,9 +769,9 @@ void run_reporter_loop(run_ctx *r)
             if (now - t_peak > 5.0 && tot > r->peak_rate) r->peak_rate = tot;
             t_last = now;
         }
-        bool back = false;                       /* keys the canary gave back, which the state on disk still has as scanned: saved at once */
-        if (r->cfg.mode == MODE_LINEAR && r->sched) sched_given_back(r->sched, &back);
-        if (back) next_ckpt = now;
+        bool back = false;                       /* keys the canary gave back, which the state on disk still has as scanned: saved within */
+        if (r->cfg.mode == MODE_LINEAR && r->sched) sched_given_back(r->sched, &back);   /* 5 s, and again every 5 s while the disk refuses them */
+        if (back && now - t_ckpt >= 5) next_ckpt = now;
         bool need_pi = now >= next_term || now >= next_files || now >= next_ckpt || now >= next_csv;
         if (!need_pi) continue;
         run_final_progress(r, &pi);
@@ -780,6 +782,7 @@ void run_reporter_loop(run_ctx *r)
         if (now >= next_ckpt) {
             if (r->checkpoint && !atomic_load(&r->found) && r->checkpoint(r) != 0) pz_log(PZ_LOG_WARN, "checkpoint save failed");
             next_ckpt = now + r->checkpoint_interval;
+            t_ckpt = now;
         }
         prev_mono = pz_mono(), prev_wall = pz_now();   /* the workers computed while the disk took its time: no suspension */
     }

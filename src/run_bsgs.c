@@ -185,6 +185,7 @@ static void bs_cleanup(run_ctx *r)
     bs_run *b = r->bsgs;
     if (b) {
         bsgs_table_free(&b->tab);
+        pz_secure_zero(b->scfg.seed, sizeof b->scfg.seed);   /* a copy of the seed (forget_search) */
         free(b);
         r->bsgs = NULL;
     }

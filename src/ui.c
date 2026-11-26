@@ -24,7 +24,7 @@ double ui_rates(const run_ctx *r, double *cpu, double *gpu, int *ncpu)
 
 const char *ui_state_name(const run_ctx *r, bool final)
 {
-    if (atomic_load(&r->found)) return "FOUND";
+    if (run_key_saved(r)) return "FOUND";          /* a key that FOUND.txt could not take is not: the campaign finds it again */
     if (r->sched && sched_finished(r->sched)) return "COMPLETED";
     return final ? "STOPPED" : "RUNNING";
 }

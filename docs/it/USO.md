@@ -747,8 +747,13 @@ della cartella della campagna**: lo stato e la sua copia, i punti e i canguri, l
 `status.json`, `log.txt`, e qualunque altra cosa ci sia (non tenere niente di tuo nella cartella di una campagna: un file di `--table` va altrove). Restano
 solo `FOUND.txt` e `campaign.conf` senza il suo seed. Un file che non si riesce a cancellare è nominato in un errore sul terminale: cancellalo a mano. Non viene
 scritto un ultimo rapporto e il pannello non lascia un ultimo riquadro sullo schermo. Dopo, `list` mostra la campagna come `FOUND`, senza avanzamento né
-velocità, `info` mostra la sua configurazione e dice che non tiene altro, e `hunt` mostra `FOUND.txt`. Una chiave che non si è potuta cifrare non è scritta da
-nessuna parte, e allora, come quando `FOUND.txt` non si può scrivere, la campagna resta com'era, così che una nuova ricerca ritrovi la chiave.
+velocità, `info` mostra la sua configurazione e dice che non tiene altro, `where` dice che il suo ordine di visita se n'è andato con il seed, e `hunt` mostra
+`FOUND.txt` (anche quando riceve il `-s` della campagna, che non ha più un seed con cui confrontarlo). I file se ne vanno alla fine della sessione, quando la
+ricerca si è fermata (il canguro su GPU prima rilegge i suoi canguri dalla scheda, e può volerci qualche secondo): se il programma finisce nel mezzo
+(un secondo Ctrl-C, `kill -9`, un'interruzione di corrente), il successivo `hunt` o `merge` della campagna li cancella prima di mostrare `FOUND.txt`. Su
+Windows una console chiusa al ritrovamento aspetta la cancellazione, per i pochi secondi che Windows concede. Una chiave che non si è potuta cifrare non è
+scritta da nessuna parte, e allora, come quando `FOUND.txt` non si può scrivere, la campagna tiene i suoi file, e il suo stato non conta come cercato il posto
+della chiave, così che una nuova ricerca ritrovi la chiave; i suoi rapporti e `list` dicono `STOPPED`, non `FOUND`.
 La cartella di ogni campagna è del solo proprietario (modo 0700; su Windows una lista di accesso del solo utente e del sistema, che non prende nulla dalla
 cartella sopra, quindi la cartella deve stare su un disco con liste di accesso, NTFS), così gli altri utenti della macchina non leggono nulla di tutto
 questo mentre la ricerca gira, e i file di una campagna non si aprono mai attraverso un collegamento (una cartella copiata da altrove potrebbe contenerne uno
@@ -770,6 +775,8 @@ che punta a un altro file dell'utente).
 * **Lo swap**: la memoria del programma può essere scritta dal sistema in un file di swap o di ibernazione. I buffer della password e la memoria della derivazione
   sono bloccati in RAM quando i limiti del sistema lo consentono (di solito non per i 256 MiB di scrypt senza privilegi); la chiave in chiaro vive troppo poco per
   finire probabilmente nello swap, ma nulla qui lo garantisce. Usa uno swap cifrato, o nessuno.
+* **Una macchina persa al ritrovamento.** Fra il ritrovamento e la cancellazione (secondi) la cartella ha ancora ciò che porta alla chiave (il seed, lo stato,
+  i punti): un computer che viene ripreso, o che perde la corrente, in quel momento lo tiene finché non ci gira un `hunt` o un `merge` della campagna.
 * **Un'altra copia del seed.** Ce l'ha una copia della cartella fatta prima del ritrovamento, ce l'ha ogni altro computer di una divisione con `--part` (serve
   a tutti), e un seed dato con `-s` è nella cronologia della shell e, mentre il programma gira, nell'elenco dei processi (`--seed-file` lo tiene fuori da
   entrambi): con una copia di ciò che il programma scriveva mentre la ricerca girava (un backup della cartella, le righe di avanzamento di una corsa in

@@ -39,7 +39,7 @@ int cmd_merge(int argc, char **argv)
     for (int i = 0; i < o.nfiles; i++) fl[i] = o.files[i];
     int rc = kangaroo_merge(r, fl, o.nfiles);
     if (atomic_load(&r->found)) {
-        const bool saved = !r->found_write_failed && !r->found_seal_failed;
+        const bool saved = run_key_saved(r);
         if (saved && r->cfg.has_encrypt) forget_search(r);   /* as hunt does: nothing that leads to the key */
         print_found_banner(r);
         onfound_wait();

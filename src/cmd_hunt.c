@@ -332,8 +332,9 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
 }
 
 /* Options that describe the campaign itself must agree with the stored configuration: a silent mismatch would make the
- * user believe a different search is running than the one that resumes. */
-static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
+ * user believe a different search is running than the one that resumes. `forgot`: the campaign found its key and forgot its seed
+ * (forget_search), which -s can no longer be compared with. */
+static void check_resume_consistency(const opts_t *o, const campaign_cfg *c, bool forgot)
 {
     if (o->puzzle && c->puzzle != o->puzzle) {
         if (c->puzzle) pz_die("campaign '%s' is for puzzle %d, not %d", c->name, c->puzzle, o->puzzle);
@@ -367,7 +368,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (!c->has_pubkey || memcmp(tmp.pubkey33, c->pubkey33, 33) != 0) pz_die("the given public key does not match the one of the existing campaign");
     }
     check_encrypt_resume(o, c);
-    if (o->seed[0]) {
+    if (o->seed[0] && !forgot) {
         u8 s[32];
         seed_from_text(o->seed, s);
         if (memcmp(s, c->seed, 32) != 0) pz_die("the given seed does not match the one of the existing campaign (the seed cannot be changed)");
@@ -518,7 +519,7 @@ static void print_spend_warning(const run_ctx *r)
            "  `pzpeer sweep` makes and signs it without sending it.\n");
 }
 
-/* what becomes of a key that could not be saved: the state stays as it was before the find (end_session), and the kangaroo's dp.bin has the
+/* what becomes of a key that could not be saved: the state never has its place as scanned (sched_freeze), and the kangaroo's dp.bin has the
  * two points that meet (kang_table_insert) */
 static const char *found_again(const run_ctx *r)
 {
@@ -572,12 +573,18 @@ static void reserve_space(const run_ctx *r)
         pz_log(PZ_LOG_WARN, "cannot write %s: %s (a disk that is full at the find would lose the key)", r->path_reserve, strerror(errno));
 }
 
-/* A campaign that has already found the key ('hunt' and 'merge' end there): FOUND.txt is shown. False when it has not. */
-bool print_already_found(const run_ctx *r)
+/* A campaign that has already found the key ('hunt' and 'merge' end there): FOUND.txt is shown. One that encrypts the key and ended before
+ * it forgot its search (killed, a power cut, a console closed at the find) forgets it now, once FOUND.txt holds the encrypted key. False
+ * when it has not found it. */
+bool print_already_found(run_ctx *r)
 {
     if (!file_exists(r->path_found)) return false;
     char *t = pz_read_file(r->path_found, NULL);
     printf("This campaign has already found the key (%s):\n\n%s\n", r->path_found, t ? t : "");
+    if (r->cfg.has_encrypt && t && strstr(t, "PZENC1:")) {
+        if (!r->lock) r->lock = campaign_lock(r->cfg.dir);
+        forget_search(r);
+    }
     free(t);
     return true;
 }
@@ -697,11 +704,12 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
         } else if (cfg_save(&r->cfg, conf) != 0) pz_die("cannot save %s", conf);
     }
     if (resuming) {
-        char err[256];
+        char err[256], found[700];
         campaign_private(cdir);
         if (cfg_load(&r->cfg, conf, err, sizeof err) != 0) pz_die("%s", err);
+        snprintf(found, sizeof found, "%s/FOUND.txt", cdir);
         shared_bind(o, &r->cfg, false);
-        check_resume_consistency(o, &r->cfg);
+        check_resume_consistency(o, &r->cfg, r->cfg.has_encrypt && file_exists(found));
         check_options_for_campaign(o, &r->cfg, r, false);
         pz_strlcpy(r->cfg.dir, cdir, sizeof r->cfg.dir);
     }
@@ -841,6 +849,7 @@ void forget_search(run_ctx *r)
     char conf[700];
     snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
     pz_secure_zero(r->cfg.seed, sizeof r->cfg.seed);
+    pz_secure_zero(g_start_key, sizeof g_start_key);
     if (cfg_save(&r->cfg, conf) != 0) pz_log(PZ_LOG_ERR, "cannot rewrite %s without the seed: delete the folder once FOUND.txt is copied", conf);
     pz_log_set_file(NULL);
     if (r->lock > 0) close(r->lock), r->lock = 0;
@@ -862,31 +871,27 @@ static int release_run(run_ctx *r, int status)
 static int end_session(run_ctx *r, const opts_t *o, int rc)
 {
     double el = run_session_elapsed(r);
-    /* a key that is on the screen only (FOUND.txt could not be written): the state stays as it was before the find, so that the next
-     * start finds the key again instead of taking its place for searched */
-    const bool unsaved = atomic_load(&r->found) && (r->found_write_failed || r->found_seal_failed);
-    const bool forget = atomic_load(&r->found) && r->cfg.has_encrypt && !unsaved;
-    if (!unsaved && !forget && r->checkpoint && r->checkpoint(r) != 0) {
+    const bool forget = r->cfg.has_encrypt && run_key_saved(r);
+    if (!forget && r->checkpoint && r->checkpoint(r) != 0) {
         /* the progress of this session may not be on disk: say so loudly and fail the command */
         pz_log(PZ_LOG_ERR, "final state save FAILED in %s (disk full or not writable?): the progress of the last session may be lost", r->cfg.dir);
         rc = PZ_EXIT_ERROR;
     }
     progress_info pi;
     run_final_progress(r, &pi);
-    if (!forget) run_write_report_files(r, &pi, true);   /* forget: no report, and no last frame on the screen, of how far the search got */
-    pz_interrupt_done();   /* state and reports are on disk: a pending console close may terminate the process */
-    if (!forget) run_ui_final(r, &pi);
+    if (!forget) run_write_report_files(r, &pi, true), run_ui_final(r, &pi);   /* forget: no report, and no last frame on the screen, of how far the search got */
     const bool finished = r->sched && sched_finished(r->sched);
     if (r->cleanup) r->cleanup(r);
     if (r->sched) { sched_free(r->sched); r->sched = NULL; }
     if (r->near) fclose(r->near), r->near = NULL;     /* closed first: Windows deletes no file that is open */
     if (forget) forget_search(r);
+    pz_interrupt_done();   /* the state and the reports are on disk, or forgotten: a pending console close may end the process */
     char ds[48];
     pz_log(PZ_LOG_INFO, "session ended after %s", pz_fmt_duration(el, ds, sizeof ds));
     if (atomic_load(&r->found)) {
         print_found_banner(r);
         onfound_wait();                               /* the box is out; the program ends when the command has (at most 120 s) */
-        return release_run(r, r->found_seal_failed || r->found_write_failed ? PZ_EXIT_ERROR : PZ_EXIT_FOUND);
+        return release_run(r, run_key_saved(r) ? PZ_EXIT_FOUND : PZ_EXIT_ERROR);
     }
     int status = PZ_EXIT_NOT_FOUND;
     if (finished) {
@@ -925,6 +930,7 @@ int cmd_hunt(int argc, char **argv)
     bool locked;
     const bool resuming = open_or_create_campaign(&o, r, &locked);
     run_paths(r);
+    pz_secure_zero(o.seed, sizeof o.seed);              /* the seed is in the campaign now: no other copy stays (forget_search wipes that one) */
     if (resuming && print_already_found(r)) {
         free(r);
         return PZ_EXIT_FOUND;

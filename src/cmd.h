@@ -78,7 +78,8 @@ void campaign_private(const char *dir);   /* dies unless the folder of a campaig
 /* An encrypting campaign that found its key: the seed out of memory and campaign.conf, and every file of its folder deleted but that one
  * and FOUND.txt. The files of the search are closed by then. */
 void forget_search(run_ctx *r);
-/* A campaign that has already found the key: FOUND.txt is shown. False when it has not. */
-bool print_already_found(const run_ctx *r);
+/* A campaign that has already found the key: FOUND.txt is shown, and the search of one that encrypts it is forgotten if it was not yet.
+ * False when it has not found it. */
+bool print_already_found(run_ctx *r);
 
 #endif
