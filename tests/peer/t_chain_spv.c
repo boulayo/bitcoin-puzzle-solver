@@ -761,11 +761,14 @@ int main(void)
     /* The first sync, from the checkpoint to the tip, takes several operations (on the main chain some 640 000 headers, a minute of each
      * server an operation): ready goes on while they bring headers (before, one operation, and the rest waited for the first session) */
     server drip;
-    start(&drip, (lies){.chunk = 1, .slow_ms = 40});
+    start(&drip, (lies){.chunk = 1, .slow_ms = 100});          /* some 9 headers an operation: 18 take three (wide margins for slow CI) */
     view(&c, &ch, &drip, NULL, NULL);
-    c.op_ms = 300;
+    c.op_ms = 1000;
     uint64_t synced = 0;
-    CHECK(chain_spv_ready(&c, why, sizeof why) == 1 && spv_tip(&c.headers, &synced) && synced == (uint64_t)W.nb - 1);
+    const int ready = chain_spv_ready(&c, why, sizeof why);
+    (void)spv_tip(&c.headers, &synced);
+    CHECK(ready == 1 && synced == (uint64_t)W.nb - 1);
+    if (ready != 1 || synced != (uint64_t)W.nb - 1) fprintf(stderr, "t_chain_spv: the first sync stopped at block %llu of %d (%d: %s)\n", (unsigned long long)synced, W.nb - 1, ready, why);
     chain_spv_free(&c);
 
     stop(&honest), stop(&hider), stop(&stale), stop(&noproof), stop(&nowork), stop(&keeper), stop(&blind);
