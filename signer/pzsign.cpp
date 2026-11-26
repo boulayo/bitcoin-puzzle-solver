@@ -46,8 +46,9 @@ struct fail {
   std::string why;
 };
 
-// P2 has given all its messages and waits for the signatures of P1: a failure from here on depends on nothing P2 holds (0x84, not 0x83)
-static bool only_the_signatures;
+// P2 has given all its messages and waits for the signatures of P1: a failure from here on depends on nothing P2 holds (0x84, not 0x83).
+// One a party: the selftest runs two in one process.
+static thread_local bool only_the_signatures;
 
 static const crypto::ecurve_t& curve() { return crypto::curve_secp256k1; }
 
@@ -355,6 +356,9 @@ static int selftest() {
   MODULO(q) k = x[0] + x[1];
   bytes eid(32), digests(96, 0xff);
   RAND_bytes(eid.data(), 32), RAND_bytes(digests.data(), 64);
+  // OpenSSL keeps the algorithms it fetches in a cache that it fills at their first use, and the two parties below would fill it at
+  // the same time (on Windows that crashed now and then; a session is one party a process): the first use is here
+  (void)crypto::ro::hash_string(eid).bitlen(256);
   for (int first = 0; first < 2; first++) {
     job_t jobs[2];
     for (int i = 0; i < 2; i++) {

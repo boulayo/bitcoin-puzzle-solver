@@ -11,6 +11,7 @@
 #   macos-x86_64   macos-15          the Intel binary, cross-compiled on the Apple Silicon runner (make MACOS_ARCH=x86_64, Apple
 #                                    clang's -arch) and run under Rosetta (arch -x86_64) when the runner has it
 #   peer-sanitizers ubuntu-22.04     the unit tests of pzpeer under ASAN, UBSAN and TSAN, its fuzzer, the self-test of pzsolve under ASAN
+#                                    and that of pzsign under TSAN
 #   regtest        ubuntu-22.04      Bitcoin Core in regtest, and on it the session, the whole network, sweep and the linear search
 #
 # Runner labels change over time (macos-13 was retired; the Intel images, macos-15-intel, are being retired and their jobs waited
@@ -376,6 +377,11 @@ jobs:
         run: |
           sudo sysctl -w vm.mmap_rnd_bits=28
           make -j"$(nproc)" BUILD=build/tsan OPT="-O1 -fsanitize=thread" peer-test
+      # the selftest of pzsign is the only place where two parties share a process: two threads (a session is one party a process)
+      - name: pzsign under TSAN (its selftest, three times)
+        run: |
+          make -j"$(nproc)" BUILD=build/tsan-signer SIGNER_SAN=-fsanitize=thread OSSL=build/openssl signer
+          for i in 1 2 3; do build/tsan-signer/pzsign selftest; done
 
   # The network on a node of its own: Bitcoin Core in regtest (the release of bitcoincore.org, checked against the hash of its
   # SHA256SUMS), and on it the session of two homes with the real pzsign (every case of t_session), the whole network of three homes

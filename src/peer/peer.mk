@@ -9,6 +9,8 @@
 #   make signer      build/pzsign, the two-party signer (signer/, C++ on cb-mpc: needs a C++ compiler, and fetches and builds OpenSSL
 #                    the first time)
 #   make signer-test its tests: two pzsign sessions relayed by the test (signer/test.py)
+#   make BUILD=build/tsan SIGNER_SAN=-fsanitize=thread OSSL=build/openssl signer
+#                    pzsign under a sanitizer (cb-mpc and pzsign; the OpenSSL of the normal build, as it is), for its selftest
 
 SECP_DIR   := lib/secp256k1
 SECP_FLAGS  = -std=c99 $(OPT) -g $(DEPLOY) -I$(SECP_DIR) -I$(SECP_DIR)/include -w \
@@ -93,7 +95,7 @@ SIGNER      := $(BUILD)/pzsign$(EXE)
 CBMPC       := signer/vendor/cb-mpc
 OSSL        := $(BUILD)/openssl
 CBMPC_OBJ   := $(patsubst $(CBMPC)/src/%.cpp,$(BUILD)/cbmpc/%.o,$(wildcard $(CBMPC)/src/cbmpc/*/*.cpp))
-SIGNER_CXXFLAGS = $(DEPLOY) -std=c++17 -O2 -fno-operator-names -Wno-attributes -Wno-parentheses -DNDEBUG -DNO_DEPRECATED_OPENSSL -MMD -MP \
+SIGNER_CXXFLAGS = $(DEPLOY) -std=c++17 -O2 $(SIGNER_SAN) -fno-operator-names -Wno-attributes -Wno-parentheses -DNDEBUG -DNO_DEPRECATED_OPENSSL -MMD -MP \
               $(if $(filter 1,$(X86)),-mpclmul -maes -msse4.1) $(if $(filter 1,$(ARM64)),-march=armv8-a+crypto) \
               -include $(CBMPC)/include/cbmpc/core/precompiled.h -I$(CBMPC)/vendors -I$(CBMPC)/include -I$(CBMPC)/include-internal -I$(OSSL)/include
 ifeq ($(WIN),1)
