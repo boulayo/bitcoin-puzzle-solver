@@ -49,15 +49,15 @@ typedef struct {
 } session_chain;
 
 #define SESSION_PRIZES_MAX 16               /* the named coins of a puzzle address (prize= of the network file, data/prizes.csv) */
-#define SESSION_COINS_MAX 64                /* the coins of an address a session, or a sweep, looks at */
+#define SESSION_COINS_MAX 64                /* the coins of an address a session looks at */
 
 /* The coins of a P2PKH script, for the session and for a sweep alike: the largest of a scan of it and, of the named ones (at most
- * SESSION_PRIZES_MAX; their values are the chain's), those the scan did not list, each looked up alone (coin). A light chain lists no coin
- * older than its checkpoint, and the scan of a node fails when the address holds thousands of coins of dust: the named coins are found all
- * the same. Into out (SESSION_COINS_MAX entries); returns how many. *unseen: what the chain did not answer about (the scan, each named
- * coin): 0 when the coins are all it has of the script. */
+ * SESSION_PRIZES_MAX; their values are the chain's), those the scan did not list, each looked up alone (coin). The scan of a node fails
+ * when the address holds thousands of coins of dust, and the servers of a light chain may all hide a coin from theirs: the named coins
+ * are found all the same. Into out (max entries, SESSION_PRIZES_MAX of them for the named coins); returns how many. *unseen: what the
+ * chain did not answer about (the scan, each named coin): 0 when the coins are all it has of the script. */
 int session_coins(const session_chain *ch, const uint8_t spk[BTC_P2PKH_LEN], const payout_coin *named, int nnamed, payout_coin *out,
-                  int *unseen);
+                  int max, int *unseen);
 
 /* The limit of failed signings of a home (docs/en/NETWORK.md 7.5, project 4.6). A bug of the two-party signer could leak a bit of a piece
  * through each signing that fails, so every run of pzsign counts as failed, in a file, before it starts, and is taken off once it gave valid

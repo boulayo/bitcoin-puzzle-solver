@@ -371,14 +371,14 @@ static bool tx_ok(const btc_tx *tx)
 
 #define NO_INPUT SIZE_MAX
 
-/* The legacy serialization. With sig_in an input, it is the one its signature hash covers: the scriptSig of that input replaced by
- * code, those of the others empty. */
-static size_t tx_write(const btc_tx *tx, uint8_t *out, size_t sig_in, const uint8_t *code, size_t code_len)
+/* The legacy serialization of tx with the inputs ins, n_in of them (those of tx, or more: btc_sign_all). With sig_in an input, it is the
+ * one its signature hash covers: the scriptSig of that input replaced by code, those of the others empty. */
+static size_t tx_write(const btc_tx *tx, const btc_in *ins, size_t n_in, uint8_t *out, size_t sig_in, const uint8_t *code, size_t code_len)
 {
     uint8_t *o = put_le32(out, tx->version);
-    o = put_size(o, tx->n_in);
-    for (size_t k = 0; k < tx->n_in; k++) {
-        const btc_in *in = &tx->in[k];
+    o = put_size(o, n_in);
+    for (size_t k = 0; k < n_in; k++) {
+        const btc_in *in = &ins[k];
         const uint8_t *s = in->script;
         size_t sl = in->script_len;
         if (sig_in != NO_INPUT) {
@@ -416,7 +416,7 @@ size_t btc_tx_serialize(const btc_tx *tx, uint8_t *out, size_t cap)
 {
     const size_t n = btc_tx_size(tx);
     if (!n || n > cap || !out) return 0;
-    return tx_write(tx, out, NO_INPUT, NULL, 0);
+    return tx_write(tx, tx->in, tx->n_in, out, NO_INPUT, NULL, 0);
 }
 
 bool btc_tx_txid(const btc_tx *tx, uint8_t txid[32])
@@ -432,13 +432,20 @@ bool btc_tx_txid(const btc_tx *tx, uint8_t txid[32])
 
 #define SIGHASH_ALL 1
 
+/* the signature hash of input i of tx with the inputs ins, its preimage written in b */
+static void sighash(const btc_tx *tx, const btc_in *ins, size_t n_in, size_t i, const uint8_t *code, size_t code_len, uint8_t *b,
+                    uint8_t digest[32])
+{
+    const size_t n = tx_write(tx, ins, n_in, b, i, code, code_len);
+    put_le32(b + n, SIGHASH_ALL);
+    pz_sha256d(b, n + 4, digest);
+}
+
 bool btc_sighash_legacy(const btc_tx *tx, size_t i, const uint8_t *script_code, size_t code_len, uint8_t digest[32])
 {
     if (!tx_ok(tx) || i >= tx->n_in || code_len > BTC_SCRIPTCODE_MAX || (code_len && !script_code)) return false;
     uint8_t b[BTC_TX_MAX_SIZE + BTC_SCRIPTCODE_MAX + 4];   /* the scriptSigs are left out, script_code and the hashtype come in */
-    const size_t n = tx_write(tx, b, i, script_code, code_len);
-    put_le32(b + n, SIGHASH_ALL);
-    pz_sha256d(b, n + 4, digest);
+    sighash(tx, tx->in, tx->n_in, i, script_code, code_len, b, digest);
     return true;
 }
 
@@ -456,13 +463,12 @@ size_t btc_der_encode(const uint8_t r[32], const uint8_t s[32], uint8_t der[BTC_
     return secp256k1_ecdsa_signature_serialize_der(ctx(), der, &n, &low) ? n : 0;
 }
 
-bool btc_put_sig_p2pkh(btc_tx *tx, size_t i, const uint8_t r[32], const uint8_t s[32], const uint8_t pub[33])
+/* the scriptSig of a P2PKH spend: the signature (r, s) and its hashtype, and the compressed key pub */
+static bool put_sig(btc_in *in, const uint8_t r[32], const uint8_t s[32], const uint8_t pub[33])
 {
     uint8_t der[BTC_DER_MAX];
-    if (!tx_ok(tx) || i >= tx->n_in || (pub[0] != 2 && pub[0] != 3)) return false;
     const size_t n = btc_der_encode(r, s, der);
     if (!n) return false;
-    btc_in *in = &tx->in[i];
     uint8_t *o = in->script;
     *o++ = (uint8_t)(n + 1);   /* a direct push: the signature and its hashtype */
     memcpy(o, der, n);
@@ -472,6 +478,11 @@ bool btc_put_sig_p2pkh(btc_tx *tx, size_t i, const uint8_t r[32], const uint8_t 
     memcpy(o, pub, 33);
     in->script_len = (uint8_t)(o + 33 - in->script);
     return true;
+}
+
+bool btc_put_sig_p2pkh(btc_tx *tx, size_t i, const uint8_t r[32], const uint8_t s[32], const uint8_t pub[33])
+{
+    return tx_ok(tx) && i < tx->n_in && (pub[0] == 2 || pub[0] == 3) && put_sig(&tx->in[i], r, s, pub);
 }
 
 bool btc_key_script(const uint8_t seckey[32], uint8_t spk[BTC_P2PKH_LEN])
@@ -486,22 +497,46 @@ bool btc_key_script(const uint8_t seckey[32], uint8_t spk[BTC_P2PKH_LEN])
     return true;
 }
 
-bool btc_sign_p2pkh(btc_tx *tx, size_t i, const uint8_t seckey[32])
+/* signs input i of tx with the inputs ins, the preimage of its signature hash written in b */
+static bool sign_in(const btc_tx *tx, btc_in *ins, size_t n_in, size_t i, const uint8_t seckey[32], uint8_t *b)
 {
     const secp256k1_context *c = ctx();
     secp256k1_pubkey pk;
     secp256k1_ecdsa_signature sig;
     uint8_t pub[33], h160[20], code[BTC_P2PKH_LEN], digest[32], rs[64];
     size_t pl = sizeof pub;
-    if (!tx_ok(tx) || i >= tx->n_in || !secp256k1_ec_pubkey_create(c, &pk, seckey)) return false;
+    if (!secp256k1_ec_pubkey_create(c, &pk, seckey)) return false;
     secp256k1_ec_pubkey_serialize(c, pub, &pl, &pk, SECP256K1_EC_COMPRESSED);
     pz_hash160(pub, sizeof pub, h160);
     btc_script_p2pkh(h160, code);
-    if (!btc_sighash_legacy(tx, i, code, sizeof code, digest)) return false;
-    /* NULL nonce function: the default, RFC 6979. The signature comes out with low s. */
-    if (!secp256k1_ecdsa_sign(c, &sig, digest, seckey, NULL, NULL)) return false;
+    sighash(tx, ins, n_in, i, code, sizeof code, b, digest);
+    /* NULL nonce function: the default, RFC 6979. The signature comes out with low s, and is checked: one a fault spoiled is not sent */
+    if (!secp256k1_ecdsa_sign(c, &sig, digest, seckey, NULL, NULL) || secp256k1_ecdsa_verify(c, &sig, digest, &pk) != 1) return false;
     secp256k1_ecdsa_signature_serialize_compact(c, rs, &sig);
-    return btc_put_sig_p2pkh(tx, i, rs, rs + 32, pub);
+    return put_sig(&ins[i], rs, rs + 32, pub);
+}
+
+bool btc_sign_p2pkh(btc_tx *tx, size_t i, const uint8_t seckey[32])
+{
+    uint8_t b[BTC_TX_MAX_SIZE + BTC_SCRIPTCODE_MAX + 4];
+    return tx_ok(tx) && i < tx->n_in && sign_in(tx, tx->in, tx->n_in, i, seckey, b);
+}
+
+uint8_t *btc_sign_all(const btc_tx *outs, const uint8_t *outpoints, size_t n, const uint8_t seckey[32], size_t *len)
+{
+    const bool shape = n && outs->n_out && outs->n_out <= BTC_MAX_OUT;
+    btc_in *in = calloc(n ? n : 1, sizeof *in);
+    uint8_t *raw = shape ? malloc(btc_vsize_p2pkh(n, outs->out, outs->n_out)) : NULL;   /* at its longest: a preimage is shorter */
+    bool ok = in && raw;
+    for (size_t i = 0; ok && i < n; i++) {
+        memcpy(in[i].prev_txid, outpoints + 36 * i, 32);
+        in[i].prev_vout = (uint32_t)get_le(outpoints + 36 * i + 32, 4), in[i].sequence = BTC_SEQUENCE_FINAL;
+    }
+    for (size_t i = 0; ok && i < n; i++) ok = sign_in(outs, in, n, i, seckey, raw);
+    *len = ok ? tx_write(outs, in, n, raw, NO_INPUT, NULL, 0) : 0;
+    free(in);
+    if (!ok) free(raw), raw = NULL;
+    return raw;
 }
 
 bool btc_ecdsa_verify(const uint8_t digest[32], const uint8_t *der, size_t der_len, const uint8_t *pub, size_t pub_len)

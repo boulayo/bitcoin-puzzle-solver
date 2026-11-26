@@ -5,11 +5,11 @@
 #include "sys.h"
 #include <pzcore/address.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #define COINBASE_MATURITY 100
-#define SCAN_MAX 64
 
 /* the address of a P2PKH script on the chain, for the descriptor of scantxoutset */
 static bool p2pkh_address(btc_chain chain, const uint8_t spk[BTC_P2PKH_LEN], char *out, size_t cap)
@@ -40,37 +40,41 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     chain_rpc *c = ctx;
     char addr[64];
     const char *addrs[1] = {addr};
-    btc_utxo u[SCAN_MAX];
-    size_t n;
+    btc_utxo *u = max > 0 ? malloc((size_t)max * sizeof *u) : NULL;   /* a sweep asks for hundreds */
+    size_t n = 0;
     uint64_t tip;
-    if (max <= 0 || !p2pkh_address(c->chain, spk, addr, sizeof addr)) return -1;
+    bool ok = u && p2pkh_address(c->chain, spk, addr, sizeof addr);
     /* the node runs one scan at a time and answers another one (the partner on the same node, a wallet) with an error, not in a queue:
      * on the main chain a scan takes minutes, so the wait is as long as a scan may be */
     const int64_t until = sys_now_ms() + c->rpc->scan_timeout_ms;
-    while (!btc_rpc_scan(c->rpc, addrs, 1, u, max < SCAN_MAX ? (size_t)max : SCAN_MAX, &n, &tip)) {
-        if (c->rpc->err.kind != BTC_RPC_ERPC || !strstr(c->rpc->err.msg, "in progress") || sys_now_ms() > until) return -1;
-        sys_sleep_ms(1000);
+    while (ok && !btc_rpc_scan(c->rpc, addrs, 1, u, (size_t)max, &n, &tip)) {
+        ok = c->rpc->err.kind == BTC_RPC_ERPC && strstr(c->rpc->err.msg, "in progress") && sys_now_ms() <= until;
+        if (ok) sys_sleep_ms(1000);
     }
-    const size_t got = max < SCAN_MAX ? (size_t)max : SCAN_MAX;  /* the scan reports every coin, and fills at most these */
-    if (n > got) n = got;
+    if (n > (size_t)max) n = (size_t)max;                       /* the scan reports every coin, and fills at most max */
     int k = 0;
-    for (size_t i = 0; i < n && k < max; i++) {
+    for (size_t i = 0; ok && i < n; i++) {
         if (!u[i].height || (u[i].coinbase && tip + 1 < u[i].height + COINBASE_MATURITY)) continue;   /* not spendable yet */
         if (u[i].spk_len != BTC_P2PKH_LEN || memcmp(u[i].spk, spk, BTC_P2PKH_LEN)) continue;           /* not the script asked */
         memcpy(out[k].txid, u[i].txid, 32), out[k].vout = u[i].vout, out[k].value = u[i].value, k++;
     }
-    return k;
+    free(u);
+    return ok ? k : -1;
+}
+
+bool chain_rpc_send(chain_rpc *c, const uint8_t *raw, size_t n)
+{
+    uint8_t txid[32];
+    if (btc_rpc_sendrawtransaction(c->rpc, raw, n, txid)) return true;
+    /* sent already, by the partner or by an earlier try: -27 (in the chain) or a mempool that knows it */
+    return c->rpc->err.kind == BTC_RPC_ERPC && (c->rpc->err.code == -27 || strstr(c->rpc->err.msg, "already") != NULL);
 }
 
 static bool broadcast(void *ctx, const btc_tx *tx)
 {
-    chain_rpc *c = ctx;
-    uint8_t raw[BTC_TX_MAX_SIZE], txid[32];
+    uint8_t raw[BTC_TX_MAX_SIZE];
     const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
-    if (!n) return false;
-    if (btc_rpc_sendrawtransaction(c->rpc, raw, n, txid)) return true;
-    /* sent already, by the partner or by an earlier try: -27 (in the chain) or a mempool that knows it */
-    return c->rpc->err.kind == BTC_RPC_ERPC && (c->rpc->err.code == -27 || strstr(c->rpc->err.msg, "already") != NULL);
+    return n && chain_rpc_send(ctx, raw, n);
 }
 
 static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)

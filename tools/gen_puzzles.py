@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Generates src/puzzles_data.c from data/puzzles.csv after re-verifying every row
 with the independent reference implementation (tools/ref.py), plus the addresses of the
-withdrawn puzzles 161..256 from data/puzzles_withdrawn.csv (n,address) and the coins of the
-addresses of the open puzzles from data/prizes.csv (n,txid,vout,sats; see data/README.md,
-tools/fetch_prizes.py).
+withdrawn puzzles 161..256 from data/puzzles_withdrawn.csv (n,address) and the coins the
+creator put at the addresses of the open puzzles from data/prizes.csv (n,txid,vout,sats; see
+data/README.md, tools/fetch_prizes.py).
 
     python3 -I tools/gen_puzzles.py            # rewrite src/puzzles_data.c
     python3 -I tools/gen_puzzles.py --check    # fail if the committed file is stale
@@ -21,8 +21,11 @@ import ref
 CSV = os.path.join(ROOT, 'data', 'puzzles.csv')
 CSV_RET = os.path.join(ROOT, 'data', 'puzzles_withdrawn.csv')
 CSV_PRIZES = os.path.join(ROOT, 'data', 'prizes.csv')
-PRIZES_MAX = 16                    # the prize= lines a network takes (SESSION_PRIZES_MAX of src/peer/session.h)
-PRIZE_MIN = 7400                   # satoshis: what an input costs at 50 sat/vB, the lowest fee rate of a sweep (src/peer/sweep.c)
+# the transactions of the creator, each with an output of n times this many satoshis for puzzle n: of January 2015 (output n - 1),
+# July 2017 (output n - 52) and April 2023 (one output for each puzzle open then)
+CREATOR = {'08389f34c98c606322740c0be6a7125d9860bb8d5cb182c02f98461e5fa6cd15': (100000, 1),
+           '5d45587cfd1d5b0fb826805541da7d94c61fe432259e68ee26f4a04544384164': (900000, 52),
+           '12f34b58b04dfb0233ce889f674781c0e0c7ba95482cca469125af41a78d13b3': (9000000, None)}
 ADDR_RE = r'1[1-9A-HJ-NP-Za-km-z]{24,33}'
 OUT = os.path.join(ROOT, 'src', 'puzzles_data.c')
 
@@ -118,22 +121,18 @@ def load_prizes(main_rows):
             if None in r or None in r.values() or not all(re.fullmatch(r'[0-9]{1,16}', r[k]) for k in ('n', 'vout', 'sats')):
                 raise ValueError('prizes.csv: malformed row %r' % (r,))
             rows.append((int(r['n']), r['txid'], int(r['vout']), int(r['sats'])))
-    # the coins of the address of an open puzzle, with or without a public key
+    # the coins of the creator at the address of an open puzzle, with or without a public key: one of each transaction at most
     unsolved = {n for n, addr, pub, priv in main_rows if not priv}
     seen = set()
     for n, txid, vout, sats in rows:
         if n not in unsolved:
             raise ValueError('coin of puzzle %d: not an open puzzle' % n)
-        if not re.fullmatch(r'[0-9a-f]{64}', txid):
-            raise ValueError('coin of puzzle %d: txid must be 64 lowercase hex digits' % n)
-        if not PRIZE_MIN <= sats <= 21000000 * 100000000 or (txid, vout) in seen:
-            raise ValueError('coin of puzzle %d: value out of range (%d satoshis at least), or a coin listed twice' % (n, PRIZE_MIN))
-        seen.add((txid, vout))
+        unit, first = CREATOR.get(txid, (0, None))
+        if not unit or sats != n * unit or (first is not None and vout != n - first) or (n, txid) in seen:
+            raise ValueError('coin of puzzle %d: not an output of a transaction of the creator, of its value, or listed twice' % n)
+        seen.add((n, txid))
     if [r[0] for r in rows] != sorted(r[0] for r in rows):
         raise ValueError('prizes.csv: rows in the order of the puzzles')
-    for n in unsolved:
-        if sum(r[0] == n for r in rows) > PRIZES_MAX:
-            raise ValueError('puzzle %d has more than %d coins: a network names at most that many (SESSION_PRIZES_MAX)' % (n, PRIZES_MAX))
     return rows
 
 
@@ -151,7 +150,7 @@ def render(rows, retired, prizes):
     for n, addr in retired:
         out.append('    "%s", /* %d */' % (addr, n))
     out.append('};')
-    out += ['', '/* the coins of the addresses of the open puzzles (data/prizes.csv), ended by n = 0 */',
+    out += ['', '/* the coins the creator put at the addresses of the open puzzles (data/prizes.csv), ended by n = 0 */',
             'const puzzle_prize PZ_PRIZES[] = {']
     for n, txid, vout, sats in prizes:
         out.append('    {%d, "%s", %d, %d},' % (n, txid, vout, sats))
@@ -170,7 +169,7 @@ def main():
         if cur != text:
             print('src/puzzles_data.c is out of date: run tools/gen_puzzles.py')
             return 1
-        print('puzzles_data.c in sync (%d puzzles, %d solved, %d unsolved with public key; %d withdrawn; %d coins of open puzzles)' % (
+        print('puzzles_data.c in sync (%d puzzles, %d solved, %d unsolved with public key; %d withdrawn; %d coins of the creator)' % (
             len(rows), sum(1 for r in rows if r[3]), sum(1 for r in rows if not r[3] and r[2]), len(retired), len(prizes)))
         return 0
     with open(OUT, 'w') as f:

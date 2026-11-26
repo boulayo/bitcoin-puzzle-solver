@@ -173,14 +173,10 @@ The other lines are settings of the node that reads them, and each is checked wh
 from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a named coin of the puzzle address,
 found even when no scan of the address lists it; its value and script are read from the chain; it counts in what is left at the
 address, before the pieces of the key are exchanged, until it is spent, 7.5 step 8). Any number of each, at most 16 `prize=`. The
-networks written in the program, of either kind, carry the coins of their address as `prize=` lines (`data/prizes.csv`; `pzpeer
-netcheck 140` lists them): every coin that was there, confirmed and worth at least 7400 satoshis (what an input costs at 50 sat/vB,
-the lowest fee rate of a sweep; a payout of a pair takes a coin from 8880), when the table was made: the three of the creator at each
-address, of 2015, 2017 and 2023, and what strangers sent there. The table is a snapshot. A coin spent since is found spent; a coin that
-came later is above the checkpoint of this version, where a scan of the address lists it (a version that moves the checkpoint forward
-makes the table again: `tools/fetch_prizes.py`). Naming the old
-coins is also what makes a home with a node and a home without one build the same first transaction: a node lists every coin of the
-address, servers none below their checkpoint (8.2).
+networks written in the program, of either kind, carry as `prize=` lines the coins the creator put at their address (`data/prizes.csv`;
+`pzpeer netcheck 140` lists them): three a puzzle, of 2015, 2017 and 2023, history that never changes. What others send there is in no
+table: every coin of a puzzle address is above the checkpoint of the servers, and their scans show it as a node's does (8.2). The named
+coins are a defence of a home without a node: servers that all hide a coin of the prize cannot make it look gone.
 
 A line is `key=value`; from `#` on it is a comment, and spaces at the ends of the key and of the value do not count. Canonical lines: the
 defining lines rebuilt as `key=value`, sorted bytewise, joined with `\n` (no `\n` at the end). An unknown key, or a repeated or missing
@@ -710,8 +706,8 @@ pzsolve finds the key on its own sends the coins of the puzzle at once, 90% to i
 it with a partner, whose share it would otherwise take.
 The public key of the puzzle is known, so that transaction shows nothing and goes to the public mempool; it is tried again every minute
 for an hour while the chain does not take it, and the key goes on the terminal once the coins are sent (or at the last try). The coins
-are those of a session, the scan of the address and its named coins; a home without a node sends them all or none (8.2: with a named
-coin that no server gives, or with none named, it does not send a part of them, and says why). A key
+are those of a session, the scan of the address and its named coins, all of them or none (8.2: when the chain does not answer about
+every coin, it sends nothing, and says why). A key
 pzsolve encrypted is not read, and its line says so. The terms are shown
 at the first start of a home, which asks to accept them (or `--accept-terms`), and in one line at every start.
 
@@ -956,7 +952,8 @@ router: the machine of the tests reaches neither.
   transactions are legacy, so their virtual size is their size; it is counted with every signature at its longest (71 bytes of DER
   with a low `s`, and the hashtype), and the fee is rounded up: the rate paid is never below the one agreed.
 - What we build is standard: version 2, P2PKH inputs, every output above the dust limit of P2PKH (546 satoshis, the highest of the
-  standard forms), at most 16 inputs and 16 outputs, far below the size limit.
+  standard forms), at most 16 inputs and 16 outputs; a sweep up to 675 inputs, the most a standard transaction (100 000 virtual bytes)
+  holds.
 - The vectors of `tests/peer/t_btc.c` come from transactions of the main chain, pinned by their txids, and from
   `tests/peer/gen_btc_vectors.py`, an independent implementation in Python of the serialization, the legacy signature hash, RFC 6979 and
   DER (`python3 tests/peer/gen_btc_vectors.py > tests/peer/btc_vectors.h`).
@@ -990,9 +987,9 @@ On the main chain:
 - The scan reads the whole set of unspent outputs, minutes on the main chain, and the node runs one at a time: a session waits for the
   scan of another (the partner on the same node, a wallet) as long as a scan may take (30 minutes). A scan it gives up on is aborted:
   the node would go on with it, and refuse the next one meanwhile.
-- Thousands of tiny coins may be sent to a puzzle address. The scan keeps the 64 largest (equal values by outpoint, the order of
-  `payout_first`, so that both homes keep the same), not the first 64 the node lists: it lists them in the order of their txids,
-  where the prize may come last.
+- Thousands of tiny coins may be sent to a puzzle address. The scan keeps the largest it is asked for, 48 for a session and 675 for a
+  sweep (equal values by outpoint, the order of `payout_first`, so that both homes keep the same), not the first the node lists: it
+  lists them in the order of their txids, where the prize may come last.
 - When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
   would cancel at once.
 - An output spent only in the node's mempool still counts as unspent (`gettxout` without the mempool, which reads the set of the
@@ -1004,18 +1001,21 @@ On the main chain:
   always the scan and the named coins (`session_coins`, one function for the session, the solo payout of a home and `pzpeer sweep`):
   the `prize=txid:vout:sats` of the network file (at most 16; the txid as explorers show it), each checked with `gettxout` without the
   mempool: unspent, confirmed (mature for a coinbase), of the puzzle's script, with the node's value; `sats` is not used. The largest 48
-  coins of the scan, when it works, and the named ones not among them make the coins of the first transaction. Two homes whose network
-  files name different coins may build different transactions when the scan fails: the plan stops them, until their files agree.
-- A sweep of a key found alone (`pzpeer sweep`, and the solo payout of a home, 7.5) takes what the node lists, the largest 16 coins
-  worth their input, and says how many it leaves; the fee is twice the estimate, from 50 sat/vB (a pair starts at 20: it can pay
-  again at a higher rate, while this transaction goes once, raced by whoever reads the key in it).
+  coins of the scan, when it works, and the named ones not among them make the coins a home sees. Two homes that see different coins
+  build the first transaction from those both see (`S_COINS`, 7.5): a coin only one of them sees is left to a later session.
+- A sweep of a key found alone (`pzpeer sweep`, and the solo payout of a home, 7.5) takes every coin the node lists that is worth its
+  input, in one transaction, and says how many it leaves; when the scan fails it makes none (the named coins alone would leave the
+  rest). The fee is twice the estimate, from 50 sat/vB (a pair starts at 20: it can pay again at a higher rate, while this
+  transaction goes once, raced by whoever reads the key in it).
 - Fee rates are asked for a confirmation within 2 blocks (project 4.5), the higher of the two homes' taken (7.5).
 
 ### 8.2 Without a node of one's own
 
 `pzpeer run` without `--rpc` reads the chain from Electrum servers: the `electrum=host:port` lines of the network file and those of
 `--electrum HOST:PORT`, 8 at most; a network of the main chain with none of either uses a built-in list of eight public servers of
-different operators, and the block 969696 as its checkpoint. The connections stay open from one question to the next (a session asks
+different operators, and the block 338688 as its checkpoint: the first of the difficulty period in which the coins of the puzzles begin
+(the first in block 339085, January 2015). Every coin ever sent to a puzzle address is above it, and is proven like any other: the
+checkpoint never needs to move. The connections stay open from one question to the next (a session asks
 once a block while it waits for one, and the height every 15 seconds, which the servers are asked every 10 seconds at most for all the
 sessions); the servers are asked one after another, each with a minute for its calls of an operation, its headers included, and one that
 does not answer, or announces blocks it cannot show, is left alone for ten minutes. None is trusted: nothing a server says is
@@ -1023,21 +1023,23 @@ believed without a proof, and what a lying server can still do is hide things, w
 show no coin at the puzzle address do not make the home take the prize for gone (7.5, step 3), and an address they show empty makes it
 give its piece of the key only when every named coin of the address is proven spent (7.5, step 8; with none named, never: a coin that
 came to the address later and that all the servers hide would still go to the partner alone). The named coins, of the network file or
-of the program, are looked up one by one (`blockchain.transaction.get` of the txid the file or the program names, its bytes hashed to
-it, and no server that proves the output spent): the coins of a puzzle address are older than the built-in checkpoint, where no kept
-header proves their block, so no scan of the address lists them; a server that hides their spend only makes the first transaction
-spend a coin that is gone, which the network refuses. The table of the program (`data/prizes.csv`) names every coin that was at the
-address of an open puzzle when it was made, so a home without a node builds the same first transaction as one with a node, which lists
-them all. It is a snapshot and needs no renewal with the checkpoint: a coin that came after it is above every later checkpoint,
-where the scan lists it, and one spent since is found spent.
+of the program, are also looked up one by one (`blockchain.transaction.get` of the txid the file or the program names, its bytes hashed
+to it, and no server that proves the output spent), so servers that all hide one from their scans cannot make it look gone (nor can a
+checkpoint of a network file above it); a server that hides their spend only makes the first transaction spend a coin that is gone,
+which the network refuses. That is all the table of the program (`data/prizes.csv`) is for: the three coins the creator put at the
+address of each open puzzle, history that needs no renewal (a puzzle that is solved loses its rows). Every other coin of the address
+the scans show, as a node's does: a home with a node and one without see the same coins.
 
-A sweep of a key found alone, by `pzpeer sweep` or by the solo payout of a home (7.5), works without a node for the puzzles the
-program knows, or with the `prize=` lines of a network file: it takes the named coins and what the scan lists. It never sweeps a part
-of the coins unknowingly, because the transaction shows the public key and whoever is fastest takes the rest. So through servers it
-refuses, and says why, when no server gives the transaction of a named coin or none answers about the address (a server hid it: try
-again, or use `--rpc`), and when no coin of the address is named (its older coins cannot be seen without a node). A spend the servers
-hide makes the transaction invalid, never partial. What it leaves on purpose it says: the coins worth less than their input, and those
-beyond the 16 inputs of one transaction.
+A sweep of a key found alone, by `pzpeer sweep` or by the solo payout of a home (7.5), works without a node for any key: it takes the
+named coins and what the scan lists, all at once, every coin worth its input, up to the 675 inputs of a standard transaction. It never
+sweeps a part of the coins unknowingly, because the transaction shows the public key and whoever is fastest takes the rest. So it
+refuses, and says why, when no server gives the transaction of a named coin or none answers about the address (try again, or use
+`--rpc`), and, for `pzpeer sweep`, when a server lists a coin worth its input that none proves (below the checkpoint, or no branch from
+any server): the refusal names the server and the coin. Taken, a coin a server made up would make the transaction invalid after it
+showed the public key; left, a real one would go to whoever is first. Sessions leave such a coin out and refuse nothing for it, as one
+lying server would stop them; so does the solo payout, whose public key is known: what it leaves is the home's alone. A spend the
+servers hide makes the transaction invalid, never partial. What it leaves on purpose it says: the coins worth less than their input,
+and the smallest when the address holds more than one standard transaction takes (it asks the chain for one coin more, to know).
 
 The connection is plain TCP, one JSON object a line; as every
 answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
@@ -1050,8 +1052,12 @@ checks the rules that the proof of work alone does not (below).
    the target of every 2016 blocks, its time above the median of the 11 before and no more than two hours ahead. Of a batch with an
    invalid header the valid ones before it are kept. A branch replaces the kept one only with more work. The chain is kept in
    `headers.bin` of the home's folder, 80 bytes a block, and is the clock of the session: the blocks F waits count on it, and no
-   server can make them come faster without the work. A chain whose last block is more than six hours old is not ready (regtest:
-   any), and a session waits.
+   server can make them come faster without the work. A save appends the new headers, and writes the file whole only after a branch
+   replaced headers it holds. From the built-in checkpoint the chain is about 640 000 headers, 51 MB on disk and in memory: a home
+   fetches them when it starts, before it joins the network, so that no session waits for them, in as many operations as bring
+   headers (2016 a request, a minute of each server an operation), and keeps on disk what each server brought; `pzpeer sweep` keeps no
+   file and fetches them every time, minutes. A chain whose last block is more than six hours old is not ready (regtest: any), and a
+   session waits; while the headers are still coming it says so.
 2. **Coins.** `blockchain.scripthash.listunspent` of the puzzle address from each server, and the union of what they list. For each
    coin, the transaction that made it (`blockchain.transaction.get`), whose hash must be its txid, and its Merkle branch
    (`blockchain.transaction.get_merkle`) to the header of its height in the kept chain: then it is confirmed, as deep as that header.
@@ -1074,8 +1080,9 @@ first transaction the network refuses. On testnet and signet only the proof of w
 `t_spv` checks the rules on real headers of the main chain; `t_chain_spv` runs the sessions' calls against servers that hide a coin,
 list a spent one, give false proofs, add blocks without work, drop a broadcast, do not see the mempool, list there a transaction they do
 not have or answer slowly, a spend behind 260 transactions of dust, a spend by a transaction of 17 inputs, a coin of the prize below the
-checkpoint, and the sweep of a key (a named coin below the checkpoint taken, a named coin no server gives and an address with no named
-coin refused); `PZ_E2E_LIGHT=1
+checkpoint, a first sync of several operations, and the sweep of a key (a named coin below the checkpoint taken, an address with no
+coin named taken, 20 coins in one transaction, a named coin no server gives refused, a coin a server lists and none proves refused with
+the server named, a node whose scan fails refused); `PZ_E2E_LIGHT=1
 tests/peer/e2e_net.sh` pays a coincidence with three homes that have no node. Not tried yet against a public server.
 
 ## 9. Status
@@ -1238,7 +1245,7 @@ makes and signs the transaction (`sweep.c`) and prints it; with `--private` it g
 transactions without showing them (free and open to all since August 2026), and to nothing else: a `POST` of `{"tx_hex": ...}` to
 `https://slipstream.mara.com/api/transactions` through the `curl` of the system (Linux, macOS, and Windows since 10 have it), so that
 pzpeer needs no TLS of its own. That interface is not documented by MARA: it is the one its page and the programs of others use, and
-`--pool URL` gives another address. The coins are those of the key's address: with `--rpc`, what the node lists; without a node, the
-coins the program names for the puzzle (`data/prizes.csv`, every open puzzle of the table) and what the servers list above their
-checkpoint, all of them or none (8.2): for a key of an address the program does not know, or when a server hides a named coin, it makes
-no transaction and says so.
+`--pool URL` gives another address. The coins are those of the key's address, all of them or none (8.2): with `--rpc`, what the node
+lists; without a node, what the servers list and prove, and the coins of the creator the program names for an open puzzle
+(`data/prizes.csv`); when the chain does not answer about every coin, or a server lists one that none proves, it makes no transaction
+and says so.

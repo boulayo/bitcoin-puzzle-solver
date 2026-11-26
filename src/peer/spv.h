@@ -18,6 +18,7 @@ typedef struct {
     uint8_t cp[32];                /* its hash */
     uint8_t *hdr;                  /* n headers of SPV_HEADER bytes */
     size_t n, cap;
+    size_t saved;                  /* the first headers, as the file holds them (spv_load, spv_save): a save appends the rest */
 } spv_chain;
 
 /* The hash of the genesis block of a chain, in internal order: the checkpoint of height 0. */
@@ -32,13 +33,17 @@ void spv_free(spv_chain *c);
 bool spv_add(spv_chain *c, uint64_t at, const uint8_t *hdrs, size_t count, uint64_t now);
 /* The height of the tip; false while the chain is empty. */
 bool spv_tip(const spv_chain *c, uint64_t *height);
+/* The time of the tip, in seconds since 1970; 0 while the chain is empty. */
+uint32_t spv_tip_time(const spv_chain *c);
 /* The header of a height, NULL when it is not kept. */
 const uint8_t *spv_header(const spv_chain *c, uint64_t height);
 /* Whether the transaction txid (internal order) is at position pos of the block at `height`: the branch (n hashes, internal order, from
  * the leaf up) must lead to the Merkle root of that header. */
 bool spv_proof(const spv_chain *c, uint64_t height, const uint8_t txid[32], const uint8_t (*branch)[32], size_t n, uint32_t pos);
-/* The chain in a file, so that a restart does not fetch it again. A file that does not fit the checkpoint is ignored. */
-bool spv_save(const spv_chain *c, const char *path);
+/* The chain in a file, so that a restart does not fetch it again. A file that does not fit the checkpoint is ignored. A save appends what
+ * the chain gained at its end; it writes the file whole after a branch replaced headers of the file, and when the file is not as the last
+ * save or load left it. */
+bool spv_save(spv_chain *c, const char *path);
 bool spv_load(spv_chain *c, const char *path, uint64_t now);
 
 /* For the tests: the target of compact bits (false when negative or overflowing), and the bits after a period that took `timespan` seconds. */

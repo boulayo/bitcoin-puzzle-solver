@@ -134,7 +134,7 @@ bool spv_init(spv_chain *c, btc_chain chain, uint64_t base, const uint8_t hash[3
 void spv_free(spv_chain *c)
 {
     free(c->hdr);
-    c->hdr = NULL, c->n = c->cap = 0;
+    c->hdr = NULL, c->n = c->cap = c->saved = 0;
 }
 
 static bool reserve(spv_chain *c, size_t n)
@@ -190,6 +190,7 @@ bool spv_add(spv_chain *c, uint64_t at, const uint8_t *hdrs, size_t count, uint6
     if (!reserve(c, j + count)) return false;
     memcpy(c->hdr + j * SPV_HEADER, hdrs, count * SPV_HEADER);
     c->n = j + count;
+    if (c->saved > j) c->saved = j;                            /* the file holds the headers it replaced */
     return true;
 }
 
@@ -199,6 +200,8 @@ bool spv_tip(const spv_chain *c, uint64_t *height)
     *height = c->base + c->n - 1;
     return true;
 }
+
+uint32_t spv_tip_time(const spv_chain *c) { return c->n ? hdr_time(c->hdr + (c->n - 1) * SPV_HEADER) : 0; }
 
 const uint8_t *spv_header(const spv_chain *c, uint64_t height)
 {
@@ -220,28 +223,40 @@ bool spv_proof(const spv_chain *c, uint64_t height, const uint8_t txid[32], cons
 }
 
 static const char MAGIC[8] = "PZHDR1\n";
+#define HEAD (8 + 1 + 8 + 32)                                  /* MAGIC, the chain, the height and the hash of the checkpoint */
 
-bool spv_save(const spv_chain *c, const char *path)
+bool spv_save(spv_chain *c, const char *path)
 {
-    uint8_t head[8 + 1 + 8 + 32];
-    FILE *f = sys_new_file(path, false);
-    memcpy(head, MAGIC, 8);
-    head[8] = (uint8_t)c->chain;
-    for (int b = 0; b < 8; b++) head[9 + b] = (uint8_t)(c->base >> (8 * b));
-    memcpy(head + 17, c->cp, 32);
-    return sys_new_file_done(f, path, f && fwrite(head, 1, sizeof head, f) == sizeof head && fwrite(c->hdr, SPV_HEADER, c->n, f) == c->n);
+    uint8_t head[HEAD];
+    bool ok;
+    FILE *f = c->saved ? sys_fopen(path, "ab") : NULL;
+    if (f && fseek(f, 0, SEEK_END) == 0 && ftell(f) == (long)(HEAD + c->saved * SPV_HEADER)) {   /* the file as it was left: it grows */
+        ok = fwrite(c->hdr + c->saved * SPV_HEADER, SPV_HEADER, c->n - c->saved, f) == c->n - c->saved;
+        ok = fclose(f) == 0 && ok;                             /* cut short by a crash, it is written whole the next time */
+    } else {
+        if (f) fclose(f);
+        f = sys_new_file(path, false);
+        memcpy(head, MAGIC, 8);
+        head[8] = (uint8_t)c->chain;
+        for (int b = 0; b < 8; b++) head[9 + b] = (uint8_t)(c->base >> (8 * b));
+        memcpy(head + 17, c->cp, 32);
+        ok = sys_new_file_done(f, path, f && fwrite(head, 1, HEAD, f) == HEAD && fwrite(c->hdr, SPV_HEADER, c->n, f) == c->n);
+    }
+    c->saved = ok ? c->n : 0;
+    return ok;
 }
 
 bool spv_load(spv_chain *c, const char *path, uint64_t now)
 {
-    uint8_t head[8 + 1 + 8 + 32], buf[SPV_HEADER];
+    uint8_t head[HEAD], buf[SPV_HEADER];
     uint64_t base = 0, at = c->base;
     FILE *f = sys_fopen(path, "rb");
     if (!f) return false;
-    bool ok = fread(head, 1, sizeof head, f) == sizeof head && !memcmp(head, MAGIC, 8) && head[8] == (uint8_t)c->chain;
+    bool ok = fread(head, 1, HEAD, f) == HEAD && !memcmp(head, MAGIC, 8) && head[8] == (uint8_t)c->chain;
     for (int b = 0; b < 8; b++) base |= (uint64_t)head[9 + b] << (8 * b);
     ok = ok && base == c->base && !memcmp(head + 17, c->cp, 32);
     for (; ok && fread(buf, SPV_HEADER, 1, f) == 1; at++) ok = spv_add(c, at, buf, 1, now);   /* every header checked again: what is valid stays */
     fclose(f);
+    c->saved = ok ? c->n : 0;                                  /* a file that did not load whole is written whole */
     return ok;
 }

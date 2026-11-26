@@ -583,6 +583,50 @@ static void test_sign(void)
     CHECK(!btc_ecdsa_verify(digest, der, 7, pub, 65) && !btc_ecdsa_verify(digest, der, dl, pub, 64) && !btc_ecdsa_verify(digest, der, dl, pub, 33));
 }
 
+/* A transaction of more inputs than a btc_tx holds (a sweep): up to 16 it is, byte for byte, the one btc_sign_p2pkh signs input by input;
+ * of 40, each signature verifies against the preimage built here from its bytes */
+static void test_sign_all(void)
+{
+    uint8_t key[32] = {0}, zero[32] = {0}, spk[BTC_P2PKH_LEN], op[40 * 36], b[BTC_TX_MAX_SIZE], pre[40 * 41 + 200], digest[32], *raw;
+    size_t len;
+    btc_tx outs, tx;
+    key[31] = 7;
+    CHECK(btc_key_script(key, spk));
+    for (int i = 0; i < 40; i++) pz_sha256((const uint8_t *)&i, sizeof i, op + 36 * i), memcpy(op + 36 * i + 32, (const uint8_t[4]){(uint8_t)i}, 4);
+    btc_tx_init(&outs);
+    CHECK(btc_tx_add_out(&outs, 123456, spk, sizeof spk) && btc_tx_add_out(&outs, 7890, spk, sizeof spk));
+    for (size_t n = 1; n <= BTC_MAX_IN; n += 15) {
+        tx = outs;
+        for (size_t i = 0; i < n; i++) CHECK(btc_tx_add_in(&tx, op + 36 * i, (uint32_t)i, BTC_SEQUENCE_FINAL));
+        for (size_t i = 0; i < n; i++) CHECK(btc_sign_p2pkh(&tx, i, key));
+        const size_t want = btc_tx_serialize(&tx, b, sizeof b);
+        CHECK((raw = btc_sign_all(&outs, op, n, key, &len)) && want && len == want && !memcmp(raw, b, len));
+        free(raw);
+    }
+    size_t nop;
+    uint8_t *ops = NULL;
+    CHECK((raw = btc_sign_all(&outs, op, 40, key, &len)) && (ops = btc_tx_outpoints(raw, len, &nop)) && nop == 40 && !memcmp(ops, op, sizeof op));
+    const uint8_t *in[40], *p = raw + 5;                      /* version, then 40 inputs: their count is one byte */
+    for (int k = 0; raw && k < 40; k++) in[k] = p, p += 36 + 1 + p[36] + 4;
+    for (int i = 0; raw && i < 40; i++) {
+        uint8_t *o = pre;
+        memcpy(o, raw, 5), o += 5;
+        for (int k = 0; k < 40; k++) {
+            memcpy(o, in[k], 36), o += 36;
+            *o++ = k == i ? BTC_P2PKH_LEN : 0;
+            if (k == i) memcpy(o, spk, BTC_P2PKH_LEN), o += BTC_P2PKH_LEN;
+            memcpy(o, in[k] + 37 + in[k][36], 4), o += 4;
+        }
+        memcpy(o, p, (size_t)(raw + len - p)), o += raw + len - p;
+        memcpy(o, "\1\0\0\0", 4), o += 4;
+        pz_sha256d(pre, (size_t)(o - pre), digest);
+        const uint8_t *s = in[i] + 37, sl = s[0];
+        CHECK(in[i][36] == 1 + sl + 1 + 33 && s[sl] == 1 && s[sl + 1] == 33 && btc_ecdsa_verify(digest, s + 1, sl - 1u, s + sl + 2, 33));
+    }
+    free(ops), free(raw);
+    CHECK(!btc_sign_all(&outs, op, 40, zero, &len) && !btc_sign_all(&outs, op, 0, key, &len));
+}
+
 static void test_size(void)
 {
     btc_out out[3] = {{.script_len = 25}, {.script_len = 22}, {.script_len = 34}};
@@ -636,6 +680,7 @@ int main(void)
     test_sighash();
     test_der();
     test_sign();
+    test_sign_all();
     test_size();
     test_mutations();
     TEST_DONE("t_btc");

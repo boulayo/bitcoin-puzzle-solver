@@ -10,22 +10,24 @@
 
 #include "session.h"
 
+#define SWEEP_MAX_IN ((100000 - 100) / BTC_P2PKH_IN_SIZE)   /* the P2PKH inputs a standard transaction holds (100 000 virtual bytes): 675 */
+
 typedef struct {
     uint64_t rate;                 /* in: satoshis per 1000 virtual bytes, 0 for twice the estimate of the chain, 50 to 1000 sat/vB; out: used */
-    uint64_t total;                /* out: the satoshis of the coins taken */
-    int listed;                    /* out: the coins of the address the chain showed */
+    uint64_t total, fee, cut;      /* out: the satoshis of the coins taken, the fee, the share of the author */
+    int listed, taken;             /* out: the coins of the address the chain showed, and those taken */
+    uint8_t *raw;                  /* out: the transaction, signed, len bytes (malloc'd: the caller frees it) */
+    size_t len;
 } sweep_info;
 
 /* The confirmed coins of the key to the script to (session_coins: a scan of its address and the named coins, the prize= of a network
- * file or of the table of the program): the largest, as many as a transaction holds, each worth more than the fee of its own input (the
- * address of a puzzle collects dozens of coins of dust), less a fee that passes at once. With author, the share of the author of what
- * the fee leaves goes to its script (payout_author). Signed and checked: NULL, or why there is no transaction.
- * A transaction that spends a part of the coins shows the public key and leaves the rest to whoever is first, so a chain read from
- * servers (pending is offered) must show them all: it is refused when it did not answer about the address or about a named coin (a
- * server hid it), and when no coin is named, as servers cannot show a coin older than their checkpoint. A node of one's own sees every
- * coin, and its sweep takes what it lists. */
+ * file or of the table of the program), all at once: a transaction that spends a part of them shows the public key, and whoever is first
+ * takes the rest. Every coin worth more than the fee of its own input (the address of a puzzle collects dozens of coins of dust), as many
+ * as a standard transaction holds, less a fee that passes at once. With author, the share of the author of what the fee leaves goes to
+ * its script (payout_author). NULL, or why there is no transaction: also when the chain did not answer about the address or about a
+ * named coin (the scan of a node failed, a server hid a coin, or listed one that no server proves, chain_spv.whole). */
 const char *sweep_tx(const session_chain *ch, const uint8_t sec[32], const payout_coin *named, int nnamed, const uint8_t *to, size_t to_len,
-                     const payout_terms *author, sweep_info *info, btc_tx *tx);
+                     const payout_terms *author, sweep_info *info);
 
 /* The pool --private gives the transaction to: MARA's Slipstream, free and open to all since August 2026, which mines it without showing it
  * in the public mempool. Its interface is not documented by MARA: this is the one its own page and the programs of others use. */

@@ -130,6 +130,10 @@ size_t btc_der_encode(const uint8_t r[32], const uint8_t s[32], uint8_t der[BTC_
  * ECDSA of libsecp256k1 with its default nonces (RFC 6979, deterministic), low s, SIGHASH_ALL; the scriptSig becomes the signature
  * with its hashtype byte and the compressed public key. False when i is out of range or seckey is not a valid key. */
 bool btc_sign_p2pkh(btc_tx *tx, size_t i, const uint8_t seckey[32]);
+/* A transaction of more inputs than a btc_tx holds, all of one key (a sweep takes every coin of an address at once): n P2PKH inputs that
+ * spend the outpoints (36 bytes each, as a transaction holds them; final sequence), each signed as btc_sign_p2pkh signs, and the outputs,
+ * version and lock time of outs (whose inputs are not used). Its bytes, malloc'd, their number in *len; NULL when seckey is not a key. */
+uint8_t *btc_sign_all(const btc_tx *outs, const uint8_t *outpoints, size_t n, const uint8_t seckey[32], size_t *len);
 /* Puts in place a signature made elsewhere (the two-party signer) as (r, s): the same scriptSig as btc_sign_p2pkh, with the
  * compressed key pub. It is not checked here: btc_verify_p2pkh does that. False when i is out of range, pub is not a compressed key
  * or (r, s) cannot be encoded. */

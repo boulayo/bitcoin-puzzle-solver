@@ -150,6 +150,7 @@ typedef struct {
     bool phantom;                  /* lists in the mempool of every script a transaction it does not have */
     int slow_ms;                   /* answers every call this late */
     int slow_scan_ms;              /* answers its histories and proofs this late: each in time, and as many as it is asked */
+    int chunk;                     /* gives at most this many headers a call, as a server may (0: what is asked) */
     uint64_t fee;                  /* its estimate, satoshis per 1000 bytes */
 } lies;
 
@@ -239,7 +240,7 @@ static bool answer(server *s, const char *method, const json_val *p, char *out, 
     if (!strcmp(method, "blockchain.block.headers")) {
         int n = 0;
         snprintf(out, cap, "{\"hex\": \"");
-        for (uint64_t h = u0; h < u0 + u1 && (int)h <= top; h++, n++) {
+        for (uint64_t h = u0; h < u0 + u1 && (int)h <= top && (!s->l.chunk || n < s->l.chunk); h++, n++) {
             uint8_t fake[80] = {2};
             if ((int)h < W.nb) hexcat(out, W.hdr[h], 80);
             else {                                             /* linked to the real tip, with its time and target, and no work */
@@ -401,6 +402,15 @@ static void stop(server *s)
     sys_close(s->lfd);
 }
 
+/* a node whose scan fails: it gives a named coin, of 1 BTC */
+static int scan_fails(void *node, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max) { return -1; }
+static int named_there(void *node, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
+{
+    memcpy(out->txid, txid, 32), out->vout = vout, out->value = 100000000;
+    return 1;
+}
+static uint64_t a_rate(void *node) { return 1000; }
+
 /* the chain of a session on the given servers (at most 3) */
 static void view(chain_spv *c, session_chain *ch, server *a, server *b, server *d)
 {
@@ -477,27 +487,55 @@ int main(void)
         CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.coin(ch.ctx, fid, 0, pspk, &pc) == 1 && pc.value == 100000000 && !memcmp(pc.txid, fid, 32));
         CHECK(ch.coin(ch.ctx, fid, 0, aspk, &pc) == 0 && ch.coin(ch.ctx, f2id, 0, pspk, &pc) == 0 && ch.coin(ch.ctx, other, 0, pspk, &pc) == -1);
         /* A sweep of the key of the address (a key found alone: pzpeer sweep, the solo payout of a home). With the coins of the address
-         * named it takes the prize, which no scan lists, and finds the other one spent (before, it saw no coin, or swept only what came
-         * after the checkpoint). A named coin no server gives, or an address with no coin named, and it refuses: the transaction would
-         * show the public key and leave the rest of the coins to whoever is first */
+         * named it takes the prize, which no scan proves, and finds the other one spent. A named coin no server gives, and it refuses: the
+         * transaction would show the public key and leave the rest of the coins to whoever is first. So does a sweep that takes a coin
+         * only with its proof (whole, pzpeer sweep) when a server lists one that none proves, here the prize below the checkpoint, named
+         * or not: it names that server (before, such a coin was dropped without a word, and one not named was left behind) */
         payout_coin named[3] = {{.vout = 0}, {.vout = 0}, {.vout = 0}};
         memcpy(named[0].txid, fid, 32), memcpy(named[1].txid, f2id, 32), memcpy(named[2].txid, other, 32);
         sweep_info si = {.rate = 50000};
         btc_tx sw;
-        const char *no = sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si, &sw);
-        CHECK(!no && si.listed == 1 && sw.n_in == 1 && !memcmp(sw.in[0].prev_txid, fid, 32) && sw.n_out == 1 && sw.out[0].value > 99980000 &&
-              btc_verify_p2pkh(&sw, 0, pspk, BTC_P2PKH_LEN));
-        no = sweep_tx(&ch, psec, named, 3, aspk, BTC_P2PKH_LEN, NULL, &si, &sw);
-        CHECK(no && strstr(no, "hid a coin") && sw.n_in == 0);
-        no = sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si, &sw);
-        CHECK(no && strstr(no, "older than their checkpoint") && sw.n_in == 0);
+        const char *no = sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si);
+        CHECK(!no && si.listed == 1 && si.taken == 1 && btc_tx_parse(&sw, si.raw, si.len) && !memcmp(sw.in[0].prev_txid, fid, 32) &&
+              sw.n_out == 1 && sw.out[0].value > 99980000 && btc_verify_p2pkh(&sw, 0, pspk, BTC_P2PKH_LEN));
+        free(si.raw);
+        no = sweep_tx(&ch, psec, named, 3, aspk, BTC_P2PKH_LEN, NULL, &si);
+        CHECK(no && strstr(no, "did not answer") && !si.raw);
+        c.whole = 1;
+        no = sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si);
+        CHECK(no && !si.raw && strstr(c.unproven, honest.addr) && strstr(c.unproven, "block 1)"));
         chain_spv_free(&c);
         /* a server that lists no coin hides no named one: its transaction is asked for by its id */
         const char *hides[1] = {hider.addr};
         CHECK(chain_spv_init(&c, BTC_REGTEST, 2, cp2, hides, 1, NULL));
         c.timeout_ms = 3000, ch = chain_spv_iface(&c);
-        CHECK(!sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si, &sw) && sw.n_in == 1 && !memcmp(sw.in[0].prev_txid, fid, 32));
+        CHECK(!sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si) && btc_tx_parse(&sw, si.raw, si.len) && sw.n_in == 1 &&
+              !memcmp(sw.in[0].prev_txid, fid, 32));
+        free(si.raw);
         chain_spv_free(&c);
+        /* From the checkpoint of the chain every coin is proven: a sweep needs no coin named (before, it was refused on a light chain). A
+         * server whose proofs prove nothing is asked in vain, and the sweep refuses; next to an honest one, which proves what it lists,
+         * the sweep goes on, whichever comes first */
+        view(&c, &ch, &honest, NULL, NULL);
+        c.whole = 1;
+        CHECK(!sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si) && si.taken == 1 && btc_tx_parse(&sw, si.raw, si.len) &&
+              !memcmp(sw.in[0].prev_txid, fid, 32));
+        free(si.raw);
+        chain_spv_free(&c);
+        view(&c, &ch, &noproof, NULL, NULL);
+        c.whole = 1;
+        CHECK(sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si) && strstr(c.unproven, noproof.addr));
+        c.whole = 100000001;                                  /* a coin worth less than a sweep takes: left, as it would be anyway */
+        CHECK((no = sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si)) && strstr(no, "no confirmed coin") && !c.unproven[0]);
+        chain_spv_free(&c);
+        view(&c, &ch, &noproof, &honest, NULL);
+        c.whole = 1;
+        CHECK(!sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si) && si.taken == 1 && !c.unproven[0]);
+        free(si.raw);
+        chain_spv_free(&c);
+        /* a node whose scan fails: the named coins alone would be swept, and the rest left (before, it went on) */
+        session_chain node = {.coins = scan_fails, .coin = named_there, .feerate = a_rate};
+        CHECK((no = sweep_tx(&node, psec, named, 1, aspk, BTC_P2PKH_LEN, NULL, &si)) && strstr(no, "did not answer") && !si.raw);
     }
 
     /* a server that hides the coins: alone it gives none (a delay); next to an honest one the prize is there */
@@ -695,8 +733,43 @@ int main(void)
     CHECK(ch.confirmations(ch.ctx, f4id, 0) == -1);
     chain_spv_free(&c);
 
+    /* A sweep takes every coin worth its input at once, here 20, and leaves the dust (before, the 16 largest, with the advice to send
+     * the rest once the first was in a block: by then whoever read the public key in it had taken them) */
+    uint8_t msec[32], mspk[BTC_P2PKH_LEN];
+    spk_of("many", msec, mspk);
+    pthread_mutex_lock(&W.mu);
+    for (int t = 0; t < 3; t++) {
+        btc_tx f;
+        btc_tx_init(&f);
+        CHECK(btc_tx_add_in(&f, other, 20 + (uint32_t)t, BTC_SEQUENCE_FINAL));
+        for (int o = 0; o < (t < 2 ? 10 : 2); o++) CHECK(btc_tx_add_out(&f, t < 2 ? 100000 + 10 * (uint64_t)o + (uint64_t)t : 546, mspk, BTC_P2PKH_LEN));
+        add_tx(&f);
+    }
+    pthread_mutex_unlock(&W.mu);
+    mine_block();
+    view(&c, &ch, &honest, NULL, NULL);
+    c.whole = 1;
+    sweep_info si = {.rate = 50000};
+    const btc_out to_a = {.script_len = BTC_P2PKH_LEN};
+    size_t nop = 0;
+    uint8_t *ops = NULL;
+    CHECK(!sweep_tx(&ch, msec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si) && si.listed == 22 && si.taken == 20 && si.total == 2000910 &&
+          si.fee == btc_fee(btc_vsize_p2pkh(20, &to_a, 1), 50000) && (ops = btc_tx_outpoints(si.raw, si.len, &nop)) && nop == 20);
+    free(ops), free(si.raw);
+    chain_spv_free(&c);
+
+    /* The first sync, from the checkpoint to the tip, takes several operations (on the main chain some 640 000 headers, a minute of each
+     * server an operation): ready goes on while they bring headers (before, one operation, and the rest waited for the first session) */
+    server drip;
+    start(&drip, (lies){.chunk = 1, .slow_ms = 40});
+    view(&c, &ch, &drip, NULL, NULL);
+    c.op_ms = 300;
+    uint64_t synced = 0;
+    CHECK(chain_spv_ready(&c, why, sizeof why) == 1 && spv_tip(&c.headers, &synced) && synced == (uint64_t)W.nb - 1);
+    chain_spv_free(&c);
+
     stop(&honest), stop(&hider), stop(&stale), stop(&noproof), stop(&nowork), stop(&keeper), stop(&blind);
-    stop(&slow), stop(&phantom), stop(&slower);
+    stop(&slow), stop(&phantom), stop(&slower), stop(&drip);
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_chain_spv");
 }

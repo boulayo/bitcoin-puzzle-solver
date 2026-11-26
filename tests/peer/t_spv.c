@@ -3,8 +3,9 @@
 /* t_spv.c - the chain of headers and the Merkle proofs. The rule of the target on real headers of the main chain (the first change of
  * difficulty, at block 32256), then everything else on a chain mined here at the difficulty of regtest: what extends the chain, what is
  * refused (another block before, no proof of work, another target, a time at or below the median, a time in the future), a branch with less
- * work and one with more, the file, and the proofs. */
+ * work and one with more, the file and how it grows, and the proofs. */
 #include "peertest.h"
+#include "chain_spv.h"
 #include "spv.h"
 #include <pzcore/hash.h>
 
@@ -21,7 +22,10 @@ static const struct { unsigned height; const char *hash, *header; } REAL[] = {
      "0100000049c1daab3b6536ff1b2633c3a316a6e06ec287676cdeec4ca7baae6b00000000ac10b36b8f354b3353207de15940a5edbc05bb8364af75b4b5409e7823f2b48923ec3a4bffff001dbd5fa412"},
     {32256, "000000004f2886a170adb7204cb0c7a824217dd24d11a74423d564c4e0904967",
      "010000004b0360d834a330ec7833e30e1f523ee05a0793361e29a73421964f980000000027b64a020af294e903feed93768705336a20090612a043f47af462a2f5e5b564f8ee3a4b6ad8001dd3a43707"},
-    /* the checkpoint pzpeer ships for the main chain, the last block of its period and the first of the next */
+    /* the checkpoint pzpeer ships for the main chain, the first block of the period of the first coin of the puzzles */
+    {338688, "000000000000000017dfe3f5ebf13fdcf41b255ad0c3da4fc880745a221bf959",
+     "020000002b6af4e45531f7346867d23c474e77230edacfe1ec141b0300000000000000000cf62b5b70b30d16e77687f7408f6102161ec2700edd5bb362c0df057f389dd9a905b4542f01191805687df4"},
+    /* a period of today's difficulty: its first block, its last, and the first of the next */
     {969696, "000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b",
      "00e00020ea7409145abed3693b6aa5e269dea055406e0962804301000000000000000000a8f40cc468f3aa4518fdc368e37fc7aff01eb12b293885f847517602a96e3a93d4abc06af01e021779d3a409"},
     {971711, "0000000000000000000051aed6d87a76a4f2387ce41455b61f3cd64cd7a95e2e",
@@ -70,10 +74,17 @@ static void test_main_chain(void)
     memcpy(bad, b, 80), memcpy(bad + 4, hc, 32);                                  /* linked, but its work is for another header */
     CHECK(!spv_add(&ch, 32257, bad, 1, NOW));
     spv_free(&ch);
-    /* the same at today's difficulty: block 971712 from the times of 969696 and 971711; and 969696 starts a chain by its hash */
+    /* the same at today's difficulty: block 971712 from the times of 969696 and 971711 */
     real(969696, a, ha), real(971711, b, hb), real(971712, c, hc);
     CHECK(le32(c + 72) == 0x17020093u && spv_retarget(le32(b + 72), (int64_t)le32(b + 68) - (int64_t)le32(a + 68)) == le32(c + 72));
-    CHECK(spv_init(&ch, BTC_MAIN, 969696, ha) && spv_add(&ch, 969696, a, 1, NOW) && !spv_add(&ch, 969697, c, 1, NOW));
+    /* the checkpoint of the program: that real header, on a period boundary, before block 339085 (the first coin of a puzzle, January
+     * 2015), and it starts a chain by its hash */
+    uint8_t cp[32];
+    uint64_t cph;
+    real(338688, a, ha);
+    CHECK(chain_spv_defaults(NULL, &cph, cp) == 8 && cph == 338688 && cph % SPV_PERIOD == 0 && cph < 339085 && !memcmp(cp, ha, 32));
+    CHECK(le32(a + 68) == 1421084073u && le32(a + 72) == 0x1819012fu);
+    CHECK(spv_init(&ch, BTC_MAIN, cph, cp) && spv_add(&ch, cph, a, 1, NOW) && !spv_add(&ch, cph + 1, c, 1, NOW) && spv_tip_time(&ch) == 1421084073u);
     spv_free(&ch);
     uint8_t g[32];
     spv_genesis(BTC_MAIN, g);
@@ -169,6 +180,23 @@ static void test_chain(void)
     FILE *fp = fopen(path, "r+b");
     CHECK(fp && fseek(fp, 49 + 80 * 20 + 3, SEEK_SET) == 0 && fputc(0x55, fp) != EOF && fclose(fp) == 0);
     CHECK(spv_init(&d, BTC_REGTEST, 100, cp) && !spv_load(&d, path, NOW) && d.n == 20);   /* the headers before the damage are valid */
+    spv_free(&d);
+    /* a save adds to the file what the chain gained at its end and writes nothing of what is there: the damage stays, and a load still
+     * stops at it (before, the file was written whole at every new block, 51 MB on the main chain). After a branch that replaced headers
+     * of the file it is written whole; so is the file of a load that stopped early */
+    mine(spv_header(&c, 130), T0 + 600 * 31 + 7, BITS, 2000, x);
+    CHECK(spv_add(&c, 131, x, 1, NOW) && spv_save(&c, path));
+    CHECK((fp = fopen(path, "rb")) && fseek(fp, 0, SEEK_END) == 0 && ftell(fp) == 49 + 80 * 32 && fclose(fp) == 0);
+    CHECK(spv_init(&d, BTC_REGTEST, 100, cp) && !spv_load(&d, path, NOW) && d.n == 20);
+    spv_free(&d);
+    for (int i = 0; i < 4; i++) mine(i ? f[i - 1] : spv_header(&c, 128), T0 + 600 * (29 + (uint32_t)i) + 11, BITS, 3000 + (uint32_t)i, f[i]);
+    CHECK(spv_add(&c, 129, f[0], 4, NOW) && spv_tip(&c, &tip) && tip == 132 && spv_save(&c, path));
+    CHECK(spv_init(&d, BTC_REGTEST, 100, cp) && spv_load(&d, path, NOW) && d.n == c.n && !memcmp(d.hdr, c.hdr, c.n * 80));
+    spv_free(&d);
+    CHECK((fp = fopen(path, "r+b")) && fseek(fp, 49 + 80 * 5 + 10, SEEK_SET) == 0 && fputc(0x55, fp) != EOF && fclose(fp) == 0);
+    CHECK(spv_init(&d, BTC_REGTEST, 100, cp) && !spv_load(&d, path, NOW) && d.n == 5 && spv_save(&d, path));
+    spv_free(&d);
+    CHECK(spv_init(&d, BTC_REGTEST, 100, cp) && spv_load(&d, path, NOW) && d.n == 5);
     spv_free(&d);
     remove(path);
     spv_free(&c);

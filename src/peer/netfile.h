@@ -44,8 +44,8 @@ bool netfile_parse(const char *text, netfile *nf, char *err, size_t errlen);
 bool netfile_load(const char *path, netfile *nf, char *err, size_t errlen);
 /* The network of puzzle n, written in the program (docs/en/NETWORK.md 5): the public key and the range from the table of the puzzles,
  * the jump seed SHA256("pznet1/jumps" || public key), the schema net-06, at least max(8, (n - 1) / 2 - 44) zero bits, the main chain.
- * A puzzle without a known public key has a linear network: its address, blocks of 2^44 keys, the main chain. Either has the coins of
- * the address of the puzzle as prize= lines (data/prizes.csv). n = 0: the first puzzle whose public key is known and whose key is not. False, with the reason, for a puzzle that is not in the table. */
+ * A puzzle without a known public key has a linear network: its address, blocks of 2^44 keys, the main chain. Either has the coins the
+ * creator put at the address of the puzzle as prize= lines (data/prizes.csv). n = 0: the first puzzle whose public key is known and whose key is not. False, with the reason, for a puzzle that is not in the table. */
 bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen);
 /* What the checks of the claims need of a linear network. */
 void netfile_blocks(const netfile *nf, block_net *out);

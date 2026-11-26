@@ -430,21 +430,23 @@ static bool solo_payout(home *h, const char *found, bool last)
     if (have && home_chain(h, &rpc, &crpc, &ch, why, sizeof why) && ch.ready(ch.ctx, why, sizeof why) == 1) {
         payout_terms t = {0};
         sweep_info si = {0};
-        btc_tx tx;
         uint8_t txid[32];
         char id[65];
-        const char *no = payout_author(PAYOUT_TERMS, &t) ? sweep_tx(&ch, sec, h->prizes, h->nprizes, h->pay_spk, h->pay_len, &t, &si, &tx) : "no terms";
+        const char *no = payout_author(PAYOUT_TERMS, &t) ? sweep_tx(&ch, sec, h->prizes, h->nprizes, h->pay_spk, h->pay_len, &t, &si) : "no terms";
         if (no) snprintf(why, sizeof why, "%s", no);
-        else if (!ch.broadcast(ch.ctx, &tx)) snprintf(why, sizeof why, "the chain did not take the transaction");
+        else if (!(h->cfg->rpc ? chain_rpc_send(&crpc, si.raw, si.len) : chain_spv_send(&h->spv, si.raw, si.len)))
+            snprintf(why, sizeof why, "the chain did not take the transaction");
         else {
-            btc_tx_txid(&tx, txid), btc_hash_to_hex(txid, id);
+            btc_txid(si.raw, si.len, txid), btc_hash_to_hex(txid, id);
             home_say("the coins of the puzzle are sent: %s BTC to the payout address of this home, %s BTC (%u%%) to the author of pzpeer: %s",
-                btc_amount(tx.out[0].value, va), btc_amount(tx.out[1].value, vb), t.author_pct, id);
-            if (si.listed > (int)tx.n_in)
-                home_say("%d smaller coins are left at the puzzle address: pzpeer sweep moves those worth their fee, once this transaction is in a"
-                         " block", si.listed - (int)tx.n_in);
+                btc_amount(si.total - si.fee - si.cut, va), btc_amount(si.cut, vb), t.author_pct, id);
+            if (si.taken == SWEEP_MAX_IN && si.listed > si.taken)
+                home_say("the puzzle address has more coins than a standard transaction holds: the smallest are left there");
+            else if (si.listed > si.taken)
+                home_say("%d coins worth less than their input are left at the puzzle address", si.listed - si.taken);
             sent = true;
         }
+        free(si.raw);
     }
     btc_rpc_done(&rpc);
     if (have && (sent || last)) {
@@ -1042,6 +1044,12 @@ static bool light_chain(home *h, const home_cfg *cfg, char *err, size_t cap)
     h->spv.fallback_feerate = 2000;
     /* six hours without a block: the servers are behind, or lie. The height every waiting session asks: from the servers every ten seconds */
     if (h->chain != BTC_REGTEST) h->spv.max_tip_age = 6 * 3600, h->spv.tip_ms = 10000;
+    /* the first start fetches some 640 000 headers, minutes: now, before the network starts, so that no session waits for them */
+    uint64_t from = cph;
+    const bool kept = spv_tip(&h->spv.headers, &from);
+    if (h->spv.max_tip_age && (uint64_t)time(NULL) > spv_tip_time(&h->spv.headers) + h->spv.max_tip_age)
+        home_say("chain: the block headers since block %llu are fetched from the servers%s", (unsigned long long)from,
+                 kept ? "" : " (the first time: minutes)");
     const int ready = chain_spv_ready(&h->spv, err, cap);
     home_say("chain: %d Electrum server%s, %s%s", n, n == 1 ? "" : "s", err, ready ? "" : " (a session waits for it)");
     return true;
@@ -1114,7 +1122,7 @@ int home_run(const home_cfg *cfg)
     }
     if (!cfg->rpc && !h->nprizes)
         home_say("the network file names no coin of the puzzle address (prize=): servers could hide one, so a payout is shared as always, but"
-                 " the pieces of the key are exchanged, and a key this home finds alone is swept, only with a node of one's own (--rpc)");
+                 " the pieces of the key are exchanged only with a node of one's own (--rpc)");
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,

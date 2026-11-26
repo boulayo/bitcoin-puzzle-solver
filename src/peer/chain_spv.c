@@ -34,6 +34,7 @@ typedef struct {
     electrum *e;
     bool up[CHAIN_SPV_SERVERS];
     int nup;
+    uint64_t to;                   /* the highest block announced by a server that did not lie about its headers */
 } servers;
 
 /* ---- one server ---- */
@@ -135,17 +136,18 @@ static bool fetch_headers(chain_spv *c, electrum *e, uint64_t at, uint64_t to)
     return true;
 }
 
-/* Brings our headers up to the server's. When its chain does not continue ours it may have left it some blocks back: asked again from
- * further back, where spv_add takes its branch only with more work. False when it announces blocks above ours and, answering in time,
- * gives none we keep: it lies, or is on another chain. */
-static bool sync_headers(chain_spv *c, electrum *e)
+/* Brings our headers up to the server's, whose height goes to *announced. When its chain does not continue ours it may have left it some
+ * blocks back: asked again from further back, where spv_add takes its branch only with more work. False when it announces blocks above
+ * ours and, answering in time, gives none we keep: it lies, or is on another chain. */
+static bool sync_headers(chain_spv *c, electrum *e, uint64_t *announced)
 {
     json_doc d;
     const json_val *res;
-    uint64_t to, tip, grown;
+    uint64_t to = 0, tip, grown;
     if (!electrum_call(e, "blockchain.headers.subscribe", NULL, &d, &res)) return true;   /* no answer: the connection is closed */
     const bool ok = json_u64(json_get(res, "height"), &to);
     json_free(&d);
+    *announced = to;
     const bool had = tip_of(c, &tip);
     if (!ok || (had && to <= tip)) return true;
     if (!had) (void)fetch_headers(c, e, c->headers.base, to);
@@ -161,15 +163,16 @@ static bool sync_headers(chain_spv *c, electrum *e)
 
 /* Takes the connections for one operation: those that are down and due are opened, and each brings the headers up to date. A connection
  * left from an earlier operation may have been closed by its server meanwhile: it is opened again once. Each server has op_ms for its
- * calls of the operation, whatever the others take: a slow one costs the operation its own time only. */
+ * calls of the operation, whatever the others take: a slow one costs the operation its own time only. What a server brings goes to the
+ * file at once: the first sync is minutes, and a stop must not lose them. */
 static void open_all(servers *s, chain_spv *c)
 {
     pthread_mutex_lock(&c->io);
-    s->c = c, s->e = c->conn, s->nup = 0;
-    uint64_t before = 0, after = 0;
-    const bool had = tip_of(c, &before);
+    s->c = c, s->e = c->conn, s->nup = 0, s->to = 0;
     const int64_t now = sys_now_ms();
     for (int i = 0; i < c->nservers; i++) {
+        uint64_t to = 0, before = 0, after = 0;
+        const bool had = tip_of(c, &before);
         for (int attempt = 0; attempt < 2; attempt++) {
             const bool kept = s->e[i].fd >= 0;
             if (!kept && now < c->retry[i]) break;
@@ -178,18 +181,21 @@ static void open_all(servers *s, chain_spv *c)
                 break;
             }
             s->e[i].budget = c->op_ms ? c->op_ms : OP_MS;
-            if (!sync_headers(c, &s->e[i])) {
-                electrum_close(&s->e[i]), c->retry[i] = now + RETRY_MS;
+            if (!sync_headers(c, &s->e[i], &to)) {
+                electrum_close(&s->e[i]), c->retry[i] = now + RETRY_MS, to = 0;
                 break;
             }
             if (s->e[i].fd >= 0 || !kept) break;
         }
         s->up[i] = s->e[i].fd >= 0;
         s->nup += s->up[i];
+        if (to > s->to) s->to = to;                             /* also of one whose time ran out in the middle of its headers */
+        pthread_mutex_lock(&c->mu);
+        if (c->headers_path && spv_tip(&c->headers, &after) && (!had || after != before)) (void)spv_save(&c->headers, c->headers_path);
+        pthread_mutex_unlock(&c->mu);
     }
     pthread_mutex_lock(&c->mu);
     c->synced = sys_now_ms();
-    if (c->headers_path && spv_tip(&c->headers, &after) && (!had || after != before)) (void)spv_save(&c->headers, c->headers_path);
     pthread_mutex_unlock(&c->mu);
 }
 
@@ -288,8 +294,24 @@ static int by_claimed_value(const void *a, const void *b)
     return (x->value < y->value) - (x->value > y->value);
 }
 
+/* Whether the server proves the coin l of the script: the transaction that made it (its bytes hashed to its txid) pays the script and
+ * is mature, and its Merkle branch leads to our header of its block. 1 with its value; 0 when it is no coin of the script that can be
+ * spent; -1 when it is not proven (no transaction, no branch, a block above our headers or below the checkpoint) */
+static int prove(chain_spv *c, electrum *e, const uint8_t spk[BTC_P2PKH_LEN], const listed *l, uint64_t tip, uint64_t *value)
+{
+    uint8_t *raw;
+    const uint8_t *ps;
+    size_t len, pl;
+    if (l->height > tip || !get_tx(e, l->txid, &raw, &len)) return -1;
+    const bool ours = btc_prevout(raw, len, l->txid, l->vout, value, &ps, &pl) && pl == BTC_P2PKH_LEN && !memcmp(ps, spk, pl) &&
+                      tip - l->height + 1 >= (is_coinbase(raw, len) ? COINBASE_MATURITY : 1);
+    free(raw);
+    return !ours ? 0 : get_proof(c, e, l->txid, l->height) ? 1 : -1;
+}
+
 /* The proven, confirmed coins of a P2PKH script: the union of what the servers list. A coin some server does not list is dropped when that
- * server proves it spent. -1 when no server answered. */
+ * server proves it spent. -1 when no server answered; for a sweep (c->whole) also when a server listed a coin worth what the sweep takes
+ * that none proves, named in c->unproven: a sweep that left it would show the public key, and whoever is first would take it. */
 static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *out, int max)
 {
     servers s;
@@ -298,6 +320,7 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
     unsigned answered = 0;
     int n = 0;
     open_all(&s, c);
+    c->unproven[0] = 0;
     script_hash(spk, BTC_P2PKH_LEN, sh);
     if (!tip_of(c, &tip)) s.nup = 0;
     for (int i = 0; i < c->nservers && s.nup; i++) {
@@ -317,17 +340,13 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
         for (uint32_t k = 0; l && k < cnt; k++, it = json_next(it)) {
             uint64_t vout, height;
             if (btc_hash_from_hex(json_str(json_get(it, "tx_hash")), l[m].txid) && json_u64(json_get(it, "tx_pos"), &vout) &&
-                json_u64(json_get(it, "height"), &height) && json_u64(json_get(it, "value"), &l[m].value) && height && height <= tip &&
-                vout <= UINT32_MAX)
-                l[m].vout = (uint32_t)vout, l[m].height = height, m++;   /* not in the mempool, nor above what we have verified */
+                json_u64(json_get(it, "height"), &height) && json_u64(json_get(it, "value"), &l[m].value) && height && vout <= UINT32_MAX)
+                l[m].vout = (uint32_t)vout, l[m].height = height, m++;   /* not in the mempool */
         }
         if (m) qsort(l, m, sizeof *l, by_claimed_value);
         for (uint32_t k = 0; k < m && k < (uint32_t)max; k++) {
-            uint8_t *raw = NULL;
-            const uint8_t *ps;
             uint64_t value;
-            size_t len, pl;
-            int j = 0, low = 0;
+            int j = 0, low = 0, got = -1;
             while (j < n && (memcmp(out[j].coin.txid, l[k].txid, 32) || out[j].coin.vout != l[k].vout)) j++;
             if (j < n) {
                 out[j].listed |= 1u << i;
@@ -335,14 +354,20 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
             }
             for (int q = 1; q < n; q++) low = out[q].coin.value < out[low].coin.value ? q : low;
             if (n == max && l[k].value <= out[low].coin.value) continue;   /* full of larger coins */
-            if (get_tx(&s.e[i], l[k].txid, &raw, &len) && btc_prevout(raw, len, l[k].txid, l[k].vout, &value, &ps, &pl) &&
-                pl == BTC_P2PKH_LEN && !memcmp(ps, spk, pl) && tip - l[k].height + 1 >= (is_coinbase(raw, len) ? COINBASE_MATURITY : 1) &&
-                get_proof(c, &s.e[i], l[k].txid, l[k].height) && (n < max || value > out[low].coin.value)) {
+            /* a coin a sweep takes: the others are asked for what this one does not prove */
+            const bool swept = c->whole && l[k].value >= c->whole;
+            for (int t = 0; got < 0 && t < (swept ? c->nservers : 1); t++)
+                if (s.up[(i + t) % c->nservers]) got = prove(c, &s.e[(i + t) % c->nservers], spk, &l[k], tip, &value);
+            if (got > 0 && (n < max || value > out[low].coin.value)) {
                 const int at = n < max ? n++ : low;
                 memcpy(out[at].coin.txid, l[k].txid, 32);
                 out[at].coin.vout = l[k].vout, out[at].coin.value = value, out[at].listed = 1u << i;
+            } else if (got < 0 && swept && !c->unproven[0]) {
+                char id[65];
+                btc_hash_to_hex(l[k].txid, id);
+                snprintf(c->unproven, sizeof c->unproven, "%s lists %s:%u (%llu satoshis, block %llu), which no server proves", c->servers[i], id,
+                         l[k].vout, (unsigned long long)l[k].value, (unsigned long long)l[k].height);
             }
-            free(raw);
         }
         free(l);
         json_free(&d);
@@ -356,16 +381,17 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
                 break;
             }
         }
+    if (!answered || c->unproven[0]) n = -1;
     close_all(&s);
-    return answered ? n : -1;
+    return n;
 }
-
 
 static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
 {
-    found_coin *f = malloc(COINS_MAX * sizeof *f);
+    const int cap = max > COINS_MAX ? max : COINS_MAX;        /* a sweep takes more of them than a session looks at */
+    found_coin *f = malloc((size_t)cap * sizeof *f);
     if (!f) return -1;
-    int n = gather(ctx, spk, f, COINS_MAX);
+    int n = gather(ctx, spk, f, cap);
     if (n > 0) qsort(f, (size_t)n, sizeof *f, payout_by_value);   /* the largest first, as payout_first takes them (the coin begins f) */
     if (n > max) n = max;
     for (int i = 0; i < n; i++) out[i] = f[i].coin;
@@ -373,15 +399,13 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     return n;
 }
 
-static bool broadcast(void *ctx, const btc_tx *tx)
+bool chain_spv_send(chain_spv *c, const uint8_t *raw, size_t n)
 {
-    chain_spv *c = ctx;
     servers s;
-    uint8_t raw[BTC_TX_MAX_SIZE], txid[32], *back;
+    uint8_t txid[32], *back;
     size_t bl;
-    const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
     bool ok = false;
-    if (!n || !btc_tx_txid(tx, txid)) return false;
+    if (!btc_txid(raw, n, txid)) return false;
     open_all(&s, c);
     for (int i = 0; i < c->nservers; i++) {                    /* to every server: one that keeps it to itself changes nothing */
         json_w w;
@@ -398,6 +422,13 @@ static bool broadcast(void *ctx, const btc_tx *tx)
     }
     close_all(&s);
     return ok;
+}
+
+static bool broadcast(void *ctx, const btc_tx *tx)
+{
+    uint8_t raw[BTC_TX_MAX_SIZE];
+    const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
+    return n && chain_spv_send(ctx, raw, n);
 }
 
 /* Output txid:vout: -1 spent by a confirmed transaction, with its proof; -2 when no server gives the transaction (its bytes count only with
@@ -429,11 +460,11 @@ static int look(chain_spv *c, const uint8_t txid[32], uint32_t vout, const uint8
 
 static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout) { return look(ctx, txid, vout, NULL, NULL, NULL); }
 
-/* A coin of the prize (prize= of the network file, or of the program for its networks), looked up alone: the creator's coins are older than
- * the checkpoint, where no kept header proves a block, so no scan of the address shows them. The txid is the file's or the program's, not
- * a server's: the bytes hashed to it are the chain's, value and script. 1 when it pays the script and no server proves it spent; a
- * server that hides a spend only makes the first transaction spend a coin that is gone, which the network refuses: a delay. 0 when it is
- * spent or pays another script, -1 when no server gives the transaction */
+/* A coin of the prize (prize= of the network file, or of the program for its networks), looked up alone: found even when every server hides
+ * it from the scans of the address, and also below the checkpoint, where no kept header proves a block. The txid is the file's or the
+ * program's, not a server's: the bytes hashed to it are the chain's, value and script. 1 when it pays the script and no server proves it
+ * spent; a server that hides a spend only makes the first transaction spend a coin that is gone, which the network refuses: a delay. 0
+ * when it is spent or pays another script, -1 when no server gives the transaction */
 static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
 {
     bool pays = false;
@@ -541,18 +572,23 @@ session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, b
 int chain_spv_ready(chain_spv *c, char *why, size_t cap)
 {
     servers s;
-    uint64_t tip;
-    open_all(&s, c);
-    close_all(&s);
+    uint64_t tip = 0, before;
+    (void)tip_of(c, &tip);
+    do {                                                       /* the first sync takes several operations: as many as bring headers */
+        before = tip;
+        open_all(&s, c);
+        close_all(&s);
+    } while (tip_of(c, &tip) && tip > before && tip < s.to);
     if (!s.nup) return snprintf(why, cap, "no Electrum server answers"), 0;
     if (!tip_of(c, &tip)) return snprintf(why, cap, "no server gave headers that start at the checkpoint"), 0;
     pthread_mutex_lock(&c->mu);
-    const uint8_t *h = spv_header(&c->headers, tip);
-    const uint32_t t = (uint32_t)h[68] | (uint32_t)h[69] << 8 | (uint32_t)h[70] << 16 | (uint32_t)h[71] << 24;
+    const uint64_t t = spv_tip_time(&c->headers), now = (uint64_t)time(NULL);
     pthread_mutex_unlock(&c->mu);
-    const uint64_t now = (uint64_t)time(NULL);
-    if (c->max_tip_age && now > t && now - t > c->max_tip_age)
-        return snprintf(why, cap, "the last block the servers give (%llu) is %llu minutes old", (unsigned long long)tip, (unsigned long long)((now - t) / 60)), 0;
+    const bool old = c->max_tip_age && now > t && now - t > c->max_tip_age;
+    if (old && tip < s.to)
+        return snprintf(why, cap, "the block headers are still being fetched from the servers: block %llu of %llu", (unsigned long long)tip,
+                        (unsigned long long)s.to), 0;
+    if (old) return snprintf(why, cap, "the last block the servers give (%llu) is %llu minutes old", (unsigned long long)tip, (unsigned long long)((now - t) / 60)), 0;
     snprintf(why, cap, "block %llu, %d server%s", (unsigned long long)tip, s.nup, s.nup == 1 ? "" : "s");
     return 1;
 }
@@ -564,8 +600,10 @@ int chain_spv_defaults(const char **out, uint64_t *cp_height, uint8_t cp_hash[32
                                        "tardis.bauerj.eu:50001",          "xtrum.com:50001"};
     const int n = (int)(sizeof MAIN / sizeof *MAIN);
     for (int i = 0; out && i < n; i++) out[i] = MAIN[i];
-    *cp_height = 969696;                                        /* moved forward: make data/prizes.csv again (tools/fetch_prizes.py) */
-    (void)btc_hash_from_hex("000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b", cp_hash);
+    /* the first block of the period in which the coins of the puzzles begin (block 339085, January 2015): every coin ever sent to a puzzle
+     * address is above it and is proven like any other, so it never needs to move */
+    *cp_height = 338688;
+    (void)btc_hash_from_hex("000000000000000017dfe3f5ebf13fdcf41b255ad0c3da4fc880745a221bf959", cp_hash);
     return n;
 }
 

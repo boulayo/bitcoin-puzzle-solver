@@ -25,5 +25,7 @@ session_chain chain_rpc_iface(chain_rpc *c);
  * headers it knows); -1 never (it is on another chain than c->chain). why gets the reason, or where the node is (cap bytes). A
  * session does not start on a node that is behind: the coins it reports may be spent already, or not there yet. */
 int chain_rpc_ready(chain_rpc *c, char *why, size_t cap);
+/* A transaction as bytes (a sweep, larger than a btc_tx) to the node; true also when it has it already. */
+bool chain_rpc_send(chain_rpc *c, const uint8_t *raw, size_t n);
 
 #endif

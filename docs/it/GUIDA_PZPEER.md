@@ -120,7 +120,7 @@ tests/peer/e2e_sweep.sh
 ```
 
 Una chiave con due monete: pzpeer fa e firma la transazione che le sposta, il nodo la accetterebbe, e pzpeer non l'ha mandata (non è nella
-mempool). Pochi secondi.
+mempool). Poi una con venti, due di polvere: le diciotto che valgono il loro input vanno in una sola transazione. Pochi secondi.
 
 ### 3.7 Se qualcosa non va
 
@@ -188,7 +188,8 @@ Da solo, pzpeer:
 - usa pzsolve e pzsign che stanno accanto a lui (altrimenti `--pzsolve PERCORSO`, `--pzsign PERCORSO`);
 - chiede al router di aprire la porta 28140 (`--no-portmap` per non farlo, `--listen 0` per non ricevere connessioni);
 - trova gli altri nodi nella tabella di BitTorrent;
-- legge la catena da server Electrum pubblici e verifica ogni risposta. Con un bitcoind proprio è meglio:
+- legge la catena da server Electrum pubblici e verifica ogni risposta; alla prima partenza scarica da loro le intestazioni dei blocchi
+  dal 2015, circa 50 MB, qualche minuto prima di entrare nella rete (poi le tiene in `headers.bin`). Con un bitcoind proprio è meglio:
   `--rpc 127.0.0.1:8332 --rpc-cookie ~/.bitcoin/.cookie`.
 
 Le opzioni dopo `--` vanno a pzsolve, per esempio `./pzpeer run -- -t 8` (otto thread) o `-- --limit 50` (metà della macchina). pzpeer
@@ -232,20 +233,25 @@ echo CHIAVE_IN_64_CIFRE_ESADECIMALI | ./pzpeer sweep --to TUO_INDIRIZZO --privat
 (la chiave con gli zeri davanti fino a 64 cifre). pzpeer fa e firma la transazione e la dà solo a Slipstream di MARA, un pool che mina le
 transazioni senza mostrarle (`--pool URL` per un altro). Senza `--private` la stampa soltanto, da dare a mano a un pool.
 
-**Funziona anche senza un nodo Bitcoin**, per i puzzle che il programma conosce (tutti quelli ancora aperti): le monete dell'indirizzo
-sono scritte nel programma, e i server Electrum servono solo a confermare che ci sono ancora. Senza nodo, però, `sweep` muove tutte le
-monete dell'indirizzo o nessuna, perché una transazione che ne spende solo una parte mostra la chiave pubblica e lascia il resto al
-primo che arriva. Quindi rifiuta, e dice perché, in due casi:
+**Funziona anche senza un nodo Bitcoin**, per qualsiasi chiave: i server Electrum elencano le monete dell'indirizzo, e pzpeer crede solo
+a quelle che provano, ciascuna con la sua transazione e la prova che sta in un blocco. Per questo tiene le intestazioni dei blocchi dal
+gennaio 2015 (blocco 338688, prima della prima moneta di ogni puzzle): ogni volta le scarica dai server, circa 50 MB, qualche minuto
+(`the block headers since block 338688 are fetched from the servers`). Le monete che il creatore ha messo sui puzzle aperti sono anche
+scritte nel programma, e vengono cercate una per una: un server che le nasconde non le fa sparire.
 
-- un server ha nascosto una delle monete scritte nel programma, o nessuno ha risposto (`a server hid a coin of the address...`): riprova
-  più tardi, oppure usa un tuo nodo con `--rpc HOST:PORTA --rpc-cookie FILE`;
-- la chiave è di un indirizzo che il programma non conosce (`servers cannot show the coins of an address that are older than their
-  checkpoint...`): le monete vecchie di un indirizzo si vedono solo con un nodo proprio, quindi serve `--rpc`.
+`sweep` muove tutte le monete dell'indirizzo o nessuna, perché una transazione che ne spende solo una parte mostra la chiave pubblica e
+lascia il resto al primo che arriva. Quindi rifiuta, e dice perché, in due casi:
 
-Con `--rpc` prende tutto quello che il nodo elenca. In ogni caso dice quante monete lascia: quelle che valgono meno della commissione
-per spenderle e quelle oltre le 16 che entrano in una transazione. La chiave del puzzle 38 (`000...0022382facd0`, ormai vuoto) serve a
-provare il comando senza rischi: con `--rpc` risponde `no transaction: the address has no confirmed coin`, senza nodo il secondo rifiuto
-qui sopra.
+- la catena non ha risposto su tutte le monete (`the chain did not answer about every coin of the address...`): un server ha nascosto
+  una moneta scritta nel programma, nessuno ha risposto, o è fallita la scansione del tuo nodo; riprova più tardi, oppure usa un tuo nodo
+  con `--rpc HOST:PORTA --rpc-cookie FILE`;
+- un server elenca una moneta che nessun server prova (`... which no server proves: leave that server out`): lascialo fuori dando gli
+  altri con `--electrum HOST:PORTA`, oppure usa `--rpc`.
+
+Prende in una sola transazione tutte le monete che valgono più della commissione per spenderle, fino alle 675 che entrano in una
+transazione standard, e dice quante ne lascia: quelle che valgono meno (la polvere che arriva sugli indirizzi dei puzzle), che chi vede la
+chiave pubblica può prendersi. La chiave del puzzle 38 (`000...0022382facd0`, ormai vuoto) serve a provare il comando senza rischi:
+risponde `no transaction: the address has no confirmed coin`, con un nodo o senza.
 
 ### 5.4 Un nodo sempre acceso
 
@@ -291,5 +297,6 @@ I file della cartella: `home.seed`, `start.key`, `terms`, `payout`, `failed-sign
 | `pzsolve ended with status ...` | leggere `pzsolve.out`; la casa resta come custode |
 | `64 failed signings of this home on this network: no more with this home seed` | la casa ha raggiunto il tetto a vita delle firme fallite e non firma più: fermarla, spostare `home.seed` altrove (non cancellarlo) e riavviarla; nasce una casa nuova, con cammini e pezzi nuovi |
 | `10 payouts of this home on this network that did not pay: no more with this home seed` | la casa ha raggiunto il tetto a vita dei pagamenti non riusciti e non ne tenta più su questa rete: come sopra, spostare `home.seed` altrove e riavviarla |
-| `servers cannot show the coins of an address ...: Use a node of your own (--rpc)` | `pzpeer sweep` senza nodo funziona solo per i puzzle aperti, le cui monete sono nel programma: per un altro indirizzo serve `--rpc` |
-| `a server hid a coin of the address, or none answered about it` | riprovare più tardi o con altri server; senza tutte le monete del premio lo sweep non fa nessuna transazione, apposta |
+| `the block headers since block 338688 are fetched from the servers` | senza nodo, la prima partenza (e ogni `pzpeer sweep`) scarica le intestazioni dei blocchi dal 2015, circa 50 MB: aspettare qualche minuto; la casa entra nella rete dopo |
+| `the chain did not answer about every coin of the address` | riprovare più tardi, con altri server o con un nodo proprio (`--rpc`); senza tutte le monete dell'indirizzo lo sweep non fa nessuna transazione, apposta |
+| `... which no server proves: leave that server out` | un server elenca una moneta senza la sua prova: dare gli altri server con `--electrum HOST:PORTA`, o usare `--rpc` |

@@ -577,9 +577,9 @@ static void *alive_main(void *arg)
 }
 
 int session_coins(const session_chain *ch, const uint8_t spk[BTC_P2PKH_LEN], const payout_coin *named, int nnamed, payout_coin *out,
-                  int *unseen)
+                  int max, int *unseen)
 {
-    const int scanned = ch->coins(ch->ctx, spk, out, SESSION_COINS_MAX - SESSION_PRIZES_MAX);
+    const int scanned = ch->coins(ch->ctx, spk, out, max - SESSION_PRIZES_MAX);
     int n = scanned < 0 ? 0 : scanned;
     *unseen = scanned < 0;
     for (int i = 0; i < nnamed && i < SESSION_PRIZES_MAX && ch->coin; i++) {
@@ -599,7 +599,7 @@ static int coins_of(sess *s, const uint8_t spk[BTC_P2PKH_LEN], const payout_coin
     alive al = {.s = s};
     pthread_t t;
     const bool beating = pthread_create(&t, NULL, alive_main, &al) == 0;
-    const int n = session_coins(s->c->chain, spk, named, nnamed, out, unseen);
+    const int n = session_coins(s->c->chain, spk, named, nnamed, out, SESSION_COINS_MAX, unseen);
     atomic_store(&al.stop, true);
     if (beating) pthread_join(t, NULL);
     return n;
