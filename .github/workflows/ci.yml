@@ -10,6 +10,8 @@
 #   macos-arm64    macos-15          Apple Silicon, Apple clang
 #   macos-x86_64   macos-15          the Intel binary, cross-compiled on the Apple Silicon runner (make MACOS_ARCH=x86_64, Apple
 #                                    clang's -arch) and run under Rosetta (arch -x86_64) when the runner has it
+#   peer-sanitizers ubuntu-22.04     the unit tests of pzpeer under ASAN, UBSAN and TSAN, its fuzzer, the self-test of pzsolve under ASAN
+#   regtest        ubuntu-22.04      Bitcoin Core in regtest, and on it the session, the whole network, sweep and the linear search
 #
 # Runner labels change over time (macos-13 was retired; the Intel images, macos-15-intel, are being retired and their jobs waited
 # in the queue for a quarter of an hour and were cancelled, which is why the Intel binary is built on the Apple Silicon runner):
@@ -346,3 +348,77 @@ jobs:
             build/pzsign
           if-no-files-found: ignore
           retention-days: 7
+
+  # pzpeer under the sanitizers: its unit tests with AddressSanitizer and UndefinedBehaviorSanitizer, then with ThreadSanitizer, both
+  # with the real pzsign (the tests of the two-party signing and of the session), the fuzzer of its readers of hostile input for a
+  # minute under ASAN, and the self-test of pzsolve under ASAN. Any report stops the test that made it.
+  peer-sanitizers:
+    name: pzpeer under the sanitizers (ASAN, UBSAN, TSAN)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      PZSIGN: build/pzsign
+      ASAN: -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: pzsign (OpenSSL, cb-mpc and pzsign, some minutes)
+        run: make -j"$(nproc)" signer
+      - name: The unit tests of pzpeer under ASAN and UBSAN
+        run: make -j"$(nproc)" BUILD=build/asan OPT="$ASAN" peer-test
+      - name: The fuzzer of hostile input under ASAN (60 s)
+        run: make BUILD=build/asan OPT="$ASAN" peer-fuzz FUZZ_SECONDS=60
+      - name: The self-test of pzsolve under ASAN and UBSAN
+        run: make -j"$(nproc)" BUILD=build/asan OPT="$ASAN" all && build/asan/pzsolve selftest
+      # the kernels of the runners randomize addresses with more bits than ThreadSanitizer can map: 28 is what it takes
+      - name: The unit tests of pzpeer under TSAN
+        run: |
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          make -j"$(nproc)" BUILD=build/tsan OPT="-O1 -fsanitize=thread" peer-test
+
+  # The network on a node of its own: Bitcoin Core in regtest (the release of bitcoincore.org, checked against the hash of its
+  # SHA256SUMS), and on it the session of two homes with the real pzsign (every case of t_session), the whole network of three homes
+  # with a node and then with the light chain through two Electrum stand-ins, pzpeer sweep, and the shared linear search
+  # (tests/peer/e2e_*.sh). Each script ends with a PASSED or FAILED line and keeps its folder when it fails.
+  regtest:
+    name: the network on bitcoind in regtest (session, three homes, sweep, linear search)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      BITCOIN: '28.1'
+      BITCOIN_SHA256: 07f77afd326639145b9ba9562912b2ad2ccec47b8a305bd075b4f4cb127b7ed7   # bitcoin-28.1-x86_64-linux-gnu.tar.gz
+      PZ_REGTEST: 127.0.0.1:18443:pz:pz
+      PZSIGN: build/pzsign
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Bitcoin Core in regtest
+        run: |
+          f=bitcoin-$BITCOIN-x86_64-linux-gnu.tar.gz
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$f" "https://bitcoincore.org/bin/bitcoin-core-$BITCOIN/$f"
+          echo "$BITCOIN_SHA256  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/regtest"
+          "$RUNNER_TEMP/bitcoin-$BITCOIN/bin/bitcoind" -regtest -daemon -datadir="$RUNNER_TEMP/regtest" -rpcuser=pz -rpcpassword=pz \
+              -rpcport=18443 -port=18444 -listen=0 -fallbackfee=0.0002
+          for i in $(seq 60); do
+            curl -s --user pz:pz --data-binary '{"jsonrpc":"1.0","id":1,"method":"getblockcount","params":[]}' http://127.0.0.1:18443/ |
+                grep -q '"result"' && exit 0
+            sleep 1
+          done
+          echo "::error::bitcoind did not answer"; exit 1
+      - name: Build (pzsolve, pzpeer and its tests, pzsign)
+        run: make -j"$(nproc)" all peer-tests signer
+      - name: The session of two homes on the node
+        run: build/peer/t_session
+      - name: The whole network, with a node
+        run: tests/peer/e2e_net.sh
+      - name: The whole network, with the light chain
+        run: PZ_E2E_LIGHT=1 tests/peer/e2e_net.sh
+      - name: pzpeer sweep
+        run: tests/peer/e2e_sweep.sh
+      - name: The shared linear search
+        run: tests/peer/e2e_linear.sh
+      - name: The log of the node
+        if: failure()
+        run: tail -n 200 "$RUNNER_TEMP/regtest/regtest/debug.log"

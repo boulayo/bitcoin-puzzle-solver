@@ -4,7 +4,8 @@
 # openssl.sh DIR - the static OpenSSL that cb-mpc needs (signer/vendor/README.md), built into DIR (DIR/include, DIR/lib/libcrypto.a)
 # for the compiler $CC: for Windows when it is a MinGW-w64 one, for $MACOS_ARCH (arm64 or x86_64) on macOS when it is set, else for the
 # machine. The release tarball is checked by its hash and
-# built as it is; the tree it is built in is removed at the end (the tarball stays for the next build).
+# built as it is; the tree it is built in is removed at the end (the tarball stays for the next build). signer/openssl-LICENSE.txt is the
+# LICENSE.txt of this version, which the release archives carry (tools/package_release.sh): take it again with a new VER.
 set -eu
 DIR=$1
 VER=3.6.4

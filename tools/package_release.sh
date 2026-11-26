@@ -4,29 +4,31 @@
 #
 #   tools/package_release.sh                 build and package Linux x86-64 and Windows x86-64 into dist-release/
 #   tools/package_release.sh linux           only the Linux x86-64 package
-#   tools/package_release.sh windows         only the Windows x86-64 package (needs MinGW-w64, see WINCC)
-#   tools/package_release.sh --pack BINARY OS ARCH
-#                                            package a binary that is already built (what the release workflow does on every
-#                                            runner); OS is linux, macos or windows, ARCH is x86_64 or arm64
+#   tools/package_release.sh windows         only the Windows x86-64 package (needs MinGW-w64, see WINCC and WINCXX)
+#   tools/package_release.sh --pack DIR OS ARCH
+#                                            package the programs already built in the build folder DIR (what the release
+#                                            workflow does on every runner); OS is linux, macos or windows, ARCH is x86_64 or arm64
 #   tools/package_release.sh --sums          (re)write SHA256SUMS for the archives in dist-release/
 #
 # Output (OUT, default dist-release/; <version> is <version>-test.<commit> for a test build, see PZ_VERSION below):
-#   pzsolve-<version>-linux-x86_64.tar.gz     one top folder per archive, with the binary, README.md, LICENSE (if the
-#   pzsolve-<version>-windows-x86_64.zip      repository has one), CHANGELOG.md, the user documents and BUILD-INFO.txt
-#   SHA256SUMS
+#   pzsolve-<version>-linux-x86_64.tar.gz     one top folder per archive, with the three programs (pzsolve, pzpeer, pzsign),
+#   pzsolve-<version>-windows-x86_64.zip      README.md, LICENSE (if the repository has one), CHANGELOG.md, the user documents,
+#   SHA256SUMS                                licenses/ (those of libsecp256k1, cb-mpc and OpenSSL, which pzpeer and pzsign hold)
+#                                             and BUILD-INFO.txt
 #
-# The user documents are docs/en/USAGE.md, docs/en/ALGORITHMS.md, docs/it and docs/img (the DOCS list of this script). The ones for developers
-# (RESEARCH, ARCHITECTURE, RELEASING, CONTRIBUTING, tools/) stay in the repository, and the shipped files link to them by their
-# github.com address.
+# The user documents are docs/en/USAGE.md, docs/en/ALGORITHMS.md, docs/en/NETWORK.md, docs/it and docs/img (the DOCS list of this
+# script). The ones for developers (RESEARCH, ARCHITECTURE, RELEASING, CONTRIBUTING, tools/) stay in the repository, and the shipped
+# files link to them by their github.com address.
 #
-# The builds are the ones of the Makefile, from scratch, in build/release/<target>: Linux dynamic against glibc (the code avoids
-# the __isoc23_* symbols and anything newer than glibc 2.34, so the binary starts on older distributions; checked below), Windows
-# static with MinGW-w64 (only system DLLs; checked below). Release builds never use -march=native, the program picks its SIMD
+# The builds are the ones of the Makefile, from scratch, in build/release/<target>: Linux dynamic against glibc, needing nothing newer
+# than glibc 2.34 so that the programs start on older distributions (checked below): pzsolve avoids the newer symbols in its code, but
+# pzpeer, pzsign and the OpenSSL and libgcc they hold take those of the machine that builds them, so the Linux package is built on
+# Ubuntu 22.04, as the release workflow does; Windows static with MinGW-w64 (only system DLLs; checked below). Release builds never use -march=native, the program picks its SIMD
 # engine at run time. The Makefile builds with -g (the build/ folders keep the debug information for gdb, valgrind and the
 # sanitizers); the binary that goes into an archive is a copy with the debug information and the symbol table stripped (strip,
 # `strip -x` on macOS, the MinGW strip for Windows; a missing strip only warns and the package is then simply bigger).
-# Environment: OUT, JOBS, WINCC (default x86_64-w64-mingw32-gcc-posix), SKIP_TESTS=1 (skip the self-test), PZ_VERSION (the version of
-# the archives and of the binaries the script builds; see VERSION below).
+# Environment: OUT, JOBS, WINCC and WINCXX (default x86_64-w64-mingw32-gcc-posix and -g++-posix), SKIP_TESTS=1 (skip the self-tests),
+# PZ_VERSION (the version of the archives and of the binaries the script builds; see VERSION below).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -36,9 +38,13 @@ OUT=${OUT:-dist-release}
 # VERSION-test.COMMIT for any other commit: a test build; docs/en/RELEASING.md), which the builds below are then given
 VERSION=${PZ_VERSION:-$(make -s print-version 2>/dev/null || tr -d '[:space:]' < VERSION)}
 WINCC=${WINCC:-x86_64-w64-mingw32-gcc-posix}
+WINCXX=${WINCXX:-x86_64-w64-mingw32-g++-posix}
 JOBS=${JOBS:-$( (nproc || sysctl -n hw.ncpu || echo 2) 2>/dev/null | head -1)}
 export COPYFILE_DISABLE=1          # macOS tar: no ._* AppleDouble files in the archives
-DOCS=(docs/en/USAGE.md docs/en/ALGORITHMS.md docs/it docs/img)
+DOCS=(docs/en/USAGE.md docs/en/ALGORITHMS.md docs/en/NETWORK.md docs/it docs/img)
+PROGRAMS=(pzsolve pzpeer pzsign)
+# the licenses of the code that pzpeer and pzsign hold besides the project's: its name in licenses/, then the file
+LICENSES=(libsecp256k1.txt lib/secp256k1/COPYING cb-mpc.md signer/vendor/cb-mpc/LICENSE.md OpenSSL.txt signer/openssl-LICENSE.txt)
 
 # owner of the archive members: root, whoever built the package (GNU tar and bsdtar spell the options differently)
 TAROPTS=()
@@ -88,22 +94,27 @@ strip_binary() {
   echo "  stripped $(basename "$f"): $before -> $(wc -c < "$f" | tr -d ' ') bytes"
 }
 
-# pack BINARY OS ARCH: stages <name>/ and writes <name>.tar.gz (linux, macos) or <name>.zip (windows) into $OUT
+# pack DIR OS ARCH: stages <name>/ with the programs of the build folder DIR and writes <name>.tar.gz (linux, macos) or <name>.zip
+# (windows) into $OUT
 pack() {
-  local bin=$1 os=$2 arch=$3
-  [ -f "$bin" ] || die "no such binary: $bin"
+  local dir=$1 os=$2 arch=$3 ext="" p
   case "$os" in linux|macos|windows) ;; *) die "unknown OS '$os' (linux, macos or windows)" ;; esac
-  local name="pzsolve-$VERSION-$os-$arch" exe=pzsolve
-  [ "$os" = windows ] && exe=pzsolve.exe
+  [ "$os" = windows ] && ext=.exe
+  for p in "${PROGRAMS[@]}"; do [ -f "$dir/$p$ext" ] || die "no $p$ext in $dir"; done
+  local name="pzsolve-$VERSION-$os-$arch"
   local stage; stage=$(mktemp -d "${TMPDIR:-/tmp}/pzpack.XXXXXX")
   STAGES+=("$stage")
   local d="$stage/$name"
-  mkdir -p "$d" "$OUT"
-  cp "$bin" "$d/$exe"
-  chmod 755 "$d/$exe"
-  strip_binary "$d/$exe" "$os"
+  mkdir -p "$d/licenses" "$OUT"
+  for p in "${PROGRAMS[@]}"; do
+    cp "$dir/$p$ext" "$d/$p$ext"
+    chmod 755 "$d/$p$ext"
+    strip_binary "$d/$p$ext" "$os"
+  done
+  local i
+  for ((i = 0; i < ${#LICENSES[@]}; i += 2)); do cp "${LICENSES[i + 1]}" "$d/licenses/${LICENSES[i]}" || die "missing license: ${LICENSES[i + 1]}"; done
   cp README.md "$d/"
-  for f in LICENSE LICENSE.md LICENSE.txt COPYING CHANGELOG.md; do [ -f "$f" ] && cp "$f" "$d/"; done
+  for f in LICENSE LICENSE.md LICENSE.txt COPYING NOTICE CHANGELOG.md; do [ -f "$f" ] && cp "$f" "$d/"; done
   local doc
   for doc in "${DOCS[@]}"; do
     [ -e "$doc" ] || die "missing document: $doc"
@@ -111,14 +122,14 @@ pack() {
     cp -R "$doc" "$d/$doc"
   done
   {
-    echo "pzsolve $VERSION"
+    echo "pzsolve, pzpeer and pzsign $VERSION"
     echo "platform:  $os-$arch"
     echo "commit:    $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo "built:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "builder:   $(uname -sm)"
   } > "$d/BUILD-INFO.txt"
   find "$d" -type d -exec chmod 755 {} +
-  find "$d" -type f ! -name "$exe" -exec chmod 644 {} +
+  find "$d" -type f ! -name 'pz*' -exec chmod 644 {} +
   rm -f "$OUT/$name.tar.gz" "$OUT/$name.zip"
   local abs_out; abs_out=$(cd "$OUT" && pwd)
   if [ "$os" = windows ]; then
@@ -146,15 +157,19 @@ build_linux() {
   local dir=build/release/linux
   say "Linux x86-64: build ($(${CC:-cc} --version | head -1))"
   rm -rf "$dir"
-  make -s BUILD="$dir" PZ_VERSION="$VERSION" -j"$JOBS"
-  if [ -z "${SKIP_TESTS:-}" ]; then say "Linux x86-64: self-test"; "$dir/pzsolve" selftest | tail -2; fi
+  make -s BUILD="$dir" PZ_VERSION="$VERSION" -j"$JOBS" all peer signer
+  if [ -z "${SKIP_TESTS:-}" ]; then
+    say "Linux x86-64: self-tests"
+    "$dir/pzsolve" selftest | tail -2
+    "$dir/pzsign" selftest | tail -1
+    "$dir/pzpeer" version
+  fi
   if command -v objdump >/dev/null 2>&1; then
-    local r
-    r=$(tools/check_binary.sh linux "$dir/pzsolve" 2>&1) || die "$r"
-    echo "  glibc: $r"
+    local r p
+    for p in "${PROGRAMS[@]}"; do r=$(tools/check_binary.sh linux "$dir/$p" 2>&1) || die "$p: $r"; echo "  $p, glibc: $r"; done
   fi
   say "Linux x86-64: package"
-  pack "$dir/pzsolve" linux x86_64
+  pack "$dir" linux x86_64
 }
 
 build_windows() {
@@ -162,24 +177,24 @@ build_windows() {
   local dir=build/release/windows
   say "Windows x86-64: build ($($WINCC --version | head -1))"
   rm -rf "$dir"
-  make -s CC="$WINCC" BUILD="$dir" PZ_VERSION="$VERSION" -j"$JOBS"
+  make -s CC="$WINCC" CXX="$WINCXX" BUILD="$dir" PZ_VERSION="$VERSION" -j"$JOBS" all peer signer
   local objdump=${WINCC%gcc*}objdump
   if command -v "$objdump" >/dev/null 2>&1; then
-    local r
-    r=$(OBJDUMP="$objdump" tools/check_binary.sh windows "$dir/pzsolve.exe" 2>&1) || die "$r"
-    echo "  pzsolve.exe $r"
+    local r p
+    for p in "${PROGRAMS[@]}"; do r=$(OBJDUMP="$objdump" tools/check_binary.sh windows "$dir/$p.exe" 2>&1) || die "$p.exe: $r"; echo "  $p.exe $r"; done
   fi
   if [ -z "${SKIP_TESTS:-}" ] && command -v wine >/dev/null 2>&1; then
-    say "Windows x86-64: self-test under Wine"
+    say "Windows x86-64: self-tests under Wine"
     WINEDEBUG=-all wine "$dir/pzsolve.exe" selftest 2>&1 | tr -d '\r' | tail -2
+    WINEDEBUG=-all wine "$dir/pzsign.exe" selftest 2>&1 | tr -d '\r' | tail -1
   fi
   say "Windows x86-64: package"
-  pack "$dir/pzsolve.exe" windows x86_64
+  pack "$dir" windows x86_64
 }
 
 case "${1:-all}" in
   -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
-  --pack)    [ $# -ge 4 ] || die "usage: $0 --pack BINARY OS ARCH"; pack "$2" "$3" "$4"; exit 0 ;;
+  --pack)    [ $# -ge 4 ] || die "usage: $0 --pack DIR OS ARCH"; pack "$2" "$3" "$4"; exit 0 ;;
   --sums)    write_sums; exit 0 ;;
   linux)     build_linux ;;
   windows)   build_windows ;;

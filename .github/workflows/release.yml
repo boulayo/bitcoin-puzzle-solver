@@ -1,4 +1,5 @@
-# Release: builds the five binaries in release mode, packages them, writes SHA256SUMS and creates the GitHub release.
+# Release: builds pzsolve, pzpeer and pzsign for five platforms in release mode, packages them, writes SHA256SUMS and creates the
+# GitHub release.
 #
 # How to release: bump VERSION, add the "## [X.Y.Z]" section to CHANGELOG.md, then either
 #   - push the tag vX.Y.Z (it must match VERSION), or
@@ -21,14 +22,16 @@
 # another commit than the one this run built: the files would not come from the tagged commit, while the tag and the notes stay as
 # they are. Tick "replace" in a manual run to do it on purpose; the job log says what happened.
 #
-# Archives (one top folder each, with the binary, README.md, LICENSE if present, CHANGELOG.md, the user documents and BUILD-INFO.txt):
+# Archives (one top folder each, with the three programs, README.md, LICENSE, NOTICE, CHANGELOG.md, the user documents, licenses/ with
+# those of libsecp256k1, cb-mpc and OpenSSL, and BUILD-INFO.txt):
 # (<version> is <version>-test.<commit> for a test build)
 #   pzsolve-<version>-linux-x86_64.tar.gz    pzsolve-<version>-linux-arm64.tar.gz
 #   pzsolve-<version>-macos-arm64.tar.gz     pzsolve-<version>-macos-x86_64.tar.gz
 #   pzsolve-<version>-windows-x86_64.zip     SHA256SUMS
 # The same archives can be made on a Linux machine without Actions: tools/package_release.sh.
-# The binary inside every archive is a stripped copy (tools/package_release.sh does it in the Package step, after the macOS
-# signature, which it applies again); the builds themselves keep their debug information.
+# The programs inside every archive are stripped copies (tools/package_release.sh does it in the Package step, after the macOS
+# signature, which it applies again); the builds themselves keep their debug information. pzsign also builds OpenSSL (a few minutes,
+# signer/openssl.sh).
 #
 # Release builds are portable: the Makefile never passes -march=native (the program picks its SIMD engine at run time).
 # Linux binaries are built on Ubuntu 22.04 so that they need at most glibc 2.34. The Windows exe is cross-compiled with
@@ -164,26 +167,30 @@ jobs:
         run: |
           echo "::add-matcher::.github/problem-matchers/cc.json"
           if [ "${{ matrix.os }}" = windows ]; then
-            make windows PZ_VERSION="$PZV" -k -j"$(nproc)" 2>&1 | tee build.log
-            echo "BIN=build/win/pzsolve.exe" >> "$GITHUB_ENV"
+            make windows winsigner PZ_VERSION="$PZV" -k -j"$(nproc)" 2>&1 | tee build.log
+            echo "DIR=build/win" >> "$GITHUB_ENV"; echo "EXE=.exe" >> "$GITHUB_ENV"
           else
             MAKEARCH=""
             if [ "${{ matrix.os }}-${{ matrix.arch }}" = macos-x86_64 ]; then MAKEARCH="MACOS_ARCH=x86_64"; fi
-            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" $MAKEARCH PZ_VERSION="$PZV" 2>&1 | tee build.log
-            echo "BIN=build/pzsolve" >> "$GITHUB_ENV"
+            make -k -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null | head -1)" $MAKEARCH PZ_VERSION="$PZV" all peer signer 2>&1 | tee build.log
+            echo "DIR=build" >> "$GITHUB_ENV"; echo "EXE=" >> "$GITHUB_ENV"
           fi
-      - name: The macOS binary is for ${{ matrix.arch }}
+          echo "PROGRAMS=pzsolve pzpeer pzsign" >> "$GITHUB_ENV"
+      - name: The macOS programs are for ${{ matrix.arch }}
         if: matrix.os == 'macos'
         run: |
-          file build/pzsolve
-          lipo -archs build/pzsolve
-          [ "$(lipo -archs build/pzsolve)" = "${{ matrix.arch }}" ] || { echo "::error::the binary is not for ${{ matrix.arch }}: $(lipo -archs build/pzsolve)"; exit 1; }
+          for p in $PROGRAMS; do
+            file build/$p
+            [ "$(lipo -archs build/$p)" = "${{ matrix.arch }}" ] || { echo "::error::$p is not for ${{ matrix.arch }}: $(lipo -archs build/$p)"; exit 1; }
+          done
       - name: Ad-hoc code signature
         if: matrix.os == 'macos'
         run: |
-          codesign -s - --force build/pzsolve
-          codesign -v build/pzsolve
-          codesign -dv build/pzsolve 2>&1 | head -5
+          for p in $PROGRAMS; do
+            codesign -s - --force build/$p
+            codesign -v build/$p
+            codesign -dv build/$p 2>&1 | head -3
+          done
       # The self-test gates the release. On macOS it leaves out OpenCL (Apple's deprecated framework, no usable GPU on the runners).
       # The x86_64 macOS binary is run under Rosetta on the Apple Silicon runner; without Rosetta the job fails: an untested binary
       # is not published.
@@ -201,21 +208,25 @@ jobs:
               echo "::error::Rosetta is not installed on this runner: the x86_64 macOS binary cannot be tested here, and an untested binary is not published"; exit 1
             fi
           fi
-          $RUN "$BIN" version
-          $RUN "$BIN" version | sed -n 1p | grep -q "^pzsolve $PZV (" || { echo "::error::the binary does not report the version $PZV"; exit 1; }
-          $RUN "$BIN" selftest
-      - name: Linux binary needs no glibc newer than 2.34
+          for p in pzsolve pzpeer; do
+            $RUN build/$p version
+            $RUN build/$p version | sed -n 1p | grep -q "^$p $PZV (" || { echo "::error::$p does not report the version $PZV"; exit 1; }
+          done
+          $RUN build/pzsign version | sed -n 1p | grep -qx "pzsign $PZV" || { echo "::error::pzsign does not report the version $PZV"; exit 1; }
+          $RUN build/pzsolve selftest
+          $RUN build/pzsign selftest
+      - name: Linux programs need no glibc newer than 2.34
         if: matrix.os == 'linux'
-        run: tools/check_binary.sh linux "$BIN"
-      - name: Windows exe imports only system DLLs
+        run: for p in $PROGRAMS; do tools/check_binary.sh linux build/$p; done
+      - name: Windows exes import only system DLLs
         if: matrix.os == 'windows'
-        run: tools/check_binary.sh windows "$BIN"
+        run: for p in $PROGRAMS; do tools/check_binary.sh windows build/win/$p.exe; done
       - name: Package
         env:
           PZ_VERSION: ${{ needs.version.outputs.build }}
         run: |
           export OUT=dist-release
-          tools/package_release.sh --pack "$BIN" ${{ matrix.os }} ${{ matrix.arch }}
+          tools/package_release.sh --pack "$DIR" ${{ matrix.os }} ${{ matrix.arch }}
           ls -l dist-release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -257,6 +268,9 @@ jobs:
           ./pzsolve.exe selftest
           ./pzsolve.exe hunt -p 20 -c ci20 -d campaigns --ui log -q --no-gpu
           grep -qi d2c55 campaigns/ci20/FOUND.txt
+          ./pzpeer.exe version | sed -n 1p | tr -d '\r' | grep -q "^pzpeer $PZV (" || { echo "::error::pzpeer.exe does not report the version $PZV"; exit 1; }
+          ./pzpeer.exe netcheck 140
+          ./pzsign.exe selftest
 
   release:
     name: GitHub release
@@ -322,6 +336,7 @@ jobs:
             echo
             echo "Check the download against \`SHA256SUMS\` (\`sha256sum -c SHA256SUMS\`, or \`shasum -a 256 -c SHA256SUMS\` on macOS)."
             echo
+            echo "- **Three programs:** \`pzsolve\`, the solver; \`pzpeer\`, the daemon of the shared network (a home: \`pzpeer run\`; a node: \`pzpeer node\`), which runs \`pzsolve\` and the two-party signer \`pzsign\`: keep the three in one folder. The network is described in \`docs/en/NETWORK.md\`; \`docs/it/GUIDA_PZPEER.md\` is a guide to try it and use it (in Italian)."
             echo "- **GPU:** CUDA and OpenCL on Linux and Windows. macOS and Linux arm64 builds run on the CPU (NEON hashing for the linear scan, portable code for the rest, slower than the AVX2/AVX-512 engines); Apple's OpenCL is tried but not supported."
             echo "- **macOS:** the binaries are signed ad hoc, not notarized. If macOS refuses to open a file downloaded with a browser, run \`xattr -dr com.apple.quarantine pzsolve-$VERSION-macos-*\` once after unpacking."
             echo "- **Windows:** the exe is not code-signed; SmartScreen may ask for \"More info\" and \"Run anyway\"."

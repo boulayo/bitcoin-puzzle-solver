@@ -43,7 +43,7 @@
 VERSION                current version
 CHANGELOG.md           history of the changes
 tools/release.sh       release script: checks, bumps VERSION, verifies, tags
-tools/package_release.sh  builds the Linux and Windows packages locally (the workflow packs the binary of every platform with it)
+tools/package_release.sh  builds the Linux and Windows packages locally (the workflow packs the programs of every platform with it)
 tools/verify.sh        the full verification run by the release script
 tools/check_binary.sh  the two checks of a binary that is about to be shipped: the glibc ceiling of the Linux one, the DLLs of the Windows one
 tools/check_docs.sh    the two user guides in step (sections, options, environment variables) and the links of every document
@@ -54,12 +54,19 @@ GitHub Releases        the binaries of every published version, with SHA256SUMS
 
 The repository does not keep binaries in git. The binaries of each version are release assets on GitHub.
 
-The Makefile always builds with `-g`, so that the binaries in `build/` can be used with gdb, Valgrind and the sanitizers. The binaries
-in the release archives are stripped copies: `tools/package_release.sh` (both when it builds, and for `--pack BINARY OS ARCH`, which the
-release workflow runs on every runner) strips the staged file with `strip` on Linux, `strip -x` on macOS (a signed binary is signed
-ad hoc again afterwards, since stripping invalidates the signature) and the MinGW `strip` for the Windows exe. If no strip tool is
-found, or it fails, the script only prints a warning and packages the binary as it is. After stripping it runs `pzsolve version` on the
-copy (when the binary can run on the packaging machine) and stops if the original starts and the stripped one does not.
+Every archive holds the three programs: `pzsolve`, `pzpeer` and `pzsign` (kept in one folder: pzpeer runs the two others), with
+`licenses/` for the code that pzpeer and pzsign hold besides the project's (libsecp256k1, cb-mpc, OpenSSL: `signer/openssl-LICENSE.txt`
+is the license of the OpenSSL version that `signer/openssl.sh` builds) and the user documents, `docs/en/NETWORK.md` and the Italian
+guide to pzpeer among them.
+
+The Makefile always builds with `-g`, so that the binaries in `build/` can be used with gdb, Valgrind and the sanitizers. The programs
+in the release archives are stripped copies: `tools/package_release.sh` (both when it builds, and for `--pack DIR OS ARCH`, which the
+release workflow runs on every runner with its build folder) strips the staged files with `strip` on Linux, `strip -x` on macOS (a
+signed binary is signed ad hoc again afterwards, since stripping invalidates the signature) and the MinGW `strip` for the Windows exes.
+If no strip tool is found, or it fails, the script only prints a warning and packages the program as it is. After stripping it runs
+`version` on the copy (when it can run on the packaging machine) and stops if the original starts and the stripped one does not. The
+Linux package is built on Ubuntu 22.04: pzpeer, pzsign and the OpenSSL and libgcc they hold take the glibc symbols of the machine that
+builds them, and the package must need no glibc newer than 2.34.
 
 ## How to release
 
@@ -80,11 +87,12 @@ copy (when the binary can run on the packaging machine) and stops if the origina
    pass before pushing the tag. A commit that changes only documents does not start the CI by itself (`ci.yml` ignores them): run the CI
    workflow by hand on it (Actions tab, "CI", "Run workflow"), or release a commit the CI did run on. A test build (a manual run
    without "publish") is not gated.
-6. Pushing the tag starts the GitHub Actions workflow. It builds the binaries for every supported platform (Linux x86-64 and arm64, macOS
-   Apple Silicon and Intel, Windows x86-64), runs the self-test of each (the Windows exe is run on a Windows machine; the macOS Intel
-   binary is cross-compiled on the Apple Silicon runner with `make MACOS_ARCH=x86_64` and self-tested under Rosetta, `arch -x86_64`,
-   and the job fails if the runner has no Rosetta: an untested binary is not published), checks the Linux binary
-   (no glibc symbol newer than 2.34) and the Windows one (system DLLs only) with `tools/check_binary.sh`, and publishes the five archives, together
+6. Pushing the tag starts the GitHub Actions workflow. It builds the three programs for every supported platform (Linux x86-64 and
+   arm64, macOS Apple Silicon and Intel, Windows x86-64), runs the self-tests of pzsolve and pzsign and checks the versions they report
+   (the Windows exes are run on a Windows machine; the macOS Intel programs are cross-compiled on the Apple Silicon runner with
+   `make MACOS_ARCH=x86_64` and self-tested under Rosetta, `arch -x86_64`, and the job fails if the runner has no Rosetta: an untested
+   program is not published), checks the Linux programs (no glibc symbol newer than 2.34) and the Windows ones (system DLLs only) with
+   `tools/check_binary.sh`, and publishes the five archives, together
    with `SHA256SUMS`, as a GitHub Release for the tag. When it has finished, open the release page and check that every archive and the
    checksum file are there.
 
