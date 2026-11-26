@@ -729,6 +729,7 @@ static void test_eviction(void)
     nap(300);
     n = dht_contacts(e->d, cs, DHT_K + 4);
     CHECK(n == DHT_K - 1 && !has(cs, n, fake[1].id, NULL) && !has(cs, n, fake[DHT_K].id, NULL));
+    stop_main(e);                 /* or it names its dead contacts in every lookup of the tests that follow, a refused dial each */
 }
 
 /* ---- the limits ---- */
