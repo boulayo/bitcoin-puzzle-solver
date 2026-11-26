@@ -367,12 +367,7 @@ goes on with a new file, `merge` refuses it. A file written by a later version i
   on the SASS; on the RTX A2000 the two forms measured side by side (RESEARCH.md section 5, after 1.19.2) go opposite ways: `NK` 64 quads with the
   tags once 922 M steps/s against 896 (+2.9 %), `NK` 128 quads 743 against 908 (-18 %), so the form of 1.19.2 is the default and the tuner
   picks between them (on that card `NK` 64 quads, tags once: +1.5 % over the `NK` 128 quads of 1.19.2). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
-  work-items, `NK` 16, 32 or 64, plain or `b`). `PZ_GPU_NK=4g` forces the *block herd* (`NK` = 4), which no tuning offers: the four walkers
-  of a work-item stay in its registers for the whole launch, two blocks of 128 work-items per SM (20,480 walkers on 20 SMs), and one inversion
-  serves a whole block and round (each work-item multiplies its four denominators, 32 work-items of the block multiply the products of a column
-  of four and invert the 32 column products together, Montgomery's trick works back down), so a step touches the device memory only for its
-  history; the walk, the history and the host side are the same. On the RTX A2000 it is slower than `NK` 128 quads, as the model of
-  RESEARCH.md section 5 expects; the self-test checks it on every device.
+  work-items, `NK` 16, 32 or 64, plain or `b`).
   `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its measurements: RESEARCH.md sections 5 and 8.4.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,
@@ -721,7 +716,7 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 * With 29-bit limbs a difference `a − b + k·p` that only meets a tight factor in a product (or goes to the hash) skips its carry pass: its
   limbs stay below 2^31 + 2^23, and nine products of such a limb and a tight one still fit in 64 bits. With IFMA a product that waits for
   the previous one is latency-bound, so the forward pass of the batch inversion runs as two interleaved chains (even and odd
-  denominators), and a product may take a term to add before its reduction (`pz_fev_mul_add`, `pz_fev_sqr_add`: `a·b + c` with the limbs
+  denominators; `pz_fev_inv_batch`, in the linear search and in the windows of BSGS), and a product may take a term to add before its reduction (`pz_fev_mul_add`, `pz_fev_sqr_add`: `a·b + c` with the limbs
   of `c` below 2^55, as `K1 − x` or `K2 − x − y` of tight elements are), which saves the subtraction and the carry pass that would
   follow it; the linear step and the kangaroo step use it for `x3` and `y3`. The multiply-adds read only the low 52 bits of their
   operands, so the carry pass of the high half of a product leaves the carried bits in the limbs it folds; with IFMA the `x` of a

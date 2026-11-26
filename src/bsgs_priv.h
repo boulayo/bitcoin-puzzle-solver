@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* bsgs_priv.h - internals shared by bsgs.c, the per-ISA group routine and the tests. */
+/* bsgs_priv.h - internals shared by bsgs.c, the group routines and the tests. */
 #ifndef PZ_BSGS_PRIV_H
 #define PZ_BSGS_PRIV_H
 
@@ -9,9 +9,7 @@
  * stores x.n[0] / x.n[1] (normalized) at position off + BS_HALF, and advances C by BS_GRP*U.  dx and tmp hold
  * BS_HALF + 1 elements.  Returns false (C untouched) when a denominator is zero: some point of the window is
  * the point at infinity or collides with the centre, which the caller handles exactly. */
-typedef bool (*bs_group_fn)(const bs_steps *st, pz_ge *C, u64 *xlo, u64 *xhi, pz_fe *dx, pz_fe *tmp);
 bool bs_group_base(const bs_steps *st, pz_ge *C, u64 *xlo, u64 *xhi, pz_fe *dx, pz_fe *tmp);
-bool bs_group_x86(const bs_steps *st, pz_ge *C, u64 *xlo, u64 *xhi, pz_fe *dx, pz_fe *tmp);
 
 /* Lane-parallel variant: `lanes` consecutive windows per call (centres C[0..lanes), advanced by lanes*BS_GRP*U), x
  * words interleaved as xlo[(off + BS_HALF)*lanes + l]. prepare() builds its tables for a bs_steps (NULL on failure,

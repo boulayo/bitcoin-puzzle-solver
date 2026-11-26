@@ -7,6 +7,7 @@
  * JIT-compiles the PTX for the GPU at hand on first use and keeps the result in its cache. */
 #include "rt_priv.h"
 #include "platform.h"
+#include "envopts.h"
 #include "lz.h"
 #include <pthread.h>
 
@@ -78,9 +79,8 @@ static void cu_load(void)
 #else
     const char *names[] = {"libcuda.so.1", "libcuda.so", NULL};
 #endif
-    const char *env = getenv("PZ_CUDA_LIB");                   /* a driver by its path: the simulated one of the tests on Windows */
-    const char *given[] = {env, NULL};
-    cu.lib = pz_lib_open(env && *env ? given : names);
+    const char *given[] = {g_env.cuda_lib, NULL};              /* PZ_CUDA_LIB, a driver by its path: the simulated one of the tests on Windows */
+    cu.lib = pz_lib_open(g_env.cuda_lib[0] ? given : names);
     if (!cu.lib) { snprintf(g_why, sizeof g_why, "CUDA driver not found"); g_state = -1; return; }
 #define SYM(field, name) do { *(void **)&cu.field = pz_lib_sym(cu.lib, name); if (!cu.field) { snprintf(g_why, sizeof g_why, "CUDA driver lacks %s (too old?)", name); g_state = -1; return; } } while (0)
     SYM(Init, "cuInit");

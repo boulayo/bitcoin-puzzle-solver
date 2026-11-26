@@ -269,7 +269,7 @@ static int tune_check_wide_herds(void)
         const int n = gpu_kvariants_of(&d, vs);
         for (int i = 0; i < n; i++) { nwide += KV_WIDE(vs[i]) != 0; probe |= vs[i] == wc[c].probe; }
         TCHK(nwide == wc[c].nwide && (!wc[c].probe || probe));
-        if (wc[c].probe) TCHK(gpu_tune_kang_threads_for(&d, KV_NK(wc[c].probe), false, KV_WIDE(wc[c].probe), false) == wc[c].threads);
+        if (wc[c].probe) TCHK(gpu_tune_kang_threads_for(&d, KV_NK(wc[c].probe), false, KV_WIDE(wc[c].probe)) == wc[c].threads);
         if (nwide != wc[c].nwide) printf("  GPU tuning: case %zu offers %d wide herds\n", c, nwide);
     }
     return fails;
@@ -282,32 +282,10 @@ static int tune_check_variant_names(void)
     char nb[64];
     TCHK(!strcmp(gpu_kvariant_name(64 | 1 << 16 | KV_WIDEFLAG(KV_WIDE_X4), nb, sizeof nb), "NK 64 pairs, 4x herd"));
     TCHK(!strcmp(gpu_kvariant_name(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "NK 64, full herd"));
-    TCHK(!strcmp(gpu_kvariant_name(4 | KV_BLOCK << 16, nb, sizeof nb), "NK 4 block herd"));
     TCHK(!strcmp(gpu_kvariant_name(128 | 2 << 16 | KV_METAFLAG, nb, sizeof nb), "NK 128 quads, tags once"));
     TCHK(!strcmp(gpu_kvariant_name(64 | KV_METAFLAG | KV_L2FLAG, nb, sizeof nb), "NK 64, tags once, L2 herd"));
     TCHK(!strcmp(gpu_kvariant_code(128 | 2 << 16 | KV_METAFLAG, nb, sizeof nb), "128cm") && !strcmp(gpu_kvariant_code(64 | 1 << 16 | KV_L2FLAG, nb, sizeof nb), "64bl"));
     TCHK(!strcmp(gpu_kvariant_code(64 | KV_METAFLAG | KV_L2FLAG, nb, sizeof nb), "64ml") && !strcmp(gpu_kvariant_code(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "-"));
-    return fails;
-}
-
-/* The block herd: never tuned; two blocks of 128 work-items per SM with CUDA */
-static int tune_check_block_herd(void)
-{
-    int fails = 0;
-    for (int api = 0; api < 2; api++) {
-        rt_dev d;
-        memset(&d, 0, sizeof d);
-        d.api = api ? RT_OPENCL : RT_CUDA;
-        d.cu = 20;
-        d.gmem = (u64)4 << 30;
-        d.is_gpu = true;
-        pz_strlcpy(d.vendor, "NVIDIA", sizeof d.vendor);
-        int vs[32], nblock = 0;
-        const int n = gpu_kvariants_of(&d, vs);
-        for (int i = 0; i < n; i++) nblock += KV_CFG(vs[i]) == KV_BLOCK;
-        TCHK(nblock == 0);                   /* the block herd is not tuned (slower on the A2000), only forced */
-        TCHK(gpu_tune_kang_threads_for(&d, 4, false, 0, true) == (api ? 20u * KANG_GROUP : 20u * KANG_BLOCK_ITEMS_CU));
-    }
     return fails;
 }
 
@@ -392,17 +370,17 @@ static int tune_check_variant_encoding(void)
 {
     int fails = 0;
     TCHK(VAR_MAKE(256, 4) == 262400 && VAR_MAKE(128, 0) == 128 && VAR_HALF(262400) == 256 && VAR_MINB(262400) == 4);
-    TCHK(KV_MAKE(128, 2, 1, 0, 0) == 1179776 && KV_MAKE(64, 1, 1, 1, KV_WIDE_FULL) == 118554688 && KV_MAKE(4, KV_BLOCK, 0, 0, 0) == 196612);
+    TCHK(KV_MAKE(128, 2, 1, 0, 0) == 1179776 && KV_MAKE(64, 1, 1, 1, KV_WIDE_FULL) == 118554688);
     TCHK(KV_MAKE(64, 0, 1, 1, 0) == 17825856 && KV_MAKE(64, 1, 0, 1, KV_WIDE_FULL) == 117506112);
     const int v = 118554688;
     TCHK(KV_NK(v) == 64 && KV_CFG(v) == 1 && KV_META(v) == 1 && KV_L2(v) == 1 && KV_WIDE(v) == KV_WIDE_FULL && KV_KERNEL(v) == (64 | 1 << 16 | 1 << 20));
     static const struct { const char *text; int code; } good[] = {
-        {"128", 128}, {"64b", 64 | 1 << 16}, {"256c", 256 | 2 << 16}, {"4g", 4 | 3 << 16}, {"128cm", 1179776}, {"64l", 64 | 1 << 24}, {"64ml", 17825856},
+        {"128", 128}, {"64b", 64 | 1 << 16}, {"256c", 256 | 2 << 16}, {"128cm", 1179776}, {"64l", 64 | 1 << 24}, {"64ml", 17825856},
         {"32bml", 32 | 1 << 16 | 1 << 20 | 1 << 24}, {"65535", 65535},
     };
     int code = -1;
     for (size_t i = 0; i < sizeof good / sizeof *good; i++) TCHK(gpu_kvariant_parse(good[i].text, &code) && code == good[i].code);
-    static const char *const bad[] = {"", "0", "b", "12k", "64lm", "64bb", "64bc", "64x", "65536", "99999999999", "-4", " 64", "64 ", "64b ", "m"};
+    static const char *const bad[] = {"", "0", "b", "12k", "64lm", "64bb", "64bc", "64x", "4g", "65536", "99999999999", "-4", " 64", "64 ", "64b ", "m"};
     code = -1;
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) TCHK(!gpu_kvariant_parse(bad[i], &code) && code == -1);
     char text[24];
@@ -413,7 +391,7 @@ static int tune_check_variant_encoding(void)
     }
     TCHK(!strcmp(gpu_variant_code(262400, text, sizeof text), "262400") && !strcmp(gpu_variant_name(262400, text, sizeof text), "256, register cap"));
     TCHK(!strcmp(gpu_kvariant_cl_config(0), "") && !strcmp(gpu_kvariant_cl_config(1), " -DMC=2") && !strcmp(gpu_kvariant_cl_config(2), " -DMC=4"));
-    TCHK(!strcmp(gpu_kvariant_cl_config(3), " -DKANG_BLOCK=1") && !strcmp(gpu_kvariant_cl_config(4), "") && !strcmp(gpu_kvariant_cl_config(15), ""));
+    TCHK(!strcmp(gpu_kvariant_cl_config(3), "") && !strcmp(gpu_kvariant_cl_config(15), ""));
     TCHK(!strcmp(gpu_kvariant_cl_meta(0), "") && !strcmp(gpu_kvariant_cl_meta(1), " -DKANG_META=1"));
     return fails;
 }
@@ -435,7 +413,6 @@ int gpu_tune_selftest(void)
     fails += tune_check_wide_herds();
     fails += tune_check_variant_names();
     fails += tune_check_variant_encoding();
-    fails += tune_check_block_herd();
     fails += tune_check_saved_file();
     fails += tune_check_launch_length();
     pz_strlcpy(g_env.xdg_cache_home, old, sizeof g_env.xdg_cache_home);

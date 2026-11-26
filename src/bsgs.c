@@ -210,14 +210,6 @@ static void steps_make(bs_steps *st, const pz_ge *U, u64 kmag, bool negated)
     free(aff);
 }
 
-static bs_group_fn pick_group(void)
-{
-#if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
-    if (cpu_has_adx()) return bs_group_x86;
-#endif
-    return bs_group_base;
-}
-
 /* The lane-parallel windows must give exactly the x words of the scalar routine (two calls, so that the advance of the
  * centres is covered too); a variant that does not is never used. */
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
@@ -356,7 +348,6 @@ void bsgs_table_free(bsgs_table *t)
 typedef struct {
     bsgs_table *t;
     const bs_steps *st;
-    bs_group_fn gf;
     _Atomic u64 *next_block;
     u64 nblocks, blk;
     _Atomic u64 *units;
@@ -419,7 +410,7 @@ static void *build_thread(void *p)
         if (!pz_ec_mul_g(&C, &(pz_u256){{first + BS_HALF, 0, 0, 0}})) pz_die("BSGS: invalid centre");
         for (; first < bend; first += BS_GRP) {
             if (atomic_load_explicit(a->stop, memory_order_relaxed)) { a->stopped = true; goto done; }
-            if (!a->gf(a->st, &C, xlo, xhi, dx, tmp)) pz_die("BSGS: zero denominator while building the table");
+            if (!bs_group_base(a->st, &C, xlo, xhi, dx, tmp)) pz_die("BSGS: zero denominator while building the table");
             u64 cnt = bend - first < BS_GRP ? bend - first : BS_GRP;
             for (u64 i = 0; i < cnt; i++) {
                 if (i + 16 < cnt) __builtin_prefetch(&t->slots[bs_bucket_index(nb, xlo[i + 16]) * 8], 1, 1);
@@ -447,7 +438,7 @@ bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic 
     const bs_vengine *ve = pick_vengine();
     const u64 blk = build_block(t->T, nthreads, ve ? ve->lanes : 1), nblocks = (t->T + blk - 1) / blk;
     for (int i = 0; i < nthreads; i++) {
-        args[i] = (build_arg){t, st, pick_group(), &next, nblocks, blk, units ? units[i] : NULL, stop ? stop : &never, 0, false};
+        args[i] = (build_arg){t, st, &next, nblocks, blk, units ? units[i] : NULL, stop ? stop : &never, 0, false};
         if (pthread_create(&th[i], NULL, build_thread, &args[i]) != 0) pz_die("pthread_create failed");
     }
     u64 inserted = 0;
@@ -959,7 +950,6 @@ u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *u
 {
     const bsgs_params *p = j->p;
     if (p->Pp_inf) pz_die("bsgs_scan: the key is the centre of the range (to be handled first)");
-    bs_group_fn gf = pick_group();
     const bs_vengine *ve = pick_vengine();
     void *vt = ve ? ve->prepare(&j->giant) : NULL;
     const int nl = vt ? ve->lanes : 1;
@@ -995,7 +985,7 @@ u64 bsgs_scan(const bsgs_job *j, int64_t a0, u64 n, bsgs_found_fn found, void *u
         }
         const int64_t a_c = a_first + BS_HALF;
         if (!cvalid) cvalid = giant_point(p, a_c, &C);
-        if (cvalid && gf(&j->giant, &C, xlo, xhi, dx, tmp)) {
+        if (cvalid && bs_group_base(&j->giant, &C, xlo, xhi, dx, tmp)) {
             probe_batch(&ctx, xlo, xhi, BS_GRP, 1, a_first);
         } else {
             /* some point of the window is the point at infinity (the key sits exactly on a giant step) or collides with

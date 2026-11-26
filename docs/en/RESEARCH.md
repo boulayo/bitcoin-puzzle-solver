@@ -582,7 +582,9 @@ scheduling control words that `ptxas` writes into every instruction give the lat
   puzzles 44 and 50 are found with `PZ_GPU_NK=4g` on both.
 * **On the card**: `PZ_GPU_NK=4g pzsolve bench --gpu-only` (the line `kangaroo ... NK 4 block herd`), expected 0.44 to 0.49 G steps/s if the
   clock stays near 1.3 GHz, up to 0.7 G if the lighter load lets it rise; `pzsolve bench --gpu-only --retune` should keep `NK` 128 quads. It
-  did (910 to 916 M steps/s with `NK` 128 quads), so the tuners no longer measure the block herd: it stays a forced variant. Not
+  did (910 to 916 M steps/s with `NK` 128 quads), so the tuners no longer measure the block herd: it stays a forced variant
+  (**removed in 1.24.0**, 26 November 2026: the kernel, its module `kang4g`, the suffix `g` of `PZ_GPU_NK` and the work-groups of the
+  simulated driver are gone; this section is what is left of it, and the source is in the history up to 1.23.4). Not
   done: choosing the inverting warp from `%warpid` so that co-resident blocks never invert on the same partition (61,100 → 54,100 cycles, +13 %
   for this variant, with inline assembly).
 
@@ -831,7 +833,8 @@ simulated CUDA driver and on pocl, which run the plain code (the new forms are P
   (**−1.3 %**), with h2 808.2 (**−7.7 %**); window 256 837.4, with h1 839.9 (+0.3 %). So an `IMAD.HI` costs what the probes of `bench`
   said (2.4 slots: the model gave −0.5 % for h1 at that cost, and the loss is a little larger because the hash phase is not the whole key),
   and an `IMAD.WIDE` in the hash about two slots (the model's −9 % at two slots against −7.7 % measured). The two variants are dropped;
-  the executable is back to 20 modules. The six kernels of 1.19.2 stay, and the tuner of 1.20.0 picks 256 or 512 with the register cap,
+  the executable is back to 20 modules (their options `PZ_HASH_SIG`, `PZ_HASH_RMD` and `PZ_HASH_FOLD`, which no module defined, left the
+  kernel sources in 1.24.0). The six kernels of 1.19.2 stay, and the tuner of 1.20.0 picks 256 or 512 with the register cap,
   875 M keys/s on that card, 4.5 % over the default 256.
 * **What is left, and needs the kernel rather than the hash.** The hash phase leaves the FMA pipe idle 1044 cycles per key (2906 − 1862 at
   one slot per `IMAD.WIDE`) and the field phase leaves the ALU pipe idle; the field work of a pair (1582 FMA-pipe cycles at one slot, 2784
@@ -1700,7 +1703,7 @@ The purpose of the lane engines and the representation of the field elements are
   requires. Zero denominators (a center that coincides with the step) make the whole round fall back to an exact slow path,
   exercised by the tests.
 * **Measurements** (x86-64 server CPU with AVX-512 and no IFMA, 4 threads): scalar `avx512` engine 23.9 M keys/s, `avx512v`
-  **41.6 M keys/s (×1.74)**. Per lane, `fev_mul` costs ≈ 19 cycles (AVX-512) or ≈ 28 (AVX2) against 37 for the scalar one, `fev_sqr`
+  **41.6 M keys/s (×1.74)** (the scalar `avx512` engine, which every CPU that runs it loses to `avx512v`, was removed in 1.24.0). Per lane, `fev_mul` costs ≈ 19 cycles (AVX-512) or ≈ 28 (AVX2) against 37 for the scalar one, `fev_sqr`
   ≈ 11 / 23 against 34; the vector unit is the bottleneck (`vpmuludq` zmm: 1 per cycle on this CPU). With AVX2 the gain
   is modest (≈ ×1.15) and the autotune picks the best engine for the CPU in use.
 

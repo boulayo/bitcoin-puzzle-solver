@@ -328,15 +328,6 @@ int main(int argc, char **argv)
     }
     if (g_env.expect_shani && !shani_tested) { printf("t_engine: PZ_EXPECT_SHANI=1 but the shani engine was not tested\n"); fails++; }
     CHECK(tested >= 1);
-    /* reference scan agrees on a tiny range */
-    {
-        pz_u256 st = pz_u256_from_u64(40); pz_u256 key = pz_u256_from_u64(53);
-        u8 h[20]; h160_of_key(&key, h);
-        scan_job job; scan_job_init(&job, h);
-        hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-        cpu_scan_reference(&job, &st, 30);
-        CHECK(r.hits == 1 && r.key.w[0] == 53);
-    }
     printf(fails ? "t_engine: %d FAILED\n" : "t_engine: OK\n", fails);
     return fails != 0;
 }

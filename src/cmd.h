@@ -15,7 +15,7 @@
 #if defined(__aarch64__)
 #define PZ_ISA_LIST "auto, baseline, neon, neon2"
 #else
-#define PZ_ISA_LIST "auto, baseline, avx2, shani, avx512, avx2v, avx512v, avx512i"
+#define PZ_ISA_LIST "auto, baseline, avx2, shani, avx2v, avx512v, avx512i"
 #endif
 
 /* ---- the options of hunt, info, list, where and merge ---- */

@@ -12,7 +12,6 @@ static const struct { const char *word; char suffix; const char *cl_option; } KV
     {"", 0, ""},
     {" pairs", 'b', " -DMC=2"},
     {" quads", 'c', " -DMC=4"},
-    {" block herd", 'g', " -DKANG_BLOCK=1"},
 };
 #define KV_NFORMS ((int)(sizeof KV_FORMS / sizeof *KV_FORMS))
 

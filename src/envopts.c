@@ -105,7 +105,7 @@ static void env_gpu_nk(void)
     const char *v = env_get("PZ_GPU_NK");
     if (!v) return;
     if (strlen(v) >= sizeof g_env.gpu_nk_text || !pz_env_parse_nk(v, &g_env.gpu_nk, &g_env.gpu_nk_cfg, &g_env.gpu_nk_meta, &g_env.gpu_nk_l2)) {
-        env_ignored("PZ_GPU_NK", v, "expected a number of walkers, with the suffix b, c or g, then m and then l if wanted, as in 128b");
+        env_ignored("PZ_GPU_NK", v, "expected a number of walkers, with the suffix b or c, then m and then l if wanted, as in 128b");
         return;
     }
     memcpy(g_env.gpu_nk_text, v, strlen(v) + 1);
@@ -138,6 +138,7 @@ void pz_env_init(void)
     env_gpu_api();
     g_env.no_cuda = env_flag("PZ_NO_CUDA");
     g_env.no_opencl = env_flag("PZ_NO_OPENCL");
+    env_text("PZ_CUDA_LIB", g_env.cuda_lib, sizeof g_env.cuda_lib);
     g_env.opencl_all = env_flag("PZ_OPENCL_ALL");
     if (env_int("PZ_GPU_HALF", 1, 1 << 22, &n)) g_env.gpu_half = (int)n;   /* room above the window for the flags of a variant code (gpu_variant.h) */
     env_gpu_nk();

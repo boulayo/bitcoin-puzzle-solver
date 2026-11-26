@@ -99,9 +99,6 @@ else
 PLATFORM_SRC := platform platform_posix
 endif
 CORE_SRC := $(PLATFORM_SRC) envopts gpu_variant util lz campaign campaigns puzzles puzzles_data eta ui bsgs jobq canary cpu_common sysinfo run_common encrypt cmd_encrypt onfound run_linear run_kangaroo run_bsgs bench_tg profile doctor selftest cmd_hunt cmd_merge cmd_campaigns cmd_puzzle cmd_devices main
-ENG_BASE := src/eng_base.c
-ENG_AVX2 := src/eng_avx2.c
-ENG_AVX5 := src/eng_avx512.c
 KERNELS  := src/kernels/pz_common.cl src/kernels/pz_linear.cl src/kernels/pz_kang.h src/kernels/pz_kang.cl src/kernels/pz_test.cl
 # CUDA modules: PTX generated from the same kernels by tools/gen_ptx.py (committed, so building needs no CUDA toolkit). Their list is
 # src/kernels/ptx/modules.txt, the only one: the lines are read here (through tools/ptx_table.awk), by gen_ptx.py, by the CUDA runtime
@@ -121,9 +118,9 @@ KANG_SRC := src/kangaroo.c src/kang_log.c src/kang_cpu.c src/kang_selftest.c src
 GPU_SRC  := cl_api rt rt_cl rt_cuda gpu gpu_tune gpu_bench gpu_tune_selftest gpu_selftest
 SRCS   := $(addprefix src/,$(addsuffix .c,$(CORE_SRC) $(GPU_SRC))) $(KANG_SRC) $(BUILD)/kernels_gen.c $(BUILD)/ptx_gen.c $(BUILD)/ptx_mods.c
 OBJS   := $(patsubst $(BUILD)/%.c,$(BUILD)/%.o,$(patsubst src/%.c,$(BUILD)/%.o,$(SRCS)))
-ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_shani.o $(BUILD)/eng_avx512.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
+ENGOBJ := $(BUILD)/eng_base.o $(BUILD)/eng_avx2.o $(BUILD)/eng_shani.o $(BUILD)/eng_avx2v.o $(BUILD)/eng_avx512v.o $(BUILD)/eng_avx512i.o
 KVOBJ  := $(BUILD)/kang_x86.o $(BUILD)/kang_avx2v.o $(BUILD)/kang_avx512v.o $(BUILD)/kang_avx512i.o $(BUILD)/kang_avx512i2.o
-BSVOBJ := $(BUILD)/bsgs_x86.o $(BUILD)/bsgs_avx2v.o $(BUILD)/bsgs_avx512v.o $(BUILD)/bsgs_avx512i.o
+BSVOBJ := $(BUILD)/bsgs_avx2v.o $(BUILD)/bsgs_avx512v.o $(BUILD)/bsgs_avx512i.o
 DEPS   := $(OBJS:.o=.d) $(ENGOBJ:.o=.d) $(KVOBJ:.o=.d) $(BSVOBJ:.o=.d)
 
 # X86=1 builds the per-ISA SIMD engines (each object file with its own -m flags, picked at run time by CPU detection); on any other
@@ -282,8 +279,8 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 
 OBJS_NEON   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_neon eng_neon2))
 OBJS_AVX2   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2v kang_avx2v bsgs_avx2v))
-OBJS_ADX    := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2 kang_x86 bsgs_x86))
-OBJS_AVX512 := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512 eng_avx512v kang_avx512v bsgs_avx512v))
+OBJS_ADX    := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2 kang_x86))
+OBJS_AVX512 := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512v kang_avx512v bsgs_avx512v))
 OBJS_IFMA   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512i kang_avx512i kang_avx512i2 bsgs_avx512i))
 $(OBJS_NEON): ISAFLAGS := $(NEON_FLAGS)
 $(OBJS_AVX2): ISAFLAGS := $(AVX2_FLAGS)
@@ -388,10 +385,10 @@ tsan:
 MOCK    := $(BUILD)/mockcuda
 ifeq ($(WIN),1)
 MOCKLIB := $(MOCK)/nvcuda.dll
-MOCKLD  := -shared -static -pthread
+MOCKLD  := -shared -static
 else
 MOCKLIB := $(MOCK)/libcuda.so.1
-MOCKLD  := -shared -fPIC -pthread
+MOCKLD  := -shared -fPIC
 endif
 MOCKCC  := $(CC) -std=gnu11 -O2 -fPIC -w -Itests/mock_cuda -DPZ_FAST_FE
 MOCKSRC := tests/mock_cuda/mock_cuda.c tests/mock_cuda/kern.c tests/mock_cuda/pz_host.h $(KERNELS)

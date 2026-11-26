@@ -45,3 +45,54 @@ static PZ_UNUSED __attribute__((noinline)) PZ_VABI void pz_fev_inv(pz_fev *r, co
         for (int l = 0; l < PZ_FEV_LANES; l++) pz_fe_inv(&e[l], &e[l]);
     for (int l = 0; l < PZ_FEV_LANES; l++) pz_fev_set_lane(r, l, &e[l]);
 }
+
+/* true if some lane of a canonical element is zero */
+static inline PZ_VABI bool pz_fev_any_zero(const pz_fev *a)
+{
+    pz_vl z = a->l[0];
+    for (int i = 1; i < PZ_FEV_NLIMB; i++) z |= a->l[i];
+    for (int l = 0; l < PZ_FEV_LANES; l++)
+        if (z[l] == 0) return true;
+    return false;
+}
+
+/* Montgomery batch inversion of a[0..n) in every lane, each lane on its own (n >= 4; tmp holds n elements): a[i] becomes its inverse.
+ * False, with a[] untouched, if some lane has a zero element. a[0] and a[1] are tight, the others may be lazy differences
+ * (pz_fev_sub_lazy): each is only ever multiplied by a tight value. With 52-bit limbs a product is latency-bound in a chain (about 85
+ * cycles against 60 when independent), so there the forward pass runs as two interleaved chains, over the even and over the odd indices;
+ * the 29-bit layouts are throughput-bound and measured no faster that way. */
+#if PZ_FEV_BITS == 52
+#define PZ_FEV_CHAINS 2
+#else
+#define PZ_FEV_CHAINS 1
+#endif
+static inline PZ_VABI bool pz_fev_inv_batch(pz_fev *a, pz_fev *tmp, int n)
+{
+    for (int i = 0; i < PZ_FEV_CHAINS; i++) tmp[i] = a[i];
+    for (int i = PZ_FEV_CHAINS; i < n; i++) pz_fev_mul(&tmp[i], &tmp[i - PZ_FEV_CHAINS], &a[i]);
+    pz_fev all, inv, ic[PZ_FEV_CHAINS];
+#if PZ_FEV_CHAINS == 2
+    const int le = (n - 1) & ~1, lo = (n - 2) | 1;           /* last even and last odd index */
+    pz_fev_mul(&all, &tmp[le], &tmp[lo]);
+#else
+    all = tmp[n - 1];
+#endif
+    pz_fev chk = all;
+    pz_fev_normalize(&chk);
+    if (PZ_UNLIKELY(pz_fev_any_zero(&chk))) return false;
+    pz_fev_inv(&inv, &all);
+#if PZ_FEV_CHAINS == 2
+    pz_fev_mul(&ic[0], &inv, &tmp[lo]);         /* inverse of the even product */
+    pz_fev_mul(&ic[1], &inv, &tmp[le]);         /* inverse of the odd product */
+#else
+    ic[0] = inv;
+#endif
+    for (int i = n - 1; i >= PZ_FEV_CHAINS; i--) {
+        pz_fev *v = &ic[i % PZ_FEV_CHAINS], t;
+        pz_fev_mul(&t, v, &tmp[i - PZ_FEV_CHAINS]);
+        pz_fev_mul(v, v, &a[i]);
+        a[i] = t;
+    }
+    for (int i = 0; i < PZ_FEV_CHAINS; i++) a[i] = ic[i];
+    return true;
+}

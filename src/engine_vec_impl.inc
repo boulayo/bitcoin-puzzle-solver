@@ -199,56 +199,6 @@ static inline VINLINE PZ_VABI void fev_sqr_sub2_bc(pz_fev *r, const pz_fev *a, c
 static inline VINLINE PZ_VABI void fev_mul_sub(pz_fev *r, const pz_fev *a, const pz_fev *b, const pz_fev *yc) { pz_fev_mul(r, a, b); fev_sub_nc(r, r, yc); }
 #endif
 
-static inline PZ_VABI bool vec_any_zero(const pz_fev *a)
-{
-    pz_vl z = a->l[0];
-    for (int i = 1; i < PZ_FEV_NLIMB; i++) z |= a->l[i];
-    for (int l = 0; l < NL; l++)
-        if (z[l] == 0) return true;
-    return false;
-}
-
-/* Montgomery batch inversion of a[0..n) (each lane independently, n >= 4); false if some lane has a zero element. a[0] and
- * a[1] are tight, the others may be fev_sub_nc results: each is only ever multiplied by a tight value.
- * With IFMA a product is latency-bound in a chain (about 85 cycles against 60 when independent), so there the forward pass
- * runs as two interleaved chains, over the even and over the odd indices; the 29-bit layouts are throughput-bound and measured
- * no faster that way. */
-#ifdef PZ_FEV_IFMA
-#define VCHAINS 2
-#else
-#define VCHAINS 1
-#endif
-static inline PZ_VABI bool vinv_batch(pz_fev *a, pz_fev *tmp, int n)
-{
-    for (int i = 0; i < VCHAINS; i++) tmp[i] = a[i];
-    for (int i = VCHAINS; i < n; i++) pz_fev_mul(&tmp[i], &tmp[i - VCHAINS], &a[i]);
-    pz_fev all, inv, ic[VCHAINS];
-#if VCHAINS == 2
-    const int le = (n - 1) & ~1, lo = (n - 2) | 1;           /* last even and last odd index */
-    pz_fev_mul(&all, &tmp[le], &tmp[lo]);
-#else
-    all = tmp[n - 1];
-#endif
-    pz_fev chk = all;
-    pz_fev_normalize(&chk);
-    if (UNLIKELY(vec_any_zero(&chk))) return false;
-    pz_fev_inv(&inv, &all);
-#if VCHAINS == 2
-    pz_fev_mul(&ic[0], &inv, &tmp[lo]);         /* inverse of the even product */
-    pz_fev_mul(&ic[1], &inv, &tmp[le]);         /* inverse of the odd product */
-#else
-    ic[0] = inv;
-#endif
-    for (int i = n - 1; i >= VCHAINS; i--) {
-        pz_fev *v = &ic[i % VCHAINS], t;
-        pz_fev_mul(&t, v, &tmp[i - VCHAINS]);
-        pz_fev_mul(v, v, &a[i]);
-        a[i] = t;
-    }
-    for (int i = 0; i < VCHAINS; i++) a[i] = ic[i];
-    return true;
-}
-
 typedef struct {
     u64 sx[PZ_FEV_NLIMB], sy[PZ_FEV_NLIMB];      /* the point N*GRP*G (centre advance per round), as limbs */
 } vstep_t;
@@ -276,13 +226,13 @@ static inline VINLINE PZ_VABI bool vround(vctx_t *c, pz_fev *xc, pz_fev *yc, con
     const pz_vl kw = kb + lane_off;                 /* window start offsets of the lanes */
 
     /* The differences below that only ever meet a tight factor in a product, or go to the hash, skip the carry pass
-     * (fev_sub_nc); the denominators too, except the first two, which start the chains of products of vinv_batch. */
+     * (fev_sub_nc); the denominators too, except the first two, which start the chains of products of pz_fev_inv_batch. */
     fev_bc_sub(&dx[0], vtab_x[0], xc);
     fev_bc_sub(&dx[1], vtab_x[1], xc);
 #pragma GCC unroll 1
     for (int i = 2; i < VHALF; i++) fev_bc_sub_nc(&dx[i], vtab_x[i], xc);
     fev_bc_sub_nc(&dx[VHALF], st->sx, xc);
-    if (UNLIKELY(!vinv_batch(dx, tmp, VHALF + 1))) return false;
+    if (UNLIKELY(!pz_fev_inv_batch(dx, tmp, VHALF + 1))) return false;
 #ifdef PZ_FEV_IFMA
     pz_fev cxv, nyv;               /* K2 - xc and K1 - yc, the terms the products of the step add */
     vcons_set(&cxv, &nyv, xc, yc);

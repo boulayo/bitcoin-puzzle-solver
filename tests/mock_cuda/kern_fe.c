@@ -22,4 +22,3 @@ void CAT(GK, sqr)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_sqr(&z, &x); 
 void CAT(GK, norm)(uint *r, const uint *a) { fe x; ld(&x, a); fe_normalize(&x); st(r, &x); }
 void CAT(GK, cneg)(uint *r, const uint *a, uint c) { fe x; ld(&x, a); fe_cneg_norm(&x, c); st(r, &x); }
 void CAT(GK, inv)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_inv(&z, &x); st(r, &z); }
-void CAT(GK, invpow)(uint *r, const uint *a) { fe x, z; ld(&x, a); fe_inv_pow(&z, &x); st(r, &z); }

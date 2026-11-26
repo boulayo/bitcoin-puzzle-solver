@@ -6,6 +6,7 @@
 #include <pzcore/cpu.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); if (++fails > 20) exit(1); } } while (0)
@@ -415,6 +416,30 @@ int main(void)
             pz_fe_normalize(&want);
             CHECK(pz_fe_eq(&got, &want));
         }
+    }
+    /* batch inversion of 7 and of 8 elements (the two chains of the 52-bit layout end on either parity) against the scalar inverse of every
+     * lane; refused, with the elements untouched, when one lane of one element is zero */
+    for (int n = 7; n <= 8; n++) {
+        pz_fev a[8], b[8], t[8];
+        pz_fe v[8][PZ_FEV_LANES];
+        for (int i = 0; i < n; i++)
+            for (int l = 0; l < PZ_FEV_LANES; l++) {
+                for (int j = 0; j < 4; j++) v[i][l].n[j] = rnd();
+                pz_fev_set_lane(&a[i], l, &v[i][l]);
+            }
+        memcpy(b, a, sizeof a);
+        CHECK(pz_fev_inv_batch(a, t, n));
+        for (int i = 0; i < n; i++)
+            for (int l = 0; l < PZ_FEV_LANES; l++) {
+                pz_fe got, want;
+                lane_value(&got, &a[i], l);
+                pz_fe_inv(&want, &v[i][l]);
+                pz_fe_normalize(&want);
+                CHECK(pz_fe_eq(&got, &want));
+            }
+        pz_fev_set_lane(&b[n - 3], PZ_FEV_LANES - 1, &(pz_fe){{0, 0, 0, 0}});
+        memcpy(a, b, sizeof a);
+        CHECK(!pz_fev_inv_batch(a, t, n) && !memcmp(a, b, sizeof a));
     }
     printf(fails ? "t_fev (%s): %d FAILED\n" : "t_fev (%s): OK\n", name, fails);
     return fails != 0;

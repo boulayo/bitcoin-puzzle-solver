@@ -2,7 +2,7 @@
 /* bsgs_vec_impl.inc - NL consecutive BSGS windows at once with lane-parallel arithmetic (fev.h or, with PZ_FEV_IFMA,
  * fev52.h), instantiated per ISA. The includer defines ISA (token) and PZ_VBYTES.
  *
- * Lane l takes the window centred at C[l]; the result is what bs_group (bsgs_isa.inc) gives for each window: the
+ * Lane l takes the window centred at C[l]; the result is what bs_group_base (bsgs_base.c) gives for each window: the
  * normalized x of C + off*U for off = -BS_HALF .. BS_HALF-1, words 0 and 1, interleaved as xlo[(off + BS_HALF)*NL + l],
  * and the centres move on by NL*BS_GRP*U (the caller passes NL consecutive windows, so they become the next NL). Only
  * x is computed for the window points. Checked against the scalar routine before use (bsgs.c). */
@@ -69,7 +69,11 @@ static bool CAT(bsv_groups_, ISA)(const void *vt, pz_ge *C, u64 *xlo, u64 *xhi, 
     }
     pz_fev_from_limbs(&b, T->sx);
     pz_fev_sub(&dx[BS_HALF], &b, &xc);
-    /* batched inversion, every lane independently */
+    /* batched inversion, every lane independently: with 52-bit limbs the two interleaved chains of pz_fev_inv_batch (10 % less time per
+     * window than one chain); the 29-bit layouts keep the loop here, which measured 0.4 % faster than the call of the same single chain */
+#ifdef PZ_FEV_IFMA
+    if (!pz_fev_inv_batch(dx, tmp, BS_HALF + 1)) return false;
+#else
     tmp[0] = dx[0];
     for (int i = 1; i <= BS_HALF; i++) pz_fev_mul(&tmp[i], &tmp[i - 1], &dx[i]);
     {
@@ -89,6 +93,7 @@ static bool CAT(bsv_groups_, ISA)(const void *vt, pz_ge *C, u64 *xlo, u64 *xhi, 
         dx[i] = t;
     }
     dx[0] = inv;
+#endif
 
     {   /* the centres */
         pz_fev x0 = xc;

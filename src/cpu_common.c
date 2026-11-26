@@ -113,7 +113,6 @@ extern const cpu_engine ENG_NEON2;
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
 extern const cpu_engine ENG_AVX2;
 extern const cpu_engine ENG_SHANI;
-extern const cpu_engine ENG_AVX512;
 extern const cpu_engine ENG_AVX2V;
 extern const cpu_engine ENG_AVX512V;
 extern const cpu_engine ENG_AVX512I;
@@ -133,7 +132,6 @@ static void engines_build(void)
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
     g_engines[g_nengines++] = &ENG_AVX2;
     g_engines[g_nengines++] = &ENG_SHANI;       /* after avx2: the autotune keeps the first of two that measure alike */
-    g_engines[g_nengines++] = &ENG_AVX512;
     g_engines[g_nengines++] = &ENG_AVX2V;
     g_engines[g_nengines++] = &ENG_AVX512V;
     g_engines[g_nengines++] = &ENG_AVX512I;
@@ -259,21 +257,4 @@ const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
     }
     if (!best) pz_die("no CPU engine computes correctly on this machine (all failed the quick check): run 'pzsolve selftest'");
     return best;
-}
-
-u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys)
-{
-    pz_ec_init();
-    pz_u256 k = *start;
-    for (u64 i = 0; i < nkeys; i++) {
-        pz_ge p;
-        u8 pub[33], h[20];
-        if (lin_point(&p, &k)) {
-            pz_ge_to_pub33(pub, &p);
-            pz_hash160(pub, 33, h);
-            if (!memcmp(h, job->target_h160, 20) && job->on_hit) job->on_hit(job->user, &k);
-        }
-        pz_u256_add_u64(&k, &k, 1);
-    }
-    return nkeys;
 }

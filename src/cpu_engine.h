@@ -62,8 +62,6 @@ const cpu_engine *cpu_engine_by_name(const char *name);
 bool cpu_engine_quickcheck(const cpu_engine *e);
 /* Picks the fastest supported engine that passes the quick check by running a short benchmark; dies if none passes. */
 const cpu_engine *cpu_engine_autotune(double seconds_per_engine, bool verbose);
-/* Plain reference scan (one scalar multiplication per key), for tests. */
-u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys);
 
 /* x86 feature probes (no-ops elsewhere), pzcore/cpu.h: AVX2 and BMI2 (the lane engines), and ADX besides (the MULX/ADX multiplication). */
 bool cpu_has_avx2(void);

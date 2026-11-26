@@ -25,9 +25,6 @@ static int g_fail, g_checks;
 static u64 g_rnd = 0x2545F4914F6CDD1DULL;
 static u64 rnd64(void) { g_rnd ^= g_rnd << 13; g_rnd ^= g_rnd >> 7; g_rnd ^= g_rnd << 17; return g_rnd; }
 
-typedef struct { int hits; pz_u256 key; } hitrec;
-static void on_hit(void *u, const pz_u256 *k) { hitrec *h = u; h->hits++; h->key = *k; }
-
 /* ---- the self-test ---- */
 
 static void t_primitives(void)
@@ -128,19 +125,9 @@ static void t_engines(void)
         char lb[64];
         snprintf(lb, sizeof lb, "CPU engine %s", E->name);
         if (!E->supported()) { pz_result_line(lb, "not supported by this CPU: skipped"); continue; }
-        CHECK(cpu_engine_quickcheck(E));          /* the hash of every lane, a key in every window and at its edges */
-        /* planted key somewhere inside a few groups */
-        pz_u256 st = pz_u256_pow2(60); pz_u256_add_u64(&st, &st, 12345);
-        for (u64 off = 5; off < 5 * CPU_GRP; off += 1999) {
-            pz_u256 key = st; pz_u256_add_u64(&key, &key, off);
-            pz_ge p; u8 pub[33], h[20];
-            pz_ec_mul_g(&p, &key); pz_ge_to_pub33(pub, &p); pz_hash160(pub, 33, h);
-            scan_job job; scan_job_init(&job, h);
-            hitrec r = {0, pz_u256_zero()}; job.on_hit = on_hit; job.user = &r;
-            u64 cov = E->scan(&job, &st, 5 * CPU_GRP);
-            CHECK(cov == 5 * CPU_GRP && r.hits == 1 && !pz_u256_cmp(&r.key, &key));
-        }
-        pz_result_line(lb, "OK");
+        const bool ok = cpu_engine_quickcheck(E);   /* the hash of every lane, a key in every window and at its edges */
+        CHECK(ok);
+        pz_result_line(lb, "%s", ok ? "OK" : "FAILED");
     }
 }
 
@@ -768,7 +755,10 @@ int bench_run(int argc, char **argv)
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);
     const int maxt = s.ncpu > 256 ? 256 : s.ncpu;                     /* the arrays below hold 256 threads */
-    pz_section("CPU: linear search, keys/s (hash160 of compressed keys, 3 s per measurement)");
+    const double sc = g_env.bench_scale;                              /* PZ_BENCH_SCALE: the timed measurements shorter or longer */
+    char title[96];
+    snprintf(title, sizeof title, "CPU: linear search, keys/s (hash160 of compressed keys, %.3g s per measurement)", 3.0 * sc);
+    pz_section(title);
     printf("  %-10s", "engine");
     for (int nt = 1; nt <= maxt; nt = nt == maxt ? nt + 1 : (nt * 2 > maxt ? maxt : nt * 2)) {
         char h[24];
@@ -783,7 +773,7 @@ int bench_run(int argc, char **argv)
         for (int nt = 1; nt <= maxt; nt = nt == maxt ? nt + 1 : (nt * 2 > maxt ? maxt : nt * 2)) {
             pthread_t th[256];
             bench_arg ba[256];
-            for (int i = 0; i < nt; i++) { ba[i] = (bench_arg){all[e], 3.0, 0, i, &s}; pthread_create(&th[i], NULL, bench_thread, &ba[i]); }
+            for (int i = 0; i < nt; i++) { ba[i] = (bench_arg){all[e], 3.0 * sc, 0, i, &s}; pthread_create(&th[i], NULL, bench_thread, &ba[i]); }
             double total = 0;
             for (int i = 0; i < nt; i++) { pthread_join(th[i], NULL); total += (double)ba[i].keys / ba[i].secs; }
             char b[32];
@@ -793,8 +783,8 @@ int bench_run(int argc, char **argv)
         printf("\n");
     }
     pz_section("CPU: kangaroo, steps/s");
-    kang_bench_cpu(&s, 1.5);
-    kangaroo_bench(3.0, true);
+    kang_bench_cpu(&s, 1.5 * sc);
+    kangaroo_bench(3.0 * sc, true);
     bsgs_bench(s.ncpu);
     gpu_bench();
     return 0;

@@ -12,7 +12,7 @@ static int fails;
 /* Every variable the program reads. A variable that is set to the empty string counts as not set, which is how the test clears one (putenv
  * with "NAME=" works the same way on Windows, where it removes the variable). */
 static const char *const ALL[] = {
-    "PZ_GPU_API", "PZ_NO_CUDA", "PZ_NO_OPENCL", "PZ_OPENCL_ALL", "PZ_GPU_HALF", "PZ_GPU_NK", "PZ_GPU_TUNE", "PZ_NO_PROFILE", "PZ_NO_LARGE_PAGES",
+    "PZ_GPU_API", "PZ_NO_CUDA", "PZ_NO_OPENCL", "PZ_CUDA_LIB", "PZ_OPENCL_ALL", "PZ_GPU_HALF", "PZ_GPU_NK", "PZ_GPU_TUNE", "PZ_NO_PROFILE", "PZ_NO_LARGE_PAGES",
     "PZ_ISA", "PZ_PRIO_GPU", "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_VERBOSE", "PZ_KANG_MIX", "PZ_KANG_ROUND",
     "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_EXPECT_SHANI", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N",
     "PZ_TEST_REPORT_INTERVAL", "PZ_TEST_CHECKPOINT_INTERVAL"};
@@ -236,14 +236,14 @@ static void t_tune_and_nk(void)
     static const struct { const char *text; int nk, cfg; bool meta, l2; } good[] = {
         {"128", 128, 0, false, false}, {"128b", 128, 1, false, false}, {"64c", 64, 2, false, false}, {"64l", 64, 0, false, true},
         {"32bl", 32, 1, false, true}, {"16cl", 16, 2, false, true}, {"65535", 65535, 0, false, false}, {"128m", 128, 0, true, false},
-        {"128cm", 128, 2, true, false}, {"64bml", 64, 1, true, true}, {"4gm", 4, 3, true, false}};
+        {"128cm", 128, 2, true, false}, {"64bml", 64, 1, true, true}};
     for (size_t k = 0; k < sizeof good / sizeof *good; k++) {
         CHECK(try_value("PZ_GPU_NK", good[k].text, last, sizeof last) == 0);
         CHECK(g_env.gpu_nk == good[k].nk && g_env.gpu_nk_cfg == good[k].cfg && g_env.gpu_nk_meta == good[k].meta && g_env.gpu_nk_l2 == good[k].l2
               && !strcmp(g_env.gpu_nk_text, good[k].text));
     }
     CHECK(try_value("PZ_GPU_NK", "", last, sizeof last) == 0 && g_env.gpu_nk == 0);
-    static const char *const bad_nk[] = {"b", "l", "m", "0", "128x", "128lb", "128bc", "128bb", "128mb", "128lm", "128mm", "65536", "-1", "128 ", " 128",
+    static const char *const bad_nk[] = {"b", "l", "m", "0", "128x", "128lb", "128bc", "128bb", "128mb", "128lm", "128mm", "4g", "65536", "-1", "128 ", " 128",
                                          "+128", "1.5", "12345678901234567890"};
     for (size_t k = 0; k < sizeof bad_nk / sizeof *bad_nk; k++) {
         CHECK(try_value("PZ_GPU_NK", bad_nk[k], last, sizeof last) == 1);
@@ -254,7 +254,6 @@ static void t_tune_and_nk(void)
     bool meta = true, l2 = true;
     CHECK(!pz_env_parse_nk("", &nk, &cfg, &meta, &l2) && !pz_env_parse_nk("12k", &nk, &cfg, &meta, &l2) && nk == 7 && cfg == 7 && meta && l2);
     CHECK(pz_env_parse_nk("256b", &nk, &cfg, &meta, &l2) && nk == 256 && cfg == 1 && !meta && !l2);
-    CHECK(pz_env_parse_nk("4g", &nk, &cfg, &meta, &l2) && nk == 4 && cfg == 3 && !meta && !l2);
     CHECK(pz_env_parse_nk("64cm", &nk, &cfg, &meta, &l2) && nk == 64 && cfg == 2 && meta && !l2);
 }
 
@@ -266,6 +265,8 @@ static void t_places(void)
     CHECK(try_value("LOCALAPPDATA", "C:\\Users\\u\\AppData\\Local", last, sizeof last) == 0 && !strcmp(g_env.local_app_data, "C:\\Users\\u\\AppData\\Local"));
     CHECK(try_value("TMPDIR", "/var/tmp", last, sizeof last) == 0 && !strcmp(g_env.tmpdir, "/var/tmp"));
     CHECK(try_value("TMPDIR", "", last, sizeof last) == 0 && !g_env.tmpdir[0]);
+    CHECK(try_value("PZ_CUDA_LIB", ".\\nvcuda.dll", last, sizeof last) == 0 && !strcmp(g_env.cuda_lib, ".\\nvcuda.dll"));
+    CHECK(try_value("PZ_CUDA_LIB", "", last, sizeof last) == 0 && !g_env.cuda_lib[0]);
     char longp[PZ_ENV_PATH + 8];                               /* the longest folder name that is kept has PZ_ENV_PATH - 1 characters */
     memset(longp, 'a', sizeof longp);
     longp[PZ_ENV_PATH - 1] = 0;

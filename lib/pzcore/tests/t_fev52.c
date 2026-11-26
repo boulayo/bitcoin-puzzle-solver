@@ -346,6 +346,30 @@ int main(void)
             CHECK(pz_fe_eq(&got, &want));
         }
     }
+    /* batch inversion of 7 and of 8 elements (the two chains of the 52-bit layout end on either parity) against the scalar inverse of every
+     * lane; refused, with the elements untouched, when one lane of one element is zero */
+    for (int n = 7; n <= 8; n++) {
+        pz_fev a[8], b[8], t[8];
+        pz_fe v[8][PZ_FEV_LANES];
+        for (int i = 0; i < n; i++)
+            for (int l = 0; l < PZ_FEV_LANES; l++) {
+                for (int j = 0; j < 4; j++) v[i][l].n[j] = rnd();
+                pz_fev_set_lane(&a[i], l, &v[i][l]);
+            }
+        memcpy(b, a, sizeof a);
+        CHECK(pz_fev_inv_batch(a, t, n));
+        for (int i = 0; i < n; i++)
+            for (int l = 0; l < PZ_FEV_LANES; l++) {
+                pz_fe got, want;
+                lane_value(&got, &a[i], l);
+                pz_fe_inv(&want, &v[i][l]);
+                pz_fe_normalize(&want);
+                CHECK(pz_fe_eq(&got, &want));
+            }
+        pz_fev_set_lane(&b[n - 3], PZ_FEV_LANES - 1, &(pz_fe){{0, 0, 0, 0}});
+        memcpy(a, b, sizeof a);
+        CHECK(!pz_fev_inv_batch(a, t, n) && !memcmp(a, b, sizeof a));
+    }
     printf(fails ? "t_fev52: %d FAILED\n" : "t_fev52: OK\n", fails);
     return fails != 0;
 }

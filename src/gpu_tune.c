@@ -55,13 +55,11 @@ static size_t kang_wide_threads_for(const rt_dev *d, int nk, int wide)
     if (t > KANG_WIDE_WALKERS / (size_t)nk) t = KANG_WIDE_WALKERS / (size_t)nk;
     return t & ~(size_t)127;
 }
-/* Work-items of the herd of a variant: the default herd, one sized to the L2 cache, a wide one or a block herd (as many work-items as stay
- * resident, KANG_BLOCK_ITEMS_CU per SM; 128 per compute unit with OpenCL), bounded by the state and the history of the least depth in a sixth of
- * the device memory. */
-size_t gpu_tune_kang_threads_for(const rt_dev *d, int nk, bool l2fit, int wide, bool block)
+/* Work-items of the herd of a variant: the default herd, one sized to the L2 cache or a wide one, bounded by the state and the history of the
+ * least depth in a sixth of the device memory. */
+size_t gpu_tune_kang_threads_for(const rt_dev *d, int nk, bool l2fit, int wide)
 {
     size_t t = l2fit ? kang_l2_threads_for(d, nk) : wide ? kang_wide_threads_for(d, nk, wide) : 0;
-    if (block) t = (size_t)d->cu * (d->api == RT_CUDA ? KANG_BLOCK_ITEMS_CU : KANG_GROUP);
     if (!t) t = kang_default_threads_for(d);
     size_t by_mem = (size_t)(d->gmem / 6 / ((size_t)nk * (KSTRIDE * 4 + 2 * KANG_HIST_ROUNDS)));   /* state + history */
     if (t > by_mem) t = by_mem;
@@ -85,9 +83,9 @@ int gpu_kvariants_of(const rt_dev *d, int *out)
     for (int w = d->api == RT_CUDA ? KV_WIDE_FULL : KV_WIDE_X4; w <= (d->api == RT_CUDA ? KV_WIDE_FULL : KV_WIDE_X8); w++)
         for (int i = 0; i < nw; i++) {
             const int nk = KV_NK(wv[i]);
-            const size_t tw = gpu_tune_kang_threads_for(d, nk, false, w, false);
-            if (tw * 4 < gpu_tune_kang_threads_for(d, nk, false, 0, false) * 5) continue;                       /* not 25% more work-items than the default herd */
-            if (w == KV_WIDE_X8 && tw * 4 < gpu_tune_kang_threads_for(d, nk, false, KV_WIDE_X4, false) * 5) continue;   /* nor than the 4x herd */
+            const size_t tw = gpu_tune_kang_threads_for(d, nk, false, w);
+            if (tw * 4 < gpu_tune_kang_threads_for(d, nk, false, 0) * 5) continue;                       /* not 25% more work-items than the default herd */
+            if (w == KV_WIDE_X8 && tw * 4 < gpu_tune_kang_threads_for(d, nk, false, KV_WIDE_X4) * 5) continue;   /* nor than the 4x herd */
             out[n++] = wv[i] | KV_WIDEFLAG(w);
         }
     if (d->l2_bytes >= KANG_L2_MIN) {
@@ -107,12 +105,6 @@ static bool valid_kvariant(const rt_dev *d, int v)
     int n = gpu_kvariants_of(d, vs);
     for (int i = 0; i < n; i++) if (vs[i] == v) return true;
     return false;
-}
-/* what PZ_GPU_NK may force: a variant the tuner measures, or the block herd, which no tuner offers (self-tested all the same) */
-static bool forcible_kvariant(const rt_dev *d, int v)
-{
-    for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) if (v == KV_MAKE(KV_BLOCK_NK[i], KV_BLOCK, 0, 0, 0)) return true;
-    return valid_kvariant(d, v);
 }
 static bool valid_variant(const rt_dev *d, int v)
 {
@@ -290,16 +282,16 @@ void gpu_tune_linear_set_variant(gpu_session *s, int v) { s->variant = v; }
 int gpu_tune_linear_code(const gpu_session *s) { return s->variant; }
 
 /* Work-items of the kangaroo kernel: CUDA keeps 512 threads per SM resident (126 registers: four blocks of 128),
- * OpenCL the historical 64 per compute unit, unless the tuner chose a herd sized to the L2 cache, a wide one or a block herd (gpu_tune_kang_threads_for). */
-size_t gpu_kang_threads(const gpu_session *s) { return gpu_tune_kang_threads_for(&s->info, s->NK, s->l2fit, s->wide, KV_CFG(s->kvar) == KV_BLOCK); }
+ * OpenCL the historical 64 per compute unit, unless the tuner chose a herd sized to the L2 cache or a wide one (gpu_tune_kang_threads_for). */
+size_t gpu_kang_threads(const gpu_session *s) { return gpu_tune_kang_threads_for(&s->info, s->NK, s->l2fit, s->wide); }
 
-/* The depth of the jump history of a herd of K walkers, that is the most rounds a launch can run: KANG_HIST_MAX (KANG_HIST_MAX_BLOCK for the
- * small herd of a block-herd kernel) while the history takes at most an eighth of the device memory and the state with it at most the sixth
- * that gpu_kang_threads allows, halved until it does, never below KANG_HIST_ROUNDS (the herd is sized for that). Longer launches pay the fixed
- * costs of a launch (the state read and written back, the first batch products, the transfers and the wait) less often. */
-uint32_t gpu_kang_depth(const rt_dev *d, size_t K, int kvar)
+/* The depth of the jump history of a herd of K walkers, that is the most rounds a launch can run: KANG_HIST_MAX while the history takes at
+ * most an eighth of the device memory and the state with it at most the sixth that gpu_kang_threads allows, halved until it does, never
+ * below KANG_HIST_ROUNDS (the herd is sized for that). Longer launches pay the fixed costs of a launch (the state read and written back, the
+ * first batch products, the transfers and the wait) less often. */
+uint32_t gpu_kang_depth(const rt_dev *d, size_t K)
 {
-    uint32_t depth = KV_CFG(kvar) == KV_BLOCK ? KANG_HIST_MAX_BLOCK : KANG_HIST_MAX;
+    uint32_t depth = KANG_HIST_MAX;
     while (depth > KANG_HIST_ROUNDS && (K * 2 * depth > d->gmem / 8 || K * (KSTRIDE * 4 + 2 * (size_t)depth) > d->gmem / 6)) depth /= 2;
     return depth;
 }
@@ -324,7 +316,7 @@ static bool kang_probe_begin(gpu_session *s, kang_probe *p)
     p->ks->P.dp_mask = ~0ULL >> 4;
     p->ks->P.cap_since = ~0ULL;
     const int T = (int)gpu_kang_threads(s);
-    if (!gpu_kang_prepare(s, &p->ks->P, T, gpu_kang_depth(&s->info, (size_t)T * s->NK, s->kvar))) { kang_probe_end(s, p); return false; }
+    if (!gpu_kang_prepare(s, &p->ks->P, T, gpu_kang_depth(&s->info, (size_t)T * s->NK))) { kang_probe_end(s, p); return false; }
     const size_t K = (size_t)T * s->NK;
     uint32_t *st = pz_xcalloc(K * KSTRIDE, 4);
     u64 x = 0x9E3779B97F4A7C15ULL;
@@ -698,10 +690,10 @@ void gpu_kang_autotune(gpu_session *s, int idx)
     s->launch_s = GPU_LAUNCH_S;
     if (g_env.gpu_nk) {
         const int v = KV_MAKE(g_env.gpu_nk, g_env.gpu_nk_cfg, g_env.gpu_nk_meta ? 1 : 0, g_env.gpu_nk_l2 ? 1 : 0, 0);
-        if (forcible_kvariant(d, v)) { gpu_tune_kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, gpu_kvariant_name(v, nb, sizeof nb)); }
+        if (valid_kvariant(d, v)) { gpu_tune_kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, gpu_kvariant_name(v, nb, sizeof nb)); }
         else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, g_env.gpu_nk_text, rt_api_name(d->api),
-                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c; 64 and 128, plain, b or c, with m after it (tags once); 4g (block herd)"
-                                      : "32, 64, 128, with suffix b, then m if wanted (tags once); with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2); 4g (block herd)");
+                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c; 64 and 128, plain, b or c, with m after it (tags once)"
+                                      : "32, 64, 128, with suffix b, then m if wanted (tags once); with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2)");
         return;
     }
     if (tune_off(d)) return;

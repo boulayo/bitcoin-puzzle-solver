@@ -322,8 +322,7 @@ come fa la taratura (sezione 7.4: 3 s di riscaldamento con la variante predefini
 da 1 a 9; un secondo o due ciascuna). La tabella dà, per variante, il codice
 che `PZ_GPU_HALF` o `PZ_GPU_NK` accetta per imporla (`-` per i branchi larghi del canguro, che nessuna variabile impone), il nome, la velocità di
 ogni turno (oltre 3 turni la minima e la massima), la mediana, la dispersione (la massima sulla minima, in %) e la mediana rispetto a quella
-predefinita; sono marcate la predefinita, la scelta salvata dalla taratura, la più veloce, le varianti che non possono girare sul dispositivo e
-quelle che nessuna taratura propone (`4g`, il branco a blocchi: "forced only"). Sotto ogni tabella la regola della taratura dice cosa sceglierebbe
+predefinita; sono marcate la predefinita, la scelta salvata dalla taratura, la più veloce e le varianti che non possono girare sul dispositivo. Sotto ogni tabella la regola della taratura dice cosa sceglierebbe
 da queste mediane, e una seconda piccola tabella dà la velocità della variante in uso con lanci da 0,15, 0,35, 0,7 e 1,4 s e la durata che la
 regola sceglie. Non si salva nulla se non si dà anche `--retune`: allora le scelte delle tabelle, una volta che la variante ha superato il
 controllo bit-esatto, sostituiscono la taratura salvata. Circa due o tre minuti per GPU. Sulle macchine di questo progetto è girato solo su
@@ -420,14 +419,14 @@ come se la variabile non ci fosse.
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
 | `PZ_CUDA_LIB=PERCORSO` | la libreria del driver CUDA da caricare, con il suo percorso, al posto di quella del sistema (le prove danno così il loro driver simulato su Windows, dove un driver si cerca solo nella cartella di sistema) |
 | `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
-| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128cm`, `64l`, `4g` |
+| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128cm`, `64l` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |
 | `PZ_OPENCL_ALL=1` | usa anche i dispositivi OpenCL su CPU (sezione 7.1) |
 | `PZ_NO_PROFILE=1` | il profilo della macchina non si misura né si usa (tutti i thread e tutte le GPU, sezione 7.6), e nemmeno le velocità ricordate del pannello (sezione 6) |
-| `PZ_ISA=NOME` | il motore CPU della ricerca lineare, al posto di quello scelto dal micro-benchmark: `auto`, `baseline`, `avx2`, `shani` (avx2 con le istruzioni SHA-256 della CPU), `avx512`, `avx2v`, `avx512v` (aritmetica della curva sulle corsie SIMD), `avx512i` (avx512v con AVX-512 IFMA); su arm64 `auto`, `baseline`, `neon`, `neon2`. Diversamente dalle altre variabili, un nome che non è fra questi, o che la CPU non sa eseguire, ferma `hunt` con un errore prima di creare qualsiasi cosa; il log dice `imposed by PZ_ISA` |
+| `PZ_ISA=NOME` | il motore CPU della ricerca lineare, al posto di quello scelto dal micro-benchmark: `auto`, `baseline`, `avx2`, `shani` (avx2 con le istruzioni SHA-256 della CPU), `avx2v`, `avx512v` (aritmetica della curva sulle corsie SIMD), `avx512i` (avx512v con AVX-512 IFMA); su arm64 `auto`, `baseline`, `neon`, `neon2`. Diversamente dalle altre variabili, un nome che non è fra questi, o che la CPU non sa eseguire, ferma `hunt` con un errore prima di creare qualsiasi cosa; il log dice `imposed by PZ_ISA` |
 | `PZ_PRIO_GPU=auto\|yes\|no` | la priorità dei thread che servono le GPU: `yes` alta, `no` normale, entrambe senza misurarla; `auto` la misura la taratura (sezione 7.7) |
 | `PZ_NO_LARGE_PAGES=1` | niente pagine grandi (Windows, sezione 10) |
-| `PZ_BENCH_SCALE=0.2` | accorcia a un quinto le misure di `bench --together` e del profilo della macchina, per i test (un numero da 0,01 a 100) |
+| `PZ_BENCH_SCALE=0.2` | accorcia a un quinto le misure a tempo di `bench`, di `bench --together` e del profilo della macchina, per i test (un numero da 0,01 a 100) |
 | `PZ_KANG_MIX=0\|1` | sui core con hyper-threading il primo thread può usare il passo vettoriale del canguro e l'altro quello scalare BMI2/ADX, che usa il moltiplicatore intero invece dell'unità vettoriale. Senza la variabile il canguro misura le due soluzioni all'avvio e usa quella mista quando è più veloce almeno del 3% (lo dice una riga del log); `=0` non la usa mai, `=1` sempre. `bench` mostra il guadagno e se è in uso (riga "mixed") |
 | `XDG_CACHE_HOME` | cartella della cache (anche su Windows); senza, `%LOCALAPPDATA%` su Windows, poi `HOME` (`~/.cache/pzsolve`) |
 | `TMPDIR` | cartella delle campagne di prova delle misure e dei test (Linux e macOS; senza, `/tmp`) |

@@ -3,7 +3,6 @@
 #include "../src/bsgs.h"
 #include "../src/envopts.h"
 #include "../src/bsgs_priv.h"
-#include "../src/cpu_engine.h"
 #include "../src/platform.h"
 #include <pzcore/hash.h>
 #include <math.h>
@@ -923,42 +922,6 @@ static void t_scan_contract(void)
     bsgs_table_free(&tab);
 }
 
-/* the portable and the BMI2/ADX group routines must produce bit-identical windows */
-static void t_group_variants(void)
-{
-#if !defined(__x86_64__) || defined(PZ_NO_X86_VARIANTS)
-    return;                                    /* no x86 variant is built (arm64, X86=0) */
-#else
-    if (!cpu_has_adx()) { puts("  (BMI2/ADX not available: variants not compared)"); return; }
-    const u64 W = (u64)1 << 20;
-    pz_u256 lo = pz_u256_from_u64(1000), hi = pz_u256_from_u64(1000 + W - 1);
-    pz_ge P = pub_of(&(pz_u256){{987654321, 0, 0, 0}});
-    bsgs_params p;
-    char err[200];
-    CHECK(bsgs_params_init(&p, &lo, &hi, &P, 64, err, sizeof err));
-    bsgs_table tab;
-    CHECK(bsgs_table_alloc(&tab, 64, err, sizeof err));
-    bsgs_job job;
-    bsgs_job_init(&job, &tab, &p);
-    pz_fe *dx = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1)), *tmp = pz_xaligned(64, sizeof(pz_fe) * (BS_HALF + 1));
-    u64 *a_lo = pz_xaligned(64, 8 * BS_GRP), *a_hi = pz_xaligned(64, 8 * BS_GRP), *b_lo = pz_xaligned(64, 8 * BS_GRP), *b_hi = pz_xaligned(64, 8 * BS_GRP);
-    for (int round = 0; round < 4; round++) {
-        pz_ge C1 = pub_of(&(pz_u256){{12345ULL + 7777ULL * (u64)round, (u64)round, 0, 0}}), C2 = C1;
-        for (int win = 0; win < 3; win++) {
-            bool ok1 = bs_group_base(&job.giant, &C1, a_lo, a_hi, dx, tmp);
-            bool ok2 = bs_group_x86(&job.giant, &C2, b_lo, b_hi, dx, tmp);
-            CHECK(ok1 && ok2);
-            CHECK(memcmp(a_lo, b_lo, 8 * BS_GRP) == 0 && memcmp(a_hi, b_hi, 8 * BS_GRP) == 0);
-            pz_fe x1 = C1.x, x2 = C2.x, y1 = C1.y, y2 = C2.y;
-            pz_fe_normalize(&x1); pz_fe_normalize(&x2); pz_fe_normalize(&y1); pz_fe_normalize(&y2);
-            CHECK(!memcmp(&x1, &x2, sizeof x1) && !memcmp(&y1, &y2, sizeof y1));
-        }
-    }
-    pz_afree(dx); pz_afree(tmp); pz_afree(a_lo); pz_afree(a_hi); pz_afree(b_lo); pz_afree(b_hi);
-    bsgs_table_free(&tab);
-#endif
-}
-
 int main(void)
 {
     pz_env_init();
@@ -978,7 +941,6 @@ int main(void)
     t_solve();
     t_window_edges();
     t_scan_contract();
-    t_group_variants();
     puts(fails ? "t_bsgs: FAILED" : "t_bsgs: ok");
     return fails != 0;
 }

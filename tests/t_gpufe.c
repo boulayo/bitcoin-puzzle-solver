@@ -20,8 +20,7 @@ typedef unsigned int uint;
     void p##sqr(uint *r, const uint *a);                                                                          \
     void p##norm(uint *r, const uint *a);                                                                         \
     void p##cneg(uint *r, const uint *a, uint c);                                                                 \
-    void p##inv(uint *r, const uint *a);                                                                          \
-    void p##invpow(uint *r, const uint *a);
+    void p##inv(uint *r, const uint *a);
 GPUFE_DECL(gp_)   /* OpenCL, 64-bit C */
 GPUFE_DECL(gc_)   /* OpenCL, add-with-carry */
 GPUFE_DECL(ga_)   /* OpenCL, add-with-carry, the product of AMD GPUs (v_mad_u64_u32 with its carry, emulated) */
@@ -33,9 +32,9 @@ typedef struct {
     void (*subn)(uint *, const uint *, const uint *), (*addn)(uint *, const uint *, const uint *);
     void (*sub2)(uint *, const uint *, const uint *, const uint *), (*mul)(uint *, const uint *, const uint *);
     void (*sqr)(uint *, const uint *), (*norm)(uint *, const uint *), (*cneg)(uint *, const uint *, uint);
-    void (*inv)(uint *, const uint *), (*invpow)(uint *, const uint *);
+    void (*inv)(uint *, const uint *);
 } gpufe;
-#define GPUFE(p, n) {n, p##add, p##sub, p##subn, p##addn, p##sub2, p##mul, p##sqr, p##norm, p##cneg, p##inv, p##invpow}
+#define GPUFE(p, n) {n, p##add, p##sub, p##subn, p##addn, p##sub2, p##mul, p##sqr, p##norm, p##cneg, p##inv}
 static const gpufe V[] = {GPUFE(gp_, "portable"), GPUFE(gc_, "carry"), GPUFE(ga_, "AMD"), GPUFE(gf_, "PTX")};
 #define NV ((int)(sizeof V / sizeof *V))
 
@@ -140,7 +139,7 @@ int main(void)
         check(a, b);
         n++;
     }
-    /* inversion (divsteps, and the power a^(p-2) it replaces): random values, small ones, values around p and 2^256,
+    /* inversion (divsteps): random values, small ones, values around p and 2^256,
      * the limb patterns, zero. The result must be canonical (< p). */
     {
         uint a[8], r[8];
@@ -161,12 +160,7 @@ int main(void)
             pz_fe A, w;
             from32(&A, a);
             pz_fe_inv(&w, &A);
-            for (int v = 0; v < NV; v++) {
-                V[v].inv(r, a);
-                expect("inv", v, r, &w, a, NULL, true);
-                V[v].invpow(r, a);
-                expect("invpow", v, r, &w, a, NULL, false);
-            }
+            for (int v = 0; v < NV; v++) { V[v].inv(r, a); expect("inv", v, r, &w, a, NULL, true); }
             ninv++;
         }
         for (int z = 0; z < 4; z++) {          /* 0, 1, p - 1, p, p + 1, 2^256 - 1 */

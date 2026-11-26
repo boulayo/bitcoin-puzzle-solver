@@ -711,7 +711,7 @@ int gpu_kangaroo_start(run_ctx *r, gpu_session **out, int *k_total)
 static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, u64 stream)
 {
     const int K = s->T * s->NK;
-    if (!gpu_kang_prepare(s, &ks->P, s->T, gpu_kang_depth(&s->info, (size_t)K, s->kvar))) return false;
+    if (!gpu_kang_prepare(s, &ks->P, s->T, gpu_kang_depth(&s->info, (size_t)K))) return false;
     if (*mirror) kang_worker_free(*mirror);
     *mirror = kang_worker_new(ks, K, stream);
     kang_herd_start(ks, *mirror, s->r->sys.ncpu, stream);   /* the walkers of the last run first */
@@ -761,10 +761,6 @@ static void *gpu_kang_thread(void *p)
     /* keep the expected number of DPs per launch well below the device buffer */
     double edp = (double)K / ldexp(1.0, (int)ks->P.dp_bits);
     double rm = (double)(s->dps_cap / 2) / (edp > 1e-9 ? edp : 1e-9);
-    /* and, past KANG_HIST_MAX rounds (the deep history of a block herd), at most 8 times the steps between two DPs of a walker: each DP replays
-     * the history of its walker since the start of the launch */
-    const double rdp = ldexp(8.0, (int)ks->P.dp_bits);
-    if (rm > KANG_HIST_MAX && rm > rdp) rm = rdp > KANG_HIST_MAX ? rdp : KANG_HIST_MAX;
     const uint32_t rmax = rm < 1 ? 1 : (rm > s->hist_rounds ? s->hist_rounds : (uint32_t)rm);
     uint32_t rounds = rmax < 4 ? rmax : 4;
     int boosted = 0;

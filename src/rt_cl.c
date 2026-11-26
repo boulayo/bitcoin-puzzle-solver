@@ -161,12 +161,6 @@ bool rtcl_kernel(rt_kern *k, const char *name)
     cl_kernel h = cl_load()->CreateKernel((cl_program)k->m->h, name, &rc);
     if (!h || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: kernel %s not found (%d)", name, rc); return false; }
     k->h = h;
-    /* a kernel built for work-groups of a given size (the block herd of the kangaroo) is launched with that size */
-    size_t wg[3] = {0, 0, 0};
-    const cl_api *cl = cl_load();
-    if (cl->GetKernelWorkGroupInfo &&
-        cl->GetKernelWorkGroupInfo(h, (cl_device_id)k->m->c->dev.cl_dev, CL_KERNEL_COMPILE_WORK_GROUP_SIZE, sizeof wg, wg, NULL) == CL_SUCCESS)
-        k->block = (int)wg[0];
     return true;
 }
 
@@ -226,10 +220,9 @@ bool rtcl_run(rt_ctx *c, rt_kern *k, size_t n)
     }
     uint32_t nn = (uint32_t)n;
     if (!clok(cl->SetKernelArg(h, (cl_uint)k->nargs, sizeof nn, &nn), "setting kernel arguments")) return false;
-    /* whole work-groups of the size the kernel requires, or else a multiple of 64 that the driver divides as it likes: given an n with no small
-     * factor (a block of the end of the range, a herd sized to its range), OpenCL 1.2 has to take a divisor of it, 1 or n itself for a prime n.
-     * The work-items past n do nothing (PZ_GUARD), or take part in the work-groups only */
-    const size_t l = (size_t)k->block, q = l ? l : 64, g = (n + q - 1) / q * q;
-    return clok(cl->EnqueueNDRangeKernel((cl_command_queue)c->b, h, 1, NULL, &g, l ? &l : NULL, 0, NULL, NULL), "kernel execution") &&
+    /* a multiple of 64 that the driver divides as it likes: given an n with no small factor (a block of the end of the range, a herd sized to
+     * its range), OpenCL 1.2 has to take a divisor of it, 1 or n itself for a prime n. The work-items past n do nothing (PZ_GUARD) */
+    const size_t g = (n + 63) / 64 * 64;
+    return clok(cl->EnqueueNDRangeKernel((cl_command_queue)c->b, h, 1, NULL, &g, NULL, 0, NULL, NULL), "kernel execution") &&
            clok(cl->Finish((cl_command_queue)c->b), "clFinish");
 }

@@ -320,8 +320,7 @@ the tuning does (section 7.4: 3 s of warm-up with the default variant, not count
 a second or two each). The table gives, per variant,
 the code that `PZ_GPU_HALF` or `PZ_GPU_NK` takes to force it (`-` for the wide kangaroo herds, which no variable forces), its name, the rate
 of each turn (beyond 3 turns the least and the greatest), the median, the spread (the greatest over the least, in %) and the median against
-the default's; the default, the choice saved by the tuning, the fastest, the variants that cannot run on the device and those that no tuning
-offers (`4g`, the block herd: "forced only") are marked. Under each table the rule of the tuning says what it would pick from these
+the default's; the default, the choice saved by the tuning, the fastest and the variants that cannot run on the device are marked. Under each table the rule of the tuning says what it would pick from these
 medians, and a second small table gives the rate of the variant in use with launches of 0.15, 0.35, 0.7 and 1.4 s and the length the rule
 picks. Nothing is saved unless `--retune` is given too: then the picks of the tables, once the variant has passed the bit-exact check,
 replace the saved tuning. About two to three minutes per GPU. On the machines of this project it has only run on simulated devices (the
@@ -418,14 +417,14 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | do not load that runtime |
 | `PZ_CUDA_LIB=PATH` | the CUDA driver library to load, by its path, in place of the one of the system (the tests give their simulated driver this way on Windows, where a driver is looked for in the system folder only) |
 | `PZ_GPU_HALF=N` | fix the window of the linear kernel (skips the tuning; the values are in ALGORITHMS.md section 5); a number that the device does not offer is reported for each device |
-| `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `128cm`, `64l`, `4g` |
+| `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `128cm`, `64l` |
 | `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
 | `PZ_OPENCL_ALL=1` | use OpenCL CPU devices too (section 7.1) |
 | `PZ_NO_PROFILE=1` | the machine profile is neither measured nor used (all threads and all GPUs, section 7.6), nor are the remembered speeds of the panel (section 6) |
-| `PZ_ISA=NAME` | the CPU engine of the linear search, instead of the one the micro-benchmark picks: `auto`, `baseline`, `avx2`, `shani` (avx2 with the SHA-256 instructions of the CPU), `avx512`, `avx2v`, `avx512v` (curve arithmetic on the SIMD lanes), `avx512i` (avx512v with AVX-512 IFMA); on arm64 `auto`, `baseline`, `neon`, `neon2`. Unlike the other variables, a name that is not one of these, or one that the CPU cannot run, stops `hunt` with an error before anything is created; the log says `imposed by PZ_ISA` |
+| `PZ_ISA=NAME` | the CPU engine of the linear search, instead of the one the micro-benchmark picks: `auto`, `baseline`, `avx2`, `shani` (avx2 with the SHA-256 instructions of the CPU), `avx2v`, `avx512v` (curve arithmetic on the SIMD lanes), `avx512i` (avx512v with AVX-512 IFMA); on arm64 `auto`, `baseline`, `neon`, `neon2`. Unlike the other variables, a name that is not one of these, or one that the CPU cannot run, stops `hunt` with an error before anything is created; the log says `imposed by PZ_ISA` |
 | `PZ_PRIO_GPU=auto\|yes\|no` | the priority of the threads that serve the GPUs: `yes` high, `no` normal, both without measuring it; `auto` measured by the tuning (section 7.7) |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
-| `PZ_BENCH_SCALE=0.2` | shortens the measurements of `bench --together` and of the machine profile to a fifth, for tests (a number from 0.01 to 100) |
+| `PZ_BENCH_SCALE=0.2` | shortens the timed measurements of `bench`, of `bench --together` and of the machine profile to a fifth, for tests (a number from 0.01 to 100) |
 | `PZ_KANG_MIX=0\|1` | on hyper-threaded cores the first thread can use the vector step of the kangaroo and the other one the scalar BMI2/ADX step, which uses the integer multiplier instead of the vector unit. Without the variable the kangaroo measures both at start-up and uses the mixed one when it is at least 3% faster (a line in the log says so); `=0` never uses it, `=1` always does. `bench` shows the gain and whether it is in use (line "mixed") |
 | `XDG_CACHE_HOME` | cache folder (also on Windows); without it `%LOCALAPPDATA%` on Windows, then `HOME` (`~/.cache/pzsolve`) |
 | `TMPDIR` | folder of the scratch campaigns of the measurements and of the tests (Linux and macOS; `/tmp` without it) |

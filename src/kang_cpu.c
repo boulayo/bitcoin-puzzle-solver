@@ -371,10 +371,17 @@ static void kround_pick(void)
 {
     g_kround = 0;
     double best = 0;
-    const char *forced = g_env.kang_round;                 /* diagnostics: base, x86, avx2v, avx512v, avx512i */
+    const char *forced = g_env.kang_round;                 /* diagnostics: the id of a step of KROUNDS */
     if (forced[0]) {
         const int f = kround_find(forced);
-        if (f >= 0 && KROUNDS[f].supported()) { g_kround = f; kround_choose_mix(false); return; }
+        if (f >= 0 && KROUNDS[f].supported()) {
+            /* imposed, not exempt: a step that differs from the portable one stops here, as an engine imposed by PZ_ISA does */
+            if (f > 0 && !kang_round_check(KROUNDS[f].fn, 96, 75))
+                pz_die("the kangaroo step '%s' does not match the reference: set PZ_KANG_ROUND to another one", forced);
+            g_kround = f;
+            kround_choose_mix(false);
+            return;
+        }
         pz_log(PZ_LOG_WARN, "PZ_KANG_ROUND=%s is not available on this CPU: choosing automatically", forced);
     }
     for (int i = 0; i < NKROUNDS; i++) {

@@ -72,6 +72,6 @@ int gpu_tune_linear_code(const gpu_session *s);
 void gpu_tune_kang_set_variant(gpu_session *s, int v);
 int gpu_tune_kang_code(const gpu_session *s);
 int gpu_tune_default_kvariant(const rt_dev *d);
-size_t gpu_tune_kang_threads_for(const rt_dev *d, int nk, bool l2fit, int wide, bool block);
+size_t gpu_tune_kang_threads_for(const rt_dev *d, int nk, bool l2fit, int wide);
 
 #endif

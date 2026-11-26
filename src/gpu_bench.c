@@ -16,11 +16,6 @@ typedef struct { double copy_gbs, lo_gops, hi_gops, add3_gops; } gpu_diag;
  * the step and its share of the inversion (docs/en/RESEARCH.md 5 "After 1.19.2: the bytes of a kangaroo step" and 8.4) */
 #define KANG_MODEL_BYTES 181
 #define KANG_MODEL_INSNS 1300
-/* the block herd (NK 4): the walkers stay in registers; per step the history (written, then read by the replay at the end of the launch) and
- * 941 instructions of the step, plus the 15,680 that the inverting warp adds (the column products and fe_inv) shared by the 16 warp-steps of a
- * block and round */
-#define KANG_BLOCK_MODEL_BYTES 4
-#define KANG_BLOCK_MODEL_INSNS 1920
 
 /* Throughput probes: memory copy bandwidth and 32-bit integer instruction rates (the two limits of the kangaroo kernel:
  * it is bound by both, see docs/en/RESEARCH.md 8.4). About two seconds. False when a probe cannot run. */
@@ -162,15 +157,8 @@ void gpu_bench(void)
         }
         gpu_diag dg;
         if (gpu_diag_run(s, &dg)) {
-            const bool blk = KV_CFG(s->kvar) == KV_BLOCK;   /* the herd of a block-herd kernel is in the registers, not in the device memory */
-            gpu_diag_print(s, &dg, kr > 0 && !blk ? s->mem_used : 0);
-            if (kr > 0 && devs[i].api == RT_CUDA && blk) {
-                char c1[32], c3[32];
-                pz_prop_line("kangaroo ceilings", "%s steps/s by integer work; measured %s", pz_fmt_si(dg.lo_gops * 1e9 / KANG_BLOCK_MODEL_INSNS, c3, sizeof c3),
-                             pz_fmt_si(kr, c1, sizeof c1));
-                pz_prop_line("", "model: ~%d bytes and ~%d integer instructions per step, one inversion per block and round", KANG_BLOCK_MODEL_BYTES,
-                             KANG_BLOCK_MODEL_INSNS);
-            } else if (kr > 0 && devs[i].api == RT_CUDA) {   /* the static counts of the CUDA kernel (docs/en/RESEARCH.md 8.4) */
+            gpu_diag_print(s, &dg, kr > 0 ? s->mem_used : 0);
+            if (kr > 0 && devs[i].api == RT_CUDA) {   /* the static counts of the CUDA kernel (docs/en/RESEARCH.md 8.4) */
                 char c1[32], c2[32], c3[32];
                 pz_prop_line("kangaroo ceilings", "%s steps/s by bandwidth, %s by integer work; measured %s",
                              pz_fmt_si(dg.copy_gbs * 1e9 / KANG_MODEL_BYTES, c2, sizeof c2), pz_fmt_si(dg.lo_gops * 1e9 / KANG_MODEL_INSNS, c3, sizeof c3),
@@ -188,16 +176,6 @@ void gpu_bench(void)
 }
 
 /* ---------------- 'bench --variants' ---------------- */
-
-/* The kangaroo variants that no tuner offers and PZ_GPU_NK can force (the block herds): measured by 'bench --variants' where they can run,
- * marked "forced only". */
-static int kvariants_forced_only(const rt_dev *d, int *out)
-{
-    (void)d;
-    int n = 0;
-    for (size_t i = 0; i < sizeof KV_BLOCK_NK / sizeof *KV_BLOCK_NK; i++) out[n++] = KV_MAKE(KV_BLOCK_NK[i], KV_BLOCK, 0, 0, 0);
-    return n;
-}
 
 /* A line of text of the benchmark, wrapped at the width of the terminal (PZ_LINE_MAX at most) under its indentation. */
 static void bench_say(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));
@@ -233,9 +211,8 @@ static void bench_marks(char *out, size_t n, const char *const *marks, int nm)
 
 /* The table of one kernel: for every variant its code (what PZ_GPU_HALF or PZ_GPU_NK take), its name, the rates of the turns (up to 3; beyond
  * that the least and the greatest), the median, the spread of the rates (max/min - 1) and the median against the default's; the default,
- * the tuner's saved choice, the fastest, the variants that cannot run and those only forced are marked. Rows stay within PZ_LINE_MAX
- * columns. Returns the index of the fastest, -1 when none could run. */
-static int bench_variants_table(const tune_ops *op, const bool *forced, int turns, double smp[][TUNE_TURNS_MAX], const int *nsmp, int saved)
+ * the tuner's saved choice, the fastest and the variants that cannot run are marked. Rows stay within PZ_LINE_MAX columns. Returns the index of the fastest, -1 when none could run. */
+static int bench_variants_table(const tune_ops *op, int turns, double smp[][TUNE_TURNS_MAX], const int *nsmp, int saved)
 {
     char line[400], nb[64], cb[24], r[32], marks[80];
     double rate[32];
@@ -275,8 +252,8 @@ static int bench_variants_table(const tune_ops *op, const bool *forced, int turn
             o += (size_t)snprintf(line + o, sizeof line - o, "%11s%8s%12s", pz_fmt_cell(rate[i], r, sizeof r), sp, vd);
         } else o += (size_t)snprintf(line + o, sizeof line - o, "%11s%8s%12s", "", "", "");
         const char *const m[] = {rate[i] <= 0 ? "cannot run" : NULL, i == di ? "default" : NULL, op->vs[i] == saved ? "saved" : NULL,
-                                 i == fastest ? "fastest" : NULL, forced[i] ? "forced only" : NULL};
-        bench_marks(marks, sizeof marks, m, 5);
+                                 i == fastest ? "fastest" : NULL};
+        bench_marks(marks, sizeof marks, m, 4);
         snprintf(line + o, sizeof line - o, "%s", marks);
         bench_row(line);
     }
@@ -322,14 +299,12 @@ static double bench_launch_table(gpu_session *s, const tune_ops *op, double save
     return pick < 0 ? GPU_LAUNCH_S : try_s[pick];
 }
 
-/* Both kernels of one device: every variant in `turns` turns (the tuner's procedure without its cut after the first turn, and the variants
- * only forced too), one table each; then the lengths of a launch of the variant in use (the saved one, else the default). With --retune the
+/* Both kernels of one device: every variant in `turns` turns (the tuner's procedure without its cut after the first turn), one table each;
+ * then the lengths of a launch of the variant in use (the saved one, else the default). With --retune the
  * rule of the tuner decides from the medians, checks the choice bit for bit and saves it with the length, as the first run would. */
-static void bench_variants_kernel(gpu_session *s, const tune_ops *base, int turns, bool retune, int nforced, const int *forced_v)
+static void bench_variants_kernel(gpu_session *s, const tune_ops *base, int turns, bool retune)
 {
     tune_ops op = *base;
-    bool forced[32] = {false};
-    for (int i = 0; i < nforced && op.nv < 32; i++) { forced[op.nv] = true; op.vs[op.nv++] = forced_v[i]; }
     op.warm_s = TUNE_WARM_S;
     double smp[32][TUNE_TURNS_MAX];
     int nsmp[32], di = 0;
@@ -339,14 +314,14 @@ static void bench_variants_kernel(gpu_session *s, const tune_ops *base, int turn
     gpu_tune_turns(s, &op, turns, false, di, smp, nsmp);
     double saved_s = GPU_LAUNCH_S;
     const int saved = gpu_tune_cache_get(&s->info, op.kang, &saved_s);
-    bench_variants_table(&op, forced, turns, smp, nsmp, saved);
-    /* the rule of the tuner on these medians: only the variants it measures (not those only forced) */
+    bench_variants_table(&op, turns, smp, nsmp, saved);
+    /* the rule of the tuner on these medians */
     double rate[32] = {0};
-    for (int i = 0; i < op.nv; i++) rate[i] = forced[i] ? 0 : gpu_tune_median(smp[i], nsmp[i]);
+    for (int i = 0; i < op.nv; i++) rate[i] = gpu_tune_median(smp[i], nsmp[i]);
     const int pick = gpu_tune_choose(&op, rate, op.nv, di);
     char nb[64], cb[24], r[32], db[64];
     if (rate[pick] <= 0) {
-        bench_say("  -> no variant the tuner measures could run: the default %s%s stays", op.entry, op.name(op.def, nb, sizeof nb));
+        bench_say("  -> no variant could run: the default %s%s stays", op.entry, op.name(op.def, nb, sizeof nb));
         op.set(s, op.def);
         return;
     }
@@ -400,13 +375,11 @@ void gpu_bench_variants(int turns)
         s->variant = gpu_default_variant(&devs[i]);
         s->launch_s = GPU_LAUNCH_S;
         gpu_tune_linear_ops(&devs[i], &op);
-        bench_variants_kernel(s, &op, turns, gpu_retune_requested(), 0, NULL);
+        bench_variants_kernel(s, &op, turns, gpu_retune_requested());
         gpu_linear_release_program(s);
-        int fv[8];
-        const int nf = kvariants_forced_only(&devs[i], fv);
         gpu_tune_kang_set_variant(s, gpu_tune_default_kvariant(&devs[i]));
         gpu_tune_kang_ops(&devs[i], &op);
-        bench_variants_kernel(s, &op, turns, gpu_retune_requested(), nf, fv);
+        bench_variants_kernel(s, &op, turns, gpu_retune_requested());
         gpu_kang_release(s);
         gpu_session_release(s);
         free(s);
