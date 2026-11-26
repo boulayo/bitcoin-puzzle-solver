@@ -404,28 +404,49 @@ static bool broadcast(void *ctx, const btc_tx *tx)
     return ok;
 }
 
-static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
+/* Output txid:vout: -1 spent by a confirmed transaction, with its proof; -2 when no server gives the transaction (its bytes count only with
+ * the hash of txid); else its confirmations, 0 when no kept header proves its block (the mempool, or below the checkpoint). With spk,
+ * *pays tells whether it pays that P2PKH script, and *value is its value */
+static int look(chain_spv *c, const uint8_t txid[32], uint32_t vout, const uint8_t *spk, bool *pays, uint64_t *value)
 {
-    chain_spv *c = ctx;
     servers s;
     uint8_t *raw = NULL;
-    const uint8_t *spk;
-    size_t len = 0, spk_len;
-    uint64_t value, tip, height = 0;
+    const uint8_t *out;
+    size_t len = 0, out_len;
+    uint64_t v, tip, height = 0;
     bool spent = false;
     open_all(&s, c);
     for (int i = 0; i < c->nservers && !raw; i++)
         if (s.up[i]) (void)get_tx(&s.e[i], txid, &raw, &len);
-    if (!raw || !tip_of(c, &tip) || !btc_prevout(raw, len, txid, vout, &value, &spk, &spk_len)) {
+    if (!raw || !tip_of(c, &tip) || !btc_prevout(raw, len, txid, vout, &v, &out, &out_len)) {
         free(raw);
         close_all(&s);
         return -2;                                             /* no server shows the transaction: that says nothing */
     }
+    if (spk) *pays = out_len == BTC_P2PKH_LEN && !memcmp(out, spk, BTC_P2PKH_LEN), *value = v;
     for (int i = 0; i < c->nservers && !spent; i++)
-        if (s.up[i]) spent = scan_history(c, &s.e[i], spk, spk_len, txid, vout, &height);
+        if (s.up[i]) spent = scan_history(c, &s.e[i], out, out_len, txid, vout, &height);
     free(raw);
     close_all(&s);
     return spent ? -1 : height && height <= tip ? (int)(tip - height + 1) : 0;
+}
+
+static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout) { return look(ctx, txid, vout, NULL, NULL, NULL); }
+
+/* A coin of the prize (prize= of the network file, or of the program for its networks), looked up alone: the creator's coins are older than
+ * the checkpoint, where no kept header proves a block, so no scan of the address shows them. The txid is the file's or the program's, not
+ * a server's: the bytes hashed to it are the chain's, value and script. 1 when it pays the script and no server proves it spent; a
+ * server that hides a spend only makes the first transaction spend a coin that is gone, which the network refuses: a delay. 0 when it is
+ * spent or pays another script, -1 when no server gives the transaction */
+static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out)
+{
+    bool pays = false;
+    uint64_t value = 0;
+    const int k = look(ctx, txid, vout, spk, &pays, &value);
+    if (k == -2) return -1;
+    if (k == -1 || !pays) return 0;
+    memcpy(out->txid, txid, 32), out->vout = vout, out->value = value;
+    return 1;
 }
 
 /* the tip of our headers, the servers asked when tip_ms has gone by since they were last (sessions poll it, each every few seconds) */
@@ -519,8 +540,7 @@ static int pending(void *ctx, const uint8_t spk[BTC_P2PKH_LEN])
 
 static int ready(void *ctx, char *why, size_t cap) { return chain_spv_ready(ctx, why, cap); }
 
-/* no coin: the prizes of the network file are among the coins the servers list, and one outside the largest ones is never paid out */
-session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, NULL, pending, ready}; }
+session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, pending, ready}; }
 
 int chain_spv_ready(chain_spv *c, char *why, size_t cap)
 {

@@ -35,8 +35,9 @@ typedef struct {
     int (*confirmations)(void *ctx, const uint8_t txid[32], uint32_t vout);
     uint64_t (*height)(void *ctx);
     uint64_t (*feerate)(void *ctx);         /* satoshis per 1000 virtual bytes for a confirmation within a few blocks */
-    /* one output of a P2PKH script (a prize of the network file): 1 when it is confirmed, unspent and spendable, with its value in out;
-     * 0 when it is not; -1 when the chain cannot be asked. NULL: not offered */
+    /* one output of a P2PKH script (a prize of the network file or of the program): 1 when it is unspent and spendable (a node: confirmed;
+     * a light chain: not proven spent, also below its checkpoint), with its value in out; 0 when it is not; -1 when the chain cannot be
+     * asked. NULL: not offered */
     int (*coin)(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out);
     /* the spends of a P2PKH script that wait in the mempool (0: none), -1 when the chain cannot be asked: a light chain does not show a
      * coin whose spend waits there. NULL: coins shows those coins (a node's scan of its set) */
@@ -65,7 +66,8 @@ typedef struct {
 /* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets
  * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces (unless coins came to the address since:
  * a new payout of them, whose second, once signed, is what the record holds, paid_at 0 again). Once the payout has its confirmations and
- * nothing of value is left at the puzzle address, the two sides give each other their pieces, and each has the key. */
+ * nothing of value is left at the puzzle address (every known coin of the prize spent), the two sides give each other their pieces, and
+ * each has the key. */
 #define PAID_TX_MAX 600                     /* a second transaction: two signed P2PKH inputs and three outputs, about 430 bytes */
 typedef struct {
     uint64_t paid_at;                       /* the height at which the prize was seen spent in a block, by second when it is known; 0: not seen */
@@ -76,6 +78,8 @@ typedef struct {
     bool have_key;
     uint8_t key[32];                        /* the key of the puzzle, the sum of the two pieces (have_key); the caller wipes it */
     bool empty;                             /* out: the chain shows the puzzle address empty, and no prize of the network file: taken */
+    bool refused;                           /* out: one side gives no piece on its chain (a light one that knows no coin of the prize):
+                                             * not tried again, until it reads the chain from a node */
 } session_paid;
 
 typedef struct {

@@ -20,15 +20,25 @@ typedef struct {
     const char *privkey;   /* private key in hex; "" when the puzzle is still unsolved */
 } puzzle_info;
 
+/* A coin of the prize of an open puzzle whose public key is known: the creator's (2015, 2017 and 2023), not the dust strangers send there.
+ * The prize= lines of the network of the puzzle (src/peer/netfile.c). */
+typedef struct {
+    int n;
+    const char *txid;      /* as explorers show it */
+    unsigned vout;
+    uint64_t sats;
+} puzzle_prize;
+
 extern const puzzle_info PZ_PUZZLES[PZ_NUM_PUZZLES];
 extern const char *const PZ_RETIRED[PZ_NUM_RETIRED];
+extern const puzzle_prize PZ_PRIZES[];   /* ended by n = 0 */
 
 /* NULL when n is outside 1..160. */
 const puzzle_info *puzzle_find(int n);
 /* Address of a withdrawn puzzle (161..256), NULL otherwise. */
 const char *puzzle_retired_address(int n);
 /* Verifies the whole table (checksums, ranges, key -> address, pubkey -> address).
- * Returns 0 on success, otherwise the number of the first inconsistent puzzle. Includes the withdrawn ones. */
+ * Returns 0 on success, otherwise the number of the first inconsistent puzzle. Includes the withdrawn ones and the coins of the prizes. */
 int puzzles_verify(char *err, size_t errlen);
 
 #endif

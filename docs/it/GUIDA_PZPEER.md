@@ -196,7 +196,10 @@ Le righe da aspettarsi: `home ... on network p140: N contacts, listening`, poi `
 
 **Quando due case si incontrano** non c'è niente da fare: compaiono righe `session ...: a coincidence with home ...: the payout starts`,
 poi `session ...: ended:` con l'esito. Il premio va dritto dall'indirizzo del puzzle agli indirizzi delle due case e dell'autore; dopo la
-conferma le due case si scambiano i pezzi della chiave, che finisce in `FOUND.txt` della cartella. Se la casa si ferma a metà, alla
+conferma le due case si scambiano i pezzi della chiave, che finisce in `FOUND.txt` della cartella. Una casa senza nodo proprio (che
+legge la catena dai server Electrum) dà il suo pezzo solo se vede spese, con la prova, tutte le monete note del premio, quelle scritte nel
+programma per i puzzle 140-160 o le righe `prize=` del file di rete: con un file di rete senza righe `prize=` non lo dà mai, e la chiave
+arriva solo ripartendo con `--rpc` (le quote del premio arrivano comunque). Se la casa si ferma a metà, alla
 ripartenza riprende da dove era (il file `paid`). **Una casa che trova la chiave da sola** manda subito il 90 % al suo indirizzo e il 10 %
 all'autore.
 

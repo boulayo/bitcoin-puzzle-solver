@@ -436,12 +436,25 @@ int main(void)
     view(&c, &ch, &honest, NULL, NULL);
     CHECK(chain_spv_ready(&c, why, sizeof why) == 1 && ch.height(ch.ctx) == 4);
     CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 1 && coins[0].value == 100000000 && !memcmp(coins[0].txid, fid, 32) && coins[0].vout == 0);
-    CHECK(!ch.coin);                                           /* the prizes are among the coins listed */
     CHECK(ch.confirmations(ch.ctx, fid, 0) == 4 && ch.confirmations(ch.ctx, f2id, 0) == -1 && ch.confirmations(ch.ctx, other, 0) == -2);
     CHECK(ch.feerate(ch.ctx) == 3000);
     c.max_tip_age = 3600;                                      /* the last block is two days old */
     CHECK(chain_spv_ready(&c, why, sizeof why) == 0);
     chain_spv_free(&c);
+    /* headers from block 2 on: the prize of block 1 is below, and no scan of the address shows it (no header proves its block), but as a
+     * prize= coin, named by its txid, it is the chain's: its value from its transaction, unspent as no server proves a spend. The coin of
+     * block 2, spent in block 3, is spent by proof; one that no server has is not known */
+    {
+        const char *one[1] = {honest.addr};
+        uint8_t cp2[32];
+        payout_coin pc;
+        pz_sha256d(W.hdr[2], 80, cp2);
+        CHECK(chain_spv_init(&c, BTC_REGTEST, 2, cp2, one, 1, NULL));
+        c.timeout_ms = 3000, ch = chain_spv_iface(&c);
+        CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.coin(ch.ctx, fid, 0, pspk, &pc) == 1 && pc.value == 100000000 && !memcmp(pc.txid, fid, 32));
+        CHECK(ch.coin(ch.ctx, fid, 0, aspk, &pc) == 0 && ch.coin(ch.ctx, f2id, 0, pspk, &pc) == 0 && ch.coin(ch.ctx, other, 0, pspk, &pc) == -1);
+        chain_spv_free(&c);
+    }
 
     /* a server that hides the coins: alone it gives none (a delay); next to an honest one the prize is there */
     view(&c, &ch, &hider, NULL, NULL);

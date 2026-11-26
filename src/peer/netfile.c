@@ -229,7 +229,7 @@ bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen)
         snprintf(err, errlen, n ? "puzzle %d: not in the table" : "no open puzzle with a public key", n);
         return false;
     }
-    char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], text[600];
+    char a[PZ_U256_HEX_BUF], b[PZ_U256_HEX_BUF], text[2400];
     pz_u256 lo = pz_u256_pow2((unsigned)p->n - 1), hi = pz_u256_pow2((unsigned)p->n), one = pz_u256_from_u64(1);
     pz_u256_sub(&hi, &hi, &one);
     if (!p->pubkey[0]) {                                       /* a linear search: the address, blocks of 2^44 keys */
@@ -244,8 +244,10 @@ bool netfile_puzzle(int n, netfile *nf, char *err, size_t errlen)
     pz_sha256(m, sizeof m, seed);
     for (int i = 0; i < 32; i++) snprintf(js + 2 * i, 3, "%02x", seed[i]);
     const int dp = (p->n - 1) / 2 - 44 > 8 ? (p->n - 1) / 2 - 44 : 8;
-    snprintf(text, sizeof text, "net=p%d\npuzzle=%d\npubkey=%s\nrange=%s:%s\njumpseed=%s\nschema=net-06\ndpbits=%d\nchain=main\n", p->n, p->n, p->pubkey,
-             pz_u256_to_hex(&lo, a), pz_u256_to_hex(&hi, b), js, dp);
+    int l = snprintf(text, sizeof text, "net=p%d\npuzzle=%d\npubkey=%s\nrange=%s:%s\njumpseed=%s\nschema=net-06\ndpbits=%d\nchain=main\n", p->n, p->n,
+                     p->pubkey, pz_u256_to_hex(&lo, a), pz_u256_to_hex(&hi, b), js, dp);
+    for (const puzzle_prize *z = PZ_PRIZES; z->n; z++)        /* the coins of its prize, as prize= lines of a file would give them */
+        if (z->n == p->n && l < (int)sizeof text) l += snprintf(text + l, sizeof text - (size_t)l, "prize=%s:%u:%llu\n", z->txid, z->vout, (unsigned long long)z->sats);
     return netfile_parse(text, nf, err, errlen);
 }
 

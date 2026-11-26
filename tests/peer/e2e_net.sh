@@ -14,7 +14,8 @@
 # than one pair may get its first transaction confirmed, each on the prize the one before sent back to the puzzle address: the last
 # pair is paid, and the prize is smaller by the fee and the tiny coin of each first transaction (about 15 000 satoshis at 20 sat/vB).
 # With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
-# bitcoind) and check every answer themselves (chain_spv.c).
+# bitcoind) and check every answer themselves (chain_spv.c); the prize= line of the network file names the coin of the prize, which they
+# must see spent before they give their pieces (with no such line a light home gives none).
 # With PZ_E2E_WIN=1 the three programs are the Windows ones of build/win, run under Wine (the bitcoind stays the one of this machine).
 # With PZ_E2E_MEET=1 nobody is given an address, as on the first day of a network: no custodian node and no entry line; the homes find
 # each other through a stand-in of the table of BitTorrent (tests/peer/bt_table.py), and the first runs alone for PZ_E2E_ALONE seconds
@@ -74,11 +75,14 @@ p=bytes([0x6f])+bytes.fromhex(sys.argv[1]); p+=hashlib.sha256(hashlib.sha256(p).
 n=int.from_bytes(p,'big'); a='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'; s=''
 while n: n,r=divmod(n,58); s=a[r]+s
 print('1'*(len(p)-len(p.lstrip(b'\0')))+s)" "$H160")
-    rpc wallet sendtoaddress "[\"$PADDR\", 1]" >/dev/null
+    FUND=$(rpc wallet sendtoaddress "[\"$PADDR\", 1]" | tr -d '"')
+    FVOUT=$(rpc wallet gettransaction "[\"$FUND\"]" | python3 -c '
+import json,sys; t=json.load(sys.stdin); print(next(d["vout"] for d in t["details"] if d["address"] == sys.argv[1] and d["category"] == "send"))' "$PADDR")
     PORT=$((${PZ_E2E_PORT:-30000} + 10 * try))      # PZ_E2E_PORT: another base when two runs share the machine
     printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=%x:%x\njumpseed=%s\nschema=net-06\ndpbits=16\nchain=regtest\n' \
         "$try" "$PUB" $((1 << (B - 1))) $(((1 << B) - 1)) "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$T/net.txt"
     [ -z "${PZ_E2E_MEET:-}" ] && echo "entry=127.0.0.1:$PORT" >> "$T/net.txt"
+    echo "prize=$FUND:$FVOUT:100000000" >> "$T/net.txt"              # the coin of the prize: a home gives its piece once it is spent
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
     A0=$(at "raw($AUTHOR)")

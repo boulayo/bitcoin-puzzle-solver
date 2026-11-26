@@ -53,6 +53,12 @@ int puzzles_verify(char *err, size_t errlen)
         u8 h[20];
         if (!pz_address_to_hash160(PZ_RETIRED[i], h)) FAIL(PZ_FIRST_RETIRED + i, "puzzle %d: invalid address %s (Base58Check)", PZ_FIRST_RETIRED + i, PZ_RETIRED[i]);
     }
+    for (const puzzle_prize *z = PZ_PRIZES; z->n; z++) {      /* of an open puzzle with a public key, a txid of 64 hex digits */
+        const puzzle_info *p = puzzle_find(z->n);
+        u8 id[32];
+        if (!p || !p->pubkey[0] || p->privkey[0] || strlen(z->txid) != 64 || pz_hex_decode(z->txid, id, 32) != 32 || !z->sats)
+            FAIL(z->n, "puzzle %d: a coin of its prize is not one of an open puzzle with a public key", z->n);
+    }
 #undef FAIL
     return 0;
 }

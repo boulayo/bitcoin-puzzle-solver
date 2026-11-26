@@ -683,6 +683,22 @@ static bool swap_second(sess *s)
 typedef enum { PIECES_NO, PIECES_KEY, PIECES_COINS, PIECES_VOID } pieces_end;   /* no key; the key; coins came to the address after the
                                                   * payout; the second transaction can no longer go through */
 
+/* Whether this home gives its piece, once the payout is settled: every known coin of the prize (built-in, or prize= of the network file)
+ * must be spent as its chain shows it, on a light chain by proof (a spend no server can make up; a server can hide one, which is a delay).
+ * A light chain that knows no coin of the prize could show an address emptied of a prize that its servers hide, which the partner would
+ * then take alone with the key: such a home never gives its piece, and the pieces are exchanged only with a node of one's own. 1 it gives
+ * it; 0 never, on this chain; -1 not now */
+static bool never_gives(const sess *s) { return s->c->chain->pending && !s->c->nprizes; }
+
+static int gives(const sess *s)
+{
+    const session_chain *ch = s->c->chain;
+    if (never_gives(s)) return 0;
+    for (int i = 0; i < s->c->nprizes && i < SESSION_PRIZES_MAX; i++)
+        if (ch->confirmations(ch->ctx, s->c->prizes[i].txid, s->c->prizes[i].vout) != -1) return -1;
+    return 1;
+}
+
 /* The confirmations of a second transaction, read from its outputs (the author's among them, which is seldom spent soon): the deepest; -1
  * when every one is spent (on a node: or unknown); -2 when the chain did not answer for one and showed none of them in a block or the
  * mempool */
@@ -716,7 +732,9 @@ static pieces_end exchange(sess *s)
     btc_tx b;
     if (!p->second_len || !btc_tx_parse(&b, p->second, p->second_len) || !btc_tx_txid(&b, bid))
         return snprintf(s->why, s->whylen, "the prize moved, but the second transaction is not known here nor to the partner: no pieces"), PIECES_NO;
-    note(s, "the pieces of the key are exchanged after %d confirmations of the payout", conf);
+    note(s, never_gives(s) ? "the payout is followed for %d confirmations; this home gives no piece of the key: it knows no coin of the prize"
+                           : "the pieces of the key are exchanged after %d confirmations of the payout", conf);
+    p->refused = false;
     const int64_t end = sys_now_ms() + (int64_t)(conf + 6) * block_ms(s);
     int64_t beat_at = sys_now_ms() + alive_every(s);
     uint64_t last = 0, since = 0, spent_at = 0;                 /* since: the height from which the state was seen settled */
@@ -766,7 +784,26 @@ static pieces_end exchange(sess *s)
                                                     : "the prize moved, but the second transaction is not in a block: no pieces yet"), PIECES_NO;
         beat(s, &beat_at);
     }
+    /* Each side says whether it gives its piece, then reads the partner's word, and gives it only when both do: a side that does not give
+     * its own takes none. An empty S_PIECE: it gives it; one byte: never on its chain (neither side tries again); an abort: not now. A
+     * piece in place of the word is wiped. */
+    static const uint8_t NEVER[1] = {0};
     uint8_t mine[32], theirs[32], key[32], k33[33];
+    const int give = gives(s);
+    if (give < 0) return fail(s, "paid; a known coin of the prize is not shown spent by the chain of this home: no piece yet"), PIECES_NO;
+    if (!send_msg(s, S_PIECE, NEVER, give ? 0 : 1) || !recv_msg(s, S_PIECE, theirs, 32, &n) || !give || n) {
+        char r[200];
+        snprintf(r, sizeof r, "%s", n == 32 ? "a piece without its word" : s->why);
+        p->refused = !give || n == 1;
+        if (!give)
+            snprintf(s->why, s->whylen, "paid; no piece is given: this home reads the chain from servers and knows no coin of the prize, which they"
+                                        " could hide; the pieces are exchanged with a node of one's own (start pzpeer run with --rpc)");
+        else if (n == 1)
+            snprintf(s->why, s->whylen, "paid; the partner gives no piece: it reads the chain from servers and knows no coin of the prize (with a node"
+                                        " of its own, --rpc, it would)");
+        else snprintf(s->why, s->whylen, "paid; no piece from the partner (%s)", r);
+        return pz_secure_zero(theirs, sizeof theirs), PIECES_NO;
+    }
     secp256k1_pubkey X, Y, K;
     size_t kl = 33;
     bool ok = pieces_secret(c->ctx, c->net, c->base, s->pair, s->me, c->d, mine);

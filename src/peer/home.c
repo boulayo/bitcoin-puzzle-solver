@@ -764,8 +764,9 @@ done:
     s->running = false, s->waiting = false, s->have_conn = false, s->conn = NULL;
     s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
     if (proved) proved_add(h, s);
-    /* again in 10 minutes if it did not pay, or paid without the pieces */
-    s->retry_at = s->alerted && !paid.empty && (res != SESSION_PAID || !paid.have_key) && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
+    /* again in 10 minutes if it did not pay, or paid without the pieces, unless one side gives no piece on its chain (a start with --rpc,
+     * of either home, tries again) */
+    s->retry_at = s->alerted && !paid.empty && !paid.refused && (res != SESSION_PAID || !paid.have_key) && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
     /* a pair whose partner never proved anything gives its slot back, and so does one out of tries (an alert that comes again starts it
      * afresh, within the limits of session.h); a paid pair keeps its slot, so that it is not started again */
     s->used = s->alerted && (res == SESSION_PAID || s->retry_at || paid.paid_at);   /* a paid pair keeps its slot: the partner may come back */
@@ -1105,15 +1106,20 @@ int home_run(const home_cfg *cfg)
     int nb = 0;
     while (nb < 16 && netfile_opt(&h->nf, "entry", nb, entries[nb], sizeof entries[nb])) boot[nb] = entries[nb], nb++;
     for (int i = 0; i < cfg->npeers && nb < 64; i++) boot[nb++] = cfg->peers[i];
-    /* the prizes, prize=txid:vout:sats (the txid as explorers show it; the value is the node's): a session finds them even when the
-     * scan of the puzzle address fails (session.c) */
+    /* the prizes, prize=txid:vout:sats (the txid as explorers show it; the value is the chain's), of the file or of the program for its
+     * networks: a session finds them even when no scan of the puzzle address lists them, and gives its piece of the key only once each is
+     * spent (session.c) */
     for (int i = 0; h->nprizes < SESSION_PRIZES_MAX && netfile_opt(&h->nf, "prize", i, line, sizeof line); i++) {
         char tx[65];
         unsigned vout;
         unsigned long long sats;
         if (sscanf(line, "%64[0-9a-fA-F]:%u:%llu", tx, &vout, &sats) == 3 && btc_hash_from_hex(tx, h->prizes[h->nprizes].txid))
             h->prizes[h->nprizes++].vout = vout;
+        else home_say("the line prize=%s of the network file is not TXID:VOUT:SATOSHIS: it is left out", line);
     }
+    if (!cfg->rpc && !h->nprizes)
+        home_say("the network file names no coin of the prize (prize=): servers could hide one, so a payout is shared as always, but the pieces"
+                 " of the key are exchanged only with a node of one's own (--rpc)");
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,

@@ -194,8 +194,11 @@ one of those lines is on another network, as a torrent with another hash is anot
 the program, as the parameters of a chain come with a node of that chain.
 
 The other lines are settings of the node that reads them, and each is checked where it is used: `entry=host:port` (a node to start
-from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a coin of the puzzle, found even when
-the scan of its address fails; its value and script are read from the chain). Any number of each.
+from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a coin of the prize, found even when
+no scan of its address lists it; its value and script are read from the chain; a home gives its piece of the key only once each is
+spent, 7.5 step 8). Any number of each. The networks written in the program carry the coins of their prize as `prize=` lines: the
+three of the creator at each address, of 2015, 2017 and 2023 (`data/prizes.csv`; `pzpeer netcheck 140` lists them), not the dust
+strangers sent there.
 
 A line is `key=value`; from `#` on it is a comment, and spaces at the ends of the key and of the value do not count. Canonical lines: the
 defining lines rebuilt as `key=value`, sorted bytewise, joined with `\n` (no `\n` at the end). An unknown key, or a repeated or missing
@@ -590,7 +593,15 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    coin whose spend waits there; what servers show there counts only with an input signed by the key of the puzzle), and less than
    100 000 satoshis at the address: the key protects nothing more. Coins of 100 000 satoshis or more that came to the address after the
    payout are paid out first, by a new payout of the pair, whose second transaction, once signed, is then the one each home keeps, and
-   the pieces follow. Each side checks the piece it gets against the public piece of the partner's record, adds the two, and checks that the sum is
+   the pieces follow. Every known coin of the prize (the `prize=` lines of the network file, which the networks written in the program
+   have) must also be spent, as the chain of the home shows it: on a node, what the node says; on a light chain, by a confirmed spend
+   with its proof, which no server can make up. A light chain shows an address as servers list it, and servers that hide a coin of the
+   prize would show it empty: the partner, with both pieces, would then take that coin alone. So a light home of a network that names no
+   coin of its prize never gives its piece (the shares are paid all the same; only the key is lost, and a start with `--rpc` exchanges
+   the pieces). Each side first says whether it gives its piece (an empty `S_PIECE`; one byte: never, on its chain; an `S_ABORT`: not
+   now) and reads the partner's word, and the pieces follow only when both give them: a side that keeps its own takes none, and a piece
+   that comes before its word is wiped. After a "never" neither side tries the pair again, until one of them starts with `--rpc`. Each
+   side checks the piece it gets against the public piece of the partner's record, adds the two, and checks that the sum is
    the key of the puzzle. Someone gives first, and a partner can keep its
    own piece: all it wins is what the key still opens, the coins of the address on the chains that split from Bitcoin in 2017 and after
    (the prizes of 2015 and of July 2017 are there too: 1.40 BCH and 1.40 BSV at #140, about 300 euros in November 2026, against 14 BTC)
@@ -640,7 +651,9 @@ at the first start of a home, which asks to accept them (or `--accept-terms`), a
 **After the payout** (`src/peer/home.c`). The pair, the first and the second transaction and the height go into `HOME/paid`, a line
 each, as soon as the second transaction is signed (height 0 until it is seen in a block), so that the payout is settled and the pieces
 still exchanged after a restart: a session of a pair in that file only does that (hello, proofs, `S_SECOND`, `S_PIECE`). It is tried
-again every 10 minutes for a day, until the key is known. The key goes into `HOME/FOUND.txt` and on the terminal, as pzsolve does; when the
+again every 10 minutes for a day, until the key is known, but not after a side said it never gives its piece (a light home of a network
+that names no coin of its prize, step 8): then a start of either home with `--rpc` tries again. A light home of such a network says so
+when it starts. The key goes into `HOME/FOUND.txt` and on the terminal, as pzsolve does; when the
 campaign of pzsolve encrypts its key (`--encrypt-pubkey` or `--encrypt-password` after `--`, the public key in its `campaign.conf`), the
 file and the terminal carry only the encrypted line, which `pzsolve decrypt-key` opens. With the prize paid pzsolve has nothing more to
 search: the home stops it, and does not start it again at the next start; it stays on, a custodian, and answers a partner that still
@@ -687,7 +700,8 @@ payouts, checked in every case, refused before anything is signed; a hello whose
 record and cannot prove it, for which no pzsign runs; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends;
 scans of F slower than the partner's wait; a coin that comes to the address after the payout, whose own payout S holds back; every
-output of the second transaction spent before the pieces. The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
+output of the second transaction spent before the pieces; the known coins of the prize, spent as a node shows them, shown unspent by a
+light chain (no piece, and the partner, told first, gives none), none known to a light chain (never a piece, and no more tries). The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
 for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are),
@@ -924,8 +938,13 @@ once a block while it waits for one, and the height every 15 seconds, which the 
 sessions); the servers are asked one after another, each with a minute for its calls of an operation, its headers included, and one that
 does not answer, or announces blocks it cannot show, is left alone for ten minutes. None is trusted: nothing a server says is
 believed without a proof, and what a lying server can still do is hide things, which is a delay and never a wrong payment: servers that
-show no coin at the puzzle address do not make the home take the prize for gone (7.5, step 3). The prizes of the network file need no
-lookup of their own here: they are among the coins the servers list, and one outside the largest is never paid out. The connection is plain TCP, one JSON object a line; as every
+show no coin at the puzzle address do not make the home take the prize for gone (7.5, step 3), and an address they show empty makes it
+give its piece of the key only when every known coin of the prize is proven spent (7.5, step 8; with none known, never: a coin that
+came to the address later and that all the servers hide would still go to the partner alone). The prizes of the network file, or of
+the program, are looked up one by one (`blockchain.transaction.get` of the txid the file or the program names, its bytes hashed to it,
+and no server that proves the output spent): the creator's coins are older than the built-in checkpoint, where no kept header proves
+their block, so no scan of the address lists them; a server that hides their spend only makes the first transaction spend a coin that is
+gone, which the network refuses. The connection is plain TCP, one JSON object a line; as every
 answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
 client) and `chain_spv.c`, a second `session_chain` beside `chain_rpc.c`; a node of one's own stays the stronger choice, as it also
 checks the rules that the proof of work alone does not (below).
@@ -959,7 +978,7 @@ first transaction the network refuses. On testnet and signet only the proof of w
 
 `t_spv` checks the rules on real headers of the main chain; `t_chain_spv` runs the sessions' calls against servers that hide a coin,
 list a spent one, give false proofs, add blocks without work, drop a broadcast, do not see the mempool, list there a transaction they do
-not have or answer slowly, and a spend behind 260 transactions of dust; `PZ_E2E_LIGHT=1
+not have or answer slowly, a spend behind 260 transactions of dust, and a coin of the prize below the checkpoint; `PZ_E2E_LIGHT=1
 tests/peer/e2e_net.sh` pays a coincidence with three homes that have no node. Not tried yet against a public server.
 
 ## 9. Status

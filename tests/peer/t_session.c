@@ -9,7 +9,9 @@
  * hangs while the other floods it; a scan of the puzzle address that fails (the prize of the network file is paid); a chain that stops.
  * After a payout the pieces: both get the key; a partner that keeps its piece, or gives a wrong one, which leaves only this side without
  * it, and a later session that gives it; coins left at the puzzle address, which hold the exchange, and a later payout of them whose
- * second S keeps; every output of the second spent before a later session. Needs PZSIGN; without it it says it was skipped. */
+ * second S keeps; every output of the second spent before a later session; the known coins of the prize: spent, as a node shows them, not
+ * shown spent by a light chain, none known to a light chain (no piece then, and the partner gives none). Needs PZSIGN; without it it
+ * says it was skipped. */
 #include "peertest.h"
 #include "chain_rpc.h"
 #include "session.h"
@@ -505,6 +507,9 @@ typedef struct {
     bool other;                       /* another pair's first transaction takes the prize output of this pair's first */
     bool copy;                        /* an old copy of the first transaction, with other signatures, is mined in its place */
     bool node;                        /* a chain of a node of its own (no pending: an empty scan is the truth), not of servers */
+    bool node1;                       /* only home 1's is of a node, home 0's of servers */
+    bool no_prizes;                   /* no coin of the prize is known (a network file without prize= lines) */
+    bool hide_prize;                  /* home 0 knows one more coin of the prize, which its chain shows unspent (a server hides it) */
     int refuse_s;                     /* the sends of the second transaction S's chain refuses */
     int cancel_blocks;                /* the blocks F waits before its cancel (0: 3) */
     bool restart_s;                   /* S's chain stops once S sends the second: then a later session, the chain back, settles it */
@@ -678,10 +683,16 @@ static void run_case(const tcase *tc, const char *bin)
         if (tc->pieces || tc->restart_s) g->paid = &paid[i], g->reveal_conf = 2;
         chn[i].slow_ms = (tc->slow_F ? i == F_home : i == 0) ? tc->slow_ms : 0;
         g->block_ms = i == S_home && tc->restart_s ? 10 : tc->block_ms;   /* a stopped chain ends S's waits soon */
-        if (tc->scan_fails) {                                   /* the prize, as a line of the network file gives it */
+        if (!tc->taken && !tc->no_prizes) {                     /* the prize, as a line of the network file gives it */
             payout_coin pc[64];
             CHECK(chn[i].in.coins(chn[i].in.ctx, puzzle_spk, pc, 64) == 1);
             g->prizes[0] = pc[0], g->nprizes = 1;
+        }
+        if (!i && tc->hide_prize) {                             /* elsewhere than the address: no scan of it lists the coin either */
+            g->prizes[g->nprizes++] = (payout_coin){.txid = {0x61, 0xde}, .vout = 3, .value = 50000000};
+            pthread_mutex_lock(&chain.mu);
+            add_utxo(g->prizes[1].txid, 3, 50000000, (const uint8_t[]){0x6a}, 1, chain.tip);
+            pthread_mutex_unlock(&chain.mu);
         }
         g->chan = &chan[i];
         g->timeout_ms = tc->timeout_ms ? tc->timeout_ms : 20000, g->poll_ms = 50, g->cancel_blocks = tc->cancel_blocks ? tc->cancel_blocks : 3, g->alive_ms = 1;
@@ -703,7 +714,8 @@ static void run_case(const tcase *tc, const char *bin)
     }
     session_chain ifc[2];
     for (int i = 0; i < 2; i++) {
-        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin, tc->node ? NULL : fl_pending, NULL};
+        ifc[i] = (session_chain){&chn[i], fl_coins, fl_broadcast, fl_conf, fl_height, fl_feerate, fl_coin, tc->node || (i && tc->node1) ? NULL : fl_pending,
+                                 NULL};
         h[i].cfg.chain = &ifc[i];
     }
     if (tc->fee) g_fee[0] = g_fee[1] = tc->fee;
@@ -735,14 +747,18 @@ static void run_case(const tcase *tc, const char *bin)
         CHECK(strstr(h[0].why, w) || strstr(h[1].why, w));
     } else if (tc->pieces) {
         /* home 1 has home 0's piece whatever it does with its own; home 0 has the key only when home 1 gave the right piece */
-        const bool later = tc->ghost || tc->coins_after, want[2] = {!later && tc->piece1 == PIECE_GIVEN, !later};
+        const bool later = tc->ghost || tc->coins_after, none = later || tc->hide_prize || tc->no_prizes;
+        const bool want[2] = {!none && tc->piece1 == PIECE_GIVEN, !none};
         for (int i = 0; i < 2; i++) {
-            CHECK(paid[i].paid_at > 0 && paid[i].have_key == want[i]);
+            CHECK(paid[i].paid_at > 0 && paid[i].have_key == want[i] && paid[i].refused == tc->no_prizes);
             if (want[i]) CHECK(!memcmp(paid[i].key, k, 32));
         }
         if (tc->piece1 == PIECE_KEPT) CHECK(strstr(h[0].why, "no piece from the partner") != NULL);
         if (tc->piece1 == PIECE_WRONG) CHECK(strstr(h[0].why, "not the right one") != NULL);
         if (later) CHECK(strstr(h[0].why, "paid out first") && strstr(h[1].why, "paid out first"));
+        /* a home that gives no piece says so before the partner gives its own, which it then does not (both words come first) */
+        if (tc->hide_prize) CHECK(strstr(h[0].why, "not shown spent") && strstr(h[1].why, "the partner stopped"));
+        if (tc->no_prizes) CHECK(strstr(h[0].why, "--rpc") && strstr(h[1].why, "the partner gives no piece"));
     }
     if (tc->coins_after) {                                      /* a later session pays out the coin that came; S keeps its second */
         e[S_home].last_b = LAST_DROPPED, e[S_home].plans = e[S_home].msgs = 0, chn[S_home].refuse = 1000;
@@ -950,6 +966,13 @@ int main(void)
         /* a partner that keeps its piece, or gives a wrong one: this side has no key, and a later session gives it */
         {.name = "the partner keeps its piece", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_KEPT, .again = true},
         {.name = "the partner gives a wrong piece", .expect = PAYOUT, .pieces = true, .piece1 = PIECE_WRONG},
+        /* the pieces with a node of its own: a coin of the prize spent is what the node says */
+        {.name = "the pieces, with a node of its own", .expect = PAYOUT, .pieces = true, .node = true},
+        /* a light chain that shows a known coin of the prize unspent (a server hides it at the address): no piece, and the partner, told
+         * before it gives its own, gives none (before, the light home gave its piece once the address looked empty) */
+        {.name = "a known coin of the prize not shown spent", .expect = PAYOUT, .pieces = true, .node1 = true, .hide_prize = true, .memory = true},
+        /* a light chain that knows no coin of the prize: never a piece, the partner told, and neither side tries again */
+        {.name = "a light chain that knows no coin of the prize", .expect = PAYOUT, .pieces = true, .node1 = true, .no_prizes = true},
         /* coins come to the puzzle address after the payout: the key would open them, so no piece is given */
         {.name = "coins at the address after the payout", .expect = PAYOUT, .pieces = true, .ghost = true, .block_ms = 400},
         /* a coin sent there for real, then a later session that pays it out, whose second S keeps: S's record is of that payout, in no

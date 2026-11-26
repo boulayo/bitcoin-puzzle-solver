@@ -149,6 +149,8 @@ static int cmd_netcheck(const char *path)
                pz_u256_to_hex(&nf.end, b), nf.schema, nf.dpbits, nf.chain);
     for (int i = 0; i < 32; i++) printf("%02x", nf.fp[i]);
     printf("\n");
+    char line[NETFILE_LINE_MAX];
+    for (int i = 0; netfile_opt(&nf, "prize", i, line, sizeof line); i++) printf("prize %s\n", line);   /* txid:vout:satoshis */
     return 0;
 }
 
