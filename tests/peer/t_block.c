@@ -3,7 +3,8 @@
 /* t_block.c - the claim of a block of a shared linear search, and the file of claims. The two keys of the test, 0x80000068b68 and
  * 0x800003d4338, have hash160s with the same bytes 8 to 12 (08 e1 d9 a1 9a: found by trying four million keys): with a target that has
  * those bytes, both are proof keys of the block that starts at 2^43. A claim is made from them, checked, sent and read back; then what
- * must be refused; then the blocks of a range as large as that of puzzle 71, and what a file of claims keeps. */
+ * must be refused; then the blocks of a range as large as that of puzzle 71, and what a file of claims keeps, of a few blocks and of
+ * thousands. */
 #include "peertest.h"
 #include "block.h"
 #include "claims.h"
@@ -77,6 +78,47 @@ static void test_claims(const uint8_t fp[32])
     remove(PATH);
 }
 
+/* Many blocks, 1 to CLAIMS_PER_BLOCK owners each, put in turns: each block gives all its claims, a claim again is a duplicate and one
+ * owner more is refused, before and after the file is opened again (the table of the blocks grew many times), and claims_at gives them
+ * in the order they came */
+static void test_many_claims(const uint8_t fp[32])
+{
+    static const char PATH[] = PZ_TEST_DIR "/t_block.many";
+    enum { BLOCKS = 5000 };
+    char err[200];
+    block_claim got[CLAIMS_PER_BLOCK], first, last;
+    int stored = 0, put = 0;
+    remove(PATH);
+    claims *c = claims_open(PATH, fp, err, sizeof err);
+    for (int turn = 0; c && turn < CLAIMS_PER_BLOCK; turn++)
+        for (uint64_t i = 0; i < BLOCKS; i++) {
+            block_claim cl = {.index = i * 0x9e3779b97f4a7c15ull >> 20, .n = 1, .off = {(uint64_t)turn + 1}};   /* a proof key of its own */
+            memcpy(cl.owner, &i, sizeof i), cl.owner[31] = (uint8_t)turn;
+            if (turn > (int)(i % CLAIMS_PER_BLOCK)) continue;
+            stored += claims_put(c, &cl) == CLAIM_STORED, put++;
+            if (put == 1) first = cl;
+            last = cl;
+        }
+    CHECK(stored == put);
+    for (int pass = 0; c && pass < 2; pass++) {
+        int right = 0;
+        for (uint64_t i = 0; i < BLOCKS; i++) {
+            block_claim again = {.index = i * 0x9e3779b97f4a7c15ull >> 20, .n = 1, .off = {1}}, more = again;
+            memcpy(again.owner, &i, sizeof i), again.owner[31] = 0;
+            more.off[0] = 9, memset(more.owner, 0xee, 32);
+            const int n = (int)(i % CLAIMS_PER_BLOCK) + 1;
+            right += claims_get(c, again.index, got, CLAIMS_PER_BLOCK) == n && claims_put(c, &again) == CLAIM_DUP &&
+                     (n < CLAIMS_PER_BLOCK || claims_put(c, &more) == CLAIM_FULL);
+        }
+        CHECK(right == BLOCKS && claims_count(c) == (uint64_t)put);
+        CHECK(claims_at(c, 0, &got[0]) && got[0].index == first.index && !memcmp(got[0].owner, first.owner, 32));
+        CHECK(claims_at(c, (uint64_t)put - 1, &got[0]) && got[0].index == last.index && !memcmp(got[0].owner, last.owner, 32));
+        claims_close(c);
+        c = pass ? NULL : claims_open(PATH, fp, err, sizeof err);
+    }
+    remove(PATH);
+}
+
 int main(void)
 {
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
@@ -147,6 +189,7 @@ int main(void)
     CHECK(block_claims_keys(&c, 1) == 2 && block_claims_keys((const block_claim[]){c, d}, 2) == 2);
     test_blocks();
     test_claims(net.fp);
+    test_many_claims(net.fp);
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_block");
 }

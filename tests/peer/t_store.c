@@ -293,6 +293,43 @@ static void test_planted(void)
     wipe();
 }
 
+/* Many owners and records, and the store opened again: every record is found, an owner at its share is still full and the others are
+ * not, and a new owner takes the next number (the opening keys the index anew and counts the records of each owner by its number) */
+static void test_reopen(void)
+{
+    enum { OWN = 200, EACH = 25 };
+    static home_identity id[OWN + 1];
+    char err[200], label[32];
+    record mine, others[4], found[4];
+    int no, ok = 0;
+    wipe();
+    store *st = store_open(PATH, ctx, &net, err, sizeof err);
+    CHECK(st != NULL);
+    for (int i = 0; i <= OWN; i++) snprintf(label, sizeof label, "reopen %d", i), id[i] = id_of(label);
+    for (int round = 0; st && round < 2; round++) {
+        store_limits(st, 0, EACH);
+        for (int i = 0; i < OWN; i++)
+            for (int j = 0; j < EACH; j++) {
+                uint8_t x[32];
+                snprintf(label, sizeof label, "reopen %d %d", i, j);
+                point_x(label, x);
+                const record r = make(&id[i], j % 3 - 1, x);
+                if (!round) ok += store_put(st, &r, &mine, others, 4, &no) == STORE_OK;
+                else ok += store_find(st, x, found, 4) == 1 && same(&found[0], &r);
+            }
+        uint8_t x[32];
+        point_x("reopen one more", x);
+        const record more = make(&id[0], 0, x), fresh = make(&id[OWN], 0, x);
+        CHECK(ok == OWN * EACH && store_count(st) == OWN * EACH && store_put(st, &more, &mine, others, 4, &no) == STORE_FULL);
+        CHECK(store_weight(st) == OWN * EACH * ldexpl(1, (int)net.dpbits));
+        if (round) CHECK(store_put(st, &fresh, &mine, others, 4, &no) == STORE_OK && file_size(PATH ".owners") == STORE_HDR + (OWN + 1) * 32);
+        store_close(st);
+        st = round ? NULL : store_open(PATH, ctx, &net, err, sizeof err);
+        ok = 0;
+    }
+    wipe();
+}
+
 /* An entry damaged on disk. At the end of the file (a crash): checked again when the file is opened, and not indexed. In the middle (not
  * checked at the opening): never given as the other record of a coincidence. */
 static void test_damaged(void)
@@ -495,6 +532,7 @@ int main(void)
     test_store();
     test_limits();
     test_planted();
+    test_reopen();
     test_damaged();
     test_lost_owner();
     test_mbox();

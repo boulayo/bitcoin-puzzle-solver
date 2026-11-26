@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* store.c - the custodian and the mailbox (see store.h). The tables are open addressing with linear probing on uniform keys (a hash, an
- * x-only key), grown at 70% load. A record is read back from the file only when its 4-byte key matches: that is, for a duplicate or a
- * coincidence, or about one time in 2^32 otherwise (8 bytes a slot keep the index small). */
+/* store.c - the custodian and the mailbox (see store.h). The tables are open addressing with linear probing, grown at 70% load, on keys
+ * that SipHash-2-4 makes of x and of the identity of an owner, under a key drawn at each opening: a peer chooses x (within the zero bits
+ * and the rule of the custodian) and its identities, and with keys it could compute it would put all its records in one run of the
+ * table, which every record of that run would then walk. A record is read back from the file only when its 4-byte key matches: that
+ * is, for a duplicate or a coincidence, or about one time in 2^32 otherwise (8 bytes a slot keep the index small). The opening reads the
+ * entries in chunks, finds their owners by number, and fetches the slots of a chunk together into a table made at its size at once:
+ * about 50 s for a full store of 2^27 records, where a SHA-256 for every entry, an owner looked up by its identity and a table that grew
+ * took two minutes. */
 #include "store.h"
 #include "sys.h"
 #include <pzcore/hash.h>
@@ -20,10 +25,12 @@ static const char MAGIC[8] = {'P', 'Z', 'S', 'T', 'O', 'R', 'E', '2'}, OMAGIC[8]
 #define X_MAX (2 * STORE_X_OWNERS) /* records of one x read back: the owners a store takes, and as many more that their owners proved */
 
 typedef struct {
-    uint8_t id[32];
-    uint32_t num;                  /* its number in PATH.owners */
+    uint32_t key, num;             /* 4 bytes of the SipHash of x, the number of the entry (EMPTY: a free slot) */
+} islot;
+
+typedef struct {
+    uint8_t id[32];                /* zeros: a number whose line a crash lost */
     uint64_t n;                    /* the records held */
-    bool used;
 } owner_slot;
 
 struct store {
@@ -33,19 +40,20 @@ struct store {
     record_net net;
     uint64_t count;                /* entries in the file */
     long double weight;            /* the sum of 2^dp of the records indexed */
-    uint32_t *keys, *idx;          /* the index: the first 4 bytes of K and the number of the entry */
+    uint64_t hkey[2];              /* of SipHash, drawn at the opening */
+    islot *idx;                    /* the index, one place of the memory a slot */
     size_t cap, used;
-    owner_slot *own;               /* the owners by identity */
+    uint32_t *own;                 /* the owners by identity: their numbers (EMPTY: a free place) */
     size_t ocap, oused;
-    uint8_t (*ids)[32];            /* the owners by number */
+    owner_slot *ids;               /* the owners by number: the entries name them so, and at the opening nothing is looked up */
     uint32_t nids, capids;
     uint64_t max, max_owner;       /* the limits of a custodian; 0: none */
 };
 
-static uint64_t be64(const uint8_t *p)
+static uint64_t le64(const uint8_t *p)
 {
     uint64_t v = 0;
-    for (int i = 0; i < 8; i++) v = v << 8 | p[i];
+    for (int i = 8; i-- > 0;) v = v << 8 | p[i];
     return v;
 }
 
@@ -56,98 +64,116 @@ void store_key(const uint8_t x[32], uint8_t k[32])
     pz_sha256(m, sizeof m, k);
 }
 
-static uint32_t key4(const uint8_t x[32])
+#define ROTL(x, b) ((x) << (b) | (x) >> (64 - (b)))
+
+static void sipround(uint64_t v[4])
 {
-    uint8_t k[32];
-    store_key(x, k);
-    return (uint32_t)(be64(k) >> 32);
+    v[0] += v[1], v[1] = ROTL(v[1], 13), v[1] ^= v[0], v[0] = ROTL(v[0], 32);
+    v[2] += v[3], v[3] = ROTL(v[3], 16), v[3] ^= v[2];
+    v[0] += v[3], v[3] = ROTL(v[3], 21), v[3] ^= v[0];
+    v[2] += v[1], v[1] = ROTL(v[1], 17), v[1] ^= v[2], v[2] = ROTL(v[2], 32);
 }
+
+/* SipHash-2-4 of 32 bytes (x, or an identity) under the key of the store */
+static uint64_t sip32(const store *st, const uint8_t p[32])
+{
+    uint64_t v[4] = {st->hkey[0] ^ 0x736f6d6570736575ull, st->hkey[1] ^ 0x646f72616e646f6dull, st->hkey[0] ^ 0x6c7967656e657261ull,
+                     st->hkey[1] ^ 0x7465646279746573ull};
+    for (int i = 0; i <= 32; i += 8) {
+        const uint64_t m = i < 32 ? le64(p + i) : 32ull << 56; /* the words, then the length */
+        v[3] ^= m, sipround(v), sipround(v), v[0] ^= m;
+    }
+    v[2] ^= 0xff;
+    for (int r = 0; r < 4; r++) sipround(v);
+    return v[0] ^ v[1] ^ v[2] ^ v[3];
+}
+
+static uint32_t key4(const store *st, const uint8_t x[32]) { return (uint32_t)(sip32(st, x) >> 32); }
 
 /* ---- the index ---- */
 
 static void index_add(store *st, uint32_t k, uint32_t i)
 {
     size_t s = (size_t)k & (st->cap - 1);
-    while (st->idx[s] != EMPTY) s = (s + 1) & (st->cap - 1);
-    st->keys[s] = k, st->idx[s] = i;
+    while (st->idx[s].num != EMPTY) s = (s + 1) & (st->cap - 1);
+    st->idx[s] = (islot){k, i};
     st->used++;
 }
 
-static bool index_grow(store *st)
+/* room in the index for want entries in all, at most 70% of it */
+static bool index_room(store *st, size_t want)
 {
-    if (st->cap && st->used * 10 < st->cap * 7) return true;
-    const size_t oc = st->cap, nc = oc ? oc * 2 : 1024;
-    uint32_t *ok = st->keys, *nk = malloc(nc * sizeof *nk), *oi = st->idx, *ni = malloc(nc * sizeof *ni);
-    if (!nk || !ni) {
-        free(nk), free(ni);
-        return false;
-    }
+    if (st->cap && want * 10 <= st->cap * 7) return true;
+    const size_t oc = st->cap;
+    size_t nc = oc ? oc * 2 : 1024;
+    while (want * 10 > nc * 7) nc *= 2;
+    islot *old = st->idx, *ni = malloc(nc * sizeof *ni);
+    if (!ni) return false;
     memset(ni, 0xff, nc * sizeof *ni);
-    st->keys = nk, st->idx = ni, st->cap = nc, st->used = 0;
+    st->idx = ni, st->cap = nc, st->used = 0;
     for (size_t s = 0; s < oc; s++)
-        if (oi[s] != EMPTY) index_add(st, ok[s], oi[s]);
-    free(ok), free(oi);
+        if (old[s].num != EMPTY) index_add(st, old[s].key, old[s].num);
+    free(old);
     return true;
 }
 
 /* ---- the owners ---- */
 
-static owner_slot *owner_find(store *st, const uint8_t id[32])
+/* the number of an owner, EMPTY when the store has none of it */
+static uint32_t owner_find(const store *st, const uint8_t id[32])
 {
-    if (!st->ocap) return NULL;
-    size_t s = (size_t)be64(id) & (st->ocap - 1);
-    for (; st->own[s].used; s = (s + 1) & (st->ocap - 1))
-        if (!memcmp(st->own[s].id, id, 32)) return &st->own[s];
-    return NULL;
+    for (size_t s = st->ocap ? (size_t)sip32(st, id) & (st->ocap - 1) : 0; st->ocap && st->own[s] != EMPTY; s = (s + 1) & (st->ocap - 1))
+        if (!memcmp(st->ids[st->own[s]].id, id, 32)) return st->own[s];
+    return EMPTY;
 }
 
-/* an owner in the tables of memory, with its number (the file has it already) */
-static owner_slot *owner_index(store *st, const uint8_t id[32], uint32_t num)
+static void owner_place(store *st, uint32_t num)
 {
-    if (!st->ocap || st->oused * 10 >= st->ocap * 7) {
-        const size_t oc = st->ocap, nc = oc ? oc * 2 : 64;
-        owner_slot *old = st->own, *n = calloc(nc, sizeof *n);
-        if (!n) return NULL;
-        st->own = n, st->ocap = nc, st->oused = 0;
-        for (size_t i = 0; i < oc; i++)
-            if (old[i].used) *owner_index(st, old[i].id, old[i].num) = old[i];
-        free(old);
-    }
-    if (num >= st->capids) {
-        const uint32_t nc = st->capids ? st->capids * 2 : 64;
-        uint8_t (*n)[32] = realloc(st->ids, (size_t)nc * 32);
-        if (!n) return NULL;
-        st->ids = n, st->capids = nc;
-    }
-    size_t s = (size_t)be64(id) & (st->ocap - 1);
-    while (st->own[s].used) s = (s + 1) & (st->ocap - 1);
-    owner_slot *o = &st->own[s];
-    memcpy(o->id, id, 32), o->num = num, o->n = 0, o->used = true;
-    memcpy(st->ids[num], id, 32);
-    if (num >= st->nids) st->nids = num + 1;
+    size_t s = (size_t)sip32(st, st->ids[num].id) & (st->ocap - 1);
+    while (st->own[s] != EMPTY) s = (s + 1) & (st->ocap - 1);
+    st->own[s] = num;
     st->oused++;
-    return o;
 }
 
-/* the numbers up to n taken, those without an owner as zeros (no owner is: an identity is a key): an entry that names an owner whose line
- * a crash lost keeps naming nobody, and a new owner never gets its number */
+/* the numbers below n taken, those without an owner as zeros (no owner is: an identity is a key): an entry that names an owner whose
+ * line a crash lost keeps naming nobody, and a new owner never gets its number */
 static bool ids_reserve(store *st, uint32_t n)
 {
     if (n > st->capids) {
-        uint8_t (*m)[32] = realloc(st->ids, (size_t)n * 32);
+        const uint32_t nc = n > 2 * st->capids ? n : 2 * st->capids;
+        owner_slot *m = realloc(st->ids, (size_t)nc * sizeof *m);
         if (!m) return false;
-        st->ids = m, st->capids = n;
+        st->ids = m, st->capids = nc;
     }
-    for (; st->nids < n; st->nids++) memset(st->ids[st->nids], 0, 32);
+    for (; st->nids < n; st->nids++) memset(&st->ids[st->nids], 0, sizeof *st->ids);
     return true;
 }
 
-/* a new owner: its identity at the end of PATH.owners first, so that every entry names an owner the file has */
-static owner_slot *owner_add(store *st, const uint8_t id[32])
+/* the owner id with its number in the tables of memory (the file has it already); false without memory */
+static bool owner_index(store *st, const uint8_t id[32], uint32_t num)
+{
+    if (!st->ocap || (st->oused + 1) * 10 > st->ocap * 7) {
+        const size_t oc = st->ocap, nc = oc ? oc * 2 : 64;
+        uint32_t *old = st->own, *n = malloc(nc * sizeof *n);
+        if (!n) return false;
+        memset(n, 0xff, nc * sizeof *n);
+        st->own = n, st->ocap = nc, st->oused = 0;
+        for (size_t i = 0; i < oc; i++)
+            if (old[i] != EMPTY) owner_place(st, old[i]);
+        free(old);
+    }
+    if (!ids_reserve(st, num + 1)) return false;
+    memcpy(st->ids[num].id, id, 32), st->ids[num].n = 0;
+    owner_place(st, num);
+    return true;
+}
+
+/* a new owner: its identity at the end of PATH.owners first, so that every entry names an owner the file has; its number, EMPTY on a
+ * failure */
+static uint32_t owner_add(store *st, const uint8_t id[32])
 {
     const uint32_t num = st->nids;
-    if (num == EMPTY || sys_pwrite(st->ofd, id, 32, STORE_HDR + (int64_t)num * 32) != 32) return NULL;
-    return owner_index(st, id, num);
+    return num != EMPTY && sys_pwrite(st->ofd, id, 32, STORE_HDR + (int64_t)num * 32) == 32 && owner_index(st, id, num) ? num : EMPTY;
 }
 
 /* ---- the entries ---- */
@@ -163,8 +189,8 @@ static bool entry_decode(const store *st, const uint8_t e[STORE_ENTRY], record *
     uint32_t num = 0;
     for (int i = 0; i < 4; i++) num |= (uint32_t)e[RECORD_WIRE + i] << (8 * i);
     static const uint8_t none[32];
-    if (num >= st->nids || !memcmp(st->ids[num], none, 32)) return false;   /* an owner whose line a crash lost */
-    return record_wire_decode(e, st->ids[num], r);
+    if (num >= st->nids || !memcmp(st->ids[num].id, none, 32)) return false;   /* an owner whose line a crash lost */
+    return record_wire_decode(e, st->ids[num].id, r);
 }
 
 static bool read_at(store *st, uint64_t i, record *r)
@@ -179,12 +205,12 @@ static int find_locked(store *st, const uint8_t x[32], record out[X_MAX])
 {
     if (!st->cap) return 0;
     uint32_t num[X_MAX];                                       /* their entries */
-    const uint32_t k = key4(x);
+    const uint32_t k = key4(st, x);
     int n = 0;
-    for (size_t s = (size_t)k & (st->cap - 1); st->idx[s] != EMPTY; s = (s + 1) & (st->cap - 1)) {
+    for (size_t s = (size_t)k & (st->cap - 1); st->idx[s].num != EMPTY; s = (s + 1) & (st->cap - 1)) {
         record r;
-        const uint32_t e = st->idx[s];
-        if (st->keys[s] != k || !read_at(st, e, &r) || memcmp(r.x, x, 32)) continue;
+        const uint32_t e = st->idx[s].num;
+        if (st->idx[s].key != k || !read_at(st, e, &r) || memcmp(r.x, x, 32)) continue;
         int at = n;
         while (at > 0 && num[at - 1] < e) at--;
         if (at == X_MAX) continue;
@@ -234,6 +260,7 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
     st->ctx = ctx;
     st->net = *net;
     st->fd = st->ofd = -1;
+    if (!sys_random(st->hkey, sizeof st->hkey)) return fail(st, err, errlen, "no randomness from the system", path);
     snprintf(opath, sizeof opath, "%s.owners", path);
     const int64_t nown = store_file(opath, OMAGIC, net->fp, 32, &st->ofd, &why), nent = nown < 0 ? -1 : store_file(path, MAGIC, net->fp, STORE_ENTRY, &st->fd, &why);
     if (nown < 0) return fail(st, err, errlen, why, opath);
@@ -244,19 +271,25 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
     static const uint8_t none[32];
     uint32_t refs = 0;                                          /* the owners the entries name */
     for (int64_t i = 0; i < nown; i++) {
-        if (sys_pread(st->ofd, buf, 32, STORE_HDR + i * 32) != 32 || !(memcmp(buf, none, 32) ? owner_index(st, buf, (uint32_t)i) != NULL
+        if (sys_pread(st->ofd, buf, 32, STORE_HDR + i * 32) != 32 || !(memcmp(buf, none, 32) ? owner_index(st, buf, (uint32_t)i)
                                                                                               : ids_reserve(st, (uint32_t)i + 1))) {
             free(buf);
             return fail(st, err, errlen, "cannot read the owners", opath);
         }
     }
     st->count = (uint64_t)nent;
+    if (!index_room(st, (size_t)nent)) {                       /* at once: no growing, no record placed twice */
+        free(buf);
+        return fail(st, err, errlen, "out of memory", path);
+    }
     for (uint64_t i = 0; i < st->count; i += LOAD_CHUNK) {
         const size_t n = st->count - i < LOAD_CHUNK ? (size_t)(st->count - i) : LOAD_CHUNK;
         if (sys_pread(st->fd, buf, n * STORE_ENTRY, STORE_HDR + i * STORE_ENTRY) != (long)(n * STORE_ENTRY)) {
             free(buf);
             return fail(st, err, errlen, "cannot read the records", path);
         }
+        islot add[LOAD_CHUNK];                                 /* the entries of the chunk to index: their slots are fetched at once */
+        size_t na = 0;
         for (size_t j = 0; j < n; j++) {
             record r;
             uint32_t num = 0;
@@ -264,14 +297,12 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
             if (num < EMPTY && num + 1 > refs) refs = num + 1;
             if (!entry_decode(st, buf + j * STORE_ENTRY, &r)) continue;   /* damaged on disk: not indexed (store_read refuses it too) */
             if (i + j + STORE_CHECK_TAIL >= st->count && !record_check(ctx, net, &r)) continue;   /* the tail, where a crash cuts */
-            if (!index_grow(st)) {
-                free(buf);
-                return fail(st, err, errlen, "out of memory", path);
-            }
-            index_add(st, key4(r.x), (uint32_t)(i + j));
-            owner_find(st, r.owner)->n++;
+            add[na] = (islot){key4(st, r.x), (uint32_t)(i + j)};
+            __builtin_prefetch(&st->idx[add[na++].key & (st->cap - 1)], 1);
+            st->ids[num].n++;
             st->weight += ldexpl(1, (int)r.dp);
         }
+        for (size_t a = 0; a < na; a++) index_add(st, add[a].key, add[a].num);
     }
     free(buf);
     if (!ids_reserve(st, refs)) return fail(st, err, errlen, "out of memory", path);
@@ -292,7 +323,7 @@ void store_close(store *st)
         const int fd = i ? st->ofd : st->fd;
         if (fd >= 0) (void)sys_sync(fd), close(fd);
     }
-    free(st->keys), free(st->idx), free(st->own), free(st->ids);
+    free(st->idx), free(st->own), free(st->ids);
     pthread_mutex_destroy(&st->mu);
     free(st);
 }
@@ -309,21 +340,23 @@ static store_status put(store *st, const record *r, bool proved, record *mine, r
     for (int i = 0; i < ns && held < 0; i++)
         if (!memcmp(same[i].owner, r->owner, 32)) held = i;
     store_status s;
-    owner_slot *o = owner_find(st, r->owner);
+    uint32_t o = owner_find(st, r->owner);
     if (held >= 0) {
         s = STORE_DUP;
         if (mine) *mine = same[held];
-    } else if ((st->max && st->count >= st->max) || (st->max_owner && o && o->n >= st->max_owner) || ns >= (proved ? X_MAX : STORE_X_OWNERS) ||
-               (st->max && !o && st->oused >= st->max / 256 + 1024)) {     /* an identity costs little: owners take memory and disk */
+    } else if ((st->max && st->count >= st->max) || (st->max_owner && o != EMPTY && st->ids[o].n >= st->max_owner) ||
+               ns >= (proved ? X_MAX : STORE_X_OWNERS) ||
+               (st->max && o == EMPTY && st->oused >= st->max / 256 + 1024)) {     /* an identity costs little: owners take memory and disk */
         s = STORE_FULL;
     } else {
         uint8_t e[STORE_ENTRY];
         s = STORE_FAIL;
-        if (!o) o = owner_add(st, r->owner);
-        if (o) entry_encode(r, o->num, e);
-        if (o && st->count + 1 < EMPTY && index_grow(st) && sys_pwrite(st->fd, e, STORE_ENTRY, STORE_HDR + st->count * STORE_ENTRY) == STORE_ENTRY) {
-            index_add(st, key4(r->x), (uint32_t)st->count++);
-            o->n++;
+        if (o == EMPTY) o = owner_add(st, r->owner);
+        if (o != EMPTY) entry_encode(r, o, e);
+        if (o != EMPTY && st->count + 1 < EMPTY && index_room(st, st->used + 1) &&
+            sys_pwrite(st->fd, e, STORE_ENTRY, STORE_HDR + st->count * STORE_ENTRY) == STORE_ENTRY) {
+            index_add(st, key4(st, r->x), (uint32_t)st->count++);
+            st->ids[o].n++;
             st->weight += ldexpl(1, (int)r->dp);
             s = STORE_OK;
             if (mine) *mine = *r;

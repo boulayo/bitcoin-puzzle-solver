@@ -305,11 +305,15 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
 ### 7.3 Custody and coincidences
 
 - Key of a record: `K = SHA256("pznet1/key" || x)`. A record goes to the 5 nodes whose IDs are closest to K (XOR distance).
-- A custodian keeps records on disk and an index in memory by the first 4 bytes of K. The file, `store.bin` in the data folder, is
+- A custodian keeps records on disk and an index in memory by 4 bytes of a keyed hash of x (SipHash-2-4, its key drawn at each start: a
+  peer chooses its x within the zero bits and the rule of the custodian, and with a hash it could compute it would put its records in
+  one run of the table, which every record of that run would then walk; the owners are found by a keyed hash of their identity too). The file, `store.bin` in the data folder, is
   append-only: a 40-byte header (`PZSTORE2` and F: a file of another network is refused) and 38-byte entries one after the other: the
   type, the zero bits, x and the number of the owner (4 bytes, little-endian). The owners are in `store.bin.owners` (an entry whose owner's line a crash lost names nobody, and its number is never given again): `PZOWNER2`, F, then
   32 bytes an owner, in the order they came. At start the index is rebuilt from the files, and an entry cut by a crash at their end is
-  dropped.
+  dropped: about 50 s for a full store of 2^27 records (5 GB, read from the cache of the system on a machine of the tests), where it
+  took about 2 minutes (a SHA-256 of every x, an owner looked up by its identity for every entry, a table that grew by doubling, two
+  places of the memory a slot). What is left is the memory: each record goes to a random place of a table of 2 GB.
 - A custodian refuses a record that does not pass the checks of 7.2 or whose owner's node ID has not the zero bits (an owner is a node:
   the alerts find it by its ID), and a second record with the same x **from the same owner** (duplicate: the first is kept).
 - What a custodian takes is bounded (a record costs its owner nothing, with any x that has the zero bits: no discrete log is needed, so
@@ -1089,8 +1093,11 @@ owner in the claim is the identity of the connection), within the rate of the re
 kept. The first three leave the claim held. A custodian keeps at most 4 owners of a block, and another owner only with a proof key
 that the claims it holds of the block lack: the proof keys of a block are the same for whoever scans it, so a claim copied under a new
 identity, which costs nothing, brings none ("nothing new"), while the scan of a block that a false claim covered brings the keys the
-false claim left out. 2^21 claims in all, in `claims.bin`; a slot that cannot be read (a write cut by a crash) ends the file there at the
-next start. `CLAIM_GET(index)` (34) is answered `CLAIMS(n, n × (length 2, claim))` (35), and whoever asks checks each claim itself.
+false claim left out. 2^21 claims in all, in `claims.bin` (slots of 491 bytes, about 1 GB); a slot that cannot be read (a write cut by
+a crash) ends the file there at the next start. In memory a table of the block of each slot, by the index of the block, at most half
+full: 16 bytes a slot, 64 MB at 2^21 claims, and a few steps to find the claims of a block or add one (before, a sorted array moved
+half of itself for each claim added: 4 ms a claim near the end, against 1 µs). At start the table is made again from the file: 1.5 s
+for 2^21 claims read from the cache of the system. `CLAIM_GET(index)` (34) is answered `CLAIMS(n, n × (length 2, claim))` (35), and whoever asks checks each claim itself.
 
 **The home (`linear.c`).** `pzpeer run` on a linear network: no payout, no terms, no chain. The home picks a block at random that it
 did not scan itself, asks its custodians whether anyone claimed it, and tries another one while it is claimed. After 64 claimed ones,

@@ -4,9 +4,9 @@
  *
  * Records live in an append-only file, a 40-byte header ("PZSTORE2" and the fingerprint F of the network) and 38-byte entries one after
  * the other: the type, the zero bits, x and the number of the owner, whose identity is the entry of that number in a second file beside it
- * (PATH.owners: "PZOWNER2", F, then 32 bytes a owner, in the order they came). In memory there is only an index by the first 4 bytes of
- * K = SHA256("pznet1/key" || x) and the records of each owner; both are rebuilt from the files when they are opened, and an entry cut by
- * a crash at the end of a file is dropped. A store refuses a second record with the same x from the same owner. Records with the same x
+ * (PATH.owners: "PZOWNER2", F, then 32 bytes a owner, in the order they came). In memory there is only an index by a keyed hash of x
+ * and the owners with their records held; both are rebuilt from the files when they are opened, and an entry cut by a crash at the end
+ * of a file is dropped. A store refuses a second record with the same x from the same owner. Records with the same x
  * from different owners are a coincidence: store_put gives them to the caller, which alerts. A custodian's store has limits
  * (store_limits): records in all, records of one owner, owners in all (one per 256 records it may hold, and 1024 more), owners of one x
  * (STORE_X_OWNERS, and as many more whose owners proved them: store_put_proved); beyond them it is full.

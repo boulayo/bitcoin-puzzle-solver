@@ -24,7 +24,7 @@ void claims_close(claims *c);
 /* A checked claim: CLAIM_STORED, CLAIM_DUP (the same owner had claimed the block), CLAIM_COPY (its proof keys are all in the claims held of
  * the block), CLAIM_FULL (CLAIMS_PER_BLOCK owners, or CLAIMS_MAX claims) or CLAIM_FAILED (the disk). */
 int claims_put(claims *c, const block_claim *cl);
-/* The claims of block index, at most max. */
+/* The claims of block index, at most max (and CLAIMS_PER_BLOCK). */
 int claims_get(claims *c, uint64_t index, block_claim *out, int max);
 /* The k-th claim kept, in the order they came; false past the end. */
 bool claims_at(claims *c, uint64_t k, block_claim *out);
