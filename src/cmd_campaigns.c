@@ -129,6 +129,9 @@ int cmd_where(int argc, char **argv)
                          pz_group_digits(blocks_plain, blocks_grouped, sizeof blocks_grouped));
         else
             pz_prop_line("part", "not in part %s of this computer: another computer will scan it", s->part_text);
+        char sid[9];
+        cfg_split_id(&c, sid);
+        pz_prop_line("split id", "%s (the computers of the split must all show it: otherwise they visit the blocks in other orders)", sid);
     }
     if (mine) where_state(s, cdir, &local, off, "keys");
     sched_free(s);

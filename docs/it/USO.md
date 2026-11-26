@@ -61,6 +61,9 @@ Quello che richiede più di una riga dell'aiuto:
   `G`. La campagna conta, divide (`--part`) e riporta le chiavi dei passi, e `where` accetta una chiave dei passi. Bit ignoti in più
   gruppi separati non sono un passo solo: si dividono in più campagne, una per ogni valore del gruppo più piccolo, se è piccolo.
 * `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale (non con `--part`: sezione 8.2).
+  `--seed-file FILE` prende la prima riga di un file come `-s` prende il suo valore, e `--seed-file -` la prima riga dello standard input
+  (digitata senza eco su un terminale; un file che si chiama `-` è `./-`): il seed resta così fuori dalla cronologia della shell e dall'elenco dei
+  processi. `-s` invece non è mai letto come nome di un file, qualunque sia il suo primo carattere.
 * `--mem` è in GiB (`--mem 0.25` sono 256 MiB). Senza, il canguro prende il 40 % della RAM libera per la tabella dei punti distinti
   (almeno 256 MiB, al massimo 64 GiB) e il BSGS sceglie una tabella che stia nel 70 % della RAM libera.
 * Il `--chunk-bits` predefinito fa i blocchi grandi quanto l'intervallo permette, con almeno 16 blocchi per quota e al massimo 2^36 chiavi
@@ -492,10 +495,15 @@ che i computer comunichino. Il blocco corto di fondo intervallo, se c'è, è con
 computer A:  pzsolve hunt -p 71 -s 5f3a…(64 cifre) --part 0/2
 computer B:  pzsolve hunt -p 71 -s 5f3a…(stesso)   --part 1/2
 ```
-* **Uguali su tutti**: puzzle o intervallo, seed (`-s`, 64 cifre esadecimali o un testo scelto da te; una campagna nuova con `--part` senza di
-  esso è rifiutata, perché ogni computer prenderebbe un seed suo e le quote si sovrapporrebbero lasciando blocchi che nessuno cerca) e
-  `--chunk-bits` (se non lo indichi dipende solo dall'intervallo e dal numero di quote, quindi è già uguale, ma non tra versioni precedenti
-  e successive alla 1.19.1: in quel caso indicalo). **Diverse**: le quote.
+* **Uguali su tutti**: puzzle o intervallo, seed (`-s` o `--seed-file`: 64 cifre esadecimali o un testo scelto da te; una campagna nuova con
+  `--part` senza di esso è rifiutata, perché ogni computer prenderebbe un seed suo e le quote si sovrapporrebbero lasciando blocchi che nessuno
+  cerca) e `--chunk-bits` (se non lo indichi dipende solo dall'intervallo e dal numero di quote, quindi è già uguale, ma non tra versioni
+  precedenti e successive alla 1.19.1: in quel caso indicalo). **Diverse**: le quote.
+* **L'identificativo della divisione**: a ogni avvio il log dice `part Q/T, split id XXXXXXXX`, e lo dicono anche `report.txt` e `where`. È un
+  hash di ciò che i computer devono avere in comune: il seed, il bersaglio, l'intervallo, `--step`, `--chunk-bits` e il numero di quote (non le
+  quote, né il seed stesso). Tutti i computer della divisione devono mostrare lo stesso identificativo: uno che ne mostra un altro ha un altro seed
+  o un'altra dimensione dei blocchi, e le sue quote non combaciano con le altre; fermalo e fai ripartire la sua campagna con le opzioni giuste e un
+  altro nome (`-c`).
 * **Computer di velocità diverse**: dai più quote al più veloce. Con `pzsolve split 800M 120M` ottieni la divisione in proporzione
   (qui `0-86/100` e `87-99/100`); `--part 0-86/100` è lo stesso di `0,1,2,…,86/100`. Una quota per computer basta se sono uguali.
 * **La parte è della campagna**: si decide alla creazione, non si cambia (`--part` diverso su una campagna esistente è rifiutato, usa `-c` per
@@ -750,9 +758,10 @@ che punta a un altro file dell'utente).
   sono bloccati in RAM quando i limiti del sistema lo consentono (di solito non per i 256 MiB di scrypt senza privilegi); la chiave in chiaro vive troppo poco per
   finire probabilmente nello swap, ma nulla qui lo garantisce. Usa uno swap cifrato, o nessuno.
 * **Un'altra copia del seed.** Ce l'ha una copia della cartella fatta prima del ritrovamento, ce l'ha ogni altro computer di una divisione con `--part` (serve
-  a tutti), e un seed scritto a mano (`-s`) è nella cronologia della shell: con l'avanzamento che il log mostrava mentre la ricerca girava, porta al blocco
-  della chiave. Non fare backup o istantanee della cartella di una campagna che cifra su una macchina di cui non ti fidi, e dividi una ricerca solo fra
-  macchine di cui ti fidi allo stesso modo.
+  a tutti), e un seed dato con `-s` è nella cronologia della shell e, mentre il programma gira, nell'elenco dei processi (`--seed-file` lo tiene fuori da
+  entrambi): con l'avanzamento che il log mostrava mentre la ricerca girava, porta al blocco della chiave. Non fare backup o istantanee della cartella di una
+  campagna che cifra su una macchina di cui non ti fidi, e dividi una ricerca solo fra macchine di cui ti fidi allo stesso modo. Un seed che è un testo deve
+  essere difficile da indovinare: l'identificativo del seed e quello della divisione, che i rapporti mostrano, permettono a chiunque di verificare un tentativo.
 * **Una password debole**, come in 11.4; un keylogger o un terminale modificato, che vedono la password mentre la digiti.
 * **I metadati**: indirizzo, puzzle, ora e nome della campagna restano in chiaro (sono pubblici per natura).
 
