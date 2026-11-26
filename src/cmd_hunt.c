@@ -22,6 +22,9 @@
 
 static bool file_exists(const char *p) { struct stat st; return stat(p, &st) == 0; }
 
+/* -s gives the seed (its 64 hex digits, or a text that is hashed); absent or "auto", a new campaign draws one */
+static bool seed_given(const opts_t *o) { return o->seed[0] && strcmp(o->seed, "auto") != 0; }
+
 /* PZ_ISA: true when it imposes a CPU engine ("auto" and unset do not). Checked before a campaign directory is created, so a typo leaves
  * nothing behind. */
 static bool isa_forced(void)
@@ -128,19 +131,9 @@ static void derive_campaign_name(const opts_t *o, char *out, size_t n)
 /* The block size (bits) of a campaign over rsz keys: the one asked for with --chunk-bits or the default of the range, and never more than
  * the range holds. A new campaign takes this value and a resumed command is compared through it, so that the command that created a
  * campaign can resume it also when its --chunk-bits was cut down. */
-static unsigned clamp_chunk_bits(const pz_u256 *rsz, unsigned cb)
-{
-    pz_u256 chunk = pz_u256_pow2(cb);
-    if (pz_u256_cmp(&chunk, rsz) > 0) {   /* chunk larger than the range: shrink */
-        unsigned b = pz_u256_bits(rsz) - 1;
-        cb = b < 1 ? 1 : b;
-    }
-    return cb;
-}
-
 static unsigned effective_chunk_bits(const pz_u256 *rsz, int requested)
 {
-    return clamp_chunk_bits(rsz, requested > 0 ? (unsigned)requested : cfg_default_chunk_bits(rsz));
+    return cfg_clamp_chunk_bits(rsz, requested > 0 ? (unsigned)requested : cfg_default_chunk_bits(rsz));
 }
 
 /* -m kangaroo or -m bsgs without a public key: what can be done instead. */
@@ -240,29 +233,24 @@ static void set_target(const opts_t *o, campaign_cfg *c)
  * search without a public key or for a small range. */
 static void set_mode(const opts_t *o, campaign_cfg *c, const pz_u256 *rsz)
 {
-    if (!strcmp(o->mode, "linear")) c->mode = MODE_LINEAR;
-    else if (!strcmp(o->mode, "kangaroo")) {
-        if (!c->has_pubkey) no_pubkey(c, "kangaroo");
-        c->mode = MODE_KANGAROO;
-    } else if (!strcmp(o->mode, "bsgs")) {
-        if (!c->has_pubkey) no_pubkey(c, "bsgs");
-        c->mode = MODE_BSGS;
-        c->bsgs_t = pick_bsgs_entries(o, rsz, NULL);
-    } else if (!strcmp(o->mode, "auto")) {
-        pz_u256 lim = pz_u256_pow2(20);
-        if (!c->has_pubkey || pz_u256_cmp(rsz, &lim) < 0) c->mode = MODE_LINEAR;
-        else {
-            bool viable;
-            u64 T = pick_bsgs_entries(o, rsz, &viable);
-            bool given = o->table[0] && access(o->table, F_OK) == 0;
-            bool small = viable && bsgs_mean_cost(rsz, T) < 4e9L;               /* seconds of work: no point in waking the GPUs */
-            bool gpus = !o->no_gpu && gpu_count_usable() > 0;
-            if (viable && (given || small || !gpus || o->bsgs_entries)) {
-                c->mode = MODE_BSGS;
-                c->bsgs_t = T;
-            } else c->mode = MODE_KANGAROO;
-        }
-    } else pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", o->mode);
+    if (mode_from_name(o->mode, &c->mode)) {                 /* -m given (parse_opts took nothing else but "auto") */
+        if (c->mode != MODE_LINEAR && !c->has_pubkey) no_pubkey(c, o->mode);
+        if (c->mode == MODE_BSGS) c->bsgs_t = pick_bsgs_entries(o, rsz, NULL);
+        return;
+    }
+    pz_u256 lim = pz_u256_pow2(20);
+    if (!c->has_pubkey || pz_u256_cmp(rsz, &lim) < 0) c->mode = MODE_LINEAR;
+    else {
+        bool viable;
+        u64 T = pick_bsgs_entries(o, rsz, &viable);
+        bool given = o->table[0] && access(o->table, F_OK) == 0;
+        bool small = viable && bsgs_mean_cost(rsz, T) < 4e9L;               /* seconds of work: no point in waking the GPUs */
+        bool gpus = !o->no_gpu && gpu_count_usable() > 0;
+        if (viable && (given || small || !gpus || o->bsgs_entries)) {
+            c->mode = MODE_BSGS;
+            c->bsgs_t = T;
+        } else c->mode = MODE_KANGAROO;
+    }
 }
 
 /* --step: the keys of the range become START + i * STEP (cfg_set_step). A step of 1 is the range as it is. */
@@ -305,7 +293,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     set_target(o, c);
     set_step(o, c);
 
-    if (o->seed[0] && strcmp(o->seed, "auto") != 0) seed_from_text(o->seed, c->seed);
+    if (seed_given(o)) seed_from_text(o->seed, c->seed);
     else if (!o->jump_seed[0]) seed_generate(c->seed);   /* a shared walk takes the start key (shared_bind) */
 
     pz_u256 rsz = cfg_range_size(c);
@@ -320,6 +308,10 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
 
     if (o->part[0] && strcmp(o->part, "0/1") != 0) {
         if (c->mode != MODE_LINEAR) pz_die("--part is only used in linear search (with a known public key use -m linear; the kangaroo has --node and 'merge')");
+        /* the computers of a split share out one order of the blocks: a seed drawn here would be this computer's alone */
+        if (!seed_given(o))
+            pz_die("--part needs -s, the same on every computer of the split (64 hexadecimal digits, or any text): with a seed of its own each "
+                   "computer would visit the blocks in another order, and their shares would overlap and leave blocks that none of them scans");
         pz_strlcpy(c->part, o->part, sizeof c->part);
     }
     if (c->mode == MODE_LINEAR) {                 /* before anything is created on disk: the order of visit must exist and every share must hold a block */
@@ -327,7 +319,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
         if (o->chunk_bits <= 0) {                 /* the default block of the linear search depends on the number of shares too (campaign.c) */
             part_spec ps;
             unsigned shares = c->part[0] && part_parse(c->part, &ps, perr, sizeof perr) && ps.total ? ps.total : 1;
-            c->chunk_bits = clamp_chunk_bits(&rsz, cfg_linear_chunk_bits(&rsz, shares));
+            c->chunk_bits = cfg_clamp_chunk_bits(&rsz, cfg_linear_chunk_bits(&rsz, shares));
         }
         if (!sched_check_part(c, perr, sizeof perr)) pz_die("%s", perr);
     }
@@ -371,7 +363,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (!c->has_pubkey || memcmp(tmp.pubkey33, c->pubkey33, 33) != 0) pz_die("the given public key does not match the one of the existing campaign");
     }
     check_encrypt_resume(o, c);
-    if (o->seed[0] && strcmp(o->seed, "auto") != 0) {
+    if (seed_given(o)) {
         u8 s[32];
         seed_from_text(o->seed, s);
         if (memcmp(s, c->seed, 32) != 0) pz_die("the given seed does not match the one of the existing campaign (the seed cannot be changed)");
@@ -385,12 +377,9 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
     const pz_u256 rsz = cfg_range_size(c);
     if (o->chunk_bits > 0 && effective_chunk_bits(&rsz, o->chunk_bits) != c->chunk_bits)
         pz_die("--chunk-bits cannot be changed on an existing campaign (it is %u)", c->chunk_bits);
-    if (strcmp(o->mode, "auto") != 0) {
-        const char *want = !strcmp(o->mode, "linear") ? "linear" : !strcmp(o->mode, "kangaroo") ? "kangaroo" : !strcmp(o->mode, "bsgs") ? "bsgs" : NULL;
-        if (!want) pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", o->mode);
-        if (strcmp(want, mode_name(c->mode)) != 0)
-            pz_die("the existing campaign uses mode %s, not %s (the mode cannot be changed: use another name with -c)", mode_name(c->mode), want);
-    }
+    search_mode want;
+    if (mode_from_name(o->mode, &want) && want != c->mode)             /* "auto" names none */
+        pz_die("the existing campaign uses mode %s, not %s (the mode cannot be changed: use another name with -c)", mode_name(c->mode), o->mode);
     if (c->mode == MODE_BSGS) {
         bool from_table;
         const u64 T = requested_bsgs_entries(o, &from_table);
@@ -543,19 +532,18 @@ static void print_spend_warning(const run_ctx *r)
            "  `pzpeer sweep` makes and signs it without sending it.\n");
 }
 
-/* The banner printed when the key is found (by 'hunt' or by 'merge'). */
-/* what becomes of a key that could not be saved: the state stays as it was before the find (end_session) */
+/* what becomes of a key that could not be saved: the state stays as it was before the find (end_session), and the kangaroo's dp.bin has the
+ * two points that meet (kang_table_insert) */
 static const char *found_again(const run_ctx *r)
 {
-    return r->cfg.mode == MODE_KANGAROO ? "(the walk of a new session is another: this screen may be the only copy of the key)"
+    return r->cfg.mode == MODE_KANGAROO ? "(the same command finds it again in dp.bin, if the disk took the points that meet)"
                                         : "(its place stays unsearched in the campaign: the same command finds it again)";
 }
 
+/* The banner printed when the key is found (by 'hunt' or by 'merge'). */
 void print_found_banner(const run_ctx *r)
 {
-    char addr[80];
-    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
+    const char *addr = r->cfg.address;
     printf("\a\n======================= KEY FOUND =======================\n");
     if (r->cfg.puzzle) printf("  puzzle:         #%d\n", r->cfg.puzzle);
     if (r->cfg.has_encrypt) {                       /* only the ciphertext: the key is not on the screen, and neither is its public key */
@@ -793,7 +781,7 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
 }
 
 /* The lines that start the session in the log: version, target, range, mode, hardware and what the options changed. */
-static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming, int thr_full)
+static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
 {
     char idb[17], rng[3 * PZ_U256_HEX_BUF + 40], rsz[80], addr[80];
     seed_to_id(r->cfg.seed, idb);
@@ -819,15 +807,9 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
         say(PZ_LOG_INFO, "mode: kangaroo, shared walk (net-06) | start key id %s | public jumps, secret starts", idb);
     else
         say(PZ_LOG_INFO, "mode: kangaroo (known public key) | seed id %s | the seed determines jumps and starting positions", idb);
-    if (r->cfg.part[0] && !r->cfg.net) {          /* never the start key of a shared walk (--part is refused there anyway) */
-        char sd[65];
-        pz_hex_encode(r->cfg.seed, 32, sd);
-        const bool text_seed = o->seed[0] && strcmp(o->seed, "auto") != 0;   /* the seed the user typed is the one to give the others */
-        const bool show = !text_seed && !r->cfg.has_encrypt;   /* an encrypting campaign keeps its seed out of the log (forget_seed) */
-        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --step, --chunk-bits and %s%s%s with the other shares",
-               r->cfg.part, text_seed ? "the same -s" : show ? "this seed (-s " : "the seed of this campaign", show ? sd : "", show ? ")" : "");
-        if (!text_seed && !show) printf("  the seed for the other computers (shown here only, not written to the log): -s %s\n", sd);
-    }
+    if (r->cfg.part[0])                          /* the seed is the user's own (-s, required with --part): it is never shown */
+        pz_log(PZ_LOG_INFO, "part %s: this computer scans only its shares of the blocks; the other computers need the same range, --step, --chunk-bits "
+               "and -s, with the other shares", r->cfg.part);
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
     if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)%s", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes,
                                         PLURAL(r->engine->lanes), isa_forced() ? ", imposed by PZ_ISA" : "");
@@ -846,8 +828,9 @@ static void log_session_header(const opts_t *o, const run_ctx *r, bool resuming,
 
 /* An encrypting campaign that found its key leaves nothing that leads to it. The state and the points say where the search stood, and
  * with the seed, which orders the blocks, that is where the key is: whoever read the folder afterwards found the key again in a moment.
- * The seed goes first, from memory and from campaign.conf (the reports written from here on show zeros); the files that hold the
- * position go once they are closed. An earlier copy of campaign.conf still has the seed (docs/en/USAGE.md 11.5). */
+ * The seed goes first, from memory and from campaign.conf (the reports written from here on show zeros, and not how far the search
+ * got: run_final_progress); the files that hold the position go once they are closed. Another copy of the seed (an earlier copy of
+ * campaign.conf, the other computers of a --part split, a shell history) still has it (docs/en/USAGE.md 11.5). */
 void forget_seed(run_ctx *r)
 {
     char conf[700];
@@ -858,11 +841,12 @@ void forget_seed(run_ctx *r)
 
 void forget_position(const run_ctx *r)
 {
-    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin", "herd.bin", "near.txt"};   /* near misses: keys of the last blocks */
+    /* near misses: keys of the last blocks; stats.csv: the progress of every minute */
+    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin", "herd.bin", "near.txt", "stats.csv"};
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         char p[700];
         snprintf(p, sizeof p, "%s/%s", r->cfg.dir, names[i]);
-        remove(p);
+        if (remove(p) != 0 && errno != ENOENT) pz_log(PZ_LOG_ERR, "cannot delete %s: %s (delete it: it leads to the key)", p, strerror(errno));
     }
 }
 
@@ -898,6 +882,7 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
     const bool finished = r->sched && sched_finished(r->sched);
     if (r->cleanup) r->cleanup(r);
     if (r->sched) { sched_free(r->sched); r->sched = NULL; }
+    if (r->near) fclose(r->near), r->near = NULL;     /* closed first: Windows deletes no file that is open */
     if (forget) forget_position(r);
     char ds[48];
     pz_log(PZ_LOG_INFO, "session ended after %s", pz_fmt_duration(el, ds, sizeof ds));
@@ -964,7 +949,7 @@ int cmd_hunt(int argc, char **argv)
         pz_interrupt_done();
         return release_run(r, PZ_EXIT_INTERRUPTED);
     }
-    log_session_header(&o, r, resuming, thr_full);
+    log_session_header(r, resuming, thr_full);
     announce_encrypt(r);
 
     run_session_load(r);

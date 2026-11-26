@@ -247,10 +247,50 @@ static void engine_check_stop_flag(const cpu_engine *e)
     CHECK(e->scan(&job, &st, 1u << 24) == 0);
 }
 
+/* An engine that misses keys: the hits of the engine it wraps (g_wrapped) at the offsets that g_drop names are not reported. The quick
+ * check must refuse every such engine; it used to plant a single key, on one side of the centre of one window. */
+static const cpu_engine *g_wrapped;
+static bool (*g_drop)(u64 off);
+typedef struct { const scan_job *job; pz_u256 start; } droprec;
+static void on_hit_dropping(void *u, const pz_u256 *k)
+{
+    const droprec *d = u;
+    pz_u256 off;
+    pz_u256_sub(&off, k, &d->start);
+    if (!g_drop(off.w[0])) d->job->on_hit(d->job->user, k);
+}
+static u64 scan_dropping(const scan_job *job, const pz_u256 *start, u64 nkeys)
+{
+    droprec d = {job, *start};
+    scan_job j = *job;
+    j.on_hit = on_hit_dropping;
+    j.on_near = NULL;
+    j.user = &d;
+    return g_wrapped->scan(&j, start, nkeys);
+}
+static bool drop_below(u64 off) { return off % CPU_GRP < CPU_HALF; }          /* the keys below the centre of every window */
+static bool drop_above(u64 off) { return off % CPU_GRP > CPU_HALF; }          /* those above it */
+static bool drop_lanes(u64 off) { return off % g_wrapped->granule / CPU_GRP != g_wrapped->granule / 2 / CPU_GRP; }   /* all windows but one */
+
+static void engine_check_quickcheck(const cpu_engine *e)
+{
+    CHECK(cpu_engine_quickcheck(e));
+    cpu_engine broken = *e;
+    broken.scan = scan_dropping;
+    g_wrapped = e;
+    bool (*const drops[])(u64) = {drop_below, drop_above, drop_lanes};
+    for (size_t i = 0; i < sizeof drops / sizeof *drops; i++) {
+        if (drops[i] == drop_lanes && e->granule == CPU_GRP) continue;     /* one window: nothing to drop */
+        g_drop = drops[i];
+        CHECK(!cpu_engine_quickcheck(&broken));
+    }
+}
+
 static void test_engine(const cpu_engine *e)
 {
     printf("  engine %-9s (%d lanes, step of %llu keys)\n", e->name, e->lanes, (unsigned long long)e->granule);
     engine_check_hash160(e);
+    engine_check_quickcheck(e);
     if (!engine_check_scans(e)) return;
     engine_check_group_edges(e);
     engine_check_near(e);

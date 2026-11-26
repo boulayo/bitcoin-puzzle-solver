@@ -231,7 +231,13 @@ int kang_table_insert(kang_state *ks, const dp_rec *rec, u64 at)
         if ((e->tagk >> KANG_KSHIFT) == (rec->tagk >> KANG_KSHIFT)) {
             if (kind_of(ks, e->tagk) == kind_of(ks, rec->tagk)) return 0;
             dp_rec old;
-            if (entry_record(ks, e, &old) && solve_pair(ks, &old, rec)) return 2;
+            u64 idx;
+            if (entry_record(ks, e, &old) && solve_pair(ks, &old, rec)) {
+                /* in the log too: when the key could not be saved, the next run meets the pair there (the walker that came second stays on
+                 * this point, and a walker reports a point only when it lands on it) */
+                if (at == KANG_AT_NEW) (void)kang_log_push(ks, rec, &idx);
+                return 2;
+            }
             atomic_fetch_add(&ks->rejected, 1);
             return 0;
         }

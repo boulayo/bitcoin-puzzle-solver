@@ -11,10 +11,7 @@
  *   - only candidates whose digest word PZ_HASH_FILTER_WORD equals the target's are
  *     verified in full with the scalar reference hash. */
 
-#define CAT_(a, b) a##b
-#define CAT(a, b) CAT_(a, b)
-#define PZ_HASH_LANES_FN CAT(hash_lanes_, ISA)
-#include <pzcore/impl/hash_lanes.inc>
+#include "engine_common.inc"
 
 #define HALF CPU_HALF
 #define GRP CPU_GRP
@@ -22,31 +19,12 @@
 typedef struct {
     u32 X[8][PZ_LANES] PZ_ALIGN(64);
     u32 pfx[PZ_LANES] PZ_ALIGN(64);
-    u32 out[5][PZ_LANES] PZ_ALIGN(64);
+    u32 outw[PZ_LANES] PZ_ALIGN(64);      /* the filter word of the digests */
     u64 koff[PZ_LANES];       /* key offset from the claim start */
     int n;
     const scan_job *job;
     pz_u256 base;             /* first key of the claim */
 } ctx_t;
-
-static void ctx_verify(ctx_t *c, int lane)
-{
-    u8 pub[33], h[20];
-    pub[0] = (u8)c->pfx[lane];
-    for (int i = 0; i < 8; i++) {
-        u32 w = c->X[i][lane];
-        pub[1 + 4 * i] = (u8)(w >> 24); pub[2 + 4 * i] = (u8)(w >> 16);
-        pub[3 + 4 * i] = (u8)(w >> 8);  pub[4 + 4 * i] = (u8)w;
-    }
-    pz_hash160(pub, 33, h);
-    const bool hit = memcmp(h, c->job->target_h160, 20) == 0;
-    if (!hit && !c->job->on_near) return;
-    pz_u256 key;
-    pz_u256 d = pz_u256_from_u64(c->koff[lane]);
-    pz_u256_add(&key, &c->base, &d);
-    if (c->job->on_near) c->job->on_near(c->job->user, &key);
-    if (hit && c->job->on_hit) c->job->on_hit(c->job->user, &key);
-}
 
 static inline void ctx_flush(ctx_t *c)
 {
@@ -54,27 +32,19 @@ static inline void ctx_flush(ctx_t *c)
     c->n = 0;
     return;
 #endif
-    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, &c->out[0][0]);
-    _Static_assert(PZ_HASH_FILTER_WORD == SCAN_FILTER_WORD, "the word of a near miss");
+    PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, c->outw);
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     for (int l = 0; l < c->n; l++)
-        if (UNLIKELY(c->out[0][l] == t0)) ctx_verify(c, l);
+        if (UNLIKELY(c->outw[l] == t0)) lane_verify(c->job, &c->base, &c->X[0][l], PZ_LANES, c->pfx[l], c->koff[l]);
     c->n = 0;
 }
 
 static inline void ctx_add(ctx_t *c, const pz_fe *x, const pz_fe *y, u64 koff)
 {
-    pz_fe xn = *x, yn = *y;
-    pz_fe_normalize(&xn);
-    pz_fe_normalize(&yn);
-    const int l = c->n;
-    c->X[0][l] = (u32)(xn.n[3] >> 32); c->X[1][l] = (u32)xn.n[3];
-    c->X[2][l] = (u32)(xn.n[2] >> 32); c->X[3][l] = (u32)xn.n[2];
-    c->X[4][l] = (u32)(xn.n[1] >> 32); c->X[5][l] = (u32)xn.n[1];
-    c->X[6][l] = (u32)(xn.n[0] >> 32); c->X[7][l] = (u32)xn.n[0];
-    c->pfx[l] = 2u + (u32)(yn.n[0] & 1);
+    const int l = c->n++;                 /* before the stores into the lane, which the compiler cannot tell from c->n */
+    lane_set(&c->X[0][l], &c->pfx[l], PZ_LANES, x, y);
     c->koff[l] = koff;
-    if (++c->n == PZ_LANES) ctx_flush(c);
+    if (l == PZ_LANES - 1) ctx_flush(c);
 }
 
 /* Processes one group. On success *C advances by GRP*G. Returns false if a

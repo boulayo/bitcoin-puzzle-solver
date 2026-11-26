@@ -108,22 +108,11 @@ _Static_assert(KV_X + PZ_FEV_NLIMB <= KV_STRIDE && KV_B + KV_BN <= KV_STRIDE && 
 /* sig, esc: 0 or all ones; tags in the low 32 bits; jb: the table offsets of this round's jumps, from the forward pass */
 typedef struct { pz_vl d0, d1, d2, prev, prev2, lastdp, sig, ck, mn, esc, jb; } kv_aux;
 
-/* bits [64k, 64k + 64) of a canonical element */
-static inline PZ_VABI pz_vl kv_word64(const pz_fev *x, int k)
-{
-    const int bit = 64 * k, a = bit / PZ_FEV_BITS, sh = bit % PZ_FEV_BITS;
-    pz_vl w = x->l[a] >> sh;
-#pragma GCC unroll 3
-    for (int m = 1; m <= 3; m++)
-        if (m * PZ_FEV_BITS - sh < 64 && a + m < PZ_FEV_NLIMB) w |= x->l[a + m] << (m * PZ_FEV_BITS - sh);
-    return w;
-}
-
 /* table offsets of the jumps (kang_jump_index): low bits of x, moved to the next jump when the walk would close a
  * 2-cycle, or an escape jump at the point of least tag of a detected cycle */
 static inline PZ_VABI pz_vl kv_jbase(const pz_fev *x, const kv_aux *a, u64 R)
 {
-    const pz_vl t = kv_word64(x, 2) & pz_vl_set(0xFFFFFFFFULL);
+    const pz_vl t = pz_fev_word64(x, 2) & pz_vl_set(0xFFFFFFFFULL);
     const pz_vl two = (pz_vl)(t == a->prev2) & pz_vl_set(1);
     const pz_vl out = (a->esc | (pz_vl)(t == a->ck)) & (pz_vl)(t == a->mn);
     const pz_vl reg = (x->l[0] + two) & pz_vl_set(R - 1), ej = pz_vl_set(R) + ((x->l[0] >> 16) & pz_vl_set(KANG_NESC - 1));
@@ -387,11 +376,11 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
         s2 = (s2 ^ sel) + k1;
         a->d0 = s0; a->d1 = s1; a->d2 = s2;
         a->sig ^= sel;
-        const pz_vl tag = kv_word64(&E->vx[cc], 2) & pz_vl_set(0xFFFFFFFFULL);
+        const pz_vl tag = pz_fev_word64(&E->vx[cc], 2) & pz_vl_set(0xFFFFFFFFULL);
         kv_cycle_update(a, tag, E->bndv);
         a->prev2 = a->prev;
         a->prev = tag;
-        const pz_vl n1 = kv_word64(&x[u].x3, 1);
+        const pz_vl n1 = pz_fev_word64(&x[u].x3, 1);
         const pz_vl dpm = (pz_vl)((n1 & E->dpmask) == pz_vl_set(0));
         pz_vl rsm = pz_vl_set(0);
         if (E->bnd) rsm = (pz_vl)(pz_vl_set(E->n + 1) - a->lastdp > E->cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
@@ -401,7 +390,7 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
         u64 any = 0;
         for (int l = 0; l < NL; l++) any |= ev[l];
         if (LIKELY(!any)) continue;
-        const pz_vl n2 = kv_word64(&x[u].x3, 2);
+        const pz_vl n2 = pz_fev_word64(&x[u].x3, 2);
         for (int l = 0; l < NL; l++) {
             const int i = cc * NL + l;
             if (ev[l]) a->lastdp[l] = E->n + 1;
@@ -556,11 +545,11 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         s2 = (s2 ^ sel) + k1;
         a->d0 = s0; a->d1 = s1; a->d2 = s2;
         a->sig ^= sel;
-        const pz_vl tag = kv_word64(&vx[c], 2) & pz_vl_set(0xFFFFFFFFULL);
+        const pz_vl tag = pz_fev_word64(&vx[c], 2) & pz_vl_set(0xFFFFFFFFULL);
         kv_cycle_update(a, tag, bndv);
         a->prev2 = a->prev;
         a->prev = tag;
-        const pz_vl n1 = kv_word64(&x3, 1);
+        const pz_vl n1 = pz_fev_word64(&x3, 1);
         const pz_vl dpm = (pz_vl)((n1 & dpmask) == pz_vl_set(0));
         pz_vl rsm = pz_vl_set(0);
         if (bnd) rsm = (pz_vl)(pz_vl_set(n + 1) - a->lastdp > cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
@@ -570,7 +559,7 @@ void CAT(kang_round_, ISA)(kang_worker *w)
         u64 any = 0;
         for (int l = 0; l < NL; l++) any |= ev[l];
         if (LIKELY(!any)) continue;
-        const pz_vl n2 = kv_word64(&x3, 2);
+        const pz_vl n2 = pz_fev_word64(&x3, 2);
         for (int l = 0; l < NL; l++) {
             const int i = c * NL + l;
             if (ev[l]) a->lastdp[l] = n + 1;

@@ -41,6 +41,8 @@ int rt_enumerate(rt_dev *out, int max, char *note, size_t note_len);
 
 rt_ctx *rt_open(const rt_dev *d);
 void rt_close(rt_ctx *c);
+/* The device of a context as its builds left it: OpenCL sets no_asm when the inline assembly was refused. */
+const rt_dev *rt_device(const rt_ctx *c);
 /* Program `prog`; `param` is HALF for the linear kernel, NK for the kangaroo, 0 for the tests. NULL on failure (logged). */
 rt_mod *rt_build(rt_ctx *c, rt_prog_id prog, int param);
 void rt_mod_free(rt_mod *m);

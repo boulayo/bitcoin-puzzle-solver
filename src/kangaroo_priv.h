@@ -84,8 +84,8 @@ static inline i192 i192_from_signed(bool neg, const pz_u256 *mag)
 /* a walker of the herd across stops: its distance, its group of species, its sign */
 typedef struct kang_hrec { i192 d; u8 grp; int8_t sigma; } kang_hrec;
 
-/* distinguished-point record: 32 bytes. tagk = (x.n[2] & ~7) | kind. The steps write the codes tame / wild with its sign (0 to 2);
- * kang_dp_recode turns them into the codes of the species (0 to 4). */
+/* distinguished-point record: 32 bytes. tagk = (x.n[2] & ~7) | kind. The steps write (x.n[2] & ~3) | the code tame / wild with its sign
+ * (0 to 2); kang_dp_recode turns that into the code of the species (0 to 4) and clears bit 2. */
 typedef struct { u64 tagk; i192 d; } dp_rec;
 /* An entry of the table: 16 bytes, the tag and where the whole record is. A match of two tags of the same kind needs nothing more (the walker is
  * restarted); a match of two kinds, once a campaign plus a few false matches of the 61 bits of the tag, reads the distance back. ref is 1 + the
@@ -286,7 +286,7 @@ kang_state *kang_create(run_ctx *r);
 int kang_configure(kang_state *ks, int k_gpu_total);
 void kang_destroy(kang_state *ks);
 int kang_load_log(kang_state *ks);
-int kang_flush_log(kang_state *ks);                                                      /* no lock held: writes every point collected so far; 0, or -1 when the file refuses */
+int kang_flush_log(kang_state *ks);                                                      /* no lock held: every point collected so far to the file and the disk; 0, or -1 when they refuse */
 void kang_table_unlock(kang_state *ks);                                                  /* mu held: lets go of it, then writes the block this thread took out of the log, if any */
 typedef struct { u64 read, added, dups, skipped; bool solved; char jump_id[9]; } kang_merge_stats;   /* jump_id: that of the file, when it differs */
 int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);                /* a KANG_HDR_* value (KANG_HDR_OK: merged) */

@@ -33,7 +33,8 @@ int cmd_merge(int argc, char **argv)
     campaign_lock(cdir);   /* a campaign that is running must be stopped first: both would write the same log */
     pz_strlcpy(r->on_found, o.on_found, sizeof r->on_found);
     if (o.encrypt_pubkey[0] || o.encrypt_password) harden_process();
-    encrypt_on_resume(&o, r);
+    encrypt_on_resume(&o, r);                       /* before the log is opened: it may rewrite it */
+    pz_log_set_file(r->path_log);                   /* the files merged and a key found go to the log of the campaign, as with 'hunt' */
     announce_encrypt(r);
     r->mem_limit = mem_bytes(o.mem_gb);
     const char *fl[16];

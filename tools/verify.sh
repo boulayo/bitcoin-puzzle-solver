@@ -258,13 +258,16 @@ NG=$(grep -c '^  GPU\[0\]' "$T/dfull.out"); NR=$(grep -c 'GPU recovery rules' "$
 gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while the campaign runs (a few seconds into the search), the device must be reopened
   local f="$T/fault.$1" d="$T/fl.$1" o="$T/fl.$1.log" tp
   rm -rf "$d" "$f"
-  $MOCK PZ_MOCK_FAIL_FILE="$f" PZ_GPU_TUNE=0 timeout -k 60 -s INT 600 build/pzsolve hunt -p "$2" -m "$1" -c f -d "$d" --no-cpu --ui log > "$o" 2>&1 & tp=$!
+  $MOCK PZ_MOCK_FAIL_FILE="$f" PZ_MOCK_COUNT=1 PZ_GPU_TUNE=0 timeout -k 60 -s INT 600 build/pzsolve hunt -p "$2" -m "$1" -c f -d "$d" --no-cpu --ui log > "$o" 2>&1 & tp=$!
   wait_for 'running "$d/f"'; sleep 3; touch "$f"
   wait_for 'grep -q "device resumed" "$o"'
   kill -INT $tp 2>/dev/null; wait $tp
   grep -q "device resumed" "$o"
 }
 gpu_fault_test linear 40 && echo "  OK GPU error mid-campaign: reopened (linear)" || { echo "  FAIL GPU recovery (linear)"; fail=$((fail+1)); }
+# the recovery builds the linear kernel once, in its self-test: two modules at the start (the field test, the kernel), two after the error
+NLOAD=$(sed -n 's/.*cuModuleLoadDataEx: \([0-9]*\),.*/\1/p' "$T/fl.linear.log")
+[ "${NLOAD:-99}" -le 4 ] && echo "  OK GPU recovery (linear): $NLOAD modules loaded" || { echo "  FAIL GPU recovery (linear) loads ${NLOAD:-?} modules"; fail=$((fail+1)); }
 gpu_fault_test kangaroo 135 && echo "  OK GPU error mid-campaign: reopened (kangaroo)" || { echo "  FAIL GPU recovery (kangaroo)"; fail=$((fail+1)); }
 # a transient error of the driver while the start-up tests run (the simulated driver fails the first launch when the file exists at start): the tests
 # are repeated and the GPU is used (before, it was left out of the whole campaign); a wrong result still excludes it at once

@@ -102,7 +102,11 @@ int kang_flush_log(kang_state *ks)
         }
         if (ks->nlog) log_take_block(ks);
         pthread_mutex_unlock(&ks->mu);                                   /* the write itself needs only wmu */
-        const int wr = log_write_block(ks);                              /* flushed there */
+        int wr = log_write_block(ks);                                    /* flushed there */
+        /* on the disk itself: the walkers saved at a stop (herd.bin, synced) go on past these points, which would not come again (a stream
+         * of the tests has no descriptor to sync) */
+        const int fd = wr == 0 && ks->log ? fileno(ks->log) : -1;
+        if (fd >= 0 && pz_fd_sync(fd) != 0) wr = -1;
         pthread_mutex_unlock(&ks->wmu);
         return wr;
     }

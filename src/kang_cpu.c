@@ -13,7 +13,7 @@ static bool always(void) { return true; }
 static const kang_round_variant KROUNDS[] = {
     {"base", "portable", always, kang_round_base},
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
-    {"x86", "BMI2/ADX", cpu_has_avx2, kang_round_x86},
+    {"x86", "BMI2/ADX", cpu_has_adx, kang_round_x86},
     {"avx2v", "AVX2 lanes", cpu_has_avx2, kang_round_avx2v},
     {"avx512v", "AVX-512 lanes", cpu_has_avx512, kang_round_avx512v},
     {"avx512i", "AVX-512 IFMA lanes", cpu_has_ifma, kang_round_avx512i},

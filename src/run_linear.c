@@ -63,8 +63,7 @@ static void *cpu_worker(void *p)
 
 static void linear_progress(run_ctx *r, progress_info *pi)
 {
-    u64 session = 0;
-    for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
+    const u64 session = run_session_units(r);
     const sched_t *sc = r->sched;
     const bool parted = sc->part.total != 0;
     long double total = pz_u256_to_ld(&sc->part_keys);          /* this computer's part (the whole range without a split) */
@@ -108,9 +107,7 @@ static int linear_checkpoint(run_ctx *r)
     }
     int rc = sched_write(snap, n, r->path_state);
     free(snap);
-    u64 session = 0;
-    for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
-    run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + session);
+    run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + run_session_units(r));
     return rc;
 }
 

@@ -13,22 +13,21 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-typedef struct { kang_state *ks; int widx, slot; u64 stream; _Atomic int *active; } kth_arg;
+typedef struct { kang_state *ks; int widx, slot; u64 stream; } kth_arg;
 
 static void *kang_thread(void *p)
 {
     kth_arg *a = p;
     kang_cpu_worker_main(a->ks, a->widx, a->slot, a->stream);
-    if (atomic_fetch_sub(a->active, 1) == 1) atomic_store(&a->ks->r->stop, 1);
+    run_ctx *r = a->ks->r;
+    if (atomic_fetch_sub(&r->active_workers, 1) == 1) atomic_store(&r->stop, 1);   /* the last worker to leave ends the run */
     return NULL;
 }
 
 static void kang_progress(run_ctx *r, progress_info *pi)
 {
     kang_state *ks = r->kang;
-    u64 session = 0;
-    for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
-    long double done = (long double)(r->prev_units_total + session);
+    long double done = (long double)(r->prev_units_total + run_session_units(r));
     long double c = ks->expected_steps / 0.8862269254527580L;
     long double z = done / c;
     pi->done = done;
@@ -56,9 +55,7 @@ static int kang_checkpoint(run_ctx *r)
 {
     kang_state *ks = r->kang;
     int rc = kang_flush_log(ks);
-    u64 session = 0;
-    for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
-    run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + session);
+    run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + run_session_units(r));
     return rc;
 }
 
@@ -69,14 +66,14 @@ static void kang_cleanup(run_ctx *r)
 }
 
 /* Starts workers; returns the number of CPU threads started. r->nthreads is at most RUN_MAX_THREADS (main, the profile and the callers here). */
-static int kang_launch_cpu(run_ctx *r, kang_state *ks, pthread_t *th, kth_arg *args, _Atomic int *active)
+static int kang_launch_cpu(run_ctx *r, kang_state *ks, pthread_t *th, kth_arg *args)
 {
     int n = 0;
     const int nthr = r->use_cpu ? r->nthreads : 0;
     for (int i = 0; i < nthr; i++) {
         char nm[40];
         snprintf(nm, sizeof nm, "CPU%d", i);
-        args[i] = (kth_arg){ks, run_alloc_worker(r, nm, 'C'), i, (u64)i, active};
+        args[i] = (kth_arg){ks, run_alloc_worker(r, nm, 'C'), i, (u64)i};
         if (pthread_create(&th[n], NULL, kang_thread, &args[i]) != 0) pz_die("pthread_create failed");
         n++;
     }
@@ -107,14 +104,13 @@ int run_kangaroo(run_ctx *r)
     r->progress = kang_progress;
     r->checkpoint = kang_checkpoint;
 
-    static _Atomic int active;
     pthread_t th[MAX_WORKERS];
     kth_arg args[MAX_WORKERS];
     int nth = 0;
-    atomic_store(&active, (r->use_cpu ? r->nthreads : 0) + ngpu);
+    atomic_store(&r->active_workers, (r->use_cpu ? r->nthreads : 0) + ngpu);
     if (!atomic_load(&r->stop)) {
-        nth = kang_launch_cpu(r, ks, th, args, &active);
-        gpu_kangaroo_launch(r, ks, gpus, ngpu, &active);
+        nth = kang_launch_cpu(r, ks, th, args);
+        gpu_kangaroo_launch(r, ks, gpus, ngpu, &r->active_workers);
         run_reporter_loop(r);
     }
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
@@ -236,22 +232,17 @@ static double kang_try(const pz_u256 *lo, unsigned wbits, const pz_u256 *key, in
     if (o && o->dp) { ks->P.dp_bits = o->dp; ks->P.dp_mask = ((u64)1 << o->dp) - 1; }
     if (o && o->no_watchdog) ks->P.cap_since = ~0ULL;
     kang_load_log(ks);
-    static _Atomic int active;
-    atomic_store(&active, nthreads);
+    atomic_store(&r->active_workers, nthreads);
     pthread_t th[MAX_WORKERS];
     kth_arg args[MAX_WORKERS];
-    int nth = kang_launch_cpu(r, ks, th, args, &active);
+    int nth = kang_launch_cpu(r, ks, th, args);
     double t0 = pz_mono();
     while (!atomic_load(&r->found) && pz_mono() - t0 < timeout) {
         pz_sleep(0.005);
     }
     atomic_store(&r->stop, 1);
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
-    double steps = -1;
-    if (atomic_load(&r->found) && !pz_u256_cmp(&r->found_key, key)) {
-        steps = 0;
-        for (int i = 0; i < r->nws; i++) steps += (double)atomic_load(&r->ws[i].units);
-    }
+    const double steps = atomic_load(&r->found) && !pz_u256_cmp(&r->found_key, key) ? (double)run_session_units(r) : -1;
     kang_destroy(ks);
     synth_free(r);
     return steps;
@@ -405,18 +396,15 @@ double kangaroo_bench(double secs, bool print)
     kang_configure(ks, 0);
     kang_load_log(ks);
     kang_pick_round();                 /* the one-off choice of the step variant is not part of the measurement */
-    static _Atomic int active;
-    atomic_store(&active, r->nthreads);
+    atomic_store(&r->active_workers, r->nthreads);
     pthread_t th[MAX_WORKERS];
     kth_arg args[MAX_WORKERS];
-    int nth = kang_launch_cpu(r, ks, th, args, &active);
+    int nth = kang_launch_cpu(r, ks, th, args);
     pz_sleep(0.5);                     /* herds created */
-    u64 steps0 = 0, steps = 0;
-    for (int i = 0; i < r->nws; i++) steps0 += atomic_load(&r->ws[i].units);
+    const u64 steps0 = run_session_units(r);
     double t0 = pz_mono();
     pz_sleep(secs);
-    for (int i = 0; i < r->nws; i++) steps += atomic_load(&r->ws[i].units);
-    steps -= steps0;
+    const u64 steps = run_session_units(r) - steps0;
     double dt = pz_mono() - t0;
     atomic_store(&r->stop, 1);
     for (int i = 0; i < nth; i++) pthread_join(th[i], NULL);
@@ -521,13 +509,12 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
     kang_configure(ks, k_gpu);
     kang_load_log(ks);
     kang_pick_round();
-    static _Atomic int active;
-    atomic_store(&active, total + ngpu);
+    atomic_store(&r->active_workers, total + ngpu);
     pthread_t th[MAX_WORKERS];
     kth_arg args[MAX_WORKERS];
     atomic_store(&r->cpu_cap, full);
-    int nth = kang_launch_cpu(r, ks, th, args, &active);
-    gpu_kangaroo_launch(r, ks, gpus, ngpu, &active);
+    int nth = kang_launch_cpu(r, ks, th, args);
+    gpu_kangaroo_launch(r, ks, gpus, ngpu, &r->active_workers);
     int gw[16], gi = 0, gidx[16];                  /* worker slot and device index of each GPU (the sessions are freed by the join) */
     for (int j = 0; j < ngpu; j++) gidx[j] = gpu_session_index(gpu_session_at(gpus, j));
     for (int i = 0; i < r->nws && gi < ngpu; i++)
@@ -559,7 +546,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
 
 /* ---------------- merge of distinguished-point logs ('pzsolve merge') ---------------- */
 
-/* printf wrapped at the terminal width, with the continuation lines indented. */
+/* A line of 'merge': printed wrapped at the terminal width, with the continuation lines indented, and kept in the log of the campaign. */
 static void say_wrapped(const char *fmt, ...) __attribute__((format(PZ_PRINTF, 1, 2)));
 static void say_wrapped(const char *fmt, ...)
 {
@@ -569,6 +556,8 @@ static void say_wrapped(const char *fmt, ...)
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     pz_fputs_wrap(stdout, buf, PZ_LINE_MAX, 4);
+    buf[strcspn(buf, "\n")] = 0;
+    pz_log_file(PZ_LOG_INFO, "merge: %s", buf + strspn(buf, " "));
 }
 
 int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)

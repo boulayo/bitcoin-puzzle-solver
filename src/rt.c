@@ -135,6 +135,8 @@ rt_ctx *rt_open(const rt_dev *d)
     return c;
 }
 
+const rt_dev *rt_device(const rt_ctx *c) { return &c->dev; }
+
 void rt_close(rt_ctx *c)
 {
     if (!c) return;

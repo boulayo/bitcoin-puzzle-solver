@@ -191,7 +191,7 @@ bool gpu_linear_prepare_variant(gpu_session *s, int variant)
 
 bool gpu_linear_prepare(gpu_session *s) { return gpu_linear_prepare_variant(s, s->variant ? s->variant : gpu_default_variant(&s->info)); }
 
-/* Runs one launch covering at least nkeys keys; fills hits. Returns false on API errors. */
+/* Runs one launch covering at least nkeys keys; fills hits, and L->err for a block the CPU must scan again. Returns false on API errors. */
 bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
 {
     const int HALFK = s->half;
@@ -208,7 +208,7 @@ bool gpu_linear_run(gpu_session *s, const u8 target[20], lin_launch *L)
     pz_u256 center = L->key_start;
     pz_u256_add_u64(&center, &center, HALFK);
     pz_ge P0, D, GS;                              /* the kernel moves by the points it is given: with --step those of H (cpu_engine.h) */
-    if (!lin_point(&P0, &center)) return false;
+    if (!lin_point(&P0, &center)) { L->err = 1; return true; }   /* the first centre is the point at infinity (its key is 0 mod n): not the device's fault */
     pz_u256 step = pz_u256_from_u64((u64)L->ngroups * GRPK);
     if (!lin_mul(&D, &step)) return false;
     pz_u256 gs = pz_u256_from_u64(GRPK);
@@ -281,6 +281,7 @@ static bool try_device(run_ctx *r, gpu_session *s, const rt_dev *d, bool for_kan
         gpu_session_release(s);
         return false;
     }
+    s->info.no_asm = rt_device(s->c)->no_asm;           /* a build refused the inline assembly: a recovery builds without it at once */
     rt_log(PZ_LOG_INFO, "GPU[%d]: %s via %s, %u %s, %s, %s, self-test passed", d->index, d->name, rt_api_name(d->api), d->cu,
            d->api == RT_CUDA ? "SM" : "CU", mem, gpu_variant_text(s, for_kangaroo, var, sizeof var));
     return true;
@@ -439,8 +440,7 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
     const int paused = atomic_load(&s->paused);
     double wait = 1.0;
     for (int attempt = 0; attempt < 9 && !atomic_load(&r->stop); attempt++) {
-        if (kangaroo) gpu_kang_release(s); else gpu_linear_release_program(s);
-        gpu_session_release(s);                           /* clears everything after the context */
+        gpu_session_release(s);                           /* frees the programs and buffers, clears everything after the context */
         s->T = keep.T; s->NK = keep.NK; s->kvar = keep.kvar; s->variant = keep.variant; s->wide = keep.wide; s->l2fit = keep.l2fit;
         s->launch_s = keep.launch_s;
         atomic_store(&s->paused, paused);
@@ -448,8 +448,8 @@ static bool gpu_recover(gpu_session *s, bool kangaroo)
         wait = wait < 30 ? wait * 2 : 30;
         if (atomic_load(&r->stop)) break;
         if (!gpu_session_open(s, &info)) continue;
-        bool ok = gpu_test_fe(s) && (kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
-        if (ok && !kangaroo) { gpu_linear_release_program(s); ok = gpu_linear_prepare_variant(s, keep.variant); }
+        /* the linear self-test leaves the program of s->variant prepared for the launches */
+        const bool ok = gpu_test_fe(s) && (kangaroo ? gpu_test_kang(s) : gpu_test_linear(s));
         s->T = keep.T;                                /* the kangaroo self-test works with a handful of work-items */
         if (ok) return true;
         pz_log(PZ_LOG_WARN, "GPU[%d] %s: the device came back but fails the start-up check (attempt %d)", info.index, info.name, attempt + 1);
@@ -524,12 +524,13 @@ static void *gpu_linear_thread(void *p)
         u64 covered = c.nkeys;
         if (L.err) {
             pz_log(PZ_LOG_WARN, "GPU[%d] %s: numeric anomaly in the block, rescanning on the CPU", s->info.index, s->info.name);
-            cpu_scan_claim(r, &c, &covered);
-        }
-        for (uint32_t i = 0; i < L.nhits; i++) {
-            pz_u256 k = c.key_start;
-            pz_u256_add_u64(&k, &k, L.hits[i]);
-            run_scan_candidate(r, &k, "GPU");
+            cpu_scan_claim(r, &c, &covered);                   /* which reports every near miss of the block, those of the GPU too */
+        } else {
+            for (uint32_t i = 0; i < L.nhits; i++) {
+                pz_u256 k = c.key_start;
+                pz_u256_add_u64(&k, &k, L.hits[i]);
+                run_scan_candidate(r, &k, "GPU");
+            }
         }
         sched_complete(r->sched, &c, covered);
         GPU_UNITS_STAMP(&r->ws[s->widx], c.nkeys);
@@ -716,6 +717,15 @@ static bool kang_gpu_boot(gpu_session *s, kang_state *ks, kang_worker **mirror, 
     return ok;
 }
 
+/* A new start for walker idx of the herd: in the mirror, then on the device. False when the device does not take it. */
+static bool kang_gpu_restart(gpu_session *s, kang_state *ks, kang_worker *mirror, uint32_t idx)
+{
+    uint32_t st[KSTRIDE];
+    kang_restart_one(ks, mirror, (int)idx);
+    pack_state(st, mirror, (int)idx);
+    return rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, st, KSTRIDE * 4);
+}
+
 /* gpu_device_error's rebuild for the kangaroo: a fresh herd, from other starting points than every earlier one of the device */
 typedef struct { kang_state *ks; kang_worker **mirror; int recoveries; } kang_rebuild;
 static bool kang_gpu_reboot(gpu_session *s, void *ctx)
@@ -770,31 +780,26 @@ static void *gpu_kang_thread(void *p)
         uint32_t nr = nrl > s->rl_cap ? (uint32_t)s->rl_cap : nrl;
         if (nd && !rt_read(s->c, s->b_dps, 0, dpraw, (size_t)nd * 40)) goto device_error;
         if (nr && !rt_read(s->c, s->b_rl, 0, rlraw, (size_t)nr * 4)) goto device_error;
+        uint32_t nv = 0;                                   /* the records of walkers of the herd (a device that passed its self-test writes no other) */
         for (uint32_t i = 0; i < nd; i++) {
             const uint32_t *o = dpraw + (size_t)i * 10;
-            recs[i].tagk = (u64)o[0] | (u64)o[1] << 32;
-            for (int j = 0; j < 3; j++) recs[i].d.w[j] = (u64)o[2 + 2 * j] | (u64)o[3 + 2 * j] << 32;
-            if (o[8] < (uint32_t)K) kang_dp_recode(mirror, &recs[i], (int)o[8]);
+            if (o[8] >= (uint32_t)K) continue;
+            recs[nv].tagk = (u64)o[0] | (u64)o[1] << 32;
+            for (int j = 0; j < 3; j++) recs[nv].d.w[j] = (u64)o[2 + 2 * j] | (u64)o[3 + 2 * j] << 32;
+            kang_dp_recode(mirror, &recs[nv], (int)o[8]);
+            dpraw[(size_t)nv++ * 10 + 8] = o[8];               /* the walker of record nv for the restarts below (raw record nv <= i is read already) */
         }
         GPU_UNITS_STAMP(&r->ws[s->widx], (u64)K * rounds);
-        bool solved = nd && kang_insert_dps(ks, recs, (int)nd, dups);
+        bool solved = nv && kang_insert_dps(ks, recs, (int)nv, dups);
         if (solved) break;
-        uint32_t state_words[KSTRIDE];
-        for (uint32_t i = 0; i < nd; i++) {
+        for (uint32_t i = 0; i < nv; i++) {
             if (!dups[i]) continue;
-            uint32_t idx = dpraw[(size_t)i * 10 + 8];
-            if (idx >= (uint32_t)K) continue;
-            kang_restart_one(ks, mirror, (int)idx);
-            pack_state(state_words, mirror, (int)idx);
-            rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, state_words, KSTRIDE * 4);
+            if (!kang_gpu_restart(s, ks, mirror, dpraw[(size_t)i * 10 + 8])) goto device_error;
             atomic_fetch_add(&ks->dups, 1);
         }
         for (uint32_t i = 0; i < nr; i++) {
-            uint32_t idx = rlraw[i];
-            if (idx >= (uint32_t)K) continue;
-            kang_restart_one(ks, mirror, (int)idx);
-            pack_state(state_words, mirror, (int)idx);
-            rt_write(s->c, s->b_state, (size_t)idx * KSTRIDE * 4, state_words, KSTRIDE * 4);
+            if (rlraw[i] >= (uint32_t)K) continue;
+            if (!kang_gpu_restart(s, ks, mirror, rlraw[i])) goto device_error;
             atomic_fetch_add(&ks->restarts, 1);
         }
         rounds = gpu_launch_resize(rounds, dt, s->launch_s, 0.002, rmax);

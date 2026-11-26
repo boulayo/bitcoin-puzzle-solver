@@ -313,8 +313,11 @@ $BIN hunt -r 1:1000 -a "$A" -c xe2 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&
 $BIN hunt -c xn -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1; RC=$?
 [ $RC -eq 1 ] && ok "campaign already completed: exit status 1" || bad "already completed: exit status $RC"
 A=$(field 0x200000 addr)
-$BIN hunt -r 1:fffff -a "$A" --part 0/2 -c xp -d "$DIR" --ui log -q --no-gpu >"$DIR/xp.out" 2>&1; RC=$?
+$BIN hunt -r 1:fffff -a "$A" --part 0/2 -s split -c xp -d "$DIR" --ui log -q --no-gpu >"$DIR/xp.out" 2>&1; RC=$?
 [ $RC -eq 1 ] && grep -q "Part 0/2 was scanned in full" "$DIR/xp.out" && ok "share of a split range covered without the key: exit status 1" || bad "share covered without the key: exit status $RC"
+# a computer of a split without -s would draw its own order of the blocks: its share and the others' would overlap and leave gaps
+$BIN hunt -r 1:fffff -a "$A" --part 1/2 -c xq -d "$DIR" --ui log -q --no-gpu >"$DIR/xq.out" 2>&1; RC=$?
+[ $RC -eq 2 ] && [ ! -e "$DIR/xq" ] && grep -q "part needs -s" "$DIR/xq.out" && ok "a new share of a split without -s: refused, nothing created" || bad "share without -s: exit status $RC"
 # --step: a key whose unknown bits are a block in the middle (16 bits above 20 known ones, under 12 known ones), found by every method; the
 # range shown with its step, a resume with another step refused, 'where' on a key of the steps and on one that is not
 SK=$(python3 -c "print(hex((0xa5c<<36)|(0xb7e1<<20)|0x12345))"); SR=a5c000012345:a5cffff12345
@@ -377,6 +380,7 @@ kill -INT $XPID 2>/dev/null; wait $XPID
 mkdir -p "$DIR/xm2"; cp -r "$DIR/xm/xk" "$DIR/xm2/xk"
 OUT=$($BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/xk" 2>&1); RC=$?
 [ $RC -eq 0 ] && echo "$OUT" | grep -q "No collision" && ok "merge without a collision: exit status 0" || bad "merge without a collision: exit status $RC"
+grep -q "merge: .*/xm2/xk/dp.bin: .* points read" "$DIR/xm/xk/log.txt" && ok "merge: the files merged are in the log of the campaign" || bad "merge: nothing in log.txt"
 $BIN merge -c xk -d "$DIR/xm" -f "$DIR/xm2/nonexistent.bin" >/dev/null 2>&1; RC=$?
 [ $RC -eq 2 ] && ok "merge of a file that cannot be read: exit status 2" || bad "merge of an unreadable file: exit status $RC"
 $BIN merge -c xn -d "$DIR" -f "$DIR/xm2/xk" >/dev/null 2>&1; RC=$?
@@ -455,7 +459,7 @@ for kopts in "-m kangaroo" "-m auto"; do
 done
 
 echo "== invalid options: clear error and no half-created campaign left behind"
-for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "-m kangaroo --near" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50"; do
+for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "-m fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "-m kangaroo --near" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50"; do
   rm -rf "$DIR/opt"
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done
@@ -654,6 +658,9 @@ enc_case() {   # enc_case NAME N KEY SECRET RAWOPT PUBKEY HUNTARGS...
   # (before, a copy of the folder gave the plain key back in a tenth of a second)
   [ ! -e "$CD/state.dat" ] && [ ! -e "$CD/state.dat.bak" ] && [ ! -e "$CD/dp.bin" ] && grep -q '^seed=0\{64\}$' "$CD/campaign.conf" && ! grep -qi "seed" "$CD/FOUND.txt" \
     && ok "$name: no state, no points and no seed are left in the folder" || bad "$name: left behind: $(ls "$CD" | tr '\n' ' ') $(grep '^seed=' "$CD/campaign.conf")"
+  # nor how far the search got: with a copy of the seed (another computer of a --part split, a shell history) that is the place of the key too
+  grep -q '"done": null' "$CD/status.json" && grep -q 'not kept   (the key is encrypted' "$CD/report.txt" && [ ! -e "$CD/stats.csv" ] && grep -q 'final state: [^,]* FOUND$' "$CD/log.txt" \
+    && ok "$name: the last reports and the log do not say how far the search got" || bad "$name: progress left: $(grep -h '"done"\|final state' "$CD/status.json" "$CD/log.txt")"
   grep -q "^PZENC1:" "$CD.out" && grep -q "pzsolve decrypt-key" "$CD.out" && ok "$name: the box shows the encrypted line and how to read it" || bad "$name: the box: $(cat "$CD.out")"
   local LINE; LINE=$(grep '^PZENC1:' "$CD/FOUND.txt")
   [ "$(wc -l < "$CD.hook")" = 1 ] && [ "$(cat "$CD.hook")" = "$LINE|$A|$n|$name|$CD/FOUND.txt" ] && ok "$name: --on-found ran once and received the line, address, puzzle, campaign and file" || bad "$name: --on-found: $(cat "$CD.hook" 2>&1)"

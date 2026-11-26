@@ -226,8 +226,10 @@ bool rtcl_run(rt_ctx *c, rt_kern *k, size_t n)
     }
     uint32_t nn = (uint32_t)n;
     if (!clok(cl->SetKernelArg(h, (cl_uint)k->nargs, sizeof nn, &nn), "setting kernel arguments")) return false;
-    size_t g = n, l = (size_t)k->block;
-    if (l) g = (n + l - 1) / l * l;                       /* whole work-groups: the work-items past n take part in them and do nothing else */
+    /* whole work-groups of the size the kernel requires, or else a multiple of 64 that the driver divides as it likes: given an n with no small
+     * factor (a block of the end of the range, a herd sized to its range), OpenCL 1.2 has to take a divisor of it, 1 or n itself for a prime n.
+     * The work-items past n do nothing (PZ_GUARD), or take part in the work-groups only */
+    const size_t l = (size_t)k->block, q = l ? l : 64, g = (n + q - 1) / q * q;
     return clok(cl->EnqueueNDRangeKernel((cl_command_queue)c->b, h, 1, NULL, &g, l ? &l : NULL, 0, NULL, NULL), "kernel execution") &&
            clok(cl->Finish((cl_command_queue)c->b), "clFinish");
 }

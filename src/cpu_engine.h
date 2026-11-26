@@ -18,7 +18,7 @@ typedef struct scan_job {
     u8 target_h160[20];
     _Atomic int *stop;               /* non-zero asks the engine to return */
     void (*on_hit)(void *user, const pz_u256 *key);   /* called for every full 160-bit match */
-    /* optional: called for every near miss, a key whose hash160 has word PZ_HASH_FILTER_WORD of the target's (one key in 2^32, a
+    /* optional: called for every near miss, a key whose hash160 has word SCAN_FILTER_WORD of the target's (one key in 2^32, a
      * full match included, before on_hit). Whoever scanned a range knows its near misses, and nobody else: its proof of work */
     void (*on_near)(void *user, const pz_u256 *key);
     void *user;
@@ -57,15 +57,17 @@ void cpu_gmultiples(pz_ge *out, int n);
 
 const cpu_engine *const *cpu_engine_all(int *n);
 const cpu_engine *cpu_engine_by_name(const char *name);
-/* Known-answer check of an engine on one granule (a few milliseconds): false if it misses or misplaces the key. */
+/* Known-answer check of an engine: one key at a time, planted at the edges and around the centre of every window of a granule (a few
+ * milliseconds); false if it misses or misplaces one. */
 bool cpu_engine_quickcheck(const cpu_engine *e);
-/* Picks the fastest supported engine that passes the quick check by running a short benchmark. */
+/* Picks the fastest supported engine that passes the quick check by running a short benchmark; dies if none passes. */
 const cpu_engine *cpu_engine_autotune(double seconds_per_engine, bool verbose);
 /* Plain reference scan (one scalar multiplication per key), for tests. */
 u64 cpu_scan_reference(const scan_job *job, const pz_u256 *start, u64 nkeys);
 
-/* x86 feature probes (no-ops elsewhere). */
+/* x86 feature probes (no-ops elsewhere), pzcore/cpu.h: AVX2 and BMI2 (the lane engines), and ADX besides (the MULX/ADX multiplication). */
 bool cpu_has_avx2(void);
+bool cpu_has_adx(void);
 bool cpu_has_avx512(void);
 bool cpu_has_ifma(void);
 bool cpu_has_shani(void);

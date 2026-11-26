@@ -60,7 +60,7 @@ Quello che richiede più di una riga dell'aiuto:
   posizione della chiave fra i passi, e i motori lineari e i kernel passano da una chiave alla successiva con `PASSO·G` invece che con
   `G`. La campagna conta, divide (`--part`) e riporta le chiavi dei passi, e `where` accetta una chiave dei passi. Bit ignoti in più
   gruppi separati non sono un passo solo: si dividono in più campagne, una per ogni valore del gruppo più piccolo, se è piccolo.
-* `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale.
+* `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale (non con `--part`: sezione 8.2).
 * `--mem` è in GiB (`--mem 0.25` sono 256 MiB). Senza, il canguro prende il 40 % della RAM libera per la tabella dei punti distinti
   (almeno 256 MiB, al massimo 64 GiB) e il BSGS sceglie una tabella che stia nel 70 % della RAM libera.
 * Il `--chunk-bits` predefinito fa i blocchi grandi quanto l'intervallo permette, con almeno 16 blocchi per quota e al massimo 2^36 chiavi
@@ -437,8 +437,9 @@ e quelle del driver CUDA simulato) sono descritte in [`ARCHITECTURE.md`](https:/
 ## 8. Consigli prestazionali
 
 * Lancia `pzsolve bench` una volta: confronta i motori e il numero di thread; con una GPU lancia anche `pzsolve bench --together` (sezione 7.9).
-  Il programma sceglie il motore più veloce (`PZ_ISA` ne impone uno, sezione 7.10); `bench` li mostra tutti. Ogni motore, prima di essere usato, supera una verifica rapida con una
-  chiave nota: un motore che sbagliasse verrebbe escluso.
+  Il programma sceglie il motore più veloce (`PZ_ISA` ne impone uno, sezione 7.10); `bench` li mostra tutti. Ogni motore, prima di essere usato, supera una verifica rapida: una
+  chiave nota messa a turno in ogni finestra di un passo (ogni corsia dei motori `*v`) e sulle chiavi dove il codice prende una strada sua (i
+  bordi di una finestra, il suo centro e le due accanto); un motore che ne sbagliasse una verrebbe escluso.
 * I thread di calcolo vanno prima su core fisici diversi, uno per core, e solo oltre il numero dei core sul secondo thread SMT di un core (su
   Windows l'assegnazione è un suggerimento al sistema, che può spostare i thread).
 * Il canguro sulla CPU usa le stesse corsie SIMD della ricerca lineare; la variante viene scelta misurando (tre brevi campioni di ognuna,
@@ -491,7 +492,8 @@ che i computer comunichino. Il blocco corto di fondo intervallo, se c'è, è con
 computer A:  pzsolve hunt -p 71 -s 5f3a…(64 cifre) --part 0/2
 computer B:  pzsolve hunt -p 71 -s 5f3a…(stesso)   --part 1/2
 ```
-* **Uguali su tutti**: puzzle o intervallo, seed (`-s`: lo trovi nella riga «Seed» di `report.txt`, e con `--part` nel log all'avvio) e
+* **Uguali su tutti**: puzzle o intervallo, seed (`-s`, 64 cifre esadecimali o un testo scelto da te; una campagna nuova con `--part` senza di
+  esso è rifiutata, perché ogni computer prenderebbe un seed suo e le quote si sovrapporrebbero lasciando blocchi che nessuno cerca) e
   `--chunk-bits` (se non lo indichi dipende solo dall'intervallo e dal numero di quote, quindi è già uguale, ma non tra versioni precedenti
   e successive alla 1.19.1: in quel caso indicalo). **Diverse**: le quote.
 * **Computer di velocità diverse**: dai più quote al più veloce. Con `pzsolve split 800M 120M` ottieni la divisione in proporzione
@@ -723,11 +725,13 @@ processo dello stesso utente non può collegarsi a esso.
 Ciò che dice **dove** sta la chiave sparisce al ritrovamento. Lo stato di una ricerca (e i punti di un canguro) dicono dov'era arrivata quando ha trovato la
 chiave, e il seed dà l'ordine dei blocchi: insieme restituiscono la chiave in un attimo, qualunque cosa protegga `FOUND.txt` (le versioni prima della 1.23.3
 li lasciavano entrambi). Perciò, quando una campagna che cifra trova la chiave, il programma sostituisce con zeri il seed in `campaign.conf`, non lo scrive in
-`FOUND.txt` né nel log (un log scritto prima che si aggiungesse la cifratura perde le righe con il seed), e cancella `state.dat`, la sua copia, `dp.bin`,
-`herd.bin` e `near.txt`; vale per `hunt` come per `merge`. Una chiave che non si è potuta cifrare non è scritta da nessuna parte, e la campagna resta com'era, così che
-una nuova ricerca la ritrovi. La cartella di ogni campagna è del solo proprietario (modo 0700), così gli altri utenti
-della macchina non leggono nulla di tutto questo mentre la ricerca gira, e i file di una campagna non si aprono mai attraverso un collegamento (una cartella
-copiata da altrove potrebbe contenerne uno che punta a un altro file dell'utente).
+`FOUND.txt` né nel log (un log scritto prima che si aggiungesse la cifratura perde le righe con il seed), cancella `state.dat`, la sua copia, `dp.bin`,
+`herd.bin`, `near.txt` e `stats.csv`, e il suo ultimo rapporto, `status.json` e l'ultima riga del log non dicono fin dove era arrivata la ricerca; vale per `hunt`
+come per `merge`. Una chiave che non si è potuta cifrare non è scritta da nessuna parte, e la campagna resta com'era, così che una nuova ricerca la ritrovi.
+La cartella di ogni campagna è del solo proprietario (modo 0700; su Windows una lista di accesso del solo utente e del sistema, che non prende nulla dalla
+cartella sopra, quindi la cartella deve stare su un disco con liste di accesso, NTFS), così gli altri utenti della macchina non leggono nulla di tutto
+questo mentre la ricerca gira, e i file di una campagna non si aprono mai attraverso un collegamento (una cartella copiata da altrove potrebbe contenerne uno
+che punta a un altro file dell'utente).
 
 **Non protetti**:
 
@@ -745,9 +749,10 @@ copiata da altrove potrebbe contenerne uno che punta a un altro file dell'utente
 * **Lo swap**: la memoria del programma può essere scritta dal sistema in un file di swap o di ibernazione. I buffer della password e la memoria della derivazione
   sono bloccati in RAM quando i limiti del sistema lo consentono (di solito non per i 256 MiB di scrypt senza privilegi); la chiave in chiaro vive troppo poco per
   finire probabilmente nello swap, ma nulla qui lo garantisce. Usa uno swap cifrato, o nessuno.
-* **Una copia della cartella fatta prima del ritrovamento.** Contiene il seed: con l'avanzamento che i rapporti e il log della campagna finita mostrano, porta
-  al blocco della chiave. Non fare backup o istantanee della cartella di una campagna che cifra su una macchina di cui non ti fidi; un seed scritto a mano
-  (`-s`) è anche nella cronologia della shell.
+* **Un'altra copia del seed.** Ce l'ha una copia della cartella fatta prima del ritrovamento, ce l'ha ogni altro computer di una divisione con `--part` (serve
+  a tutti), e un seed scritto a mano (`-s`) è nella cronologia della shell: con l'avanzamento che il log mostrava mentre la ricerca girava, porta al blocco
+  della chiave. Non fare backup o istantanee della cartella di una campagna che cifra su una macchina di cui non ti fidi, e dividi una ricerca solo fra
+  macchine di cui ti fidi allo stesso modo.
 * **Una password debole**, come in 11.4; un keylogger o un terminale modificato, che vedono la password mentre la digiti.
 * **I metadati**: indirizzo, puzzle, ora e nome della campagna restano in chiaro (sono pubblici per natura).
 

@@ -146,14 +146,8 @@ void bsgs_sched_cfg(const bsgs_params *p, const campaign_cfg *cfg, campaign_cfg 
     *out = *cfg;
     out->range_start = pz_u256_from_u64(1);
     out->range_end = pz_u256_from_u64(p->Ng);
-    pz_u256 rsz = pz_u256_from_u64(p->Ng);
-    unsigned cb = cfg_default_chunk_bits(&rsz);
-    pz_u256 chunk = pz_u256_pow2(cb);
-    if (pz_u256_cmp(&chunk, &rsz) > 0) {
-        unsigned b = pz_u256_bits(&rsz) - 1;
-        cb = b < 1 ? 1 : b;
-    }
-    out->chunk_bits = cb;
+    const pz_u256 rsz = pz_u256_from_u64(p->Ng);
+    out->chunk_bits = cfg_clamp_chunk_bits(&rsz, cfg_default_chunk_bits(&rsz));
 }
 
 /* ------------------------------------------------------------ giant points */
@@ -219,7 +213,7 @@ static void steps_make(bs_steps *st, const pz_ge *U, u64 kmag, bool negated)
 static bs_group_fn pick_group(void)
 {
 #if defined(__x86_64__) && !defined(PZ_NO_X86_VARIANTS)
-    if (cpu_has_avx2()) return bs_group_x86;
+    if (cpu_has_adx()) return bs_group_x86;
 #endif
     return bs_group_base;
 }

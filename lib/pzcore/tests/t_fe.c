@@ -55,7 +55,7 @@ int main(void)
 #if defined(__BMI2__) && defined(__ADX__)
     /* the build with BMI2 and ADX (t_fe_asm) runs only where they are: with clang it has no asm, but its C uses them too (an x86-64
      * binary under Rosetta, which has neither, computed garbage with them) */
-    if (!pz_cpu_has_avx2()) { printf("t_fe (BMI2/ADX): CPU without BMI2/ADX, skipped\n"); return 0; }
+    if (!pz_cpu_has_adx()) { printf("t_fe (BMI2/ADX): CPU without BMI2/ADX, skipped\n"); return 0; }
 #endif
 #ifdef PZ_FE_ASM
     const char *mode = "asm";

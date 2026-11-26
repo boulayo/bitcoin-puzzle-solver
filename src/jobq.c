@@ -348,20 +348,28 @@ bool sched_locate(sched_t *s, const pz_u256 *key, pz_u256 *seq, u64 *offset)
 
 /* ---- the checkpoint (state.dat) ---- */
 
+/* the checksum of the n bytes of a state before its line crc=: 16 hex digits of their SHA-256 */
+static void state_crc(const char *text, size_t n, char hx[17])
+{
+    u8 dg[32];
+    pz_sha256((const u8 *)text, n, dg);
+    pz_hex_encode(dg, 8, hx);
+}
+
+/* the line crc= of a state, when the text has one and it is right */
+static char *state_crc_ok(char *text)
+{
+    char *crc = strstr(text, "crc="), hx[17];
+    if (!crc) return NULL;
+    state_crc(text, (size_t)(crc - text), hx);
+    return strncmp(crc + 4, hx, 16) == 0 ? crc : NULL;
+}
+
 /* true when `path` exists and carries a valid checksum */
 static bool state_file_valid(const char *path)
 {
     char *text = pz_read_file(path, NULL);
-    if (!text) return false;
-    char *crc = strstr(text, "crc=");
-    bool ok = false;
-    if (crc) {
-        u8 dg[32];
-        char hx[17];
-        pz_sha256((u8 *)text, (size_t)(crc - text), dg);
-        pz_hex_encode(dg, 8, hx);
-        ok = strncmp(crc + 4, hx, 16) == 0;
-    }
+    const bool ok = text && state_crc_ok(text);
     free(text);
     return ok;
 }
@@ -379,10 +387,8 @@ char *sched_snapshot(sched_t *s, size_t *len)
         n += snprintf(buf + n, cap - (size_t)n, "iv %s %s\n", u128_to_hex(s->done[i].a, h1), u128_to_hex(s->done[i].b, h2));
     }
     pthread_mutex_unlock(&s->mu);
-    u8 dg[32];
     char hx[17];
-    pz_sha256((u8 *)buf, (size_t)n, dg);
-    pz_hex_encode(dg, 8, hx);
+    state_crc(buf, (size_t)n, hx);
     n += snprintf(buf + n, 64, "crc=%s\n", hx);
     *len = (size_t)n;
     return buf;
@@ -427,13 +433,12 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
         snprintf(err, errlen, "cannot read %s: %s", path, strerror(errno));
         return -1;
     }
-    char *crc = strstr(text, "crc=");
-    if (!crc) { snprintf(err, errlen, "checkpoint without checksum"); free(text); return -1; }
-    u8 dg[32];
-    char hx[17];
-    pz_sha256((u8 *)text, (size_t)(crc - text), dg);
-    pz_hex_encode(dg, 8, hx);
-    if (strncmp(crc + 4, hx, 16)) { snprintf(err, errlen, "invalid checkpoint checksum (corrupt file?)"); free(text); return -1; }
+    char *crc = state_crc_ok(text);
+    if (!crc) {
+        snprintf(err, errlen, strstr(text, "crc=") ? "invalid checkpoint checksum (corrupt file?)" : "checkpoint without checksum");
+        free(text);
+        return -1;
+    }
     *crc = 0;
     unsigned cb = 0;
     char vlim_text[64] = "", kd_text[64] = "", nds[32] = "";

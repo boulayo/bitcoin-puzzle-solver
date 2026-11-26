@@ -120,7 +120,7 @@ static void fill_row(row_t *w, const char *base, time_t now)
     bool running = campaign_is_running(dir);
     if (js) {
         if (json_get(js, "state", v, sizeof v)) pz_strlcpy(w->state, state_name(v), sizeof w->state);
-        if (json_get(js, "fraction", v, sizeof v)) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);
+        if (json_get(js, "fraction", v, sizeof v) && strcmp(v, "null")) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);   /* null: not kept */
         if (json_get(js, "rate_per_second", v, sizeof v)) {
             double rt = atof(v);
             if (rt > 0) { char b[32]; pz_fmt_si(rt, b, sizeof b); snprintf(w->rate, sizeof w->rate, "%s/s", b); }

@@ -95,6 +95,7 @@ void scan_job_init(scan_job *j, const u8 h160[20])
 /* ISA probes: the detection itself is in pzcore; PZ_ASSUME_IFMA=1 skips the CPUID check of the IFMA extension, for tests on
  * hosts whose (virtual) CPUID hides an extension the processor does execute. */
 bool cpu_has_avx2(void) { return pz_cpu_has_avx2(); }
+bool cpu_has_adx(void) { return pz_cpu_has_adx(); }
 bool cpu_has_avx512(void) { return pz_cpu_has_avx512(); }
 bool cpu_has_ifma(void)
 {
@@ -191,15 +192,12 @@ static bool lanes_check(const cpu_engine *e)
     return true;
 }
 
-bool cpu_engine_quickcheck(const cpu_engine *e)
+/* A scan of two granules from a large key with the target planted at offset `off`: false if it misses or misplaces the key. */
+static bool planted_check(const cpu_engine *e, u64 off)
 {
-    cpu_tables_init();
-    if (!lanes_check(e)) return false;
-    /* one granule starting at an arbitrary large key, with the target planted at an odd offset in its second half */
-    pz_u256 start = pz_u256_pow2(97);
+    pz_u256 start = pz_u256_pow2(97), want;
     pz_u256_add_u64(&start, &start, 0x5A5A5ULL);
-    pz_u256 want = start;
-    pz_u256_add_u64(&want, &want, e->granule / 2 + 37);
+    pz_u256_add_u64(&want, &start, off);
     pz_ge p;
     u8 pub[33], h[20];
     if (!lin_point(&p, &want)) return false;
@@ -210,8 +208,21 @@ bool cpu_engine_quickcheck(const cpu_engine *e)
     qc_t q = {0};
     job.on_hit = qc_hit;
     job.user = &q;
-    u64 done = e->scan(&job, &start, e->granule);
-    return done == e->granule && q.hits == 1 && pz_u256_cmp(&q.key, &want) == 0;
+    return e->scan(&job, &start, 2 * e->granule) == 2 * e->granule && q.hits == 1 && pz_u256_cmp(&q.key, &want) == 0;
+}
+
+bool cpu_engine_quickcheck(const cpu_engine *e)
+{
+    cpu_tables_init();
+    if (!lanes_check(e)) return false;
+    /* in every window of the second granule (a lane of the vector engines; the centres there come from the advance over the first), and in
+     * one window or another at each position where the code of a window takes its own branch: the first and the last key, and the centre
+     * with its two neighbours (the lanes run the same code, the positions the same in every lane) */
+    static const u64 pos[] = {0, CPU_HALF - 1, CPU_HALF, CPU_HALF + 1, CPU_GRP - 1};
+    const u64 nw = e->granule / CPU_GRP, np = sizeof pos / sizeof *pos;
+    for (u64 k = 0; k < (nw > np ? nw : np); k++)
+        if (!planted_check(e, e->granule + k % nw * CPU_GRP + pos[k % np])) return false;
+    return true;
 }
 
 const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
@@ -219,7 +230,7 @@ const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
     cpu_tables_init();
     int n;
     const cpu_engine *const *all = cpu_engine_all(&n);
-    const cpu_engine *best = &ENG_BASE;
+    const cpu_engine *best = NULL;
     double best_rate = 0;
     u8 h[20] = {0};
     scan_job job;
@@ -244,8 +255,9 @@ const cpu_engine *cpu_engine_autotune(double secs, bool verbose)
             char b[32];
             pz_log(PZ_LOG_INFO, "CPU autotune: %-9s %s keys/s (1 thread)", e->name, pz_fmt_si(rate, b, sizeof b));
         }
-        if (rate > best_rate * 1.03) { best_rate = rate; best = e; }
+        if (!best || rate > best_rate * 1.03) { best_rate = rate; best = e; }
     }
+    if (!best) pz_die("no CPU engine computes correctly on this machine (all failed the quick check): run 'pzsolve selftest'");
     return best;
 }
 

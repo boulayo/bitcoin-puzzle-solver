@@ -12,10 +12,8 @@
  * The field arithmetic is fev.h (9 limbs of 29 bits, vpmuludq) or, when the includer defines PZ_FEV_IFMA, fev52.h (5 limbs
  * of 52 bits, AVX-512 IFMA); this file only relies on their common interface. */
 
-#define CAT_(a, b) a##b
-#define CAT(a, b) CAT_(a, b)
-#define PZ_HASH_LANES_FN CAT(hash_lanes_, ISA)
-#include <pzcore/impl/hash_lanes.inc>
+#include "engine_common.inc"
+
 /* With 32 vector registers the search runs faster with the products, vctx_emit and vround inlined (measured: 2.7 % on avx512v,
  * 0 to 2 % on avx512i); with the 16 of AVX2 the spills make it slower (-1 to -2.4 %). */
 #if PZ_VBYTES == 64
@@ -60,32 +58,12 @@ typedef struct {
     pz_u256 base;             /* first key of the claim */
 } vctx_t;
 
-static PZ_VABI void vctx_verify(vctx_t *c, const vbatch_t *b, int lane)
-{
-    u8 pub[33], h[20];
-    pub[0] = (u8)b->pfx[lane];
-    for (int i = 0; i < 8; i++) {
-        u32 w = b->X[i][lane];
-        pub[1 + 4 * i] = (u8)(w >> 24); pub[2 + 4 * i] = (u8)(w >> 16);
-        pub[3 + 4 * i] = (u8)(w >> 8);  pub[4 + 4 * i] = (u8)w;
-    }
-    pz_hash160(pub, 33, h);
-    const bool hit = memcmp(h, c->job->target_h160, 20) == 0;
-    if (!hit && !c->job->on_near) return;
-    pz_u256 key;
-    pz_u256 d = pz_u256_from_u64(b->koff[lane]);
-    pz_u256_add(&key, &c->base, &d);
-    if (c->job->on_near) c->job->on_near(c->job->user, &key);
-    if (hit && c->job->on_hit) c->job->on_hit(c->job->user, &key);
-}
-
 static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
 {
 #ifdef PZ_PROF_NOHASH
     c->n = 0;
     return;
 #endif
-    _Static_assert(PZ_HASH_FILTER_WORD == SCAN_FILTER_WORD, "the word of a near miss");
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     const pz_vu t = pz_v_set(t0);
     for (int k = 0; k * PZ_LANES < c->n; k++) {
@@ -100,7 +78,7 @@ static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
 #endif
         if (UNLIKELY(any))
             for (int l = 0; l < PZ_LANES && k * PZ_LANES + l < c->n; l++)
-                if (c->outw[l] == t0) vctx_verify(c, b, l);
+                if (c->outw[l] == t0) lane_verify(c->job, &c->base, &b->X[0][l], PZ_LANES, b->pfx[l], b->koff[l]);
     }
     c->n = 0;
 }
@@ -108,16 +86,9 @@ static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
 /* one candidate from the scalar fallback path */
 static PZ_VABI void vctx_add_scalar(vctx_t *c, const pz_fe *x, const pz_fe *y, u64 koff)
 {
-    pz_fe xn = *x, yn = *y;
-    pz_fe_normalize(&xn);
-    pz_fe_normalize(&yn);
     vbatch_t *b = &c->b[c->n / PZ_LANES];
     const int l = c->n % PZ_LANES;
-    b->X[0][l] = (u32)(xn.n[3] >> 32); b->X[1][l] = (u32)xn.n[3];
-    b->X[2][l] = (u32)(xn.n[2] >> 32); b->X[3][l] = (u32)xn.n[2];
-    b->X[4][l] = (u32)(xn.n[1] >> 32); b->X[5][l] = (u32)xn.n[1];
-    b->X[6][l] = (u32)(xn.n[0] >> 32); b->X[7][l] = (u32)xn.n[0];
-    b->pfx[l] = 2u + (u32)(yn.n[0] & 1);
+    lane_set(&b->X[0][l], &b->pfx[l], PZ_LANES, x, y);
     b->koff[l] = koff;
     if (++c->n == VBATCHES * PZ_LANES) vctx_flush(c);
 }
@@ -183,12 +154,7 @@ static inline VINLINE PZ_VABI void vctx_emit(vctx_t *c, pz_fev *x, const pz_fev 
 }
 
 /* the same operations with one operand a constant given as limbs, broadcast to every lane */
-static inline PZ_VABI void fev_bcast(pz_fev *r, const u64 *a)
-{
-#pragma GCC unroll 9
-    for (int i = 0; i < PZ_FEV_NLIMB; i++) r->l[i] = pz_vl_set(a[i]);
-}
-static inline PZ_VABI void fev_bc_sub(pz_fev *r, const u64 *a, const pz_fev *b) { pz_fev t; fev_bcast(&t, a); pz_fev_sub(r, &t, b); }
+static inline PZ_VABI void fev_bc_sub(pz_fev *r, const u64 *a, const pz_fev *b) { pz_fev t; pz_fev_from_limbs(&t, a); pz_fev_sub(r, &t, b); }
 /* a - b for a difference that only meets a tight factor in a product, or goes to the hash: with 29-bit limbs without the carry
  * pass (pz_fev_sub_lazy of two tight elements, a valid factor next to a tight one); IFMA reads only 52 bits of each limb and needs
  * the carries. */
@@ -200,9 +166,9 @@ static inline PZ_VABI void fev_sub_nc(pz_fev *r, const pz_fev *a, const pz_fev *
     pz_fev_sub_lazy(r, a, b);
 #endif
 }
-static inline PZ_VABI void fev_bc_sub_nc(pz_fev *r, const u64 *a, const pz_fev *b) { pz_fev t; fev_bcast(&t, a); fev_sub_nc(r, &t, b); }
-static inline PZ_VABI void fev_bc_add(pz_fev *r, const pz_fev *a, const u64 *b) { pz_fev t; fev_bcast(&t, b); pz_fev_add(r, a, &t); }
-static inline PZ_VABI void fev_sub2_bc(pz_fev *r, const pz_fev *a, const pz_fev *b, const u64 *c) { pz_fev t; fev_bcast(&t, c); pz_fev_sub2(r, a, b, &t); }
+static inline PZ_VABI void fev_bc_sub_nc(pz_fev *r, const u64 *a, const pz_fev *b) { pz_fev t; pz_fev_from_limbs(&t, a); fev_sub_nc(r, &t, b); }
+static inline PZ_VABI void fev_bc_add(pz_fev *r, const pz_fev *a, const u64 *b) { pz_fev t; pz_fev_from_limbs(&t, b); pz_fev_add(r, a, &t); }
+static inline PZ_VABI void fev_sub2_bc(pz_fev *r, const pz_fev *a, const pz_fev *b, const u64 *c) { pz_fev t; pz_fev_from_limbs(&t, c); pz_fev_sub2(r, a, b, &t); }
 
 /* x3 = l^2 - xc - Sx and y3 = l*t - yc of the step. With IFMA the subtrahends go into the products as the constants K2 - xc - Sx
  * and K1 - yc (pz_fev_sqr_add, pz_fev_mul_add): the term is added to the low columns before the reduction, whose carry pass
@@ -287,13 +253,6 @@ typedef struct {
     u64 sx[PZ_FEV_NLIMB], sy[PZ_FEV_NLIMB];      /* the point N*GRP*G (centre advance per round), as limbs */
 } vstep_t;
 
-static void to_limbs(u64 out[PZ_FEV_NLIMB], const pz_fe *x)
-{
-    pz_fev t;
-    pz_fev_set_lane(&t, 0, x);
-    for (int i = 0; i < PZ_FEV_NLIMB; i++) out[i] = t.l[i][0];
-}
-
 /* i*G for i = 1..VHALF as limbs of this field layout, built once */
 static u64 vtab_x[VHALF][PZ_FEV_NLIMB], vtab_y[VHALF][PZ_FEV_NLIMB];
 static pthread_once_t vtab_once = PTHREAD_ONCE_INIT;
@@ -302,8 +261,8 @@ static void vtab_build(void)
     pz_ge *g = pz_xmalloc(sizeof(pz_ge) * VHALF);
     cpu_gmultiples(g, VHALF);
     for (int i = 0; i < VHALF; i++) {
-        to_limbs(vtab_x[i], &g[i].x);
-        to_limbs(vtab_y[i], &g[i].y);
+        pz_fev_limbs(vtab_x[i], &g[i].x);
+        pz_fev_limbs(vtab_y[i], &g[i].y);
     }
     free(g);
 }
@@ -425,8 +384,8 @@ static u64 CAT(engv_scan_, ISA)(const scan_job *job, const pz_u256 *key_start, u
     {
         pz_ge sp;
         if (!lin_mul(&sp, &(pz_u256){{(u64)NL * GRPV, 0, 0, 0}})) pz_die("scan: invalid step");
-        to_limbs(st.sx, &sp.x);
-        to_limbs(st.sy, &sp.y);
+        pz_fev_limbs(st.sx, &sp.x);
+        pz_fev_limbs(st.sy, &sp.y);
     }
     const u64 per_round = (u64)NL * GRPV;
     const u64 rounds = (nkeys + per_round - 1) / per_round;

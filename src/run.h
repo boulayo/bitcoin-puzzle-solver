@@ -18,7 +18,7 @@
 typedef struct {
     char name[40];
     char kind;                       /* 'C' CPU thread, 'G' GPU */
-    _Atomic u64 units;               /* keys scanned (linear) / group steps (kangaroo) */
+    _Atomic u64 units;               /* keys scanned (linear), steps of the walkers (kangaroo), baby then giant steps (BSGS) */
     _Atomic u64 t_units;             /* a worker that counts by launches (a GPU): pz_mono in microseconds at its last count, so that its rate is
                                       * taken between the ends of two launches and not over a window that holds a fraction of one; 0: counts
                                       * continuously (a CPU thread) */
@@ -35,6 +35,8 @@ typedef struct {
     eta_in eta;                      /* completion-time model inputs (done / remaining / scale) */
     const char *unit;                /* "keys", "steps" */
     bool beyond;                     /* kangaroo: far past the expected effort without a collision: the completion-time model says nothing */
+    bool forgotten;                  /* an encrypting campaign that found its key: how far its search got is not shown (with a copy of the
+                                      * seed, on another computer of a --part split or in a shell history, it leads to the key) */
     char detail[320];
 } progress_info;
 
@@ -123,13 +125,20 @@ typedef struct run_ctx {
     /* state of the run modes, in the run so that two runs in one process (the self-tests, the measurements) do not share it */
     void *bsgs;                      /* BSGS mode (bs_run*, run_bsgs.c) */
     int worker_stop_n;               /* number of flags in worker_stop */
-    _Atomic int active_workers;      /* linear: CPU threads and GPU controllers still running; the last one to leave stops the run */
+    _Atomic int active_workers;      /* linear and kangaroo: CPU threads and GPU controllers still running; the last one to leave stops the run */
     u64 keys_at_start[2];            /* linear: keys already covered when this session began, low and high 64 bits (the progress adds the
                                       * session's to it); not a u128, which would raise the alignment of the whole run_ctx */
 } run_ctx;
 
 /* Seconds of this session spent computing: the monotonic time since the start minus the suspensions. */
 static inline double run_session_elapsed(const run_ctx *r) { return pz_mono() - r->t_start - r->paused_total; }
+/* The units of every worker in this session. */
+static inline u64 run_session_units(const run_ctx *r)
+{
+    u64 n = 0;
+    for (int i = 0; i < r->nws; i++) n += atomic_load(&r->ws[i].units);
+    return n;
+}
 
 /* common */
 void run_init(run_ctx *r);

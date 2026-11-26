@@ -341,10 +341,8 @@ static bool write_found_plain(run_ctx *r)
  * done the key is written nowhere, which the box says, and the campaign keeps its state (end_session). */
 static bool write_found_encrypted(run_ctx *r)
 {
-    char addr[64], buf[2048], pz[48] = "", id[9], ts[40];
+    char buf[2048], pz[48] = "", id[9], ts[40];
     u8 kb[32];
-    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
     pz_u256_to_be(&r->found_key, kb);
     r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, r->found_sealed, sizeof r->found_sealed);
     pz_secure_zero(kb, sizeof kb);
@@ -366,7 +364,7 @@ static bool write_found_encrypted(run_ctx *r)
             "password of --encrypt-password) can read it. The line below is safe to copy anywhere, and it opens with the secret alone. At home:\n"
             "    pzsolve decrypt-key FOUND.txt\n\n"
             "%s\n",
-            ts, r->cfg.name, pz, addr, PZ_VERSION, id, r->found_sealed);
+            ts, r->cfg.name, pz, r->cfg.address, PZ_VERSION, id, r->found_sealed);
     return found_save(r, buf, (size_t)n);
 }
 
@@ -376,10 +374,7 @@ static void run_write_found(run_ctx *r)
 {
     (void)(r->cfg.has_encrypt ? write_found_encrypted(r) : write_found_plain(r));
     if (r->found_seal_failed || !r->on_found[0]) return;      /* also when the file could not be written: the command may be all that tells */
-    char addr[64];
-    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
-    onfound_start(r->on_found, r->cfg.has_encrypt ? r->found_sealed : "", addr, r->cfg.puzzle, r->cfg.name, r->path_found);
+    onfound_start(r->on_found, r->cfg.has_encrypt ? r->found_sealed : "", r->cfg.address, r->cfg.puzzle, r->cfg.name, r->path_found);
 }
 
 /* ---- reporting ---- */
@@ -403,6 +398,12 @@ void run_final_progress(run_ctx *r, progress_info *pi)
     pi->est_state = r->est_state;
     pi->rate_eta = r->rate_eta > 0 ? r->rate_eta : (r->est_state == RATE_MEASURING ? 0 : pi->rate);
     if (r->progress) r->progress(r, pi);
+    if (atomic_load(&r->found) && r->cfg.has_encrypt) {             /* the last reports: nothing that says where the search stood */
+        const char *unit = pi->unit;
+        memset(pi, 0, sizeof *pi);
+        pi->unit = unit;
+        pi->forgotten = true;
+    }
 }
 
 /* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines, and the
@@ -442,7 +443,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
 {
     const size_t bcap = 8192 + (size_t)r->nws * 128;      /* the list of the workers grows with their number */
     char *buf = pz_xmalloc(bcap);
-    char stamp[40], seedhex[65], idb[17], rs[80], addr[80], hx[48], elapsed[48], state[24];
+    char stamp[40], seedhex[65], idb[17], rs[80], hx[48], elapsed[48], state[24];
     double el = r->elapsed_prev + run_session_elapsed(r);
     time_t now = time(NULL);
     struct tm tmv;
@@ -453,8 +454,6 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     char rng[3 * PZ_U256_HEX_BUF + 40];
     cfg_range_text(&r->cfg, rng, sizeof rng);
     pz_hex_encode(r->cfg.target_h160, 20, hx);
-    if (r->cfg.address[0]) pz_strlcpy(addr, r->cfg.address, sizeof addr);
-    else pz_hash160_to_address(r->cfg.target_h160, addr, sizeof addr);
     pz_fmt_duration(el, elapsed, sizeof elapsed);
     pz_strlcpy(state, ui_state_name(r, final), sizeof state);
     eta_summary es;
@@ -482,6 +481,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     char amount[160];                                     /* the kangaroo has no total: its steps are compared with the mean cost */
     if (kang) snprintf(amount, sizeof amount, "%s %s, ~%s expected on average", done, pi->unit, total);
     else snprintf(amount, sizeof amount, "%s of %s %s", done, total, pi->unit);
+    if (pi->forgotten) snprintf(pct, sizeof pct, "not kept"), snprintf(amount, sizeof amount, "the key is encrypted: how far the search got is not written");
     char partline[PART_TEXT + 200] = "";
     if (r->cfg.part[0]) snprintf(partline, sizeof partline, "Part:           %s  (this computer scans only its shares of the blocks)\n", r->cfg.part);
     if (r->limit_pct) {
@@ -541,7 +541,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
         "%s"
         "Detail:         %s\n"
         "%s",
-        PZ_VERSION, stamp, state, r->cfg.name, idb, seedhex, pzt, addr, hx,
+        PZ_VERSION, stamp, state, r->cfg.name, idb, seedhex, pzt, r->cfg.address, hx,
         r->cfg.has_pubkey ? "  (public key known)" : "", mode_name(r->cfg.mode), rng, rbits, partline,
         r->sessions, elapsed, kang ? "Success prob.:  " : "Progress:       ",
         pct, amount, speed, tleft,
@@ -562,19 +562,21 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     json_num(e90, sizeof e90, pi->beyond ? NAN : es.t90);
     json_num(efull, sizeof efull, pi->beyond ? NAN : kang ? es.t99 : es.t_full);
     for (int i = 0; i < ETA_NWIN; i++) json_num(pj[i], sizeof pj[i], es.p_win[i]);
+    char dn[48] = "null", tn[48] = "null", fr[32] = "null";      /* forgotten: not written */
+    if (!pi->forgotten) snprintf(dn, sizeof dn, "\"%.0Lf\"", pi->done), snprintf(tn, sizeof tn, "\"%.0Lf\"", pi->total), snprintf(fr, sizeof fr, "%.12g", pi->fraction);
     int m = snprintf(j, jcap,
         "{\n  \"program\": \"pzsolve\",\n  \"version\": \"%s\",\n  \"campaign\": \"%s\",\n  \"seed_id\": \"%s\",\n  \"part\": \"%s\",\n  \"limit_percent\": %d,\n"
         "  \"puzzle\": %d,\n  \"mode\": \"%s\",\n  \"state\": \"%s\",\n  \"updated_unix\": %lld,\n"
-        "  \"elapsed_seconds\": %.1f,\n  \"sessions\": %d,\n  \"unit\": \"%s\",\n  \"done\": \"%.0Lf\",\n  \"total\": \"%.0Lf\",\n"
-        "  \"fraction\": %.12g,\n  \"rate_per_second\": %.1f,\n  \"rate_cpu\": %.1f,\n  \"rate_gpu\": %.1f,\n"
+        "  \"elapsed_seconds\": %.1f,\n  \"sessions\": %d,\n  \"unit\": \"%s\",\n  \"done\": %s,\n  \"total\": %s,\n"
+        "  \"fraction\": %s,\n  \"rate_per_second\": %.1f,\n  \"rate_cpu\": %.1f,\n  \"rate_gpu\": %.1f,\n"
         "  \"eta_seconds_50\": %s,\n  \"eta_seconds_90\": %s,\n  \"eta_seconds_%s\": %s,\n"
         "  \"prob_1h\": %s,\n  \"prob_24h\": %s,\n  \"prob_7d\": %s,\n  \"prob_30d\": %s,\n  \"prob_1y\": %s,\n"
         "  \"found\": %s,\n  \"rejected_candidates\": %llu,\n  \"walkers\": %lld,\n  \"workers\": [",
         PZ_VERSION, r->cfg.name, idb, r->cfg.part, r->limit_pct, r->cfg.puzzle, mode_name(r->cfg.mode), state, (long long)now, el,
-        r->sessions, pi->unit, pi->done, pi->total, pi->fraction, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
+        r->sessions, pi->unit, dn, tn, fr, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
         pj[0], pj[1], pj[2], pj[3], pj[4],
         atomic_load(&r->found) ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad), r->walkers);
-    for (int i = 0; i < r->nws && (size_t)m + 300 < jcap; i++) {
+    for (int i = 0; i < r->nws && !pi->forgotten && (size_t)m + 300 < jcap; i++) {   /* the units of the workers add up to the progress */
         const double wr = r->ws[i].rate;
         m += snprintf(j + m, jcap - (size_t)m, "%s\n    {\"name\": \"%s\", \"kind\": \"%c\", \"rate\": %.1f, \"units\": %llu}", i ? "," : "",
                       r->ws[i].name, r->ws[i].kind, isfinite(wr) && wr >= 0 && wr < 1e18 ? wr : 0.0, (unsigned long long)atomic_load(&r->ws[i].units));
@@ -777,6 +779,7 @@ void run_reporter_loop(run_ctx *r)
             if (r->checkpoint && !atomic_load(&r->found) && r->checkpoint(r) != 0) pz_log(PZ_LOG_WARN, "checkpoint save failed");
             next_ckpt = now + r->checkpoint_interval;
         }
+        prev_mono = pz_mono(), prev_wall = pz_now();   /* the workers computed while the disk took its time: no suspension */
     }
     /* a stop that was asked for: what follows can take seconds (the walkers of a GPU are read back, millions of them), and a second Ctrl-C
      * then quits at once */

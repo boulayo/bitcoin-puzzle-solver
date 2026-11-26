@@ -785,6 +785,30 @@ static int log_check_collision(void)
     return fails;
 }
 
+/* The point that solves the key goes to dp.bin as well: a key that could not be saved (FOUND.txt not written, the encryption impossible) is
+ * found again when the next run loads the file. */
+static int log_check_solving_point(void)
+{
+    int fails = 0;
+    dp_rec ta, wb;
+    pz_u256 want;
+    meeting_pair(&ta, &wb, &want);
+    kang_state *a = kang_make_test_state(40, 1), *b = kang_make_test_state(40, 1);
+    if (!a || !b) {
+        if (a) kang_free_test_state(a);
+        if (b) kang_free_test_state(b);
+        return fails + 1;
+    }
+    FCHK(kang_load_log(a) == 1 && kang_table_insert(a, &ta, KANG_AT_NEW) == 1 && kang_table_insert(a, &wb, KANG_AT_NEW) == 2);
+    FCHK(kang_flush_log(a) == 0 && file_size(a->log_path) == KANG_LOG_HDR + 2 * (long long)sizeof(dp_rec));
+    if (a->log) { fclose(a->log); a->log = NULL; }
+    FCHK(rename(a->log_path, b->log_path) == 0);           /* the next run of the campaign: another state, the same file */
+    FCHK(kang_load_log(b) == 0 && b->loaded == 2 && atomic_load(&b->r->found) && !pz_u256_cmp(&b->r->found_key, &want));
+    kang_free_test_state(a);
+    kang_free_test_state(b);
+    return fails;
+}
+
 /* a file shorter than its header is an interrupted creation: the log starts again (with the header of this version, also after the
  * beginning of a header of version 4). Another short file is not ours */
 static int log_check_short_files(void)
@@ -916,6 +940,7 @@ static int log_file_checks(void)
     fails += log_check_cut_tails();
     fails += log_check_v4_append();
     fails += log_check_collision();
+    fails += log_check_solving_point();
     fails += log_check_short_files();
     fails += log_check_magics();
 #ifdef __GLIBC__

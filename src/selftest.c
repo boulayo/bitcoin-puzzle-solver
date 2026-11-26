@@ -16,6 +16,7 @@
 #include "outfmt.h"
 #include "encrypt.h"
 #include <unistd.h>
+#include <sys/stat.h>
 
 int pz_sections_printed;
 static int g_fail, g_checks;
@@ -127,23 +128,7 @@ static void t_engines(void)
         char lb[64];
         snprintf(lb, sizeof lb, "CPU engine %s", E->name);
         if (!E->supported()) { pz_result_line(lb, "not supported by this CPU: skipped"); continue; }
-        const int L = E->lanes;
-        u32 X[8 * 64], pfx[64], out[5 * 64];
-        u8 xb[64][32];
-        for (int l = 0; l < L; l++) {
-            for (int i = 0; i < 32; i++) xb[l][i] = (u8)rnd64();
-            pfx[l] = 2 + (rnd64() & 1);
-            for (int i = 0; i < 8; i++) X[i * L + l] = (u32)xb[l][4*i] << 24 | (u32)xb[l][4*i+1] << 16 | (u32)xb[l][4*i+2] << 8 | xb[l][4*i+3];
-        }
-        E->hash160_lanes(X, pfx, out);
-        bool hok = true;
-        for (int l = 0; l < L; l++) {
-            u8 h[20], g[20];
-            pz_hash160_pub33((u8)pfx[l], xb[l], h);
-            for (int w = 0; w < 5; w++) for (int b = 0; b < 4; b++) g[4*w+b] = (u8)(out[w * L + l] >> (8*b));
-            if (memcmp(h, g, 20)) hok = false;
-        }
-        CHECK(hok);
+        CHECK(cpu_engine_quickcheck(E));          /* the hash of every lane, a key in every window and at its edges */
         /* planted key somewhere inside a few groups */
         pz_u256 st = pz_u256_pow2(60); pz_u256_add_u64(&st, &st, 12345);
         for (u64 off = 5; off < 5 * CPU_GRP; off += 1999) {
@@ -401,6 +386,28 @@ static bool have_file(const char *path)
     return t != NULL;
 }
 
+/* The folder of a campaign closed to the other users (campaign_private): 0700 on Linux and macOS, on Windows an access list of the user and
+ * the system alone. The user still makes and reads files in it, those already there included. */
+static void t_private_dir(void)
+{
+    char dir[600], before[700], after[700];
+    if (!pz_make_temp_dir(dir, sizeof dir, "pzpriv")) { pz_result_line("campaign folder closed to the others", "not tested: no temporary folder"); return; }
+    const int f0 = g_fail;
+    snprintf(before, sizeof before, "%s/before", dir);
+    snprintf(after, sizeof after, "%s/after", dir);
+    CHECK(pz_write_file_atomic(before, "x", 1, 0644) == 0);
+#ifndef _WIN32
+    struct stat st;
+    CHECK(chmod(dir, 0755) == 0);
+    CHECK(pz_dir_private(dir) && stat(dir, &st) == 0 && (st.st_mode & 077) == 0);
+#else
+    CHECK(pz_dir_private(dir));
+#endif
+    CHECK(pz_write_file_atomic(after, "y", 1, 0644) == 0 && have_file(after) && have_file(before));
+    CHECK(pz_remove_tree(dir) == 0);
+    pz_result_line("campaign folder closed to the others", "%s", g_fail == f0 ? "OK" : "FAILED");
+}
+
 static void set_target(run_ctx *r, u64 key)
 {
     pz_u256 k = pz_u256_from_u64(key);
@@ -597,6 +604,7 @@ int selftest_checks(bool banner)
     t_limit();
     pz_result_line("--limit shares and thread order", "%s", g_fail == f0 ? "OK" : "FAILED");
     t_scan_hits();
+    t_private_dir();
     t_encrypt_key();
     {
         int rc = gpu_selftest();

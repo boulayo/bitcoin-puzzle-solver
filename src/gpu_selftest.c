@@ -498,6 +498,14 @@ static int gpu_policy_selftest(void)
         } else fails++;
         free(r);
     }
+    /* a block whose first centre is the point at infinity (its key is 0 mod n) goes to the CPU (L.err); it is no error of the device, which
+     * is not even used */
+    {
+        gpu_session gs = {.half = 256, .T_max = 64};
+        lin_launch L = {.nkeys = 1024};
+        pz_u256_sub(&L.key_start, &pz_secp256k1_n, &(pz_u256){{256, 0, 0, 0}});
+        PCHK(gpu_linear_run(&gs, (const u8[20]){0}, &L) && L.err && !L.nhits);
+    }
     fails += gpu_tune_selftest();
     pz_result_line("GPU recovery rules", "%s", fails ? "FAILED" : "OK");
     return fails;

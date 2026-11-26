@@ -36,8 +36,7 @@ typedef struct { bs_run *b; int slot; } bs_warg;
 static void bs_progress(run_ctx *r, progress_info *pi)
 {
     bs_run *b = r->bsgs;
-    u64 session = 0;
-    for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
+    const u64 session = run_session_units(r);
     bs_phase ph = (bs_phase)atomic_load(&b->phase);
     char a[48], c[48], det[160];
     if (ph == PH_SEARCH || ph == PH_DONE) {
@@ -79,8 +78,7 @@ static int bs_checkpoint(run_ctx *r)
     bs_run *b = r->bsgs;
     int rc = 0;
     if (r->sched && atomic_load(&b->phase) >= PH_SEARCH) rc = sched_save(r->sched, r->path_state);
-    u64 session = 0;
-    for (int i = 0; i < r->nws; i++) session += atomic_load(&r->ws[i].units);
+    const u64 session = run_session_units(r);
     /* the units of a campaign are its giant steps: the baby steps of the table (built again by every session) are not counted */
     const u64 base = atomic_load(&r->units_base);
     const u64 giants = atomic_load(&b->phase) >= PH_SEARCH && session > base ? session - base : 0;
@@ -165,9 +163,7 @@ static void *driver_main(void *p)
 
     bsgs_job_init(&b->job, &b->tab, &b->P);
     /* the same counters count the giant steps from now on: the speeds, the peak and the session average start over */
-    u64 built = 0;
-    for (int i = 0; i < r->nws; i++) built += atomic_load(&r->ws[i].units);
-    atomic_store(&r->units_base, built);
+    atomic_store(&r->units_base, run_session_units(r));
     atomic_store(&r->rate_restart, 1);
     atomic_store(&b->phase, PH_SEARCH);
     pthread_t th[MAX_WORKERS];

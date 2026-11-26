@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* campaign.c - configuration persistence, seeds. */
 #include "campaign.h"
+#include <pzcore/address.h>
 #include <pzcore/hash.h>
 #include <pzcore/seed.h>
 #include "platform.h"
@@ -10,6 +11,13 @@
 /* ---- modes, ranges and block sizes ---- */
 
 const char *mode_name(search_mode m) { return m == MODE_KANGAROO ? "kangaroo" : m == MODE_BSGS ? "bsgs" : "linear"; }
+
+bool mode_from_name(const char *name, search_mode *m)
+{
+    for (search_mode k = MODE_LINEAR; k <= MODE_BSGS; k++)
+        if (!strcmp(name, mode_name(k))) return *m = k, true;
+    return false;
+}
 
 bool puzzle_range(int n, pz_u256 *start, pz_u256 *end)
 {
@@ -107,6 +115,14 @@ unsigned cfg_default_chunk_bits(const pz_u256 *range_size)
     if (b < 12) b = 12;
     if (b > 36) b = 36;
     return (unsigned)b;
+}
+
+unsigned cfg_clamp_chunk_bits(const pz_u256 *range_size, unsigned cb)
+{
+    const pz_u256 chunk = pz_u256_pow2(cb);
+    if (pz_u256_cmp(&chunk, range_size) <= 0) return cb;
+    const unsigned b = pz_u256_bits(range_size) - 1;          /* the largest block that fits, at least 2 keys */
+    return b < 1 ? 1 : b;
 }
 
 /* The default block size (bits) of a linear search over range_size keys split in `shares` parts (1 without --part). A launch of a GPU
@@ -395,6 +411,7 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
     GET("range_end") if (!pz_u256_from_hex(&c->range_end, v)) { snprintf(err, errlen, "invalid range_end"); free(text); return -1; }
     GET("address") pz_strlcpy(c->address, v, sizeof c->address);
     GET("hash160") if (pz_hex_decode(v, c->target_h160, 20) != 20) { snprintf(err, errlen, "invalid hash160"); free(text); return -1; }
+    if (!c->address[0]) pz_hash160_to_address(c->target_h160, c->address, sizeof c->address);   /* a campaign that had only the hash160 */
     GET("pubkey")
     if (v[0]) {
         if (pz_hex_decode(v, c->pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->pubkey, c->pubkey33, 33)) {
@@ -405,10 +422,7 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
         c->has_pubkey = true;
     }
     GET("mode")
-    if (!strcmp(v, "linear")) c->mode = MODE_LINEAR;
-    else if (!strcmp(v, "kangaroo")) c->mode = MODE_KANGAROO;
-    else if (!strcmp(v, "bsgs")) c->mode = MODE_BSGS;
-    else {            /* not guessed: a search of another kind than the campaign's would run on its state */
+    if (!mode_from_name(v, &c->mode)) {            /* not guessed: a search of another kind than the campaign's would run on its state */
         snprintf(err, errlen, "unknown mode '%.20s' in %s (a campaign of another version?)", v, path);
         free(text);
         return -1;

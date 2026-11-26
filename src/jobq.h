@@ -6,7 +6,8 @@
  * are fastest at.
  *
  * Progress is kept in a "virtual" linear space V = k * 2^chunk_bits + offset as a sorted set of completed intervals. Workers claim
- * contiguous pieces of V; the set only ever holds one hole per claim in flight, so it stays tiny and is cheap to checkpoint. */
+ * contiguous pieces of V; the set holds a hole for each claim in flight and for each claim given back unfinished (a stop, a GPU that
+ * failed), which the visit fills again, so it stays tiny and is cheap to checkpoint. */
 #ifndef PZ_JOBQ_H
 #define PZ_JOBQ_H
 
@@ -91,8 +92,8 @@ size_t sched_open_intervals(sched_t *s);
 /* Fraction of this computer's part covered, in [0,1] (of the range without a split). */
 double sched_fraction(sched_t *s);
 bool sched_finished(sched_t *s);
-/* Sequence number (position in the visiting order of the whole range) at which `key` will be/was
- * scanned, as a fraction of the whole campaign. */
+/* Where `key` will be or was scanned: the position of its block in the visiting order of the whole range (*seq) and its offset in the block.
+ * False outside the range. */
 bool sched_locate(sched_t *s, const pz_u256 *key, pz_u256 *seq, u64 *offset);
 
 #endif

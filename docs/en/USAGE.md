@@ -60,7 +60,7 @@ line of the help:
   key among the steps, and the linear engines and kernels move from one key to the next by `STEP·G` where they move by `G` otherwise.
   The campaign counts, splits (`--part`) and reports the keys of the steps, and `where` takes a key of the steps. Unknown bits in
   several separate groups are not one step: split them into several campaigns, one for each value of the smaller group, when it is small.
-* `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random.
+* `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random (not with `--part`: section 8.2).
 * `--mem` is in GiB (`--mem 0.25` is 256 MiB). Without it the kangaroo takes 40 % of the free RAM for the table of distinguished points
   (at least 256 MiB, at most 64 GiB) and BSGS chooses a table that fits in 70 % of it.
 * The default `--chunk-bits` makes the blocks as large as the range allows while each share keeps 16 of them, at most 2^36 keys (a range of
@@ -435,8 +435,9 @@ and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](htt
 ## 8. Performance tips
 
 * Run `pzsolve bench` once: it compares the engines and the number of threads; with a GPU also run `pzsolve bench --together` (section 7.9).
-  The program picks the fastest engine (`PZ_ISA` imposes one, section 7.10); `bench` shows them all. Every engine, before being used, passes a quick check with a known key: an
-  engine that got it wrong would be excluded.
+  The program picks the fastest engine (`PZ_ISA` imposes one, section 7.10); `bench` shows them all. Every engine, before being used, passes a quick check: a known
+  key planted in turn in every window of a step (every lane of the `*v` engines) and at the keys where the code takes its own branches (the
+  edges of a window, its centre and the two next to it); an engine that got one wrong would be excluded.
 * The compute threads go first on different physical cores, one per core, and only beyond the number of cores on the second SMT thread of a
   core (on Windows the assignment is a hint to the system, which may move the threads).
 * The kangaroo on the CPU uses the same SIMD lanes as the linear search; the variant is chosen by measuring (three short samples of each,
@@ -489,7 +490,8 @@ the computers communicating. The short block at the end of the range, if any, is
 computer A:  pzsolve hunt -p 71 -s 5f3a…(64 digits) --part 0/2
 computer B:  pzsolve hunt -p 71 -s 5f3a…(same)      --part 1/2
 ```
-* **The same on all**: puzzle or range, seed (`-s`: you find it in the "Seed" line of `report.txt`, and with `--part` in the log at startup) and
+* **The same on all**: puzzle or range, seed (`-s`, 64 hexadecimal digits or any text you choose; a new campaign with `--part` is refused
+  without it, since each computer would draw a seed of its own and their shares would overlap and leave blocks that nobody scans) and
   `--chunk-bits` (if you do not give it, it depends only on the range and on the number of shares, so it is already the same, but not between
   versions before and after 1.19.1: then give it). **Different**: the shares.
 * **Computers of different speeds**: give more shares to the faster one. With `pzsolve split 800M 120M` you get the proportional division
@@ -717,9 +719,11 @@ the memory to a file and another process of the same user cannot attach to it.
 What says **where** the key is goes at the find. The state of a search (and the points of a kangaroo) say where it stood when it found the key, and the seed
 gives the order of the blocks: together they give the key back in a moment, whatever protects `FOUND.txt` (versions before 1.23.3 left both). So when an
 encrypting campaign finds the key, with `hunt` or with `merge`, the program replaces the seed in `campaign.conf` with zeros, leaves it out of `FOUND.txt` and of
-the log (a log written before the encryption was added loses its lines with the seed), and deletes `state.dat`, its copy, `dp.bin`, `herd.bin` and `near.txt`. A key
-that could not be encrypted is written nowhere, and the campaign is left as it was, so that a new search finds it again.
-The folder of every campaign is its owner's alone (mode 0700), so that other users of the machine read none of this while the search runs, and the files
+the log (a log written before the encryption was added loses its lines with the seed), deletes `state.dat`, its copy, `dp.bin`, `herd.bin`, `near.txt` and
+`stats.csv`, and its last report, `status.json` and the last line of its log do not say how far the search got. A key that could not be encrypted is written
+nowhere, and the campaign is left as it was, so that a new search finds it again.
+The folder of every campaign is its owner's alone (mode 0700; on Windows an access list of the user and the system only, which takes nothing from the folder
+above, so the folder must be on a disk that has access lists, NTFS), so that other users of the machine read none of this while the search runs, and the files
 of a campaign are never opened through a link (a folder copied from elsewhere could hold one that points at another file of the user).
 
 **Not protected**:
@@ -737,9 +741,9 @@ of a campaign are never opened through a link (a folder copied from elsewhere co
 * **Swap**: the memory of the program can be written to a swap file or a hibernation file by the system. The password buffers and the key-derivation memory are locked
   in RAM when the limits of the system allow it (usually not for the 256 MiB of scrypt without privileges); the plain key is too short-lived to be likely to reach
   swap, but nothing here guarantees it. Use encrypted swap, or none.
-* **A copy of the folder made before the find.** It holds the seed: with the progress that the reports and the log of the finished campaign show, it leads to
-  the block of the key. Make no backup or snapshot of the folder of an encrypting campaign on a machine you do not trust; a seed you typed (`-s`) is also in
-  the history of the shell.
+* **Another copy of the seed.** A copy of the folder made before the find holds it, so does every other computer of a `--part` split (they all need it), and a
+  seed you typed (`-s`) is in the history of the shell: with the progress that the log showed while the search ran, it leads to the block of the key. Make no
+  backup or snapshot of the folder of an encrypting campaign on a machine you do not trust, and split a search only among machines you trust alike.
 * **A weak password**, as in 11.4; a keylogger or a modified terminal, which see the password as you type.
 * **The metadata**: the address, the puzzle, the time and the campaign name stay in the clear (they are public by nature).
 

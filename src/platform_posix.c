@@ -115,7 +115,18 @@ void pz_fd_drop_cache(int fd, u64 off, u64 len)
     (void)fd; (void)off; (void)len;               /* macOS has no equivalent */
 #endif
 }
-int pz_rename_replace_ex(const char *from, const char *to, bool durable) { (void)durable; return rename(from, to); }
+/* A rename reaches the disk with the folder that holds the name: durable, the folder is synced too (a folder that cannot be is no failure) */
+int pz_rename_replace_ex(const char *from, const char *to, bool durable)
+{
+    if (rename(from, to) != 0) return -1;
+    if (!durable) return 0;
+    const char *sl = strrchr(to, '/');
+    char dir[1200];
+    snprintf(dir, sizeof dir, "%.*s", sl ? (int)(sl - to) + (sl == to) : 1, sl ? to : ".");
+    const int fd = open(dir, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) (void)pz_fd_sync(fd), close(fd);
+    return 0;
+}
 int pz_rename_replace(const char *from, const char *to) { return pz_rename_replace_ex(from, to, true); }
 
 int pz_mkdir1(const char *path)

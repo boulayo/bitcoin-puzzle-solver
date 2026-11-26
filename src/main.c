@@ -117,7 +117,7 @@ static const char *hunt_text(void)
 "SEVERAL COMPUTERS (same -s, range and public key on all of them)\n"
 "      --part Q/T          linear search: the blocks of the visit order are divided into T shares and this computer scans share Q\n"
 "                          (counting from 0; several are allowed: 0,1/4 or 0-6/9) [without it: every block].\n"
-"                          The same --chunk-bits on all the computers\n"
+"                          A new campaign needs -s with it; the same -s and --chunk-bits on all the computers\n"
 "      --node N            kangaroo: number of this computer (0..65535, 0 if there is only one): the kangaroos start from\n"
 "                          different points (see 'merge')\n"
 "\n"
@@ -474,7 +474,12 @@ void parse_opts(int argc, char **argv, opts_t *o)
             opt_copy("--dir", o->dir, sizeof o->dir, optarg);
             break;
         case 's': opt_copy("--seed", o->seed, sizeof o->seed, optarg); break;
-        case 'm': opt_copy("--mode", o->mode, sizeof o->mode, optarg); break;
+        case 'm': {
+            search_mode m;
+            opt_copy("--mode", o->mode, sizeof o->mode, optarg);
+            if (strcmp(optarg, "auto") && !mode_from_name(optarg, &m)) pz_die("--mode: invalid value '%s' (expected auto, linear, kangaroo or bsgs)", optarg);
+            break;
+        }
         case 't': o->threads = (int)pz_arg_int("--threads", optarg, 1, RUN_MAX_THREADS); break;
         case O_NOCPU: o->no_cpu = true; break;
         case O_NOGPU: o->no_gpu = true; break;

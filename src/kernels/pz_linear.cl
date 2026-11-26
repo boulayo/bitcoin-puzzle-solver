@@ -9,8 +9,8 @@
  *
  * prm layout (uints): P0.x[8] P0.y[8] D.x[8] D.y[8] GS.x[8] GS.y[8] target[5] ngroups
  * hits: [0] = number of hits, [1] = error flag, then pairs (koff_lo, koff_hi); a hit is a key whose hash160 has word 2 of the target's
- * (one in 2^32: the key, and the near misses the host keeps as the proof of the scan). The host compares the rest
- * (word 2 first, the other words only for the keys that pass it) and is re-verified by the host  */
+ * (one in 2^32: the key, and the near misses the host keeps as the proof of the scan). The host computes the hash of each one
+ * again from its key and compares the whole of it */
 
 #ifndef HALF
 #define HALF 128

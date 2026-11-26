@@ -44,7 +44,9 @@ For puzzle *n* the private key `k` lies in `[2^(n-1), 2^n − 1]` (an interval o
 
 * Field `GF(p)`, `p = 2^256 − 2^32 − 977`, in 4 limbs of 64 bits with lazy reduction (`2^256 ≡ 2^32 + 977`).
   The 4×4 multiplication is inline assembly with **MULX** and the two carry chains **ADCX/ADOX** (ADX); a portable C version
-  serves CPUs without BMI2/ADX (the two are compared in `lib/pzcore/tests/t_fe.c` on 400,000 pairs, edge cases included).
+  serves CPUs without BMI2/ADX (the two are compared in `lib/pzcore/tests/t_fe.c` on 400,000 pairs, edge cases included). The lane
+  engines of section 10 do not use it: the AVX2 ones (`avx2v`, the AVX2 lanes of the kangaroo and of BSGS) need AVX2 and BMI2 only, and
+  run on a Haswell, which has no ADX.
 * Consecutive keys of a block are obtained by **adding affine points** instead of redoing a scalar multiplication for every
   key. An affine addition needs one modular inversion, which costs about as much as 70 multiplications (the divsteps of Bernstein and
   Yang, in variable time, `lib/pzcore/src/fe.c`; the addition chain to `p − 2` costs 270): it is amortized with

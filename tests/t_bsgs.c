@@ -929,7 +929,7 @@ static void t_group_variants(void)
 #if !defined(__x86_64__) || defined(PZ_NO_X86_VARIANTS)
     return;                                    /* no x86 variant is built (arm64, X86=0) */
 #else
-    if (!cpu_has_avx2()) { puts("  (BMI2/ADX not available: variants not compared)"); return; }
+    if (!cpu_has_adx()) { puts("  (BMI2/ADX not available: variants not compared)"); return; }
     const u64 W = (u64)1 << 20;
     pz_u256 lo = pz_u256_from_u64(1000), hi = pz_u256_from_u64(1000 + W - 1);
     pz_ge P = pub_of(&(pz_u256){{987654321, 0, 0, 0}});

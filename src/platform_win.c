@@ -8,6 +8,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
 #include <bcrypt.h>
 #include <io.h>
 #include <process.h>
@@ -169,7 +171,33 @@ bool pz_is_dir(const char *path)
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-bool pz_dir_private(const char *path) { return pz_is_dir(path); }
+/* The folder of a campaign holds its seed, its points and the key: its access list names this user and the system alone, takes nothing from
+ * the folder above (a folder under C:\ lets every user of the machine in), and passes on to everything inside, the files already there
+ * included. The user's own SID rather than the owner's: a folder made by an elevated process belongs to the Administrators group, which the
+ * same user without elevation is not. Setting it takes WRITE_DAC: a folder that another user made is refused. */
+bool pz_dir_private(const char *path)
+{
+    union { TOKEN_USER u; BYTE b[TOKEN_USER_MAX_SIZE]; } tu;
+    HANDLE tok;
+    DWORD n;
+    char *sid = NULL, sddl[256];
+    PSECURITY_DESCRIPTOR sd = NULL;
+    PACL dacl = NULL;
+    BOOL present = FALSE, defaulted = FALSE;
+    bool ok = false;
+    if (!pz_is_dir(path) || !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    if (GetTokenInformation(tok, TokenUser, &tu, sizeof tu, &n) && ConvertSidToStringSidA(tu.u.User.Sid, &sid)) {
+        snprintf(sddl, sizeof sddl, "D:P(A;OICI;FA;;;%s)(A;OICI;FA;;;SY)", sid);
+        ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(sddl, SDDL_REVISION_1, &sd, NULL) &&
+             GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present &&
+             SetNamedSecurityInfoA((char *)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl,
+                                   NULL) == ERROR_SUCCESS;
+        LocalFree(sd);
+        LocalFree(sid);
+    }
+    CloseHandle(tok);
+    return ok;
+}
 
 bool pz_is_own_dir(const char *path)                            /* the folders asked about are in the user's own temporary folder */
 {

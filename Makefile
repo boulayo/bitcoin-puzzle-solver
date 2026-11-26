@@ -136,7 +136,9 @@ ifeq ($(ARM64),1)
 NEON_FLAGS   := -march=armv8-a+crypto
 endif
 ifeq ($(X86),1)
-AVX2_FLAGS   := -mavx2 -mbmi2 -madx
+# AVX2: the lanes (the hash, fev.h), which need no ADX and so run on Haswell too; ADX: the MULX/ADX multiplication of fe.h with AVX2
+AVX2_FLAGS   := -mavx2 -mbmi2
+ADX_FLAGS    := $(AVX2_FLAGS) -madx
 AVX512_FLAGS := -mavx512f -mavx512vl -mavx512bw -mavx512dq -mbmi2 -madx
 IFMA_FLAGS   := $(AVX512_FLAGS) -mavx512ifma
 SHANI_FLAGS  := -msha -mavx2 -mssse3 -msse4.1
@@ -196,7 +198,7 @@ endif
 LIBEXAMPLES := keyaddr roundtrip permute batch8
 
 $(BUILD)/pzcore/t_fe_asm$(EXE): lib/pzcore/tests/t_fe.c $(LIB) | $(BUILD)/pzcore
-	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
+	$(CC) $(LIBFLAGS) $(ADX_FLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
 $(BUILD)/pzcore/t_fev2$(EXE): lib/pzcore/tests/t_fev.c $(LIB) | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) $(AVX2_FLAGS) -DPZ_VBYTES=32 -o $@ $< $(LIB) $(LIBLDLIBS)
 $(BUILD)/pzcore/t_fev5$(EXE): lib/pzcore/tests/t_fev.c $(LIB) | $(BUILD)/pzcore
@@ -279,14 +281,16 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(COMMON)$(if $(ISAFLAGS), $(ISAFLAGS)) -MMD -MP -c $< -o $@
 
 OBJS_NEON   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_neon eng_neon2))
-OBJS_AVX2   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2 eng_avx2v kang_x86 kang_avx2v bsgs_x86 bsgs_avx2v))
+OBJS_AVX2   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2v kang_avx2v bsgs_avx2v))
+OBJS_ADX    := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx2 kang_x86 bsgs_x86))
 OBJS_AVX512 := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512 eng_avx512v kang_avx512v bsgs_avx512v))
 OBJS_IFMA   := $(addprefix $(BUILD)/,$(addsuffix .o,eng_avx512i kang_avx512i kang_avx512i2 bsgs_avx512i))
 $(OBJS_NEON): ISAFLAGS := $(NEON_FLAGS)
 $(OBJS_AVX2): ISAFLAGS := $(AVX2_FLAGS)
+$(OBJS_ADX): ISAFLAGS := $(ADX_FLAGS)
 $(OBJS_AVX512): ISAFLAGS := $(AVX512_FLAGS)
 $(OBJS_IFMA): ISAFLAGS := $(IFMA_FLAGS)
-$(BUILD)/eng_shani.o: ISAFLAGS := $(AVX2_FLAGS) $(SHANI_FLAGS)
+$(BUILD)/eng_shani.o: ISAFLAGS := $(ADX_FLAGS) $(SHANI_FLAGS)
 
 ifeq ($(X86),1)
 ALLENG := $(ENGOBJ) $(KVOBJ) $(BSVOBJ)

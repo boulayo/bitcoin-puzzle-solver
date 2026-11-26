@@ -44,7 +44,7 @@ typedef struct {
     int puzzle;                  /* 0 when a custom range is used */
     pz_u256 range_start, range_end; /* inclusive; with a step, of the index i: 1 to the number of keys */
     u8 target_h160[20];
-    char address[64];            /* may be empty if only a hash160 was given */
+    char address[64];            /* the one given, or the P2PKH address of the hash160 (set_target, cfg_load) */
     bool has_pubkey;
     u8 pubkey33[33];
     pz_ge pubkey;
@@ -69,6 +69,7 @@ typedef struct {
 } campaign_cfg;
 
 const char *mode_name(search_mode m);
+bool mode_from_name(const char *name, search_mode *m);   /* "linear", "kangaroo" or "bsgs"; false for any other name */
 /* --step: the keys START, START + STEP, ... up to END become the index range 1 to their number. False, with the reason, when the step is
  * 0, or not below n. */
 bool cfg_set_step(campaign_cfg *c, const pz_u256 *start, const pz_u256 *end, const pz_u256 *step, const char **why);
@@ -86,6 +87,7 @@ pz_u256 cfg_range_size(const campaign_cfg *c);
 /* The default size of the blocks of the visiting order (bits) for a range; the stored value of an existing campaign wins. */
 unsigned cfg_default_chunk_bits(const pz_u256 *range_size);   /* BSGS (the giant steps) and the other modes */
 unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares);   /* new linear campaigns: it depends on the shares of --part too */
+unsigned cfg_clamp_chunk_bits(const pz_u256 *range_size, unsigned cb);        /* cb, or less when a block of 2^cb keys is larger than the range */
 /* Generates a fresh 256-bit seed with pzcore's generator (seed.h); dies only when the OS gives no random numbers. */
 void seed_generate(u8 seed[32]);
 /* Parses a user seed: 64 hex digits are used verbatim, anything else is hashed. */
