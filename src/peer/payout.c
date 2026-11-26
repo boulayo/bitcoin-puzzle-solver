@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define REPLACEABLE 0xfffffffdu    /* the sequence of an input whose transaction may be replaced (BIP 125) */
+
 /* the terms by version (payout.h, docs/en/NETWORK.md 7.5) */
 static const struct {
     unsigned pct;
@@ -35,12 +37,12 @@ size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least)
 
 uint64_t payout_worth(uint64_t feerate) { return 3 * btc_fee(BTC_P2PKH_IN_SIZE, feerate); }
 
-/* the output of F's cancel and its fee, for a cancel of n tiny coins */
-static uint64_t cancel_out(const payout_terms *t, size_t n, btc_out *out)
+/* the output of F's cancel and its fee at a rate, for a cancel of n tiny coins */
+static uint64_t cancel_out(const payout_terms *t, size_t n, uint64_t rate, btc_out *out)
 {
     *out = (btc_out){.script_len = (uint8_t)t->pay_len[t->first]};
     memcpy(out->script, t->pay_spk[t->first], t->pay_len[t->first]);
-    return btc_fee(btc_vsize_p2pkh(n, out, 1), t->feerate);
+    return btc_fee(btc_vsize_p2pkh(n, out, 1), rate);
 }
 
 /* The outputs of the second transaction from what it spends: of what the fee leaves, the share of the author at 2 and the rest half each,
@@ -60,7 +62,7 @@ static bool second_values(const payout_terms *t, uint64_t all, uint64_t v[3])
 uint64_t payout_tiny(const payout_terms *t)
 {
     btc_out out;
-    const uint64_t need = 2 * cancel_out(t, 1, &out) + 546;
+    const uint64_t half = (t->feerate + 1) / 2, need = 2 * cancel_out(t, 1, t->low_feerate > half ? t->low_feerate : half, &out) + 546;
     return need > PAYOUT_TINY_MIN ? need : PAYOUT_TINY_MIN;
 }
 
@@ -98,15 +100,34 @@ static bool first_ok(const payout_terms *t, const btc_tx *first)
            first->out[1].script_len == BTC_P2PKH_LEN && !memcmp(first->out[1].script, t->coin_spk[t->first], BTC_P2PKH_LEN);
 }
 
+/* the second transaction: outputs 0 and 1 of the first (txid), worth all, to the payout addresses and the author of t. Its inputs signal
+ * replacement: nodes without full replace-by-fee relay a bump of it too (payout_bump) */
+static bool second_tx(const payout_terms *t, const uint8_t txid[32], uint64_t all, btc_tx *tx)
+{
+    uint64_t v[3];
+    btc_tx_init(tx);
+    return second_values(t, all, v) && btc_tx_add_in(tx, txid, 0, REPLACEABLE) && btc_tx_add_in(tx, txid, 1, REPLACEABLE) &&
+           btc_tx_add_out(tx, v[0], t->pay_spk[0], t->pay_len[0]) && btc_tx_add_out(tx, v[1], t->pay_spk[1], t->pay_len[1]) &&
+           btc_tx_add_out(tx, v[2], t->author_spk, t->author_len);
+}
+
 bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx)
 {
-    uint8_t txid[32];
-    if (!first_ok(t, first) || !btc_tx_txid(first, txid)) return false;
-    btc_tx_init(tx);
-    uint64_t v[3];                                              /* the prize and F's tiny coin, which came from the prize too */
-    return second_values(t, first->out[0].value + first->out[1].value, v) && btc_tx_add_in(tx, txid, 0, BTC_SEQUENCE_FINAL) &&
-           btc_tx_add_in(tx, txid, 1, BTC_SEQUENCE_FINAL) && btc_tx_add_out(tx, v[0], t->pay_spk[0], t->pay_len[0]) &&
-           btc_tx_add_out(tx, v[1], t->pay_spk[1], t->pay_len[1]) && btc_tx_add_out(tx, v[2], t->author_spk, t->author_len);
+    uint8_t txid[32];                                           /* the prize and F's tiny coin, which came from the prize too */
+    return first_ok(t, first) && btc_tx_txid(first, txid) && second_tx(t, txid, first->out[0].value + first->out[1].value, tx);
+}
+
+bool payout_bump(const payout_terms *t, const btc_tx *second, uint64_t all, btc_tx *tx)
+{
+    payout_terms o = *t;                                        /* the outputs of the second, not today's addresses: the same split */
+    uint64_t was = 0, now = 0;
+    if (second->n_in != 2 || second->n_out != 3) return false;
+    for (int k = 0; k < 2; k++) o.pay_len[k] = second->out[k].script_len, memcpy(o.pay_spk[k], second->out[k].script, o.pay_len[k]);
+    o.author_len = second->out[2].script_len, memcpy(o.author_spk, second->out[2].script, o.author_len);
+    for (int k = 0; k < 3; k++) was += second->out[k].value;
+    if (was >= all || !second_tx(&o, second->in[0].prev_txid, all, tx)) return false;
+    for (int k = 0; k < 3; k++) now += tx->out[k].value;
+    return all - now > 2 * (all - was);
 }
 
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx)
@@ -124,7 +145,7 @@ bool payout_sweep(const payout_terms *t, const payout_coin *coins, size_t n, btc
     bool ok = n && n <= BTC_MAX_IN && t->pay_len[t->first] <= BTC_SPK_MAX;
     btc_tx_init(tx);
     for (size_t i = 0; ok && i < n; i++) all += coins[i].value, ok = btc_tx_add_in(tx, coins[i].txid, coins[i].vout, BTC_SEQUENCE_FINAL);
-    const uint64_t fee = ok ? cancel_out(t, n, &out) : 0;
+    const uint64_t fee = ok ? cancel_out(t, n, t->feerate, &out) : 0;
     return ok && all >= fee + 546 && btc_tx_add_out(tx, all - fee, out.script, out.script_len);
 }
 

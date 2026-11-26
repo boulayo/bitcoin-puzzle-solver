@@ -41,7 +41,9 @@
 #define FAILS_MAX 10               /* failed signings of a home on a network, with any partner (project 4.6) */
 #define FAILS_PAIR_MAX 3           /* on one own point, for ever, */
 #define FAILS_EVER_MAX 64          /* and of this home on a network, for ever: then only a new home seed signs again */
-#define PAYOUTS_MAX 5              /* payouts of one own point that reached the signing of their first transaction and did not pay */
+#define PAYOUTS_MAX 5              /* payouts of one own point that reached the signing of their first transaction and did not pay, */
+#define PAYOUTS_EVER_MAX 10        /* and of this home on a network, for ever: a prize is paid once, and each later point of a walk that met
+                                    * another's would give that partner 5 more tries */
 #define RETRY_S 600                /* a kept pair whose session did not pay starts again after this, */
 #define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
 #define STATUS_S 600               /* the status line of the network, every 10 minutes */
@@ -1066,7 +1068,7 @@ int home_run(const home_cfg *cfg)
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);
     h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.ever_max = FAILS_EVER_MAX;
-    h->limit.pay_max = PAYOUTS_MAX;
+    h->limit.pay_max = PAYOUTS_MAX, h->limit.pay_ever_max = PAYOUTS_EVER_MAX;
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
     snprintf(h->dppath, sizeof h->dppath, "%.1100s/dpbits.txt", h->dir);

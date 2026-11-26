@@ -14,8 +14,9 @@
 
 /* The messages of a session (the first byte of a frame; docs/en/NETWORK.md 7.4 keeps 16 to 31 for them). S_ALIVE keeps the channel busy
  * while a session waits for blocks, and is skipped by the reader. After the payout S_SECOND carries the second transaction (empty from
- * a side that does not have it) and S_PIECE the secret piece of a side. S_FEE, after the proofs, the fee rate a side proposes. */
-enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE, S_SECOND, S_FEE };
+ * a side that does not have it) and S_PIECE the secret piece of a side. S_FEE, after the proofs, the fee rate a side proposes; S_COINS
+ * the outpoints of the coins of the puzzle it sees. */
+enum { S_HELLO = 16, S_PROOF, S_PLAN, S_SIGNER, S_SIGNED, S_TINYSIG, S_ABORT, S_ALIVE, S_PIECE, S_SECOND, S_FEE, S_COINS };
 
 typedef struct {
     void *ctx;
@@ -70,7 +71,8 @@ typedef struct {
     bool busy;                              /* a run of pzsign is under way */
     const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point or the home> <failures> [<since>]" */
     unsigned max, pair_max, ever_max;
-    unsigned pay_max;                       /* payouts of one own point that did not pay (each spent a fee and a tiny coin of the prize) */
+    unsigned pay_max, pay_ever_max;         /* payouts that did not pay (each spent a fee and a tiny coin of the prize): of one own point,
+                                             * and of the home on the network, for ever */
 } session_limit;
 
 /* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets

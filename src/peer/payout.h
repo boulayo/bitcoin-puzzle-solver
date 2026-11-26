@@ -5,7 +5,8 @@
  *   first:  the coins of the puzzle (at most 8) back to the puzzle address, less the fee and a tiny coin for party F;
  *   second: the prize of the first and F's tiny coin, which came from it: the share of the author of pzpeer, the rest half each to the
  *           payout addresses;
- *   cancel: F alone spends its tiny coin, which makes a second transaction held back by the partner worthless. */
+ *   cancel: F alone spends its tiny coin, which makes a second transaction held back by the partner worthless;
+ *   bump:   the second again at a higher fee rate, which replaces one the chain no longer takes. */
 #ifndef PZPEER_PAYOUT_H
 #define PZPEER_PAYOUT_H
 
@@ -26,7 +27,8 @@ typedef struct {
     uint8_t coin_spk[2][BTC_P2PKH_LEN];   /* the tiny coins of the parties (P2PKH of their coin keys) */
     uint8_t pay_spk[2][BTC_SPK_MAX];      /* the payout addresses of the parties */
     size_t pay_len[2];
-    uint64_t feerate;                     /* satoshis per 1000 virtual bytes */
+    uint64_t feerate;                     /* satoshis per 1000 virtual bytes: the higher of the two homes' */
+    uint64_t low_feerate;                 /* the lower, which sizes the tiny coin (payout_tiny) */
     int first;                            /* F, the party whose tiny coin goes into the second transaction */
     uint8_t author_spk[BTC_SPK_MAX];      /* the share of the author (payout_author) */
     size_t author_len;
@@ -54,13 +56,18 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
 /* The second transaction, from the first as it was confirmed: a legacy txid covers the signatures, and a third party can still change the
  * encoding of one before a miner takes it, so the second is built only from the first that is in a block. */
 bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx);
+/* The second transaction again, from the same two coins of the first, worth all, at the fee rate of t: the outputs of `second`, whose rate
+ * the chain no longer takes, with their values by the same split. False unless it pays more than twice the fee of `second`. Whichever of
+ * the two is mined, each party gets its share. */
+bool payout_bump(const payout_terms *t, const btc_tx *second, uint64_t all, btc_tx *tx);
 /* The cancel of party F: its tiny coin of the first transaction to its own payout address, less the fee. */
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx);
 /* F's tiny coins (n of them, at most BTC_MAX_IN) to its own payout address, less the fee; false when they do not pay it and more than
  * the dust limit. Unsigned: each input is F's coin key. */
 bool payout_sweep(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx);
-/* The satoshis of a tiny coin: twice the fee of F's cancel at the fee rate of the terms and the dust limit, PAYOUT_TINY_MIN at least. F
- * can therefore always cancel, whatever the rate; were its coin worth less than that fee, S could hold the second transaction back for free. */
+/* The satoshis of a tiny coin: twice the fee of F's cancel at the lower rate, but at half the fee rate at least, and the dust limit;
+ * PAYOUT_TINY_MIN at least. F can therefore always cancel at the fee rate; were its coin worth less than that fee, S could hold the second
+ * transaction back for free. F keeps the coin when a try fails: a rate far above the partner's would make it larger for nothing. */
 uint64_t payout_tiny(const payout_terms *t);
 /* The digests of the first n inputs of tx, which spend the puzzle address (all the inputs of the first transaction, input 0 of the second):
  * what pzsign signs, in this order. */

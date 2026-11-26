@@ -89,6 +89,18 @@ int main(void)
     CHECK(payout_second(&other, &a, &b2) && memcmp(b2.out[2].script, b.out[2].script, t.author_len));
     other.author_len = 0;
     CHECK(!payout_second(&other, &a, &b2) && !payout_first(&other, coins, 10, &a2));
+    /* a bump of the second: the same coins and output scripts (not the payout addresses of the terms of today), the same split, a fee more
+     * than twice as high; its inputs, as those of the second, signal that it may be replaced */
+    payout_terms up = t;
+    up.feerate = 25000, up.pay_spk[0][3] ^= 1;
+    const uint64_t all = a.out[0].value + a.out[1].value;
+    CHECK(payout_bump(&up, &b, all, &b2) && b2.n_in == 2 && b2.n_out == 3 && b.in[0].sequence < 0xfffffffe && b2.in[1].sequence < 0xfffffffe);
+    for (size_t k = 0; k < 3; k++)
+        CHECK(b2.out[k].script_len == b.out[k].script_len && !memcmp(b2.out[k].script, b.out[k].script, b.out[k].script_len));
+    CHECK(!memcmp(b2.in[0].prev_txid, aid, 32) && b2.in[0].prev_vout == 0 && b2.in[1].prev_vout == 1 && all - sum_out(&b2) > 10 * fee_b);
+    CHECK(b2.out[2].value == sum_out(&b2) / 10 && b2.out[0].value >= b2.out[1].value && b2.out[0].value - b2.out[1].value <= 1);
+    up.feerate = 2 * t.feerate;                                  /* twice the fee is not enough: no bump */
+    CHECK(!payout_bump(&up, &b, all, &b2) && !payout_bump(&up, &a, all, &b2));
     CHECK(btc_sign_p2pkh(&b, 0, puzzle) && btc_sign_p2pkh(&b, 1, coin[1]));
     CHECK(btc_verify_p2pkh(&b, 0, t.puzzle_spk, BTC_P2PKH_LEN) && btc_verify_p2pkh(&b, 1, t.coin_spk[1], BTC_P2PKH_LEN));
     CHECK(!btc_verify_p2pkh(&b, 1, t.coin_spk[0], BTC_P2PKH_LEN));
@@ -110,11 +122,18 @@ int main(void)
     CHECK(!payout_second(&t, &bad, &b) && !payout_cancel(&t, &bad, &c));
     /* a high fee rate makes the tiny coins larger: F's cancel always leaves at least its own fee and the dust limit */
     payout_terms hot = t;
-    hot.feerate = 500000;                                        /* 500 sat/vB */
+    hot.feerate = hot.low_feerate = 500000;                      /* 500 sat/vB, both homes */
     btc_tx ha, hc;
     CHECK(payout_tiny(&t) == PAYOUT_TINY_MIN && payout_tiny(&hot) > 150000);
     CHECK(payout_first(&hot, coins, 10, &ha) && ha.n_out == 2 && ha.out[1].value == payout_tiny(&hot));
     CHECK(payout_cancel(&hot, &ha, &hc) && hc.out[0].value > payout_tiny(&hot) / 2 && !payout_cancel(&hot, &a, &hc));
+    /* the lower rate of the two homes sizes it, but half the fee rate at least: F's cancel at the fee rate still leaves the dust limit
+     * (before, a partner F that proposed 4 times the other's rate had a coin 4 times as large, which it kept when it stopped the payout) */
+    payout_terms push = hot;
+    push.low_feerate = hot.feerate / 4;
+    CHECK(payout_first(&push, coins, 10, &ha) && payout_cancel(&push, &ha, &hc) && hc.out[0].value == 546);
+    push.low_feerate = hot.feerate / 4 * 3;
+    CHECK(payout_tiny(&push) > ha.out[1].value && payout_tiny(&push) < payout_tiny(&hot));
     hot.first = 2;
     CHECK(!payout_first(&hot, coins, 10, &ha) && !payout_cancel(&hot, &ha, &hc));
     /* a first transaction only when its prize pays for the second: at 25 sat/vB with P2PKH payouts the second needs more than a tiny coin

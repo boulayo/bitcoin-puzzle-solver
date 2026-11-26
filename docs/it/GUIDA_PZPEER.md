@@ -290,5 +290,6 @@ I file della cartella: `home.seed`, `start.key`, `terms`, `payout`, `failed-sign
 | `points of this home are not published yet` | la casa trova punti più in fretta di quanto li pubblica: la rete regola da sola i bit dei punti |
 | `pzsolve ended with status ...` | leggere `pzsolve.out`; la casa resta come custode |
 | `64 failed signings of this home on this network: no more with this home seed` | la casa ha raggiunto il tetto a vita delle firme fallite e non firma più: fermarla, spostare `home.seed` altrove (non cancellarlo) e riavviarla; nasce una casa nuova, con cammini e pezzi nuovi |
+| `10 payouts of this home on this network that did not pay: no more with this home seed` | la casa ha raggiunto il tetto a vita dei pagamenti non riusciti e non ne tenta più su questa rete: come sopra, spostare `home.seed` altrove e riavviarla |
 | `servers cannot show the coins of an address ...: Use a node of your own (--rpc)` | `pzpeer sweep` senza nodo funziona solo per i puzzle aperti, le cui monete sono nel programma: per un altro indirizzo serve `--rpc` |
 | `a server hid a coin of the address, or none answered about it` | riprovare più tardi o con altri server; senza tutte le monete del premio lo sweep non fa nessuna transazione, apposta |
