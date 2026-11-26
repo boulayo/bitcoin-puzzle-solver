@@ -347,7 +347,8 @@ Electrum, e resta da decidere (sotto). Tutto il resto è corretto, con una prova
 - Il registro delle dichiarazioni inserisce in ordine (lento verso i 2 milioni); l'apertura del deposito ricalcola un SHA-256 per voce
   (1-2 minuti a deposito pieno): da cambiare con il formato dei file.
 - Un solo corpo per il passo del canguro: no, costa l'1,2 % di istruzioni in AVX2. L'inversione a lotti di BSGS in comune con gli altri
-  motori: da misurare.
+  motori: ~~da misurare~~ fatta il 26 novembre per BSGS con IFMA (10 % in meno per finestra, 3.14); per gli altri motori resta da
+  decidere (0,4 % su AVX-512 senza IFMA).
 
 ### 3.13 Le migliorie del 26 novembre
 
@@ -360,6 +361,38 @@ Electrum, e resta da decidere (sotto). Tutto il resto è corretto, con una prova
 | M4 | `--part`: niente mostrava che i computer avessero lo stesso seed e gli stessi blocchi | l'identificativo della divisione (8 cifre) a ogni avvio, in `report.txt` e in `where`; `--seed-file` dà il seed senza scriverlo nella riga di comando |
 | M5 | Registro delle dichiarazioni lento verso i 2 milioni; deposito pieno aperto in 2 minuti | una tabella per indice del blocco (1 µs a dichiarazione); il deposito si apre in circa 50 s, con un indice che nessuno può intasare; nessun file cambia formato |
 | W | `pzsign.exe selftest` andava in crash ogni tanto su Windows (lo ha trovato la prova del pacchetto) | due corse fra le due parti del self-test, che sono due thread di un processo (nell'uso vero ogni parte è un processo): corrette, e la CI prova pzsign sotto TSAN |
+
+### 3.14 Dalla terza revisione del 26 novembre: bug corretti e codice tolto
+
+Chiesto: correggere i 18 bug, togliere tutto ciò che non costa niente, seme semplificato, custode passivo, tetto a vita delle firme
+fallite. Il punto 24 di 3.11, la riga P1 di 3.13 e la voce E7 sono superati da questa sezione.
+
+| | Cosa | Com'è ora |
+|---|---|---|
+| X1 | Chiave trovata da soli senza un nodo: `pzpeer sweep` e il pagamento da soli non vedevano le monete più vecchie del checkpoint; al massimo spazzavano un deposito recente, mostrando la chiave e lasciando il premio a chi arriva primo | le monete di ogni puzzle aperto sono nel programma (`data/prizes.csv`: 77 puzzle, 247 monete, due esploratori concordi) e si cercano una per una; senza nodo lo sweep prende tutte le monete nominate o non fa nessuna transazione; un indirizzo senza monete nominate è rifiutato (serve `--rpc`) |
+| X6 | Una casa con nodo e una senza costruivano prime transazioni diverse ai puzzle 155 e 160 (vecchi depositi di estranei) | la tabella nomina anche le monete degli estranei da 7400 satoshi: stessa lista per tutte e due |
+| X2-X4 | Scambio dei pezzi: 100 000 satoshi di polvere lo bloccavano per sempre; con tutte le uscite spese e monete rimaste non si pagava più; una seconda transazione ridata dal partner era rifiutata dopo un cambio di indirizzo di incasso | conta solo ciò che un pagamento può prendere; una sessione dopo paga il resto; la seconda transazione si riconosce dalle firme |
+| X5 | Firme fallite: ogni punto nuovo di un cammino dava al partner altri tre tentativi sullo stesso segreto, e il conto per rete ripartiva ogni 30 giorni | tetto a vita di 64 per casa e rete; al tetto la casa non firma più e dice di spostare `home.seed` |
+| X7-X18 | Avvisi senza prova, cassette con coppie non provate, copie piantate su otto record, proprietari di un custode riempiti in 7 ore, ricerca fermata da quattro nomi in un blocco di indirizzi, spesa non vista in transazioni con più di 16 voci, `PROVE` senza risposta ritentato dopo una settimana, canarino senza salvataggio, file lasciati da una campagna cifrata | corretti (CHANGELOG 1.24.0) |
+| RB | Custode attivo: ricordava le coppie avvisate, teneva i record in attesa di prova, mandava avvisi suoi | passivo: dice al proprietario che altri hanno la stessa x, e basta; il proprietario prova e avvisa. Due limiti di frequenza invece di quattro, due tipi di lavoro invece di tre |
+| SB1 | Generatore del seme: sei fonti, prove di salute, regola dei 128 bit, memoria bloccata (1024 righe) | il generatore del sistema letto due volte, con quello della CPU e 256 letture del contatore mescolati con HKDF (281 righe); rifiuta solo se il generatore del sistema fallisce |
+| RA, PA, SA, MA | Regole e codice doppi | tolti: l'elenco è nel CHANGELOG (Changed e Removed). Fra questi il motore CPU `avx512`, il modulo GPU `kang4g`, `HOME/proved`, i limiti per proprietario e per identità |
+| S | Campagna cifrata che trova la chiave | restano solo `FOUND.txt` e `campaign.conf` senza seme: tutto il resto della cartella è cancellato, anche un file messo lì a mano |
+
+**Cambi di comportamento da sapere.** `-s auto` è rifiutato. Dopo un ritrovamento cifrato lo stato di uscita di `--on-found` è solo sul
+terminale. Un `PROVE` per un record che il custode non ha preso chiude la connessione. La regola dello scambio dei pezzi passa per
+ciò che resta all'indirizzo (le monete nominate non ancora viste spese contano come rimaste).
+
+**Resta aperto.**
+- Una seconda transazione con una tariffa troppo bassa non si può sostituire: servirebbe firmarla di nuovo dalla stessa prima.
+- `data/prizes.csv` è una fotografia: quando il checkpoint dei server va avanti (`chain_spv.c`) la tabella va rifatta con
+  `tools/fetch_prizes.py`, e le righe di un puzzle risolto vanno tolte.
+- La cancellazione dei file al ritrovamento cifrato è provata qui su Linux; su macOS e Windows la prova solo la CI.
+- `tools/gen_ptx.py --check` vuole NVRTC, che qui e nella CI non c'è: i 25 moduli sono stati rifatti dall'agente che ha tolto `kang4g`,
+  il controllo va ripetuto su un computer con CUDA. Due espressioni ternarie da piegare alla prossima rigenerazione.
+- Non fatti, perché costano un po' di sicurezza o di velocità e non erano chiesti: `POSSESS` (RB3), RB9, e le liste PB, SB3-13, MB
+  della revisione.
+- La strada vera con i server Electrum pubblici resta provata solo con server finti: da qui non si raggiungono.
 
 ### 3.5 Librerie
 

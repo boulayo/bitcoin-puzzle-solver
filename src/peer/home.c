@@ -148,7 +148,7 @@ void home_say_secret(const char *fmt, ...)
 
 /* ---- files of the home ---- */
 
-/* the home seed: made once, from several sources (lib/pzcore/src/seed.c), and kept */
+/* the home seed: made once (lib/pzcore/src/seed.c), and kept */
 static bool home_seed(home *h, char *err, size_t errlen)
 {
     char path[1100];
@@ -516,7 +516,7 @@ static bool start_pzsolve(home *h, char *err, size_t errlen)
  *   2^dp = E / (32 N K).
  * - The room: E / 2^dp records, each kept by DHT_KSTORE nodes; N nodes that keep S records each (the default store) are half full at the
  *   end when 2^dp = 10 E / (N S).
- * The fewer of the two (a full custodian still alerts what it is given; a delay is lost work), at least the network's, at most RECORD_DP_MORE
+ * The fewer of the two (a full custodian still tells the coincidences of what it is given; a delay is lost work), at least the network's, at most RECORD_DP_MORE
  * more. *room: the zero bits the room alone would want. */
 static unsigned choose_dp(const home *h, double nodes, double walkers, unsigned *room)
 {
