@@ -393,6 +393,10 @@ ciò che resta all'indirizzo (le monete nominate non ancora viste spese contano 
 - Non fatti, perché costano un po' di sicurezza o di velocità e non erano chiesti: `POSSESS` (RB3), RB9, e le liste PB, SB3-13, MB
   della revisione.
 - La strada vera con i server Electrum pubblici resta provata solo con server finti: da qui non si raggiungono.
+- Una ricerca nella rete non ricorda i contatti che non rispondono se non sono nella sua tabella: un nodo che ne nomina di morti li fa
+  richiamare a ogni ricerca. Su Linux e macOS un rifiuto non costa niente, su Windows due secondi (lo ha mostrato la CI: il test della
+  rete ci passava a fatica, ora il nodo che li nominava si ferma a fine prova). Il costo di una ricerca resta limitato (4 nodi per
+  blocco di indirizzi, 10 secondi nella prova con nodi ostili); una memoria breve dei rifiuti lo ridurrebbe.
 
 ### 3.5 Librerie
 
