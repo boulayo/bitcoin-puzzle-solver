@@ -283,6 +283,21 @@ bool btc_txid(const uint8_t *raw, size_t len, uint8_t txid[32])
     return raw && tx_walk(raw, len, &m, NULL) && txid_of(raw, len, &m, txid);
 }
 
+uint8_t *btc_tx_outpoints(const uint8_t *raw, size_t len, size_t *n)
+{
+    txmap m;
+    if (!raw || !tx_walk(raw, len, &m, NULL)) return NULL;
+    rd r = {raw + m.body, raw + m.outs, false};
+    *n = (size_t)rd_size(&r);
+    uint8_t *out = malloc(*n * 36);
+    for (size_t k = 0; out && k < *n; k++) {   /* the walk checked every input, so these reads cannot fail */
+        memcpy(out + 36 * k, rd_take(&r, 36), 36);
+        rd_take(&r, rd_size(&r));
+        rd_take(&r, 4);
+    }
+    return out;
+}
+
 bool btc_prevout(const uint8_t *raw, size_t len, const uint8_t txid[32], uint32_t vout, uint64_t *value, const uint8_t **spk,
                  size_t *spk_len)
 {
@@ -522,6 +537,13 @@ bool btc_verify_p2pkh(const btc_tx *tx, size_t i, const uint8_t *prev_spk, size_
 }
 
 /* ---- size and fee ---- */
+
+int btc_coin_cmp(uint64_t value_a, const uint8_t txid_a[32], uint32_t vout_a, uint64_t value_b, const uint8_t txid_b[32], uint32_t vout_b)
+{
+    if (value_a != value_b) return value_a > value_b ? -1 : 1;
+    const int c = memcmp(txid_a, txid_b, 32);
+    return c ? c : (vout_a > vout_b) - (vout_a < vout_b);
+}
 
 size_t btc_vsize_p2pkh(size_t n_in, const btc_out *out, size_t n_out)
 {

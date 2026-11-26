@@ -130,16 +130,6 @@ static bool recv_msg(sess *s, uint8_t type, uint8_t *p, size_t cap, size_t *len)
 
 /* ---- the hello and the proofs ---- */
 
-static bool p2pkh_of(const secp256k1_context *ctx, const uint8_t sec[32], uint8_t spk[BTC_P2PKH_LEN])
-{
-    secp256k1_pubkey p;
-    uint8_t pub[33], h[20];
-    size_t n = 33;
-    if (!secp256k1_ec_pubkey_create(ctx, &p, sec) || !secp256k1_ec_pubkey_serialize(ctx, pub, &n, &p, SECP256K1_EC_COMPRESSED)) return false;
-    pz_hash160(pub, 33, h);
-    btc_script_p2pkh(h, spk);
-    return true;
-}
 
 static uint64_t be64(const uint8_t *p)
 {
@@ -154,7 +144,7 @@ static bool hello(sess *s)
     secp256k1_xonly_pubkey xo;
     if (!secp256k1_keypair_xonly_pub(c->ctx, &xo, NULL, c->identity) || !secp256k1_xonly_pubkey_serialize(c->ctx, s->my_x, &xo))
         return fail(s, "no identity");
-    if (memcmp(c->mine.owner, s->my_x, 32) || memcmp(c->theirs.owner, c->partner, 32)) return fail(s, "the records are not of the two homes");
+    if (memcmp(c->mine.owner, s->my_x, 32)) return fail(s, "the own record is not of this home");
     if (!record_check(c->ctx, c->net, &c->mine) || !record_check(c->ctx, c->net, &c->theirs) || !pieces_order(&c->mine, &c->theirs, s->pair))
         return fail(s, "not a useful coincidence");
     s->me = memcmp(s->pair[0].owner, s->my_x, 32) == 0 ? 0 : 1;
@@ -166,7 +156,7 @@ static bool hello(sess *s)
     /* the nonce: the partner's proof is made over it, and with the partner's it makes the ids of the signings of this session, which
      * must never repeat (a signing id names the parties of pzsign, and a pair can have more than one session) */
     if (!sys_random(s->nonce[s->me], 32)) return fail(s, "no randomness from the system");
-    if (!p2pkh_of(c->ctx, c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
+    if (!btc_key_script(c->coin_sec, coin_spk)) return fail(s, "invalid coin key");
     record_encode(&c->mine, m);
     record_encode(&c->theirs, m + RECORD_LEN);
     memcpy(m + 2 * RECORD_LEN, s->nonce[s->me], 32);
@@ -196,13 +186,12 @@ static bool hello(sess *s)
     if (!payout_author(v, t)) return fail(s, "the partner gives terms of the payout this home does not know (version %u)", v);
     /* the proofs of possession: each over the nonce of the other */
     uint8_t proof[64], their_proof[64];
-    if (!record_prove(c->ctx, c->net, &c->mine, c->d, c->partner, s->nonce[you], proof)) return fail(s, "the distance does not fit the record");
+    if (!record_prove(c->ctx, c->net, &c->mine, c->d, c->theirs.owner, s->nonce[you], proof)) return fail(s, "the distance does not fit the record");
     if (!send_msg(s, S_PROOF, proof, 64) || !recv_msg(s, S_PROOF, their_proof, 64, &n)) return false;
     if (n != 64 || !record_proof_ok(c->ctx, c->net, &c->theirs, s->my_x, s->nonce[s->me], their_proof)) return fail(s, "the partner did not prove its distance");
     s->proved = true;
-    if (c->proved) *c->proved = true;
     note(s, "the partner proved it holds the other piece of the key");
-    return true;
+    return !c->on_proved || c->on_proved(c->user) || fail(s, "this point has its pair already, with another identity of the partner");
 }
 
 /* The fee rate of the payout, after the proofs: the chain is asked only then, so a stranger's hello costs this home nothing of it.
@@ -286,10 +275,13 @@ static bool limit_write(const char *path, uint8_t (*key)[32], const unsigned *co
     return sys_new_file_done(f, path, ok);
 }
 
-/* d (+1 or -1) to the failed signings of the network and of the pair, or (payout) to the payouts of the pair that did not pay; +1 is
- * refused at a limit, and 0 only checks. The failures on the network count from the first of them for LIMIT_NETWORK_S, and then start
- * again: a partner that spoils its messages can stop this home on the network for that long, not for ever. Those of an own point count
- * for ever: its piece is what a bug of the signer would leak. False with the reason in why (mu held) */
+/* d (+1 or -1) to the failed signings of the network, of the own point and of the home, or (payout) to the payouts of the pair that did
+ * not pay; +1 is refused at a limit, and 0 only checks. The failures on the network count from the first of them for LIMIT_NETWORK_S, and
+ * then start again: a partner that spoils its messages can stop this home on the network for that long, not for ever. Those of an own
+ * point count for ever: its piece is what a bug of the signer would leak. So do those of the home on the network, by its identity: the
+ * points a walk finds after it met another have pieces that differ by sums of public jumps, so each new one would give the partner new
+ * failures on the same secret, a few every 30 days for ever; at that limit only a new home seed, with new walks, signs again. False
+ * with the reason in why (mu held) */
 static bool limit_add(const sess *s, int d, bool payout, char *why, size_t whylen)
 {
     const session_limit *l = s->c->limit;
@@ -301,14 +293,18 @@ static bool limit_add(const sess *s, int d, bool payout, char *why, size_t whyle
     if (!limit_read(l->path, key, count, since, &n)) return snprintf(why, whylen, "the count of failed signings cannot be read"), false;   /* no path: the partner is told */
     /* the pair by the own point, on this network: the piece of this home is that of its point, and the partner can change any byte of
      * its own record (a new session id each time) */
-    uint8_t m[11 + 64], pair[32];
+    uint8_t m[11 + 64], pair[32], ever[32];
     memcpy(m, payout ? "pznet1/paid" : "pznet1/fail", 11), memcpy(m + 11, s->c->net->fp, 32), memcpy(m + 43, s->c->mine.x, 32);
     pz_sha256(m, sizeof m, pair);
-    const uint8_t *which[2] = {payout ? pair : s->c->net->fp, pair};
-    const unsigned max[2] = {payout ? l->pay_max : l->max, payout ? l->pay_max : l->pair_max};
-    const int lines = payout ? 1 : 2;
-    int at[2];
-    bool refused = false, dated = false;
+    memcpy(m, "pznet1/ever", 11), memcpy(m + 43, s->my_x, 32);
+    pz_sha256(m, sizeof m, ever);
+    const uint8_t *which[3] = {payout ? pair : s->c->net->fp, pair, ever};
+    const unsigned max[3] = {payout ? l->pay_max : l->max, l->pair_max, l->ever_max};
+    static const char *const what[3] = {"failed signings on this network in 30 days", "failed signings of this own point",
+                                        "failed signings of this home on this network"};
+    const int lines = payout ? 1 : 3;
+    int at[3];
+    bool refused = false;
     for (int w = 0; w < lines && !refused; w++) {
         for (at[w] = 0; at[w] < n && memcmp(key[at[w]], which[w], 32); at[w]++) {}
         if (at[w] == n) {
@@ -317,17 +313,14 @@ static bool limit_add(const sess *s, int d, bool payout, char *why, size_t whyle
         }
         unsigned *k = &count[at[w]];
         int64_t *t = &since[at[w]];
-        if (!payout && !w && (!*k || !*t || now - *t >= LIMIT_NETWORK_S)) {   /* the window of the network: new, of an earlier version, or over */
-            dated = *k && !*t;                                 /* a line without its date counts from now, which must be written */
-            if (*t) *k = 0;
-            *t = now;
-        }
+        if (!payout && !w && (!*k || now - *t >= LIMIT_NETWORK_S)) *k = 0, *t = now;   /* the window of the network: new, or over */
         if ((refused = d >= 0 && *k >= max[w]))
-            snprintf(why, whylen, "%u %s %s: no more (the limit of a home, docs/en/NETWORK.md 7.5)", *k,
-                     payout ? "payouts that did not pay" : "failed signings", w || payout ? "of this own point" : "on this network");
+            snprintf(why, whylen, "%u %s: no more%s (the limit of a home, docs/en/NETWORK.md 7.5)", *k,
+                     payout ? "payouts of this own point that did not pay" : what[w],
+                     !payout && w == 2 ? " with this home seed: move home.seed away and start again, with new walks and new pieces" : "");
     }
     for (int w = 0; w < lines && d && !refused; w++) count[at[w]] = d > 0 ? count[at[w]] + 1 : count[at[w]] ? count[at[w]] - 1 : 0;
-    if ((d && !refused) || dated)
+    if (d && !refused)
         if (!limit_write(l->path, key, count, since, n)) return snprintf(why, whylen, "cannot write the count of failed signings"), false;
     return !refused;
 }
@@ -579,36 +572,39 @@ static void *alive_main(void *arg)
     return NULL;
 }
 
-/* The coins of a script (-1: the chain cannot be asked), while S_ALIVE goes to the partner, which may wait for a message: a scan of the
- * node's whole set can take half an hour, and the partner would give up after one wait (and this side, reading its next message later,
- * start a signing nobody answers). */
-static int coins_of(sess *s, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
+int session_coins(const session_chain *ch, const uint8_t spk[BTC_P2PKH_LEN], const payout_coin *named, int nnamed, payout_coin *out,
+                  int *unseen)
 {
-    const session_chain *ch = s->c->chain;
+    const int scanned = ch->coins(ch->ctx, spk, out, SESSION_COINS_MAX - SESSION_PRIZES_MAX);
+    int n = scanned < 0 ? 0 : scanned;
+    *unseen = scanned < 0;
+    for (int i = 0; i < nnamed && i < SESSION_PRIZES_MAX && ch->coin; i++) {
+        bool have = false;
+        for (int j = 0; j < n && !have; j++) have = !memcmp(out[j].txid, named[i].txid, 32) && out[j].vout == named[i].vout;
+        const int k = have ? 0 : ch->coin(ch->ctx, named[i].txid, named[i].vout, spk, &out[n]);
+        n += k > 0, *unseen += k < 0;
+    }
+    return n;
+}
+
+/* The coins of a script (session_coins) while S_ALIVE goes to the partner, which may wait for a message: a scan of the node's whole set
+ * can take half an hour, and the partner would give up after one wait (and this side, reading its next message later, start a signing
+ * nobody answers). */
+static int coins_of(sess *s, const uint8_t spk[BTC_P2PKH_LEN], const payout_coin *named, int nnamed, payout_coin *out, int *unseen)
+{
     alive al = {.s = s};
     pthread_t t;
     const bool beating = pthread_create(&t, NULL, alive_main, &al) == 0;
-    const int n = ch->coins(ch->ctx, spk, out, max);
+    const int n = session_coins(s->c->chain, spk, named, nnamed, out, unseen);
     atomic_store(&al.stop, true);
     if (beating) pthread_join(t, NULL);
     return n;
 }
 
-/* The coins of the puzzle (-1: the chain cannot be asked): the largest of a scan of its address and, with prizes, the prizes of the network
- * file that the scan did not list (project 4.4; then -1 only when the scan failed and none of them was found). A scan can fail: thousands
- * of coins of dust sent to the address make the node's answer too long to read, and the prizes are still found one by one. */
-static int puzzle_coins(sess *s, payout_coin coins[64], bool prizes)
+/* the coins of the puzzle: a scan of its address and its named coins */
+static int puzzle_coins(sess *s, payout_coin coins[SESSION_COINS_MAX], int *unseen)
 {
-    const session_chain *ch = s->c->chain;
-    const int scanned = coins_of(s, s->t.puzzle_spk, coins, 64 - SESSION_PRIZES_MAX);
-    int n = scanned < 0 ? 0 : scanned;
-    for (int i = 0; prizes && i < s->c->nprizes && i < SESSION_PRIZES_MAX && ch->coin; i++) {
-        const payout_coin *p = &s->c->prizes[i];
-        bool have = false;
-        for (int j = 0; j < n && !have; j++) have = !memcmp(coins[j].txid, p->txid, 32) && coins[j].vout == p->vout;
-        if (!have && ch->coin(ch->ctx, p->txid, p->vout, s->t.puzzle_spk, &coins[n]) == 1) n++;
-    }
-    return n || scanned >= 0 ? n : -1;
+    return coins_of(s, s->t.puzzle_spk, s->c->prizes, s->c->nprizes, coins, unseen);
 }
 
 /* F's tiny coins of earlier sessions of this pair that did not end in a payout or a cancel (a failure or a restart after their first
@@ -617,11 +613,11 @@ static int puzzle_coins(sess *s, payout_coin coins[64], bool prizes)
 static void sweep_tiny(sess *s)
 {
     const session_chain *ch = s->c->chain;
-    payout_coin coins[8];
+    payout_coin coins[SESSION_COINS_MAX];
     btc_tx x;
-    int k = 0;
-    const int n = s->me == s->F ? coins_of(s, s->t.coin_spk[s->me], coins, 8) : 0;
-    for (int i = 0; i < n; i++)
+    int k = 0, unseen;
+    const int n = s->me == s->F ? coins_of(s, s->t.coin_spk[s->me], NULL, 0, coins, &unseen) : 0;
+    for (int i = 0; i < n && k < BTC_MAX_IN; i++)
         if (coins[i].vout == 1 && ch->confirmations(ch->ctx, coins[i].txid, 0) == -1) coins[k++] = coins[i];
     bool ok = k && payout_sweep(&s->t, coins, (size_t)k, &x);
     for (int i = 0; ok && i < k; i++) ok = btc_sign_p2pkh(&x, (size_t)i, s->c->coin_sec);
@@ -630,19 +626,25 @@ static void sweep_tiny(sess *s)
 
 /* ---- after the payout: the pieces ---- */
 
-/* the coins left at the puzzle address, in satoshis (of those the chain shows: the largest), or -1 when the chain cannot be asked */
+/* What is left at the puzzle address that a payout could still take, in satoshis: of the coins the chain shows there (a scan, and the
+ * named coins one by one: a light chain sees those below its checkpoint only so), those worth an input at the lowest fee rate. The rest
+ * no payout would ever take, and counting it would let anyone stop the exchange of the pieces for ever with a little dust. -1 when the
+ * chain did not answer about the address or about a named coin: servers that hide a coin of the prize cannot make it look gone. */
 static int64_t left_at_puzzle(sess *s)
 {
-    payout_coin coins[64];
-    const int n = puzzle_coins(s, coins, false);
+    payout_coin coins[SESSION_COINS_MAX];
+    int unseen;
+    const int n = puzzle_coins(s, coins, &unseen);
+    const uint64_t worth = payout_worth(s->c->min_feerate);
     int64_t left = 0;
-    for (int i = 0; i < n; i++) left += (int64_t)coins[i].value;
-    return n < 0 ? -1 : left;
+    for (int i = 0; i < n; i++) left += coins[i].value >= worth ? (int64_t)coins[i].value : 0;
+    return unseen ? -1 : left;
 }
 
 /* A second transaction of this pair, given by the partner: it spends the prize output and the tiny coin of one first transaction (the one
- * this side saw paid, if it saw it), pays the two payout addresses and the author, and both its inputs are validly signed, which only the
- * two homes together can do for the first input */
+ * this side saw paid, if it saw it), and both its inputs are validly signed, which only the two homes together can do for the first
+ * input. That signature covers every output, so they are those this home signed for then: they are not compared with the payout
+ * addresses of today, which a home may have changed since. */
 static bool second_ok(const sess *s, const uint8_t *raw, size_t n, btc_tx *b)
 {
     const payout_terms *t = &s->t;
@@ -650,10 +652,8 @@ static bool second_ok(const sess *s, const uint8_t *raw, size_t n, btc_tx *b)
     if (!btc_tx_parse(b, raw, n) || b->n_in != 2) return false;
     const uint8_t *first = p && p->paid_at ? p->first : b->in[0].prev_txid;
     return b->n_out == 3 && !memcmp(b->in[0].prev_txid, first, 32) && b->in[0].prev_vout == 0 && !memcmp(b->in[1].prev_txid, first, 32) &&
-           b->in[1].prev_vout == 1 && b->out[0].script_len == t->pay_len[0] && !memcmp(b->out[0].script, t->pay_spk[0], t->pay_len[0]) &&
-           b->out[1].script_len == t->pay_len[1] && !memcmp(b->out[1].script, t->pay_spk[1], t->pay_len[1]) &&
-           b->out[2].script_len == t->author_len && !memcmp(b->out[2].script, t->author_spk, t->author_len) &&
-           btc_verify_p2pkh(b, 0, t->puzzle_spk, BTC_P2PKH_LEN) && btc_verify_p2pkh(b, 1, t->coin_spk[t->first], BTC_P2PKH_LEN);
+           b->in[1].prev_vout == 1 && btc_verify_p2pkh(b, 0, t->puzzle_spk, BTC_P2PKH_LEN) &&
+           btc_verify_p2pkh(b, 1, t->coin_spk[t->first], BTC_P2PKH_LEN);
 }
 
 /* the second transaction of this pair, signed, kept by the caller (on disk) before it goes to the chain: a restart then finds it */
@@ -683,21 +683,12 @@ static bool swap_second(sess *s)
 typedef enum { PIECES_NO, PIECES_KEY, PIECES_COINS, PIECES_VOID } pieces_end;   /* no key; the key; coins came to the address after the
                                                   * payout; the second transaction can no longer go through */
 
-/* Whether this home gives its piece, once the payout is settled: every known coin of the prize (built-in, or prize= of the network file)
- * must be spent as its chain shows it, on a light chain by proof (a spend no server can make up; a server can hide one, which is a delay).
- * A light chain that knows no coin of the prize could show an address emptied of a prize that its servers hide, which the partner would
- * then take alone with the key: such a home never gives its piece, and the pieces are exchanged only with a node of one's own. 1 it gives
- * it; 0 never, on this chain; -1 not now */
+/* Whether this home never gives its piece on its chain. Every named coin of the puzzle address (built-in, or prize= of the network file)
+ * counts in what is left there until its chain shows it spent, on a light chain by proof (a spend no server can make up; a server can
+ * hide one, which is a delay): left_at_puzzle. A light chain that knows no coin of the address could show it emptied of a prize that
+ * its servers hide, which the partner would then take alone with the key: such a home never gives its piece, and the pieces are
+ * exchanged only with a node of one's own. */
 static bool never_gives(const sess *s) { return s->c->chain->pending && !s->c->nprizes; }
-
-static int gives(const sess *s)
-{
-    const session_chain *ch = s->c->chain;
-    if (never_gives(s)) return 0;
-    for (int i = 0; i < s->c->nprizes && i < SESSION_PRIZES_MAX; i++)
-        if (ch->confirmations(ch->ctx, s->c->prizes[i].txid, s->c->prizes[i].vout) != -1) return -1;
-    return 1;
-}
 
 /* The confirmations of a second transaction, read from its outputs (the author's among them, which is seldom spent soon): the deepest; -1
  * when every one is spent (on a node: or unknown); -2 when the chain did not answer for one and showed none of them in a block or the
@@ -718,7 +709,7 @@ static int second_depth(const sess *s, const uint8_t bid[32])
  * every block; once it is, the pair is paid (paid_at); when its coins went another way, it is forgotten (PIECES_VOID). Settled: that
  * transaction has conf confirmations (proven: a block that holds it, by the outputs it made), the prize output of the first is spent in
  * a block, no spend of the puzzle address waits in the mempool (a light chain hides a coin whose spend is there), and less than
- * REVEAL_DUST is left at it. When the outputs of the second are all spent already and its depth cannot be read (it was seen in a block,
+ * REVEAL_DUST is left at it (left_at_puzzle). When the outputs of the second are all spent already and its depth cannot be read (it was seen in a block,
  * paid_at, in this session or an earlier one), the state must hold for conf blocks in a row. Someone gives first, and a partner can keep
  * its own piece: all it gains is what the key still opens (docs/en/NETWORK.md 7.5). Waits at most conf + 6 blocks of block_ms. */
 static pieces_end exchange(sess *s)
@@ -770,7 +761,9 @@ static pieces_end exchange(sess *s)
             /* the scan of the address (minutes on a node) only when it decides something */
             const bool scan = in_block && (depth >= conf || depth < 1) && !pend && ch->confirmations(ch->ctx, p->first, 0) == -1;
             const int64_t left = scan ? left_at_puzzle(s) : -1;
-            if (left >= REVEAL_DUST && depth >= conf) {         /* settled but for coins that came later: a payout of them first */
+            if (left >= REVEAL_DUST) {                          /* settled but for coins still there: a payout of them first */
+                char v[32];
+                note(s, "%s BTC that a payout can take are at the puzzle address: they are paid out before the pieces", btc_amount((uint64_t)left, v));
                 snprintf(s->why, s->whylen, "paid; coins came to the puzzle address after the payout: they are paid out first");
                 return PIECES_COINS;
             }
@@ -785,12 +778,11 @@ static pieces_end exchange(sess *s)
         beat(s, &beat_at);
     }
     /* Each side says whether it gives its piece, then reads the partner's word, and gives it only when both do: a side that does not give
-     * its own takes none. An empty S_PIECE: it gives it; one byte: never on its chain (neither side tries again); an abort: not now. A
-     * piece in place of the word is wiped. */
+     * its own takes none. An empty S_PIECE: it gives it; one byte: never on its chain (neither side tries again). A piece in place of
+     * the word is wiped. */
     static const uint8_t NEVER[1] = {0};
     uint8_t mine[32], theirs[32], key[32], k33[33];
-    const int give = gives(s);
-    if (give < 0) return fail(s, "paid; a known coin of the prize is not shown spent by the chain of this home: no piece yet"), PIECES_NO;
+    const bool give = !never_gives(s);
     if (!send_msg(s, S_PIECE, NEVER, give ? 0 : 1) || !recv_msg(s, S_PIECE, theirs, 32, &n) || !give || n) {
         char r[200];
         snprintf(r, sizeof r, "%s", n == 32 ? "a piece without its word" : s->why);
@@ -886,10 +878,11 @@ session_result session_run(const session_cfg *c, char *why, size_t whylen)
     sweep_tiny(&s);
     const session_chain *ch = c->chain;
     /* the first transaction: the coins of the puzzle back to its address, and the tiny coins */
-    payout_coin coins[64];
+    payout_coin coins[SESSION_COINS_MAX];
     btc_tx a, b, x;
-    const int nc = puzzle_coins(&s, coins, true);
-    if (nc < 0) return fail(&s, "the chain does not answer about the coins of the puzzle"), SESSION_FAILED;
+    int unseen;
+    const int nc = puzzle_coins(&s, coins, &unseen);
+    if (!nc && unseen) return fail(&s, "the chain does not answer about the coins of the puzzle"), SESSION_FAILED;
     if (!nc && ch->pending)                                     /* a light chain: servers that hide the coins show none either */
         return fail(&s, "the servers show no coin at the puzzle address, which proves nothing (they may hide them): the session ends, and a"
                         " later one asks again"), SESSION_FAILED;

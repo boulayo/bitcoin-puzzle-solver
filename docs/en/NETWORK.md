@@ -194,11 +194,16 @@ one of those lines is on another network, as a torrent with another hash is anot
 the program, as the parameters of a chain come with a node of that chain.
 
 The other lines are settings of the node that reads them, and each is checked where it is used: `entry=host:port` (a node to start
-from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a coin of the prize, found even when
-no scan of its address lists it; its value and script are read from the chain; a home gives its piece of the key only once each is
-spent, 7.5 step 8). Any number of each. The networks written in the program carry the coins of their prize as `prize=` lines: the
-three of the creator at each address, of 2015, 2017 and 2023 (`data/prizes.csv`; `pzpeer netcheck 140` lists them), not the dust
-strangers sent there.
+from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a named coin of the puzzle address,
+found even when no scan of the address lists it; its value and script are read from the chain; it counts in what is left at the
+address, before the pieces of the key are exchanged, until it is spent, 7.5 step 8). Any number of each, at most 16 `prize=`. The
+networks written in the program, of either kind, carry the coins of their address as `prize=` lines (`data/prizes.csv`; `pzpeer
+netcheck 140` lists them): every coin that was there, confirmed and worth at least 7400 satoshis (what an input costs at 50 sat/vB,
+the lowest fee rate of a sweep; a payout of a pair takes a coin from 8880), when the table was made: the three of the creator at each
+address, of 2015, 2017 and 2023, and what strangers sent there. The table is a snapshot. A coin spent since is found spent; a coin that
+came later is above every checkpoint, where a scan of the address lists it, so a later checkpoint needs no new table. Naming the old
+coins is also what makes a home with a node and a home without one build the same first transaction: a node lists every coin of the
+address, servers none below their checkpoint (8.2).
 
 A line is `key=value`; from `#` on it is a comment, and spaces at the ends of the key and of the value do not count. Canonical lines: the
 defining lines rebuilt as `key=value`, sorted bytewise, joined with `\n` (no `\n` at the end). An unknown key, or a repeated or missing
@@ -584,22 +589,28 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
 7. The payout counts only when the spend of output 0 of the first transaction is this pair's second transaction: another pair's first
    transaction can spend it too, the prize going back to the puzzle address. With the whole signature a side checks that its second
    transaction is in a block; F without it checks that the prize did not come back to the address. The second transaction F gets in the
-   `S_SECOND` of a later session is checked: it spends outputs 0 and 1 of one first transaction (the one F saw paid, if it saw it), pays
-   the two payout addresses and the author, and both its inputs are validly signed, which only the two homes together can do for the first.
+   `S_SECOND` of a later session is checked: it spends outputs 0 and 1 of one first transaction (the one F saw paid, if it saw it), and
+   both its inputs are validly signed, which only the two homes together can do for the first; that signature covers every output, so
+   they are the ones the home signed for then (they are not compared with the payout addresses of the later session: a home may have
+   changed its own since).
 8. `S_PIECE`, once the payout is settled: the secret piece of the side, 32 bytes. Settled means 6 confirmations of the second transaction,
    proven by a block that holds it (by its outputs, the author's among them, which is seldom spent soon; when all three are spent already
    and its depth cannot be read, the state must have held for 6 blocks in a row, also in a later session, as the home saw it in a
    block), output 0 of the first spent in a block, no spend of the puzzle address waiting in the mempool (a light chain does not show a
    coin whose spend waits there; what servers show there counts only with an input signed by the key of the puzzle), and less than
-   100 000 satoshis at the address: the key protects nothing more. Coins of 100 000 satoshis or more that came to the address after the
-   payout are paid out first, by a new payout of the pair, whose second transaction, once signed, is then the one each home keeps, and
-   the pieces follow. Every known coin of the prize (the `prize=` lines of the network file, which the networks written in the program
-   have) must also be spent, as the chain of the home shows it: on a node, what the node says; on a light chain, by a confirmed spend
-   with its proof, which no server can make up. A light chain shows an address as servers list it, and servers that hide a coin of the
-   prize would show it empty: the partner, with both pieces, would then take that coin alone. So a light home of a network that names no
-   coin of its prize never gives its piece (the shares are paid all the same; only the key is lost, and a start with `--rpc` exchanges
-   the pieces). Each side first says whether it gives its piece (an empty `S_PIECE`; one byte: never, on its chain; an `S_ABORT`: not
-   now) and reads the partner's word, and the pieces follow only when both give them: a side that keeps its own takes none, and a piece
+   100 000 satoshis left at the address that a payout could take: the key protects nothing more. What is left is what a scan of the
+   address shows and, one by one, the named coins (the `prize=` lines of the network file, which the networks written in the program
+   have) that the chain of the home does not show spent: on a node, what the node says; on a light chain, a confirmed spend with its
+   proof, which no server can make up. Only the coins worth an input of a payout at the lowest fee rate count (8880 satoshis at
+   20 sat/vB): the rest no payout would ever take, and counting it would let anyone stop the exchange for ever with twelve coins of
+   dust (it is left to whoever is first with the key). When the chain does not answer about the address or about a named coin, nothing
+   is settled yet. With 100 000 satoshis or more left (coins that came after the payout, or more of them than one payout takes) they
+   are paid out first, by a new payout of the pair, whose second transaction, once signed, is then the one each home keeps, and the
+   pieces follow; also when every output of the second transaction is spent already. A light chain shows an address as servers list
+   it, and servers that hide a coin would show it empty: the partner, with both pieces, would then take that coin alone. A named coin
+   they cannot hide: it is there until its spend is proven. So a light home of a network that names no coin of its address never gives
+   its piece (the shares are paid all the same; only the key is lost, and a start with `--rpc` exchanges the pieces). Each side first
+   says whether it gives its piece (an empty `S_PIECE`; one byte: never, on its chain) and reads the partner's word, and the pieces follow only when both give them: a side that keeps its own takes none, and a piece
    that comes before its word is wiped. After a "never" neither side tries the pair again, until one of them starts with `--rpc`. Each
    side checks the piece it gets against the public piece of the partner's record, adds the two, and checks that the sum is
    the key of the puzzle. Someone gives first, and a partner can keep its
@@ -611,19 +622,24 @@ that NATs and relays do not cut the channel as idle, and the reader skips it):
    again at every block meanwhile; one whose coins went another way (F's cancel, another pair) is forgotten, and a later session pays anew.
 
 **The limit of failed signings** (project 4.6). A bug of the signer could leak a bit of a piece through each signing that fails (a selective
-failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, or of SHA256("pznet1/fail" ||
-fingerprint || x of an own point)> <failures>`, and on the line of a network the time of its first failure (a line at 0 is left out): every run of pzsign counts as failed before it starts (written
+failure), so the home counts them in `HOME/failed-signings`, lines `<hex of the network fingerprint, of SHA256("pznet1/fail" ||
+fingerprint || x of an own point), or of SHA256("pznet1/ever" || fingerprint || identity of the home)> <failures>`, and on the line of a network the time of its first failure (a line at 0 is left out): every run of pzsign counts as failed before it starts (written
 through a new file, synced, that replaces the old one) and is taken off when it gives valid signatures, so a crash or a kill in the middle
 counts; a pzsign that could not start counts nothing, and neither does P2 (F) when it gave all its messages and only the signatures of
 P1 did not come or do not verify (pzsign ends with 0x84): nothing it answered depends on that, and a partner that keeps them could
-otherwise use up the home's count. At 10 failures on a network in 30 days, with any partner, or 3 on one own point for ever, with any
+otherwise use up the home's count. At 10 failures on a network in 30 days, with any partner, 3 on one own point for ever, with any
 partner (the piece at stake is that of the point, and whoever knows the distance of the other point can name it again under new
-identities, each a new eid), the home signs no more on it, and says so
+identities, each a new eid), or 64 of the home on the network for ever, the home signs no more there, and says so
 before the plan of the first transaction, so that the partner's pzsign does not start (it would count a failure of its own). Runs are one
 at a time; a session that does not get its turn within 2 minutes gives up without a run. The count of a network starts again 30 days
-after its first failure: it guards no piece of its own (each point has its limit), and a partner that spoils its messages, with the points
-of a merger, could otherwise stop an honest home on the network for ever; a line without its time (an earlier version) counts from the
-first time it is read.
+after its first failure: a partner that spoils its messages, with the points of a merger, could otherwise stop an honest home on the
+network for ever. The count of a point does not bound what leaks of a walk: once a tame and a wild walk of two homes have met, both
+find every later distinguished point of that path, each a new coincidence of the same pair, and the pieces of the home there differ
+from one another by sums of jumps that anyone computes from the public seed. A leak about one is a leak about all, and each new
+point would give the partner three more failures. What bounds it is the count of the network, ten every 30 days, and, since that one
+starts again, the count of the home: at 64 failures in all (kept under the identity of the home, which comes from its seed) the home
+signs nothing more on the network, and the reason it gives says what to do: move `home.seed` away and start again. A new seed is new
+walks and new pieces, and what may have leaked of the old ones is worth nothing; the points of the old seed are lost to the search.
 
 **The limit of payouts.** Each first transaction pays a fee and F's tiny coin from the prize, so a payout counts, in the same file under
 `SHA256("pznet1/paid" || fingerprint || x of the own point)`, from the signing of its first transaction until the prize is paid. At 5 on
@@ -638,13 +654,16 @@ by version of the terms (`payout_author`), not in the network file nor in an opt
 of the network, so a later version may change the address or lower the share without a new network and without losing a point. A pair
 pays by the older version of its two homes, which a newer one knows: from this version on, an older home and a newer one always pay each
 other. The second
-transaction is signed by both homes together, and a home checks its outputs (`second_ok` checks the one it gets): a home that runs a
+transaction is signed by both homes together, and a home checks its outputs before it signs (the plan; one it gets later from the
+partner, `second_ok`, carries that signature over all of them): a home that runs a
 program changed to leave the share out pays it all the same when its partner runs this one, and the session fails otherwise. A home whose
 pzsolve finds the key on its own sends the coins of the puzzle at once, 90% to its payout address and 10% to the author (`solo_payout`,
 `sweep_tx`), but only once its own sessions are over and no second transaction it signed waits for its block: one of them may be paying
 it with a partner, whose share it would otherwise take.
 The public key of the puzzle is known, so that transaction shows nothing and goes to the public mempool; it is tried again every minute
-for an hour while the chain does not take it, and the key goes on the terminal once the coins are sent (or at the last try). A key
+for an hour while the chain does not take it, and the key goes on the terminal once the coins are sent (or at the last try). The coins
+are those of a session, the scan of the address and its named coins; a home without a node sends them all or none (8.2: with a named
+coin that no server gives, or with none named, it does not send a part of them, and says why). A key
 pzsolve encrypted is not read, and its line says so. The terms are shown
 at the first start of a home, which asks to accept them (or `--accept-terms`), and in one line at every start.
 
@@ -685,8 +704,11 @@ point costs the work of a point, real or not.
 pair; anyone can copy the x of a published record into a record of its own, so a session started by a hello alone costs little before
 the proofs (pzsign starts after them, step 3), at most 16 of them run at a time, one per partner, and their slots are given back when
 they end unless the partner proved its distance: at least 48 of the 64 slots are always there for the pairs the table alerted. Once a
-partner proved its distance on an own point, no other pair on that point gets a slot (its records named under other identities), and
-while a session runs on a point a hello for another pair on it is refused. A pair
+partner proved its distance on an own point, the point has its pair: no other pair on it gets a slot, a session of another pair on it
+ends at its own proof, and the slots other pairs hold on it are given back when their sessions end (the records of one partner named
+under other identities, which a custodian alerts together, and copies that nobody can prove); while a session runs on a point a hello
+for another pair on it is refused. The rule lives in memory: after a restart another identity of the same partner may be the pair of
+the point, and it finds the same counts of failed signings and of payouts, which are by the own point, not by the pair. A pair
 that the table alerted, or whose partner proved its distance, and whose session did not pay starts again 10 minutes after it ends, up to
 144 times (a session may wait for blocks for a day); then its slot is given back, and an alert that comes again starts it afresh, within
 the limits above.
@@ -700,8 +722,10 @@ payouts, checked in every case, refused before anything is signed; a hello whose
 record and cannot prove it, for which no pzsign runs; a pzsign that stops reading while the other floods it; a scan of the puzzle
 address that fails, where the prize of the network file is paid; a chain that stops after the first transaction, where the wait ends;
 scans of F slower than the partner's wait; a coin that comes to the address after the payout, whose own payout S holds back; every
-output of the second transaction spent before the pieces; the known coins of the prize, spent as a node shows them, shown unspent by a
-light chain (no piece, and the partner, told first, gives none), none known to a light chain (never a piece, and no more tries). The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
+output of the second transaction spent before the pieces; the named coins of the address, spent as a node shows them, one shown unspent by a
+light chain (it counts in what is left: no piece, and the partner gives none), none known to a light chain (never a piece, and no more tries); the
+limit of the home on a network for ever; a second transaction given again to a home that changed its payout address; dust that no payout takes at the address after the payout,
+which does not stop the pieces. The counts of the limit are checked in every case, and every channel carries `S_ALIVE` before the messages that are read.
 
 Not yet handled: a first transaction whose signature encoding a third party changes before it is mined (its txid changes: the session waits
 for its own txid and gives up); the state of a session is in memory only (after a restart the pair starts again from the coins as they are),
@@ -918,15 +942,20 @@ On the main chain:
   where the prize may come last.
 - When the node does not answer for a while, the height is the last it gave, never 0: a session counts blocks from a height, and F
   would cancel at once.
-- An output spent only in the node's mempool still counts as unspent (`gettxout` with the mempool, then without it): a spend counts
+- An output spent only in the node's mempool still counts as unspent (`gettxout` without the mempool, which reads the set of the
+  chain; when the output is not there, `getmempoolentry` tells a transaction that waits there from a spend in a block): a spend counts
   once it is in a block (7.5, step 6).
 
 - A puzzle address with more than about 45 000 coins makes the reply of the scan larger than the 16 MB of the JSON reader: it would cost
-  an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a prize. So the session also takes the prizes of
-  the network file (`prize=txid:vout:sats`, at most 16; the txid as explorers show it), each checked with `gettxout` without the
+  an attacker about 0.3 BTC (the coins of 546 satoshis and their fees), much less than a prize. So the coins of a puzzle address are
+  always the scan and the named coins (`session_coins`, one function for the session, the solo payout of a home and `pzpeer sweep`):
+  the `prize=txid:vout:sats` of the network file (at most 16; the txid as explorers show it), each checked with `gettxout` without the
   mempool: unspent, confirmed (mature for a coinbase), of the puzzle's script, with the node's value; `sats` is not used. The largest 48
-  coins of the scan, when it works, and the prizes not among them make the coins of the first transaction. Two homes whose network files
-  list different prizes may build different transactions when the scan fails: the plan stops them, until their files agree.
+  coins of the scan, when it works, and the named ones not among them make the coins of the first transaction. Two homes whose network
+  files name different coins may build different transactions when the scan fails: the plan stops them, until their files agree.
+- A sweep of a key found alone (`pzpeer sweep`, and the solo payout of a home, 7.5) takes what the node lists, the largest 16 coins
+  worth their input, and says how many it leaves; the fee is twice the estimate, from 50 sat/vB (a pair starts at 20: it can pay
+  again at a higher rate, while this transaction goes once, raced by whoever reads the key in it).
 - Fee rates are asked for a confirmation within 2 blocks (project 4.5), the higher of the two homes' taken (7.5).
 
 ### 8.2 Without a node of one's own
@@ -939,12 +968,25 @@ sessions); the servers are asked one after another, each with a minute for its c
 does not answer, or announces blocks it cannot show, is left alone for ten minutes. None is trusted: nothing a server says is
 believed without a proof, and what a lying server can still do is hide things, which is a delay and never a wrong payment: servers that
 show no coin at the puzzle address do not make the home take the prize for gone (7.5, step 3), and an address they show empty makes it
-give its piece of the key only when every known coin of the prize is proven spent (7.5, step 8; with none known, never: a coin that
-came to the address later and that all the servers hide would still go to the partner alone). The prizes of the network file, or of
-the program, are looked up one by one (`blockchain.transaction.get` of the txid the file or the program names, its bytes hashed to it,
-and no server that proves the output spent): the creator's coins are older than the built-in checkpoint, where no kept header proves
-their block, so no scan of the address lists them; a server that hides their spend only makes the first transaction spend a coin that is
-gone, which the network refuses. The connection is plain TCP, one JSON object a line; as every
+give its piece of the key only when every named coin of the address is proven spent (7.5, step 8; with none named, never: a coin that
+came to the address later and that all the servers hide would still go to the partner alone). The named coins, of the network file or
+of the program, are looked up one by one (`blockchain.transaction.get` of the txid the file or the program names, its bytes hashed to
+it, and no server that proves the output spent): the coins of a puzzle address are older than the built-in checkpoint, where no kept
+header proves their block, so no scan of the address lists them; a server that hides their spend only makes the first transaction
+spend a coin that is gone, which the network refuses. The table of the program (`data/prizes.csv`) names every coin that was at the
+address of an open puzzle when it was made, so a home without a node builds the same first transaction as one with a node, which lists
+them all. It is a snapshot and needs no renewal with the checkpoint: a coin that came after it is above every later checkpoint,
+where the scan lists it, and one spent since is found spent.
+
+A sweep of a key found alone, by `pzpeer sweep` or by the solo payout of a home (7.5), works without a node for the puzzles the
+program knows, or with the `prize=` lines of a network file: it takes the named coins and what the scan lists. It never sweeps a part
+of the coins unknowingly, because the transaction shows the public key and whoever is fastest takes the rest. So through servers it
+refuses, and says why, when no server gives the transaction of a named coin or none answers about the address (a server hid it: try
+again, or use `--rpc`), and when no coin of the address is named (its older coins cannot be seen without a node). A spend the servers
+hide makes the transaction invalid, never partial. What it leaves on purpose it says: the coins worth less than their input, and those
+beyond the 16 inputs of one transaction.
+
+The connection is plain TCP, one JSON object a line; as every
 answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
 client) and `chain_spv.c`, a second `session_chain` beside `chain_rpc.c`; a node of one's own stays the stronger choice, as it also
 checks the rules that the proof of work alone does not (below).
@@ -965,8 +1007,8 @@ checks the rules that the proof of work alone does not (below).
    its branch. For the wait of F and the confirmations of our own transactions, an output is spent only when such a transaction is
    confirmed: a server that just stops listing the prize proves nothing, nor does one that shows a spend in its mempool (the partner
    could run it, and keep the transaction to itself). Every confirmed transaction of the history of the script from the block of the
-   coin on is looked into, oldest first, as far as the server's minute goes, and what each spends is kept for the next look: dust sent
-   to the address cannot hide a spend.
+   coin on is looked into, oldest first, as far as the server's minute goes, every input of it however many it has, and what each
+   spends is kept for the next look: dust sent to the address cannot hide a spend, nor can the shape of the transaction that spends.
 4. **Our transactions** go to every server; the broadcast holds when a server then serves the transaction back.
 5. **Fee rate:** the lower median of `blockchain.estimatefee` of the servers that answer, under the cap of the file: servers that raise
    it win only as a majority.
@@ -978,7 +1020,9 @@ first transaction the network refuses. On testnet and signet only the proof of w
 
 `t_spv` checks the rules on real headers of the main chain; `t_chain_spv` runs the sessions' calls against servers that hide a coin,
 list a spent one, give false proofs, add blocks without work, drop a broadcast, do not see the mempool, list there a transaction they do
-not have or answer slowly, a spend behind 260 transactions of dust, and a coin of the prize below the checkpoint; `PZ_E2E_LIGHT=1
+not have or answer slowly, a spend behind 260 transactions of dust, a spend by a transaction of 17 inputs, a coin of the prize below the
+checkpoint, and the sweep of a key (a named coin below the checkpoint taken, a named coin no server gives and an address with no named
+coin refused); `PZ_E2E_LIGHT=1
 tests/peer/e2e_net.sh` pays a coincidence with three homes that have no node. Not tried yet against a public server.
 
 ## 9. Status
@@ -1141,4 +1185,7 @@ makes and signs the transaction (`sweep.c`) and prints it; with `--private` it g
 transactions without showing them (free and open to all since August 2026), and to nothing else: a `POST` of `{"tx_hex": ...}` to
 `https://slipstream.mara.com/api/transactions` through the `curl` of the system (Linux, macOS, and Windows since 10 have it), so that
 pzpeer needs no TLS of its own. That interface is not documented by MARA: it is the one its page and the programs of others use, and
-`--pool URL` gives another address.
+`--pool URL` gives another address. The coins are those of the key's address: with `--rpc`, what the node lists; without a node, the
+coins the program names for the puzzle (`data/prizes.csv`, every open puzzle of the table) and what the servers list above their
+checkpoint, all of them or none (8.2): for a key of an address the program does not know, or when a server hides a named coin, it makes
+no transaction and says so.

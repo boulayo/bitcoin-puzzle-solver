@@ -5,27 +5,41 @@
 #include "chain_rpc.h"
 #include "chain_spv.h"
 #include "sys.h"
+#include "../puzzles.h"
+#include <pzcore/address.h>
 #include <pzcore/seal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-bool sweep_tx(const session_chain *ch, const uint8_t sec[32], const uint8_t *to, size_t to_len, const payout_terms *author, sweep_info *info,
-              btc_tx *tx)
+const char *sweep_tx(const session_chain *ch, const uint8_t sec[32], const payout_coin *named, int nnamed, const uint8_t *to, size_t to_len,
+                     const payout_terms *author, sweep_info *info, btc_tx *tx)
 {
     uint8_t spk[BTC_P2PKH_LEN];
-    payout_coin coins[64];
+    payout_coin coins[SESSION_COINS_MAX];
     btc_out out[2] = {{.script_len = (uint8_t)to_len}};       /* the outputs as they will be, for the size */
+    const bool light = ch->pending != NULL;
+    int unseen;
     memcpy(out[0].script, to, to_len);
     if (author) out[1].script_len = (uint8_t)author->author_len, memcpy(out[1].script, author->author_spk, author->author_len);
-    int n = info->listed = btc_key_script(sec, spk) ? ch->coins(ch->ctx, spk, coins, 64) : -1;
-    if (!info->rate) {                                          /* twice the estimate, 50 to 1000 sat/vB: no server sets the fee of a prize */
+    btc_tx_init(tx);
+    info->total = 0, info->listed = 0;
+    if (!btc_key_script(sec, spk)) return "not a key";
+    if (light && !nnamed)
+        return "servers cannot show the coins of an address that are older than their checkpoint, and no coin of this one is named: a"
+               " sweep of a part of them would leave the rest to whoever is first. Use a node of your own (--rpc)";
+    int n = info->listed = session_coins(ch, spk, named, nnamed, coins, &unseen);
+    if (light && unseen)
+        return "a server hid a coin of the address, or none answered about it: a sweep of a part of the coins would leave the rest to"
+               " whoever is first. Try again, or use a node of your own (--rpc)";
+    if (!n) return unseen ? "the chain did not answer" : "the address has no confirmed coin";
+    /* Twice the estimate, 50 to 1000 sat/vB: no server sets the fee of a prize. The floor is above the 20 sat/vB of a pair (home.c): a
+     * pair can pay again at a higher rate, while this transaction goes once, and whoever sees its key in it races it */
+    if (!info->rate) {
         const uint64_t est = 2 * ch->feerate(ch->ctx);
         info->rate = est < 50000 ? 50000 : est > 1000000 ? 1000000 : est;
     }
-    btc_tx_init(tx);
-    info->total = 0;
-    if (n > 0) n = (int)payout_largest(coins, (size_t)n, BTC_MAX_IN, btc_fee(BTC_P2PKH_IN_SIZE, info->rate) + 1);
+    n = (int)payout_largest(coins, (size_t)n, BTC_MAX_IN, btc_fee(BTC_P2PKH_IN_SIZE, info->rate) + 1);
     bool ok = n > 0;
     for (int i = 0; ok && i < n; i++) info->total += coins[i].value, ok = btc_tx_add_in(tx, coins[i].txid, coins[i].vout, BTC_SEQUENCE_FINAL);
     const uint64_t fee = ok ? btc_fee(btc_vsize_p2pkh(tx->n_in, out, author ? 2 : 1), info->rate) : 0;
@@ -33,7 +47,20 @@ bool sweep_tx(const session_chain *ch, const uint8_t sec[32], const uint8_t *to,
     ok = ok && left - cut > 546 && (!author || cut >= 546) && btc_tx_add_out(tx, left - cut, to, to_len) &&
          (!author || btc_tx_add_out(tx, cut, out[1].script, out[1].script_len));
     for (size_t i = 0; ok && i < tx->n_in; i++) ok = btc_sign_p2pkh(tx, i, sec) && btc_verify_p2pkh(tx, i, spk, sizeof spk);
-    return ok;
+    return ok ? NULL : "its coins do not pay the fee";
+}
+
+/* the named coins of the address of a key, from the table of the program (data/prizes.csv): those of the open puzzle it is the key of */
+static int named_coins(const uint8_t spk[BTC_P2PKH_LEN], payout_coin out[SESSION_PRIZES_MAX])
+{
+    uint8_t h160[20], a[20];
+    int n = 0;
+    (void)btc_script_is_p2pkh(spk, BTC_P2PKH_LEN, h160);
+    for (int i = 0; i < PZ_NUM_PUZZLES; i++)
+        if (pz_address_to_hash160(PZ_PUZZLES[i].address, a) && !memcmp(a, h160, 20))
+            for (const puzzle_prize *z = PZ_PRIZES; z->n && n < SESSION_PRIZES_MAX; z++)
+                if (z->n == PZ_PUZZLES[i].n && btc_hash_from_hex(z->txid, out[n].txid)) out[n++].vout = z->vout;
+    return n;
 }
 
 /* The transaction to a mining pool that does not show it in the public mempool (--private): POST {"tx_hex": ...} to url through the curl
@@ -86,7 +113,8 @@ int sweep_main(int argc, char **argv)
     if (!to_len) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest]\n"
                                         "                    [--rpc H:P:USER:PASSWORD | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n"
                                         "                    [--private | --pool URL]\n"
-                                        "       the private key, 64 hex digits, on the standard input\n"), 2;
+                                        "       the private key, 64 hex digits, on the standard input\n"
+                                        "       without --rpc: the key of an open puzzle of the program (its coins are named there), every coin or none\n"), 2;
     char hex[80] = "";
     if (!fgets(hex, sizeof hex, stdin)) hex[0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;
@@ -111,9 +139,10 @@ int sweep_main(int argc, char **argv)
     const session_chain ch = rpc_arg ? chain_rpc_iface(&crpc) : chain_spv_iface(&spv);
     btc_tx tx;
     sweep_info si = {.rate = rate};
-    const bool ok = sweep_tx(&ch, sec, to_spk, to_len, NULL, &si, &tx);
+    payout_coin named[SESSION_PRIZES_MAX];
+    const char *no = sweep_tx(&ch, sec, named, chain == BTC_MAIN ? named_coins(spk, named) : 0, to_spk, to_len, NULL, &si, &tx);
     pz_secure_zero(sec, sizeof sec);
-    if (!ok) return fprintf(stderr, si.listed > 0 ? "the coins of this key do not pay the fee\n" : si.listed == 0 ? "this key has no confirmed coin\n" : "the chain did not answer\n"), 1;
+    if (no) return fprintf(stderr, "no transaction: %s\n", no), 1;
     const int n = (int)tx.n_in, listed = si.listed;
     const uint64_t total = si.total, fee = total - tx.out[0].value;
     rate = si.rate;

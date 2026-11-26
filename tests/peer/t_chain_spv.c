@@ -7,6 +7,7 @@
  * not have, answer slowly. With an honest server next to them the answers are the true ones; alone, a liar gets a delay and nothing else. */
 #include "peertest.h"
 #include "chain_spv.h"
+#include "sweep.h"
 #include "json.h"
 #include "sys.h"
 #include <pzcore/hash.h>
@@ -17,7 +18,7 @@
 /* ---- the world: a chain and a mempool ---- */
 
 typedef struct {
-    uint8_t raw[600], txid[32];
+    uint8_t raw[800], txid[32];
     size_t len;
     int height;                    /* 0: in the mempool */
 } wtx;
@@ -52,6 +53,24 @@ static int add_tx(const btc_tx *tx)
     CHECK(t->len && btc_tx_txid(tx, t->txid));
     t->height = 0;
     return W.nt++;
+}
+
+/* A transaction of 17 inputs, more than a btc_tx holds, in the mempool: the first spends txid:vout, and it pays 1000 satoshis to spk.
+ * Unsigned: the servers of the test check no signature. */
+static void add_big(const uint8_t txid[32], uint32_t vout, const uint8_t spk[BTC_P2PKH_LEN])
+{
+    wtx *t = &W.t[W.nt++];
+    uint8_t *p = t->raw;
+    memcpy(p, "\x02\0\0\0\x11", 5), p += 5;
+    for (int k = 0; k < 17; k++, p += 41) {
+        memset(p, 0, 41);
+        if (k) pz_sha256((const uint8_t *)&k, sizeof k, p);
+        else memcpy(p, txid, 32), p[32] = (uint8_t)vout;
+        memset(p + 37, 0xff, 4);
+    }
+    memcpy(p, "\x01\xe8\x03\0\0\0\0\0\0\x19", 10), memcpy(p + 10, spk, BTC_P2PKH_LEN), memset(p + 35, 0, 4);
+    t->len = (size_t)(p + 39 - t->raw), t->height = 0;
+    CHECK(btc_txid(t->raw, t->len, t->txid));
 }
 
 static void merkle_root(uint8_t (*ids)[32], size_t n, size_t pos, uint8_t root[32], uint8_t (*branch)[32], size_t *depth)
@@ -162,21 +181,24 @@ static bool touches(const server *s, int i, const char *sh, int spent_by[16])
 {
     btc_tx tx;
     bool hit = false;
-    if (!btc_tx_parse(&tx, W.t[i].raw, W.t[i].len)) return false;
+    size_t n_in = 0;
+    uint8_t *in = btc_tx_outpoints(W.t[i].raw, W.t[i].len, &n_in);   /* every input, also of a transaction no btc_tx holds */
+    if (!btc_tx_parse(&tx, W.t[i].raw, W.t[i].len)) tx.n_out = 0;    /* whose outputs the test does not need */
     for (size_t o = 0; o < tx.n_out; o++) {
         char hex[65];
         sh_of(tx.out[o].script, tx.out[o].script_len, hex);
         hit |= !strcmp(hex, sh);
     }
-    for (size_t k = 0; k < tx.n_in; k++)
+    for (size_t k = 0; in && k < n_in; k++)
         for (int j = 0; j < W.nt; j++) {
             const uint8_t *spk;
             size_t len;
             char hex[65];
-            if (memcmp(tx.in[k].prev_txid, W.t[j].txid, 32) || !tx_script(&W.t[j], tx.in[k].prev_vout, &spk, &len)) continue;
+            if (memcmp(in + 36 * k, W.t[j].txid, 32) || !tx_script(&W.t[j], in[36 * k + 32], &spk, &len)) continue;
             sh_of(spk, len, hex);
             hit |= !strcmp(hex, sh);
         }
+    free(in);
     for (size_t o = 0; hit && spent_by && o < tx.n_out; o++) {
         spent_by[o] = -1;
         for (int j = 0; j < W.nt; j++) {
@@ -267,7 +289,8 @@ static bool answer(server *s, const char *method, const json_val *p, char *out, 
                 char hex[65];
                 btc_tx tx;
                 if ((W.t[i].height > 0) == (pass == 1) || W.t[i].height < 0 || (s->l.blind_mempool && W.t[i].height == 0)) continue;
-                if (!touches(s, i, a0, by) || !btc_tx_parse(&tx, W.t[i].raw, W.t[i].len)) continue;
+                if (!touches(s, i, a0, by)) continue;
+                if (!btc_tx_parse(&tx, W.t[i].raw, W.t[i].len)) tx.n_in = tx.n_out = 0;   /* too large: in a history by its id alone */
                 btc_hash_to_hex(W.t[i].txid, hex);
                 if (!unspent) {
                     bool spends = false;                       /* a liar that lists spent coins shows no transaction that spends */
@@ -453,6 +476,27 @@ int main(void)
         c.timeout_ms = 3000, ch = chain_spv_iface(&c);
         CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.coin(ch.ctx, fid, 0, pspk, &pc) == 1 && pc.value == 100000000 && !memcmp(pc.txid, fid, 32));
         CHECK(ch.coin(ch.ctx, fid, 0, aspk, &pc) == 0 && ch.coin(ch.ctx, f2id, 0, pspk, &pc) == 0 && ch.coin(ch.ctx, other, 0, pspk, &pc) == -1);
+        /* A sweep of the key of the address (a key found alone: pzpeer sweep, the solo payout of a home). With the coins of the address
+         * named it takes the prize, which no scan lists, and finds the other one spent (before, it saw no coin, or swept only what came
+         * after the checkpoint). A named coin no server gives, or an address with no coin named, and it refuses: the transaction would
+         * show the public key and leave the rest of the coins to whoever is first */
+        payout_coin named[3] = {{.vout = 0}, {.vout = 0}, {.vout = 0}};
+        memcpy(named[0].txid, fid, 32), memcpy(named[1].txid, f2id, 32), memcpy(named[2].txid, other, 32);
+        sweep_info si = {.rate = 50000};
+        btc_tx sw;
+        const char *no = sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si, &sw);
+        CHECK(!no && si.listed == 1 && sw.n_in == 1 && !memcmp(sw.in[0].prev_txid, fid, 32) && sw.n_out == 1 && sw.out[0].value > 99980000 &&
+              btc_verify_p2pkh(&sw, 0, pspk, BTC_P2PKH_LEN));
+        no = sweep_tx(&ch, psec, named, 3, aspk, BTC_P2PKH_LEN, NULL, &si, &sw);
+        CHECK(no && strstr(no, "hid a coin") && sw.n_in == 0);
+        no = sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si, &sw);
+        CHECK(no && strstr(no, "older than their checkpoint") && sw.n_in == 0);
+        chain_spv_free(&c);
+        /* a server that lists no coin hides no named one: its transaction is asked for by its id */
+        const char *hides[1] = {hider.addr};
+        CHECK(chain_spv_init(&c, BTC_REGTEST, 2, cp2, hides, 1, NULL));
+        c.timeout_ms = 3000, ch = chain_spv_iface(&c);
+        CHECK(!sweep_tx(&ch, psec, named, 2, aspk, BTC_P2PKH_LEN, NULL, &si, &sw) && sw.n_in == 1 && !memcmp(sw.in[0].prev_txid, fid, 32));
         chain_spv_free(&c);
     }
 
@@ -630,6 +674,25 @@ int main(void)
     pthread_mutex_unlock(&W.mu);
     view(&c, &ch, &honest, &phantom, NULL);
     CHECK(ch.pending(ch.ctx, pspk) >= 1);
+    chain_spv_free(&c);
+
+    /* a coin spent by a transaction of 17 inputs, more than a btc_tx holds: every input of it is looked at (before, such a transaction
+     * was taken to spend nothing, and a coin an outside wallet swept so stayed unspent for ever) */
+    btc_tx fund4;
+    uint8_t f4id[32];
+    btc_tx_init(&fund4);
+    CHECK(btc_tx_add_in(&fund4, other, 11, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&fund4, 700000, pspk, BTC_P2PKH_LEN) && btc_tx_txid(&fund4, f4id));
+    pthread_mutex_lock(&W.mu);
+    add_tx(&fund4);
+    pthread_mutex_unlock(&W.mu);
+    mine_block();
+    pthread_mutex_lock(&W.mu);
+    add_big(f4id, 0, aspk);
+    pthread_mutex_unlock(&W.mu);
+    view(&c, &ch, &honest, NULL, NULL);
+    CHECK(ch.confirmations(ch.ctx, f4id, 0) == 1);             /* in the mempool: no spend yet */
+    mine_block();
+    CHECK(ch.confirmations(ch.ctx, f4id, 0) == -1);
     chain_spv_free(&c);
 
     stop(&honest), stop(&hider), stop(&stale), stop(&noproof), stop(&nowork), stop(&keeper), stop(&blind);

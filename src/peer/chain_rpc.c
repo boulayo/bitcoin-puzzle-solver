@@ -38,12 +38,12 @@ int chain_rpc_ready(chain_rpc *c, char *why, size_t cap)
 static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
 {
     chain_rpc *c = ctx;
-    char addr[64], why[300];
+    char addr[64];
     const char *addrs[1] = {addr};
     btc_utxo u[SCAN_MAX];
     size_t n;
     uint64_t tip;
-    if (max <= 0 || !p2pkh_address(c->chain, spk, addr, sizeof addr) || chain_rpc_ready(c, why, sizeof why) != 1) return -1;
+    if (max <= 0 || !p2pkh_address(c->chain, spk, addr, sizeof addr)) return -1;
     /* the node runs one scan at a time and answers another one (the partner on the same node, a wallet) with an error, not in a queue:
      * on the main chain a scan takes minutes, so the wait is as long as a scan may be */
     const int64_t until = sys_now_ms() + c->rpc->scan_timeout_ms;
@@ -79,11 +79,10 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
     bool found;
     btc_utxo u;
     bool pooled;
-    if (!btc_rpc_gettxout(c->rpc, txid, vout, true, &found, &u)) return -2;
-    if (!found && !btc_rpc_gettxout(c->rpc, txid, vout, false, &found, &u)) return -2;   /* spent in the mempool only: not yet */
-    if (found) return (int)u.confirmations;
-    /* in no block's set: spent in a block, unless the transaction itself is back in the mempool (a reorganisation took its block away,
-     * and its spend waits there too): that is no spend in a block */
+    if (!btc_rpc_gettxout(c->rpc, txid, vout, &found, &u)) return -2;
+    if (found) return (int)u.confirmations;                     /* in the set of the chain: a spend that only waits in the mempool is none yet */
+    /* in no block's set: spent in a block, unless the transaction itself waits in the mempool (it is new, or a reorganisation took its
+     * block away, and its spend may wait there too): that is no spend in a block */
     return !btc_rpc_inmempool(c->rpc, txid, &pooled) ? -2 : pooled ? 0 : -1;
 }
 
@@ -114,7 +113,7 @@ static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t 
     chain_rpc *c = ctx;
     bool found;
     btc_utxo u;
-    if (!btc_rpc_gettxout(c->rpc, txid, vout, false, &found, &u)) return -1;
+    if (!btc_rpc_gettxout(c->rpc, txid, vout, &found, &u)) return -1;
     if (!found || !u.confirmations || (u.coinbase && u.confirmations < COINBASE_MATURITY) || u.spk_len != BTC_P2PKH_LEN ||
         memcmp(u.spk, spk, BTC_P2PKH_LEN))
         return 0;

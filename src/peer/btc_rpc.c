@@ -134,23 +134,6 @@ bad:
     return fail(c, BTC_RPC_EPROTO, 0, "expected HOST:PORT:USER:PASSWORD, or HOST:PORT with the cookie file");
 }
 
-bool btc_rpc_set_wallet(btc_rpc *c, const char *name)
-{
-    if (!name || !name[0]) {
-        c->wallet[0] = 0;
-        return true;
-    }
-    const size_t n = strlen(name);
-    if (n > sizeof c->wallet - sizeof "/wallet/") return false;
-    for (size_t i = 0; i < n; i++) {
-        const unsigned char ch = (unsigned char)name[i];
-        if (!(ch >= 'a' && ch <= 'z') && !(ch >= 'A' && ch <= 'Z') && !(ch >= '0' && ch <= '9') && ch != '-' && ch != '_' && ch != '.')
-            return false;
-    }
-    snprintf(c->wallet, sizeof c->wallet, "/wallet/%s", name);
-    return true;
-}
-
 void btc_rpc_done(btc_rpc *c) { pz_secure_zero(c, sizeof *c); }
 
 /* ---- transport ---- */
@@ -309,7 +292,7 @@ static bool recv_reply(btc_rpc *c, int fd, int64_t deadline, reply *r)
 }
 
 /* One request and its reply, on a connection of its own. */
-static bool exchange(btc_rpc *c, bool wallet, const char *body, size_t bl, int timeout_ms, reply *r)
+static bool exchange(btc_rpc *c, const char *body, size_t bl, int timeout_ms, reply *r)
 {
     /* the head carries the credentials: wiped once sent */
     char head[sizeof c->auth + sizeof c->host + sizeof c->wallet + 256];
@@ -317,7 +300,7 @@ static bool exchange(btc_rpc *c, bool wallet, const char *body, size_t bl, int t
     const int hl = snprintf(head, sizeof head,
                             "POST %s HTTP/1.1\r\nHost: %s%s%s:%s\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\n"
                             "Content-Length: %zu\r\nConnection: close\r\n\r\n",
-                            wallet && c->wallet[0] ? c->wallet : "/", v6 ? "[" : "", c->host, v6 ? "]" : "", c->port, c->auth, bl);
+                            c->wallet[0] ? c->wallet : "/", v6 ? "[" : "", c->host, v6 ? "]" : "", c->port, c->auth, bl);
     *r = (reply){0};
     bool ok = hl > 0 && (size_t)hl < sizeof head;
     if (!ok) fail(c, BTC_RPC_EPROTO, 0, "cannot build the request");
@@ -335,7 +318,7 @@ static bool exchange(btc_rpc *c, bool wallet, const char *body, size_t bl, int t
 
 /* ---- JSON-RPC ---- */
 
-static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int timeout_ms, json_doc *doc, const json_val **result)
+static bool rpc(btc_rpc *c, const char *method, json_w *params, int timeout_ms, json_doc *doc, const json_val **result)
 {
     *doc = (json_doc){0};
     *result = NULL;
@@ -359,7 +342,7 @@ static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int
     size_t bl;
     const char *body = jw_done(&w, &bl);
     reply r;
-    bool ok = body && exchange(c, wallet, body, bl, timeout_ms, &r);
+    bool ok = body && exchange(c, body, bl, timeout_ms, &r);
     if (!body) fail(c, BTC_RPC_EPROTO, 0, "%s: cannot build the request", method);
     /* A node that started again since the cookie was read has a new one: read again, the call is made once more. */
     if (ok && r.status == 401 && c->cookie[0]) {
@@ -367,7 +350,7 @@ static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int
         memcpy(old, c->auth, sizeof old);
         if (read_cookie(c) && strcmp(old, c->auth)) {
             free(r.p);
-            ok = exchange(c, wallet, body, bl, timeout_ms, &r);
+            ok = exchange(c, body, bl, timeout_ms, &r);
         }
         pz_secure_zero(old, sizeof old);
     }
@@ -406,23 +389,15 @@ static bool rpc(btc_rpc *c, bool wallet, const char *method, json_w *params, int
     return true;
 }
 
-bool btc_rpc_call(btc_rpc *c, bool wallet, const char *method, json_w *params, json_doc *doc, const json_val **result)
+bool btc_rpc_call(btc_rpc *c, const char *method, json_w *params, json_doc *doc, const json_val **result)
 {
-    const bool ok = rpc(c, wallet, method, params, c->timeout_ms, doc, result);
+    const bool ok = rpc(c, method, params, c->timeout_ms, doc, result);
     dbg("bitcoind %s: %s", method, ok ? "ok" : c->err.msg);
+    if (params) jw_free(params);
     return ok;
 }
 
 /* ---- the calls ---- */
-
-/* The params of most calls are a few values: written into w, which the call frees. */
-static bool call(btc_rpc *c, bool wallet, const char *method, json_w *w, json_doc *doc, const json_val **res)
-{
-    const bool ok = rpc(c, wallet, method, w, c->timeout_ms, doc, res);
-    dbg("bitcoind %s: %s", method, ok ? "ok" : c->err.msg);
-    if (w) jw_free(w);
-    return ok;
-}
 
 /* the end of a call that read what it needed from the result: false, with the message, when it was not what was expected */
 static bool done(btc_rpc *c, json_doc *doc, bool ok, const char *method)
@@ -437,28 +412,15 @@ bool btc_rpc_getblockcount(btc_rpc *c, uint64_t *height)
 {
     json_doc d;
     const json_val *res;
-    if (!call(c, false, "getblockcount", NULL, &d, &res)) return false;
+    if (!btc_rpc_call(c, "getblockcount", NULL, &d, &res)) return false;
     return done(c, &d, json_u64(res, height), "getblockcount");
-}
-
-bool btc_rpc_getblockhash(btc_rpc *c, uint64_t height, uint8_t hash[32])
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    jw_u64(&w, height);
-    jw_end(&w);
-    if (!call(c, false, "getblockhash", &w, &d, &res)) return false;
-    return done(c, &d, get_hash(res, hash), "getblockhash");
 }
 
 bool btc_rpc_getblockchaininfo(btc_rpc *c, btc_chaininfo *info)
 {
     json_doc d;
     const json_val *res;
-    if (!call(c, false, "getblockchaininfo", NULL, &d, &res)) return false;
+    if (!btc_rpc_call(c, "getblockchaininfo", NULL, &d, &res)) return false;
     btc_chaininfo x = {0};
     const char *chain = json_str(json_get(res, "chain"));
     const bool ok = chain && strlen(chain) < sizeof x.chain && json_u64(json_get(res, "blocks"), &x.blocks) &&
@@ -476,30 +438,6 @@ static void put_hash(json_w *w, const uint8_t h[32])
     char hex[65];
     btc_hash_to_hex(h, hex);
     jw_str(w, hex);
-}
-
-bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t *blockhash, uint8_t **raw, size_t *len)
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    put_hash(&w, txid);
-    jw_u64(&w, 0);   /* verbosity 0: the hex; every version takes the number */
-    if (blockhash) put_hash(&w, blockhash);
-    jw_end(&w);
-    if (!call(c, false, "getrawtransaction", &w, &d, &res)) return false;
-    const char *hex = json_str(res);
-    const size_t n = hex ? res->n / 2 : 0;
-    uint8_t *b = n ? malloc(n) : NULL;
-    const bool ok = b && pz_unhex(hex, res->n, b);
-    if (!ok) free(b);
-    else {
-        *raw = b;
-        *len = n;
-    }
-    return done(c, &d, ok, "getrawtransaction");
 }
 
 /* the fields an unspent output has in both scantxoutset and gettxout: the script in hex and the coinbase flag */
@@ -520,12 +458,7 @@ static bool get_u32(const json_val *v, uint32_t *out)
 }
 
 /* whether a goes before b in the order of the coins kept by a scan: the larger value first, then the smaller outpoint */
-static bool before(const btc_utxo *a, const btc_utxo *b)
-{
-    if (a->value != b->value) return a->value > b->value;
-    const int c = memcmp(a->txid, b->txid, 32);
-    return c ? c < 0 : a->vout < b->vout;
-}
+static bool before(const btc_utxo *a, const btc_utxo *b) { return btc_coin_cmp(a->value, a->txid, a->vout, b->value, b->txid, b->vout) < 0; }
 
 bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height)
 {
@@ -549,7 +482,7 @@ bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo 
     }
     jw_end(&w);
     jw_end(&w);
-    const bool ok = rpc(c, false, "scantxoutset", &w, c->scan_timeout_ms, &d, &res);
+    const bool ok = rpc(c, "scantxoutset", &w, c->scan_timeout_ms, &d, &res);
     jw_free(&w);
     if (!ok) {
         if (c->err.kind == BTC_RPC_ENET) {   /* the node goes on with a scan whose client has gone, and refuses the next one meanwhile */
@@ -558,7 +491,7 @@ bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo 
             jw_arr(&w);
             jw_str(&w, "abort");
             jw_end(&w);
-            if (call(c, false, "scantxoutset", &w, &d, &res)) json_free(&d);
+            if (btc_rpc_call(c, "scantxoutset", &w, &d, &res)) json_free(&d);
             c->err = e;
         }
         return false;
@@ -590,7 +523,7 @@ bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo 
     return done(c, &d, true, "scantxoutset");
 }
 
-bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool mempool, bool *found, btc_utxo *out)
+bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool *found, btc_utxo *out)
 {
     json_w w;
     json_doc d;
@@ -599,9 +532,9 @@ bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool me
     jw_arr(&w);
     put_hash(&w, txid);
     jw_u64(&w, vout);
-    jw_bool(&w, mempool);
+    jw_bool(&w, false);   /* without the mempool: the set of the chain */
     jw_end(&w);
-    if (!call(c, false, "gettxout", &w, &d, &res)) return false;
+    if (!btc_rpc_call(c, "gettxout", &w, &d, &res)) return false;
     *found = !json_is_null(res);
     if (!*found) return done(c, &d, true, "gettxout");
     btc_utxo u = {.vout = vout};
@@ -622,7 +555,7 @@ bool btc_rpc_inmempool(btc_rpc *c, const uint8_t txid[32], bool *in)
     jw_arr(&w);
     put_hash(&w, txid);
     jw_end(&w);
-    if ((*in = call(c, false, "getmempoolentry", &w, &d, &res))) return done(c, &d, true, "getmempoolentry");
+    if ((*in = btc_rpc_call(c, "getmempoolentry", &w, &d, &res))) return done(c, &d, true, "getmempoolentry");
     return c->err.kind == BTC_RPC_ERPC && c->err.code == -5;  /* "Transaction not in mempool" */
 }
 
@@ -635,31 +568,12 @@ bool btc_rpc_estimatesmartfee(btc_rpc *c, unsigned target, uint64_t *sat_per_kvb
     jw_arr(&w);
     jw_u64(&w, target);
     jw_end(&w);
-    if (!call(c, false, "estimatesmartfee", &w, &d, &res)) return false;
+    if (!btc_rpc_call(c, "estimatesmartfee", &w, &d, &res)) return false;
     const json_val *rate = json_get(res, "feerate");
     bool ok = res->type == JSON_OBJECT;
     if (!rate) *sat_per_kvb = 0;   /* "errors" instead: no estimate */
     else ok = ok && json_sats(rate, sat_per_kvb);
     return done(c, &d, ok, "estimatesmartfee");
-}
-
-bool btc_rpc_testmempoolaccept(btc_rpc *c, const uint8_t *raw, size_t len, bool *ok, char *reason, size_t cap)
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    jw_arr(&w);
-    jw_hex(&w, raw, len);
-    jw_end(&w);
-    jw_end(&w);
-    if (!call(c, false, "testmempoolaccept", &w, &d, &res)) return false;
-    const json_val *r0 = json_at(res, 0);
-    const char *why = json_str(json_get(r0, "reject-reason"));
-    const bool good = res->n == 1 && json_bool(json_get(r0, "allowed"), ok) && (*ok || why);
-    if (good && cap) snprintf(reason, cap, "%s", *ok ? "" : why);
-    return done(c, &d, good, "testmempoolaccept");
 }
 
 bool btc_rpc_sendrawtransaction(btc_rpc *c, const uint8_t *raw, size_t len, uint8_t txid[32])
@@ -671,68 +585,6 @@ bool btc_rpc_sendrawtransaction(btc_rpc *c, const uint8_t *raw, size_t len, uint
     jw_arr(&w);
     jw_hex(&w, raw, len);
     jw_end(&w);
-    if (!call(c, false, "sendrawtransaction", &w, &d, &res)) return false;
+    if (!btc_rpc_call(c, "sendrawtransaction", &w, &d, &res)) return false;
     return done(c, &d, get_hash(res, txid), "sendrawtransaction");
-}
-
-bool btc_rpc_createwallet(btc_rpc *c, const char *name)
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    jw_str(&w, name);
-    jw_end(&w);
-    if (!call(c, false, "createwallet", &w, &d, &res)) return false;
-    return done(c, &d, res->type == JSON_OBJECT, "createwallet");
-}
-
-bool btc_rpc_getnewaddress(btc_rpc *c, const char *type, char *addr, size_t cap)
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    if (type) {
-        jw_str(&w, "");   /* the label */
-        jw_str(&w, type);
-    }
-    jw_end(&w);
-    if (!call(c, true, "getnewaddress", &w, &d, &res)) return false;
-    const char *a = json_str(res);
-    const bool ok = a && res->n < cap;
-    if (ok) memcpy(addr, a, res->n + 1);
-    return done(c, &d, ok, "getnewaddress");
-}
-
-bool btc_rpc_sendtoaddress(btc_rpc *c, const char *addr, uint64_t sats, uint8_t txid[32])
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    jw_str(&w, addr);
-    jw_sats(&w, sats);
-    jw_end(&w);
-    if (!call(c, true, "sendtoaddress", &w, &d, &res)) return false;
-    return done(c, &d, get_hash(res, txid), "sendtoaddress");
-}
-
-bool btc_rpc_generatetoaddress(btc_rpc *c, unsigned blocks, const char *addr, uint8_t last[32])
-{
-    json_w w;
-    json_doc d;
-    const json_val *res;
-    jw_init(&w);
-    jw_arr(&w);
-    jw_u64(&w, blocks);
-    jw_str(&w, addr);
-    jw_end(&w);
-    if (!call(c, false, "generatetoaddress", &w, &d, &res)) return false;
-    bool ok = res->type == JSON_ARRAY && res->n == blocks;
-    if (ok && last && blocks) ok = get_hash(json_at(res, blocks - 1), last);
-    return done(c, &d, ok, "generatetoaddress");
 }

@@ -234,15 +234,7 @@ static void test_basic(void)
     CHECK(strtoul(req_header("Content-Length"), NULL, 10) == strlen(b));
     CHECK(C.err.kind == BTC_RPC_OK);
 
-    uint8_t hash[32];
-    serve(ok_body("{\"result\":\"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f\",\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_getblockhash(&C, 0, hash) && hash[0] == 0x6f && hash[31] == 0x00);
-    served();
-    CHECK_STR(req_method(), "getblockhash");
-    CHECK_STR(req_params(), "[0]");
-    CHECK(strstr(S.req, "\"id\":2,") != NULL);   /* a new id per call */
-
-    /* the generic call, with its own params */
+    /* the generic call, with its own params, which it frees */
     json_w w;
     jw_init(&w);
     jw_arr(&w);
@@ -251,11 +243,12 @@ static void test_basic(void)
     json_doc d;
     const json_val *res;
     serve(ok_body("{\"result\":{\"a\":[1,2]},\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_call(&C, false, "echo", &w, &d, &res) && res->type == JSON_OBJECT && json_at(json_get(res, "a"), 1));
+    CHECK(btc_rpc_call(&C, "echo", &w, &d, &res) && res->type == JSON_OBJECT && json_at(json_get(res, "a"), 1));
     served();
+    CHECK_STR(req_method(), "echo");
     CHECK_STR(req_params(), "[\"x\\\"y\"]");
+    CHECK(strstr(S.req, "\"id\":2,") != NULL);   /* a new id per call */
     json_free(&d);
-    jw_free(&w);
     btc_rpc_done(&C);
 }
 
@@ -265,6 +258,26 @@ static const char GENESIS_CB[] =
     "332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffff"
     "ffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec1"
     "12de5c384df7ba0b8d578a4c702b6bf11d5fac00000000";
+
+/* getrawtransaction through the generic call, for the replies of every size and framing: the bytes of the transaction, malloc'd */
+static bool get_raw(const uint8_t txid[32], const uint8_t *blockhash, uint8_t **raw, size_t *len)
+{
+    json_w w;
+    json_doc d;
+    const json_val *res;
+    char hex[65];
+    jw_init(&w), jw_arr(&w), btc_hash_to_hex(txid, hex), jw_str(&w, hex), jw_u64(&w, 0);
+    if (blockhash) btc_hash_to_hex(blockhash, hex), jw_str(&w, hex);
+    jw_end(&w);
+    *raw = NULL;
+    if (!btc_rpc_call(&C, "getrawtransaction", &w, &d, &res)) return false;
+    const char *text = json_str(res);
+    *len = text ? res->n / 2 : 0;
+    const bool ok = *len && (*raw = malloc(*len)) && pz_unhex(text, res->n, *raw);
+    if (!ok) free(*raw), *raw = NULL;
+    json_free(&d);
+    return ok;
+}
 
 static void test_calls(void)
 {
@@ -278,7 +291,7 @@ static void test_calls(void)
     /* getrawtransaction with the block, then the amount check of what came */
     snprintf(body, sizeof body, "{\"result\":\"%s\",\"error\":null,\"id\":@ID@}", GENESIS_CB);
     serve(ok_body(body));
-    CHECK(btc_rpc_getrawtransaction(&C, txid, bh, &raw, &len) && len == strlen(GENESIS_CB) / 2);
+    CHECK(get_raw(txid, bh, &raw, &len) && len == strlen(GENESIS_CB) / 2);
     served();
     CHECK_STR(req_params(), "[\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\",0,"
                             "\"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f\"]");
@@ -290,17 +303,17 @@ static void test_calls(void)
     raw = NULL;
     /* without the block; a reply that is not hex */
     serve(ok_body("{\"result\":\"0g\",\"error\":null,\"id\":@ID@}"));
-    CHECK(!btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && C.err.kind == BTC_RPC_EPROTO && !raw);
+    CHECK(!get_raw(txid, NULL, &raw, &len) && !raw);
     served();
     CHECK_STR(req_params(), "[\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\",0]");
     serve(ok_body("{\"result\":\"abc\",\"error\":null,\"id\":@ID@}"));
-    CHECK(!btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && C.err.kind == BTC_RPC_EPROTO);
+    CHECK(!get_raw(txid, NULL, &raw, &len));
     served();
     /* not found: the error of bitcoind, with HTTP 500 as it sends it to a JSON-RPC 1.0 request */
     reply_case nf = {500, "{\"result\":null,\"error\":{\"code\":-5,\"message\":\"No such mempool or blockchain transaction. Use gettransaction "
                           "for wallet transactions.\"},\"id\":@ID@}", LENGTH, ALL, NULL};
     serve(nf);
-    CHECK(!btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && C.err.kind == BTC_RPC_ERPC && C.err.code == -5);
+    CHECK(!get_raw(txid, NULL, &raw, &len) && C.err.kind == BTC_RPC_ERPC && C.err.code == -5);
     CHECK(strstr(C.err.msg, "getrawtransaction: No such mempool") == C.err.msg);
     served();
 
@@ -311,13 +324,13 @@ static void test_calls(void)
     for (size_t i = 0; i < big; i++) o += sprintf(bb + o, "%02x", (unsigned)(i * 7 & 0xff));
     sprintf(bb + o, "\",\"error\":null,\"id\":@ID@}");
     serve(ok_body(bb));
-    CHECK(btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && len == big && raw[big - 1] == (uint8_t)((big - 1) * 7));
+    CHECK(get_raw(txid, NULL, &raw, &len) && len == big && raw[big - 1] == (uint8_t)((big - 1) * 7));
     served();
     free(raw);
     raw = NULL;
     reply_case bigc = {200, bb, CHUNKED, ALL, NULL};
     serve(bigc);
-    CHECK(btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && len == big && raw[12345] == (uint8_t)(12345 * 7));
+    CHECK(get_raw(txid, NULL, &raw, &len) && len == big && raw[12345] == (uint8_t)(12345 * 7));
     served();
     free(raw);
     free(bb);
@@ -416,13 +429,13 @@ static void test_calls(void)
     bool found = true;
     btc_utxo t;
     serve(ok_body("{\"result\":null,\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_gettxout(&C, txid, 1, true, &found, &t) && !found);
+    CHECK(btc_rpc_gettxout(&C, txid, 1, &found, &t) && !found);
     served();
-    CHECK_STR(req_params(), "[\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\",1,true]");
+    CHECK_STR(req_params(), "[\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\",1,false]");
     serve(ok_body("{\"result\":{\"bestblock\":\"00\",\"confirmations\":0,\"value\":0.00000546,\"scriptPubKey\":{\"asm\":\"\","
                   "\"desc\":\"\",\"hex\":\"5120000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433\",\"type\":\"witness_v1_taproot\"},"
                   "\"coinbase\":false},\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_gettxout(&C, txid, 3, false, &found, &t) && found && t.value == 546 && t.confirmations == 0 && t.spk_len == 34 &&
+    CHECK(btc_rpc_gettxout(&C, txid, 3, &found, &t) && found && t.value == 546 && t.confirmations == 0 && t.spk_len == 34 &&
           t.vout == 3 && !memcmp(t.txid, txid, 32) && t.spk[0] == 0x51);
     served();
     CHECK_STR(req_params(), "[\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\",3,false]");
@@ -437,21 +450,8 @@ static void test_calls(void)
     CHECK(btc_rpc_estimatesmartfee(&C, 2, &rate) && rate == 0);
     served();
 
-    /* testmempoolaccept and sendrawtransaction */
+    /* sendrawtransaction */
     const uint8_t tx[3] = {0x01, 0xab, 0xff};
-    bool ok = true;
-    char why[64];
-    serve(ok_body("{\"result\":[{\"txid\":\"aa\",\"wtxid\":\"aa\",\"allowed\":false,\"reject-reason\":\"min relay fee not met\"}],"
-                  "\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_testmempoolaccept(&C, tx, 3, &ok, why, sizeof why) && !ok);
-    CHECK_STR(why, "min relay fee not met");
-    served();
-    CHECK_STR(req_params(), "[[\"01abff\"]]");
-    serve(ok_body("{\"result\":[{\"txid\":\"aa\",\"wtxid\":\"aa\",\"allowed\":true,\"vsize\":191,\"fees\":{\"base\":0.00001}}],"
-                  "\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_testmempoolaccept(&C, tx, 3, &ok, why, sizeof why) && ok);
-    CHECK_STR(why, "");
-    served();
     reply_case rej = {500, "{\"result\":null,\"error\":{\"code\":-26,\"message\":\"min relay fee not met, 100 < 191\"},\"id\":@ID@}",
                       LENGTH, ALL, NULL};
     serve(rej);
@@ -466,45 +466,19 @@ static void test_calls(void)
     btc_rpc_done(&C);
 }
 
+/* the path of the calls: the root, or the one of a wallet for the wallet calls of the tests on regtest */
 static void test_wallet(void)
 {
     client();
-    char addr[100];
-    uint8_t txid[32], last[32];
-    serve(ok_body("{\"result\":{\"name\":\"w1\",\"warning\":\"\"},\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_createwallet(&C, "w1"));
-    served();
-    CHECK(req_line("POST / HTTP/1.1"));
-    CHECK_STR(req_params(), "[\"w1\"]");
-    CHECK(btc_rpc_set_wallet(&C, "w1") && !btc_rpc_set_wallet(&C, "a/b") && !btc_rpc_set_wallet(&C, "a b") && !btc_rpc_set_wallet(&C, "%2e"));
-    CHECK(strcmp(C.wallet, "/wallet/w1") == 0);   /* a refused name leaves the wallet as it was */
-    serve(ok_body("{\"result\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_getnewaddress(&C, "bech32", addr, sizeof addr));
-    CHECK_STR(addr, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+    uint64_t h;
+    strcpy(C.wallet, "/wallet/w1");
+    serve(ok_body("{\"result\":7,\"error\":null,\"id\":@ID@}"));
+    CHECK(btc_rpc_getblockcount(&C, &h) && h == 7);
     served();
     CHECK(req_line("POST /wallet/w1 HTTP/1.1"));
-    CHECK_STR(req_params(), "[\"\",\"bech32\"]");
-    serve(ok_body("{\"result\":\"mrCDrCybB6J1vRfbwM5hemdJz73FwDBC8r\",\"error\":null,\"id\":@ID@}"));
-    CHECK(!btc_rpc_getnewaddress(&C, NULL, addr, 10) && C.err.kind == BTC_RPC_EPROTO);   /* does not fit */
-    served();
-    CHECK_STR(req_params(), "[]");
-    serve(ok_body("{\"result\":\"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16\",\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_sendtoaddress(&C, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080", 100000, txid) && txid[0] == 0x16);
-    served();
-    CHECK(req_line("POST /wallet/w1 HTTP/1.1"));
-    CHECK_STR(req_params(), "[\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",0.00100000]");
-    serve(ok_body("{\"result\":[\"00000000000000000000000000000000000000000000000000000000000000aa\","
-                  "\"00000000000000000000000000000000000000000000000000000000000000bb\"],\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_generatetoaddress(&C, 2, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080", last) && last[0] == 0xbb);
-    served();
-    CHECK(req_line("POST / HTTP/1.1"));   /* not a wallet call */
-    CHECK_STR(req_params(), "[2,\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\"]");
-    serve(ok_body("{\"result\":[\"00000000000000000000000000000000000000000000000000000000000000aa\"],\"error\":null,\"id\":@ID@}"));
-    CHECK(!btc_rpc_generatetoaddress(&C, 2, "x", NULL) && C.err.kind == BTC_RPC_EPROTO);   /* one block for two */
-    served();
-    CHECK(btc_rpc_set_wallet(&C, NULL) && C.wallet[0] == 0);
-    serve(ok_body("{\"result\":\"x\",\"error\":null,\"id\":@ID@}"));
-    CHECK(btc_rpc_getnewaddress(&C, NULL, addr, sizeof addr));
+    C.wallet[0] = 0;
+    serve(ok_body("{\"result\":8,\"error\":null,\"id\":@ID@}"));
+    CHECK(btc_rpc_getblockcount(&C, &h) && h == 8);
     served();
     CHECK(req_line("POST / HTTP/1.1"));
     btc_rpc_done(&C);
@@ -633,7 +607,7 @@ static void test_http(void)
         uint8_t *raw = NULL, txid[32] = {0};
         size_t len = 0;
         serve((reply_case){0, NULL, 0, ALL, wire});
-        CHECK(btc_rpc_getrawtransaction(&C, txid, NULL, &raw, &len) && len == hexn && raw[hexn - 1] == (uint8_t)(hexn - 1));
+        CHECK(get_raw(txid, NULL, &raw, &len) && len == hexn && raw[hexn - 1] == (uint8_t)(hexn - 1));
         served();
         free(raw);
         free(body);

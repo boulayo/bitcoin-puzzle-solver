@@ -52,26 +52,31 @@ int main(void)
     CHECK(netfile_puzzle(140, &a, err, sizeof err) && !strcmp(a.net, "p140") && a.puzzle == 140 && a.dpbits == 25 && !strcmp(a.chain, "main") &&
           !memcmp(a.pubkey33, m + 12, 33) && !memcmp(a.jumpseed, seed, 32) && a.start.w[2] == 1ull << 11 && a.end.w[2] == (1ull << 12) - 1);
     CHECK(netfile_puzzle(0, &b, err, sizeof err) && b.puzzle == 140 && !memcmp(a.fp, b.fp, 32));
-    /* the three coins of the creator as its prize= lines (data/prizes.csv), in the canonical order; they are no part of the fingerprint */
+    /* the coins of its address as its prize= lines (data/prizes.csv), the three of the creator among them, 16 at most; they are no
+     * part of the fingerprint */
     char line[NETFILE_LINE_MAX];
-    CHECK(netfile_opt(&a, "prize", 0, line, sizeof line) && !strcmp(line, "08389f34c98c606322740c0be6a7125d9860bb8d5cb182c02f98461e5fa6cd15:139:14000000"));
-    CHECK(netfile_opt(&a, "prize", 1, line, sizeof line) && !strcmp(line, "12f34b58b04dfb0233ce889f674781c0e0c7ba95482cca469125af41a78d13b3:64:1260000000"));
-    CHECK(netfile_opt(&a, "prize", 2, line, sizeof line) && !strcmp(line, "5d45587cfd1d5b0fb826805541da7d94c61fe432259e68ee26f4a04544384164:88:126000000"));
-    CHECK(!netfile_opt(&a, "prize", 3, line, sizeof line));
+    static const char *const CREATOR[3] = {"08389f34c98c606322740c0be6a7125d9860bb8d5cb182c02f98461e5fa6cd15:139:14000000",
+                                           "12f34b58b04dfb0233ce889f674781c0e0c7ba95482cca469125af41a78d13b3:64:1260000000",
+                                           "5d45587cfd1d5b0fb826805541da7d94c61fe432259e68ee26f4a04544384164:88:126000000"};
+    int found = 0, lines = 0;
+    for (; netfile_opt(&a, "prize", lines, line, sizeof line); lines++)
+        for (int k = 0; k < 3; k++) found += !strcmp(line, CREATOR[k]);
+    CHECK(found == 3 && lines <= 16);
     char t140[600], lo[PZ_U256_HEX_BUF], hi[PZ_U256_HEX_BUF];
     snprintf(t140, sizeof t140, "net=p140\npuzzle=140\npubkey=%s\nrange=%s:%s\njumpseed=", P140, pz_u256_to_hex(&a.start, lo), pz_u256_to_hex(&a.end, hi));
     for (int i = 0; i < 32; i++) snprintf(t140 + strlen(t140), sizeof t140 - strlen(t140), "%02x", seed[i]);
     strcat(t140, "\nschema=net-06\ndpbits=25\nchain=main\n");
     CHECK(netfile_parse(t140, &b, err, sizeof err) && !memcmp(a.fp, b.fp, 32) && !netfile_opt(&b, "prize", 0, line, sizeof line));
     for (int n = 145; n <= 160; n += 5)
-        CHECK(netfile_puzzle(n, &b, err, sizeof err) && netfile_opt(&b, "prize", 2, line, sizeof line) && !netfile_opt(&b, "prize", 3, line, sizeof line));
+        CHECK(netfile_puzzle(n, &b, err, sizeof err) && netfile_opt(&b, "prize", 2, line, sizeof line) && !netfile_opt(&b, "prize", 16, line, sizeof line));
     CHECK(netfile_puzzle(145, &b, err, sizeof err) && b.dpbits == 28 && memcmp(a.fp, b.fp, 32));
     CHECK(!netfile_puzzle(161, &b, err, sizeof err));
-    /* puzzle 71, without a public key: a linear network, of its address and blocks of 2^44 keys */
+    /* puzzle 71, without a public key: a linear network, of its address and blocks of 2^44 keys (and the coins of its address, when the
+     * table has them) */
     uint8_t h71[20];
     CHECK(netfile_puzzle(71, &b, err, sizeof err) && b.linear && b.blockbits == 44 && !strcmp(b.net, "p71") && !strcmp(b.chain, "main") &&
           pz_address_to_hash160(b.address, h71) && !memcmp(b.h160, h71, 20) && b.start.w[1] == 1ull << 6 && b.end.w[1] == (1ull << 7) - 1 &&
-          !netfile_opt(&b, "prize", 0, line, sizeof line));
+          !netfile_opt(&b, "prize", 16, line, sizeof line));
     /* a linear file: the address must be of its chain, blockbits a size a claim can prove, and no key of the kangaroo */
     static const char LIN[] = "net=lin\npuzzle=0\naddress=mmF9pY4RGQVXonKpcvvYPxkEgs42C3iSRz\nrange=1000:ffff\nblockbits=36\nchain=regtest\n";
     char t[600];

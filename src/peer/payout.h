@@ -40,8 +40,13 @@ typedef struct {
  * version this program does not know. */
 bool payout_author(unsigned version, payout_terms *t);
 
+/* The order of the coins wherever some are chosen, for qsort (of payout_coin, or of a struct that begins with one): the largest first,
+ * ties by outpoint (btc_coin_cmp). */
+int payout_by_value(const void *a, const void *b);
 /* Puts the coins largest first (ties by outpoint) and returns how many of the first `max` are worth at least `least`. */
 size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least);
+/* The least a coin is worth for a first transaction to take it at a fee rate: 3 times the fee of its input. */
+uint64_t payout_worth(uint64_t feerate);
 
 /* The first transaction from the coins of the puzzle: the largest first (ties by outpoint), at most PAYOUT_MAX_COINS, without the coins worth
  * less than 3 times the fee of their input. False when what is taken does not pay the fee and the tiny coins. */

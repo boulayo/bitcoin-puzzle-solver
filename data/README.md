@@ -51,29 +51,37 @@ Checks:
 
 No public or private keys are known for these puzzles. They stay in the database only so that `hunt -p 161` works without `-a`.
 
-## Coins of the prizes (`prizes.csv`, acquired on 2026-11-26)
+## Coins of the addresses of the open puzzles (`prizes.csv`)
 
-The coins that make the prize of each open puzzle whose public key is known (140, 145, 150, 155, 160): `n,txid,vout,sats`, the txid as
-explorers show it. Each of these addresses holds three coins of the creator, and some dust that strangers sent there, which is not part
-of the prize and is left out:
+The coins at the address of every open puzzle (one without a private key in `puzzles.csv`, with or without a public key):
+`n,txid,vout,sats`, the txid as explorers show it. Every confirmed unspent coin of the address worth at least 7400 satoshis, what an
+input costs at 50 sat/vB, the lowest fee rate of a sweep (a payout of a pair takes a coin from 8880): the coins of the creator and what
+strangers sent there. At the five addresses whose public key is known (140, 145, 150, 155, 160) the creator's are three:
 
 * output `n - 1` of `08389f34c98c606322740c0be6a7125d9860bb8d5cb182c02f98461e5fa6cd15` (block 339085, January 2015), `n · 0.001` BTC;
 * output `n - 52` of `5d45587cfd1d5b0fb826805541da7d94c61fe432259e68ee26f4a04544384164` (block 475240, July 2017), `n · 0.009` BTC;
 * output `n - 76` of `12f34b58b04dfb0233ce889f674781c0e0c7ba95482cca469125af41a78d13b3` (block 785620, April 2023), `n · 0.09` BTC.
 
-Taken from the unspent coins of each address in the public APIs of **mempool.space** and **blockstream.info**
-(`/api/address/ADDRESS/utxo`, nothing but the address in the request), which **agree on every coin** of the five addresses (txid, output,
-value, block); the three coins of the creator follow the rule above for all five. They become the `prize=` lines of the networks written
-in the program (`pzpeer netcheck 140` lists them): a home pays them even when no scan of the address lists them, and gives its piece of
-the key only once each is spent (docs/en/NETWORK.md 7.5). `tools/gen_puzzles.py` checks that each row is of an open puzzle with a public
-key, with a txid of 64 hex digits, a value up to 21 million BTC, no coin twice and at most 16 coins a puzzle; `puzzles_verify()` repeats
-the first checks. A puzzle that is solved, or whose prize grows, needs its rows changed.
+`tools/fetch_prizes.py` makes the file from the unspent coins of each address in the public APIs of **mempool.space** and
+**blockstream.info** (`/api/address/ADDRESS/utxo`, nothing but the address in the request, a pause between requests): the two must
+**agree on every coin** (txid, output, value, block), or nothing is written; `--raw DIR` keeps their answers. The rows of this revision
+were acquired on 2026-11-26 for the puzzles 140, 145, 150, 155 and 160, where the two sources agreed and each address held the three
+coins of the creator; run the tool for the other open puzzles and for what strangers sent since.
+
+The rows become the `prize=` lines of the networks written in the program (`pzpeer netcheck 140` lists them) and the coins `pzpeer
+sweep` looks up for the key of an address. A home without a node reads the chain from servers, which cannot show a coin older than
+their checkpoint: with the coins named it pays them, builds the same first transaction as a home with a node, and counts them in what is
+left at the address until each is spent (docs/en/NETWORK.md 5, 7.5, 8.2). The table is a snapshot: a coin spent since is found spent by
+the program, and one that came later is above every checkpoint, where a scan of the address lists it, so a later checkpoint needs no
+new table. `tools/gen_puzzles.py` checks that each row is of an open puzzle, with a txid of 64 hex digits, a value from 7400 satoshis
+to 21 million BTC, no coin twice and at most 16 coins a puzzle (what a network names: it fails when an address has more);
+`puzzles_verify()` repeats the first checks. A puzzle that is solved needs its rows removed.
 
 ## Updating the database
 
 ```sh
 $EDITOR data/puzzles.csv                 # n,address,pubkey,privkey  (pubkey/privkey may be empty)
-$EDITOR data/prizes.csv                  # n,txid,vout,sats: the coins of the prize of an open puzzle with a public key
+python3 -I tools/fetch_prizes.py --raw DIR   # data/prizes.csv: the coins of the addresses of the open puzzles, from two explorers
 python3 -I tools/gen_puzzles.py          # checks every row and rewrites src/puzzles_data.c
 make test                                # includes the check in C
 ```

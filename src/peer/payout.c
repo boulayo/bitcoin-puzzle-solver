@@ -19,21 +19,21 @@ bool payout_author(unsigned version, payout_terms *t)
     return t->author_len > 0;
 }
 
-static int by_value(const void *a, const void *b)
+int payout_by_value(const void *a, const void *b)
 {
     const payout_coin *x = a, *y = b;
-    if (x->value != y->value) return x->value > y->value ? -1 : 1;
-    const int c = memcmp(x->txid, y->txid, 32);
-    return c ? c : (x->vout > y->vout) - (x->vout < y->vout);
+    return btc_coin_cmp(x->value, x->txid, x->vout, y->value, y->txid, y->vout);
 }
 
 size_t payout_largest(payout_coin *coins, size_t n, size_t max, uint64_t least)
 {
     size_t k = 0;
-    qsort(coins, n, sizeof *coins, by_value);
+    qsort(coins, n, sizeof *coins, payout_by_value);
     while (k < n && k < max && coins[k].value >= least) k++;
     return k;
 }
+
+uint64_t payout_worth(uint64_t feerate) { return 3 * btc_fee(BTC_P2PKH_IN_SIZE, feerate); }
 
 /* the output of F's cancel and its fee, for a cancel of n tiny coins */
 static uint64_t cancel_out(const payout_terms *t, size_t n, btc_out *out)
@@ -71,7 +71,7 @@ bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc
     const uint64_t tiny = payout_tiny(t);
     if (n > 64) n = 64;
     memcpy(take, coins, n * sizeof *coins);
-    const size_t worth = payout_largest(take, n, PAYOUT_MAX_COINS, 3 * btc_fee(BTC_P2PKH_IN_SIZE, t->feerate));
+    const size_t worth = payout_largest(take, n, PAYOUT_MAX_COINS, payout_worth(t->feerate));
     uint64_t total = 0;
     btc_tx_init(tx);
     for (size_t i = 0; i < worth; i++) {

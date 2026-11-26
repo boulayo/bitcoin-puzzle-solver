@@ -258,7 +258,7 @@ static void test_coins(void)
         if (pc[k].value == 100000000) prize = k;
     CHECK(prize >= 0 && pc[prize].txid[0] == 100 && pc[prize].vout == 1);
     for (int k = 0; k < n; k++) CHECK(pc[k].value == 100000000 || pc[k].value >= 546 + 99 - 63);   /* the 63 largest of the others */
-    CHECK(called("getblockchaininfo scantxoutset "));   /* nothing else: the node's values are the chain's */
+    CHECK(called("scantxoutset "));   /* nothing else: the node's values are the chain's */
     CHECK(strstr(N.calls, "getrawtransaction") == NULL);
     btc_rpc_done(&R);
     free(unspents);
@@ -269,7 +269,7 @@ static void test_coins(void)
     start(ans_pruned, BTC_REGTEST);
     n = CH.coins(CH.ctx, SPK, pc, 64);
     CHECK(n == 2 && pc[0].value + pc[1].value == 40000);   /* the second coin is of another script: not taken */
-    CHECK(called("getblockchaininfo scantxoutset scantxoutset scantxoutset "));
+    CHECK(called("scantxoutset scantxoutset scantxoutset "));
     btc_rpc_done(&R);
     /* room for one: the largest */
     busy_scans = 0;
@@ -286,19 +286,16 @@ static void test_coins(void)
     btc_rpc_done(&R);
     free(unspents);
 
-    /* a node that is behind: no scan, no coins */
+    /* a node that is behind, or on another chain, is not ready: whoever reads coins asks first (a session, a sweep), and scans nothing */
+    char why[200];
     bci = "{\"chain\":\"regtest\",\"blocks\":10,\"headers\":900,\"initialblockdownload\":false,\"pruned\":false}";
-    unspents = scan_result(3, three, NULL, NULL, NULL);
     start(ans_pruned, BTC_REGTEST);
-    CHECK(CH.coins(CH.ctx, SPK, pc, 64) == -1 && called("getblockchaininfo "));
+    CHECK(CH.ready(CH.ctx, why, sizeof why) == 0 && called("getblockchaininfo "));
     btc_rpc_done(&R);
-    /* the scan fails for another reason */
     bci = BCI_OK;
-    busy_scans = 0;
-    start(ans_pruned, BTC_MAIN);   /* a main-chain address to scan: the node is on regtest */
-    CHECK(CH.coins(CH.ctx, SPK, pc, 64) == -1 && called("getblockchaininfo "));
+    start(ans_pruned, BTC_MAIN);   /* the node is on regtest */
+    CHECK(CH.ready(CH.ctx, why, sizeof why) == -1 && called("getblockchaininfo "));
     btc_rpc_done(&R);
-    free(unspents);
 }
 
 /* ---- the height, the broadcast, the confirmations, the fee rate ---- */
@@ -316,10 +313,12 @@ static answer ans_misc(const char *method, const char *params, int nth)
         if (nth == 0) return (answer){"\"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16\"", NULL};
         return (answer){NULL, e[(nth - 1) % 4]};
     }
-    if (!strcmp(method, "gettxout")) {   /* spent in a block (none with the mempool nor without), a failure, spent in the mempool only,
-                                          * then none again: the transaction is back in the mempool */
-        if (nth <= 1 || (nth == 3 && strstr(params, "true")) || nth >= 5) return (answer){"null", NULL};
-        if (nth == 2) return (answer){NULL, "{\"code\":-8,\"message\":\"x\"}"};
+    if (!strcmp(method, "gettxout")) {   /* asked without the mempool: not in the set of the chain (spent in a block), a failure, in
+                                          * the set (its spend, if any, only waits in the mempool), then not in it again: the
+                                          * transaction is back in the mempool */
+        if (!strstr(params, ",false]")) return (answer){NULL, "{\"code\":-8,\"message\":\"with the mempool\"}"};
+        if (nth == 1) return (answer){NULL, "{\"code\":-8,\"message\":\"x\"}"};
+        if (nth != 2) return (answer){"null", NULL};
         return (answer){"{\"confirmations\":3,\"value\":1.0,\"scriptPubKey\":{\"hex\":\"51\"},\"coinbase\":false}", NULL};
     }
     if (!strcmp(method, "getmempoolentry"))   /* not there; then there, after a reorganisation */

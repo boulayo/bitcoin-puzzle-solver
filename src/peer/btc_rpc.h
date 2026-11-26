@@ -35,7 +35,7 @@ typedef struct {
     char host[256], port[8];
     char auth[BTC_RPC_AUTH_MAX / 3 * 4 + 8];   /* the base64 of user:password */
     char cookie[1024];      /* the cookie file the credentials come from, or empty: read again when the node answers 401 */
-    char wallet[80];        /* the path of the wallet calls, /wallet/<name>, or empty */
+    char wallet[80];        /* the path the calls go to, /wallet/<name>, when not empty: the wallet calls of the tests on regtest */
     int timeout_ms;         /* of every call but scantxoutset; 30 s from btc_rpc_init */
     int scan_timeout_ms;    /* scantxoutset reads the whole set of unspent outputs: minutes on the main chain; 30 min */
     uint64_t id;
@@ -53,21 +53,14 @@ bool btc_rpc_init_cookie(btc_rpc *c, const char *host, unsigned port, const char
  * when arg is not one of the forms, BTC_RPC_ENET when the cookie file cannot be read (the node writes it when it starts and removes it
  * when it stops: it may not be running). */
 bool btc_rpc_init_arg(btc_rpc *c, const char *arg, const char *cookie_path);
-/* The wallet the wallet calls (getnewaddress, sendtoaddress) use, when the node has more than one loaded; NULL or "" for none. The
- * name is limited to letters, digits, '-', '_' and '.', which need no escaping in the path. */
-bool btc_rpc_set_wallet(btc_rpc *c, const char *name);
 /* wipes the client, credentials included */
 void btc_rpc_done(btc_rpc *c);
 
-/* A call: method with the parameters in params (an array written with json_w, or NULL for none), to the wallet path when wallet is
- * true. On success *result is the "result" member of the reply, which lives in doc until json_free(doc); on failure doc is empty. */
-bool btc_rpc_call(btc_rpc *c, bool wallet, const char *method, json_w *params, json_doc *doc, const json_val **result);
+/* A call: method with the parameters in params (an array written with json_w, which the call frees, or NULL for none). On success
+ * *result is the "result" member of the reply, which lives in doc until json_free(doc); on failure doc is empty. */
+bool btc_rpc_call(btc_rpc *c, const char *method, json_w *params, json_doc *doc, const json_val **result);
 
 bool btc_rpc_getblockcount(btc_rpc *c, uint64_t *height);
-bool btc_rpc_getblockhash(btc_rpc *c, uint64_t height, uint8_t hash[32]);
-/* The bytes of a transaction, in *raw (malloc'd: the caller frees it) and *len: from the mempool or the transaction index, or from
- * the block blockhash when it is not NULL, which needs no index. As the server sent them: btc_prevout is the check. */
-bool btc_rpc_getrawtransaction(btc_rpc *c, const uint8_t txid[32], const uint8_t *blockhash, uint8_t **raw, size_t *len);
 
 /* what getblockchaininfo says of the node's chain */
 typedef struct {
@@ -98,23 +91,14 @@ typedef struct {
  * time: another one is refused with an error that says "in progress". A scan this client gave up on is aborted, so as not to keep the
  * node busy. */
 bool btc_rpc_scan(btc_rpc *c, const char *const *addrs, size_t n_addr, btc_utxo *out, size_t cap, size_t *n, uint64_t *height);
-/* gettxout: *found false when the output is spent or never was; with mempool, a spend in the mempool counts as spent */
-bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool mempool, bool *found, btc_utxo *out);
+/* gettxout without the mempool: *found false when the output is spent in a block, never was, or is not in a block yet */
+bool btc_rpc_gettxout(btc_rpc *c, const uint8_t txid[32], uint32_t vout, bool *found, btc_utxo *out);
 /* Whether the node has the transaction in its mempool (getmempoolentry); false when it could not be asked. */
 bool btc_rpc_inmempool(btc_rpc *c, const uint8_t txid[32], bool *in);
 /* estimatesmartfee: satoshis per 1000 virtual bytes to confirm within target blocks, or 0 when the node has no estimate (a node that
  * has just started, regtest) */
 bool btc_rpc_estimatesmartfee(btc_rpc *c, unsigned target, uint64_t *sat_per_kvb);
-/* testmempoolaccept of one transaction: *ok, and the reason of a refusal in reason (cap bytes, "" when accepted) */
-bool btc_rpc_testmempoolaccept(btc_rpc *c, const uint8_t *raw, size_t len, bool *ok, char *reason, size_t cap);
 /* sendrawtransaction: the txid the node gives back */
 bool btc_rpc_sendrawtransaction(btc_rpc *c, const uint8_t *raw, size_t len, uint8_t txid[32]);
-
-/* The wallet calls of the tests on regtest. type of getnewaddress: "legacy", "p2sh-segwit", "bech32", "bech32m", or NULL for the
- * node's default. generatetoaddress gives the hash of the last block in last when it is not NULL. */
-bool btc_rpc_createwallet(btc_rpc *c, const char *name);
-bool btc_rpc_getnewaddress(btc_rpc *c, const char *type, char *addr, size_t cap);
-bool btc_rpc_sendtoaddress(btc_rpc *c, const char *addr, uint64_t sats, uint8_t txid[32]);
-bool btc_rpc_generatetoaddress(btc_rpc *c, unsigned blocks, const char *addr, uint8_t last[32]);
 
 #endif

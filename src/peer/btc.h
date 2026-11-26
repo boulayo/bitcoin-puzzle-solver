@@ -104,6 +104,10 @@ bool btc_tx_txid(const btc_tx *tx, uint8_t txid[32]);
 /* the txid of any transaction in either serialization, with no limit on its size; false when raw is not a transaction */
 bool btc_txid(const uint8_t *raw, size_t len, uint8_t txid[32]);
 
+/* The outpoints a transaction in either serialization spends, with no limit on their number: 36 bytes each as it holds them (the txid,
+ * then the output number, little-endian), malloc'd, their number in *n. NULL when raw is not a transaction. */
+uint8_t *btc_tx_outpoints(const uint8_t *raw, size_t len, size_t *n);
+
 /* The amount check (docs/en/NETWORK.md 8). raw is the transaction that created the output txid:vout, as some server sent it: it is
  * accepted only when its hash is txid, which makes the value and the script it holds those of the chain. The value goes to *value
  * and the scriptPubKey to *spk (a pointer into raw) and *spk_len. */
@@ -139,6 +143,9 @@ bool btc_ecdsa_verify(const uint8_t digest[32], const uint8_t *der, size_t der_l
 
 /* ---- size and fee ---- */
 
+/* The order of the coins wherever some are chosen (the scan of a node, the coins of a light chain, the inputs of a payout): the larger
+ * value first, then the smaller outpoint (the txid in internal order, then the output). Negative when coin a goes before coin b. */
+int btc_coin_cmp(uint64_t value_a, const uint8_t txid_a[32], uint32_t vout_a, uint64_t value_b, const uint8_t txid_b[32], uint32_t vout_b);
 /* the most a signed P2PKH input takes: 36 bytes of outpoint, a 1-byte length, a scriptSig of 107 (a push of a signature of at most
  * 71 bytes, r of 33 with its sign byte and a low s of 32, and its hashtype, a push of a compressed key), 4 of sequence */
 #define BTC_P2PKH_IN_SIZE 148

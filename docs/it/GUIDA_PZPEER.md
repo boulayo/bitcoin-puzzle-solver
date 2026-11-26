@@ -230,8 +230,22 @@ echo CHIAVE_IN_64_CIFRE_ESADECIMALI | ./pzpeer sweep --to TUO_INDIRIZZO --privat
 ```
 
 (la chiave con gli zeri davanti fino a 64 cifre). pzpeer fa e firma la transazione e la dà solo a Slipstream di MARA, un pool che mina le
-transazioni senza mostrarle (`--pool URL` per un altro). Senza `--private` la stampa soltanto, da dare a mano a un pool. La chiave del
-puzzle 38 (`000...0022382facd0`, ormai vuoto) serve a provare il comando senza rischi: risponde `this key has no confirmed coin`.
+transazioni senza mostrarle (`--pool URL` per un altro). Senza `--private` la stampa soltanto, da dare a mano a un pool.
+
+**Funziona anche senza un nodo Bitcoin**, per i puzzle che il programma conosce (tutti quelli ancora aperti): le monete dell'indirizzo
+sono scritte nel programma, e i server Electrum servono solo a confermare che ci sono ancora. Senza nodo, però, `sweep` muove tutte le
+monete dell'indirizzo o nessuna, perché una transazione che ne spende solo una parte mostra la chiave pubblica e lascia il resto al
+primo che arriva. Quindi rifiuta, e dice perché, in due casi:
+
+- un server ha nascosto una delle monete scritte nel programma, o nessuno ha risposto (`a server hid a coin of the address...`): riprova
+  più tardi, oppure usa un tuo nodo con `--rpc HOST:PORTA --rpc-cookie FILE`;
+- la chiave è di un indirizzo che il programma non conosce (`servers cannot show the coins of an address that are older than their
+  checkpoint...`): le monete vecchie di un indirizzo si vedono solo con un nodo proprio, quindi serve `--rpc`.
+
+Con `--rpc` prende tutto quello che il nodo elenca. In ogni caso dice quante monete lascia: quelle che valgono meno della commissione
+per spenderle e quelle oltre le 16 che entrano in una transazione. La chiave del puzzle 38 (`000...0022382facd0`, ormai vuoto) serve a
+provare il comando senza rischi: con `--rpc` risponde `no transaction: the address has no confirmed coin`, senza nodo il secondo rifiuto
+qui sopra.
 
 ### 5.4 Un nodo sempre acceso
 

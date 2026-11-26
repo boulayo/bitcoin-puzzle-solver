@@ -266,7 +266,7 @@ const char *const PZ_RETIRED[PZ_NUM_RETIRED] = {
     "1FMcotmnqqE5M2x9DDX3VfPAPuBWArGisa", /* 256 */
 };
 
-/* the coins of the prize of the open puzzles with a public key (data/prizes.csv), ended by n = 0 */
+/* the coins of the addresses of the open puzzles (data/prizes.csv), ended by n = 0 */
 const puzzle_prize PZ_PRIZES[] = {
     {140, "08389f34c98c606322740c0be6a7125d9860bb8d5cb182c02f98461e5fa6cd15", 139, 14000000},
     {140, "5d45587cfd1d5b0fb826805541da7d94c61fe432259e68ee26f4a04544384164", 88, 126000000},

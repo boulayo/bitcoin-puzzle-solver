@@ -16,15 +16,16 @@
 #define COINBASE_MATURITY 100
 #define COINS_MAX 256
 #define SPENDS_MAX 2048            /* the transactions whose inputs are kept: a txid names its bytes for ever */
+#define SPENDS_KEEP 1024           /* inputs of one of them, at most: a larger one is looked into again every time */
 
 #define RETRY_MS 600000            /* a server that did not answer is tried again after ten minutes */
 #define OP_MS 60000                /* the calls of one server in an operation, all together (op_ms 0) */
 
-/* the outpoints a transaction spends (n 0: it holds more than a btc_tx, which ours never do) */
+/* the outpoints a transaction spends, 36 bytes each as it holds them (in NULL: an empty place) */
 typedef struct spv_spends {
     uint8_t txid[32];
-    uint8_t n;
-    struct { uint8_t txid[32]; uint32_t vout; } in[BTC_MAX_IN];
+    size_t n;
+    uint8_t *in;
 } spends;
 
 /* the servers of one operation: e is the connections of the chain, held until close_all */
@@ -206,32 +207,33 @@ static bool is_coinbase(const uint8_t *raw, size_t len)
     return len >= o + 1 + 36 && raw[o] == 1 && !memcmp(raw + o + 1, ZERO, 32);
 }
 
-/* The outpoints transaction id spends, kept from one call to the next (io held), else from the server, whose bytes count only when their
- * hash is id; NULL when it does not give them */
-static const spends *spends_of(chain_spv *c, electrum *e, const uint8_t id[32])
+/* Whether transaction id spends the outpoint op (36 bytes, as a transaction holds it). What id spends is kept from one call to the next
+ * (io held), else it comes from the server, whose bytes count only when their hash is id (false when it does not give them): every
+ * input of it, however many, so that no transaction of any shape hides a spend. */
+static bool spends_it(chain_spv *c, electrum *e, const uint8_t id[32], const uint8_t op[36])
 {
-    if (!c->spends && !(c->spends = calloc(SPENDS_MAX, sizeof *c->spends))) return NULL;
+    if (!c->spends && !(c->spends = calloc(SPENDS_MAX, sizeof *c->spends))) return false;
     spends *sp = &c->spends[(id[0] | (size_t)id[1] << 8) % SPENDS_MAX];
-    if (!memcmp(sp->txid, id, 32)) return sp;
-    uint8_t *raw;
-    size_t len;
-    btc_tx *tx = malloc(sizeof *tx);
-    const bool got = tx && get_tx(e, id, &raw, &len);
-    if (got) {
-        memcpy(sp->txid, id, 32), sp->n = btc_tx_parse(tx, raw, len) ? (uint8_t)tx->n_in : 0;
-        for (size_t k = 0; k < sp->n; k++) memcpy(sp->in[k].txid, tx->in[k].prev_txid, 32), sp->in[k].vout = tx->in[k].prev_vout;
+    uint8_t *raw, *in = sp->in;
+    size_t len, n = sp->n;
+    const bool kept = in && !memcmp(sp->txid, id, 32);
+    if (!kept) {
+        if (!get_tx(e, id, &raw, &len)) return false;
+        in = btc_tx_outpoints(raw, len, &n);
         free(raw);
+        if (in && n <= SPENDS_KEEP) free(sp->in), memcpy(sp->txid, id, 32), sp->n = n, sp->in = in;
     }
-    free(tx);
-    return got ? sp : NULL;
+    bool spent = false;
+    for (size_t k = 0; in && k < n && !spent; k++) spent = !memcmp(in + 36 * k, op, 36);
+    if (in != sp->in) free(in);
+    return spent;
 }
 
 /* The history of a script on one server, looked at for the output txid:vout. *height: where txid is confirmed, by proof. True when the
  * server shows the output spent by a confirmed transaction, with its proof. A spend in the mempool counts for nothing: one server could
  * show a transaction that was never sent (the second transaction a partner holds back), and F would not cancel. Every confirmed
  * transaction at or above txid's height is looked into, oldest first, as far as the server's time in the operation goes; what each
- * spends is kept (spends_of), so the next look goes further: dust sent to the address cannot hide the spend. Transactions with more
- * inputs or outputs than a btc_tx holds are not looked into: ours are small. */
+ * spends is kept (spends_it), so the next look goes further: dust sent to the address cannot hide the spend. */
 static bool scan_history(chain_spv *c, electrum *e, const uint8_t *spk, size_t spk_len, const uint8_t txid[32], uint32_t vout, uint64_t *height)
 {
     json_w w;
@@ -240,6 +242,9 @@ static bool scan_history(chain_spv *c, electrum *e, const uint8_t *spk, size_t s
     uint8_t sh[32];
     bool spent = false;
     int64_t at = 0;                                            /* the height of txid in this history */
+    uint8_t op[36];
+    memcpy(op, txid, 32);
+    for (int b = 0; b < 4; b++) op[32 + b] = (uint8_t)(vout >> (8 * b));
     script_hash(spk, spk_len, sh);
     jw_init(&w);
     jw_arr(&w), put_hash(&w, sh), jw_end(&w);
@@ -260,9 +265,7 @@ static bool scan_history(chain_spv *c, electrum *e, const uint8_t *spk, size_t s
         int64_t h;
         if (!btc_hash_from_hex(json_str(json_get(it, "tx_hash")), id) || !json_i64(json_get(it, "height"), &h) || h < at || !memcmp(id, txid, 32))
             continue;
-        const spends *sp = spends_of(c, e, id);
-        for (size_t k = 0; sp && k < sp->n && !spent; k++)
-            spent = !memcmp(sp->in[k].txid, txid, 32) && sp->in[k].vout == vout && get_proof(c, e, id, (uint64_t)h);
+        spent = spends_it(c, e, id, op) && get_proof(c, e, id, (uint64_t)h);
     }
     json_free(&d);
     return spent;
@@ -357,20 +360,13 @@ static int gather(chain_spv *c, const uint8_t spk[BTC_P2PKH_LEN], found_coin *ou
     return answered ? n : -1;
 }
 
-static int by_value(const void *a, const void *b)
-{
-    const payout_coin *x = &((const found_coin *)a)->coin, *y = &((const found_coin *)b)->coin;
-    if (x->value != y->value) return x->value > y->value ? -1 : 1;
-    const int c = memcmp(x->txid, y->txid, 32);
-    return c ? c : (x->vout > y->vout) - (x->vout < y->vout);
-}
 
 static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, int max)
 {
     found_coin *f = malloc(COINS_MAX * sizeof *f);
     if (!f) return -1;
     int n = gather(ctx, spk, f, COINS_MAX);
-    if (n > 0) qsort(f, (size_t)n, sizeof *f, by_value);       /* the largest first, as payout_first takes them */
+    if (n > 0) qsort(f, (size_t)n, sizeof *f, payout_by_value);   /* the largest first, as payout_first takes them (the coin begins f) */
     if (n > max) n = max;
     for (int i = 0; i < n; i++) out[i] = f[i].coin;
     free(f);
@@ -592,6 +588,7 @@ bool chain_spv_init(chain_spv *c, btc_chain chain, uint64_t cp_height, const uin
 void chain_spv_free(chain_spv *c)
 {
     for (int i = 0; i < c->nservers; i++) electrum_close(&c->conn[i]);
+    for (int i = 0; c->spends && i < SPENDS_MAX; i++) free(c->spends[i].in);
     free(c->spends);
     spv_free(&c->headers);
     pthread_mutex_destroy(&c->mu);

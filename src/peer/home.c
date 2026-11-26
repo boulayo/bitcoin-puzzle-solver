@@ -37,10 +37,10 @@
 #include <unistd.h>
 
 #define MAX_SESSIONS 64
-#define PROVED_MAX 1024
 #define HELLO_SESSIONS 16          /* sessions started by a hello alone, without an alert of the table (the others always have room) */
 #define FAILS_MAX 10               /* failed signings of a home on a network, with any partner (project 4.6) */
-#define FAILS_PAIR_MAX 3           /* and with one pair */
+#define FAILS_PAIR_MAX 3           /* on one own point, for ever, */
+#define FAILS_EVER_MAX 64          /* and of this home on a network, for ever: then only a new home seed signs again */
 #define PAYOUTS_MAX 5              /* payouts of one own point that reached the signing of their first transaction and did not pay */
 #define RETRY_S 600                /* a kept pair whose session did not pay starts again after this, */
 #define RETRIES 144                /* for about a day (the signings that fail are counted, session.h) */
@@ -62,7 +62,7 @@ typedef struct session_slot {
     int64_t retry_at;               /* when its session starts again (0: never), the seconds of mono_s */
     int tries;
     session_paid paid;              /* its payout, once its prize moved, and the key once the pieces are exchanged */
-    uint8_t eid[32], partner[32];
+    uint8_t eid[32];
     record mine, theirs;
     net_conn *conn;                 /* an incoming channel handed by on_session */
     uint8_t first[SESSION_HELLO_MAX];  /* the hello that came with it; a longer first message is no hello */
@@ -90,9 +90,6 @@ typedef struct {
     pthread_mutex_t mu;             /* own, dpr, the sessions */
     pthread_cond_t cv;
     session_slot s[MAX_SESSIONS];
-    uint8_t proved[PROVED_MAX][64];  /* HOME/proved: the x of an own point and the id of the pair whose partner proved it, also from
-                                      * before a restart: no other pair on that point (slot_of) */
-    int nproved;
     int ended;                      /* sessions that ended, and how: for exit_when_done */
     bool paid;
     session_limit limit;            /* the failed signings, counted in the home folder */
@@ -243,29 +240,6 @@ static void paid_save(home *h)
     if (!sys_new_file_done(f, h->paidpath, ok)) home_say("cannot write %s: after a restart the pieces would not be exchanged", h->paidpath);
 }
 
-/* HOME/proved, a line "<x> <eid>" a pair, read at the start (proved_add with no pair) or added to (mu held) */
-static void proved_add(home *h, const session_slot *s)
-{
-    char path[1200], line[140];
-    snprintf(path, sizeof path, "%s/proved", h->dir);
-    if (!s) {
-        FILE *f = sys_fopen(path, "r");
-        uint8_t e[64];
-        while (f && h->nproved < PROVED_MAX && fgets(line, sizeof line, f))
-            if (strlen(line) >= 129 && line[64] == ' ' && pz_unhex(line, 64, e) && pz_unhex(line + 65, 64, e + 32)) memcpy(h->proved[h->nproved++], e, 64);
-        if (f) fclose(f);
-        return;
-    }
-    for (int i = 0; i < h->nproved; i++)
-        if (!memcmp(h->proved[i], s->mine.x, 32)) return;      /* the point has its pair already */
-    if (h->nproved == PROVED_MAX) return;
-    memcpy(h->proved[h->nproved], s->mine.x, 32), memcpy(h->proved[h->nproved] + 32, s->eid, 32), h->nproved++;
-    char a[65], b[65];
-    pz_hex_encode(s->mine.x, 32, a), pz_hex_encode(s->eid, 32, b);
-    FILE *f = sys_fopen(path, "a");
-    if (!f || fprintf(f, "%s %s\n", a, b) < 0 || fflush(f) || !sys_sync(fileno(f))) home_say("cannot write %s", path);
-    if (f) fclose(f);
-}
 
 /* The pairs of HOME/paid back in their slots: they try the exchange of the pieces again soon, unless the key is in FOUND.txt already (then
  * they only answer the partner, which may still lack this home's piece). */
@@ -289,7 +263,6 @@ static void paid_load(home *h)
             continue;
         pieces_eid(&h->net, pair, s->eid);
         if (memcmp(s->eid, eid, 32) || memcmp(s->mine.owner, h->id.xonly, 32)) continue;   /* of another network, or another home */
-        memcpy(s->partner, s->theirs.owner, 32);
         s->used = s->alerted = s->proved = true;
         s->paid.paid_at = at, s->paid.have_key = known, s->paid.second_len = sl / 2;
         s->retry_at = known ? 0 : mono_s() + 60;               /* once dp.bin is read back: the distance of the own point comes from it */
@@ -458,13 +431,16 @@ static bool solo_payout(home *h, const char *found, bool last)
         btc_tx tx;
         uint8_t txid[32];
         char id[65];
-        if (!payout_author(PAYOUT_TERMS, &t) || !sweep_tx(&ch, sec, h->pay_spk, h->pay_len, &t, &si, &tx))
-            snprintf(why, sizeof why, si.listed > 0 ? "its coins do not pay the fee" : si.listed == 0 ? "the puzzle address has no confirmed coin" : "the chain did not answer");
+        const char *no = payout_author(PAYOUT_TERMS, &t) ? sweep_tx(&ch, sec, h->prizes, h->nprizes, h->pay_spk, h->pay_len, &t, &si, &tx) : "no terms";
+        if (no) snprintf(why, sizeof why, "%s", no);
         else if (!ch.broadcast(ch.ctx, &tx)) snprintf(why, sizeof why, "the chain did not take the transaction");
         else {
             btc_tx_txid(&tx, txid), btc_hash_to_hex(txid, id);
             home_say("the coins of the puzzle are sent: %s BTC to the payout address of this home, %s BTC (%u%%) to the author of pzpeer: %s",
                 btc_amount(tx.out[0].value, va), btc_amount(tx.out[1].value, vb), t.author_pct, id);
+            if (si.listed > (int)tx.n_in)
+                home_say("%d smaller coins are left at the puzzle address: pzpeer sweep moves those worth their fee, once this transaction is in a"
+                         " block", si.listed - (int)tx.n_in);
             sent = true;
         }
     }
@@ -677,6 +653,27 @@ static void session_on_paid(void *user, const session_paid *p)
     pthread_mutex_unlock(&w->h->mu);
 }
 
+/* another used slot on the same own point whose partner proved its distance (mu held) */
+static bool point_taken(const home *h, const session_slot *s)
+{
+    for (int i = 0; i < MAX_SESSIONS; i++)
+        if (&h->s[i] != s && h->s[i].used && h->s[i].proved && !memcmp(h->s[i].mine.x, s->mine.x, 32)) return true;
+    return false;
+}
+
+/* The partner of a session proved its distance: the pair has the own point, unless a pair proved there first. Whoever knows the other
+ * distance can name the point again under as many identities as it likes: only one of them goes on, and the others give their slots
+ * back when their sessions end (session_main). */
+static bool session_on_proved(void *user)
+{
+    const sayer *w = user;
+    pthread_mutex_lock(&w->h->mu);
+    const bool ok = !point_taken(w->h, w->s);
+    w->s->proved |= ok, w->s->alerted |= ok;                    /* an alert that comes after it starts no second session */
+    pthread_mutex_unlock(&w->h->mu);
+    return ok;
+}
+
 /* the partner's own connection to this home, which on_session handed to the slot: dht_channel looks for it while it tries the others */
 static net_conn *incoming(void *arg, int ms, bool *give_up)
 {
@@ -705,12 +702,10 @@ static void *session_main(void *arg)
     home_say("session %s: a coincidence with home %02x%02x%02x%02x...: the payout starts", tag, s->theirs.owner[0], s->theirs.owner[1],
         s->theirs.owner[2], s->theirs.owner[3]);
     session_result res = SESSION_FAILED;
-    bool proved = false;
     sayer sy = {h, s, tag};
     pthread_mutex_lock(&h->mu);
     session_paid paid = s->paid;                                /* the session writes its copy; the slot gets it back at the end */
     pthread_mutex_unlock(&h->mu);
-    const uint64_t paid_before = paid.paid_at;
     const bool had_key = paid.have_key;                         /* a session that gives the partner our piece again shows nothing new */
     /* the own terms first: once the channel is open the partner's hello comes within seconds (and is waited for no longer); the chain
      * is asked once the partner proved its point (session.c) */
@@ -722,11 +717,11 @@ static void *session_main(void *arg)
     if (!home_chain(h, &rpc, &crpc, &chain, why, sizeof why)) goto done;
     sc = (session_cfg){.ctx = h->ctx, .net = &h->net, .identity = &h->id.kp, .mine = s->mine, .theirs = s->theirs, .pay_len = h->pay_len,
                        .min_feerate = 20000, .max_feerate = 1000000,   /* 20 to 1000 satoshis a virtual byte */
-                       .pzsign = cfg->pzsign, .pzsign_log = h->signlog, .limit = &h->limit, .proved = &proved,
+                       .pzsign = cfg->pzsign, .pzsign_log = h->signlog, .limit = &h->limit, .on_proved = session_on_proved,
                        .chain = &chain, .timeout_ms = 300000, .cancel_blocks = 3, .paid = &paid, .say = session_say, .on_paid = session_on_paid, .user = &sy,
                        /* how often the chain is asked: public servers are not to be hammered */
                        .poll_ms = h->chain == BTC_REGTEST ? 1000 : cfg->rpc ? 2000 : 15000};
-    memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33), memcpy(sc.partner, s->theirs.owner, 32);
+    memcpy(sc.base, h->base, 32), memcpy(sc.pubkey33, h->nf.pubkey33, 33);
     memcpy(sc.pay_spk, h->pay_spk, h->pay_len);
     memcpy(sc.prizes, h->prizes, sizeof sc.prizes), sc.nprizes = h->nprizes;
     const uint32_t n = (uint32_t)s->eid[0] << 24 | (uint32_t)s->eid[1] << 16 | (uint32_t)s->eid[2] << 8 | s->eid[3];
@@ -756,20 +751,18 @@ done:
     if (paid.have_key && !had_key) paid.have_key = found_key(h, paid.key);
     pz_secure_zero(paid.key, sizeof paid.key);
     pthread_mutex_lock(&h->mu);
-    s->paid = paid;
-    if (paid.paid_at && !paid_before) paid_save(h), h->prize_paid = true;
+    s->paid = paid;                                             /* a payout was kept, and counted, when the session saw it (session_on_paid) */
     h->prize_gone |= paid.empty && !paid.paid_at;
     if (c) net_close(c);
     if (s->have_conn && s->conn != c) net_close(s->conn);      /* the partner's connection came too, after another one */
     s->running = false, s->waiting = false, s->have_conn = false, s->conn = NULL;
-    s->proved |= proved, s->alerted |= proved;                  /* an alert that comes after it starts no second session */
-    if (proved) proved_add(h, s);
     /* again in 10 minutes if it did not pay, or paid without the pieces, unless one side gives no piece on its chain (a start with --rpc,
      * of either home, tries again) */
     s->retry_at = s->alerted && !paid.empty && !paid.refused && (res != SESSION_PAID || !paid.have_key) && ++s->tries < RETRIES ? mono_s() + RETRY_S : 0;
     /* a pair whose partner never proved anything gives its slot back, and so does one out of tries (an alert that comes again starts it
      * afresh, within the limits of session.h); a paid pair keeps its slot, so that it is not started again */
     s->used = s->alerted && (res == SESSION_PAID || s->retry_at || paid.paid_at);   /* a paid pair keeps its slot: the partner may come back */
+    s->used &= s->proved || !point_taken(h, s);                 /* the own point has its pair: this one, another identity or a copy, goes */
     h->ended++;
     h->paid |= res == SESSION_PAID;
     pthread_mutex_unlock(&h->mu);
@@ -789,13 +782,12 @@ static session_slot *slot_of(home *h, const record *mine, const record *theirs, 
         if (h->s[i].used && !memcmp(h->s[i].eid, eid, 32)) return &h->s[i];
         make &= !(h->s[i].used && h->s[i].proved && !memcmp(h->s[i].mine.x, mine->x, 32));
     }
-    for (int i = 0; i < h->nproved; i++) make &= memcmp(h->proved[i], mine->x, 32) || !memcmp(h->proved[i] + 32, eid, 32);
     for (int i = 0; make && i < MAX_SESSIONS; i++)
         if (!h->s[i].used) {
             session_slot *s = &h->s[i];
             memset(s, 0, sizeof *s);
             s->used = *fresh = true;
-            memcpy(s->eid, eid, 32), memcpy(s->partner, theirs->owner, 32);
+            memcpy(s->eid, eid, 32);
             s->mine = *mine, s->theirs = *theirs;
             return s;
         }
@@ -851,7 +843,7 @@ static void on_session(void *user, net_conn *c, const uint8_t *msg, size_t len)
         bool busy = false;
         for (int i = 0; i < MAX_SESSIONS; i++) {
             const session_slot *o = &h->s[i];
-            if (o->used && !o->alerted) open++, busy |= !memcmp(o->partner, a.owner, 32);
+            if (o->used && !o->alerted) open++, busy |= !memcmp(o->theirs.owner, a.owner, 32);
             busy |= o->used && o->running && !memcmp(o->mine.x, b.x, 32);   /* one session on a point at a time: a partner proving there
                                                                               * cannot open others under new identities meanwhile */
         }
@@ -1073,7 +1065,8 @@ int home_run(const home_cfg *cfg)
     snprintf(h->dpbin, sizeof h->dpbin, "%.1100s/campaigns/net-%.31s/dp.bin", h->dir, h->nf.net);
     pthread_mutex_init(&h->limit.mu, NULL);
     pthread_cond_init(&h->limit.cv, NULL);
-    h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.pay_max = PAYOUTS_MAX;
+    h->limit.path = h->limitpath, h->limit.max = FAILS_MAX, h->limit.pair_max = FAILS_PAIR_MAX, h->limit.ever_max = FAILS_EVER_MAX;
+    h->limit.pay_max = PAYOUTS_MAX;
     pz_u256_to_be(&h->nf.start, h->base);
     if (!record_net_init(h->ctx, &h->net, h->nf.fp, h->nf.dpbits, h->nf.pubkey33, h->base)) return fprintf(stderr, "invalid network\n"), 1;
     snprintf(h->dppath, sizeof h->dppath, "%.1100s/dpbits.txt", h->dir);
@@ -1099,7 +1092,7 @@ int home_run(const home_cfg *cfg)
     } else if (!light_chain(h, cfg, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!home_seed(h, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!keys_identity(h->ctx, h->seed, h->nf.fp, cfg->id_bits, &h->id)) return fprintf(stderr, "no identity\n"), 1;
-    paid_load(h), proved_add(h, NULL);
+    paid_load(h);
     /* the table: the entry lines of the file and the peers given */
     const char *boot[64];
     char entries[16][NETFILE_LINE_MAX], line[NETFILE_LINE_MAX];
@@ -1118,8 +1111,8 @@ int home_run(const home_cfg *cfg)
         else home_say("the line prize=%s of the network file is not TXID:VOUT:SATOSHIS: it is left out", line);
     }
     if (!cfg->rpc && !h->nprizes)
-        home_say("the network file names no coin of the prize (prize=): servers could hide one, so a payout is shared as always, but the pieces"
-                 " of the key are exchanged only with a node of one's own (--rpc)");
+        home_say("the network file names no coin of the puzzle address (prize=): servers could hide one, so a payout is shared as always, but"
+                 " the pieces of the key are exchanged, and a key this home finds alone is swept, only with a node of one's own (--rpc)");
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
     dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,

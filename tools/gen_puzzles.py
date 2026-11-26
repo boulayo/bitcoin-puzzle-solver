@@ -3,8 +3,8 @@
 """Generates src/puzzles_data.c from data/puzzles.csv after re-verifying every row
 with the independent reference implementation (tools/ref.py), plus the addresses of the
 withdrawn puzzles 161..256 from data/puzzles_withdrawn.csv (n,address) and the coins of the
-prize of the open puzzles with a public key from data/prizes.csv (n,txid,vout,sats; see
-data/README.md).
+addresses of the open puzzles from data/prizes.csv (n,txid,vout,sats; see data/README.md,
+tools/fetch_prizes.py).
 
     python3 -I tools/gen_puzzles.py            # rewrite src/puzzles_data.c
     python3 -I tools/gen_puzzles.py --check    # fail if the committed file is stale
@@ -22,6 +22,7 @@ CSV = os.path.join(ROOT, 'data', 'puzzles.csv')
 CSV_RET = os.path.join(ROOT, 'data', 'puzzles_withdrawn.csv')
 CSV_PRIZES = os.path.join(ROOT, 'data', 'prizes.csv')
 PRIZES_MAX = 16                    # the prize= lines a network takes (SESSION_PRIZES_MAX of src/peer/session.h)
+PRIZE_MIN = 7400                   # satoshis: what an input costs at 50 sat/vB, the lowest fee rate of a sweep (src/peer/sweep.c)
 ADDR_RE = r'1[1-9A-HJ-NP-Za-km-z]{24,33}'
 OUT = os.path.join(ROOT, 'src', 'puzzles_data.c')
 
@@ -117,19 +118,22 @@ def load_prizes(main_rows):
             if None in r or None in r.values() or not all(re.fullmatch(r'[0-9]{1,16}', r[k]) for k in ('n', 'vout', 'sats')):
                 raise ValueError('prizes.csv: malformed row %r' % (r,))
             rows.append((int(r['n']), r['txid'], int(r['vout']), int(r['sats'])))
-    # the coins of a network with a payout: an open puzzle whose public key is known
-    payout = {n for n, addr, pub, priv in main_rows if pub and not priv}
+    # the coins of the address of an open puzzle, with or without a public key
+    unsolved = {n for n, addr, pub, priv in main_rows if not priv}
     seen = set()
     for n, txid, vout, sats in rows:
-        if n not in payout:
-            raise ValueError('prize of puzzle %d: not an open puzzle with a public key' % n)
+        if n not in unsolved:
+            raise ValueError('coin of puzzle %d: not an open puzzle' % n)
         if not re.fullmatch(r'[0-9a-f]{64}', txid):
-            raise ValueError('prize of puzzle %d: txid must be 64 lowercase hex digits' % n)
-        if not 0 < sats <= 21000000 * 100000000 or (txid, vout) in seen:
-            raise ValueError('prize of puzzle %d: value out of range, or a coin listed twice' % n)
+            raise ValueError('coin of puzzle %d: txid must be 64 lowercase hex digits' % n)
+        if not PRIZE_MIN <= sats <= 21000000 * 100000000 or (txid, vout) in seen:
+            raise ValueError('coin of puzzle %d: value out of range (%d satoshis at least), or a coin listed twice' % (n, PRIZE_MIN))
         seen.add((txid, vout))
-    if [r[0] for r in rows] != sorted(r[0] for r in rows) or max([sum(r[0] == n for r in rows) for n in payout], default=0) > PRIZES_MAX:
-        raise ValueError('prizes.csv: rows in the order of the puzzles, at most %d a puzzle' % PRIZES_MAX)
+    if [r[0] for r in rows] != sorted(r[0] for r in rows):
+        raise ValueError('prizes.csv: rows in the order of the puzzles')
+    for n in unsolved:
+        if sum(r[0] == n for r in rows) > PRIZES_MAX:
+            raise ValueError('puzzle %d has more than %d coins: a network names at most that many (SESSION_PRIZES_MAX)' % (n, PRIZES_MAX))
     return rows
 
 
@@ -147,7 +151,7 @@ def render(rows, retired, prizes):
     for n, addr in retired:
         out.append('    "%s", /* %d */' % (addr, n))
     out.append('};')
-    out += ['', '/* the coins of the prize of the open puzzles with a public key (data/prizes.csv), ended by n = 0 */',
+    out += ['', '/* the coins of the addresses of the open puzzles (data/prizes.csv), ended by n = 0 */',
             'const puzzle_prize PZ_PRIZES[] = {']
     for n, txid, vout, sats in prizes:
         out.append('    {%d, "%s", %d, %d},' % (n, txid, vout, sats))
@@ -166,7 +170,7 @@ def main():
         if cur != text:
             print('src/puzzles_data.c is out of date: run tools/gen_puzzles.py')
             return 1
-        print('puzzles_data.c in sync (%d puzzles, %d solved, %d unsolved with public key; %d withdrawn; %d prize coins)' % (
+        print('puzzles_data.c in sync (%d puzzles, %d solved, %d unsolved with public key; %d withdrawn; %d coins of open puzzles)' % (
             len(rows), sum(1 for r in rows if r[3]), sum(1 for r in rows if not r[3] and r[2]), len(retired), len(prizes)))
         return 0
     with open(OUT, 'w') as f:

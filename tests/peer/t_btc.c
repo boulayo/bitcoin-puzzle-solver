@@ -164,8 +164,17 @@ static bool round_trip(const uint8_t *raw, size_t n, const char *txid_display)
 {
     btc_tx tx;
     uint8_t out[BTC_TX_MAX_SIZE], h1[32], h2[32];
-    return btc_tx_parse(&tx, raw, n) && btc_tx_size(&tx) == n && btc_tx_serialize(&tx, out, sizeof out) == n && !memcmp(out, raw, n) &&
-           btc_tx_txid(&tx, h1) && same_hash(h1, txid_display) && btc_txid(raw, n, h2) && !memcmp(h1, h2, 32);
+    bool ok = btc_tx_parse(&tx, raw, n) && btc_tx_size(&tx) == n && btc_tx_serialize(&tx, out, sizeof out) == n && !memcmp(out, raw, n) &&
+              btc_tx_txid(&tx, h1) && same_hash(h1, txid_display) && btc_txid(raw, n, h2) && !memcmp(h1, h2, 32);
+    size_t n_in = 0;                                           /* the outpoints it spends, read without a btc_tx: the same */
+    uint8_t *op = btc_tx_outpoints(raw, n, &n_in);
+    ok = ok && op && n_in == tx.n_in;
+    for (size_t k = 0; ok && k < n_in; k++)
+        ok = !memcmp(op + 36 * k, tx.in[k].prev_txid, 32) && op[36 * k + 32] == (uint8_t)tx.in[k].prev_vout &&
+             op[36 * k + 33] == (uint8_t)(tx.in[k].prev_vout >> 8);
+    free(op);
+    return ok && !btc_tx_outpoints(raw, n - 1, &n_in) && btc_coin_cmp(2, h1, 0, 1, h1, 0) < 0 && btc_coin_cmp(1, h1, 0, 1, h1, 1) < 0 &&
+           btc_coin_cmp(1, h1, 1, 1, h1, 1) == 0;
 }
 
 static void test_main_chain(void)

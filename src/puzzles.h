@@ -20,8 +20,9 @@ typedef struct {
     const char *privkey;   /* private key in hex; "" when the puzzle is still unsolved */
 } puzzle_info;
 
-/* A coin of the prize of an open puzzle whose public key is known: the creator's (2015, 2017 and 2023), not the dust strangers send there.
- * The prize= lines of the network of the puzzle (src/peer/netfile.c). */
+/* A coin of the address of an open puzzle, as it was when data/prizes.csv was made: the creator's (2015, 2017 and 2023) and what strangers
+ * sent there, when it is worth an input of a sweep. The prize= lines of the network of the puzzle (src/peer/netfile.c), and the coins
+ * `pzpeer sweep` looks up for the key of the address (src/peer/sweep.c): servers cannot show a coin older than their checkpoint. */
 typedef struct {
     int n;
     const char *txid;      /* as explorers show it */

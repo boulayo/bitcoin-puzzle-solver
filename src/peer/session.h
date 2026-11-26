@@ -47,26 +47,36 @@ typedef struct {
     int (*ready)(void *ctx, char *why, size_t cap);
 } session_chain;
 
-#define SESSION_PRIZES_MAX 16
+#define SESSION_PRIZES_MAX 16               /* the named coins of a puzzle address (prize= of the network file, data/prizes.csv) */
+#define SESSION_COINS_MAX 64                /* the coins of an address a session, or a sweep, looks at */
+
+/* The coins of a P2PKH script, for the session and for a sweep alike: the largest of a scan of it and, of the named ones (at most
+ * SESSION_PRIZES_MAX; their values are the chain's), those the scan did not list, each looked up alone (coin). A light chain lists no coin
+ * older than its checkpoint, and the scan of a node fails when the address holds thousands of coins of dust: the named coins are found all
+ * the same. Into out (SESSION_COINS_MAX entries); returns how many. *unseen: what the chain did not answer about (the scan, each named
+ * coin): 0 when the coins are all it has of the script. */
+int session_coins(const session_chain *ch, const uint8_t spk[BTC_P2PKH_LEN], const payout_coin *named, int nnamed, payout_coin *out,
+                  int *unseen);
 
 /* The limit of failed signings of a home (docs/en/NETWORK.md 7.5, project 4.6). A bug of the two-party signer could leak a bit of a piece
  * through each signing that fails, so every run of pzsign counts as failed, in a file, before it starts, and is taken off once it gave valid
- * signatures; at max failures on the network in 30 days, or pair_max for one own point (with any partner, for ever), there are no more
- * signings. The file survives a restart and a crash in the middle of a run. Runs are one at a time (busy): a session that does not get its
- * turn within two minutes gives up without one. */
+ * signatures; at max failures on the network in 30 days, pair_max for one own point (with any partner, for ever) or ever_max of the home
+ * on the network (for ever: the pieces of the points of one walk differ by sums of jumps anyone can compute, so what leaks of one is
+ * known of all of them), there are no more signings. The file survives a restart and a crash in the middle of a run. Runs are one at a
+ * time (busy): a session that does not get its turn within two minutes gives up without one. */
 typedef struct {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     bool busy;                              /* a run of pzsign is under way */
-    const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point> <failures> [<since>]" */
-    unsigned max, pair_max;
+    const char *path;                       /* lines "<hex of the network fp, or of a hash of it and an own point or the home> <failures> [<since>]" */
+    unsigned max, pair_max, ever_max;
     unsigned pay_max;                       /* payouts of one own point that did not pay (each spent a fee and a tiny coin of the prize) */
 } session_limit;
 
 /* The payout of a pair and its key, kept by the caller from one session of the pair to the next. A session that sees the prize paid sets
  * paid_at and first; one that starts with paid_at set pays nothing: it only exchanges the pieces (unless coins came to the address since:
  * a new payout of them, whose second, once signed, is what the record holds, paid_at 0 again). Once the payout has its confirmations and
- * nothing of value is left at the puzzle address (every known coin of the prize spent), the two sides give each other their pieces, and
+ * nothing a payout could take is left at the puzzle address (its named coins spent too), the two sides give each other their pieces, and
  * each has the key. */
 #define PAID_TX_MAX 600                     /* a second transaction: two signed P2PKH inputs and three outputs, about 430 bytes */
 typedef struct {
@@ -88,20 +98,18 @@ typedef struct {
     uint8_t base[32];                       /* the start of the range, big-endian */
     uint8_t pubkey33[33];                   /* the key of the puzzle */
     const secp256k1_keypair *identity;      /* of this home */
-    uint8_t partner[32];                    /* the x-only identity at the other end of the channel (its Noise static key) */
-    record mine, theirs;                    /* the pair, as the alert gave it */
+    record mine, theirs;                    /* the pair, as the alert gave it; the owner of theirs is the other end of the channel */
     uint8_t d[32];                          /* the distance of mine (d mod n, big-endian) */
     uint8_t coin_sec[32];                   /* the key of the tiny coin of this home for this session */
     uint8_t pay_spk[BTC_SPK_MAX];           /* the payout address of this home */
     size_t pay_len;
     uint64_t min_feerate, max_feerate;      /* the fee rate this home proposes is twice the estimate of its chain, within these (satoshis
                                              * per 1000 virtual bytes); the higher of the two homes is taken, and one above max ends the session */
-    payout_coin prizes[SESSION_PRIZES_MAX]; /* the prize= outpoints of the network file (their values are the chain's) */
+    payout_coin prizes[SESSION_PRIZES_MAX]; /* the named coins of the puzzle address: the prize= outpoints of the network file */
     int nprizes;
     const char *pzsign;                    /* the signer */
     const char *pzsign_log;                 /* where its messages go (NULL: where pzpeer's go) */
     session_limit *limit;                   /* NULL: no limit (tests) */
-    bool *proved;                           /* set when the partner has proved its distance (NULL: not wanted) */
     const session_chan *chan;
     const session_chain *chain;
     int timeout_ms;                         /* the longest wait for one message of the partner */
@@ -113,6 +121,8 @@ typedef struct {
     int reveal_conf;                        /* the confirmations of the payout before the pieces are exchanged (0: 6) */
     void (*say)(void *user, const char *line);   /* the steps that matter to the owner, one short line each (NULL: none) */
     void (*on_paid)(void *user, const session_paid *p);   /* the payout is known (paid_at, first, second): to keep it (NULL: none) */
+    bool (*on_proved)(void *user);          /* the partner proved its distance; false ends the session: the own point has its pair with
+                                             * another identity already (NULL: none) */
     void *user;
 } session_cfg;
 
