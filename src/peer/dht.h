@@ -8,8 +8,8 @@
  * x in the answer, and sends ALERT(record, record, proof) with its own proof of possession to each of them and to the DHT_KSTORE mailbox
  * nodes of each (closest to SHA256("pznet1/mbox" || owner)). An alert for this node is handed to the daemon (on_alert) only after both
  * proofs of possession check out: this node's own (from own_distance) and the other owner's, which its ALERT carries or POSSESS asks for
- * (so two homes that do not listen prove to each other through their mailboxes). A node that does not listen (listen_port 0) only dials
- * out: it gets its alerts by polling its mailboxes.
+ * (so two homes that do not listen prove to each other through their mailboxes), and once the other owner or a mailbox of it took this
+ * node's proof. A node that does not listen (listen_port 0) only dials out: it gets its alerts by polling its mailboxes.
  * A node that listens is also a relay: it joins the connections of two homes that cannot dial each other (docs/en/NETWORK.md 7.7).
  *
  * Everything that comes from the network is bounded (docs/en/NETWORK.md 7.4): contacts per address block in the table, connections and
@@ -84,7 +84,9 @@ typedef struct {
     unsigned mbox_poll_s;          /* mailbox polls; 0: 3600 while the others reach this node, 60 otherwise */
     unsigned probe_s;              /* how long a node that listens goes without a connection coming in before it doubts its port; 0: 120 */
     unsigned retry_s;              /* an alert whose other owner did not answer is retried after this, then twice as late each time up to an
-                                    * hour, for a day; 0: 60 */
+                                    * hour, for alert_s; 0: 60 */
+    unsigned alert_s;              /* the life of an alert that waits, after which it is forgotten (its pair is new when it comes again);
+                                    * 0: a day */
     bool allow_private;            /* a test network (or --allow-private): loopback and private addresses are taken, and not limited.
                                     * A public network refuses them in answers and in the table, so no answer sends it into the LAN */
     uint64_t store_max;            /* records this node keeps as a custodian; 0: DHT_STORE_DEFAULT */

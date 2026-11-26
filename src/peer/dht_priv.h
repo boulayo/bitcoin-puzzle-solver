@@ -108,7 +108,7 @@ struct dht {
     atomic_bool unplaced;          /* an own record went to no other node: the first contacts after none get all of them again */
     int lfd;
     uint16_t port;
-    int64_t refresh_ms, republish_ms, retry_ms, relay_ms, slot_ms, probe_ms;
+    int64_t refresh_ms, republish_ms, retry_ms, alert_ms, relay_ms, slot_ms, probe_ms;
     pthread_mutex_t rt_mu;         /* the routing table */
     bucket b[DHT_BUCKETS];
     pthread_mutex_t l_mu;          /* the limits by address block */
@@ -207,7 +207,7 @@ bool job_push(dht *d, int kind, const record *a, const record *b, const dht_cont
 void parallel(void *(*fn)(void *), void *args, size_t size, int n);
 void rt_seen(dht *d, const dht_contact *c);     /* it answered */
 void rt_asked(dht *d, const dht_contact *c);    /* it asked */
-void rt_failed(dht *d, const uint8_t id[32]);
+void rt_failed(dht *d, const dht_contact *c);   /* an exchange with it failed */
 int rt_closest(dht *d, const uint8_t t[32], dht_contact *out, int max);
 int rt_count(dht *d);
 bool responsible(dht *d, const uint8_t key[32]);

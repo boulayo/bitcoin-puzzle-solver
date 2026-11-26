@@ -90,6 +90,8 @@ int dht_parse_nodes(const dht *d, const uint8_t *msg, size_t len, dht_contact *o
 
 /* ---- the routing table ---- */
 
+static bool same_addr(const net_addr *a, const net_addr *b) { return !memcmp(a->ip, b->ip, 16) && a->port == b->port; }
+
 static int rt_index(const bucket *b, const uint8_t id[32])
 {
     for (int i = 0; i < b->n; i++)
@@ -146,7 +148,7 @@ static void rt_note(dht *d, const dht_contact *c, bool answered)
     if (at >= 0 && answered) {
         rt_entry e = b->e[at];
         rt_drop(b, at);
-        if (e.fails && (memcmp(e.c.addr.ip, c->addr.ip, 16) || e.c.addr.port != c->addr.port) && rt_room(d, b, &c->addr, c->id)) {
+        if (e.fails && !same_addr(&e.c.addr, &c->addr) && rt_room(d, b, &c->addr, c->id)) {
             e.c.addr = c->addr;
             net_addr_block(&c->addr, e.block);
         }
@@ -180,13 +182,15 @@ static void rt_note(dht *d, const dht_contact *c, bool answered)
 void rt_seen(dht *d, const dht_contact *c) { rt_note(d, c, true); }
 void rt_asked(dht *d, const dht_contact *c) { rt_note(d, c, false); }
 
-void rt_failed(dht *d, const uint8_t id[32])
+/* An exchange with c that failed counts against the contact of the table with its ID only at the address the table has: an answer that
+ * names a known node at an address where it is not cannot drop it, nor let it move to another (rt_note). Before, any address counted. */
+void rt_failed(dht *d, const dht_contact *c)
 {
-    if (is_me(d, id)) return;
+    if (is_me(d, c->id)) return;
     pthread_mutex_lock(&d->rt_mu);
-    bucket *b = &d->b[bucket_of(d->me.id, id)];
-    const int at = rt_index(b, id);
-    if (at >= 0 && ++b->e[at].fails >= FAILS_MAX) rt_drop(b, at);
+    bucket *b = &d->b[bucket_of(d->me.id, c->id)];
+    const int at = rt_index(b, c->id);
+    if (at >= 0 && same_addr(&b->e[at].c.addr, &c->addr) && ++b->e[at].fails >= FAILS_MAX) rt_drop(b, at);
     pthread_mutex_unlock(&d->rt_mu);
 }
 
@@ -256,7 +260,7 @@ bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uin
 void heard(dht *d, const dht_contact *c, bool ok)
 {
     if (ok) rt_seen(d, c);
-    else rt_failed(d, c->id);
+    else rt_failed(d, c);
 }
 
 /* The ping of the weakest contact of a full bucket, or of a node that waits to enter one. A dead contact leaves its place to the node
@@ -298,17 +302,32 @@ typedef struct {
     dht_contact c;
     int state;
     uint8_t by[32];                /* the node whose answer named it; OWN for a contact of this node's own table */
+    net_addr alt;                  /* where it is asked when its own address fails: the last other one it was named at (port 0: none), */
+    uint8_t alt_by[32];            /* ... and the node that named it there */
 } cand;
 
 static const uint8_t OWN[32];
 
+/* a candidate out of the lookup that a node named at another address is asked there: one answer that names it first, at an address
+ * where it is not, cannot hide it (before, the later names were dropped) */
+static void cand_alt(cand *e)
+{
+    if (e->state < C_FAIL || !e->alt.port) return;
+    e->c.addr = e->alt, memcpy(e->by, e->alt_by, 32), e->alt.port = 0, e->state = C_NEW;
+}
+
 /* Into the candidates, sorted by distance to t, at most SHORT_MAX. In a full list a new one takes the place of one that failed, or of
  * the farthest that another node named and that was not asked yet, when it is closer; never of one that answered, nor of a contact of
- * the own table: names that nobody checked cannot push out the nodes this node knows to be there. */
+ * the own table: names that nobody checked cannot push out the nodes this node knows to be there. One already there that has not
+ * answered keeps the last other address it is named at, for when its own fails. */
 static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c, int state, const uint8_t *by)
 {
     for (int i = 0; i < *n; i++)
-        if (!memcmp(s[i].c.id, c->id, 32)) return;
+        if (!memcmp(s[i].c.id, c->id, 32)) {
+            if (s[i].state != C_OK && !same_addr(&s[i].c.addr, &c->addr))
+                s[i].alt = c->addr, memcpy(s[i].alt_by, by ? by : OWN, 32), cand_alt(&s[i]);
+            return;
+        }
     if (*n == SHORT_MAX) {
         int out = *n - 1;
         while (out >= 0 && s[out].state < C_FAIL) out--;
@@ -325,6 +344,7 @@ static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c,
     s[at].c = *c;
     s[at].state = state;
     memcpy(s[at].by, by ? by : OWN, 32);
+    s[at].alt.port = 0;
     (*n)++;
 }
 
@@ -414,6 +434,8 @@ static void *lookup_main(void *arg)
         for (int j = 0; j < L->n; j++)
             if (!memcmp(L->s[j].c.id, c.id, 32)) L->s[j].state = ok ? C_OK : C_FAIL;
         if (!ok) cand_distrust(L->s, L->n, c.id);
+        for (int j = 0; !ok && j < L->n; j++)
+            if (!memcmp(L->s[j].c.id, c.id, 32)) cand_alt(&L->s[j]);
         for (int g = 0; g < ngot; g++)
             if (!is_me(L->d, got[g].id)) cand_add(L->s, &L->n, L->target, &got[g], C_NEW, c.id);
         pthread_cond_broadcast(&L->cv);

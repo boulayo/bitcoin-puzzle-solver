@@ -443,18 +443,21 @@ void pair_hash(const record *a, const record *b, uint8_t h[32])
 struct mbox {
     pthread_mutex_t mu;
     mbox_pair *e;                  /* the oldest first */
+    const mbox_pair **by_x;        /* room for make_room to sort them */
     size_t cap, per_owner, n;
 };
 
 mbox *mbox_new(size_t cap, size_t per_owner)
 {
     mbox *m = calloc(1, sizeof *m);
-    if (!m || !(m->e = calloc(cap ? cap : 1, sizeof *m->e))) {
-        free(m);
-        return NULL;
-    }
+    if (!m) return NULL;
     m->cap = cap ? cap : 1;
     m->per_owner = per_owner ? per_owner : m->cap;
+    m->e = calloc(m->cap, sizeof *m->e), m->by_x = malloc(m->cap * sizeof *m->by_x);
+    if (!m->e || !m->by_x) {
+        free(m->e), free(m->by_x), free(m);
+        return NULL;
+    }
     pthread_mutex_init(&m->mu, NULL);
     return m;
 }
@@ -463,21 +466,37 @@ void mbox_free(mbox *m)
 {
     if (!m) return;
     pthread_mutex_destroy(&m->mu);
-    free(m->e);
+    free(m->e), free(m->by_x);
     free(m);
 }
 
 static bool has_owner(const mbox_pair *p, const uint8_t owner[32]) { return !memcmp(p->r[0].owner, owner, 32) || !memcmp(p->r[1].owner, owner, 32); }
 
-/* Room for one more pair among those of owner (among all when NULL), which may be limit: the oldest goes. A flood for one owner pushes
- * out its own pairs only. */
+/* pairs by their x, and at one x the oldest first */
+static int by_x(const void *a, const void *b)
+{
+    const mbox_pair *p = *(const mbox_pair *const *)a, *q = *(const mbox_pair *const *)b;
+    const int c = memcmp(p->r[0].x, q->r[0].x, 32);
+    return c ? c : (p > q) - (p < q);
+}
+
+/* Room for one more pair among those of owner (among all when NULL), which may be limit: of them, the oldest at the x that has the most
+ * goes (the oldest, when every x has one). Whoever holds a point can pair it with records under any names, but only at its x: such a
+ * flood pushes out its own pairs, and to push out a real one it needs about a point for each pair kept, each one 2^dpbits steps of a
+ * walk. Before, the oldest went, and one point was enough to empty the mailbox of an owner. */
 static void make_room(mbox *m, const uint8_t *owner, size_t limit)
 {
-    size_t k = 0, oldest = 0;
-    for (size_t i = m->n; i-- > 0;)
-        if (!owner || has_owner(&m->e[i], owner)) k++, oldest = i;
+    size_t k = 0, out = 0, most = 0;
+    for (size_t i = 0; i < m->n; i++)
+        if (!owner || has_owner(&m->e[i], owner)) m->by_x[k++] = &m->e[i];
     if (k < limit) return;
-    memmove(&m->e[oldest], &m->e[oldest + 1], (m->n - oldest - 1) * sizeof *m->e);
+    qsort(m->by_x, k, sizeof *m->by_x, by_x);
+    for (size_t i = 0, run = 0; i < k; i++) {                  /* the runs of one x, and the oldest of each */
+        run = i && !memcmp(m->by_x[i]->r[0].x, m->by_x[i - 1]->r[0].x, 32) ? run + 1 : 1;
+        const size_t first = (size_t)(m->by_x[i + 1 - run] - m->e);
+        if (run > most || (run == most && first < out)) most = run, out = first;
+    }
+    memmove(&m->e[out], &m->e[out + 1], (m->n - out - 1) * sizeof *m->e);
     m->n--;
 }
 

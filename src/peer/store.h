@@ -81,10 +81,10 @@ int pair_order(const record *a, const record *b, record out[2]);
 void pair_hash(const record *a, const record *b, uint8_t h[32]);
 
 /* The mailbox: alert pairs kept for their owners, in memory, at most cap in all and per_owner of one owner (of the owner that has
- * too many, else of all, the oldest pair goes). Two owners at one point with the same types are one pair, whatever the zero bits of
- * their records. A pair is kept in the order of its owners (pair_order), whatever order it came in, with the proof of possession of each
- * owner that sent one (docs/en/NETWORK.md 7.3: over the pair, for the other owner). The mailbox keeps what it is given: the caller checks
- * pairs and proofs. */
+ * too many, else of all, the oldest pair at the x that has the most goes: a flood at one point pushes out its own). Two owners at one
+ * point with the same types are one pair, whatever the zero bits of their records. A pair is kept in the order of its owners
+ * (pair_order), whatever order it came in, with the proof of possession of each owner that sent one (docs/en/NETWORK.md 7.3: over the
+ * pair, for the other owner). The mailbox keeps what it is given: the caller checks pairs and proofs. */
 typedef struct mbox mbox;
 
 typedef struct {

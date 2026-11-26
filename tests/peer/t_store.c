@@ -478,6 +478,21 @@ static void test_mbox(void)
     CHECK(mbox_get(m, idb.xonly, pairs, 4) == 4 && mbox_get(m, idd.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));   /* the pair of a with c went: c had too many */
     mbox_free(m);
+    /* Whoever holds one point pairs it with records under any names, a's among them, but only at its x: a flood of such pairs pushes out
+     * its own, of a and of all, not the real pair of a, nor that of c and d (before, the oldest went: both) */
+    uint8_t xf[32];
+    point_x("m5", xf);
+    const record c2 = make(&idc, 1, x2), d2 = make(&idd, 0, x2);
+    m = mbox_new(6, 4);
+    CHECK(m && mbox_put(m, &a, &d1, pa) && mbox_put(m, &c2, &d2, pc));
+    for (int t = -1; t <= 1; t++)
+        for (int u = -1; u <= 1; u++) {
+            const record p = make(&idb, t, xf), q = make(u ? &ida : &idc, u, xf);
+            CHECK(mbox_put(m, &p, &q, pb));
+        }
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 4 && has_pair(pairs, 4, &a, &d1));
+    CHECK(mbox_get(m, idd.xonly, pairs, 4) == 2 && has_pair(pairs, 2, &c2, &d2));
+    mbox_free(m);
 }
 
 int main(void)

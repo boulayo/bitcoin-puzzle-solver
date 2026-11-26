@@ -10,8 +10,9 @@
 /* ---- custody ---- */
 
 /* Whether this node takes a record of another node, at the address from, as STORED tells it: one it may be a custodian of (else FAR),
- * within the rate of the sender's block (else FULL). An owner the store does not know counts as STORE_OWNER_RECORDS records: a store
- * holds an owner for ever and has room for one in that many records, so a block fills the owners no sooner than the store. */
+ * within the rate of the sender's block (else FULL). An owner the store does not know counts as STORE_OWNER_RECORDS records when the
+ * store takes it (owner_back): a store holds an owner for ever and has room for one in that many records, so a block fills the owners
+ * no sooner than the store. */
 static int admit(dht *d, const record *r, const net_addr *from)
 {
     uint8_t k[32];
@@ -20,11 +21,19 @@ static int admit(dht *d, const record *r, const net_addr *from)
     return lim_take(d, from, LIM_REC, store_owner(d->custody, r->owner) ? 1 : STORE_OWNER_RECORDS) ? DHT_ST_STORED : DHT_ST_FULL;
 }
 
+/* After the store had r: an owner it did not take (it is full, or it refused r) costs one token, as any record, and the block gets the
+ * others back. A full custodian still tells the coincidences of a new home at the rate of every home (before, at one record in 256). */
+static void owner_back(dht *d, const record *r, const net_addr *from)
+{
+    if (!store_owner(d->custody, r->owner)) (void)lim_take(d, from, LIM_REC, 1 - STORE_OWNER_RECORDS);
+}
+
 /* A record for the custody of this node: its status for STORED. from: the address of the owner that sent it, NULL for this node's own.
  * A custodian is passive: when other owners have the x of the record it says COINCIDENCE (also for a duplicate, and for a record it
  * does not keep because it is full) and alerts nobody. The owner proves its record (PROVE) and tells the others itself, with its proof.
- * A coincidence of a record of this node is an alert of this node at once. A node of a linear search has no store, and takes and
- * publishes no record (dht.c, answer). */
+ * A record of this node that meets others is an alert of this node at once; a record of another that meets one of this node is not
+ * (it may be a copy): this node hears of it when that owner proves it (custody_proved), or at its own republish to every custodian.
+ * A node of a linear search has no store, and takes and publishes no record (dht.c, answer). */
 int custody_put(dht *d, const record *r, const net_addr *from)
 {
     static const net_addr self;                                /* the alerts of its own custody count as those of one address block */
@@ -33,6 +42,7 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     const int st = from ? admit(d, r, from) : DHT_ST_STORED;
     if (st != DHT_ST_STORED) return st;
     const store_status s = store_put(d->custody, r, NULL, others, STORE_X_OWNERS, &no);
+    if (from) owner_back(d, r, from);
     for (int i = 0; !from && i < no; i++) (void)alert_in(d, &others[i], r, NULL, &self);
     if (no && from) return DHT_ST_COINCIDENCE;
     switch (s) {
@@ -56,6 +66,7 @@ int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_add
     int no;
     if (admit(d, r, from) != DHT_ST_STORED || !record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return -1;
     (void)store_put_proved(d->custody, r, others, STORE_X_OWNERS, &no);
+    owner_back(d, r, from);
     for (int i = 0; i < no; i++) {
         memset(&pairs[i], 0, sizeof *pairs);
         pair_order(r, &others[i], pairs[i].r);

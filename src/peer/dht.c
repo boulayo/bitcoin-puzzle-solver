@@ -98,9 +98,9 @@ static lim_entry *lim_get(dht *d, const net_addr *a)
     return best;
 }
 
-/* n tokens of a kind from the block of a, and conns more of its connections at a time: 1 for one that comes (at most CONN_PER_BLOCK: a
- * peer that opens connections and says nothing holds at most that many handlers), -1 for one that ends. False when the block has used
- * its share. */
+/* n tokens of a kind from the block of a (n < 0 gives them back), and conns more of its connections at a time: 1 for one that comes (at
+ * most CONN_PER_BLOCK: a peer that opens connections and says nothing holds at most that many handlers), -1 for one that ends. False
+ * when the block has used its share. */
 static bool lim(dht *d, const net_addr *a, int kind, double n, int conns)
 {
     if (!limited(d, a)) return true;
@@ -500,6 +500,7 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
     d->refresh_ms = 1000LL * (cfg->refresh_s ? cfg->refresh_s : 3600);
     d->republish_ms = 1000LL * (cfg->republish_s ? cfg->republish_s : 86400);
     d->retry_ms = 1000LL * (cfg->retry_s ? cfg->retry_s : 60);
+    d->alert_ms = 1000LL * (cfg->alert_s ? cfg->alert_s : 86400);
     d->relay_ms = 1000LL * (cfg->relay_s ? cfg->relay_s : 4 * 3600);
     d->slot_ms = 1000LL * (cfg->relay_slot_s ? cfg->relay_slot_s : 60);
     if (d->cfg.handlers <= 0) d->cfg.handlers = 8;

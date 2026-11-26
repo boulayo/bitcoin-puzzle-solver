@@ -307,15 +307,18 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
     custodian of: it refuses one when its table knows 10 nodes closer to K (a sum over buckets: a contact of bucket j is closer exactly
     when bit j of `ID ⊕ K` is 1). An honest publisher found it among the 5 closest, so it knows at most 4 closer; a flood sprayed at
     random nodes is refused, and one aimed at a node costs about (nodes / 10) tries per record;
-  - within a rate per address block of the sender (the table of the limits in 7.4), in which an owner the custodian does not know
-    counts as 256 records;
+  - within a rate per address block of the sender (the table of the limits in 7.4), in which a record of an owner the custodian does not
+    know counts as 256 records, and as one when the custodian does not take that owner after all (it is full, or refuses the record);
   - at most `store_max` records in all (`--store-gb`, 5 GB by default, 2^27 records; the index in memory takes 8 bytes a slot at 35 to
     70 % load, 11 to 23 bytes a record, that is 30 to 60 % of the 38 bytes of its entry in the file: for the default 2 GB at most, two
     fifths of the file, and 3 GB for the moment of its last doubling, while the old table is still there), at most 8 owners of one x
     (and as many more whose owners proved their records, below), and owners in all one per 256 records it may hold and 1024 more. An
-    identity costs little, and a custodian keeps an owner for ever (the file of owners only grows): this is why a new owner costs its
-    address block 256 record tokens, also when its record is refused. One block then fills the owners of a custodian no sooner than its
-    records, in about a month (before, a new owner cost one token: 7 hours, after which no new home could store there, for ever).
+    identity costs little, and a custodian keeps an owner for ever (the file of owners only grows): this is why a new owner that it
+    takes costs its address block 256 record tokens. One block then fills the owners of a custodian no sooner than its records, in
+    about a month (before, a new owner cost one token: 7 hours, after which no new home could store there, for ever). A record whose
+    owner it does not take costs one token, as any other: a full custodian tells the coincidences of a new home, and answers its
+    `PROVE`, at the rate of every home (before, each such record cost 256, at the STORE and again at the PROVE: about 390 records of a
+    block at once and then one in five seconds, and the PROVE after a large STORE was refused).
     There is no limit of records of one owner: sixteen identities passed it at once, and on a small network a home is a large share of
     a custodian by right.
   The checks that cost nothing come first, the curve last. A node of a linear search (section 11) takes no record at all, and no
@@ -332,10 +335,14 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
   bytes: a copy of it convinces that custodian alone, of what is true). The custodian checks each proof, takes the record as a STORE
   takes it (only one it may be a custodian of, within the rate of the block) and answers an `MBOX` with the pairs: each record proved
   with every other owner of its x, up to the 8 a custodian keeps, the newest first, read from its store at that moment. The owner
-  takes from that answer only the pairs of the records it proved, at most 8 for each, or none: a custodian cannot make alerts of the
-  owner's other points. **The owner tells the other owner itself**: once its own proof checks out it sends
-  `ALERT(its record, the other record, proof)` to the other owner when it can dial it and to the other owner's mailboxes (the 5 nodes
-  closest to `SHA256("pznet1/mbox" || owner)`), and again every hour while the alert waits (below). What follows from this:
+  takes from that answer only the pairs of the records it proved, at most 8 for each (an answer with more pairs than 8 times the records
+  proved is refused whole): a custodian cannot make alerts of the owner's other points, nor more than 8 of one of them (before, the
+  bound was for the records of a PROVE together: 64 for one record of 8). **The owner tells the other owner itself**: once its own
+  proof checks out it sends `ALERT(its record, the other record, proof)` to the other owner when it can dial it and to the other
+  owner's mailboxes (the 5 nodes closest to `SHA256("pznet1/mbox" || owner)`), and again every hour for the day of the alert, also
+  once it is done: a mailbox may lose it (it keeps its pairs in memory). A post counts once the other owner or one of its mailboxes
+  took it (answered `OK`): one that reached nobody is sent again at the next try, and the alert waits for it (before, an alert whose
+  proofs had both checked out was done after one post, taken or not, and its proof was never sent again). What follows from this:
   - a copy of another home's point, which its sender cannot prove, alerts nobody: the copier gets `COINCIDENCE` and has nothing to
     send. Nor can a stranger send the alert itself: an `ALERT` without the proof of its first record is refused (before the custodians
     were passive, they sent alerts without a proof, so anyone could: a forged alert with a real record of a home cost it a lookup, a
@@ -354,23 +361,33 @@ and it is one record, in the hello of a session (7.5), the name of a pair and th
   The other owner hears of a coincidence from the owner that proved, not from the custodian. If that owner stops between its PROVE
   and its ALERT, or never sends it, the other owner hears at its own next republish to every custodian, when its record gets
   `COINCIDENCE` and it proves it: a week at most. An owner that proved and keeps silent gains nothing: it cannot use the coincidence
-  alone. A coincidence of a record of the custodian itself is its own alert at once.
+  alone. A custodian that is itself one of the owners hears of the pair as any owner does, with one difference: when its own record
+  comes second (it stores it to itself), the coincidence is its own alert at once. When another owner's record comes after its own, it
+  answers that owner `COINCIDENCE` as anyone else, and alerts itself only once that owner proves the record (`PROVE`), which a copy
+  cannot; an owner that never proves leaves it to the custodian's own next republish to every custodian, a week at most.
 - A node that receives an `ALERT` checks both records (7.2, same x, different owners) and the proof of the first one's owner for the
   second's, and refuses it without. It keeps the pair, with the proof, as a mailbox when it may be a mailbox of one of the owners (the
-  rule of the custodian above, for the key of the mailbox), in memory: the last 4096 pairs, at most 64 of one owner (a flood of the
-  pairs of one owner pushes out its own; the oldest goes). Two owners at one point are one pair whatever the zero bits of their
-  records. When one owner is itself it checks the proofs of possession: its own (the daemon gives the distance of the point) and the
-  other owner's. Only then the daemon gets the alert.
+  rule of the custodian above, for the key of the mailbox), in memory: 4096 pairs, at most 64 of one owner. When one owner, or the
+  mailbox, has no more room, the oldest of its pairs at the x that has the most of them goes (the oldest, when every x has one).
+  Whoever holds a point can pair it with records under any names, with a valid proof of its own, but only at that x: a flood of such
+  pairs pushes out its own, and to push out a real pair it needs about a point for each pair kept, each one a walk (before, the oldest
+  pair went, and one point was enough to empty the mailboxes of a home, and with identities placed near a mailbox the whole of it).
+  Two owners at one point are one pair whatever the zero bits of their records. When one owner is itself it checks the proofs of
+  possession: its own (the daemon gives the distance of the point) and the other owner's. Only then the daemon gets the alert.
 - The other owner's proof comes one of two ways. In its `ALERT`, which is how an owner hears of a pair from the other one. Or by
   `POSSESS`, with a nonce of the asker, which the owner that heard of the pair from a custodian asks the other owner when it listens.
   The proof of an `ALERT` is over the pair: the asker is the other owner and the nonce is the name of the pair,
   `SHA256("pznet1/pair" || the names of the two records in the order of their owners)`. It binds the asker, so it proves nothing to
   anyone else, and a fixed nonce lets it wait in a mailbox; a copier cannot make it without the distance. A mailbox checks it and keeps
   it with the pair, and `MBOX` carries it. So two homes that do not listen prove their points to each other through their mailboxes.
-- An alert that waits is tried again after a minute, then twice as late each time up to an hour, for a day; a wrong proof drops it. A
-  node remembers 1024 alerts: when they are all waiting, the oldest goes whose job is not in the queue, so a flood of alerts that will
-  never end cannot shut out the next real one, whose job is queued at once and keeps it while it waits behind the jobs of the flood;
-  an alert pushed out comes back with a mailbox poll, or the next republish to every custodian. An alert has one job at a time, queued
+- An alert that waits is tried again after a minute, then twice as late each time up to an hour, for a day: then it is forgotten, and
+  the pair is a new alert when it comes again (the other owner's `ALERT`, a mailbox poll, the next republish to every custodian), so
+  proofs that missed each other for a day are not the end of a coincidence (before, the alert was refused, and nothing of that pair
+  counted any more until a restart). Only a wrong proof of the other owner refuses an alert. An alert that is done stays, so the
+  daemon is told of the pair once, and posts its proof every hour for the rest of its day. A node remembers 1024 alerts: when they
+  are all waiting, the oldest goes whose job is not in the queue, so a flood of alerts that will never end cannot shut out the next
+  real one, whose job is queued at once and keeps it while it waits behind the jobs of the flood; an alert pushed out comes back with a
+  mailbox poll, or the next republish to every custodian. An alert has one job at a time, queued
   or under way. The alerts that came from one address block hold at most 8 places in the queue of the jobs, also when they are tried
   again, and the kinds of jobs take turns (the alerts of the node, the pings). What can still make such a flood: a custodian of the
   home's points that lies in its answers to `PROVE` (at most 8 pairs for each record proved; each costs the home a lookup of the owner
@@ -435,7 +452,7 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   | contacts of one block in a bucket, in the table | 2, 4 |
   | queries of one lookup, to one block | 64, 4 (a candidate that another node named, past them, counts as failed; a contact of the own table is asked all the same) |
   | connections of one block queued or being answered at a time; new ones | 4; 20 a second, 100 at once (a peer that opens connections and says nothing holds 4 handlers at most, for the 2 seconds the handshake and the request of a connection have together) |
-  | records stored or proved from one block | 50 a second, 100 000 at once (a home that was alone sends them all); a record of an owner the custodian does not know counts as 256 |
+  | records stored or proved from one block | 50 a second, 100 000 at once (a home that was alone sends them all); a record of an owner the custodian does not know counts as 256 if it takes that owner, else as one |
   | alerts of the node from one block waiting in its jobs (also when tried again) | 8 |
   | relays (waiting or under way) of the homes of one block | 2 |
 
@@ -454,11 +471,12 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   contact goes to the tail when it answers. A full bucket pings its weakest contact (the one that failed most, the oldest among equals)
   and keeps it if it answers; the newcomer waits, and takes the place of a dead contact once it has answered a ping of its own. Before,
   a contact that had missed one answer was replaced at once, which an attacker on the path could use to swap good contacts for its own.
-  Three failed exchanges in a row drop a contact. A contact enters the table only when it answers, never from a NODES answer, and only
-  within the limits by block: one attacker's nodes, on its few networks, cannot fill a bucket or the table (project 4.2). A known
-  contact moves to the address it answered at only when its own failed since it last answered, and the new one's block has its share:
-  before, a node that named it at an address of its own, which passed the bytes on to it, took its place in the table and could then
-  cut it out (three failures drop a contact).
+  Three failed exchanges in a row at its own address drop a contact: one at an address that an answer named for it does not count
+  (before, it did, so names of a known node at dead addresses could drop it). A contact enters the table only when it answers, never
+  from a NODES answer, and only within the limits by block: one attacker's nodes, on its few networks, cannot fill a bucket or the
+  table (project 4.2). A known contact moves to the address it answered at only when its own failed since it last answered, and the
+  new one's block has its share: before, a node that named it at an address of its own, which passed the bytes on to it, took its
+  place in the table and could then cut it out (three failures drop a contact).
 - A node that asks tells its port itself, so it is not taken at its word: the node asked pings it at that address (3 seconds, one
   ping at a time for a bucket, in turn with the alerts that wait) and takes it when it answers. A node that does not listen (port 0) is never
   put in a table: it dials out, publishes, polls its mailboxes, and is never a custodian. A home whose router lets nothing in listens
@@ -473,7 +491,10 @@ k = 20, α = 3, 256 buckets. Messages (inside Noise frames, first byte the type;
   keep pointing at new nodes cannot make a lookup endless). A lookup asks at most 4 nodes that others named in one address block: answers
   that all point at one network, a victim or the attacker's own, do not make the node dial it more. The contacts of its own table are
   asked whatever their block (the table has 4 of a block at most): before, names that fail, placed in the block of a node the lookup
-  knew, used up the 4 queries and kept the lookup from that node. The result counts the node itself when it listens.
+  knew, used up the 4 queries and kept the lookup from that node. A candidate named again at another address before it answered keeps
+  the last such address, and is asked there when its own fails: an answer that names a node first, at an address where it is not,
+  cannot hide it from the lookup (before, the first address named was the only one, and `dht_find` failed: no direct `ALERT` or
+  `POSSESS`, no dial of a session). The result counts the node itself when it listens.
   `want` is 20 to find nodes, 5 to find the custodians of a record or the mailboxes of an owner.
 - Publishing: the custodians of each record, then one STORE per custodian with all its records, 16 custodians at a time, and after it
   the PROVEs of the records it said 3 for, 8 at a time, until one fails. A dead or slow custodian holds one of the 16 for a timeout,

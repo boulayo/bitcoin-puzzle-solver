@@ -184,7 +184,7 @@ static net_conn *relay_join(dht *d, const dht_contact *r, const uint8_t partner[
     size_t n;
     net_conn *c = dht_dial(d, r);
     if (!c) {
-        rt_failed(d, r->id);
+        rt_failed(d, r);
         return NULL;
     }
     req[0] = DHT_RELAY;
@@ -212,7 +212,7 @@ static net_conn *dial_partner(dht *d, const uint8_t partner[32])
     dht_contact pc;
     if (!dht_find(d, partner, &pc)) return NULL;
     net_conn *c = dht_dial(d, &pc);
-    if (!c) rt_failed(d, pc.id);
+    if (!c) rt_failed(d, &pc);
     return c;
 }
 

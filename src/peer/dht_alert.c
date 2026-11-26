@@ -8,9 +8,9 @@
 #include <stdlib.h>
 
 #define ALERTS_MAX 1024            /* alerts of this node remembered */
-#define POST_MS (3600 * 1000LL)    /* this node's proof of an alert, sent again to the other owner while the alert waits */
+#define POSTS 24                   /* this node's proof of an alert goes to the other owner this many times in the life of the alert (every
+                                    * hour of its day), also once it is done: a mailbox that lost it gets it again */
 #define BACKOFF_MAX_MS (3600 * 1000LL)
-#define ALERT_TTL_MS (24 * 3600 * 1000LL)
 
 enum { AL_WAIT, AL_DONE, AL_REFUSED };
 
@@ -23,7 +23,8 @@ struct own_alert {
     bool blocked;                  /* it came from another node: its jobs count against the address block it came from, also when retried */
     uint8_t block[16];
     int tries;
-    int64_t until, next, posted;   /* retried at next (later each time) until until; this node's proof last sent to the other owner */
+    int64_t until, next, posted;   /* its life; its next try (once done, its next post); this node's proof last taken by the other owner
+                                    * or a mailbox of it */
 };
 
 void dht_mbox_key(const uint8_t owner[32], uint8_t k[32])
@@ -100,7 +101,7 @@ static own_alert *alert_add_locked(dht *d, const record *m, const record *t, con
     e->mine = *m, e->theirs = *t;
     if ((e->blocked = block != NULL)) memcpy(e->block, block, 16);
     e->state = AL_WAIT;
-    e->until = sys_now_ms() + ALERT_TTL_MS;
+    e->until = sys_now_ms() + d->alert_ms;
     e->next = sys_now_ms() + d->retry_ms;
     *fresh = true;
     return e;
@@ -142,12 +143,13 @@ bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, co
     return fresh;
 }
 
-/* ALERT(a, b, the proof of the owner of a for the owner of b) to a contact; to this node itself, what it would do with it */
-static void send_alert(dht *d, const dht_contact *c, const record *a, const record *b, const uint8_t proof[64])
+/* ALERT(a, b, the proof of the owner of a for the owner of b) to a contact; to this node itself, what it would do with it. Whether it was
+ * taken. */
+static bool send_alert(dht *d, const dht_contact *c, const record *a, const record *b, const uint8_t proof[64])
 {
     if (is_me(d, c->id)) {
         (void)alert_in(d, a, b, proof, NULL);
-        return;
+        return true;
     }
     uint8_t req[1 + PAIR_LEN + 64], ans[1];
     size_t n;
@@ -155,7 +157,9 @@ static void send_alert(dht *d, const dht_contact *c, const record *a, const reco
     record_encode(a, req + 1);
     record_encode(b, req + 1 + RECORD_LEN);
     memcpy(req + 1 + PAIR_LEN, proof, 64);
-    heard(d, c, exchange(d, c, req, sizeof req, ans, sizeof ans, &n) && n == 1);
+    const bool ok = exchange(d, c, req, sizeof req, ans, sizeof ans, &n) && n == 1;
+    heard(d, c, ok);
+    return ok;
 }
 
 /* this node knows the distance of its own record: the proof it would give, made and checked */
@@ -185,7 +189,7 @@ static int ask_proof_at(dht *d, const dht_contact *c, const record *r)
 {
     net_conn *k = dht_dial(d, c);
     if (!k) {
-        rt_failed(d, c->id);
+        rt_failed(d, c);
         return -1;
     }
     const int st = dht_proof_on(d, k, r);
@@ -204,7 +208,7 @@ int dht_ask_proof(dht *d, const record *r)
 /* This node's proof of possession for the other owner of an alert, over the pair: the pair's name is the nonce, so the proof can wait in
  * a mailbox, and it binds the other owner as the asker, so it proves nothing to anyone else (docs/en/NETWORK.md 7.3). In an ALERT to
  * the other owner at its contact c when it was found, and to its mailboxes, where it finds it when it does not listen: this is how
- * the other owner hears of the pair. False when this node cannot make the proof. */
+ * the other owner hears of the pair. Whether the other owner or one of its mailboxes took it: a post that reached nobody is no post. */
 static bool post_proof(dht *d, const own_alert *e, const dht_contact *c)
 {
     uint8_t dd[32], proof[64], k[32];
@@ -213,11 +217,11 @@ static bool post_proof(dht *d, const own_alert *e, const dht_contact *c)
                     record_prove(d->cfg.ctx, d->cfg.net, &e->mine, dd, e->theirs.owner, e->h, proof);
     pz_secure_zero(dd, sizeof dd);
     if (!ok) return false;
-    if (c) send_alert(d, c, &e->mine, &e->theirs, proof);
+    bool took = c && send_alert(d, c, &e->mine, &e->theirs, proof);
     dht_mbox_key(e->theirs.owner, k);
     const int m = dht_lookup(d, k, mb, DHT_KSTORE);
-    for (int i = 0; i < m && !stopping(d); i++) send_alert(d, &mb[i], &e->mine, &e->theirs, proof);
-    return true;
+    for (int i = 0; i < m && !stopping(d); i++) took |= send_alert(d, &mb[i], &e->mine, &e->theirs, proof);
+    return took;
 }
 
 static int64_t backoff_ms(const dht *d, int tries)
@@ -229,8 +233,10 @@ static int64_t backoff_ms(const dht *d, int tries)
 
 /* The job of an alert of this node: its own proof (when the distance is missing the daemon may not have read that point yet, as after a
  * restart: the alert waits), then this node's proof sent to the other owner, then the other owner's proof, asked with POSSESS unless it
- * came already (an ALERT, a mailbox); the other owner is looked up once for both. on_alert when both check out; only a wrong proof of
- * the other owner refuses it. An alert that waits is tried again later each time (backoff_ms) for a day. */
+ * came already (an ALERT, a mailbox); the other owner is looked up once for both. on_alert when both check out and the other owner, or
+ * a mailbox of it, took this node's proof (else that owner may never hear of the pair); only a wrong proof of the other owner refuses
+ * it. An alert that waits is tried again later each time (backoff_ms) for alert_ms, then forgotten (retry_alerts); one done posts this
+ * node's proof again every alert_ms / POSTS for the rest of that life, and on_alert is not called again. */
 void job_alert(dht *d, const record *a, const record *b)
 {
     uint8_t h[32];
@@ -239,13 +245,14 @@ void job_alert(dht *d, const record *a, const record *b)
     pthread_mutex_lock(&d->a_mu);
     own_alert *p = alert_find(d, h);
     if (p) p->queued = false;
-    const bool go = p && p->state == AL_WAIT && !p->busy;
+    const bool go = p && p->state != AL_REFUSED && !p->busy;
     if (go) p->busy = true, e = *p;
     pthread_mutex_unlock(&d->a_mu);
-    if (!go) return;                                           /* done already, or a job on it now */
+    if (!go) return;                                           /* refused, or a job on it now */
+    const int was = e.state;
     if (!e.mine_ok) e.mine_ok = own_proof(d, &e.mine);
     dht_contact c;
-    const bool post = e.mine_ok && (!e.posted || sys_now_ms() - e.posted >= POST_MS), ask = e.mine_ok && !e.theirs_ok;
+    const bool post = e.mine_ok && (!e.posted || sys_now_ms() - e.posted >= d->alert_ms / POSTS), ask = e.mine_ok && !e.theirs_ok;
     const bool found = (post || ask) && dht_find(d, e.theirs.owner, &c);
     if (post && post_proof(d, &e, found ? &c : NULL)) e.posted = sys_now_ms();
     const int asked = !ask ? -2 : found ? ask_proof_at(d, &c, &e.theirs) : -1;
@@ -256,19 +263,25 @@ void job_alert(dht *d, const record *a, const record *b)
         p->mine_ok = e.mine_ok, p->posted = e.posted;
         p->theirs_ok = p->theirs_ok || asked == 1;             /* or its proof came while this job asked */
         if (asked == 0) p->state = AL_REFUSED;
-        else if (p->mine_ok && p->theirs_ok) p->state = AL_DONE;
+        else if (p->mine_ok && p->theirs_ok && p->posted) p->state = AL_DONE, p->next = sys_now_ms() + d->alert_ms / POSTS;
         else p->tries++, p->next = sys_now_ms() + backoff_ms(d, p->tries);
         st = p->state;
         e = *p;
     }
     pthread_mutex_unlock(&d->a_mu);
-    dlog(d, st == AL_DONE      ? "alert: both proofs check out"
+    dlog(d, was == AL_DONE     ? "alert: done, this node's proof sent again (a mailbox may have lost it)"
+            : st == AL_DONE    ? "alert: both proofs check out"
             : st == AL_REFUSED ? "alert refused: the other owner's proof does not check out"
             : !e.mine_ok       ? "alert: this node does not know the distance of its point (yet), retried later"
+            : !e.posted        ? "alert: this node's proof reached neither the other owner nor a mailbox of it, retried later"
                                : "alert: the other owner's proof has not come, retried later");
-    if (st == AL_DONE && d->cfg.on_alert) d->cfg.on_alert(d->cfg.user, &e.mine, &e.theirs, e.mine.t == e.theirs.t);
+    if (st == AL_DONE && was != AL_DONE && d->cfg.on_alert) d->cfg.on_alert(d->cfg.user, &e.mine, &e.theirs, e.mine.t == e.theirs.t);
 }
 
+/* The alerts that wait, and those done within their life: those that are due queued again (one done posts this node's proof again, for
+ * a mailbox that may have lost it). Those that wait past their life forgotten, so that the pair is a new alert when it comes again (the
+ * other owner's ALERT, a mailbox, the next republish to every custodian); before, they were refused as for a wrong proof, and nothing
+ * of the pair counted any more. One done stays, so the daemon is told once. */
 void retry_alerts(dht *d)
 {
     own_alert due[16];
@@ -277,9 +290,14 @@ void retry_alerts(dht *d)
     pthread_mutex_lock(&d->a_mu);
     for (int i = 0; i < d->nalerts; i++) {
         own_alert *e = &d->alerts[i];
-        if (e->state != AL_WAIT || e->queued || e->busy || now < e->next) continue;
-        if (now >= e->until) e->state = AL_REFUSED;
-        else if (n < 16) e->next = now + backoff_ms(d, e->tries + 1), e->queued = true, due[n++] = *e;
+        const bool done = e->state == AL_DONE;
+        if (e->state == AL_REFUSED || e->queued || e->busy || (done && now >= e->until)) continue;
+        if (now >= e->until) {
+            memmove(e, e + 1, (size_t)(d->nalerts - i - 1) * sizeof *e);
+            d->nalerts--, i--;
+        } else if (now >= e->next && n < 16) {
+            e->next = now + (done ? d->alert_ms / POSTS : backoff_ms(d, e->tries + 1)), e->queued = true, due[n++] = *e;
+        }
     }
     pthread_mutex_unlock(&d->a_mu);
     for (int i = 0; i < n; i++) alert_job(d, due[i].h, &due[i].mine, &due[i].theirs, due[i].blocked ? due[i].block : NULL);
@@ -287,10 +305,12 @@ void retry_alerts(dht *d)
 
 /* The pairs of an MBOX answer from c that concern this node. From a mailbox, each that brings the other owner's proof becomes an alert:
  * a mailbox cannot make one of a pair nobody proved. From a custodian after PROVE (the n records proved), each new pair of those
- * records does, at most as many as a custodian keeps owners for them: the custodian cannot bring alerts of the other records of this
- * node, nor more of them than it may hold. False when the answer is malformed (its type exchange checked). */
+ * records does, at most as many for each as a custodian keeps owners of one x: the custodian cannot bring alerts of the other records
+ * of this node, nor more of them than it may hold. False when the answer is malformed (its type exchange checked), or longer than that
+ * for all the records together. */
 static bool mbox_take(dht *d, const dht_contact *c, const uint8_t *ans, size_t len, const record *proved, int n, int *fresh)
 {
+    int took[DHT_PROVE_MAX] = {0};                             /* after PROVE: the pairs of each record proved */
     if (len < 2 || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY ||
         (proved && ans[1] > n * STORE_X_OWNERS))
         return false;
@@ -303,7 +323,7 @@ static bool mbox_take(dht *d, const dht_contact *c, const uint8_t *ans, size_t l
         const int me = mine(d, &r[0]) ? 0 : mine(d, &r[1]) ? 1 : -1;
         int of = 0;                                            /* after PROVE: which record proved it is of */
         while (proved && me >= 0 && of < n && !same_record(&r[me], &proved[of])) of++;
-        if (me < 0 || (proved && of == n)) continue;
+        if (me < 0 || (proved && (of == n || took[of]++ >= STORE_X_OWNERS))) continue;
         pair_hash(&r[0], &r[1], h);
         const int st = alert_state(d, h, &theirs_ok);
         if (st > AL_WAIT || (st < 0 && !pair_ok(d, &r[0], &r[1]))) continue;   /* the checks only of a new pair */

@@ -27,6 +27,8 @@
 
 static int fails;
 static unsigned probe_s;           /* of the next node made (0: the default) */
+static unsigned alert_s;           /* of the next node made (0: the default) */
+static uint64_t store_max;         /* of the next node made (0: the default) */
 static int timeout_ms = 2000;      /* of the next node made */
 static const block_net *linear;    /* of the next node made: the blocks of a linear search (NULL: a network of records) */
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
@@ -166,7 +168,7 @@ static dht_config node_cfg(node *n, int port)
         .ctx = ctx, .net = &net, .self = &n->id, .id_bits = BITS, .listen_host = "127.0.0.1", .listen_port = port, .dir = n->dir,
         .on_alert = on_alert, .own_distance = own_distance, .on_session = on_session, .user = n, .timeout_ms = timeout_ms, .handlers = 4,
         .mbox_poll_s = port ? 0 : 1, .retry_s = 1, .allow_private = true, .relay_max = 2, .relay_bytes = 8u << 20, .relay_slot_s = 1,
-        .probe_s = probe_s, .verbose = getenv("T_DHT_VERBOSE") != NULL, .blocks = linear,
+        .probe_s = probe_s, .alert_s = alert_s, .store_max = store_max, .verbose = getenv("T_DHT_VERBOSE") != NULL, .blocks = linear,
     };
     return cfg;
 }
@@ -1033,17 +1035,17 @@ static void test_nodes_answer(void)
 typedef struct {
     home_identity id;
     net_cfg cfg;
-    int lfd;
+    int lfd, delay_ms;             /* delay_ms: before it answers FIND_NODE */
     uint16_t port;
-    uint8_t pool[DHT_K][82];
+    uint8_t ans[2 + DHT_K * 82];   /* its answer to FIND_NODE */
+    size_t len;
     atomic_bool stop;
 } hostile;
 
 static void *hostile_main(void *arg)
 {
     hostile *h = arg;
-    uint8_t req[64], ans[2 + DHT_K * 82] = {DHT_NODES, DHT_K};
-    memcpy(ans + 2, h->pool, sizeof h->pool);
+    uint8_t req[64];
     while (!atomic_load(&h->stop)) {
         net_addr from;
         size_t len;
@@ -1052,11 +1054,22 @@ static void *hostile_main(void *arg)
         if (!c) continue;
         if (net_recv(c, req, sizeof req, &len) && len) {
             if (req[0] == DHT_PING) (void)net_send(c, (const uint8_t[]){DHT_PONG}, 1);
-            else if (req[0] == DHT_FIND_NODE) (void)net_send(c, ans, sizeof ans);
+            else if (req[0] == DHT_FIND_NODE) nap(h->delay_ms), (void)net_send(c, h->ans, h->len);
         }
         net_close(c);
     }
     return NULL;
+}
+
+/* h, named name, listening on 127.0.0.1 and answering FIND_NODE with the NODES of the n identities ids at the addresses addrs */
+static bool hostile_start(hostile *h, pthread_t *th, const char *name, const home_identity *ids, const char *const *addrs, int n)
+{
+    make_id(name, &h->id);
+    h->len = nodes_msg(h->ans, ids, addrs, n);
+    h->lfd = net_listen("127.0.0.1", 0, &h->port);
+    net_cfg_init(&h->cfg, ctx, &h->id, FP, BITS, h->port, 2000);
+    atomic_store(&h->stop, false);
+    return h->lfd >= 0 && pthread_create(th, NULL, hostile_main, h) == 0;
 }
 
 /* whether id shares `bits` bits with t after the zero bits of an identity */
@@ -1088,8 +1101,9 @@ static void test_hostile_lookup(void)
             make_id(label, &h->id);
             if (close_to(h->id.id, target, 9)) break;
         }
+        h->ans[0] = DHT_NODES, h->ans[1] = DHT_K, h->len = sizeof h->ans;
         for (int i = 0; i < DHT_K; i++) {                       /* the names it gives: no keys, nearer still */
-            uint8_t *p = h->pool[i], m[40];
+            uint8_t *p = h->ans + 2 + 82 * i, m[40];
             for (uint32_t c = 0;; c++) {
                 memcpy(m, target, 32), memcpy(m + 32, &(uint32_t){(uint32_t)(k * 100 + i)}, 4), memcpy(m + 36, &c, 4);
                 pz_sha256(m, sizeof m, p + 32);
@@ -1125,6 +1139,65 @@ static void test_hostile_lookup(void)
     for (int k = 0; k < H; k++) atomic_store(&hs[k].stop, true);
     for (int k = 0; k < H; k++) pthread_join(th[k], NULL), net_close_fd(hs[k].lfd);
     for (int i = 0; i < TAR; i++) net_close_fd(tfd[i]);
+}
+
+/* A lookup for a node that one answer names, first, at an address where nobody listens, and a later answer at its own: the node is
+ * asked there, and found. Before, the first address named for an ID was the only one, and dht_find failed: no ALERT or POSSESS went to
+ * that node, nor a dial of a session. S does not listen, so no node keeps it; its contacts are two nodes of the test. */
+static void test_named_elsewhere(void)
+{
+    static hostile hs[2];
+    pthread_t th[2];
+    home_identity sid;
+    const node *B = &nodes[6];
+    char real[32];
+    snprintf(real, sizeof real, "127.0.0.1:%u", dht_port(B->d));
+    dht *S = scratch("s-named", true, 0, -1, &sid);
+    hs[0].lfd = hs[1].lfd = -1;
+    hs[1].delay_ms = 300;                                       /* its name of B comes second: while B is asked there, or after */
+    const bool one = S && hostile_start(&hs[0], &th[0], "names dead", &B->id, (const char *const[]){"127.0.0.1:1"}, 1),
+               up = one && hostile_start(&hs[1], &th[1], "names real", &B->id, (const char *const[]){real}, 1);
+    CHECK(up);
+    if (up) {
+        dht_contact c;
+        seen_port(S, &hs[0].id, hs[0].port), seen_port(S, &hs[1].id, hs[1].port);
+        CHECK(dht_find(S, B->id.xonly, &c) && c.addr.port == dht_port(B->d));
+    }
+    for (int k = 0; k < 2; k++) atomic_store(&hs[k].stop, true);
+    if (one) pthread_join(th[0], NULL);
+    if (up) pthread_join(th[1], NULL);
+    for (int k = 0; k < 2; k++) net_close_fd(hs[k].lfd);
+    if (S) scratch_end(S, "s-named");
+}
+
+/* A contact of the table whose address fails once, and that two answers name at addresses where nobody listens: the lookup asks it there
+ * too, and it stays in the table, as only a failure at its own address counts against it (three drop it). Before, every address
+ * counted: one lookup dropped it, and one failure elsewhere let an answer at another address take its place (rt_note). A contact that
+ * answers at its own address is never asked at another. */
+static void test_named_dead(void)
+{
+    static hostile hs[2];
+    pthread_t th[2];
+    home_identity sid, bid;
+    dht_contact cs[8], out[DHT_K];
+    make_id("named dead", &bid);
+    dht *S = scratch("s-dead", true, 0, -1, &sid);
+    hs[0].lfd = hs[1].lfd = -1;
+    hs[1].delay_ms = 300;                                       /* its name comes once the first two addresses failed */
+    const bool one = S && hostile_start(&hs[0], &th[0], "dead namer 1", &bid, (const char *const[]){"127.0.0.1:2"}, 1),
+               up = one && hostile_start(&hs[1], &th[1], "dead namer 2", &bid, (const char *const[]){"127.0.0.1:3"}, 1);
+    CHECK(up);
+    if (up) {
+        seen_at(S, &bid, "127.0.0.1:1");
+        seen_port(S, &hs[0].id, hs[0].port), seen_port(S, &hs[1].id, hs[1].port);
+        (void)dht_lookup(S, bid.id, out, DHT_K);
+        CHECK(has(cs, dht_contacts(S, cs, 8), bid.id, NULL));
+    }
+    for (int k = 0; k < 2; k++) atomic_store(&hs[k].stop, true);
+    if (one) pthread_join(th[0], NULL);
+    if (up) pthread_join(th[1], NULL);
+    for (int k = 0; k < 2; k++) net_close_fd(hs[k].lfd);
+    if (S) scratch_end(S, "s-dead");
 }
 
 static int raw_connect(uint16_t port)
@@ -1715,8 +1788,8 @@ static void test_starved_coincidence(void)
 
 /* A node of the table at an address of its own that answers as a custodian would, except: every record of a STORE is a coincidence, and
  * PROVE and MBOX_GET get the answer the test set (LIAR_PAIRS) or, PROVE, none (LIAR_SILENT: it holds the connection past the timeout
- * of the asker); or every record of a STORE is stored, at once (LIAR_OK) or after a second (LIAR_SLOW). Each connection on a thread
- * of its own. */
+ * of the asker); or every record of a STORE is stored, at once (LIAR_OK) or after a second (LIAR_SLOW). It takes every ALERT but the
+ * first `deaf`, which get no answer. Each connection on a thread of its own. */
 enum { LIAR_OK, LIAR_PAIRS, LIAR_SILENT, LIAR_SLOW };
 
 typedef struct {
@@ -1725,7 +1798,8 @@ typedef struct {
     int lfd;
     uint16_t port;
     pthread_t th;
-    atomic_int mode, proves, live;
+    bool up;                       /* its thread runs */
+    atomic_int mode, proves, live, alerts, deaf;   /* alerts: the ALERTs that came */
     atomic_bool stop;
     pthread_mutex_t mu;
     uint8_t mbox[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY];   /* LIAR_PAIRS: the answer to PROVE */
@@ -1749,7 +1823,7 @@ static void *liar_conn_main(void *arg)
     if (c && req && ans && net_recv(c, req, NOISE_FRAME_MAX, &len) && len) {
         if (req[0] == DHT_PING) ans[0] = DHT_PONG, n = 1;
         else if (req[0] == DHT_FIND_NODE) ans[0] = DHT_NODES, ans[1] = 0, n = 2;
-        else if (req[0] == DHT_ALERT) ans[0] = DHT_OK, n = 1;
+        else if (req[0] == DHT_ALERT) ans[0] = DHT_OK, n = atomic_fetch_add(&l->alerts, 1) >= atomic_load(&l->deaf);
         else if (req[0] == DHT_MBOX_GET && mode != LIAR_PAIRS) ans[0] = DHT_MBOX, ans[1] = 0, n = 2;
         else if (req[0] == DHT_STORE && len >= 2) {
             if (mode == LIAR_SLOW) nap(1000);
@@ -1788,15 +1862,37 @@ static void *liar_main(void *arg)
     return NULL;
 }
 
-/* the answer of the liar to PROVE and to MBOX_GET: an MBOX with these pairs, without proofs */
+/* the liar named name, listening on 127.0.0.1; false when it could not start */
+static bool liar_start(liar *l, const char *name)
+{
+    memset(l, 0, sizeof *l);
+    pthread_mutex_init(&l->mu, NULL);
+    make_id(name, &l->id);
+    l->lfd = net_listen("127.0.0.1", 0, &l->port);
+    net_cfg_init(&l->cfg, ctx, &l->id, FP, BITS, l->port, 2000);
+    l->up = l->lfd >= 0 && pthread_create(&l->th, NULL, liar_main, l) == 0;
+    return l->up;
+}
+
+static void liar_end(liar *l)
+{
+    atomic_store(&l->stop, true);
+    if (l->up) pthread_join(l->th, NULL);
+    while (atomic_load(&l->live)) nap(20);
+    net_close_fd(l->lfd);
+    pthread_mutex_destroy(&l->mu);
+}
+
+/* the answer of the liar to PROVE and to MBOX_GET: an MBOX with these pairs, and the proofs they have */
 static void liar_answer(liar *l, const mbox_pair *p, int n)
 {
     pthread_mutex_lock(&l->mu);
     l->mbox[0] = DHT_MBOX, l->mbox[1] = (uint8_t)n;
-    memset(l->mbox + 2, 0, (size_t)n * DHT_MBOX_ENTRY);
     for (int i = 0; i < n; i++) {
-        record_encode(&p[i].r[0], l->mbox + 2 + (size_t)i * DHT_MBOX_ENTRY);
-        record_encode(&p[i].r[1], l->mbox + 2 + (size_t)i * DHT_MBOX_ENTRY + RECORD_LEN);
+        uint8_t *q = l->mbox + 2 + (size_t)i * DHT_MBOX_ENTRY;
+        record_encode(&p[i].r[0], q), record_encode(&p[i].r[1], q + RECORD_LEN);
+        q[2 * RECORD_LEN] = (uint8_t)(p[i].has[0] | p[i].has[1] << 1);
+        memcpy(q + 2 * RECORD_LEN + 1, p[i].proof, sizeof p[i].proof);
     }
     l->mbox_len = 2 + (size_t)n * DHT_MBOX_ENTRY;
     pthread_mutex_unlock(&l->mu);
@@ -1822,6 +1918,16 @@ static void *repub_main(void *arg)
     (void)dht_republish(j->d, true);
     j->end = ms();
     return NULL;
+}
+
+/* the pairs of owner at x in the mailbox of d */
+static int pairs_at(dht *d, const uint8_t owner[32], const uint8_t x[32])
+{
+    mbox_pair pairs[DHT_MBOX_MAX];
+    int k = 0;
+    const int n = dht_local_mbox(d, owner, pairs, DHT_MBOX_MAX);
+    for (int i = 0; i < n; i++) k += !memcmp(pairs[i].r[0].x, x, 32);
+    return k;
 }
 
 static void lying_checks(node *O, node *P, liar *l)
@@ -1923,6 +2029,33 @@ static void lying_checks(node *O, node *P, liar *l)
     pthread_join(th, NULL);
     printf("t_dht: a publish of %.1f s during a republish of %.1f s to a slow custodian\n", (double)(pub_end - t0) / 1000, (double)(rj.end - r0) / 1000);
     CHECK(pub_end - t0 < 2500 && rj.end > pub_end);
+
+    /* a PROVE of two records answered with nine pairs of the first: O takes eight, as many as a custodian keeps owners of one x, and
+     * posts its proof to the mailboxes of their owners, P among them (before, the bound was for the two records together: nine) */
+    record two[2];
+    mbox_pair nine[STORE_X_OWNERS + 1];
+    for (int i = 0; i < 2; i++) {
+        char label[32];
+        uint8_t di[32];
+        snprintf(label, sizeof label, "each %d", i);
+        hashed(label, di), even_point(di, two[i].x);
+        give_point(O, 0, two[i].x, di);
+        two[i].t = 0, two[i].dp = net.dpbits;
+    }
+    for (int i = 0; i <= STORE_X_OWNERS; i++) {
+        char label[32];
+        home_identity sy;
+        snprintf(label, sizeof label, "each owner %d", i);
+        make_id(label, &sy);
+        const record mineO = rec_of(0, two[0].x, O->id.xonly), q = rec_of(1, two[0].x, sy.xonly);
+        nine[i] = pair_of(&mineO, &q);
+    }
+    liar_answer(l, nine, STORE_X_OWNERS + 1);
+    atomic_store(&l->mode, LIAR_PAIRS);
+    CHECK(dht_publish(O->d, two, 2) == 2);
+    for (t0 = ms(); ms() - t0 < 10000 && pairs_at(P->d, O->id.xonly, two[0].x) < STORE_X_OWNERS; nap(50)) {}
+    nap(1000);
+    CHECK(pairs_at(P->d, O->id.xonly, two[0].x) == STORE_X_OWNERS);
 }
 
 /* PROVE against a custodian that lies, on a network of three of its own: O publishes, P is the other owner of the points (it never
@@ -1939,12 +2072,7 @@ static void test_lying_custodian(void)
         snprintf(tiny[i].dir, sizeof tiny[i].dir, ROOT "/%s", i ? "t-p" : "t-o");
         clean_dir(tiny[i].dir);
     }
-    memset(&l, 0, sizeof l);
-    pthread_mutex_init(&l.mu, NULL);
-    make_id("liar", &l.id);
-    l.lfd = net_listen("127.0.0.1", 0, &l.port);
-    net_cfg_init(&l.cfg, ctx, &l.id, FP, BITS, l.port, 2000);
-    const bool up = start_node(P, DHT_ANY_PORT, -1) && start_node(O, DHT_ANY_PORT, -1) && l.lfd >= 0 && pthread_create(&l.th, NULL, liar_main, &l) == 0;
+    const bool up = liar_start(&l, "liar") && start_node(P, DHT_ANY_PORT, -1) && start_node(O, DHT_ANY_PORT, -1);
     CHECK(up);
     if (up) {
         seen_port(O->d, &P->id, dht_port(P->d)), seen_port(P->d, &O->id, dht_port(O->d));
@@ -1960,16 +2088,12 @@ static void test_lying_custodian(void)
         CHECK(dht_count(O->d) == 2 && dht_count(P->d) == 2);
         lying_checks(O, P, &l);
     }
-    atomic_store(&l.stop, true);
-    if (up) pthread_join(l.th, NULL);
-    while (atomic_load(&l.live)) nap(20);
-    net_close_fd(l.lfd);
+    liar_end(&l);
     for (int i = 0; i < 2; i++) {
         dht_stop(tiny[i].d);
         clean_dir(tiny[i].dir);
         pthread_mutex_destroy(&tiny[i].mu);
     }
-    pthread_mutex_destroy(&l.mu);
 }
 
 /* An exchange from the source address src of this machine (127.0.0.2: another address block than the one of 127.0.0.1), as
@@ -2144,38 +2268,145 @@ static bool store_to(const net_cfg *cli, const node *V, const record *r, int n, 
     return ok;
 }
 
-/* The owners of a custodian. A store has room for one owner in 256 records, keeps an owner for ever, and an identity costs little: so
- * an owner the store does not know costs its address block 256 of its record tokens (100 000 at once, 50 a second), also when its
- * record is refused. A block that spent them gets a new owner refused, and an owner the store knows served. Before, a new owner cost
- * one token: one address block filled the owners of a custodian in 7 hours, and no new home could store there, for ever. */
+/* The owners of a custodian. A store has room for one owner in 256 records, keeps an owner for ever, and an identity costs little: so an
+ * owner it takes costs its address block 256 of its record tokens (100 000 at once, 50 a second). A record whose owner it does not take
+ * costs one, as any record: a refused one, and every record of a new home at a full store, which still tells their coincidences and
+ * answers their PROVE. Before, each of them cost 256: a block's second STORE of 255 refused records ended in FULL, a new home got 390
+ * coincidences of a full custodian at once and then one in five seconds, and its PROVE after them was refused. */
 static void test_owner_cost(void)
 {
+    enum { HELD = 10 };
     static node V;
-    static record valid[DHT_STORE_MAX + 2], bad[DHT_STORE_MAX];
-    if (!victim(&V, "s-owners", 0)) return;
+    static record valid[HELD], bad[DHT_STORE_MAX], same_x[DHT_STORE_MAX];
+    store_max = HELD;
+    const bool up = victim(&V, "s-owners", 0);
+    store_max = 0;
+    if (!up) return;
     home_identity kid, xid, yid;
     net_cfg known, burner, fresh;
-    uint8_t st[DHT_STORE_MAX], d[32];
+    uint8_t st[DHT_STORE_MAX], d[HELD][32];
     make_id("owner known", &kid), make_id("owner burner", &xid), make_id("owner new", &yid);
     net_cfg_init(&known, ctx, &kid, FP, BITS, 0, 2000), net_cfg_init(&burner, ctx, &xid, FP, BITS, 0, 2000);
     net_cfg_init(&fresh, ctx, &yid, FP, BITS, 0, 2000);
-    for (int i = 0; i < DHT_STORE_MAX + 2; i++) {
+    for (int i = 0; i < HELD; i++) {
         char label[32];
         snprintf(label, sizeof label, "owner point %d", i);
-        hashed(label, d), even_point(d, valid[i].x);
+        hashed(label, d[i]), even_point(d[i], valid[i].x);
         valid[i].t = 0, valid[i].dp = net.dpbits;
-        if (i < DHT_STORE_MAX) bad[i] = valid[i], bad[i].dp = 40;   /* zero bits that x has not: refused after the tokens are taken */
     }
-    CHECK(store_to(&known, &V, valid, 1, st) && st[0] == DHT_ST_STORED);
-    /* 255 refused records of an owner the store does not know: 65 280 tokens; the next 255 find 34 464 left, enough for 134 */
-    CHECK(store_to(&burner, &V, bad, DHT_STORE_MAX, st) && st[0] == DHT_ST_INVALID && st[DHT_STORE_MAX - 1] == DHT_ST_INVALID);
-    CHECK(store_to(&burner, &V, bad, DHT_STORE_MAX, st) && st[0] == DHT_ST_INVALID && st[DHT_STORE_MAX - 1] == DHT_ST_FULL);
-    CHECK(store_to(&known, &V, valid + 1, DHT_STORE_MAX, st) && st[0] == DHT_ST_STORED);   /* the rest of them, one a record */
-    CHECK(store_to(&fresh, &V, valid, 1, st) && st[0] == DHT_ST_FULL);                    /* a new owner: 256, five seconds away */
-    nap(200);
-    CHECK(store_to(&known, &V, valid + DHT_STORE_MAX + 1, 1, st) && st[0] == DHT_ST_STORED);
-    CHECK(dht_local_count(V.d) >= 3 && dht_local_count(V.d) <= 2 + DHT_STORE_MAX);
+    for (int i = 0; i < DHT_STORE_MAX; i++) {
+        same_x[i] = valid[i % HELD];
+        bad[i] = same_x[i], bad[i].dp = 40;                     /* zero bits that x has not: refused after the tokens are taken */
+    }
+    CHECK(store_to(&known, &V, valid, HELD, st) && st[0] == DHT_ST_STORED && st[HELD - 1] == DHT_ST_STORED);   /* the store is full */
+    for (int k = 0; k < 2; k++) {                               /* 1020 records of owners the store does not take */
+        CHECK(store_to(&burner, &V, bad, DHT_STORE_MAX, st) && st[0] == DHT_ST_INVALID && st[DHT_STORE_MAX - 1] == DHT_ST_INVALID);
+        CHECK(store_to(&fresh, &V, same_x, DHT_STORE_MAX, st) && st[0] == DHT_ST_COINCIDENCE && st[DHT_STORE_MAX - 1] == DHT_ST_COINCIDENCE);
+    }
+    /* the new home proves what got COINCIDENCE: the answer has the pairs */
+    uint8_t req[2 + DHT_PROVE_MAX * (RECORD_WIRE + 64)] = {DHT_PROVE, DHT_PROVE_MAX}, ans[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY];
+    static const uint8_t custody_nonce[32];
+    size_t n;
+    net_addr a;
+    for (int i = 0; i < DHT_PROVE_MAX; i++) {
+        const record r = rec_of(0, valid[i].x, yid.xonly);
+        uint8_t *q = req + 2 + (size_t)i * (RECORD_WIRE + 64);
+        record_wire_encode(&r, q);
+        CHECK(record_prove(ctx, &net, &r, d[i], V.id.xonly, custody_nonce, q + RECORD_WIRE));
+    }
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(V.d);
+    CHECK(net_exchange(&fresh, &a, V.id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && ans[0] == DHT_MBOX && ans[1] == DHT_PROVE_MAX);
+    CHECK(dht_local_count(V.d) == HELD);
     victim_end(&V);
+}
+
+/* An alert of a home's own custody waits for the other owner's proof, which does not come within its life (alert_s: a day on a real
+ * network, a second here): it is forgotten, and the other owner's ALERT that comes after it is a new alert, checked and done. Before,
+ * the alert that waited in vain was refused as for a wrong proof, and nothing of that pair counted any more: the other owner's proof,
+ * its mailboxes, the custodians at the next republish. */
+static void test_alert_expiry(void)
+{
+    static node V;
+    alert_s = 1;
+    const bool up = victim(&V, "s-expiry", 0);
+    alert_s = 0;
+    if (!up) return;
+    uint8_t dV[32], dP[32], x[32], st[1];
+    hashed("expiry", dV), even_point(dV, x), wild_of(dV, dP);
+    give_point(&V, 0, x, dV);
+    home_identity pid;
+    net_cfg pc;
+    make_id("expiry partner", &pid);
+    net_cfg_init(&pc, ctx, &pid, FP, BITS, 0, 2000);
+    const record rP = rec_of(1, x, pid.xonly);
+    record rV, mine, theirs;
+    bool merge;
+    CHECK(store_to(&pc, &V, &rP, 1, st) && st[0] == DHT_ST_STORED);   /* the partner's record, then V's own: an alert of its custody */
+    CHECK(publish_one(&V, 0, x, &rV));
+    nap(2500);                                                  /* past its life, and a turn of the maintenance thread */
+    CHECK(alerts_of(&V, NULL, NULL, NULL) == 0);
+    CHECK(alert_from("127.0.0.1", &pc, &V, "expiry partner", 1, dP, &rV, NULL));
+    const int64_t t0 = ms();
+    while (ms() - t0 < 10000 && alerts_of(&V, NULL, NULL, NULL) < 1) nap(20);
+    CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rP) && !merge);
+    victim_end(&V);
+}
+
+/* A home that does not listen gets the other owner's proof from its mailbox, and its own proof reaches nobody at first: its one mailbox
+ * node, the liar, leaves the first ALERT unanswered. The home sends it again until a node takes it, and only then is the alert done.
+ * Done, it still posts its proof for the rest of the alert's life (4 s here, a day on a real network), for a mailbox that lost it, and
+ * then no more; the daemon is told once. Before, the alert was done after the one post that nobody took, and a done alert never sent
+ * its proof again: the other owner, if it does not listen either, never heard of the pair. */
+static void test_post_again(void)
+{
+    static node V;
+    static liar l;
+    uint8_t dV[32], dP[32], x[32], h[32];
+    home_identity pid;
+    memset(&V, 0, sizeof V);
+    pthread_mutex_init(&V.mu, NULL);
+    make_id("again home", &V.id);
+    snprintf(V.dir, sizeof V.dir, ROOT "/s-again");
+    clean_dir(V.dir);
+    hashed("posted again", dV), even_point(dV, x), wild_of(dV, dP);
+    give_point(&V, 0, x, dV);
+    make_id("again partner", &pid);
+    const record rV = rec_of(0, x, V.id.xonly), rP = rec_of(1, x, pid.xonly);
+    mbox_pair p = pair_of(&rV, &rP);
+    const int at = same(&p.r[0], &rP) ? 0 : 1;                  /* the partner's proof for V, in the mailbox */
+    pair_hash(&rV, &rP, h);
+    p.has[at] = true;
+    CHECK(record_prove(ctx, &net, &rP, dP, V.id.xonly, h, p.proof[at]));
+    alert_s = 4;                                                /* a post every 4 / 24 s: at every turn of the maintenance thread */
+    const bool up = liar_start(&l, "again mailbox") && start_node(&V, 0, -1);
+    alert_s = 0;
+    CHECK(up);
+    if (up) {
+        atomic_store(&l.deaf, 1);
+        liar_answer(&l, &p, 1);
+        atomic_store(&l.mode, LIAR_PAIRS);
+        seen_port(V.d, &l.id, l.port);                          /* V's only contact: the mailbox of both owners */
+        int64_t t1 = 0;                                         /* when the first post came, as the alert was made */
+        const int64_t t0 = ms();
+        for (; ms() - t0 < 15000 && alerts_of(&V, NULL, NULL, NULL) < 1; nap(20))
+            if (!t1 && atomic_load(&l.alerts)) t1 = ms();
+        record mine, theirs;
+        bool merge;
+        CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rP) && !merge);
+        CHECK(atomic_load(&l.alerts) >= 2);
+        printf("t_dht: a proof that reached nobody, sent again and taken in %.1f s\n", (double)(ms() - t0) / 1000);
+        while (ms() - t0 < 15000 && atomic_load(&l.alerts) < 3) nap(20);
+        CHECK(atomic_load(&l.alerts) >= 3);                     /* done, and posted again */
+        while (ms() < t1 + 4000 + 1200) nap(20);                /* past the life of the alert, and a turn */
+        const int posts = atomic_load(&l.alerts);
+        nap(1200);
+        CHECK(atomic_load(&l.alerts) == posts && alerts_of(&V, NULL, NULL, NULL) == 1);
+    }
+    dht_stop(V.d);
+    liar_end(&l);
+    clean_dir(V.dir);
+    pthread_mutex_destroy(&V.mu);
 }
 
 int main(void)
@@ -2232,6 +2463,8 @@ int main(void)
     test_republish();
     test_eviction();
     test_moved_contact();
+    test_named_elsewhere();
+    test_named_dead();
     test_planted_copies();                                     /* after the eviction: its alerts that wait make lookups */
     test_starved_coincidence();
     test_policy();
@@ -2241,7 +2474,9 @@ int main(void)
     test_alert_blocks();
     test_alert_queue();
     test_owner_cost();
+    test_alert_expiry();
     test_lying_custodian();
+    test_post_again();
     test_linear();
     t0 = ms();
     test_relay_session();
