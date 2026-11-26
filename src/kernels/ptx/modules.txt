@@ -7,10 +7,10 @@
 #
 # name      the module, and the name of its file in this folder
 # kind      linear (src/kernels/pz_linear.cl), kang (pz_kang.cl) or test (pz_test.cl); all three come after pz_common.cl
-# cfg       what the parameter of rt_build has above bit 16 (src/gpu_priv.h): the minimum resident blocks per SM of a linear kernel plus 8 times
-#           the configuration of the batch products of a kangaroo kernel (0 at every
-#           walker, 1 at every other, 2 at every fourth), plus 16 for the metadata written
-#           once (bit 20 of the parameter, -DKANG_META=1: the tag two steps back stored in the last round only, pz_kang.cl)
+# cfg       what the parameter of rt_build has above bit 16 (src/gpu_variant.h, KV_KERNEL): for a linear kernel the minimum resident
+#           blocks per SM; for a kangaroo kernel the configuration of the batch products (0 at every walker, 1 at every other, 2 at every
+#           fourth), plus 16 for the metadata written once (bit 20 of the parameter, -DKANG_META=1: the tag two steps back stored in the last
+#           round only, pz_kang.cl)
 # base      an earlier module whose text is the dictionary of this one in the compressed embedding (src/lz.c), or - for none; the modules of
 #           a family differ in few lines, so all the PTX takes about 1 MB instead of 12. A base comes before the modules that use it
 # defines   the -D options of the NVRTC build, or - for none. The size of the parameter of rt_build (HALF, or NK) is the value of -DHALF / -DNK

@@ -548,7 +548,7 @@ scheduling control words that `ptxas` writes into every instruction give the lat
 * **Latency, which decides.** A block cannot start round r + 1 before its inverting warp has finished round r, and the inverse is a serial
   chain: the stall counts of the round sum to 1,379 cycles before the first barrier, 35,203 for the inverting warp between the barriers (32,000
   of them `fe_inv`: 170 + 19 × (45 + 12.6 × 83 + 571) + 226; a turn of the divstep loop is 33 instructions and 83 cycles) and 8,094 after the
-  second, **≈ 44,700 cycles per round for one warp alone**. The issue model of `tools/research/kang_block_sched.py` (one instruction issued per
+  second, **≈ 44,700 cycles per round for one warp alone**. The issue model of `tools/research/kang_block_sched.py` (removed with the kernel in 1.24.0, in the history up to 1.23.4; one instruction issued per
   cycle and partition, each pipe held two cycles per warp instruction, the stall counts and scoreboards of `ptxas`, the barriers of each block;
   two blocks per SM, warp w of a block on partition w, IMAD.WIDE at one slot): **52,500 cycles per round for one block alone, 54,100 for two
   blocks whose inverting warps fall on different partitions, 61,100 when they fall on the same one** (blocks b and b + 20, co-resident on a

@@ -7,21 +7,90 @@
 The module (src/kernels/ptx/modules.txt, `kang128c` the form of 1.19.2 and `kang128cm` the tags written once; or `kang` with -D options for a
 build that is not a module) is compiled with NVRTC and ptxas as
 tools/gen_ptx.py does, disassembled, and the executed path of one turn of the loop over the walkers of a round is rebuilt from the SASS as
-kang_block_sched.py does for the block herd: the loop is the one whose body stores the history entries (STG.U16), a conditional branch is
+the earlier tool of the block herd did (removed with that kernel in 1.24.0): the loop is the one whose body stores the history entries (STG.U16), a conditional branch is
 taken when it skips a block that holds an ATOMG (a restart, a distinguished point) and not taken when its target calls kang_emit_dp; the
 other conditional branches are not taken (the cycle update then counts its checkpoint form, a few instructions more than the common one).
 The private arrays of the work-item live in device memory, so every LDL and STL of the path is traffic to it (a predicated store and its
 complement under the other polarity of the same predicate count once): the script prints, per step, the bytes read and written by the local
 loads and stores by purpose (from their offsets in the stack frame, which the kernel lays out as X, Y, TP, FL, the tags, CM, LD), the history
 store, the jump-table loads (served by L1 and L2: the table is 21 KiB), and the instructions of the turn on the two integer pipes and the
-rest; then the round overhead outside that loop (the check of the product, fe_inv as executed for a warp: kang_block_sched.inv_path) per
+rest; then the round overhead outside that loop (the check of the product, fe_inv as executed for a warp: inv_path) per
 step. Used for docs/en/RESEARCH.md section 5 (after 1.19.2). The tools: see tools/research/README.md (sass_count.py)."""
 import collections, importlib.util, os, re, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location('kang_block_sched', os.path.join(HERE, 'kang_block_sched.py'))
-kbs = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(kbs)
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ALU = {'IADD3', 'LOP3', 'SHF', 'LEA', 'SEL', 'PRMT', 'ISETP', 'FLO', 'POPC', 'BREV', 'MOV', 'IMNMX', 'PLOP3', 'P2R', 'R2P', 'BMSK', 'VOTE', 'IABS',
+       'SGXT'}
+
+
+def opname(t):
+    return re.sub(r'^@!?U?P\w+\s+', '', t).split()[0]
+
+
+def pipe(op):
+    b = op.split('.')[0]
+    return 'F' if b == 'IMAD' else 'A' if b in ALU else 'O'
+
+
+def parse(text):
+    """{function: [(offset, text, (stall, yield, write barrier, read barrier, wait mask))]} and {label: (function, index)}"""
+    funcs, labels, cur, pend = collections.OrderedDict(), {}, None, None
+    for l in text.splitlines():
+        m = re.match(r'\s*\.text\.(\S+):', l) or re.match(r'^(\$\S+):', l)
+        if m:
+            cur = m.group(1).split('$')[-1]
+            funcs[cur] = []
+            continue
+        m = re.match(r'\s*\.(L_x_\d+):', l)
+        if m and cur is not None:
+            labels[m.group(1)] = (cur, len(funcs[cur]))
+            continue
+        m = re.match(r'\s*/\*([0-9a-f]{4,})\*/\s+(.*?)\s*;\s*/\*\s*0x([0-9a-f]{16})\s*\*/', l)
+        if m and cur is not None:
+            pend = (int(m.group(1), 16), m.group(2).strip())
+            continue
+        m = re.match(r'\s*/\*\s*0x([0-9a-f]{16})\s*\*/\s*$', l)
+        if m and pend is not None:
+            c = int(m.group(1), 16) >> 41
+            funcs[cur].append(pend + ((c & 0xf, (c >> 4) & 1, (c >> 5) & 7, (c >> 8) & 7, (c >> 11) & 0x3f),))
+            pend = None
+    return funcs, labels
+
+
+def block_end(ins, i):
+    while i < len(ins) and not re.search(r'\bBRA\b|EXIT|RET', ins[i][1]):
+        i += 1
+    return i
+
+
+def inv_path(funcs, labels, rounds=19, turns=(13,) * 12 + (12,) * 7):
+    """the executed instructions of fe_inv for one warp: the prologue, `rounds` rounds of the divstep loop (`turns` turns of the inner loop each)
+    and the epilogue up to the return; and the parts, for the counts"""
+    f = [n for n in funcs if 'fe_inv' in n][0]
+    ins = funcs[f]
+    lab = {k: v[1] for k, v in labels.items() if v[0] == f}
+    back = []
+    for i, (_, t, _) in enumerate(ins):
+        m = re.search(r'BRA.*`\(\.(L_x_\d+)\)', t)
+        if m and lab[m.group(1)] < i:
+            back.append((lab[m.group(1)], i))
+    outer = max(back, key=lambda x: x[1] - x[0])
+    inner = min(back, key=lambda x: x[1] - x[0])
+    pro, pre, turn, post = ins[:outer[0]], ins[outer[0]:inner[0]], ins[inner[0]:inner[1] + 1], ins[inner[1] + 1:outer[1] + 1]
+    epi = []
+    for x in ins[outer[1] + 1:]:
+        epi.append(x)
+        if 'RET' in x[1]:
+            break
+    tr = list(pro)
+    for r in range(rounds):
+        tr += pre + turn * turns[r % len(turns)] + post
+    return tr + epi, (('prologue', pro), ('round, before the turns', pre), ('turn', turn), ('round, after the turns', post), ('epilogue', epi))
+
+
+def stats(seq):
+    pa = collections.Counter(pipe(opname(t)) for _, t, _ in seq)
+    return len(seq), pa['A'], pa['F'], pa['O'], sum(c[0] for _, _, c in seq)
 
 
 def width(op):
@@ -40,7 +109,7 @@ def walker_loop(ins, lab):
             if any('STG.E.U16' in x[1] for x in body) and any('LDL.128' in x[1] for x in body) and (best is None or i - h < best[1] - best[0]):
                 best = (h, i)
     if best is None:
-        raise SystemExit('no loop over the walkers found (a block herd kernel? use kang_block_sched.py)')
+        raise SystemExit('no loop over the walkers found')
     return best
 
 
@@ -65,7 +134,7 @@ def path_of(ins, lab, head, back):
             else:
                 j = lab[tgt]
                 skipped = ins[i + 1:j] if j > i else []
-                if any('emit_dp' in x[1] for x in ins[j:kbs.block_end(ins, j) + 1]):
+                if any('emit_dp' in x[1] for x in ins[j:block_end(ins, j) + 1]):
                     taken = False
                 else:
                     taken = any('ATOMG' in x[1] for x in skipped)
@@ -184,7 +253,7 @@ def main():
     module, arch = opt('--module', 'kang128c'), opt('--arch', 'sm_86')
     defines = [a for a in args if a.startswith('-D')]
     text = compile_module(nvrtc, ptxas, nvdisasm, module, arch, defines)
-    funcs, labels = kbs.parse(text)
+    funcs, labels = parse(text)
     ins = funcs['pz_kang_step']
     lab = {k: v[1] for k, v in labels.items() if v[0] == 'pz_kang_step'}
     head, back = walker_loop(ins, lab)
@@ -199,7 +268,7 @@ def main():
         if d.startswith('-DKANG_META='):
             meta = int(d[13:]) != 0
     steps = sum('STG.E.U16' in x[1] for x in path)
-    n, a, f, o, _ = kbs.stats(path)
+    n, a, f, o, _ = stats(path)
     print('%s %s: loop over the walkers at %x..%x, %d steps per turn' % (module, arch, ins[head][0], ins[back][0], steps))
     print('  per step: %.1f instructions (ALU pipe %.1f, FMA pipe %.1f, other %.1f)' % (n / steps, a / steps, f / steps, o / steps))
     mb = mem_bytes(ins, idx, layout(nk, mc, meta))
@@ -219,16 +288,16 @@ def main():
     if outer:
         rest = ins[outer[0]:head] + ins[back + 1:outer[1] + 1]
         rest = [x for x in rest if 'ATOMG' not in x[1]]
-        inv, _ = kbs.inv_path(funcs, labels)
-        rn, ra, rf, ro, _ = kbs.stats(rest)
-        ni, ia, fi, oi, _ = kbs.stats(inv)
+        inv, _ = inv_path(funcs, labels)
+        rn, ra, rf, ro, _ = stats(rest)
+        ni, ia, fi, oi, _ = stats(inv)
         print('  round overhead (static, outside the loop, with the rare blocks): %d instructions; fe_inv as executed per warp: %d (ALU %d, FMA %d)' % (rn, ni, ia, fi))
         print('  with NK walkers per work-item, per step: (%d + %d) / NK' % (rn, ni))
 
 
 def compile_module(nvrtc, ptxas, nvdisasm, module, arch, defines):
     import ctypes, subprocess, tempfile
-    spec = importlib.util.spec_from_file_location('gen_ptx', os.path.join(kbs.ROOT, 'tools', 'gen_ptx.py'))
+    spec = importlib.util.spec_from_file_location('gen_ptx', os.path.join(ROOT, 'tools', 'gen_ptx.py'))
     gp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gp)
     mods = {m[0]: m for m in gp.read_modules()}

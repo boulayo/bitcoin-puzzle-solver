@@ -681,6 +681,8 @@ void gpu_linear_autotune(gpu_session *s, int idx)
     gpu_tune_pick(s, idx, &op);
 }
 
+#define L2_NK_TEXT "; with an L2 of at least 8 MiB also 16, 32 and 64 with the suffix l (herd in L2; plain or b, without m)"
+
 /* Chooses the kangaroo kernel variant for this device (cached on disk like the linear variant) and leaves it in s. */
 void gpu_kang_autotune(gpu_session *s, int idx)
 {
@@ -692,8 +694,9 @@ void gpu_kang_autotune(gpu_session *s, int idx)
         const int v = KV_MAKE(g_env.gpu_nk, g_env.gpu_nk_cfg, g_env.gpu_nk_meta ? 1 : 0, g_env.gpu_nk_l2 ? 1 : 0, 0);
         if (valid_kvariant(d, v)) { gpu_tune_kang_set_variant(s, v); rt_log(PZ_LOG_INFO, "GPU[%d]: kangaroo variant set by PZ_GPU_NK: %s", idx, gpu_kvariant_name(v, nb, sizeof nb)); }
         else rt_log(PZ_LOG_WARN, "GPU[%d]: PZ_GPU_NK=%s ignored (allowed values with %s: %s)", idx, g_env.gpu_nk_text, rt_api_name(d->api),
-                    d->api == RT_CUDA ? "64, 128, 256, with suffix b; 64 and 128 also with c; 64 and 128, plain, b or c, with m after it (tags once)"
-                                      : "32, 64, 128, with suffix b, then m if wanted (tags once); with an L2 of at least 8 MiB also 16 and 32 and the suffix l (herd in L2)");
+                    d->api == RT_CUDA ? "64, 128, 256, plain or with b; 64 and 128 also with c; 64 and 128, plain, b or c, with m after it (tags once)"
+                                        L2_NK_TEXT
+                                      : "32, 64, 128, plain or with b, and m after it if wanted (tags once)" L2_NK_TEXT);
         return;
     }
     if (tune_off(d)) return;
