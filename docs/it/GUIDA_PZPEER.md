@@ -172,6 +172,18 @@ Per provare lo stesso su un computer solo: due cartelle e due porte, `--dir a --
 
 ## 5. Usarlo davvero
 
+**Senza un nodo proprio**, prima di tutto una prova che il computer veda la catena dai server Electrum pubblici:
+
+```sh
+./pzpeer netcheck 135 --chain
+```
+
+Scarica le intestazioni dei blocchi dal 2015 (la prima volta qualche minuto, poi le tiene in `pzchain`) e mostra le tre monete che il
+creatore ha messo sul puzzle 135, ognuna `unspent ... proven`, poi le monete che trova sull'indirizzo, ognuna provata. Non spedisce
+niente e non costa niente. Se dice `no Electrum server answers`, il computer non raggiunge i server (porta 50001 chiusa da un firewall o
+dalla rete). `tests/peer/mainnet.sh` fa la stessa prova sui puzzle 135 e 71 e costruisce uno sweep che non spedisce; la CI la ripete
+ogni settimana su Linux, macOS e Windows.
+
 ### 5.1 Una casa su un puzzle con chiave pubblica
 
 ```sh
@@ -235,8 +247,9 @@ transazioni senza mostrarle (`--pool URL` per un altro). Senza `--private` la st
 
 **Funziona anche senza un nodo Bitcoin**, per qualsiasi chiave: i server Electrum elencano le monete dell'indirizzo, e pzpeer crede solo
 a quelle che provano, ciascuna con la sua transazione e la prova che sta in un blocco. Per questo tiene le intestazioni dei blocchi dal
-gennaio 2015 (blocco 338688, prima della prima moneta di ogni puzzle): ogni volta le scarica dai server, circa 50 MB, qualche minuto
-(`the block headers since block 338688 are fetched from the servers`). Le monete che il creatore ha messo sui puzzle aperti sono anche
+gennaio 2015 (blocco 338688, prima della prima moneta di ogni puzzle): la prima volta le scarica dai server, circa 50 MB, qualche minuto
+(`the block headers since block 338688 are fetched from the servers`), e le tiene nella cartella `pzchain` (un'altra con `--dir`): le
+volte dopo prende solo i blocchi nuovi. Le monete che il creatore ha messo sui puzzle aperti sono anche
 scritte nel programma, e vengono cercate una per una: un server che le nasconde non le fa sparire.
 
 `sweep` muove tutte le monete dell'indirizzo o nessuna, perché una transazione che ne spende solo una parte mostra la chiave pubblica e
@@ -297,6 +310,6 @@ I file della cartella: `home.seed`, `start.key`, `terms`, `payout`, `failed-sign
 | `pzsolve ended with status ...` | leggere `pzsolve.out`; la casa resta come custode |
 | `64 failed signings of this home on this network: no more with this home seed` | la casa ha raggiunto il tetto a vita delle firme fallite e non firma più: fermarla, spostare `home.seed` altrove (non cancellarlo) e riavviarla; nasce una casa nuova, con cammini e pezzi nuovi |
 | `10 payouts of this home on this network that did not pay: no more with this home seed` | la casa ha raggiunto il tetto a vita dei pagamenti non riusciti e non ne tenta più su questa rete: come sopra, spostare `home.seed` altrove e riavviarla |
-| `the block headers since block 338688 are fetched from the servers` | senza nodo, la prima partenza (e ogni `pzpeer sweep`) scarica le intestazioni dei blocchi dal 2015, circa 50 MB: aspettare qualche minuto; la casa entra nella rete dopo |
+| `the block headers since block 338688 are fetched from the servers` | senza nodo, la prima partenza di una casa (e la prima di `pzpeer sweep` o di `netcheck --chain`, in `pzchain`) scarica le intestazioni dei blocchi dal 2015, circa 50 MB: aspettare qualche minuto; la casa entra nella rete dopo |
 | `the chain did not answer about every coin of the address` | riprovare più tardi, con altri server o con un nodo proprio (`--rpc`); senza tutte le monete dell'indirizzo lo sweep non fa nessuna transazione, apposta |
 | `... which no server proves: leave that server out` | un server elenca una moneta senza la sua prova: dare gli altri server con `--electrum HOST:PORTA`, o usare `--rpc` |

@@ -10,6 +10,9 @@
 
 #include "session.h"
 
+/* the folder of the block headers of pzpeer sweep and pzpeer netcheck --chain, which have no home: fetched once, then only the new ones */
+#define SWEEP_DIR "pzchain"
+
 #define SWEEP_MAX_IN ((100000 - 100) / BTC_P2PKH_IN_SIZE)   /* the P2PKH inputs a standard transaction holds (100 000 virtual bytes): 675 */
 
 typedef struct {

@@ -425,11 +425,12 @@ modo sicuro.
 | E1-E3 | Commento della tabella dei moduli, avviso di `PZ_GPU_NK`, strumento di ricerca del modulo tolto | corretti, lo strumento tolto |
 
 **Resta aperto.**
-- La prima sincronizzazione dal blocco 338688 è provata solo con server finti (da qui i server pubblici non si raggiungono); `pzpeer
-  sweep` senza nodo non tiene le intestazioni e le riscarica a ogni esecuzione (minuti).
+- La prima sincronizzazione dal blocco 338688 è provata qui solo con server finti (da qui i server pubblici non si raggiungono); con
+  quelli veri la prova `tests/peer/mainnet.sh` (`pzpeer netcheck N --chain`), nel flusso `mainnet.yml` di GitHub. ~~`pzpeer sweep`
+  riscarica le intestazioni a ogni esecuzione~~: le tiene in `pzchain`.
 - Con un solo server lento e centinaia di monete, uno sweep leggero può esaurire il minuto del server e rifiutare (con `--rpc` no).
 - Dopo il pagamento, una moneta rimasta che nessun pagamento alla tariffa della sessione prende (per esempio una sola da 100 000
-  satoshi sopra i 100 sat/vB) va a chi la spazza per primo con la chiave, cioè a una delle due case.
+  satoshi sopra i 100 sat/vB) va a chi la spazza per primo con la chiave, cioè a una delle due case: accettato (27 novembre).
 - Un avviso fatto che rimanda ancora la sua prova è il primo a uscire quando la tabella degli avvisi (1024) è piena.
 - Una macchina persa fra il ritrovamento cifrato e la cancellazione tiene seme e stato finché un `hunt` o `merge` non ci gira.
 - La preferenza di `S_SECOND` per la seconda transazione rifirmata e la strada -2 della catena leggera sono provate solo leggendo il

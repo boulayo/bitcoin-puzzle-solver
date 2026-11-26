@@ -115,6 +115,16 @@ typedef struct {
 
 static int64_t mono_s(void) { return sys_now_ms() / 1000; }
 
+bool home_own_dir(const char *dir)
+{
+    if (!sys_mkdir(dir) || !sys_private(dir))
+        return fprintf(stderr, "%s must be a folder of this user that nobody else can open (on Linux and macOS: chmod 700 it)\n", dir), false;
+    const int got = sys_lock_dir(dir);
+    if (got < 0) fprintf(stderr, "%s: cannot make its lock file\n", dir);
+    else if (!got) fprintf(stderr, "%s is the folder of another pzpeer that runs now: one pzpeer a folder (--dir gives another)\n", dir);
+    return got > 0;
+}
+
 static volatile sig_atomic_t g_stop;                            /* 1: stop; 2 (a second signal): do not wait for the sessions */
 static void on_signal(int sig) { (void)sig, g_stop = g_stop < 2 ? g_stop + 1 : 2; }
 

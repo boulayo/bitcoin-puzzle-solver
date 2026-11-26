@@ -1,0 +1,73 @@
+# The main chain without a node of one's own (tests/peer/mainnet.sh): pzpeer on the public Electrum servers of the program, on Linux,
+# macOS and Windows. The block headers since block 338688 (some 640 000, minutes), the coins of the creator at puzzles 135 and 71 proven,
+# and a sweep built and not sent: nothing is sent and nothing costs anything. Its result depends on servers this project does not run, so
+# it is apart from CI: once a week, to see in time when the servers or their answers change, by hand, and at every push that changes
+# the code of the light chain.
+name: Main chain
+
+on:
+  push:
+    paths: ['src/peer/chain_spv.c', 'src/peer/spv.c', 'src/peer/electrum.c', 'src/peer/sweep.c', 'tests/peer/mainnet.sh',
+            '.github/workflows/mainnet.yml']
+  workflow_dispatch:
+  schedule:
+    - cron: '37 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mainnet-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, runner: ubuntu-22.04 }
+          - { name: macos-arm64,  runner: macos-15 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build pzpeer
+        run: make -j4 peer
+      - name: The main chain through the public servers
+        run: tests/peer/mainnet.sh build/pzpeer
+
+  windows-build:
+    name: windows-x86_64 (cross-compile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Install MinGW-w64
+        run: tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix
+      - name: Build pzpeer.exe
+        run: make CC=x86_64-w64-mingw32-gcc-posix BUILD=build/win -j"$(nproc)" peer
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: pzpeer-exe
+          path: build/win/pzpeer.exe
+          if-no-files-found: error
+          retention-days: 3
+
+  windows:
+    name: windows-x86_64
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: pzpeer-exe
+      - name: The main chain through the public servers
+        run: tests/peer/mainnet.sh ./pzpeer.exe

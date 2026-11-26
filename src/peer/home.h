@@ -18,7 +18,7 @@ typedef struct {
     const char *network;            /* the network file; NULL: the network of puzzle (written in the program) */
     int puzzle;                     /* 0: the first open puzzle with a public key */
     const char *dir;                /* the folder of the home (home.seed, start.key, the campaign, the node's files), made private and locked
-                                       by the caller (main.c, own_dir) */
+                                       by the caller (home_own_dir) */
     const char *pzsolve, *pzsign;   /* the programs: a path, or a name looked up in PATH */
     const char *payout;             /* the payout address of this home; NULL: the one kept in the folder, else asked on the terminal */
     bool accept_terms;              /* the terms of the payout (payout.h) are accepted without the question of the first start */
@@ -44,6 +44,10 @@ typedef struct {
     unsigned solo_wait;             /* tests: seconds before the coins of a key pzsolve found on its own are sent (a pair that met is paid first) */
     bool verbose;
 } home_cfg;
+
+/* Makes dir if it is not there, for this user alone, and takes its lock (one pzpeer a folder); false, with the reason on stderr, when it
+ * cannot. For a home, a node and the headers of pzpeer sweep. */
+bool home_own_dir(const char *dir);
 
 /* Runs until SIGINT or SIGTERM (or, with exit_when_done, the end of the first session or of pzsolve). 0 when it ended well. */
 int home_run(const home_cfg *cfg);

@@ -4,6 +4,7 @@
 #include "sweep.h"
 #include "chain_rpc.h"
 #include "chain_spv.h"
+#include "home.h"
 #include "sys.h"
 #include "../puzzles.h"
 #include <pzcore/address.h>
@@ -90,7 +91,7 @@ static bool send_private(const char *url, const char *hex)
 
 int sweep_main(int argc, char **argv)
 {
-    const char *to = NULL, *chain_name = "main", *rpc_arg = NULL, *cookie = NULL, *servers[CHAIN_SPV_SERVERS], *pool = NULL;
+    const char *to = NULL, *chain_name = "main", *rpc_arg = NULL, *cookie = NULL, *servers[CHAIN_SPV_SERVERS], *pool = NULL, *dir = SWEEP_DIR;
     int nservers = 0;
     uint64_t rate = 0;
     for (int i = 2; i < argc; i += 2) {
@@ -108,6 +109,7 @@ int sweep_main(int argc, char **argv)
         else if (!strcmp(a, "--rpc-cookie")) cookie = v;
         else if (!strcmp(a, "--electrum") && nservers < CHAIN_SPV_SERVERS) servers[nservers++] = v;
         else if (!strcmp(a, "--feerate")) rate = 1000 * strtoull(v, NULL, 10);
+        else if (!strcmp(a, "--dir")) dir = v;
         else to = NULL, i = argc;
     }
     btc_chain chain;
@@ -115,9 +117,10 @@ int sweep_main(int argc, char **argv)
     const size_t to_len = to && btc_chain_parse(chain_name, &chain) ? btc_address_script(chain, to, to_spk) : 0;
     if (!to_len) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest]\n"
                                         "                    [--rpc H:P:USER:PASSWORD | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n"
-                                        "                    [--private | --pool URL]\n"
+                                        "                    [--private | --pool URL] [--dir DIR]\n"
                                         "       the private key, 64 hex digits, on the standard input\n"
-                                        "       without --rpc: Electrum servers, whose answers are proven; every coin of the address or none\n"), 2;
+                                        "       without --rpc: Electrum servers, whose answers are proven; every coin of the address or none;\n"
+                                        "       the block headers are kept in DIR/headers.bin (default " SWEEP_DIR "): fetched once, then only the new ones\n"), 2;
     char hex[80] = "";
     if (!fgets(hex, sizeof hex, stdin)) hex[0] = 0;
     hex[strcspn(hex, " \t\r\n")] = 0;
@@ -131,13 +134,17 @@ int sweep_main(int argc, char **argv)
     chain_spv spv;
     uint64_t cph = 0;
     bool has_cp = false;
-    char why[300];
+    char why[300], hdrpath[1100];
     if (rpc_arg && !btc_rpc_init_arg(&rpc, rpc_arg, cookie)) return fprintf(stderr, "--rpc: %s\n", rpc.err.msg), 1;
     if (!rpc_arg) {
+        if (!home_own_dir(dir)) return 1;
+        snprintf(hdrpath, sizeof hdrpath, "%s/headers.bin", dir);
         if (chain == BTC_MAIN) has_cp = true, nservers = nservers ? (chain_spv_defaults(NULL, &cph, cp), nservers) : chain_spv_defaults(servers, &cph, cp);
-        if (!nservers || !chain_spv_init(&spv, chain, cph, has_cp ? cp : NULL, servers, nservers, NULL)) return fprintf(stderr, "no chain: give --rpc or --electrum\n"), 1;
+        if (!nservers || !chain_spv_init(&spv, chain, cph, has_cp ? cp : NULL, servers, nservers, hdrpath)) return fprintf(stderr, "no chain: give --rpc or --electrum\n"), 1;
         spv.fallback_feerate = 2000, spv.whole = btc_fee(BTC_P2PKH_IN_SIZE, rate ? rate : SWEEP_MIN_RATE) + 1;   /* what the sweep takes */
-        if (has_cp) fprintf(stderr, "the block headers since block %llu are fetched from the servers: minutes\n", (unsigned long long)cph);
+        uint64_t tip;
+        if (has_cp && !spv_tip(&spv.headers, &tip))
+            fprintf(stderr, "the block headers since block %llu are fetched from the servers into %s (the first time: minutes)\n", (unsigned long long)cph, hdrpath);
     }
     if ((rpc_arg ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&spv, why, sizeof why)) != 1) return fprintf(stderr, "the chain is not ready: %s\n", why), 1;
     const session_chain ch = rpc_arg ? chain_rpc_iface(&crpc) : chain_spv_iface(&spv);

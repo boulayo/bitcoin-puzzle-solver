@@ -3,6 +3,7 @@
 /* main.c - pzpeer, the daemon of the shared kangaroo network (docs/en/NETWORK.md). */
 #include "bt.h"
 #include "btc.h"
+#include "chain_spv.h"
 #include "dbg.h"
 #include "sys.h"
 #include "dht.h"
@@ -10,6 +11,7 @@
 #include "home.h"
 #include "netfile.h"
 #include "sweep.h"
+#include <pzcore/hash.h>
 #include <pzcore/seal.h>
 #include <pzcore/seed.h>
 #include <signal.h>
@@ -42,7 +44,9 @@ static int usage_to(FILE *f)
                     "       pzpeer sweep --to ADDRESS [options]  the transaction that moves the coins of a found key, signed and NOT sent,\n"
                     "                                            to give to a mining pool in private (the key on the standard input);\n"
                     "                                            with --private it goes to MARA's Slipstream (--pool URL: another pool)\n"
-                    "       pzpeer netcheck NETWORK              the values and the fingerprint of a network (a file, or a puzzle number)\n"
+                    "       pzpeer netcheck NETWORK [--chain]    the values and the fingerprint of a network (a file, or a puzzle number);\n"
+                    "                                            --chain: its coins as a home without a node sees them, from the Electrum\n"
+                    "                                            servers of the program, each one proven (the headers kept in " SWEEP_DIR ")\n"
                     "       pzpeer dpcheck NETWORK DP_BIN        recompute every point of a campaign's dp.bin and check its tag\n"
                     "       pzpeer version\n"
                     "options of run and node:\n"
@@ -135,7 +139,48 @@ static int cmd_dpcheck(const secp256k1_context *ctx, const char *netpath, const 
     return df.bad ? 1 : 0;
 }
 
-static int cmd_netcheck(const char *path)
+/* --chain: the coins of the address of a puzzle as a home without a node sees them, from the Electrum servers of the program, each one
+ * proven: the named coins one by one, then the scan of the address. The block headers are kept in SWEEP_DIR, as pzpeer sweep keeps them
+ * (the first time some 640 000: minutes). The check of a machine that will run without a node of its own. */
+static int netcheck_chain(const netfile *nf)
+{
+    const char *list[CHAIN_SPV_SERVERS];
+    uint8_t cp[32], h160[20], spk[BTC_SPK_MAX], txid[32];
+    uint64_t cph, tip;
+    char why[300], line[NETFILE_LINE_MAX], hex[65];
+    payout_coin coins[64];
+    chain_spv spv;
+    if (strcmp(nf->chain, "main")) return fprintf(stderr, "--chain: for a network of the main chain\n"), 1;
+    if (nf->linear && btc_address_script(BTC_MAIN, nf->address, spk) != BTC_P2PKH_LEN) return fprintf(stderr, "--chain: not a P2PKH address\n"), 1;
+    if (!nf->linear) pz_hash160(nf->pubkey33, 33, h160), btc_script_p2pkh(h160, spk);
+    const int n = chain_spv_defaults(list, &cph, cp);
+    if (!home_own_dir(SWEEP_DIR) || !chain_spv_init(&spv, BTC_MAIN, cph, cp, list, n, SWEEP_DIR "/headers.bin")) return 1;
+    spv.max_tip_age = 6 * 3600, spv.whole = 1;                  /* every coin listed must be proven */
+    if (!spv_tip(&spv.headers, &tip))
+        printf("the block headers since block %llu are fetched from the servers into " SWEEP_DIR "/headers.bin (the first time: minutes)\n",
+               (unsigned long long)cph);
+    fflush(stdout);
+    int ok = chain_spv_ready(&spv, why, sizeof why) == 1;
+    printf("chain: %s\n", why);
+    const session_chain ch = chain_spv_iface(&spv);
+    for (int i = 0; ok && netfile_opt(nf, "prize", i, line, sizeof line); i++) {
+        unsigned vout;
+        if (sscanf(line, "%64[0-9a-fA-F]:%u", hex, &vout) != 2 || !btc_hash_from_hex(hex, txid)) continue;
+        const int k = ch.confirmations(ch.ctx, txid, vout);
+        if (k > 0) printf("prize %s: unspent, %d confirmations, proven\n", line, k);
+        else printf("prize %s: %s\n", line, k == 0 ? "unspent, in no block proven yet" : k == -1 ? "spent, proven" : "no server gives it");
+        ok = k != -2;
+    }
+    const int m = ok ? ch.coins(ch.ctx, spk, coins, (int)(sizeof coins / sizeof *coins)) : -1;
+    uint64_t total = 0;
+    for (int i = 0; i < m; i++) total += coins[i].value;
+    if (ok && m >= 0) printf("the scan of the address: %d coins, %llu satoshis, each proven in a block\n", m, (unsigned long long)total);
+    else if (ok) printf("the scan of the address: %s\n", spv.unproven[0] ? spv.unproven : "no server answered");
+    chain_spv_free(&spv);
+    return ok && m >= 0 ? 0 : 1;
+}
+
+static int cmd_netcheck(const char *path, bool chain)
 {
     netfile nf;
     char err[300];
@@ -150,8 +195,8 @@ static int cmd_netcheck(const char *path)
     for (int i = 0; i < 32; i++) printf("%02x", nf.fp[i]);
     printf("\n");
     char line[NETFILE_LINE_MAX];
-    for (int i = 0; netfile_opt(&nf, "prize", i, line, sizeof line); i++) printf("prize %s\n", line);   /* txid:vout:satoshis */
-    return 0;
+    for (int i = 0; !chain && netfile_opt(&nf, "prize", i, line, sizeof line); i++) printf("prize %s\n", line);   /* txid:vout:satoshis */
+    return chain ? netcheck_chain(&nf) : 0;
 }
 
 /* the time at the start of a line, as the lines of a home have it */
@@ -184,16 +229,6 @@ static void print_alert(void *user, const record *mine, const record *theirs, bo
 /* The folder of a home or a node, before anything is written in it: for this user alone (a home keeps there its seed, the distances of
  * every point and the output of pzsolve, which shows a key it finds), and for this process alone (two pzpeer on one folder would write
  * over each other's records, journals and sessions) */
-static bool own_dir(const char *dir)
-{
-    if (!sys_mkdir(dir) || !sys_private(dir))
-        return fprintf(stderr, "%s must be a folder of this user that nobody else can open (on Linux and macOS: chmod 700 it)\n", dir), false;
-    const int got = sys_lock_dir(dir);
-    if (got < 0) fprintf(stderr, "%s: cannot make its lock file\n", dir);
-    else if (!got) fprintf(stderr, "%s is the folder of another pzpeer that runs now: one pzpeer a folder (--dir gives another)\n", dir);
-    return got > 0;
-}
-
 /* A node for manual tests of the network: no points of its own (no dp.bin, no sessions), so it is a custodian and a mailbox only. */
 static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
 {
@@ -239,7 +274,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     home_identity id;
     if (!load_net(ctx, network, puzzle, &nf, &net, &bn)) return 1;
     if (!dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), dir = dirname;
-    if (!own_dir(dir)) return 1;
+    if (!home_own_dir(dir)) return 1;
     snprintf(seedpath, sizeof seedpath, "%s/node.seed", dir);          /* its identity, as the keys of a Bitcoin node in its folder */
     const int got = keys_seed_file(seedpath, seed, err, sizeof err);
     if (!got) return fprintf(stderr, "%s\n", err), 1;
@@ -300,7 +335,7 @@ static int cmd_run(int argc, char **argv)
     char solve[4096], sign[4096];
     home_cfg cfg = {.pzsolve = beside(argv[0], "pzsolve", solve), .pzsign = beside(argv[0], "pzsign", sign), .id_bits = NODE_ID_ZERO_BITS,
                     .listen_port = DEFAULT_PORT, .portmap = true};
-    const char *peers[32], *electrum[8], *routers[8], *debug = NULL;
+    const char *peers[32], *servers[8], *routers[8], *debug = NULL;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt, but not what pzpeer gives it itself */
@@ -341,7 +376,7 @@ static int cmd_run(int argc, char **argv)
         else if (!strcmp(a, "--pzsolve")) cfg.pzsolve = v;
         else if (!strcmp(a, "--pzsign")) cfg.pzsign = v;
         else if (!strcmp(a, "--peer") && cfg.npeers < 32) peers[cfg.npeers++] = v;
-        else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) electrum[cfg.nelectrum++] = v;
+        else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) servers[cfg.nelectrum++] = v;
         else if (!strcmp(a, "--bt-router") && cfg.nbt_routers < 8) routers[cfg.nbt_routers++] = v;
         else if (!strcmp(a, "--debug")) debug = v;
         else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits") || !strcmp(a, "--store-gb") || !strcmp(a, "--solo-wait")) {
@@ -357,13 +392,13 @@ static int cmd_run(int argc, char **argv)
         } else return bad("run", "unrecognized option '%s'", a);
         i++;
     }
-    cfg.peers = peers, cfg.electrum = electrum, cfg.bt_routers = routers;
+    cfg.peers = peers, cfg.electrum = servers, cfg.bt_routers = routers;
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
     netfile nf;
     char err[300], dirname[48];
     if (!netfile_get(cfg.network, cfg.puzzle, &nf, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!cfg.dir) snprintf(dirname, sizeof dirname, "pznet-%.31s", nf.net), cfg.dir = dirname;
-    return own_dir(cfg.dir) ? home_run(&cfg) : 1;
+    return home_own_dir(cfg.dir) ? home_run(&cfg) : 1;
 }
 
 int main(int argc, char **argv)
@@ -380,7 +415,7 @@ int main(int argc, char **argv)
     sys_more_files();
     const secp256k1_context *ctx = keys_ctx();
     const int rc = argc == 4 && !strcmp(argv[1], "dpcheck")  ? cmd_dpcheck(ctx, argv[2], argv[3])
-                 : argc == 3 && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2])
+                 : (argc == 3 || (argc == 4 && !strcmp(argv[3], "--chain"))) && !strcmp(argv[1], "netcheck") ? cmd_netcheck(argv[2], argc == 4)
                  : argc >= 2 && !strcmp(argv[1], "node")     ? cmd_node(ctx, argc, argv)
                  : argc >= 2 && !strcmp(argv[1], "run")      ? cmd_run(argc, argv)
                  : argc >= 2 && !strcmp(argv[1], "sweep")    ? sweep_main(argc, argv)

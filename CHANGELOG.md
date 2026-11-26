@@ -6,6 +6,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- pzpeer: `pzpeer netcheck N --chain` shows the coins of puzzle N as a home without a node sees them, from the Electrum servers of the
+  program: the block headers since block 338688 fetched (kept in `pzchain`), each coin of the creator looked up and proven, then the scan
+  of the address, each coin proven. It sends nothing: the check of a machine before a home runs on it without a node.
+  `tests/peer/mainnet.sh` runs it on puzzles 135 and 71 with a sweep that sends nothing, and the workflow `mainnet.yml` runs that on
+  Linux, macOS and Windows, by hand and once a week (its result depends on servers this project does not run, so it is apart from CI).
 - The release archives hold pzpeer and pzsign besides pzsolve (keep the three in one folder), with `licenses/` for the code they hold
   (libsecp256k1, cb-mpc, OpenSSL), `NOTICE` and `docs/en/NETWORK.md`; the release workflow builds and checks all three on its five
   platforms (the versions they report, the self-tests of pzsolve and pzsign, the glibc ceiling and the DLLs, the Windows package run on
@@ -122,6 +127,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Changed
 
+- pzpeer: `pzpeer sweep` without a node keeps the block headers in `DIR/headers.bin` (`--dir`, default `pzchain`, locked as the folder of
+  a home): fetched the first time, then only the new ones (before, some 50 MB again at every sweep).
 - pzpeer: a light home appends the new block headers to `headers.bin` (51 MB from the new checkpoint) instead of writing the whole file
   at every block, and writes it whole only after a branch replaced headers it holds; a file of the old checkpoint is replaced. It
   fetches the headers when it starts, before it joins the network, in as many operations as bring some, and says so (the first time:

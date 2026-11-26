@@ -1040,6 +1040,11 @@ showed the public key; left, a real one would go to whoever is first. Sessions l
 lying server would stop them; so does the solo payout, whose public key is known: what it leaves is the home's alone. A spend the
 servers hide makes the transaction invalid, never partial. What it leaves on purpose it says: the coins worth less than their input,
 and the smallest when the address holds more than one standard transaction takes (it asks the chain for one coin more, to know).
+`pzpeer sweep` keeps the headers in `DIR/headers.bin` (`--dir`, default `pzchain`, a folder of this user locked as a home's): fetched
+the first time, then only the new ones. `pzpeer netcheck N --chain` uses the same folder: it shows the coins of puzzle N as a home
+without a node sees them, the named ones one by one and the scan of the address, each proven, the check of a machine before a home
+runs on it without a node; `tests/peer/mainnet.sh` runs it on puzzles 135 and 71 with a sweep that sends nothing, by hand and in the
+weekly workflow `.github/workflows/mainnet.yml` on Linux, macOS and Windows.
 
 The connection is plain TCP, one JSON object a line; as every
 answer is proven, TLS would add a dependency and no safety. The code is `spv.c` (headers and Merkle branches), `electrum.c` (the
