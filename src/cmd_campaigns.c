@@ -4,12 +4,12 @@
 #include "cmd.h"
 #include "campaigns.h"
 #include "outfmt.h"
+#include <unistd.h>
 
 int cmd_info(int argc, char **argv)
 {
     opts_t o;
     parse_opts(argc, argv, &o);
-    if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
     if (!o.campaign[0]) pz_die("specify the campaign with -c NAME or -p N");
     char p[700];
     snprintf(p, sizeof p, "%s/%s", o.dir, o.campaign);
@@ -26,10 +26,13 @@ int cmd_info(int argc, char **argv)
         free(t);
         return 0;
     }
+    snprintf(p, sizeof p, "%s/%s/FOUND.txt", o.dir, o.campaign);
+    const bool found = access(p, F_OK) == 0;      /* without a report: an encrypting campaign, which keeps nothing else (forget_search) */
     snprintf(p, sizeof p, "%s/%s/campaign.conf", o.dir, o.campaign);
     t = pz_read_file(p, NULL);
     if (!t) pz_die("campaign '%s' not found in %s", o.campaign, o.dir);
-    printf("(no report yet: the campaign has never been started)\n\n%s", t);
+    printf("(%s)\n\n%s", found ? "the campaign found its key and encrypted it: FOUND.txt and this configuration are all it keeps"
+                                : "no report yet: the campaign has never been started", t);
     free(t);
     return 0;
 }
@@ -71,7 +74,6 @@ int cmd_where(int argc, char **argv)
 {
     opts_t o;
     parse_opts(argc, argv, &o);
-    if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
     if (!o.campaign[0]) pz_usage_error("where", "the campaign is missing: -c NAME or -p N");
     if (!o.key[0]) pz_usage_error("where", "the key is missing: --key HEX");
     campaign_cfg c;

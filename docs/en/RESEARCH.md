@@ -201,8 +201,8 @@ The distribution has a long tail (it is of the "birthday" type: about `1 − exp
 Every new DP is appended to `dp.bin` (32 bytes + a header with a fingerprint of the interval and the key). On resume the table is
 rebuilt and the walkers restart from new points (a different random stream for each session); the old trails
 remain useful because each of their later DPs is already in the table. A file from a different campaign is recognized and refused.
-The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` of the older layouts are no longer read: `hunt` keeps such a `dp.bin` as
-`dp.bin.vN` and goes on with a new log, `merge` refuses it (the old versions converted them on the fly; 1.9.1 dropped this together with schemas 1 and 2).
+The log format is `"PZDP4"` (section 8.10). The formats `"PZDP1"` to `"PZDP3"` of the older layouts are no longer read: `hunt` and `merge` refuse such a `dp.bin`
+(up to 1.23.4 `hunt` kept it as `dp.bin.vN` and went on with a new log; the old versions converted them on the fly; 1.9.1 dropped this together with schemas 1 and 2).
 
 ## 5. GPU (CUDA and OpenCL)
 

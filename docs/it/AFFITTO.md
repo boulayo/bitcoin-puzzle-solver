@@ -44,7 +44,7 @@ pzsolve puzzle 40                                        # la sua chiave è pubb
 ```
 
 Controlla che il riquadro sullo schermo e `FOUND.txt` mostrino una riga `PZENC1:` e nessuna chiave, che ciò che `--on-found` ha spedito
-ti sia arrivato (`log.txt` dice come è finito il comando) e che `decrypt-key` abbia stampato `check: OK`. Poi cancella `campaigns/prova`.
+ti sia arrivato (la riga `--on-found: the command ended with exit status 0` sul terminale dice come è finito il comando) e che `decrypt-key` abbia stampato `check: OK`. Poi cancella `campaigns/prova`.
 
 ## 3. Sulla macchina in affitto
 
@@ -98,6 +98,6 @@ pzsolve decrypt-key FOUND.txt                            # la password; stampa l
 
 Deve stampare `check: OK` con l'indirizzo che cercavi: una riga la può fare chiunque conosca la chiave pubblica, quindi solo il
 controllo dell'indirizzo prova che la chiave è quella giusta. Sposta i fondi con un wallet che importa il WIF. Quando l'affitto finisce,
-cancella la cartella della campagna sulla macchina in affitto (`rm -rf campaigns/p71`): contiene l'intervallo, il bersaglio, la chiave
-pubblica e l'avanzamento della ricerca, mai la chiave (al ritrovamento il programma ha tolto il seed, lo stato e i punti, che insieme
-portavano alla chiave), ma non c'è motivo di lasciarli lì.
+cancella la cartella della campagna sulla macchina in affitto (`rm -rf campaigns/p71`): dopo il ritrovamento contiene `FOUND.txt` e
+`campaign.conf` (l'intervallo, il bersaglio, la chiave pubblica), mai la chiave (il programma ha tolto il seed e ogni file che diceva
+dov'era arrivata la ricerca, che insieme portavano alla chiave), ma non c'è motivo di lasciarli lì.

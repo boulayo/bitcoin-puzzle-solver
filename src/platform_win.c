@@ -418,7 +418,7 @@ bool pz_console_is_own(void)
     return GetConsoleProcessList(pids, 2) == 1;
 }
 
-/* ---- secrets and the hardening of the process ---- */
+/* ---- secrets ---- */
 
 bool pz_stdin_is_terminal(void)
 {
@@ -514,12 +514,6 @@ int pz_read_secret(const char *prompt, char *buf, size_t cap, bool allow_tty)
 
 bool pz_mem_lock(void *p, size_t n) { return !p || !n || VirtualLock(p, n) != 0; }
 void pz_mem_unlock(void *p, size_t n) { if (p && n) VirtualUnlock(p, n); }
-
-bool pz_harden_process(char *why, size_t n)
-{
-    if (n) snprintf(why, n, "Windows has no way to forbid a dump of the process from here");
-    return false;
-}
 
 int pz_run_shell(const char *cmd, const char *const *env, double timeout, int *code, char *why, size_t whyn)
 {

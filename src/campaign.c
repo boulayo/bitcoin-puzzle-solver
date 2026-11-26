@@ -143,14 +143,10 @@ unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares)
 
 /* ---- seeds ---- */
 
-/* pzcore's generator (seed.h): the OS, the CPU's generator, CPU timing jitter and the TPM where there is one. A campaign seed only has
- * to be unpredictable and its own, so it takes what the OS alone gives when the others fall short (a virtual machine with a coarse
- * timer), as campaigns always did, and waits for more jitter only briefly. */
 void seed_generate(u8 seed[32])
 {
-    const pz_seed_opts o = {.flags = PZ_SEED_ALLOW_DEGRADED, .max_ms = 200};
-    pz_seed_report r;
-    if (pz_seed_generate(seed, &o, &r) != PZ_SEED_OK) pz_die("cannot generate a seed: %s", r.error);
+    char err[160];
+    if (!pz_seed_generate(seed, err, sizeof err)) pz_die("cannot generate a seed: %s", err);
 }
 
 void seed_from_text(const char *text, u8 seed[32])
@@ -315,7 +311,7 @@ int cfg_save(const campaign_cfg *c, const char *path)
         snprintf(net_lines, sizeof net_lines, "jumpseed=%s\nstart_key_id=%s\n", js, c->net_keyid);
     }
     /* the lines below part= are there only when they are used: the file of a campaign without them is as before */
-    const char *req = c->net ? PZ_REQUIRES_NET : c->has_step ? PZ_REQUIRES_STEP : c->has_encrypt ? PZ_REQUIRES_ENCRYPT : NULL;
+    const char *req = c->net ? PZ_REQUIRES_NET : c->has_step ? PZ_REQUIRES_STEP : NULL;
     int n = snprintf(buf, sizeof buf,
         "# pzsolve campaign (do not edit by hand)\n"
         "format=%u\n"
@@ -350,9 +346,7 @@ int cfg_add_encrypt_pubkey(const campaign_cfg *c, const char *path)
     pz_hex_encode(c->encrypt_pubkey33, 33, hx);
     const size_t l = strlen(text), cap = l + 100;
     char *out = pz_xmalloc(cap);
-    const bool has_req = pz_kv_find(text, "requires", '=', 0) != NULL;   /* a network campaign already needs a later version */
-    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\n%s", text, l && text[l - 1] != '\n' ? "\n" : "", hx,
-                           has_req ? "" : "requires=" PZ_REQUIRES_ENCRYPT "\n");
+    const int n = snprintf(out, cap, "%s%sencrypt_pubkey=%s\n", text, l && text[l - 1] != '\n' ? "\n" : "", hx);
     const int rc = pz_write_file_atomic(path, out, (size_t)n, 0644);
     free(out);
     free(text);
@@ -395,101 +389,67 @@ int cfg_load(campaign_cfg *c, const char *path, char *err, size_t errlen)
 {
     char *text = pz_read_file(path, NULL);
     if (!text) { snprintf(err, errlen, "cannot read %s: %s", path, strerror(errno)); return -1; }
-    char v[256];
+    char v[PART_TEXT], v2[256];
     memset(c, 0, sizeof *c);
-#define GET(k) if (!cfg_val(text, k, v, sizeof v)) { snprintf(err, errlen, "missing key '%s' in %s", k, path); free(text); return -1; }
+#define BAD(...) do { snprintf(err, errlen, __VA_ARGS__); free(text); return -1; } while (0)
+#define GET(k) if (!cfg_val(text, k, v, sizeof v)) BAD("missing key '%s' in %s", k, path);
     GET("format") c->format_version = (u32)pz_strtou64(v);
-    if (c->format_version != PZ_FORMAT_VERSION) {
-        snprintf(err, errlen, "campaign format %u not supported by this version (expected %u)", c->format_version, PZ_FORMAT_VERSION);
-        free(text);
-        return -1;
-    }
-    {
-        char rv[40];   /* the version the campaign needs (absent before 1.22.0 and in a campaign that encrypts nothing): an older version must not
-                        * resume the campaign, because it would ignore what it does not know (encrypt_pubkey: the key would be written in plain) */
-        if (cfg_val(text, "requires", rv, sizeof rv) && rv[0]) {
-            unsigned long dummy[3];
-            if (!version_parse(rv, dummy)) {
-                snprintf(err, errlen, "invalid requires '%.20s' in %s (expected a version X.Y.Z)", rv, path);
-                free(text);
-                return -1;
-            }
-            if (cfg_version_cmp(PZ_VERSION, rv) < 0) {
-                snprintf(err, errlen, "this campaign needs pzsolve %s or later: it was made with %s (this is pzsolve %s)", rv,
-                         pz_kv_find(text, "encrypt_pubkey", '=', 0) ? "--encrypt-pubkey" : "a feature this version does not have", PZ_VERSION);
-                free(text);
-                return -1;
-            }
-        }
+    if (c->format_version != PZ_FORMAT_VERSION) BAD("campaign format %u not supported by this version (expected %u)", c->format_version, PZ_FORMAT_VERSION);
+    /* the version the campaign needs: an older one must not resume it, because it would ignore what it does not know (step: every key of the
+     * range would be searched) */
+    if (cfg_val(text, "requires", v, sizeof v) && v[0]) {
+        unsigned long dummy[3];
+        if (!version_parse(v, dummy)) BAD("invalid requires '%.20s' in %s (expected a version X.Y.Z)", v, path);
+        if (cfg_version_cmp(PZ_VERSION, v) < 0)
+            BAD("this campaign needs pzsolve %.20s or later: it was made with a feature this version does not have (this is pzsolve %s)", v, PZ_VERSION);
     }
     GET("created_with") pz_strlcpy(c->created_with, v, sizeof c->created_with);
     GET("created_at") c->created_at = atof(v);
     GET("name") pz_strlcpy(c->name, v, sizeof c->name);
     GET("puzzle") c->puzzle = pz_atoi(v);
-    GET("range_start") if (!pz_u256_from_hex(&c->range_start, v)) { snprintf(err, errlen, "invalid range_start"); free(text); return -1; }
-    GET("range_end") if (!pz_u256_from_hex(&c->range_end, v)) { snprintf(err, errlen, "invalid range_end"); free(text); return -1; }
+    GET("range_start") if (!pz_u256_from_hex(&c->range_start, v)) BAD("invalid range_start");
+    GET("range_end") if (!pz_u256_from_hex(&c->range_end, v)) BAD("invalid range_end");
     GET("address") pz_strlcpy(c->address, v, sizeof c->address);
-    GET("hash160") if (pz_hex_decode(v, c->target_h160, 20) != 20) { snprintf(err, errlen, "invalid hash160"); free(text); return -1; }
+    GET("hash160") if (pz_hex_decode(v, c->target_h160, 20) != 20) BAD("invalid hash160");
     if (!c->address[0]) pz_hash160_to_address(c->target_h160, c->address, sizeof c->address);   /* a campaign that had only the hash160 */
     GET("pubkey")
     if (v[0]) {
-        if (pz_hex_decode(v, c->pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->pubkey, c->pubkey33, 33)) {
-            snprintf(err, errlen, "invalid pubkey");
-            free(text);
-            return -1;
-        }
+        if (pz_hex_decode(v, c->pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->pubkey, c->pubkey33, 33)) BAD("invalid pubkey");
         c->has_pubkey = true;
     }
-    GET("mode")
-    if (!mode_from_name(v, &c->mode)) {            /* not guessed: a search of another kind than the campaign's would run on its state */
-        snprintf(err, errlen, "unknown mode '%.20s' in %s (a campaign of another version?)", v, path);
-        free(text);
-        return -1;
-    }
+    GET("mode")           /* not guessed: a search of another kind than the campaign's would run on its state */
+    if (!mode_from_name(v, &c->mode)) BAD("unknown mode '%.20s' in %s (a campaign of another version?)", v, path);
     if (cfg_val(text, "jumpseed", v, sizeof v) && v[0]) {                            /* a shared walk: no seed on disk (cfg_save) */
         c->net = true;
-        if (pz_hex_decode(v, c->net_jumpseed, 32) != 32) { snprintf(err, errlen, "invalid jumpseed"); free(text); return -1; }
+        if (pz_hex_decode(v, c->net_jumpseed, 32) != 32) BAD("invalid jumpseed");
         GET("start_key_id") pz_strlcpy(c->net_keyid, v, sizeof c->net_keyid);
     } else {
-        GET("seed") if (pz_hex_decode(v, c->seed, 32) != 32) { snprintf(err, errlen, "invalid seed"); free(text); return -1; }
+        GET("seed") if (pz_hex_decode(v, c->seed, 32) != 32) BAD("invalid seed");
     }
     GET("chunk_bits") c->chunk_bits = (unsigned)pz_strtou64(v);
     GET("dp_bits") c->dp_bits = (unsigned)pz_strtou64(v);
-    if (cfg_val(text, "bsgs_entries", v, sizeof v)) c->bsgs_t = pz_strtou64(v);   /* absent in campaigns created by 1.0.x */
-    {
-        char pv[PART_TEXT];                                                           /* absent before 1.7.5: the whole order */
-        if (cfg_val(text, "part", pv, sizeof pv) && pv[0]) {
-            part_spec ps;
-            if (!part_parse(pv, &ps, v, sizeof v)) { snprintf(err, errlen, "invalid part in %s: %s", path, v); free(text); return -1; }
-            part_format(&ps, c->part, sizeof c->part);
-        }
+    GET("bsgs_entries") c->bsgs_t = pz_strtou64(v);
+    GET("part")
+    if (v[0]) {
+        part_spec ps;
+        if (!part_parse(v, &ps, v2, sizeof v2)) BAD("invalid part in %s: %s", path, v2);
+        part_format(&ps, c->part, sizeof c->part);
     }
-    {
-        char ev[80];                                                                  /* absent in the campaigns of earlier versions and in one that does not encrypt the key */
-        if (cfg_val(text, "encrypt_pubkey", ev, sizeof ev) && ev[0]) {
-            if (pz_hex_decode(ev, c->encrypt_pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->encrypt_pubkey, c->encrypt_pubkey33, 33)) {
-                snprintf(err, errlen, "invalid encrypt_pubkey in %s (the key would not be encrypted: the campaign is not started)", path);
-                free(text);
-                return -1;
-            }
-            c->has_encrypt = true;
-        }
+    if (cfg_val(text, "encrypt_pubkey", v, sizeof v) && v[0]) {                      /* only in a campaign that encrypts the key */
+        if (pz_hex_decode(v, c->encrypt_pubkey33, 33) != 33 || !pz_ge_from_pubkey(&c->encrypt_pubkey, c->encrypt_pubkey33, 33))
+            BAD("invalid encrypt_pubkey in %s (the key would not be encrypted: the campaign is not started)", path);
+        c->has_encrypt = true;
     }
-    {
-        char sv[80], tv[80];                                                          /* a campaign with a step (1.24.0) */
-        if (cfg_val(text, "step", tv, sizeof tv) && tv[0]) {
-            pz_u256 first;
-            if (!cfg_val(text, "step_start", sv, sizeof sv) || !pz_u256_from_hex(&first, sv) || !pz_u256_from_hex(&c->step, tv) ||
-                pz_u256_is_zero(&c->step) || pz_u256_cmp(&c->step, &pz_secp256k1_n) >= 0 || pz_u256_cmp(&first, &pz_secp256k1_n) >= 0) {
-                snprintf(err, errlen, "invalid step or step_start in %s", path);
-                free(text);
-                return -1;
-            }
-            c->has_step = true;
-            pz_u256_submod_n(&c->step_base, &first, &c->step);
-        }
+    if (cfg_val(text, "step", v, sizeof v) && v[0]) {                                /* a campaign with a step (1.24.0) */
+        pz_u256 first;
+        if (!cfg_val(text, "step_start", v2, sizeof v2) || !pz_u256_from_hex(&first, v2) || !pz_u256_from_hex(&c->step, v) ||
+            pz_u256_is_zero(&c->step) || pz_u256_cmp(&c->step, &pz_secp256k1_n) >= 0 || pz_u256_cmp(&first, &pz_secp256k1_n) >= 0)
+            BAD("invalid step or step_start in %s", path);
+        c->has_step = true;
+        pz_u256_submod_n(&c->step_base, &first, &c->step);
     }
 #undef GET
+#undef BAD
     free(text);
     return 0;
 }

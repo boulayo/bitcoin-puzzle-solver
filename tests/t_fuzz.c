@@ -249,29 +249,29 @@ static char *list_text(const char *dir, const char *tmp)
     return pz_read_file(tmp, NULL);
 }
 
-/* status.json files written before 1.8.0 hold Italian state names: they are still read, and shown in English. */
-static void check_old_state_words(const char *dir)
+/* The state `list` shows: the one status.json holds, but RUNNING only while a process holds the lock of the campaign. */
+static void check_shown_states(const char *dir)
 {
-    static const char *const old[][2] = {{"IN CORSO", "STOPPED"}, {"INTERROTTA", "STOPPED"}, {"COMPLETATA", "COMPLETED"}, {"TROVATA", "FOUND"}};
+    static const char *const st[][2] = {{"RUNNING", "STOPPED"}, {"STOPPED", "STOPPED"}, {"COMPLETED", "COMPLETED"}, {"FOUND", "FOUND"}};
     char d[700], p[800], list_out[800];
-    make_campaign(dir, "oldwords", d, sizeof d);
+    make_campaign(dir, "states", d, sizeof d);
     snprintf(p, sizeof p, "%s/status.json", d);
     snprintf(list_out, sizeof list_out, "%s/list.out", dir);
-    for (size_t i = 0; i < sizeof old / sizeof *old; i++) {
+    for (size_t i = 0; i < sizeof st / sizeof *st; i++) {
         char js[200];
-        snprintf(js, sizeof js, "{\n \"state\": \"%s\",\n \"fraction\": 0.5,\n \"updated_unix\": 100\n}\n", old[i][0]);
+        snprintf(js, sizeof js, "{\n \"state\": \"%s\",\n \"fraction\": 0.5,\n \"updated_unix\": 100\n}\n", st[i][0]);
         put(p, js, strlen(js));
         char *t = list_text(dir, list_out);
-        const char *row = t ? strstr(t, "oldwords") : NULL;
-        CHECK(row && strstr(row, old[i][1]) && !strstr(t, old[i][0]));   /* a stopped campaign (nobody holds the lock) */
+        const char *row = t ? strstr(t, "states") : NULL;
+        CHECK(row && strstr(row, st[i][1]) && (i || !strstr(row, "RUNNING")));   /* a stopped campaign (nobody holds the lock) */
         free(t);
     }
-    const char *busy = "{\n \"state\": \"IN CORSO\"\n}\n";                       /* "in progress" is RUNNING while the lock is held */
+    const char *busy = "{\n \"state\": \"RUNNING\"\n}\n";
     put(p, busy, strlen(busy));
     int fd = campaign_lock(d);
     char *t = list_text(dir, list_out);
-    const char *row = t ? strstr(t, "oldwords") : NULL;
-    CHECK(row && strstr(row, "RUNNING") && !strstr(t, "IN CORSO"));
+    const char *row = t ? strstr(t, "states") : NULL;
+    CHECK(row && strstr(row, "RUNNING"));
     free(t);
     close(fd);
     CHECK(pz_remove_tree(d) == 0);
@@ -283,7 +283,7 @@ static void fuzz_list(const char *dir)
     char d1[700], p[800];
     make_campaign(dir, "camp", d1, sizeof d1);
     snprintf(p, sizeof p, "%s/status.json", d1);
-    const char *good = "{\n \"state\": \"IN CORSO\",\n \"fraction\": 0.5,\n \"rate_per_second\": 1000.0,\n \"eta_seconds_50\": 12.5,\n \"updated_unix\": 100\n}\n";
+    const char *good = "{\n \"state\": \"RUNNING\",\n \"fraction\": 0.5,\n \"rate_per_second\": 1000.0,\n \"eta_seconds_50\": 12.5,\n \"updated_unix\": 100\n}\n";
     for (int it = 0; it < 300; it++) {
         size_t n;
         char *m = mutate(good, strlen(good), &n);
@@ -365,7 +365,7 @@ int main(void)
     fuzz_sched(dir);
     fuzz_table(dir);
     fuzz_parsers();
-    check_old_state_words(dir);
+    check_shown_states(dir);
     fuzz_list(dir);
     check_shown_state(dir);
     CHECK(pz_remove_tree(dir) == 0);

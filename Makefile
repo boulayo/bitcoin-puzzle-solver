@@ -205,7 +205,7 @@ $(BUILD)/pzcore/t_fev52$(EXE): lib/pzcore/tests/t_fev52.c $(LIB) | $(BUILD)/pzco
 $(BUILD)/pzcore/t_%$(EXE): lib/pzcore/tests/t_%.c lib/pzcore/tests/testutil.h $(LIB) | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
 $(BUILD)/pzcore/t_seal$(EXE): lib/pzcore/tests/seal_vectors.h
-$(BUILD)/pzcore/t_seed$(EXE): lib/pzcore/src/seed.c      # t_seed includes it, with its test hooks: the archive's copy has none
+$(BUILD)/pzcore/t_seed$(EXE): lib/pzcore/src/seed.c      # t_seed includes it, with its test hook: the archive's copy has none
 $(BUILD)/pzcore/ex_%$(EXE): lib/pzcore/examples/%.c $(LIB) | $(BUILD)/pzcore
 	$(CC) $(LIBFLAGS) -o $@ $< $(LIB) $(LIBLDLIBS)
 

@@ -60,7 +60,7 @@ line of the help:
   key among the steps, and the linear engines and kernels move from one key to the next by `STEP·G` where they move by `G` otherwise.
   The campaign counts, splits (`--part`) and reports the keys of the steps, and `where` takes a key of the steps. Unknown bits in
   several separate groups are not one step: split them into several campaigns, one for each value of the smaller group, when it is small.
-* `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random (not with `--part`: section 8.2).
+* `-s` takes 64 hex digits as they are and hashes any other text; without it the seed is random (not with `--part`: section 8.2).
   `--seed-file FILE` takes the first line of a file as `-s` takes its value, and `--seed-file -` the first line of the standard input (typed
   without echo on a terminal; a file named `-` is `./-`): the seed then stays out of the history of the shell and of the list of processes.
   `-s` itself is never read as the name of a file, whatever its first character.
@@ -137,8 +137,7 @@ bytes. Tables of other versions: [`RELEASING.md`](https://github.com/boulayo/bit
 
 ```
 campaigns/NAME/
-  campaign.conf   immutable parameters (range, target, mode, seed, chunk-bits, baby steps, the public key to encrypt the found key to;
-                  with it, requires=1.21.0: the oldest version that may resume the campaign, a version from 1.22.0 on that is older refuses it)
+  campaign.conf   immutable parameters (range, target, mode, seed, chunk-bits, baby steps, the public key to encrypt the found key to)
   lock            lock (flock) that prevents two processes on the same campaign
   state.dat       checkpoint of the search (set of completed ranges, with checksum; .bak = previous one)
   dp.bin          kangaroo: append-only log of the distinguished points (to resume)
@@ -150,7 +149,8 @@ campaigns/NAME/
   stats.csv       time series, one row per minute (the file appears after the first minute)
   log.txt         timestamped events (also the error that ended a run)
   near.txt        linear search with --near: the near misses, one key a line (section 3)
-  FOUND.txt       only when the key is found (permissions 0600 on Linux and macOS; on Windows it inherits the folder's rights); with --encrypt-pubkey it holds the encrypted line, not the key (section 11)
+  FOUND.txt       only when the key is found (permissions 0600 on Linux and macOS; on Windows it inherits the folder's rights); with --encrypt-pubkey it holds the encrypted line, not the key,
+                  and the folder then keeps only this file and campaign.conf without its seed (section 11.5)
 ```
 
 * **Stopping**: Ctrl-C, `kill` or closing the terminal (SIGHUP; under `nohup` it is ignored). The state is saved, and a kangaroo saves
@@ -639,9 +639,10 @@ someone who controls the machine while it runs.
    `merge` takes the same options. The program turns core dumps off (Linux, macOS), checks that it can encrypt, and says at the start of the session, in the
    log, `the key will be encrypted to the public key with id XXXXXXXX`: compare that id with the one `encrypt-keygen` printed.
 
-3. **When the key is found**, the box on the screen, `FOUND.txt` and `log.txt` carry the line `PZENC1:...` and the data that is public anyway (address,
-   puzzle, campaign, seed, version, the key id), and **neither the private key nor its public key** (for a puzzle known by its address only, the public key and the
-   range would let anyone find the key with a kangaroo in minutes). `--on-found` has run your command once, without waiting for it to delay the search: see 11.3.
+3. **When the key is found**, the box on the screen and `FOUND.txt` carry the line `PZENC1:...` and the data that is public anyway (address,
+   puzzle, campaign, version, the key id), and **neither the private key nor its public key** (for a puzzle known by its address only, the public key and the
+   range would let anyone find the key with a kangaroo in minutes). `--on-found` has run your command once, without waiting for it to delay the search: see 11.3. The
+   folder of the campaign then holds `FOUND.txt` and `campaign.conf` without its seed, and nothing else (11.5).
 
 4. **Bring the result home**: copy `FOUND.txt`, or the mail you got.
 
@@ -678,7 +679,7 @@ pzsolve puzzle 30                       # its key is public: it must be the one 
 ```
 
 Check that: the box and `FOUND.txt` show a `PZENC1:` line and no key (search them for the key shown by `pzsolve puzzle 30`); your command ran and what it sent
-reached you (`log.txt` says how it ended); `decrypt-key` gives the key of the puzzle and `check: OK`. Then delete the rehearsal campaign and start the real one.
+reached you (the line `--on-found: the command ended with exit status 0` on the terminal says how it ended); `decrypt-key` gives the key of the puzzle and `check: OK`. Then delete the rehearsal campaign and start the real one.
 
 ### 11.3 The options
 
@@ -694,7 +695,7 @@ reached you (`log.txt` says how it ended); `decrypt-key` gives the key of the pu
   as the public key is made. Without a terminal (a script) the password is one line of the standard input. Giving both options is an error.
 * `--on-found "COMMAND"`: after `FOUND.txt` is written, the command is run once with `/bin/sh -c` (on Windows `cmd.exe /c`), in a thread of its own: it does not
   delay the stop of the search or the box, and the program ends when the command has (at most 120 seconds, then it is stopped). Its exit status, or the timeout, is
-  written to the log. Its environment has `PZ_FOUND_SEALED` (the `PZENC1:` line, empty when the campaign does not encrypt), `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`
+  written to the log (on the terminal alone when the campaign encrypts: its log is deleted at the find). Its environment has `PZ_FOUND_SEALED` (the `PZENC1:` line, empty when the campaign does not encrypt), `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE`
   (0 for none), `PZ_FOUND_CAMPAIGN` and `PZ_FOUND_FILE` (the path of `FOUND.txt`); **never the key**. The address and the puzzle are useful in the text of a mail, but the
   line alone is enough to open the key. Without encryption the command can read `FOUND.txt`, which
   holds the key in plain. The command is not stored in `campaign.conf` and never read from a file: give it again when you resume. The line is safe to send
@@ -731,11 +732,16 @@ On Linux and macOS the program turns core dumps off (`setrlimit`) and, on Linux,
 the memory to a file and another process of the same user cannot attach to it.
 
 What says **where** the key is goes at the find. The state of a search (and the points of a kangaroo) say where it stood when it found the key, and the seed
-gives the order of the blocks: together they give the key back in a moment, whatever protects `FOUND.txt` (versions before 1.23.3 left both). So when an
-encrypting campaign finds the key, with `hunt` or with `merge`, the program replaces the seed in `campaign.conf` with zeros, leaves it out of `FOUND.txt` and of
-the log (a log written before the encryption was added loses its lines with the seed), deletes `state.dat`, its copy, `dp.bin`, `herd.bin`, `near.txt` and
-`stats.csv`, and its last report, `status.json` and the last line of its log do not say how far the search got. A key that could not be encrypted is written
-nowhere, and the campaign is left as it was, so that a new search finds it again.
+gives the order of the blocks: together they give the key back in a moment, whatever protects `FOUND.txt` (versions before 1.23.3 left both). The reports,
+the statistics, `session.txt` and the log say how far the search got, which with a copy of the seed is the place of the key too (versions before 1.24.0 left
+`session.txt` and the progress lines of the log). So when an encrypting campaign finds the key, with `hunt` or with `merge`, the program replaces the seed in
+`campaign.conf` with zeros, leaves it out of `FOUND.txt`, and deletes **every other file of the campaign folder**: the state and its copy, the points and the
+walkers of a kangaroo, the near misses, the statistics, `session.txt`, `report.txt`, `status.json`, `log.txt`, and anything else that is there (keep nothing of
+your own in the folder of a campaign: a `--table` file belongs elsewhere). `FOUND.txt` and `campaign.conf` without its seed are all that stays. A file that
+cannot be deleted is named in an error on the terminal: delete it by hand. No last report is written and the panel leaves no last frame on the screen.
+Afterwards `list` shows the campaign as `FOUND`, without progress or speed, `info` shows its configuration and says that it keeps nothing else, and `hunt`
+shows `FOUND.txt`. A key that could not be encrypted is written nowhere, and then, as when `FOUND.txt` cannot be written, the campaign is left as it was, so that
+a new search finds the key again.
 The folder of every campaign is its owner's alone (mode 0700; on Windows an access list of the user and the system only, which takes nothing from the folder
 above, so the folder must be on a disk that has access lists, NTFS), so that other users of the machine read none of this while the search runs, and the files
 of a campaign are never opened through a link (a folder copied from elsewhere could hold one that points at another file of the user).
@@ -756,8 +762,9 @@ of a campaign are never opened through a link (a folder copied from elsewhere co
   in RAM when the limits of the system allow it (usually not for the 256 MiB of scrypt without privileges); the plain key is too short-lived to be likely to reach
   swap, but nothing here guarantees it. Use encrypted swap, or none.
 * **Another copy of the seed.** A copy of the folder made before the find holds it, so does every other computer of a `--part` split (they all need it), and a
-  seed given with `-s` is in the history of the shell and, while the program runs, in the list of processes (`--seed-file` keeps it out of both): with the
-  progress that the log showed while the search ran, it leads to the block of the key. Make no backup or snapshot of the folder of an encrypting campaign on a
+  seed given with `-s` is in the history of the shell and, while the program runs, in the list of processes (`--seed-file` keeps it out of both): with a
+  copy of what the program wrote while the search ran (a backup of the folder, the progress lines of a run in log mode on a terminal or redirected to a file),
+  it leads to the block of the key. Make no backup or snapshot of the folder of an encrypting campaign on a
   machine you do not trust, and split a search only among machines you trust alike. A seed that is a text must be hard to guess: the seed id and the split
   id, which the reports show, let anyone check a guess.
 * **A weak password**, as in 11.4; a keylogger or a modified terminal, which see the password as you type.

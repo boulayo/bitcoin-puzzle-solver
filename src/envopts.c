@@ -162,7 +162,6 @@ void pz_env_init(void)
     env_text("PZ_KANG_ROUND", g_env.kang_round, sizeof g_env.kang_round);
     g_env.bsgs_scalar = env_flag("PZ_BSGS_SCALAR");
     g_env.assume_ifma = env_flag("PZ_ASSUME_IFMA");
-    g_env.expect_shani = env_flag("PZ_EXPECT_SHANI");
     if (env_int("PZ_TEST_KTHREAD", 16, 1 << 20, &n)) g_env.test_kthread = (int)n;
     if (env_int("PZ_TEST_JUMP", 1, 2147483647, &n)) g_env.test_jump = (int)n;
     if (env_int("PZ_TEST_DP_CAP", 0, (long long)1 << 62, &n)) g_env.test_dp_cap = n;

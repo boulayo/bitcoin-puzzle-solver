@@ -52,14 +52,11 @@ static unsigned enc_log2n(void)
 
 bool enc_random_scalar(pz_u256 *r)
 {
-    for (int i = 0; i < 64; i++) {
-        u8 b[32];
-        if (!pz_os_random(b, sizeof b)) return false;
-        pz_u256_from_be(r, b);
-        pz_secure_zero(b, sizeof b);
-        if (!pz_u256_is_zero(r) && pz_u256_cmp(r, &pz_secp256k1_n) < 0) return true;   /* otherwise draw again, as the format asks */
-    }
-    return false;
+    u8 b[32];
+    if (!pz_os_random(b, sizeof b)) return false;
+    pz_seal_scalar_from_bytes(r, b);
+    pz_secure_zero(b, sizeof b);
+    return true;
 }
 
 bool enc_seal_key(const pz_ge *q, const u8 key[32], char *text, size_t cap)

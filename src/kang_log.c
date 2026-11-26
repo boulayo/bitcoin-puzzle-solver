@@ -225,7 +225,7 @@ int kang_log_class(const u8 magic[6])
     if (memcmp(magic, "PZDP", 4) != 0) return KANG_LOG_FOREIGN;
     if (memcmp(magic, KANG_LOG_MAGIC, 6) == 0) return KANG_LOG_CURRENT;
     if (memcmp(magic, KANG_LOG_MAGIC4, 6) == 0) return KANG_LOG_V4;
-    return magic[4] >= '1' && magic[4] <= '3' ? KANG_LOG_OLDER : KANG_LOG_NEWER;
+    return magic[4] >= '1' && magic[4] <= '3' ? KANG_LOG_FOREIGN : KANG_LOG_NEWER;    /* PZDP1 to PZDP3: of versions up to 1.9.0, not ours any more */
 }
 
 /* Reads the records of an open log, positioned after the header, into the table; stops at the end of the file or at the record that solves
@@ -282,7 +282,6 @@ static int log_read_header(const kang_state *ks, FILE *f, const u8 fp[32], off_t
         if (fread(hdr + got, 1, (size_t)*size - got, f) != (size_t)*size - got) return KANG_HDR_READ_ERR;
         return memcmp(hdr, want, (size_t)*size) != 0 ? KANG_HDR_FOREIGN : KANG_HDR_SHORT;
     }
-    if (cls == KANG_LOG_OLDER) return KANG_HDR_OLDER;
     if (cls == KANG_LOG_NEWER) return KANG_HDR_NEWER;
     if (cls == KANG_LOG_FOREIGN) return KANG_HDR_FOREIGN;
     if (fread(hdr + 6, 1, *hlen - 6, f) != *hlen - 6) return KANG_HDR_READ_ERR;
@@ -322,19 +321,6 @@ int kang_load_log(kang_state *ks)
     if (hc == KANG_HDR_SHORT) {
         pz_log(PZ_LOG_WARN, "distinguished points: %s is shorter than its header (%lld of %zu bytes: an interrupted creation, disk full?); starting a new file",
                ks->log_path, (long long)size, hlen);
-        return log_start(ks, fp);
-    }
-    if (hc == KANG_HDR_OLDER) {
-        /* A log of an older layout of the walkers (versions up to 1.9.0 chose it for campaigns with fewer than 256 kangaroos, that is
-         * small intervals): its points cannot be used. It is kept under another name and the campaign goes on with a new log. */
-        char old[640];
-        snprintf(old, sizeof old, "%s.v%c", ks->log_path, hdr[4]);
-        if (rename(ks->log_path, old) != 0) {
-            pz_log(PZ_LOG_ERR, "file %s was written by an older layout of the kangaroo and cannot be used, and it could not be moved away", ks->log_path);
-            return -1;
-        }
-        pz_log(PZ_LOG_WARN, "distinguished points: %s was written by an older layout of the kangaroo (versions up to 1.9.0, small intervals) and cannot be "
-               "used; it is kept as %s and the campaign goes on with a new file", ks->log_path, old);
         return log_start(ks, fp);
     }
     if (hc == KANG_HDR_NEWER) {

@@ -326,7 +326,8 @@ int main(int argc, char **argv)
         tested++;
         shani_tested |= !strcmp(all[i]->name, "shani");
     }
-    if (g_env.expect_shani && !shani_tested) { printf("t_engine: PZ_EXPECT_SHANI=1 but the shani engine was not tested\n"); fails++; }
+    const char *expect = getenv("PZ_EXPECT_SHANI");              /* a variable of the tests: on with any value but "" and "0" */
+    if (expect && expect[0] && strcmp(expect, "0") && !shani_tested) { printf("t_engine: PZ_EXPECT_SHANI=1 but the shani engine was not tested\n"); fails++; }
     CHECK(tested >= 1);
     printf(fails ? "t_engine: %d FAILED\n" : "t_engine: OK\n", fails);
     return fails != 0;

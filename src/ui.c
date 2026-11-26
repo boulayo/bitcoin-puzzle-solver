@@ -315,8 +315,7 @@ int ui_render_full(const run_ctx *r, const progress_info *pi, const eta_summary 
     pz_fmt_percent(pi->fraction, pc, sizeof pc);
     ui_fmt_count(pi->done, a, sizeof a);
     ui_fmt_count(pi->total, b, sizeof b);
-    if (pi->forgotten) snprintf(ln, sizeof ln, "Progress      not kept   (the key is encrypted: how far the search got is not written)");
-    else if (kang) snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bar_text, pc, a, b, pi->unit);
+    if (kang) snprintf(ln, sizeof ln, "Success prob. [%s] %s   (%s of ~%s %s expected)", bar_text, pc, a, b, pi->unit);
     else snprintf(ln, sizeof ln, "Progress      [%s] %s   (%s / %s %s)", bar_text, pc, a, b, pi->unit);
     add_line(&p, "", "", ln);
 
@@ -397,8 +396,7 @@ void ui_render_final_line(const run_ctx *r, const progress_info *pi, const eta_s
     const char *state = ui_state_name(r, true);
     if (kang) snprintf(a, sizeof a, "%s steps, success probability %s", ui_fmt_count(pi->done, cnt, sizeof cnt), pc);
     else snprintf(a, sizeof a, "%s covered", pc);
-    if (pi->forgotten) snprintf(buf, n, "%s %s", tag, state);
-    else if (strcmp(state, "STOPPED") != 0) snprintf(buf, n, "%s %s, %s", tag, state, a);   /* FOUND, COMPLETED: nothing left to estimate */
+    if (strcmp(state, "STOPPED") != 0) snprintf(buf, n, "%s %s, %s", tag, state, a);   /* FOUND, COMPLETED: nothing left to estimate */
     else if (pi->rate > 0 && pi->est_state != RATE_MEASURING && !pi->beyond) { ui_render_line(r, pi, es, cols, buf, n); return; }
     else snprintf(buf, n, "%s %s, %s", tag, state, a);
     if (cols > 20 && (int)strlen(buf) > cols - 1) buf[cols - 1] = 0;

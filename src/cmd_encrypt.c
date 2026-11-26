@@ -287,23 +287,16 @@ static void decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, con
 /* Opens the token with the private key `d` (whose key id is `mine`) and shows the key it holds. */
 static void decrypt_open_token(const token_t *t, const pz_u256 *d, const char *mine, bool raw, const decrypt_target *tg, int *recovered, int *failed)
 {
-    char theirs[9];
-    pz_hex_encode(t->payload + 1, 4, theirs);
-    if (strcmp(mine, theirs) != 0) {            /* said before anything is tried: a wrong password is the usual mistake */
-        fprintf(stderr, "line %d: encrypted to the public key with id %s, but this %s gives id %s: wrong %s\n", t->line, theirs,
-                raw ? "private key" : "password", mine, raw ? "key" : "password");
-        (*failed)++;
-        return;
-    }
     u8 key[32];
-    const pz_seal_status st = pz_seal_open(key, t->payload, d);
-    if (st == PZ_SEAL_E_TAG) {
-        fprintf(stderr, "line %d: the key id is right but the authentication failed: the encrypted key was altered\n", t->line);
-        (*failed)++;
-        return;
-    }
+    const pz_seal_status st = pz_seal_open(key, t->payload, d);       /* the key id is compared before anything is tried */
     if (st != PZ_SEAL_OK) {
-        fprintf(stderr, "line %d: the encrypted key cannot be opened (status %d)\n", t->line, (int)st);
+        char theirs[9];
+        pz_hex_encode(t->payload + 1, 4, theirs);
+        if (st == PZ_SEAL_E_KEYID)                                    /* a wrong password is the usual mistake */
+            fprintf(stderr, "line %d: encrypted to the public key with id %s, but this %s gives id %s: wrong %s\n", t->line, theirs,
+                    raw ? "private key" : "password", mine, raw ? "key" : "password");
+        else if (st == PZ_SEAL_E_TAG) fprintf(stderr, "line %d: the key id is right but the authentication failed: the encrypted key was altered\n", t->line);
+        else fprintf(stderr, "line %d: the encrypted key cannot be opened (status %d)\n", t->line, (int)st);
         (*failed)++;
         return;
     }

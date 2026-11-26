@@ -48,7 +48,6 @@ struct pz_env {
     char kang_round[16];            /* PZ_KANG_ROUND=id: imposes the CPU kangaroo step (the check against the steps of this CPU is made where it is used) */
     bool bsgs_scalar;               /* PZ_BSGS_SCALAR: BSGS with the scalar windows only */
     bool assume_ifma;               /* PZ_ASSUME_IFMA: IFMA is taken as present when AVX-512 is (tests on hosts whose CPUID hides it) */
-    bool expect_shani;              /* PZ_EXPECT_SHANI: the tests fail if the shani paths cannot run */
     int test_kthread;               /* PZ_TEST_KTHREAD=N (16 to 2^20): walkers per CPU thread, 0 unset */
     int test_jump;                  /* PZ_TEST_JUMP=N (1 to 2^31-1): mean jump in units of sqrt(W), 0 unset */
     long long test_dp_cap;          /* PZ_TEST_DP_CAP=N: entries of the table of distinguished points to start with, -1 unset */

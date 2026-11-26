@@ -125,8 +125,8 @@ int keys_seed_file(const char *path, uint8_t out[32], char *err, size_t errlen)
 {
     const int got = keys_file_read(path, out, err, errlen);
     if (got) return got > 0;
-    pz_seed_report rep;
-    if (pz_seed_generate(out, NULL, &rep) != PZ_SEED_OK) return snprintf(err, errlen, "no seed for %.300s: %s", path, rep.error), 0;
+    char why[160];
+    if (!pz_seed_generate(out, why, sizeof why)) return snprintf(err, errlen, "no seed for %.300s: %s", path, why), 0;
     if (!keys_file_write(path, out)) return snprintf(err, errlen, "cannot write %.300s", path), 0;
     return 2;
 }

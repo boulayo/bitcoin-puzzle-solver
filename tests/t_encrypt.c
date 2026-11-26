@@ -14,11 +14,7 @@
 #include <windows.h>
 #include <io.h>
 #else
-#include <sys/resource.h>
 #include <unistd.h>
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
 #endif
 
 static int fails;
@@ -239,26 +235,9 @@ static void test_onfound(void)
     free(t);
 }
 
-static void test_harden(void)
+/* the buffers of a secret locked in RAM (the hardening of the process is pzcore's: lib/pzcore/tests/t_seed.c) */
+static void test_mem_lock(void)
 {
-    char why[200];
-    CHECK(pz_harden_process(why, sizeof why) == 
-#ifdef _WIN32
-          false
-#else
-          true
-#endif
-    );
-#ifdef _WIN32
-    CHECK(why[0]);                                              /* it says what it cannot do */
-#endif
-#if !defined(_WIN32)
-    struct rlimit rl;
-    CHECK(getrlimit(RLIMIT_CORE, &rl) == 0 && rl.rlim_cur == 0 && rl.rlim_max == 0);
-#endif
-#ifdef __linux__
-    CHECK(prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0);
-#endif
     char buf[100];
     CHECK(pz_mem_lock(buf, 0));                                  /* nothing to lock is not a failure */
     pz_mem_lock(buf, sizeof buf);                                /* may be refused: no check */
@@ -276,7 +255,7 @@ int main(void)
     test_secret_from_stdin();
     test_run_shell();
     test_onfound();
-    test_harden();
+    test_mem_lock();
     pz_remove_tree(g_dir);
     puts(fails ? "t_encrypt: FAILED" : "t_encrypt: OK");
     return fails != 0;

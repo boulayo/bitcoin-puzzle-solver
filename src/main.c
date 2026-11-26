@@ -8,7 +8,6 @@
 #include "bsgs.h"
 #include "platform.h"
 #include "envopts.h"
-#include "encrypt.h"
 #include "cmd_encrypt.h"
 #include <getopt.h>
 #include <errno.h>
@@ -90,7 +89,7 @@ static const char *hunt_text(void)
 "  -c, --campaign NAME     campaign name (folder <dir>/<name>); resumed if it exists [pN with -p N; otherwise a name derived\n"
 "                          from the range and the target, so that the same command resumes it]\n"
 "  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
-"  -s, --seed SEED         seed: 64 hex digits (used as they are) or any text (hashed); default or 'auto': generated at random\n"
+"  -s, --seed SEED         seed: 64 hex digits (used as they are) or any text (hashed) [generated at random]\n"
 "      --seed-file FILE    the seed from the first line of FILE, taken as -s takes it, so that it stays out of the shell history and\n"
 "                          of the list of processes; '-': the standard input (typed without echo on a terminal; a file named '-'\n"
 "                          is ./-)\n"
@@ -128,9 +127,11 @@ static const char *hunt_text(void)
 "ENCRYPTING THE KEY (for rented computers; see 'pzsolve help encrypt-keygen' and 'pzsolve help decrypt-key')\n"
 "      --encrypt-pubkey HEX\n"
 "                          when the key is found, encrypt it to this public key (66 hex digits, or 130 uncompressed; made\n"
-"                          by 'encrypt-keygen' on a computer you trust): the screen, FOUND.txt and the log then carry only\n"
+"                          by 'encrypt-keygen' on a computer you trust): the screen and FOUND.txt then carry only\n"
 "                          a line 'PZENC1:...', safe to copy anywhere, and neither the key nor its public key. Stored in\n"
 "                          the campaign: a resumed campaign uses it, another one is refused. Core dumps are turned off.\n"
+"                          At the find the folder of the campaign keeps FOUND.txt and its configuration without the seed,\n"
+"                          and every other file of it is deleted (what says how far the search got leads to the key).\n"
 "                          Invalid: the program does not start (it never falls back to showing the key)\n"
 "      --encrypt-password\n"
 "                          instead of --encrypt-pubkey: type a password now (hidden, asked twice) and the public key is\n"
@@ -550,12 +551,8 @@ void parse_opts(int argc, char **argv, opts_t *o)
         pz_usage_error(g_cmd, "unexpected argument '%s' (options start with - or --)", a);
     }
     if (o->encrypt_pubkey[0] && o->encrypt_password) pz_die("--encrypt-pubkey and --encrypt-password cannot be used together: give the public key, or type a password");
-    if (o->encrypt_pubkey[0]) {                   /* before anything is created: a key that does not parse is a refusal, never a run that shows the key */
-        pz_ge q;
-        u8 q33[33];
-        char err[240];
-        if (!enc_parse_pubkey(o->encrypt_pubkey, &q, q33, err, sizeof err)) pz_die("--encrypt-pubkey: %s (nothing was started)", err);
-    }
+    /* the campaign of puzzle N is pN; with a range or a step it is another search, which hunt names itself */
+    if (!o->campaign[0] && o->puzzle && !o->range[0] && !o->step[0]) snprintf(o->campaign, sizeof o->campaign, "p%d", o->puzzle);
 }
 
 int main(int argc, char **argv)

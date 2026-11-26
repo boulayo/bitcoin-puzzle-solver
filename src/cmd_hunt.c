@@ -7,6 +7,7 @@
 #include "gpu.h"
 #include <pzcore/address.h>
 #include <pzcore/hash.h>
+#include <pzcore/seed.h>
 #include "profile.h"
 #include "kangaroo.h"
 #include "puzzles.h"
@@ -16,14 +17,12 @@
 #include "envopts.h"
 #include "encrypt.h"
 #include "onfound.h"
+#include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
 
 static bool file_exists(const char *p) { struct stat st; return stat(p, &st) == 0; }
-
-/* -s gives the seed (its 64 hex digits, or a text that is hashed); absent or "auto", a new campaign draws one */
-static bool seed_given(const opts_t *o) { return o->seed[0] && strcmp(o->seed, "auto") != 0; }
 
 /* --seed-file: the first line of the file, or of the standard input with "-" (without echo on a terminal), becomes the text of -s, so that the
  * seed stays out of the shell history and of the list of processes. Only that line is read from the standard input. */
@@ -49,16 +48,16 @@ static void seed_from_file(opts_t *o)
     if (n <= 0) pz_die("--seed-file %s: no seed (the first line is empty, or there is none)", f);
 }
 
-/* PZ_ISA: true when it imposes a CPU engine ("auto" and unset do not). Checked before a campaign directory is created, so a typo leaves
- * nothing behind. */
-static bool isa_forced(void)
+/* PZ_ISA: the CPU engine it imposes, NULL when it imposes none ("auto" and unset). Read once, before a campaign directory is created, so
+ * that a typo leaves nothing behind. */
+static const cpu_engine *g_isa;
+
+static void isa_read(void)
 {
     const char *isa = g_env.isa;
-    if (!isa[0] || !strcmp(isa, "auto")) return false;
-    const cpu_engine *e = cpu_engine_by_name(isa);
-    if (!e) pz_die("PZ_ISA: invalid value '%s' (expected %s)", isa, PZ_ISA_LIST);
-    if (!e->supported()) pz_die("PZ_ISA=%s: the CPU does not support this instruction set (see 'pzsolve devices')", isa);
-    return true;
+    if (!isa[0] || !strcmp(isa, "auto")) return;
+    if (!(g_isa = cpu_engine_by_name(isa))) pz_die("PZ_ISA: invalid value '%s' (expected %s)", isa, PZ_ISA_LIST);
+    if (!g_isa->supported()) pz_die("PZ_ISA=%s: the CPU does not support this instruction set (see 'pzsolve devices')", isa);
 }
 
 static bool parse_pubkey(const char *hex, campaign_cfg *c)
@@ -116,14 +115,10 @@ static bool range_parse(const char *text, pz_u256 *a, pz_u256 *b, const char **w
     return true;
 }
 
-/* Name used when -c is absent. It depends only on what identifies the search (puzzle, range, target), so repeating the same
- * command resumes the campaign instead of starting a new one. */
+/* Name used when -c is absent and the campaign is not the pN of a puzzle (parse_opts). It depends only on what identifies the search
+ * (puzzle, range, step, target), so repeating the same command resumes the campaign instead of starting a new one. */
 static void derive_campaign_name(const opts_t *o, char *out, size_t n)
 {
-    if (o->puzzle && !o->range[0] && !o->step[0]) {         /* with a step it is another search: not pN, which `hunt -p N` resumes */
-        snprintf(out, n, "p%d", o->puzzle);
-        return;
-    }
     char rng[300] = "", key[900];
     if (o->range[0]) {
         pz_u256 a, b;
@@ -185,29 +180,16 @@ static void set_target(const opts_t *o, campaign_cfg *c)
     bool have_target = false;
     const puzzle_info *db = o->puzzle ? puzzle_find(o->puzzle) : NULL;
     bool from_db = false;
+    char err[200];
+    /* every address, public key and known key of the built-in database, against each other: a damaged program stops here */
+    if (o->puzzle && puzzles_verify(err, sizeof err)) pz_die("puzzle database corrupted: %s", err);
     if (db && !o->address[0] && !o->pubkey[0]) {
         /* target taken from the built-in database */
-        u8 h[20];
-        if (!pz_address_to_hash160(db->address, h)) pz_die("puzzle database corrupted (puzzle %d)", db->n);
-        memcpy(c->target_h160, h, 20);
+        pz_address_to_hash160(db->address, c->target_h160);
         pz_strlcpy(c->address, db->address, sizeof c->address);
         have_target = true;
         from_db = true;
-        if (db->pubkey[0] && parse_pubkey(db->pubkey, c)) {
-            u8 hp[20];
-            pz_hash160(c->pubkey33, 33, hp);
-            if (memcmp(hp, h, 20) != 0) pz_die("puzzle database inconsistent (puzzle %d)", db->n);
-        }
-        if (db->privkey[0]) {
-            /* a solved puzzle: the stored key must map to the stored address, otherwise the database is damaged */
-            pz_u256 pk;
-            pz_ge pt;
-            u8 pub[33], hk[20];
-            if (!pz_u256_from_hex(&pk, db->privkey) || !pz_ec_mul_g(&pt, &pk)) pz_die("puzzle database corrupted (key of puzzle %d)", db->n);
-            pz_ge_to_pub33(pub, &pt);
-            pz_hash160(pub, 33, hk);
-            if (memcmp(hk, h, 20) != 0) pz_die("puzzle database inconsistent (the key of puzzle %d does not match the address)", db->n);
-        }
+        if (db->pubkey[0]) parse_pubkey(db->pubkey, c);
         if (o->range[0]) {
             /* a custom range must overlap the range the puzzle guarantees */
             pz_u256 pa, pb;
@@ -241,9 +223,7 @@ static void set_target(const opts_t *o, campaign_cfg *c)
     const char *retired = o->puzzle ? puzzle_retired_address(o->puzzle) : NULL;
     if (!have_target && retired) {
         /* puzzles 161..256: the address is known, the funds are gone */
-        u8 h[20];
-        if (!pz_address_to_hash160(retired, h)) pz_die("puzzle database corrupted (puzzle %d)", o->puzzle);
-        memcpy(c->target_h160, h, 20);
+        pz_address_to_hash160(retired, c->target_h160);
         pz_strlcpy(c->address, retired, sizeof c->address);
         have_target = true;
         pz_log(PZ_LOG_WARN, "puzzle %d was emptied by the creator in 2017 (block 475240): address %s holds no "
@@ -317,7 +297,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     set_target(o, c);
     set_step(o, c);
 
-    if (seed_given(o)) seed_from_text(o->seed, c->seed);
+    if (o->seed[0]) seed_from_text(o->seed, c->seed);    /* 64 hex digits, or a text that is hashed; without -s the campaign draws one */
     else if (!o->jump_seed[0]) seed_generate(c->seed);   /* a shared walk takes the start key (shared_bind) */
 
     pz_u256 rsz = cfg_range_size(c);
@@ -333,7 +313,7 @@ static void build_new_cfg(const opts_t *o, campaign_cfg *c)
     if (o->part[0] && strcmp(o->part, "0/1") != 0) {
         if (c->mode != MODE_LINEAR) pz_die("--part is only used in linear search (with a known public key use -m linear; the kangaroo has --node and 'merge')");
         /* the computers of a split share out one order of the blocks: a seed drawn here would be this computer's alone */
-        if (!seed_given(o))
+        if (!o->seed[0])
             pz_die("--part needs -s, the same on every computer of the split (64 hexadecimal digits, or any text): with a seed of its own each "
                    "computer would visit the blocks in another order, and their shares would overlap and leave blocks that none of them scans");
         pz_strlcpy(c->part, o->part, sizeof c->part);
@@ -387,7 +367,7 @@ static void check_resume_consistency(const opts_t *o, const campaign_cfg *c)
         if (!c->has_pubkey || memcmp(tmp.pubkey33, c->pubkey33, 33) != 0) pz_die("the given public key does not match the one of the existing campaign");
     }
     check_encrypt_resume(o, c);
-    if (seed_given(o)) {
+    if (o->seed[0]) {
         u8 s[32];
         seed_from_text(o->seed, s);
         if (memcmp(s, c->seed, 32) != 0) pz_die("the given seed does not match the one of the existing campaign (the seed cannot be changed)");
@@ -446,10 +426,10 @@ static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
 void harden_process(void)
 {
     static bool done;
-    char why[200];
     if (done) return;
     done = true;
-    if (!pz_harden_process(why, sizeof why)) pz_log(PZ_LOG_WARN, "%s", why);
+    if (!pz_seed_harden())
+        pz_log(PZ_LOG_WARN, "core dumps could not be turned off (Windows gives a program no way to): a crash may write the memory of the program to a file");
 }
 
 /* The public key to encrypt to, from --encrypt-pubkey or from the password typed (--encrypt-password), into the campaign c. */
@@ -503,24 +483,6 @@ void encrypt_on_resume(const opts_t *o, run_ctx *r)
     snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
     if (cfg_add_encrypt_pubkey(&r->cfg, conf) != 0) pz_die("cannot add the public key to %s: %s", conf, strerror(errno));
     pz_log(PZ_LOG_INFO, "the campaign now encrypts the key it finds (the public key is stored in campaign.conf)");
-    /* the log of the sessions before may show the seed (the line of --part), which an encrypting campaign keeps out of its files */
-    char sd[65], log[720];
-    pz_hex_encode(r->cfg.seed, 32, sd);
-    snprintf(log, sizeof log, "%s/log.txt", r->cfg.dir);
-    char *text = pz_read_file(log, NULL);
-    size_t w = 0;
-    for (char *p = text, *e; p && *p; p = e) {                 /* the lines without the seed, moved up in place */
-        e = p + strcspn(p, "\n") + (p[strcspn(p, "\n")] == '\n');
-        const char c = *e;
-        *e = 0;
-        const bool has = strstr(p, sd) != NULL;
-        *e = c;
-        if (!has) memmove(text + w, p, (size_t)(e - p)), w += (size_t)(e - p);
-    }
-    if (text && w < strlen(text) && pz_write_file_atomic(log, text, w, 0600) != 0)
-        pz_log(PZ_LOG_ERR, "cannot rewrite %s without the seed: delete that file", log);
-    pz_secure_zero(sd, sizeof sd);
-    free(text);
 }
 
 /* What a campaign that encrypts the key says at the start of a session. */
@@ -530,7 +492,7 @@ void announce_encrypt(const run_ctx *r)
     harden_process();
     char id[9];
     enc_key_id(&r->cfg.encrypt_pubkey, id);
-    pz_log(PZ_LOG_INFO, "the key will be encrypted to the public key with id %s when found: the screen, FOUND.txt and the log will carry only the encrypted line", id);
+    pz_log(PZ_LOG_INFO, "the key will be encrypted to the public key with id %s when found: the screen and FOUND.txt will carry only the encrypted line", id);
 }
 
 /* Printed under the box of a found key: what the program is for, and how to support it. The addresses are those of README.md, which
@@ -727,7 +689,7 @@ static bool open_or_create_campaign(opts_t *o, run_ctx *r, bool *locked)
         /* Two commands that start the same new campaign at the same moment both get here with a seed of their own: whoever takes the
          * lock decides, and only then is it known whether the configuration exists. Writing it before the lock would let the loser
          * leave its seed in campaign.conf while the winner checkpoints with another one. */
-        campaign_lock(r->cfg.dir);   /* released at process exit */
+        r->lock = campaign_lock(r->cfg.dir);
         *locked = true;
         snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
         if (file_exists(conf)) {      /* created by a command that has finished meanwhile: this one resumes it */
@@ -780,11 +742,8 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
     if (o->dp_bits >= 0) r->cfg.dp_bits = (unsigned)o->dp_bits;
 
     if (r->use_cpu && r->cfg.mode == MODE_LINEAR) {
-        if (!isa_forced()) r->engine = cpu_engine_autotune(0.25, o->verbose);
-        else {
-            r->engine = cpu_engine_by_name(g_env.isa);          /* known and supported: isa_forced() has already said otherwise and exited */
-            if (!cpu_engine_quickcheck(r->engine)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: set PZ_ISA to another one", g_env.isa);
-        }
+        r->engine = g_isa ? g_isa : cpu_engine_autotune(0.25, o->verbose);
+        if (g_isa && !cpu_engine_quickcheck(g_isa)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: set PZ_ISA to another one", g_isa->name);
     }
 
     r->prio_gpu = g_env.prio_gpu == PZ_ENV_PRIO_YES ? PRIO_YES : g_env.prio_gpu == PZ_ENV_PRIO_NO ? PRIO_NO : PRIO_AUTO;   /* PZ_PRIO_GPU */
@@ -839,7 +798,7 @@ static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
     }
     pz_log(PZ_LOG_INFO, "hardware: %s, %d usable logical thread%s (%d physical core%s), RAM %s", r->sys.model, r->sys.ncpu, PLURAL(r->sys.ncpu), r->sys.ncore, PLURAL(r->sys.ncore), memb);
     if (r->use_cpu && r->engine) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, engine %s (%d lane%s)%s", r->nthreads, PLURAL(r->nthreads), r->engine->name, r->engine->lanes,
-                                        PLURAL(r->engine->lanes), isa_forced() ? ", imposed by PZ_ISA" : "");
+                                        PLURAL(r->engine->lanes), g_isa ? ", imposed by PZ_ISA" : "");
     else if (r->use_cpu && r->cfg.mode == MODE_KANGAROO) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, kangaroo steps with %s", r->nthreads, PLURAL(r->nthreads), kang_round_name());
     else if (r->use_cpu) pz_log(PZ_LOG_INFO, "CPU: %d thread%s, giant steps with %s", r->nthreads, PLURAL(r->nthreads), bsgs_engine_name());
     if (r->limit_pct) {
@@ -853,28 +812,40 @@ static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
     pz_log(PZ_LOG_INFO, "campaign folder: %s", r->cfg.dir);
 }
 
-/* An encrypting campaign that found its key leaves nothing that leads to it. The state and the points say where the search stood, and
- * with the seed, which orders the blocks, that is where the key is: whoever read the folder afterwards found the key again in a moment.
- * The seed goes first, from memory and from campaign.conf (the reports written from here on show zeros, and not how far the search
- * got: run_final_progress); the files that hold the position go once they are closed. Another copy of the seed (an earlier copy of
- * campaign.conf, the other computers of a --part split, a shell history) still has it (docs/en/USAGE.md 11.5). */
-void forget_seed(run_ctx *r)
+/* One pass over the folder of a campaign: every file removed but FOUND.txt and campaign.conf. How many were; with `say`, one that could
+ * not be removed is reported. */
+static int remove_others(const char *dir, bool say)
+{
+    int n = 0;
+    DIR *d = opendir(dir);
+    if (!d && say) pz_log(PZ_LOG_ERR, "cannot read the folder %s: %s (delete all of it but FOUND.txt: it leads to the key)", dir, strerror(errno));
+    for (struct dirent *e; d && (e = readdir(d));) {
+        char p[1400];
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") || !strcmp(e->d_name, "FOUND.txt") || !strcmp(e->d_name, "campaign.conf")) continue;
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (remove(p) == 0) n++;
+        else if (say) pz_log(PZ_LOG_ERR, "cannot delete %s: %s (delete it: it may lead to the key)", p, strerror(errno));
+    }
+    if (d) closedir(d);
+    return n;
+}
+
+/* An encrypting campaign that found its key keeps FOUND.txt and its configuration without the seed, and nothing else. Its state, its
+ * points, its reports and its log say where the search stood, and with the seed, which orders the blocks, that is where the key is:
+ * whoever read the folder afterwards found the key again in a moment. The seed goes from memory and from campaign.conf; then every
+ * other file of the folder goes, whatever it is, so that no name can be missing from a list. The caller has closed the files of the
+ * search (Windows deletes no file that is open); the log and the lock are closed here. Another copy of the seed (an earlier copy of
+ * the folder, the other computers of a --part split, a shell history) still has it (docs/en/USAGE.md 11.5). */
+void forget_search(run_ctx *r)
 {
     char conf[700];
     snprintf(conf, sizeof conf, "%s/campaign.conf", r->cfg.dir);
     pz_secure_zero(r->cfg.seed, sizeof r->cfg.seed);
     if (cfg_save(&r->cfg, conf) != 0) pz_log(PZ_LOG_ERR, "cannot rewrite %s without the seed: delete the folder once FOUND.txt is copied", conf);
-}
-
-void forget_position(const run_ctx *r)
-{
-    /* near misses: keys of the last blocks; stats.csv: the progress of every minute */
-    static const char *const names[] = {"state.dat", "state.dat.bak", "dp.bin", "herd.bin", "near.txt", "stats.csv"};
-    for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
-        char p[700];
-        snprintf(p, sizeof p, "%s/%s", r->cfg.dir, names[i]);
-        if (remove(p) != 0 && errno != ENOENT) pz_log(PZ_LOG_ERR, "cannot delete %s: %s (delete it: it leads to the key)", p, strerror(errno));
-    }
+    pz_log_set_file(NULL);
+    if (r->lock > 0) close(r->lock), r->lock = 0;
+    while (remove_others(r->cfg.dir, false) > 0) {}        /* again while a pass removes something: a removal can make a pass skip a file */
+    remove_others(r->cfg.dir, true);
 }
 
 /* The end of a command that installed the signals: no signal, and no end of the input of --stop-with-input (its thread is detached), may
@@ -895,7 +866,6 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
      * start finds the key again instead of taking its place for searched */
     const bool unsaved = atomic_load(&r->found) && (r->found_write_failed || r->found_seal_failed);
     const bool forget = atomic_load(&r->found) && r->cfg.has_encrypt && !unsaved;
-    if (forget) forget_seed(r);
     if (!unsaved && !forget && r->checkpoint && r->checkpoint(r) != 0) {
         /* the progress of this session may not be on disk: say so loudly and fail the command */
         pz_log(PZ_LOG_ERR, "final state save FAILED in %s (disk full or not writable?): the progress of the last session may be lost", r->cfg.dir);
@@ -903,14 +873,14 @@ static int end_session(run_ctx *r, const opts_t *o, int rc)
     }
     progress_info pi;
     run_final_progress(r, &pi);
-    run_write_report_files(r, &pi, true);
+    if (!forget) run_write_report_files(r, &pi, true);   /* forget: no report, and no last frame on the screen, of how far the search got */
     pz_interrupt_done();   /* state and reports are on disk: a pending console close may terminate the process */
-    run_ui_final(r, &pi);
+    if (!forget) run_ui_final(r, &pi);
     const bool finished = r->sched && sched_finished(r->sched);
     if (r->cleanup) r->cleanup(r);
     if (r->sched) { sched_free(r->sched); r->sched = NULL; }
     if (r->near) fclose(r->near), r->near = NULL;     /* closed first: Windows deletes no file that is open */
-    if (forget) forget_position(r);
+    if (forget) forget_search(r);
     char ds[48];
     pz_log(PZ_LOG_INFO, "session ended after %s", pz_fmt_duration(el, ds, sizeof ds));
     if (atomic_load(&r->found)) {
@@ -941,14 +911,14 @@ int cmd_hunt(int argc, char **argv)
     opts_t o;
     parse_opts(argc, argv, &o);
     seed_from_file(&o);
+    if (!strcmp(o.seed, "auto")) pz_die("-s auto: 'auto' is no longer a seed (it meant no -s): leave -s out, and a new campaign draws its seed at random");
     shared_options(&o);
     pz_log_set_quiet(o.quiet);
     pz_log_set_verbose(o.verbose);
-    isa_forced();                                       /* PZ_ISA: an unknown or unsupported name stops here */
+    isa_read();                                         /* PZ_ISA: an unknown or unsupported name stops here */
     if (o.no_cpu && o.no_gpu) pz_die("--no-cpu and --no-gpu together: no compute device selected");
     if (o.retune && o.limit) pz_die("--retune measures the machine at full load: it cannot be combined with --limit");
     if (o.gpu[0] && !o.no_gpu) gpu_check_filter(o.gpu);   /* before anything is created on disk */
-    if (o.encrypt_pubkey[0] || o.encrypt_password) harden_process();   /* before the password is typed or the key can be found */
     run_ctx *r = pz_xcalloc(1, sizeof *r);
     run_init(r);
     pz_strlcpy(r->on_found, o.on_found, sizeof r->on_found);
@@ -964,7 +934,7 @@ int cmd_hunt(int argc, char **argv)
         free(r);
         return PZ_EXIT_NOT_FOUND;
     }
-    if (!locked) campaign_lock(r->cfg.dir);   /* released at process exit */
+    if (!locked) r->lock = campaign_lock(r->cfg.dir);
     if (resuming) encrypt_on_resume(&o, r);
     pz_log_set_file(r->path_log);
     run_install_signals(r);

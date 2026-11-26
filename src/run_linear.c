@@ -71,7 +71,9 @@ static void linear_progress(run_ctx *r, progress_info *pi)
     const sched_t *sc = r->sched;
     const bool parted = sc->part.total != 0;
     long double total = pz_u256_to_ld(&sc->part_keys);          /* this computer's part (the whole range without a split) */
-    long double done = (long double)(((u128)r->keys_at_start[1] << 64) | r->keys_at_start[0]) + (long double)session;
+    /* the keys counted by the workers, less those the canary gave back to be scanned again: scanned a second time, they count again */
+    long double done = (long double)(((u128)r->keys_at_start[1] << 64) | r->keys_at_start[0]) + (long double)session -
+                       (long double)sched_given_back(r->sched, NULL);
     u128 exact = sched_keys_done(r->sched);
     if ((long double)exact > done) done = (long double)exact;
     if (done > total) done = total;
@@ -102,7 +104,8 @@ static int linear_checkpoint(run_ctx *r)
      * written, so those of every block of a snapshot are in near.txt before the snapshot is taken: the sync after it has them all (a block
      * that completed between a sync and a later snapshot would be recorded with its near misses still in the page cache). */
     size_t n;
-    char *snap = sched_snapshot(r->sched, &n);
+    bool back;
+    char *snap = sched_snapshot(r->sched, &n, &back);
     if (r->near) {
         pthread_mutex_lock(&r->found_mu);
         const bool ok = fflush(r->near) == 0 && !ferror(r->near) && pz_fd_sync(fileno(r->near)) == 0;
@@ -110,6 +113,7 @@ static int linear_checkpoint(run_ctx *r)
         if (!ok) return free(snap), -1;
     }
     int rc = sched_write(snap, n, r->path_state);
+    if (back && rc == 0) rc = sched_write(snap, n, r->path_state);   /* twice: state.dat.bak, the state before, still has the keys given back as scanned */
     free(snap);
     run_session_save(r, r->elapsed_prev + run_session_elapsed(r), r->prev_units_total + run_session_units(r));
     return rc;

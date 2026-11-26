@@ -23,7 +23,6 @@
 #include <termios.h>
 #ifdef __linux__
 #include <sys/syscall.h>
-#include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -401,7 +400,7 @@ int pz_fd_terminal_cols(int fd)
 }
 bool pz_console_is_own(void) { return false; }
 
-/* ---- secrets and the hardening of the process ---- */
+/* ---- secrets ---- */
 
 bool pz_stdin_is_terminal(void) { return isatty(0); }
 
@@ -508,24 +507,6 @@ void pz_mem_unlock(void *p, size_t n)
     if (!p || !n) return;
     const uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE), a = (uintptr_t)p & ~(pg - 1), e = ((uintptr_t)p + n + pg - 1) & ~(pg - 1);
     munlock((void *)a, e - a);
-}
-
-bool pz_harden_process(char *why, size_t n)
-{
-    bool ok = true;
-    if (n) why[0] = 0;
-    struct rlimit rl = {0, 0};
-    if (setrlimit(RLIMIT_CORE, &rl) != 0) {
-        if (n) snprintf(why, n, "core dumps could not be disabled (%s)", strerror(errno));
-        ok = false;
-    }
-#ifdef __linux__
-    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
-        if (n && ok) snprintf(why, n, "the process could not be made non-dumpable (%s)", strerror(errno));
-        ok = false;
-    }
-#endif
-    return ok;
 }
 
 int pz_run_shell(const char *cmd, const char *const *env, double timeout, int *code, char *why, size_t whyn)

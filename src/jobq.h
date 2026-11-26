@@ -65,6 +65,8 @@ typedef struct sched {
     pz_u256 range_size;
     vival *start; size_t nstart;   /* the done set as the session found it (sched_load), for sched_revert */
     u128 start_keys;
+    u128 given_back;       /* keys of this session that went back to be scanned again (sched_reopen, sched_revert) */
+    u128 saved_back;       /* given_back at the last snapshot: while they differ, the state on disk still has those keys as scanned */
 } sched_t;
 
 sched_t *sched_new(const campaign_cfg *cfg);
@@ -83,11 +85,15 @@ void sched_complete(sched_t *s, const claim_t *c, u64 covered);
 void sched_reopen(sched_t *s, u128 v, u64 n);
 /* Everything completed in this session to be scanned again: the done set as the checkpoint loaded it (nothing for a new campaign). */
 void sched_revert(sched_t *s);
+/* The keys of this session given back by those two; *unsaved (optional): whether some were since the last snapshot, so that the state on
+ * disk still records them as scanned and must be written again at once. */
+u128 sched_given_back(sched_t *s, bool *unsaved);
 
 /* Persistence (text, with checksum). sched_save writes the state as it is now to path (the one before kept as path.bak); sched_snapshot
- * takes that text (*len bytes, to free) for sched_write to write later, when something else must reach the disk first. */
+ * takes that text (*len bytes, to free) for sched_write to write later, when something else must reach the disk first; *back (optional):
+ * it is the first with keys given back since the one before, whose copy on disk (path.bak after one write) still has them as scanned. */
 int sched_save(sched_t *s, const char *path);
-char *sched_snapshot(sched_t *s, size_t *len);
+char *sched_snapshot(sched_t *s, size_t *len, bool *back);
 int sched_write(const char *snap, size_t len, const char *path);
 /* 0 loaded; 1 the file is missing; -1 unreadable or damaged; -2 intact but it belongs to another campaign, another seed or another share
  * of the order. Checkpoints written before the seed was recorded (no seed_id line) are accepted. */

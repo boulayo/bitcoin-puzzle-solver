@@ -14,7 +14,7 @@ static int fails;
 static const char *const ALL[] = {
     "PZ_GPU_API", "PZ_NO_CUDA", "PZ_NO_OPENCL", "PZ_CUDA_LIB", "PZ_OPENCL_ALL", "PZ_GPU_HALF", "PZ_GPU_NK", "PZ_GPU_TUNE", "PZ_NO_PROFILE", "PZ_NO_LARGE_PAGES",
     "PZ_ISA", "PZ_PRIO_GPU", "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_VERBOSE", "PZ_KANG_MIX", "PZ_KANG_ROUND",
-    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_EXPECT_SHANI", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N",
+    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N",
     "PZ_TEST_REPORT_INTERVAL", "PZ_TEST_CHECKPOINT_INTERVAL"};
 
 static void setv(const char *name, const char *value)
@@ -78,7 +78,7 @@ static void t_defaults(void)
     CHECK(g_env.gpu_half == 0 && g_env.gpu_nk == 0 && g_env.gpu_nk_cfg == 0 && !g_env.gpu_nk_l2 && !g_env.gpu_nk_text[0]);
     CHECK(g_env.bench_scale == 1.0);
     CHECK(!g_env.xdg_cache_home[0] && !g_env.home[0] && !g_env.local_app_data[0] && !g_env.tmpdir[0] && !g_env.term_dumb && !g_env.no_color);
-    CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma && !g_env.expect_shani);
+    CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma);
     CHECK(g_env.test_kthread == 0 && g_env.test_jump == 0 && g_env.test_dp_cap == -1 && g_env.test_seal_log2n == 0);
     CHECK(!g_env.isa[0] && g_env.prio_gpu == PZ_ENV_PRIO_AUTO && g_env.test_report_interval == 0 && g_env.test_checkpoint_interval == 0);
 }
@@ -89,7 +89,7 @@ static const struct { const char *name; size_t off; } FLAGS[] = {
     {"PZ_OPENCL_ALL", offsetof(struct pz_env, opencl_all)}, {"PZ_NO_PROFILE", offsetof(struct pz_env, no_profile)},
     {"PZ_NO_LARGE_PAGES", offsetof(struct pz_env, no_large_pages)}, {"PZ_KANG_VERBOSE", offsetof(struct pz_env, kang_verbose)},
     {"PZ_BSGS_SCALAR", offsetof(struct pz_env, bsgs_scalar)},
-    {"PZ_ASSUME_IFMA", offsetof(struct pz_env, assume_ifma)}, {"PZ_EXPECT_SHANI", offsetof(struct pz_env, expect_shani)}};
+    {"PZ_ASSUME_IFMA", offsetof(struct pz_env, assume_ifma)}};
 #define NFLAGS ((int)(sizeof FLAGS / sizeof *FLAGS))
 
 static bool flag_at(int i) { return *(const bool *)((const char *)&g_env + FLAGS[i].off); }

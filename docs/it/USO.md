@@ -60,7 +60,7 @@ Quello che richiede più di una riga dell'aiuto:
   posizione della chiave fra i passi, e i motori lineari e i kernel passano da una chiave alla successiva con `PASSO·G` invece che con
   `G`. La campagna conta, divide (`--part`) e riporta le chiavi dei passi, e `where` accetta una chiave dei passi. Bit ignoti in più
   gruppi separati non sono un passo solo: si dividono in più campagne, una per ogni valore del gruppo più piccolo, se è piccolo.
-* `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, o con `auto`, il seed è casuale (non con `--part`: sezione 8.2).
+* `-s` usa 64 cifre hex così come sono e fa l'hash di qualsiasi altro testo; senza, il seed è casuale (non con `--part`: sezione 8.2).
   `--seed-file FILE` prende la prima riga di un file come `-s` prende il suo valore, e `--seed-file -` la prima riga dello standard input
   (digitata senza eco su un terminale; un file che si chiama `-` è `./-`): il seed resta così fuori dalla cronologia della shell e dall'elenco dei
   processi. `-s` invece non è mai letto come nome di un file, qualunque sia il suo primo carattere.
@@ -138,8 +138,7 @@ Tabelle di altre versioni: [`RELEASING.md`](https://github.com/boulayo/bitcoin-p
 
 ```
 campaigns/NOME/
-  campaign.conf   parametri immutabili (intervallo, bersaglio, modalità, seed, chunk-bits, baby step, la chiave pubblica a cui cifrare la chiave trovata;
-                  con essa, requires=1.21.0: la versione più vecchia che può riprendere la campagna, una versione dalla 1.22.0 in poi che è più vecchia la rifiuta)
+  campaign.conf   parametri immutabili (intervallo, bersaglio, modalità, seed, chunk-bits, baby step, la chiave pubblica a cui cifrare la chiave trovata)
   lock            blocco (flock) che impedisce due processi sulla stessa campagna
   state.dat       checkpoint della ricerca (insieme di intervalli completati, con checksum; .bak = precedente)
   dp.bin          canguro: log append-only dei punti distinti (per riprendere)
@@ -152,7 +151,8 @@ campaigns/NOME/
   stats.csv       serie storica, una riga al minuto (il file compare dopo il primo minuto)
   log.txt         eventi con data e ora (anche l'errore che ha fermato una corsa)
   near.txt        ricerca lineare con --near: le chiavi quasi giuste, una per riga (sezione 3)
-  FOUND.txt       solo a chiave trovata (permessi 0600 su Linux e macOS; su Windows eredita i diritti della cartella); con --encrypt-pubkey contiene la riga cifrata, non la chiave (sezione 11)
+  FOUND.txt       solo a chiave trovata (permessi 0600 su Linux e macOS; su Windows eredita i diritti della cartella); con --encrypt-pubkey contiene la riga cifrata, non la chiave,
+                  e la cartella tiene allora solo questo file e campaign.conf senza il suo seed (sezione 11.5)
 ```
 
 * **Fermarsi**: Ctrl-C, `kill` o chiusura del terminale (SIGHUP; sotto `nohup` viene ignorato). Lo stato viene salvato, e un canguro
@@ -643,10 +643,10 @@ chi controlla la macchina mentre il programma gira.
    trovata. `merge` accetta le stesse opzioni. Il programma disattiva i core dump (Linux, macOS), verifica di saper cifrare e scrive all'inizio della sessione, nel
    log, `the key will be encrypted to the public key with id XXXXXXXX`: confronta quell'identificativo con quello stampato da `encrypt-keygen`.
 
-3. **Quando la chiave è trovata**, il riquadro sullo schermo, `FOUND.txt` e `log.txt` contengono la riga `PZENC1:...` e i dati comunque pubblici (indirizzo,
-   puzzle, campagna, seed, versione, identificativo della chiave), e **né la chiave privata né la sua chiave pubblica** (per un puzzle noto solo per indirizzo, la
+3. **Quando la chiave è trovata**, il riquadro sullo schermo e `FOUND.txt` contengono la riga `PZENC1:...` e i dati comunque pubblici (indirizzo,
+   puzzle, campagna, versione, identificativo della chiave), e **né la chiave privata né la sua chiave pubblica** (per un puzzle noto solo per indirizzo, la
    chiave pubblica e l'intervallo permetterebbero a chiunque di trovare la chiave con un canguro in pochi minuti). `--on-found` ha eseguito il tuo comando una
-   volta, senza ritardare la ricerca: vedi 11.3.
+   volta, senza ritardare la ricerca: vedi 11.3. La cartella della campagna contiene allora `FOUND.txt` e `campaign.conf` senza il suo seed, e nient'altro (11.5).
 
 4. **Porta il risultato a casa**: copia `FOUND.txt`, oppure la mail ricevuta.
 
@@ -683,7 +683,7 @@ pzsolve puzzle 30                       # la sua chiave è pubblica: deve essere
 ```
 
 Controlla che: il riquadro e `FOUND.txt` mostrino una riga `PZENC1:` e nessuna chiave (cercaci dentro la chiave mostrata da `pzsolve puzzle 30`); il tuo comando sia
-stato eseguito e ciò che ha spedito ti sia arrivato (`log.txt` dice come è finito); `decrypt-key` dia la chiave del puzzle e `check: OK`. Poi cancella la campagna di
+stato eseguito e ciò che ha spedito ti sia arrivato (la riga `--on-found: the command ended with exit status 0` sul terminale dice come è finito); `decrypt-key` dia la chiave del puzzle e `check: OK`. Poi cancella la campagna di
 prova e avvia quella vera.
 
 ### 11.3 Le opzioni
@@ -701,7 +701,7 @@ prova e avvia quella vera.
   un errore.
 * `--on-found "COMANDO"`: dopo la scrittura di `FOUND.txt` il comando viene eseguito una volta con `/bin/sh -c` (su Windows `cmd.exe /c`), in un thread a parte: non
   ritarda l'arresto della ricerca né il riquadro, e il programma termina quando termina il comando (al massimo 120 secondi, poi viene fermato). Il suo stato di
-  uscita, o il superamento del tempo, va nel log. Nel suo ambiente ci sono `PZ_FOUND_SEALED` (la riga `PZENC1:`, vuota se la campagna non cifra),
+  uscita, o il superamento del tempo, va nel log (solo sul terminale quando la campagna cifra: il suo log è cancellato al ritrovamento). Nel suo ambiente ci sono `PZ_FOUND_SEALED` (la riga `PZENC1:`, vuota se la campagna non cifra),
   `PZ_FOUND_ADDRESS`, `PZ_FOUND_PUZZLE` (0 se non c'è), `PZ_FOUND_CAMPAIGN` e `PZ_FOUND_FILE` (il percorso di `FOUND.txt`); **mai la chiave**. L'indirizzo e il puzzle sono utili nel testo di una mail, ma la
   riga da sola basta per aprire la chiave. Senza cifratura il
   comando può leggere `FOUND.txt`, che contiene la chiave in chiaro. Il comando non è salvato in `campaign.conf` e non si legge mai da un file: ridaglielo quando
@@ -740,10 +740,15 @@ processo dello stesso utente non può collegarsi a esso.
 
 Ciò che dice **dove** sta la chiave sparisce al ritrovamento. Lo stato di una ricerca (e i punti di un canguro) dicono dov'era arrivata quando ha trovato la
 chiave, e il seed dà l'ordine dei blocchi: insieme restituiscono la chiave in un attimo, qualunque cosa protegga `FOUND.txt` (le versioni prima della 1.23.3
-li lasciavano entrambi). Perciò, quando una campagna che cifra trova la chiave, il programma sostituisce con zeri il seed in `campaign.conf`, non lo scrive in
-`FOUND.txt` né nel log (un log scritto prima che si aggiungesse la cifratura perde le righe con il seed), cancella `state.dat`, la sua copia, `dp.bin`,
-`herd.bin`, `near.txt` e `stats.csv`, e il suo ultimo rapporto, `status.json` e l'ultima riga del log non dicono fin dove era arrivata la ricerca; vale per `hunt`
-come per `merge`. Una chiave che non si è potuta cifrare non è scritta da nessuna parte, e la campagna resta com'era, così che una nuova ricerca la ritrovi.
+li lasciavano entrambi). I rapporti, le statistiche, `session.txt` e il log dicono fin dove era arrivata la ricerca, che con una copia del seed è di nuovo il
+posto della chiave (le versioni prima della 1.24.0 lasciavano `session.txt` e le righe di avanzamento del log). Perciò, quando una campagna che cifra trova la
+chiave, con `hunt` come con `merge`, il programma sostituisce con zeri il seed in `campaign.conf`, non lo scrive in `FOUND.txt`, e cancella **ogni altro file
+della cartella della campagna**: lo stato e la sua copia, i punti e i canguri, le chiavi quasi giuste, le statistiche, `session.txt`, `report.txt`,
+`status.json`, `log.txt`, e qualunque altra cosa ci sia (non tenere niente di tuo nella cartella di una campagna: un file di `--table` va altrove). Restano
+solo `FOUND.txt` e `campaign.conf` senza il suo seed. Un file che non si riesce a cancellare è nominato in un errore sul terminale: cancellalo a mano. Non viene
+scritto un ultimo rapporto e il pannello non lascia un ultimo riquadro sullo schermo. Dopo, `list` mostra la campagna come `FOUND`, senza avanzamento né
+velocità, `info` mostra la sua configurazione e dice che non tiene altro, e `hunt` mostra `FOUND.txt`. Una chiave che non si è potuta cifrare non è scritta da
+nessuna parte, e allora, come quando `FOUND.txt` non si può scrivere, la campagna resta com'era, così che una nuova ricerca ritrovi la chiave.
 La cartella di ogni campagna è del solo proprietario (modo 0700; su Windows una lista di accesso del solo utente e del sistema, che non prende nulla dalla
 cartella sopra, quindi la cartella deve stare su un disco con liste di accesso, NTFS), così gli altri utenti della macchina non leggono nulla di tutto
 questo mentre la ricerca gira, e i file di una campagna non si aprono mai attraverso un collegamento (una cartella copiata da altrove potrebbe contenerne uno
@@ -767,7 +772,8 @@ che punta a un altro file dell'utente).
   finire probabilmente nello swap, ma nulla qui lo garantisce. Usa uno swap cifrato, o nessuno.
 * **Un'altra copia del seed.** Ce l'ha una copia della cartella fatta prima del ritrovamento, ce l'ha ogni altro computer di una divisione con `--part` (serve
   a tutti), e un seed dato con `-s` è nella cronologia della shell e, mentre il programma gira, nell'elenco dei processi (`--seed-file` lo tiene fuori da
-  entrambi): con l'avanzamento che il log mostrava mentre la ricerca girava, porta al blocco della chiave. Non fare backup o istantanee della cartella di una
+  entrambi): con una copia di ciò che il programma scriveva mentre la ricerca girava (un backup della cartella, le righe di avanzamento di una corsa in
+  modalità log su un terminale o rediretta in un file), porta al blocco della chiave. Non fare backup o istantanee della cartella di una
   campagna che cifra su una macchina di cui non ti fidi, e dividi una ricerca solo fra macchine di cui ti fidi allo stesso modo. Un seed che è un testo deve
   essere difficile da indovinare: l'identificativo del seed e quello della divisione, che i rapporti mostrano, permettono a chiunque di verificare un tentativo.
 * **Una password debole**, come in 11.4; un keylogger o un terminale modificato, che vedono la password mentre la digiti.

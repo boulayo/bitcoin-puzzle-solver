@@ -333,6 +333,8 @@ SEEDL=$(grep '^seed=' "$DIR/xp1/campaign.conf" 2>/dev/null)
 [ -n "$SEEDL" ] && [ "$(grep '^seed=' "$DIR/xp3/campaign.conf")" = "$SEEDL" ] && [ "$(grep '^seed=' "$DIR/xp4/campaign.conf")" = "$SEEDL" ] &&
   [ "$(splitid xp3)" = "$(splitid xp1)" ] && ok "--seed-file: the seed of a file and of the standard input is the one of -s" ||
   bad "--seed-file: $(grep -h '^seed=' "$DIR"/xp[134]/campaign.conf 2>&1 | tr '\n' ' ')"
+OUT=$($BIN hunt -r 1:fffff -a "$A" -s auto -c xauto -d "$DIR" --ui log -q --no-gpu 2>&1); RC=$?
+[ $RC -eq 2 ] && [ ! -e "$DIR/xauto" ] && echo "$OUT" | grep -q "'auto' is no longer a seed" && ok "-s auto: refused (it is not a seed, and no longer means none), nothing created" || bad "-s auto: rc=$RC $OUT"
 printf 'other\n' > "$DIR/seed2.txt"
 OUT=$($BIN hunt -c xp1 -d "$DIR" --seed-file "$DIR/seed2.txt" --ui log -q --no-gpu 2>&1); RC=$?
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "seed does not match" && ok "--seed-file: another seed on resume is refused" || bad "--seed-file on resume: rc=$RC $OUT"
@@ -672,19 +674,18 @@ enc_case() {   # enc_case NAME N KEY SECRET RAWOPT PUBKEY HUNTARGS...
     leaks=$(grep -r -i -l -F -e "$PUBK" -e "$X" "$CD" 2>/dev/null)
     [ -z "$leaks" ] && ok "$name: the public key of the found key is nowhere in the campaign folder" || bad "$name: the public key appears in: $leaks"
   fi
-  # what led to the key is gone: the state and the points said where the search stood, and with the seed that was the place of the key
-  # (before, a copy of the folder gave the plain key back in a tenth of a second)
-  [ ! -e "$CD/state.dat" ] && [ ! -e "$CD/state.dat.bak" ] && [ ! -e "$CD/dp.bin" ] && grep -q '^seed=0\{64\}$' "$CD/campaign.conf" && ! grep -qi "seed" "$CD/FOUND.txt" \
-    && ok "$name: no state, no points and no seed are left in the folder" || bad "$name: left behind: $(ls "$CD" | tr '\n' ' ') $(grep '^seed=' "$CD/campaign.conf")"
-  # nor how far the search got: with a copy of the seed (another computer of a --part split, a shell history) that is the place of the key too
-  grep -q '"done": null' "$CD/status.json" && grep -q 'not kept   (the key is encrypted' "$CD/report.txt" && [ ! -e "$CD/stats.csv" ] && grep -q 'final state: [^,]* FOUND$' "$CD/log.txt" \
-    && ok "$name: the last reports and the log do not say how far the search got" || bad "$name: progress left: $(grep -h '"done"\|final state' "$CD/status.json" "$CD/log.txt")"
+  # what led to the key is gone: the state, the points, the reports, the log and session.txt said where the search stood, and with the seed
+  # that was the place of the key (a copy of the folder gave the plain key back in a tenth of a second; with a copy of the seed, from another
+  # computer of a --part split or a shell history, session.txt alone did). FOUND.txt and the configuration without its seed are all that stays
+  [ "$(ls -A "$CD" | tr '\n' ' ')" = "FOUND.txt campaign.conf " ] && grep -q '^seed=0\{64\}$' "$CD/campaign.conf" && ! grep -qi "seed" "$CD/FOUND.txt" \
+    && ok "$name: FOUND.txt and campaign.conf without its seed are all the folder keeps" || bad "$name: left behind: $(ls -A "$CD" | tr '\n' ' ') $(grep '^seed=' "$CD/campaign.conf")"
+  grep -q -E 'final state|cannot delete' "$CD.out" "$CD.err" && bad "$name: the end of the session: $(grep -h -E 'final state|cannot delete' "$CD.out" "$CD.err")" \
+    || ok "$name: no last line of how far the search got, and every file could be deleted"
   grep -q "^PZENC1:" "$CD.out" && grep -q "pzsolve decrypt-key" "$CD.out" && ok "$name: the box shows the encrypted line and how to read it" || bad "$name: the box: $(cat "$CD.out")"
   local LINE; LINE=$(grep '^PZENC1:' "$CD/FOUND.txt")
   [ "$(wc -l < "$CD.hook")" = 1 ] && [ "$(cat "$CD.hook")" = "$LINE|$A|$n|$name|$CD/FOUND.txt" ] && ok "$name: --on-found ran once and received the line, address, puzzle, campaign and file" || bad "$name: --on-found: $(cat "$CD.hook" 2>&1)"
   grep -q -i -F -e "$HEX" -e "$WIF" "$CD.env" && bad "$name: the key is in the environment of --on-found" || ok "$name: the environment of --on-found does not carry the key"
-  grep -q "PZENC1:" "$CD/log.txt" && ok "$name: the log has the encrypted line" || bad "$name: log.txt"
-  grep -q "^Key: .*encrypted to the public key with id" "$CD/report.txt" 2>/dev/null && ok "$name: report.txt says that the key is encrypted" || bad "$name: report.txt"
+  grep -q "encrypted to the key id .*: PZENC1:" "$CD.err" && ok "$name: the line of the find on the terminal has the encrypted line" || bad "$name: stderr: $(grep -i found "$CD.err")"
   local OUT; OUT=$(printf '%s\n' "$secret" | $BIN decrypt-key $rawopt "$CD/FOUND.txt" 2>&1); RC=$?
   [ $RC -eq 0 ] && echo "$OUT" | grep -q "key (hex): *0x$HEX\$" && echo "$OUT" | grep -q "check: *OK" && echo "$OUT" | grep -q "WIF compressed: *$WIF" && ok "$name: decrypt-key gives the key, the WIF and the check" || bad "$name: decrypt-key: rc=$RC $OUT"
 }
@@ -698,6 +699,11 @@ rm -rf "$DIR/nfe"; mkdir -p "$DIR/nfe/FOUND.txt"
 OUT=$($BIN hunt -p 20 -a "$(field 0x9a3b1 addr)" -c nfe -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" 2>&1); RC=$?
 echo "$OUT" | grep -q "^PZENC1:" && echo "$OUT" | grep -q "NOT SAVED: .*FOUND.txt could not be written" && ! echo "$OUT" | grep -q "saved in" \
   && ok "encrypted key, FOUND.txt not written: the box carries the encrypted line and says so" || bad "encrypted key, FOUND.txt not written: rc=$RC $(echo "$OUT" | grep -E 'saved|SAVED|PZENC1' | cut -c1-80 | tr '\n' ' ')"
+# what cannot be deleted at the find is said (here a folder of the user's that is not empty); the rest goes all the same
+K=$(rndkey 20 91); rm -rf "$DIR/encd"; mkdir -p "$DIR/encd/mine"; touch "$DIR/encd/mine/x"
+OUT=$($BIN hunt -p 20 -a "$(field $K addr)" -c encd -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "cannot delete .*/encd/mine: .* (delete it: it may lead to the key)" && [ "$(ls -A "$DIR/encd" | tr '\n' ' ')" = "FOUND.txt campaign.conf mine " ] \
+  && ok "encrypted find: what cannot be deleted is named in an error, the other files are gone" || bad "encrypted find with a folder inside: rc=$RC, left $(ls -A "$DIR/encd" | tr '\n' ' '): $(echo "$OUT" | grep -i delete)"
 # the checks of decrypt-key on the first campaign
 EL="$DIR/encl/FOUND.txt"; HEXL=2a3f5c1; AL=$(field 0x2a3f5c1 addr)
 OUT=$(printf '%s\n' "$OTHERPRIV" | $BIN decrypt-key --raw-key "$EL" 2>&1); RC=$?
@@ -733,6 +739,8 @@ OUT=$(cd "$DIR/encl" && printf '%s\n' "$EPRIV" | "$BINABS" decrypt-key --raw-key
 echo "nothing here" > "$DIR/none.txt"
 $BIN decrypt-key "$DIR/none.txt" >/dev/null 2>&1 </dev/null; [ $? -eq 2 ] && ok "decrypt-key: a text without an encrypted key is refused (exit status 2)" || bad "decrypt-key of a text without a line"
 $BIN hunt -c encl -d "$DIR" --ui log -q --no-gpu 2>&1 | grep -q "PZENC1:" && ok "an encrypted campaign that had found the key shows its FOUND.txt, which is the encrypted one" || bad "already found, encrypted"
+$BIN list -d "$DIR" 2>&1 | grep -q "^encl .* FOUND " && $BIN info -c encl -d "$DIR" 2>&1 | grep -q "found its key and encrypted it" \
+  && ok "list shows it as FOUND, and info says why it has no report" || bad "list / info of an encrypted campaign that found its key: $($BIN info -c encl -d "$DIR" 2>&1 | head -2)"
 
 # a key that is refused: the program does not start and nothing is created
 for badkey in "zz" "02" "$(echo "$EPUB" | sed 's/^../05/')" "0200000000000000000000000000000000000000000000000000000000000000fe" "${EPUB}00"; do
@@ -760,6 +768,7 @@ grep -q "encrypt" "$DIR/encr/campaign.conf" && bad "a campaign without encryptio
 $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$EPUB" -t 1 >"$DIR/encr.out" 2>&1 & EPID=$!
 wait_for 'grep -q "^encrypt_pubkey=" "$DIR/encr/campaign.conf"'
 grep -q "^encrypt_pubkey=$EPUB\$" "$DIR/encr/campaign.conf" && ok "resumed with --encrypt-pubkey: the campaign that had none now has it in campaign.conf" || bad "the key was not stored on resume"
+wait_for 'grep -q "^Key: .*encrypted to the public key with id" "$DIR/encr/report.txt" 2>/dev/null' && ok "report.txt says that the key will be encrypted" || bad "report.txt of an encrypting campaign: $(grep '^Key' "$DIR/encr/report.txt")"
 if [ -r /proc/$EPID/limits ]; then
   grep -q "Max core file size *0 *0" /proc/$EPID/limits && ok "with a public key to encrypt to, the process has core dumps off (/proc/$EPID/limits)" || bad "core dump limit: $(grep core /proc/$EPID/limits)"
 fi
@@ -769,13 +778,15 @@ $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERPRIV" >
 OTHERPUB=$($BIN encrypt-keygen --random 2>/dev/null | awk '/^public key/{print $3}')
 OUT=$($BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERPUB" 2>&1); RC=$?
 [ $RC -eq 2 ] && echo "$OUT" | grep -q "cannot be switched" && echo "$OUT" | grep -q "Resume it without --encrypt-pubkey" && ok "resumed with another public key: refused, with the way to proceed" || bad "other key on resume: rc=$RC $OUT"
+for f in state.dat session.txt log.txt report.txt status.json reserve.bin lock; do [ -e "$DIR/encr/$f" ] || bad "before the find the campaign has no $f"; done
 $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
+[ "$(ls -A "$DIR/encr" | tr '\n' ' ')" = "FOUND.txt campaign.conf " ] && grep -q '^seed=0\{64\}$' "$DIR/encr/campaign.conf" \
+  && ok "a campaign of three sessions that finds its key: the state, session.txt, the log, the reports, the reserve and the lock are gone" || bad "encr after the find: $(ls -A "$DIR/encr" | tr '\n' ' ')"
 grep -q '^PZENC1:' "$DIR/encr/FOUND.txt" && printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/encr/FOUND.txt" 2>/dev/null | grep -q "0x${K#0x}" && ok "resumed without the option: the stored key is used, and the result opens with the secret" || bad "resume without the option: $(head -c 300 "$DIR/encr/FOUND.txt")"
-# the version the campaign needs (requires=X.Y.Z, written with encrypt_pubkey): a version below it refuses the campaign instead of
-# ignoring the line it does not know; a campaign without the line, or with one at or below this version, resumes as before
-grep -q "^requires=1.21.0\$" "$DIR/encw/campaign.conf" && grep -q "^requires=1.21.0\$" "$DIR/encr/campaign.conf" && ok "an encrypted campaign's campaign.conf has requires=1.21.0 (one made with the option, and one given the key on resume)" \
-  || bad "requires line: '$(grep requires "$DIR/encw/campaign.conf" "$DIR/encr/campaign.conf" | tr '\n' ' ')'"
-grep -q "^requires=" "$DIR/rc/p71/campaign.conf" && bad "a campaign without encryption has a requires line" || ok "a campaign without encryption has no requires line"
+# the version a campaign needs (requires=X.Y.Z, written with a step or a shared walk): a version below it refuses the campaign instead of
+# ignoring the line it does not know; a campaign without the line, or with one at or below this version, resumes as before. Encryption
+# writes none: every version that reads the line knows encrypt_pubkey
+grep -q "^requires=" "$DIR/encw/campaign.conf" "$DIR/encr/campaign.conf" "$DIR/rc/p71/campaign.conf" && bad "a campaign without a step has a requires line" || ok "a campaign has no requires line, with encryption or without"
 for pair in "99.0.0|refused" "1.0.0|resumed" "|resumed"; do
   REQ=${pair%%|*}; WANT=${pair#*|}
   rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/rc/p71" "$DIR/rq/p71"
@@ -789,10 +800,10 @@ for pair in "99.0.0|refused" "1.0.0|resumed" "|resumed"; do
     echo "$OUT" | grep -q "campaign resumed" && [ "$SES" = 2 ] && ok "requires=${REQ:-(no line)}: resumed (2 sessions)" || bad "requires=${REQ:-(no line)}: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"
   fi
 done
-rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/encr" "$DIR/rq/encr"; sed -i 's/^requires=.*/requires=99.0.0/' "$DIR/rq/encr/campaign.conf"
-OUT=$($BIN list -d "$DIR/rq" 2>&1); echo "$OUT" | grep -q "needs pzsolve 99.0.0 or later: it was made with --encrypt-pubkey" && ok "list: an encrypted campaign of a later version is reported with the reason" || bad "list with requires=99.0.0: $OUT"
+rm -rf "$DIR/rq"; mkdir -p "$DIR/rq"; cp -r "$DIR/encr" "$DIR/rq/encr"; echo "requires=99.0.0" >> "$DIR/rq/encr/campaign.conf"
+OUT=$($BIN list -d "$DIR/rq" 2>&1); echo "$OUT" | grep -q "needs pzsolve 99.0.0 or later" && ok "list: a campaign of a later version is reported with the reason" || bad "list with requires=99.0.0: $OUT"
 OUT=$($BIN hunt -c encr -d "$DIR/rq" --ui log -q --no-gpu 2>&1); RC=$?
-[ $RC -eq 2 ] && echo "$OUT" | grep -q "it was made with --encrypt-pubkey" && ok "hunt: an encrypted campaign of a later version is refused, with the reason (exit status 2)" || bad "hunt with requires=99.0.0 on an encrypted campaign: rc=$RC $OUT"
+[ $RC -eq 2 ] && echo "$OUT" | grep -q "needs pzsolve 99.0.0 or later" && ok "hunt: a campaign of a later version is refused, with the reason (exit status 2)" || bad "hunt with requires=99.0.0: rc=$RC $OUT"
 # merge gives the key to a kangaroo campaign that has none
 rm -rf "$DIR/xmm"; cp -r "$DIR/xm" "$DIR/xmm" 2>/dev/null
 if [ -d "$DIR/xmm/xk" ]; then

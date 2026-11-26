@@ -81,9 +81,14 @@ static void t_correct(void)
 }
 
 /* Broken workers, each from a fresh campaign: one that drops every key after 64 good windows (its last window goes back, the earlier
- * ones stay), one that drops half of them and one that drops a lane of eight (the session goes back: their earlier windows passed). */
+ * ones stay), one that drops half of them and one that drops a lane of eight (the session goes back: their earlier windows passed).
+ * The keys given back are counted: the keys the workers counted, less those, are what is marked as scanned (the progress), and until the
+ * state is written again they are known as not on disk yet, which is what makes the reporter save at once. */
 static void t_broken(void)
 {
+    char path[600], bak[620], err[200];
+    snprintf(path, sizeof path, "%s/t_canary_back.state", PZ_TEST_DIR);
+    snprintf(bak, sizeof bak, "%s.bak", path);
     const struct { double keep; u64 good, within; bool session; } cases[] = {
         {0.0, (u64)64 << 38, (u64)65 << 38, false},
         {0.5, 0, (u64)8 << 38, true},
@@ -96,17 +101,29 @@ static void t_broken(void)
         canary_init(&cy, "a broken worker");
         u64 bad;
         const u64 good = work(&cy, s, (u64)1 << 30, 1.0, cases[i].good, &bad);
-        CHECK(!bad && good == cases[i].good);
+        bool unsaved = true;
+        CHECK(!bad && good == cases[i].good && sched_given_back(s, &unsaved) == 0 && !unsaved);
         work(&cy, s, (u64)1 << 30, cases[i].keep, cases[i].within, &bad);
         CHECK(bad > 0 && good + bad <= cases[i].within);
         /* what goes back: its last window (the total loss: the session before it is plausible) or, as a rule for a partial loss, the session */
         const u64 kd = sched_keys_done(s), window = good + bad - ((u64)1 << 38);
         CHECK(cases[i].session ? kd == 0 || kd == window : kd == window);
+        CHECK(good + bad - sched_given_back(s, &unsaved) == kd && unsaved);
+        CHECK(sched_save(s, path) == 0 && sched_given_back(s, &unsaved) == good + bad - kd && !unsaved);
+        sched_t *l = sched_new(&cfg);                                     /* the state on disk has the hole */
+        CHECK(sched_load(l, path, err, sizeof err) == 0 && sched_keys_done(l) == kd);
+        sched_free(l);
+        CHECK(sched_save(s, path) == 0);                                  /* written twice, as the checkpoint does: its copy has it too */
+        l = sched_new(&cfg);
+        CHECK(sched_load(l, bak, err, sizeof err) == 0 && sched_keys_done(l) == kd);
+        sched_free(l);
         claim_t c;                                                        /* a claim it completes later is given back too */
         CHECK(sched_claim(s, (u64)1 << 30, &c) == CLAIM_OK && !canary_complete(&cy, s, &c, c.nkeys, 99) && sched_keys_done(s) == kd);
         canary_free(&cy);
         sched_free(s);
     }
+    remove(path);
+    remove(bak);
 }
 
 /* A whole range of 66 windows: a worker that drops every key in its 65th window is condemned, a correct one scans the rest; every unit of
@@ -160,7 +177,7 @@ static void t_range(void)
     CHECK(sched_load(s, path, err, sizeof err) == 0 && sched_keys_done(s) == before);
     canary_init(&cy, "a worker that drops a quarter of its keys");
     work(&cy, s, unit, 0.75, (u64)64 << 38, &bad);
-    CHECK(bad > 0 && sched_keys_done(s) == before);
+    CHECK(bad > 0 && sched_keys_done(s) == before && sched_given_back(s, NULL) == bad);
     canary_free(&cy);
     sched_free(s);
     remove(path);

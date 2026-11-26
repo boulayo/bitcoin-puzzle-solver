@@ -654,13 +654,6 @@ static bool header_check(const bs_header *h, bs_layout *layout, char *err, size_
         const u64 want = linear_slots_for(h->T);
         if (h->nslots % 8 != 0 || h->nslots + 8 < want || h->nslots > want + 8 || h->nslots <= h->T) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
     }
-    pz_ec_init();
-    u8 gx[32], tx[32];
-    pz_ge tg;
-    pz_fe_to_be(gx, &pz_ec_g.x);
-    if (!pz_ec_mul_g(&tg, &(pz_u256){{h->T, 0, 0, 0}})) { snprintf(err, errlen, "inconsistent table parameters"); return false; }
-    pz_fe_to_be(tx, &tg.x);
-    if (memcmp(gx, h->gx, 32) != 0 || memcmp(tx, h->tx, 32) != 0) { snprintf(err, errlen, "the table does not match the secp256k1 curve"); return false; }
     *layout = v1 ? LAYOUT_LINEAR : v2 ? LAYOUT_BUCKET8 : LAYOUT_TAG32;
     return true;
 }
@@ -795,7 +788,7 @@ bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, s
     bool ordered;
     if (table_count(t, nthreads, &ordered) != t->T) { snprintf(err, errlen, "wrong number of entries in %s", path); bsgs_table_free(t); return false; }
     if (!ordered) { snprintf(err, errlen, "%s is not laid out as a BSGS table is", path); bsgs_table_free(t); return false; }
-    /* spot check against freshly computed points */
+    /* spot check against freshly computed points: G and T*G, which the header names too, then 254 others */
     u64 rs = 0x9E3779B97F4A7C15ULL ^ h.T;
     for (int i = 0; i < 256; i++) {
         rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17;

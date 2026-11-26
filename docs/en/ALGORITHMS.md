@@ -99,7 +99,9 @@ is above the true probability, so a correct worker trips one of the two tests le
 all its keys (n = 0: e^-64) or more than two thirds of them (n ≤ 20 of 64); the session, one that misses less, given enough keys: λ > 135 (2^39.1
 keys) for half of them, λ > 2540 (2^43.3 keys) for one lane of eight. A condemned worker stops, and its keys are scanned again: those of
 its window (the claims are listed), or everything the campaign marked as scanned in the session when the session condemned it (its
-earlier windows passed and cannot be told apart from the others' work). A claim it completes afterwards is given back. A window is
+earlier windows passed and cannot be told apart from the others' work). A claim it completes afterwards is given back. The state is
+saved at once, and its copy with it, so that no checkpoint on disk still has those keys as scanned, and the progress shown is less by them. The log
+has a line only for a condemnation. A window is
 judged only once it is full: a session shorter than 2^38 keys of a worker judges nothing, and a stop forgets the window under way. The
 kangaroo and BSGS have no near misses and no canary.
 
@@ -119,7 +121,7 @@ visits the blocks in the order `π(0), π(1), π(2), …` where `π` is a **pseu
 * Inside a block the scan is sequential (the most efficient form). Progress is kept as a set of
   completed intervals in the "virtual space" `V = position_in_path · 2^B + offset`: there are at most as many holes as work requests
   in flight, so the checkpoint stays a few lines long even after months (`state.dat`, with checksum).
-* The seed has 256 bits, from pzcore's generator (`seed.h`: the OS generator, the CPU's, CPU timing jitter and the TPM, mixed with
+* The seed has 256 bits, from pzcore's generator (`seed.h`: the OS generator, with the CPU's and the timer mixed in by
   HKDF-SHA256; [NETWORK.md](NETWORK.md) 4.1); `--seed` accepts 64 hex digits (used as they are) or any text (hashed).
 
 * **Several computers (`--part`)**. The *positions* of the visiting order are split, not the interval: with `T` shares, the computer
@@ -290,8 +292,8 @@ every 60 s, so at most the DPs of the last minute are missing from the file). A 
 too large, is not taken. The file is deleted once the key is found and written. A file of another campaign (another range or
 public key) is refused, and so is one written with another jump table (another seed, or the setup of another computer): the message gives both ids.
 A file of the format `"PZDP4"` (the same records, a header of 38 bytes without the jump table id: versions 1.9.1 to 1.11.0) is loaded, appended
-to and merged as it is. The formats `"PZDP1"` to `"PZDP3"` of the older layouts cannot be used: `hunt` keeps such a `dp.bin` as `dp.bin.vN` and
-goes on with a new file, `merge` refuses it. A file written by a later version is left as it is.
+to and merged as it is. The formats `"PZDP1"` to `"PZDP3"` of the older layouts (versions up to 1.9.0) cannot be used: `hunt` and `merge` refuse such
+a file as one that is not the campaign's, and `hunt` says to move it away. A file written by a later version is left as it is.
 
 ## 5. GPU (CUDA and OpenCL)
 
@@ -621,7 +623,7 @@ because it runs with tens of millions of walkers on many GPUs (`P` grows as `K^1
   Mean from `2^32` to `2^44`: **1.060** against 1.100 (schema 2) and 1.164 (schema 1); it is the constant of the time estimates (`KANG_C_MEAN`). At the scales of the
   open puzzles the model gives ≈ 1.04 (RESEARCH.md section 8.12, where the cost is split into its parts).
 
-**Compatibility.** The log of schema 3 is `dp.bin` in the `PZDP5` format (section 4.7); a `dp.bin` of an older layout is kept aside by `hunt`
+**Compatibility.** The log of schema 3 is `dp.bin` in the `PZDP5` format (section 4.7); a `dp.bin` of an older layout is refused by `hunt`
 and not used.
 
 ## 9. Symmetric BSGS with a RAM table (`--mode bsgs`)
@@ -763,8 +765,8 @@ secp256k1 with HKDF-SHA256 and an HMAC-SHA256 tag. How to use it, and what it do
 
 Let `Q` be the public key, `G` the generator, `n` the order of the group, and `P` the 32-byte private key to protect.
 
-1. Draw `r` in `[1, n - 1]` from the operating system's random numbers (the one source the program already uses for the seed of a campaign; a draw outside the
-   range is rejected and redrawn).
+1. Draw `r` in `[1, n - 1]` from the operating system's random numbers: 32 bytes read as a big-endian integer, `mod (n - 1)`, plus 1, as the key of a
+   password is made in 12.4.
 2. `R = r*G` (compressed, 33 bytes), `S = r*Q`, `ikm = x(S)` (32 bytes, big-endian).
 3. `okm = HKDF-SHA256(salt = "pzsolve-found-v1", ikm, info = R || Q)`, 64 bytes: the first 32 are the key stream, the last 32 the key of the MAC.
 4. `ct = P xor okm[0..32)`.
@@ -830,8 +832,7 @@ the search code that found it until it is overwritten, and in memory during the 
 as information (they are public); the line does not depend on them.
 
 The public key to encrypt to is stored in `campaign.conf` as `encrypt_pubkey=HEX`, a line that is added only when it is used: a campaign without it has a file that older versions
-and this one read as before. A version before 1.21.0 that resumes a campaign that has the line ignores it and would write the key in plain. From 1.22.0 on the campaign
-also carries the line `requires=1.21.0` (written with `encrypt_pubkey`, and only then): a version that knows the line and is below the version named refuses to resume the
-campaign, with a message that names the version needed and its own, so the plain fallback cannot happen by mistake with any version from 1.22.0 on. The versions 1.21.0 and
-1.21.1 know `encrypt_pubkey` but not `requires`, and the versions before them know neither: they still ignore the line, so a campaign that one of those may resume must
-not rely on it, and must not be resumed with a version before 1.21.0 at all. The comparison is numeric on the three parts of the version (10.0.0 is above 9.0.0).
+and this one read as before. A version before 1.21.0 that resumes a campaign that has the line ignores it and would write the key in plain: a campaign that encrypts
+must not be resumed with a version before 1.21.0. The line `requires=X.Y.Z`, with which a version from 1.22.0 on refuses a campaign that needs a later one (the message
+names the version needed and its own; the comparison is numeric on the three parts of the version, 10.0.0 is above 9.0.0), is written for a step and for a shared walk,
+which need 1.24.0. Encryption writes none: every version that reads `requires` knows `encrypt_pubkey`, and the versions before 1.21.0 read neither.

@@ -287,6 +287,5 @@ I file della cartella: `home.seed`, `start.key`, `terms`, `payout`, `failed-sign
 | `--payout ADDRESS is missing` | dare `--payout INDIRIZZO` (senza terminale non può chiederlo) |
 | `network: no contact, looking for the others` | aspettare qualche minuto; se resta, controllare la porta 28140 o dare `--peer HOST:PORTA` di un nodo noto |
 | `... does not run (pzsign version): --pzsign gives the signer` | pzsign manca o non parte: metterlo accanto a pzpeer o dare `--pzsign PERCORSO` |
-| `no seed for ...: ... make it on another computer` | la macchina non ha TPM e il suo orologio mostra troppo poco rumore: avviare la casa su un altro computer e copiare il suo `home.seed` (permessi 0600) nella cartella |
 | `points of this home are not published yet` | la casa trova punti più in fretta di quanto li pubblica: la rete regola da sola i bit dei punti |
 | `pzsolve ended with status ...` | leggere `pzsolve.out`; la casa resta come custode |

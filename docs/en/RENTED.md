@@ -42,7 +42,7 @@ pzsolve puzzle 40                                        # its key is public: it
 ```
 
 Check that the box on the screen and `FOUND.txt` show a `PZENC1:` line and no key, that what `--on-found` sent reached you
-(`log.txt` says how the command ended), and that `decrypt-key` printed `check: OK`. Then delete `campaigns/rehearsal`.
+(the line `--on-found: the command ended with exit status 0` on the terminal says how the command ended), and that `decrypt-key` printed `check: OK`. Then delete `campaigns/rehearsal`.
 
 ## 3. On the rented machine
 
@@ -94,6 +94,6 @@ pzsolve decrypt-key FOUND.txt                            # the password; prints 
 
 It must print `check: OK` with the address you were hunting: a line can be made by anyone who knows the public key, so only the address
 check proves that the key is the right one. Move the funds with a wallet that imports the WIF. When the rental ends, delete the campaign
-folder on the rented machine (`rm -rf campaigns/p71`): it holds the range, the target, the public key and the progress of the search,
-never the key (at the find the program removed the seed, the state and the points, which together led to it), but there is no reason
-to leave them behind.
+folder on the rented machine (`rm -rf campaigns/p71`): after the find it holds `FOUND.txt` and `campaign.conf` (the range, the target,
+the public key), never the key (the program removed the seed and every file that said where the search stood, which together led to
+it), but there is no reason to leave them behind.

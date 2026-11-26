@@ -126,13 +126,13 @@ static void t_snapshot(void)
     CHECK(sched_claim(a, 4096, &c1) == CLAIM_OK && sched_claim(a, 4096, &c2) == CLAIM_OK);
     sched_complete(a, &c1, c1.nkeys);
     size_t n;
-    char *snap = sched_snapshot(a, &n);
+    char *snap = sched_snapshot(a, &n, NULL);
     sched_complete(a, &c2, c2.nkeys);
     CHECK(sched_write(snap, n, PZ_TEST_DIR "/t_jobq_snap.state") == 0);
     CHECK(sched_load(b, PZ_TEST_DIR "/t_jobq_snap.state", err, sizeof err) == 0 && sched_keys_done(b) == 4096 && sched_keys_done(a) == 8192);
     free(snap);
     CHECK(sched_save(b, PZ_TEST_DIR "/t_jobq_snap2.state") == 0);
-    snap = sched_snapshot(b, &n);
+    snap = sched_snapshot(b, &n, NULL);
     char *t = pz_read_file(PZ_TEST_DIR "/t_jobq_snap2.state", NULL);
     CHECK(t && strlen(t) == n && !memcmp(t, snap, n));
     free(t), free(snap);
@@ -167,9 +167,9 @@ static void t_cfg(void)
         CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "unknown mode 'zzzz'"));
     }
     free(t);
-    /* a campaign that encrypts the key writes the version it needs (requires=X.Y.Z): a version below it refuses the campaign, one at
-     * or above it resumes it; a campaign without the line (every campaign of earlier versions) resumes as before. The cases are
-     * written from the version of this build, so that they hold whatever the version is. */
+    /* a campaign with a step (or a shared walk) writes the version it needs (requires=X.Y.Z): a version below it refuses the campaign,
+     * one at or above it resumes it; a campaign without the line resumes as before, and encryption needs none (every version that reads
+     * the line knows encrypt_pubkey). The cases are written from the version of this build, so that they hold whatever the version is. */
     unsigned long V[3] = {0, 0, 0};
     CHECK(sscanf(PZ_VERSION, "%lu.%lu.%lu", &V[0], &V[1], &V[2]) == 3);
     c.mode = MODE_LINEAR;
@@ -178,13 +178,21 @@ static void t_cfg(void)
     CHECK(pz_ge_from_pubkey(&c.encrypt_pubkey, c.encrypt_pubkey33, 33));
     CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
     t = pz_read_file(PZ_TEST_DIR "/t_jobq.conf", NULL);
-    CHECK(t && strstr(t, "\nencrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrequires=" PZ_REQUIRES_ENCRYPT "\n"));
-    CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) == 0 && l.has_encrypt);   /* this version is at or above PZ_REQUIRES_ENCRYPT */
+    CHECK(t && strstr(t, "\nencrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\n") && !strstr(t, "requires="));
+    CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) == 0 && l.has_encrypt);
     free(t);
     c.has_encrypt = false;
+    c.has_step = true;                                                                  /* the keys 1, 4, 7, ... */
+    c.step = pz_u256_from_u64(3);
     CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
     t = pz_read_file(PZ_TEST_DIR "/t_jobq.conf", NULL);
-    CHECK(t && !strstr(t, "requires="));                                                /* no encryption: no line, the file is as before */
+    CHECK(t && strstr(t, "\nrequires=" PZ_REQUIRES_STEP "\n"));
+    CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) == 0 && l.has_step);   /* this version is at or above PZ_REQUIRES_STEP */
+    free(t);
+    c.has_step = false;
+    CHECK(cfg_save(&c, PZ_TEST_DIR "/t_jobq.conf") == 0);
+    t = pz_read_file(PZ_TEST_DIR "/t_jobq.conf", NULL);
+    CHECK(t && !strstr(t, "requires="));                                                /* neither: no line, the file is as before */
     char above[40];
     snprintf(above, sizeof above, "%lu.%lu.%lu", V[0], V[1], V[2] + 1);                 /* the next patch version: above this one */
     const struct { const char *req; bool ok; } reqs[] = {
@@ -208,14 +216,8 @@ static void t_cfg(void)
         if (reqs[i].ok) CHECK(rc == 0);
         else if (reqs[i].req[0] < '0' || reqs[i].req[0] > '9' || !strchr(strchr(reqs[i].req, '.') + 1, '.'))
             CHECK(rc != 0 && strstr(err, "invalid requires") && strstr(err, reqs[i].req));
-        else   /* the message names the version needed, this one and the reason (no encrypt_pubkey line here: a feature in general) */
+        else   /* the message names the version needed and this one */
             CHECK(rc != 0 && strstr(err, "needs pzsolve ") && strstr(err, reqs[i].req) && strstr(err, PZ_VERSION) && strstr(err, "a feature this version does not have"));
-    }
-    {   /* with the encrypt_pubkey line the reason is the option */
-        FILE *f = fopen(PZ_TEST_DIR "/t_jobq.conf", "wb");
-        CHECK(f != NULL);
-        if (f) { fputs(t, f); fprintf(f, "encrypt_pubkey=0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\nrequires=%s\n", above); fclose(f); }
-        CHECK(cfg_load(&l, PZ_TEST_DIR "/t_jobq.conf", err, sizeof err) != 0 && strstr(err, "it was made with --encrypt-pubkey"));
     }
     free(t);
     CHECK(cfg_version_cmp("1.9.0", "1.21.0") < 0 && cfg_version_cmp("1.21.0", "1.21.0") == 0 && cfg_version_cmp("2.0.0", "1.99.99") > 0);

@@ -228,7 +228,7 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out)
     pthread_mutex_lock(&s->mu);
     if (want < 1024) want = 1024;
     want &= ~(u64)1023;
-    for (int guard = 0; guard < 1000000; guard++) {
+    for (;;) {               /* every turn moves s->next forward, or to the first gap once the end is reached */
         if (s->next >= s->v_limit) {
             if (s->ninf) { pthread_mutex_unlock(&s->mu); return CLAIM_WAIT; }
             u128 g = first_gap(s);
@@ -279,8 +279,6 @@ claim_status sched_claim(sched_t *s, u64 want, claim_t *out)
         pthread_mutex_unlock(&s->mu);
         return CLAIM_OK;
     }
-    pthread_mutex_unlock(&s->mu);
-    return CLAIM_DONE;
 }
 
 void sched_complete(sched_t *s, const claim_t *c, u64 covered)
@@ -308,7 +306,9 @@ void sched_reopen(sched_t *s, u128 v, u64 n)
     while (i < s->ndone && s->done[i].a < b) {
         vival *d = &s->done[i];
         if (d->b <= v) { i++; continue; }
-        s->keys_done -= (d->b < b ? d->b : b) - (d->a > v ? d->a : v);   /* a claim holds keys only, no filler */
+        const u128 back = (d->b < b ? d->b : b) - (d->a > v ? d->a : v);   /* a claim holds keys only, no filler */
+        s->keys_done -= back;
+        s->given_back += back;
         if (d->a < v && d->b > b) {                                     /* [v, b) inside it: two pieces */
             const u128 e = d->b;
             d->b = v;
@@ -328,8 +328,18 @@ void sched_revert(sched_t *s)
     if (s->nstart > s->capdone) s->done = pz_xrealloc(s->done, (s->capdone = s->nstart) * sizeof *s->done);
     if (s->nstart) memcpy(s->done, s->start, s->nstart * sizeof *s->done);
     s->ndone = s->nstart;
+    s->given_back += s->keys_done - s->start_keys;
     s->keys_done = s->start_keys;
     pthread_mutex_unlock(&s->mu);
+}
+
+u128 sched_given_back(sched_t *s, bool *unsaved)
+{
+    pthread_mutex_lock(&s->mu);
+    const u128 back = s->given_back;
+    if (unsaved) *unsaved = back != s->saved_back;
+    pthread_mutex_unlock(&s->mu);
+    return back;
 }
 
 /* ---- what the run and the reports ask ---- */
@@ -407,9 +417,10 @@ static bool state_file_valid(const char *path)
     return ok;
 }
 
-char *sched_snapshot(sched_t *s, size_t *len)
+char *sched_snapshot(sched_t *s, size_t *len, bool *back)
 {
     pthread_mutex_lock(&s->mu);
+    if (back) *back = s->given_back != s->saved_back;
     size_t cap = 1024 + strlen(s->part_text) + s->ndone * 80;
     char *buf = pz_xmalloc(cap + 64);
     char h1[48], h2[48], pl[PART_TEXT + 8] = "";
@@ -419,6 +430,7 @@ char *sched_snapshot(sched_t *s, size_t *len)
     for (size_t i = 0; i < s->ndone; i++) {
         n += snprintf(buf + n, cap - (size_t)n, "iv %s %s\n", u128_to_hex(s->done[i].a, h1), u128_to_hex(s->done[i].b, h2));
     }
+    s->saved_back = s->given_back;
     pthread_mutex_unlock(&s->mu);
     char hx[17];
     state_crc(buf, (size_t)n, hx);
@@ -439,7 +451,7 @@ int sched_write(const char *snap, size_t len, const char *path)
 int sched_save(sched_t *s, const char *path)
 {
     size_t n;
-    char *snap = sched_snapshot(s, &n);
+    char *snap = sched_snapshot(s, &n, NULL);
     const int rc = sched_write(snap, n, path);
     free(snap);
     return rc;
@@ -466,74 +478,51 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
         snprintf(err, errlen, "cannot read %s: %s", path, strerror(errno));
         return -1;
     }
+#define BAD(rc, ...) do { snprintf(err, errlen, __VA_ARGS__); free(text); return rc; } while (0)
     char *crc = state_crc_ok(text);
-    if (!crc) {
-        snprintf(err, errlen, strstr(text, "crc=") ? "invalid checkpoint checksum (corrupt file?)" : "checkpoint without checksum");
-        free(text);
-        return -1;
-    }
+    if (!crc) BAD(-1, "%s", strstr(text, "crc=") ? "invalid checkpoint checksum (corrupt file?)" : "checkpoint without checksum");
     *crc = 0;
     unsigned cb = 0;
     char vlim_text[64] = "", kd_text[64] = "", nds[32] = "";
     size_t nd = 0;
-    if (strncmp(text, "PZSCHED 1\n", 10) != 0 || !state_field(text, "cbits", nds, sizeof nds)) {
-        snprintf(err, errlen, "unrecognized checkpoint format");
-        free(text);
-        return -1;
-    }
+    if (strncmp(text, "PZSCHED 1\n", 10) != 0 || !state_field(text, "cbits", nds, sizeof nds)) BAD(-1, "unrecognized checkpoint format");
     {
         char pt[PART_TEXT] = "";
         (void)state_field(text, "part", pt, sizeof pt);              /* absent: no split */
-        if (strcmp(pt, s->part_text) != 0) {
-            snprintf(err, errlen, "the checkpoint belongs to a different split between computers (--part %s, the campaign uses %s): use another campaign name with -c",
-                     pt[0] ? pt : "none", s->part_text[0] ? s->part_text : "none");
-            free(text);
-            return -2;
-        }
+        if (strcmp(pt, s->part_text) != 0)
+            BAD(-2, "the checkpoint belongs to a different split between computers (--part %s, the campaign uses %s): use another campaign name with -c",
+                pt[0] ? pt : "none", s->part_text[0] ? s->part_text : "none");
     }
     {
         char sid[40] = "";
         /* absent in checkpoints written before the seed was recorded (up to 1.9.1): those are accepted as they were */
-        if (state_field(text, "seed_id", sid, sizeof sid) && strcmp(sid, s->seed_id) != 0) {
-            snprintf(err, errlen, "the checkpoint was written by a campaign with another seed (seed id %.16s, this campaign has %s): its positions point at other blocks",
-                     sid, s->seed_id);
-            free(text);
-            return -2;
-        }
+        if (state_field(text, "seed_id", sid, sizeof sid) && strcmp(sid, s->seed_id) != 0)
+            BAD(-2, "the checkpoint was written by a campaign with another seed (seed id %.16s, this campaign has %s): its positions point at other blocks",
+                sid, s->seed_id);
     }
     cb = (unsigned)pz_strtou64(nds);
-    if (!state_field(text, "v_limit", vlim_text, sizeof vlim_text) || !state_field(text, "keys_done", kd_text, sizeof kd_text) || !state_field(text, "ndone", nds, sizeof nds)) {
-        snprintf(err, errlen, "unrecognized checkpoint format");
-        free(text);
-        return -1;
-    }
+    if (!state_field(text, "v_limit", vlim_text, sizeof vlim_text) || !state_field(text, "keys_done", kd_text, sizeof kd_text) || !state_field(text, "ndone", nds, sizeof nds))
+        BAD(-1, "unrecognized checkpoint format");
     nd = (size_t)pz_strtou64(nds);
     u128 vlim, kdone;
-    if (!u128_from_hex(vlim_text, &vlim) || !u128_from_hex(kd_text, &kdone) || cb != s->cbits || vlim != s->v_limit) {
-        snprintf(err, errlen, "the checkpoint does not match the campaign (different chunk_bits or size)");
-        free(text);
-        return -2;
-    }
+    if (!u128_from_hex(vlim_text, &vlim) || !u128_from_hex(kd_text, &kdone) || cb != s->cbits || vlim != s->v_limit)
+        BAD(-2, "the checkpoint does not match the campaign (different chunk_bits or size)");
     s->ndone = 0;
     const char *p = strstr(text, "\niv ");
     for (size_t i = 0; i < nd; i++) {
         char a[64] = "", b[64] = "";
         u128 va = 0, vb = 0;
-        if (!p) { snprintf(err, errlen, "checkpoint interval %zu is missing", i); free(text); return -1; }
+        if (!p) BAD(-1, "checkpoint interval %zu is missing", i);
         p += 4;   /* skip "\niv " */
         size_t la = strcspn(p, " \n"), lb;
-        if (la == 0 || la >= sizeof a || p[la] != ' ') { snprintf(err, errlen, "checkpoint interval %zu is invalid", i); free(text); return -1; }
+        if (la == 0 || la >= sizeof a || p[la] != ' ') BAD(-1, "checkpoint interval %zu is invalid", i);
         memcpy(a, p, la);
         p += la + 1;
         lb = strcspn(p, " \n");
-        if (lb == 0 || lb >= sizeof b) { snprintf(err, errlen, "checkpoint interval %zu is invalid", i); free(text); return -1; }
+        if (lb == 0 || lb >= sizeof b) BAD(-1, "checkpoint interval %zu is invalid", i);
         memcpy(b, p, lb);
         p += lb;
-        if (!u128_from_hex(a, &va) || !u128_from_hex(b, &vb) || va >= vb || vb > s->v_limit) {
-            snprintf(err, errlen, "checkpoint interval %zu is invalid", i);
-            free(text);
-            return -1;
-        }
+        if (!u128_from_hex(a, &va) || !u128_from_hex(b, &vb) || va >= vb || vb > s->v_limit) BAD(-1, "checkpoint interval %zu is invalid", i);
         add_done(s, va, vb);
         p = strstr(p, "\niv ");
     }
@@ -544,6 +533,7 @@ int sched_load(sched_t *s, const char *path, char *err, size_t errlen)
     if (s->ndone) memcpy(s->start, s->done, s->ndone * sizeof *s->start);
     s->nstart = s->ndone;
     s->start_keys = kdone;
+#undef BAD
     free(text);
     return 0;
 }

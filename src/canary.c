@@ -63,8 +63,6 @@ bool canary_complete(canary *c, sched_t *s, const claim_t *cl, u64 covered, u64 
                 pz_log(PZ_LOG_ERR, "%s misses keys (%s; %s): it is no longer used, and the %s keys of its window go back to be scanned again",
                        c->name, lw, lt, pz_fmt_u64(c->wkeys, k, sizeof k));
             }
-        } else {
-            pz_log(PZ_LOG_DEBUG, "canary of %s: %s; %s", c->name, lw, lt);
         }
         c->wkeys = c->wnear = 0;
         c->nclaim = 0;

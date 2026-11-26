@@ -303,10 +303,22 @@ static void seed_text(const campaign_cfg *c, char out[65])
     else pz_hex_encode(c->seed, 32, out);
 }
 
+/* The lines FOUND.txt starts with, whether the key is encrypted or not: the title, the date, the campaign, the puzzle and the address.
+ * Their length. */
+static int found_head(const run_ctx *r, const char *title, const char *addr, char *buf, size_t n)
+{
+    char ts[40], pz[48] = "";
+    struct tm tmv;
+    pz_localtime((time_t)r->found_time, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
+    if (r->cfg.puzzle) snprintf(pz, sizeof pz, "puzzle:          %d\n", r->cfg.puzzle);
+    return snprintf(buf, n, "*** %s ***\n\ndate:            %s\ncampaign:        %s\n%saddress:         %s\n", title, ts, r->cfg.name, pz, addr);
+}
+
 /* the file of a campaign that does not encrypt the key; false if it could not be written */
 static bool write_found_plain(run_ctx *r)
 {
-    char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80], pz[48] = "";
+    char hx[80], wif[80], addr[64], buf[2048], seed[65], pk[80];
     u8 kb[32], h[20], pub[33];
     pz_ge p;
     pz_u256_to_hex(&r->found_key, hx);
@@ -318,25 +330,15 @@ static bool write_found_plain(run_ctx *r)
     pz_hash160(pub, 33, h);
     pz_hash160_to_address(h, addr, sizeof addr);
     seed_text(&r->cfg, seed);
-    time_t t = (time_t)r->found_time;
-    char ts[40];
-    struct tm tmv;
-    pz_localtime(t, &tmv);
-    strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
-    if (r->cfg.puzzle) snprintf(pz, sizeof pz, "puzzle:          %d\n", r->cfg.puzzle);
-    int n = snprintf(buf, sizeof buf,
-        "*** PRIVATE KEY FOUND ***\n\n"
-        "date:            %s\n"
-        "campaign:        %s\n"
-        "%s"
-        "address:         %s\n"
+    int n = found_head(r, "PRIVATE KEY FOUND", addr, buf, sizeof buf);
+    n += snprintf(buf + n, sizeof buf - (size_t)n,
         "private key hex: 0x%s\n"
         "WIF compressed:  %s\n"
         "public key:      %s\n"
         "campaign seed:   %s\n"
         "version:         %s\n\n"
         "KEEP THIS FILE IN A SAFE PLACE and move the funds as soon as possible.\n",
-        ts, r->cfg.name, pz, addr, hx, wif, pk, seed, PZ_VERSION);
+        hx, wif, pk, seed, PZ_VERSION);
     const bool ok = found_save(r, buf, (size_t)n);
     pz_secure_zero(hx, sizeof hx);
     pz_secure_zero(wif, sizeof wif);
@@ -350,30 +352,22 @@ static bool write_found_plain(run_ctx *r)
  * done the key is written nowhere, which the box says, and the campaign keeps its state (end_session). */
 static bool write_found_encrypted(run_ctx *r)
 {
-    char buf[2048], pz[48] = "", id[9], ts[40];
+    char buf[2048], id[9];
     u8 kb[32];
     pz_u256_to_be(&r->found_key, kb);
     r->found_seal_failed = !enc_seal_key(&r->cfg.encrypt_pubkey, kb, r->found_sealed, sizeof r->found_sealed);
     pz_secure_zero(kb, sizeof kb);
-    enc_key_id(&r->cfg.encrypt_pubkey, id);
-    struct tm tmv;
-    pz_localtime((time_t)r->found_time, &tmv);
-    strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
-    if (r->cfg.puzzle) snprintf(pz, sizeof pz, "puzzle:          %d\n", r->cfg.puzzle);
     if (r->found_seal_failed) return false;                  /* nothing to write: the box says so, and the state stays for a new search */
-    const int n = snprintf(buf, sizeof buf,
-            "*** PRIVATE KEY FOUND (ENCRYPTED) ***\n\n"
-            "date:            %s\n"
-            "campaign:        %s\n"
-            "%s"
-            "address:         %s\n"
+    enc_key_id(&r->cfg.encrypt_pubkey, id);
+    int n = found_head(r, "PRIVATE KEY FOUND (ENCRYPTED)", r->cfg.address, buf, sizeof buf);
+    n += snprintf(buf + n, sizeof buf - (size_t)n,
             "version:         %s\n"
             "encrypted to:    key id %s\n\n"
             "The private key is encrypted: only the owner of the secret that matches the public key given with --encrypt-pubkey (or made from the\n"
             "password of --encrypt-password) can read it. The line below is safe to copy anywhere, and it opens with the secret alone. At home:\n"
             "    pzsolve decrypt-key FOUND.txt\n\n"
             "%s\n",
-            ts, r->cfg.name, pz, r->cfg.address, PZ_VERSION, id, r->found_sealed);
+            PZ_VERSION, id, r->found_sealed);
     return found_save(r, buf, (size_t)n);
 }
 
@@ -407,12 +401,6 @@ void run_final_progress(run_ctx *r, progress_info *pi)
     pi->est_state = r->est_state;
     pi->rate_eta = r->rate_eta > 0 ? r->rate_eta : (r->est_state == RATE_MEASURING ? 0 : pi->rate);
     if (r->progress) r->progress(r, pi);
-    if (atomic_load(&r->found) && r->cfg.has_encrypt) {             /* the last reports: nothing that says where the search stood */
-        const char *unit = pi->unit;
-        memset(pi, 0, sizeof *pi);
-        pi->unit = unit;
-        pi->forgotten = true;
-    }
 }
 
 /* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines, and the
@@ -490,7 +478,6 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     char amount[160];                                     /* the kangaroo has no total: its steps are compared with the mean cost */
     if (kang) snprintf(amount, sizeof amount, "%s %s, ~%s expected on average", done, pi->unit, total);
     else snprintf(amount, sizeof amount, "%s of %s %s", done, total, pi->unit);
-    if (pi->forgotten) snprintf(pct, sizeof pct, "not kept"), snprintf(amount, sizeof amount, "the key is encrypted: how far the search got is not written");
     char partline[PART_TEXT + 200] = "";
     if (r->cfg.part[0]) {
         char sid[9];
@@ -576,21 +563,19 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     json_num(e90, sizeof e90, pi->beyond ? NAN : es.t90);
     json_num(efull, sizeof efull, pi->beyond ? NAN : kang ? es.t99 : es.t_full);
     for (int i = 0; i < ETA_NWIN; i++) json_num(pj[i], sizeof pj[i], es.p_win[i]);
-    char dn[48] = "null", tn[48] = "null", fr[32] = "null";      /* forgotten: not written */
-    if (!pi->forgotten) snprintf(dn, sizeof dn, "\"%.0Lf\"", pi->done), snprintf(tn, sizeof tn, "\"%.0Lf\"", pi->total), snprintf(fr, sizeof fr, "%.12g", pi->fraction);
     int m = snprintf(j, jcap,
         "{\n  \"program\": \"pzsolve\",\n  \"version\": \"%s\",\n  \"campaign\": \"%s\",\n  \"seed_id\": \"%s\",\n  \"part\": \"%s\",\n  \"limit_percent\": %d,\n"
         "  \"puzzle\": %d,\n  \"mode\": \"%s\",\n  \"state\": \"%s\",\n  \"updated_unix\": %lld,\n"
-        "  \"elapsed_seconds\": %.1f,\n  \"sessions\": %d,\n  \"unit\": \"%s\",\n  \"done\": %s,\n  \"total\": %s,\n"
-        "  \"fraction\": %s,\n  \"rate_per_second\": %.1f,\n  \"rate_cpu\": %.1f,\n  \"rate_gpu\": %.1f,\n"
+        "  \"elapsed_seconds\": %.1f,\n  \"sessions\": %d,\n  \"unit\": \"%s\",\n  \"done\": \"%.0Lf\",\n  \"total\": \"%.0Lf\",\n"
+        "  \"fraction\": %.12g,\n  \"rate_per_second\": %.1f,\n  \"rate_cpu\": %.1f,\n  \"rate_gpu\": %.1f,\n"
         "  \"eta_seconds_50\": %s,\n  \"eta_seconds_90\": %s,\n  \"eta_seconds_%s\": %s,\n"
         "  \"prob_1h\": %s,\n  \"prob_24h\": %s,\n  \"prob_7d\": %s,\n  \"prob_30d\": %s,\n  \"prob_1y\": %s,\n"
         "  \"found\": %s,\n  \"rejected_candidates\": %llu,\n  \"walkers\": %lld,\n  \"workers\": [",
         PZ_VERSION, r->cfg.name, idb, r->cfg.part, r->limit_pct, r->cfg.puzzle, mode_name(r->cfg.mode), state, (long long)now, el,
-        r->sessions, pi->unit, dn, tn, fr, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
+        r->sessions, pi->unit, pi->done, pi->total, pi->fraction, pi->rate, cpur, gpur, e50, e90, kang ? "99" : "100", efull,
         pj[0], pj[1], pj[2], pj[3], pj[4],
         atomic_load(&r->found) ? "true" : "false", (unsigned long long)atomic_load(&r->hits_bad), r->walkers);
-    for (int i = 0; i < r->nws && !pi->forgotten && (size_t)m + 300 < jcap; i++) {   /* the units of the workers add up to the progress */
+    for (int i = 0; i < r->nws && (size_t)m + 300 < jcap; i++) {
         const double wr = r->ws[i].rate;
         m += snprintf(j + m, jcap - (size_t)m, "%s\n    {\"name\": \"%s\", \"kind\": \"%c\", \"rate\": %.1f, \"units\": %llu}", i ? "," : "",
                       r->ws[i].name, r->ws[i].kind, isfinite(wr) && wr >= 0 && wr < 1e18 ? wr : 0.0, (unsigned long long)atomic_load(&r->ws[i].units));
@@ -782,6 +767,9 @@ void run_reporter_loop(run_ctx *r)
             if (now - t_peak > 5.0 && tot > r->peak_rate) r->peak_rate = tot;
             t_last = now;
         }
+        bool back = false;                       /* keys the canary gave back, which the state on disk still has as scanned: saved at once */
+        if (r->cfg.mode == MODE_LINEAR && r->sched) sched_given_back(r->sched, &back);
+        if (back) next_ckpt = now;
         bool need_pi = now >= next_term || now >= next_files || now >= next_ckpt || now >= next_csv;
         if (!need_pi) continue;
         run_final_progress(r, &pi);

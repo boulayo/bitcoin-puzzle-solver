@@ -295,21 +295,20 @@ int kang_merge_file(kang_state *ks, const char *path, kang_merge_stats *st);    
  * fingerprint of the campaign (kang_log_fp) and the first 4 bytes of the hash of the jump table (jump_tag): a log written with another
  * jump table (another seed) holds points the walks of this one never meet. Logs of version 4 ("PZDP4", versions 1.9.1 to 1.11.0) have the
  * same records and no jump table in their header: they are loaded, appended to and merged as they are. Logs of earlier layouts of the
- * walkers ("PZDP1" to "PZDP3", written by versions before 1.9.1) have other kind codes and another base, their points cannot be mixed
- * with these. */
+ * walkers ("PZDP1" to "PZDP3", written by versions before 1.9.1) have other kind codes and another base: they are not this program's
+ * any more, and are refused as any file that is not a log of the campaign. */
 #define KANG_LOG_MAGIC "PZDP5\n"
 #define KANG_LOG_MAGIC4 "PZDP4\n"
 #define KANG_LOG_HDR 42          /* magic, fingerprint, jump table */
 #define KANG_LOG_HDR4 38         /* magic, fingerprint */
 void kang_log_fp(const kang_state *ks, u8 fp[32]);                                       /* fingerprint of the campaign in a log header */
-/* What the first six bytes of a file say: not a log of pzsolve, the current layout, version 4 (no jump table in the header), an older
- * layout (PZDP1 to PZDP3), or one that only a newer version of the program writes. */
-enum { KANG_LOG_FOREIGN, KANG_LOG_CURRENT, KANG_LOG_V4, KANG_LOG_OLDER, KANG_LOG_NEWER };
+/* What the first six bytes of a file say: not a log this program reads, the current layout, version 4 (no jump table in the header), or
+ * one that only a newer version of the program writes. */
+enum { KANG_LOG_FOREIGN, KANG_LOG_CURRENT, KANG_LOG_V4, KANG_LOG_NEWER };
 int kang_log_class(const u8 magic[6]);
 /* What the header of a log says, for loading and for merging it: one of this campaign (version 4 included), shorter than its header but the
- * beginning of one of ours, another campaign's or not a log, an older layout, a newer version, this campaign's with another jump table, or
- * a read error. */
-enum { KANG_HDR_OK, KANG_HDR_SHORT, KANG_HDR_FOREIGN, KANG_HDR_OLDER, KANG_HDR_NEWER, KANG_HDR_OTHER_JUMPS, KANG_HDR_READ_ERR };
+ * beginning of one of ours, another campaign's or not a log, a newer version, this campaign's with another jump table, or a read error. */
+enum { KANG_HDR_OK, KANG_HDR_SHORT, KANG_HDR_FOREIGN, KANG_HDR_NEWER, KANG_HDR_OTHER_JUMPS, KANG_HDR_READ_ERR };
 FILE *kang_log_create(kang_state *ks, const char *path, const u8 fp[32]);               /* a log with the current header; sets log_hdr */
 bool kang_log_push(kang_state *ks, const dp_rec *rec, u64 *idx);                         /* mu held: false when there was no room; *idx: its index in the log */
 bool kang_log_get(kang_state *ks, u64 idx, dp_rec *out);                                 /* mu held: the record at index idx of the log, from the buffers or the file */

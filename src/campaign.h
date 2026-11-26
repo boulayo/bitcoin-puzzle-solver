@@ -8,11 +8,10 @@
 #include <pzcore/ec.h>
 
 #define PZ_FORMAT_VERSION 1
-/* The version a campaign that encrypts the key it finds needs (campaign.conf: requires=X.Y.Z, written with encrypt_pubkey): a version
- * older than it does not know the line and would write the key in plain. Raise it when a line is added that older versions must not
- * ignore either. (1.21.0 and 1.21.1 know encrypt_pubkey but not requires: they still ignore the line.) */
-#define PZ_REQUIRES_ENCRYPT "1.21.0"
-/* The version a shared walk needs (jumpseed=): an older version would walk its own jump table with a seed it does not have (seed= is empty:
+/* campaign.conf names the oldest version that may resume the campaign (requires=X.Y.Z) when it has a line an older version would ignore:
+ * the versions from 1.22.0 on read it and refuse a campaign above them. (Encryption has none: every version that reads the line knows
+ * encrypt_pubkey.)
+ * The version a shared walk needs (jumpseed=): an older version would walk its own jump table with a seed it does not have (seed= is empty:
  * the start key is never written). */
 #define PZ_REQUIRES_NET "1.24.0"
 /* The version a campaign with a step needs (step=): an older version would search every key of the range instead of the steps. */
@@ -88,7 +87,8 @@ pz_u256 cfg_range_size(const campaign_cfg *c);
 unsigned cfg_default_chunk_bits(const pz_u256 *range_size);   /* BSGS (the giant steps) and the other modes */
 unsigned cfg_linear_chunk_bits(const pz_u256 *range_size, unsigned shares);   /* new linear campaigns: it depends on the shares of --part too */
 unsigned cfg_clamp_chunk_bits(const pz_u256 *range_size, unsigned cb);        /* cb, or less when a block of 2^cb keys is larger than the range */
-/* Generates a fresh 256-bit seed with pzcore's generator (seed.h); dies only when the OS gives no random numbers. */
+/* A fresh 256-bit seed from pzcore's generator (seed.h): the OS generator, with the CPU's and the timer mixed in; dies when the OS gives
+ * no random numbers. */
 void seed_generate(u8 seed[32]);
 /* Parses a user seed: 64 hex digits are used verbatim, anything else is hashed. */
 void seed_from_text(const char *text, u8 seed[32]);

@@ -12,7 +12,6 @@ int cmd_merge(int argc, char **argv)
     opts_t o;
     parse_opts(argc, argv, &o);
     pz_log_set_quiet(o.quiet);
-    if (!o.campaign[0] && o.puzzle) snprintf(o.campaign, sizeof o.campaign, "p%d", o.puzzle);
     if (!o.campaign[0]) pz_usage_error("merge", "the campaign is missing: -c NAME or -p N");
     if (!o.nfiles) pz_usage_error("merge", "the files to merge are missing: -f FILE_OR_FOLDER (the dp.bin of another computer, or its campaign folder)");
     char cdir[600], conf[700], err[256];
@@ -30,10 +29,9 @@ int cmd_merge(int argc, char **argv)
         return 0;
     }
     check_encrypt_resume(&o, &r->cfg);
-    campaign_lock(cdir);   /* a campaign that is running must be stopped first: both would write the same log */
+    r->lock = campaign_lock(cdir);   /* a campaign that is running must be stopped first: both would write the same log */
     pz_strlcpy(r->on_found, o.on_found, sizeof r->on_found);
-    if (o.encrypt_pubkey[0] || o.encrypt_password) harden_process();
-    encrypt_on_resume(&o, r);                       /* before the log is opened: it may rewrite it */
+    encrypt_on_resume(&o, r);
     pz_log_set_file(r->path_log);                   /* the files merged and a key found go to the log of the campaign, as with 'hunt' */
     announce_encrypt(r);
     r->mem_limit = mem_bytes(o.mem_gb);
@@ -42,7 +40,7 @@ int cmd_merge(int argc, char **argv)
     int rc = kangaroo_merge(r, fl, o.nfiles);
     if (atomic_load(&r->found)) {
         const bool saved = !r->found_write_failed && !r->found_seal_failed;
-        if (saved && r->cfg.has_encrypt) forget_seed(r), forget_position(r);   /* as hunt does: nothing that leads to the key */
+        if (saved && r->cfg.has_encrypt) forget_search(r);   /* as hunt does: nothing that leads to the key */
         print_found_banner(r);
         onfound_wait();
         const int st = saved ? 0 : PZ_EXIT_ERROR;

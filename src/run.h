@@ -36,8 +36,6 @@ typedef struct {
     eta_in eta;                      /* completion-time model inputs (done / remaining / scale) */
     const char *unit;                /* "keys", "steps" */
     bool beyond;                     /* kangaroo: far past the expected effort without a collision: the completion-time model says nothing */
-    bool forgotten;                  /* an encrypting campaign that found its key: how far its search got is not shown (with a copy of the
-                                      * seed, on another computer of a --part split or in a shell history, it leads to the key) */
     char detail[320];
 } progress_info;
 
@@ -122,6 +120,7 @@ typedef struct run_ctx {
     /* statistics of hits */
     _Atomic u64 hits_bad;
 
+    int lock;                        /* descriptor holding the lock of the campaign folder (0: none), until the program ends or forget_search */
     int scratch_lock;                /* synthetic campaigns (run_kangaroo.c): descriptor holding the lock of the owner file of the scratch folder (0: none) */
 
     /* state of the run modes, in the run so that two runs in one process (the self-tests, the measurements) do not share it */

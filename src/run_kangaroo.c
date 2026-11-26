@@ -589,8 +589,6 @@ int kangaroo_merge(run_ctx *r, const char *const *files, int nfiles)
                 say_wrapped("  %s: %s\n", path, access(path, F_OK) != 0 ? "does not exist" : "cannot read the file");
             else if (rc == KANG_HDR_OTHER_JUMPS)
                 say_wrapped("  %s: written with another jump table (id %s, this campaign: %s): another seed, the points cannot meet\n", path, st.jump_id, ours);
-            else if (rc == KANG_HDR_OLDER)
-                say_wrapped("  %s: log of an older layout of the kangaroo (versions up to 1.9.0, small intervals): its points cannot be combined with those of this version\n", path);
             else if (rc == KANG_HDR_NEWER)
                 say_wrapped("  %s: log written by a newer version of pzsolve: its points cannot be combined with those of this version (the file is not touched)\n", path);
             else

@@ -155,7 +155,7 @@ The public versions start at 1.8.0 (the version numbers before it were developme
 
 | From → to | What changes |
 |-----------|--------------|
-| 1.8.x–1.9.0 → 1.9.1 and later | campaigns resume, except kangaroo campaigns with fewer than 256 kangaroos (small ranges): their `dp.bin` (schema 1) cannot be used, `hunt` keeps it as `dp.bin.v2` and starts a new one, `merge` refuses it. `--no-progress` is gone (use `--ui log`) |
+| 1.8.x–1.9.0 → 1.9.1 and later | campaigns resume, except kangaroo campaigns with fewer than 256 kangaroos (small ranges): their `dp.bin` (schema 1) cannot be used: `hunt` kept it as `dp.bin.v2` and started a new one up to 1.23.4 and from 1.24.0 refuses it (move the file away), `merge` refuses it. `--no-progress` is gone (use `--ui log`) |
 | 1.11.0 and later → earlier | BSGS tables saved by 1.11.0 to 1.13.0 (`PZBSGS02`) cannot be read by earlier versions; the `PZBSGS01` tables of earlier versions are still read |
 | 1.12.0 and later → earlier | a `dp.bin` created by 1.12.0 and later (`PZDP5`, with the jump table id in its header) cannot be read by earlier versions; a `PZDP4` file of 1.9.1 to 1.11.0 is read and continued as it is |
 | 1.14.0 → 1.13.0 and earlier | BSGS tables saved by 1.14.0 and later (`PZBSGS03`, 4-byte cells) cannot be read by 1.13.0 and earlier; the `PZBSGS01` and `PZBSGS02` tables are still read and used as they are |

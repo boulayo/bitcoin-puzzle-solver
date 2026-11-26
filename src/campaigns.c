@@ -89,15 +89,6 @@ const char *campaign_shown_state(const char *written, bool found, bool running)
     return !strcmp(written, "RUNNING") ? "STOPPED" : written;
 }
 
-/* status.json written before 1.8.0 holds Italian state names. */
-static const char *state_name(const char *s)
-{
-    static const char *const old[][2] = {{"IN CORSO", "RUNNING"}, {"INTERROTTA", "STOPPED"}, {"COMPLETATA", "COMPLETED"}, {"TROVATA", "FOUND"}};
-    for (size_t i = 0; i < sizeof old / sizeof *old; i++)
-        if (!strcmp(s, old[i][0])) return old[i][1];
-    return s;
-}
-
 static void fill_row(row_t *w, const char *base, time_t now)
 {
     char dir[1100], p[1200];
@@ -119,8 +110,8 @@ static void fill_row(row_t *w, const char *base, time_t now)
     bool found = access(p, F_OK) == 0;
     bool running = campaign_is_running(dir);
     if (js) {
-        if (json_get(js, "state", v, sizeof v)) pz_strlcpy(w->state, state_name(v), sizeof w->state);
-        if (json_get(js, "fraction", v, sizeof v) && strcmp(v, "null")) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);   /* null: not kept */
+        if (json_get(js, "state", v, sizeof v)) pz_strlcpy(w->state, v, sizeof w->state);
+        if (json_get(js, "fraction", v, sizeof v)) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);
         if (json_get(js, "rate_per_second", v, sizeof v)) {
             double rt = atof(v);
             if (rt > 0) { char b[32]; pz_fmt_si(rt, b, sizeof b); snprintf(w->rate, sizeof w->rate, "%s/s", b); }
@@ -149,7 +140,7 @@ char *campaign_state(const char *dir, char *out, size_t n)
     char p[4200], v[64] = "NEW";
     snprintf(p, sizeof p, "%s/status.json", dir);
     char *js = pz_read_file(p, NULL);
-    if (js && json_get(js, "state", v, sizeof v)) pz_strlcpy(v, state_name(v), sizeof v);
+    if (js) json_get(js, "state", v, sizeof v);
     free(js);
     snprintf(p, sizeof p, "%s/FOUND.txt", dir);
     pz_strlcpy(out, campaign_shown_state(v, access(p, F_OK) == 0, campaign_is_running(dir)), n);
@@ -175,7 +166,7 @@ char *campaign_report(const char *dir)
     pz_strlcpy(written, val, sizeof written);
     if ((size_t)(end - val) < sizeof written) written[end - val] = 0;
     snprintf(p, sizeof p, "%s/FOUND.txt", dir);
-    const char *shown = campaign_shown_state(state_name(written), access(p, F_OK) == 0, campaign_is_running(dir));
+    const char *shown = campaign_shown_state(written, access(p, F_OK) == 0, campaign_is_running(dir));
     if (!strcmp(shown, written)) return t;
     const size_t head = (size_t)(val - t), tail = strlen(end);
     char *out = pz_xmalloc(head + strlen(shown) + tail + 1);

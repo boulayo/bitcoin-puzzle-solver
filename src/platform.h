@@ -98,7 +98,7 @@ int pz_fd_terminal_cols(int fd);                           /* columns of the ter
  * close as soon as the program ends. Always false elsewhere. */
 bool pz_console_is_own(void);
 
-/* ---- secrets and the hardening of the process ---- */
+/* ---- secrets ---- */
 /* Whether standard input is a terminal (a console on Windows). */
 bool pz_stdin_is_terminal(void);
 /* Bytes from standard input, as they come: their number, 0 at its end, -1 on an error. */
@@ -115,9 +115,6 @@ int pz_read_secret(const char *prompt, char *buf, size_t cap, bool allow_tty);
  * on locked memory is common): the caller goes on. pz_mem_unlock before the memory is freed. */
 bool pz_mem_lock(void *p, size_t n);
 void pz_mem_unlock(void *p, size_t n);
-/* Core dumps off for this process (setrlimit, and on Linux no ptrace by the same user and no dump through PR_SET_DUMPABLE). The text of what could
- * not be done, or an empty string, goes to why. On Windows nothing is done from here and false is returned. */
-bool pz_harden_process(char *why, size_t n);
 /* Runs a command with the shell of the platform (/bin/sh -c; cmd.exe /c), with the variables env ("NAME=VALUE", NULL at the end) added to the
  * environment, standard input on the null device, and waits for it at most timeout seconds (then it is killed, with its process group where
  * there is one). Returns 0 and the exit status in *code; 1 when it was killed after the time; -1 when it could not be started (errno / text in

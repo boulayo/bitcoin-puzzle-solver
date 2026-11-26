@@ -848,14 +848,14 @@ static int log_check_short_files(void)
     return fails;
 }
 
-/* the other magics: only PZDP1 to PZDP3 are older layouts that are set aside; PZDP4 is still read; PZDP6 and the like come from a newer
- * version and stay where they are */
+/* the other magics: PZDP1 to PZDP3, older layouts, are no log of the campaign; PZDP4 is still read; PZDP6 and the like come from a newer
+ * version. A file of either kind is an error and stays as it is */
 static int log_check_magics(void)
 {
     int fails = 0;
     const u8 m[][6] = {{'P', 'Z', 'D', 'P', '1', '\n'}, {'P', 'Z', 'D', 'P', '3', '\n'}, {'P', 'Z', 'D', 'P', '4', '\n'}, {'P', 'Z', 'D', 'P', '5', '\n'},
                        {'P', 'Z', 'D', 'P', '6', '\n'}, {'P', 'Z', 'D', 'P', '0', '\n'}, {'P', 'Z', 'D', 'P', 'x', '\n'}, {'P', 'Z', 'D', 'Q', '5', '\n'}};
-    const int want[] = {KANG_LOG_OLDER, KANG_LOG_OLDER, KANG_LOG_V4, KANG_LOG_CURRENT, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_FOREIGN};
+    const int want[] = {KANG_LOG_FOREIGN, KANG_LOG_FOREIGN, KANG_LOG_V4, KANG_LOG_CURRENT, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_NEWER, KANG_LOG_FOREIGN};
     for (size_t c = 0; c < sizeof want / sizeof *want; c++) FCHK(kang_log_class(m[c]) == want[c]);
     const char digits[] = "26";
     for (size_t c = 0; c < sizeof digits - 1; c++) {
@@ -869,20 +869,11 @@ static int log_check_magics(void)
         FILE *f = fopen(ks->log_path, "wb");
         FCHK(f != NULL);
         if (f) { fwrite(body, 1, sizeof body, f); fclose(f); }
-        char aside[700];
-        snprintf(aside, sizeof aside, "%s.v%c", ks->log_path, digits[c]);
-        if (digits[c] == '2') {                       /* an older layout: set aside, and a new log */
-            FCHK(kang_load_log(ks) == 1 && ks->log);
-            if (ks->log) { fclose(ks->log); ks->log = NULL; }
-            FCHK(file_size(aside) == (long long)sizeof body && file_size(ks->log_path) == KANG_LOG_HDR);
-        } else {                                      /* a newer version's: an error, the file as it was, nothing set aside */
-            FCHK(kang_load_log(ks) == -1 && !ks->log);
-            FCHK(file_size(ks->log_path) == (long long)sizeof body && file_size(aside) == -1);
-            u8 back[sizeof body];
-            FILE *g = fopen(ks->log_path, "rb");
-            FCHK(g && fread(back, 1, sizeof back, g) == sizeof back && !memcmp(back, body, sizeof body));
-            if (g) fclose(g);
-        }
+        FCHK(kang_load_log(ks) == -1 && !ks->log && file_size(ks->log_path) == (long long)sizeof body);
+        u8 back[sizeof body];
+        FILE *g = fopen(ks->log_path, "rb");
+        FCHK(g && fread(back, 1, sizeof back, g) == sizeof back && !memcmp(back, body, sizeof body));
+        if (g) fclose(g);
         kang_free_test_state(ks);
     }
     for (int k = 0; k < 2; k++) {   /* this version's magic with another campaign's fingerprint, or with another jump table: refused, untouched */
