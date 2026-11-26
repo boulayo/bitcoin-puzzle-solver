@@ -322,8 +322,9 @@ static void test_reopen(void)
         const record more = make(&id[0], 0, x), fresh = make(&id[OWN], 0, x);
         CHECK(ok == OWN * EACH && store_count(st) == OWN * EACH && store_put(st, &more, &mine, others, 4, &no) == STORE_FULL);
         CHECK(store_weight(st) == OWN * EACH * ldexpl(1, (int)net.dpbits));
-        if (round) CHECK(store_put(st, &fresh, &mine, others, 4, &no) == STORE_OK && file_size(PATH ".owners") == STORE_HDR + (OWN + 1) * 32);
+        if (round) CHECK(store_put(st, &fresh, &mine, others, 4, &no) == STORE_OK);
         store_close(st);
+        if (round) CHECK(file_size(PATH ".owners") == STORE_HDR + (OWN + 1) * 32);   /* once closed: Windows tells an open file's size late */
         st = round ? NULL : store_open(PATH, ctx, &net, err, sizeof err);
         ok = 0;
     }

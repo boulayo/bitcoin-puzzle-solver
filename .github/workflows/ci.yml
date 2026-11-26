@@ -10,7 +10,7 @@
 #   macos-arm64    macos-15          Apple Silicon, Apple clang
 #   macos-x86_64   macos-15          the Intel binary, cross-compiled on the Apple Silicon runner (make MACOS_ARCH=x86_64, Apple
 #                                    clang's -arch) and run under Rosetta (arch -x86_64) when the runner has it
-#   peer-sanitizers ubuntu-22.04     the unit tests of pzpeer under ASAN, UBSAN and TSAN, its fuzzer, the self-test of pzsolve under ASAN
+#   peer-sanitizers ubuntu-24.04     the unit tests of pzpeer under ASAN, UBSAN and TSAN, its fuzzer, the self-test of pzsolve under ASAN
 #                                    and that of pzsign under TSAN
 #   regtest        ubuntu-22.04      Bitcoin Core in regtest, and on it the session, the whole network, sweep and the linear search
 #
@@ -352,10 +352,12 @@ jobs:
 
   # pzpeer under the sanitizers: its unit tests with AddressSanitizer and UndefinedBehaviorSanitizer, then with ThreadSanitizer, both
   # with the real pzsign (the tests of the two-party signing and of the session), the fuzzer of its readers of hostile input for a
-  # minute under ASAN, and the self-test of pzsolve under ASAN. Any report stops the test that made it.
+  # minute under ASAN, and the self-tests of pzsolve under ASAN and of pzsign under TSAN. Any report stops the test that made it. On
+  # Ubuntu 24.04: the ThreadSanitizer of the gcc of 22.04 does not follow pthread_cond_clockwait, which the waits of the C++ library
+  # use, and takes them for a mutex locked twice.
   peer-sanitizers:
     name: pzpeer under the sanitizers (ASAN, UBSAN, TSAN)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       PZSIGN: build/pzsign
