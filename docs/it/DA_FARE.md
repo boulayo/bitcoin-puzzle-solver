@@ -369,8 +369,8 @@ fallite. Il punto 24 di 3.11, la riga P1 di 3.13 e la voce E7 sono superati da q
 
 | | Cosa | Com'è ora |
 |---|---|---|
-| X1 | Chiave trovata da soli senza un nodo: `pzpeer sweep` e il pagamento da soli non vedevano le monete più vecchie del checkpoint; al massimo spazzavano un deposito recente, mostrando la chiave e lasciando il premio a chi arriva primo | le monete di ogni puzzle aperto sono nel programma (`data/prizes.csv`: 77 puzzle, 247 monete, due esploratori concordi) e si cercano una per una; senza nodo lo sweep prende tutte le monete nominate o non fa nessuna transazione; un indirizzo senza monete nominate è rifiutato (serve `--rpc`) |
-| X6 | Una casa con nodo e una senza costruivano prime transazioni diverse ai puzzle 155 e 160 (vecchi depositi di estranei) | la tabella nomina anche le monete degli estranei da 7400 satoshi: stessa lista per tutte e due |
+| X1 | Chiave trovata da soli senza un nodo: `pzpeer sweep` e il pagamento da soli non vedevano le monete più vecchie del checkpoint; al massimo spazzavano un deposito recente, mostrando la chiave e lasciando il premio a chi arriva primo | superato da 3.15: la catena leggera parte dal blocco 338688 e prova ogni moneta di ogni puzzle; lo sweep le prende tutte o non fa nessuna transazione |
+| X6 | Una casa con nodo e una senza costruivano prime transazioni diverse ai puzzle 155 e 160 (vecchi depositi di estranei) | superato da 3.15: le due case si scambiano le monete che vedono (`S_COINS`) e usano quelle comuni |
 | X2-X4 | Scambio dei pezzi: 100 000 satoshi di polvere lo bloccavano per sempre; con tutte le uscite spese e monete rimaste non si pagava più; una seconda transazione ridata dal partner era rifiutata dopo un cambio di indirizzo di incasso | conta solo ciò che un pagamento può prendere; una sessione dopo paga il resto; la seconda transazione si riconosce dalle firme |
 | X5 | Firme fallite: ogni punto nuovo di un cammino dava al partner altri tre tentativi sullo stesso segreto, e il conto per rete ripartiva ogni 30 giorni | tetto a vita di 64 per casa e rete; al tetto la casa non firma più e dice di spostare `home.seed` |
 | X7-X18 | Avvisi senza prova, cassette con coppie non provate, copie piantate su otto record, proprietari di un custode riempiti in 7 ore, ricerca fermata da quattro nomi in un blocco di indirizzi, spesa non vista in transazioni con più di 16 voci, `PROVE` senza risposta ritentato dopo una settimana, canarino senza salvataggio, file lasciati da una campagna cifrata | corretti (CHANGELOG 1.24.0) |
@@ -384,11 +384,11 @@ terminale. Un `PROVE` per un record che il custode non ha preso chiude la connes
 ciò che resta all'indirizzo (le monete nominate non ancora viste spese contano come rimaste).
 
 **Resta aperto.**
-- Una seconda transazione con una tariffa troppo bassa non si può sostituire: servirebbe firmarla di nuovo dalla stessa prima.
-- `data/prizes.csv` è una fotografia: quando il checkpoint dei server va avanti (`chain_spv.c`) la tabella va rifatta con
-  `tools/fetch_prizes.py`, e le righe di un puzzle risolto vanno tolte.
+- ~~Una seconda transazione con una tariffa troppo bassa non si può sostituire~~: fatto, 3.15.
+- ~~`data/prizes.csv` è una fotografia da rifare quando il checkpoint va avanti~~: non più, 3.15. Le righe di un puzzle risolto vanno
+  tolte.
 - La cancellazione dei file al ritrovamento cifrato è provata qui su Linux; su macOS e Windows la prova solo la CI.
-- `tools/gen_ptx.py --check` vuole NVRTC, che qui e nella CI non c'è: i 25 moduli sono stati rifatti dall'agente che ha tolto `kang4g`,
+- `tools/gen_ptx.py --check` vuole NVRTC, che qui e nella CI non c'è: i 25 moduli sono stati rifatti quando è stato tolto `kang4g`,
   il controllo va ripetuto su un computer con CUDA. Due espressioni ternarie da piegare alla prossima rigenerazione.
 - Non fatti, perché costano un po' di sicurezza o di velocità e non erano chiesti: `POSSESS` (RB3), RB9, e le liste PB, SB3-13, MB
   della revisione.
@@ -396,7 +396,44 @@ ciò che resta all'indirizzo (le monete nominate non ancora viste spese contano 
 - Una ricerca nella rete non ricorda i contatti che non rispondono se non sono nella sua tabella: un nodo che ne nomina di morti li fa
   richiamare a ogni ricerca. Su Linux e macOS un rifiuto non costa niente, su Windows due secondi (lo ha mostrato la CI: il test della
   rete ci passava a fatica, ora il nodo che li nominava si ferma a fine prova). Il costo di una ricerca resta limitato (4 nodi per
-  blocco di indirizzi, 10 secondi nella prova con nodi ostili); una memoria breve dei rifiuti lo ridurrebbe.
+  blocco di indirizzi, 10 secondi nella prova con nodi ostili); una memoria breve dei rifiuti lo ridurrebbe. In 3.15 un fallimento conta
+  solo all'indirizzo della tabella, e un nodo nominato a un indirizzo falso si cerca anche a quello vero.
+
+### 3.15 Dalla quarta revisione del 26 novembre: tutto corretto, e le monete senza tabelle da aggiornare
+
+Chiesto: un deposito di qualsiasi importo a un indirizzo di un puzzle non deve mai fermare niente perché checkpoint o tabelle non sono
+aggiornati; correggere tutti i bug; un programma pronto e resistente; due case che trovano una coincidenza si dividono il premio in
+modo sicuro.
+
+| | Cosa | Com'è ora |
+|---|---|---|
+| Monete | Senza nodo le monete più vecchie del checkpoint (blocco 969696) non si potevano provare: serviva una tabella da rifare a ogni spostamento del checkpoint, e lo sweep rifiutava un indirizzo senza monete nominate | la catena leggera parte dal blocco 338688, prima di qualsiasi moneta di qualsiasi puzzle (gennaio 2015): ogni moneta, vecchia o nuova, si prova come le altre, e il checkpoint non si sposta mai più. La prima partenza scarica circa 51 MB di intestazioni (minuti), poi aggiunge solo i blocchi nuovi. La tabella tiene solo le tre monete del creatore per puzzle (231), che sono storia |
+| Coincidenza | Due case con catene sfasate di un blocco, o un deposito confermato durante la sessione, costruivano prime transazioni diverse | `S_COINS`: ognuna manda le monete che vede, e si usano quelle comuni; una moneta vista da una sola va a una sessione dopo |
+| N1 | Un avviso che aspettava più di un giorno era rifiutato per sempre: la coincidenza persa fino al riavvio | scaduto si dimentica, e la coppia torna nuova |
+| N4 | La propria prova spedita una volta e persa non si rispediva | l'avviso è fatto solo quando qualcuno la prende, e la si rimanda ogni ora per tutto il giorno |
+| N2 | Con un punto valido si svuotavano le cassette di una casa | si butta la coppia più vecchia del punto che ne ha di più: un'inondazione butta le sue |
+| N3 | Un custode pieno faceva pagare 256 gettoni per ogni record di una casa nuova, ogni volta | 256 solo se il proprietario viene preso, se no uno |
+| N5, N6 | Un indirizzo falso nascondeva un nodo; le coppie di una risposta a PROVE contate in tutto | si prova anche l'indirizzo vero; 8 per ogni record; un fallimento conta solo all'indirizzo della tabella |
+| M1 | Un partner ostile faceva pagare commissione e monetina a ogni punto nuovo, senza tetto per la casa | 10 pagamenti non riusciti in tutta la vita della casa su una rete (poi serve un seme nuovo); la monetina si misura sulla tariffa più bassa |
+| M2 | Monete rimaste contate a 20 sat/vB ma non pagabili alla tariffa della sessione: pezzi fermi | contano solo quelle che un pagamento a quella tariffa prende |
+| M3 | Sweep col nodo: con la scansione fallita mandava solo le monete nominate | rifiuta su ogni catena |
+| M4, M5 | Seconda transazione minata mentre la casa era via presa per nulla; polvere che bloccava il recupero delle monetine | si chiude dalle monete spese; la polvere si lascia |
+| M6 | Sweep di 16 ingressi con il consiglio di mandare il resto dopo (il resto lo prende chiunque legge la chiave pubblica) | tutte le monete che valgono il loro ingresso in una transazione, fino a 675 |
+| RBF | Una seconda transazione con tariffa troppo bassa aspettava per sempre | le due case la rifirmano alla tariffa nuova, dalle stesse monete alle stesse uscite: qualunque delle due venga minata, la divisione è la stessa |
+| S1, S2 | Campagna cifrata uccisa fra il ritrovamento e la cancellazione: seme e stato restavano per sempre; su Windows la chiusura della console arrivava prima della cancellazione | il `hunt` o `merge` dopo cancella; su Windows si aspetta la cancellazione |
+| S3-S8 | `-s` rifiutato dopo il ritrovamento cifrato, `where` con un ordine falso, chiave non salvata detta FOUND, due salvataggi, copie del seme in memoria | corretti |
+| E1-E3 | Commento della tabella dei moduli, avviso di `PZ_GPU_NK`, strumento di ricerca del modulo tolto | corretti, lo strumento tolto |
+
+**Resta aperto.**
+- La prima sincronizzazione dal blocco 338688 è provata solo con server finti (da qui i server pubblici non si raggiungono); `pzpeer
+  sweep` senza nodo non tiene le intestazioni e le riscarica a ogni esecuzione (minuti).
+- Con un solo server lento e centinaia di monete, uno sweep leggero può esaurire il minuto del server e rifiutare (con `--rpc` no).
+- Dopo il pagamento, una moneta rimasta che nessun pagamento alla tariffa della sessione prende (per esempio una sola da 100 000
+  satoshi sopra i 100 sat/vB) va a chi la spazza per primo con la chiave, cioè a una delle due case.
+- Un avviso fatto che rimanda ancora la sua prova è il primo a uscire quando la tabella degli avvisi (1024) è piena.
+- Una macchina persa fra il ritrovamento cifrato e la cancellazione tiene seme e stato finché un `hunt` o `merge` non ci gira.
+- La preferenza di `S_SECOND` per la seconda transazione rifirmata e la strada -2 della catena leggera sono provate solo leggendo il
+  codice.
 
 ### 3.5 Librerie
 

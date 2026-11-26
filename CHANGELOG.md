@@ -122,6 +122,10 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Changed
 
+- pzpeer: a light home appends the new block headers to `headers.bin` (51 MB from the new checkpoint) instead of writing the whole file
+  at every block, and writes it whole only after a branch replaced headers it holds; a file of the old checkpoint is replaced. It
+  fetches the headers when it starts, before it joins the network, in as many operations as bring some, and says so (the first time:
+  minutes); a chain still behind says so too.
 - pzpeer: a custodian is passive. It tells the owner that stores a record when other owners have its x, keeps nothing between STORE and
   PROVE and alerts nobody; the owner proves the record, gets the other owners of the x in the answer, and sends its ALERT with its proof
   to each of them and to their mailboxes, as before. Gone with the custodian's own alerts: the pairs it remembered having alerted, the
@@ -149,6 +153,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Removed
 
+- `tools/research/kang_block_sched.py`, the model of the block herd, gone with it; the helpers `kang_bytes.py` took from it are in
+  `kang_bytes.py`.
 - The block herd of the GPU kangaroo (`PZ_GPU_NK=4g`, the module `kang4g`): no tuning offered it and it was slower than `NK` 128 quads
   on the card that measured it. 25 CUDA modules instead of 26; the others are unchanged.
 - The CPU engine `avx512` (scalar curve arithmetic with the 16-lane hash): every CPU that runs it runs `avx512v`, which is 1.7 times
@@ -196,23 +202,34 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
-- pzpeer: a key found alone is swept without a node of one's own, and never in part. `pzpeer sweep` and the solo payout of a home take
-  the coins of the address as a session does, from one function (`session_coins`: a scan of the address and the coins the program or the
-  network file names, looked up one by one), so the coins older than the checkpoint of the servers are among them (before, servers
-  showed none of them: a home without a node that found the key said "no confirmed coin" and gave up, or swept only a deposit that came
-  later, which for a puzzle without a public key shows that key and leaves the prize to whoever is first). Through servers a sweep takes
-  every named coin or makes no transaction: when no server gives a named coin, or the address has none named, it refuses and says why
-  (`--rpc` sees every coin). The table of the program names the coins of the address of every open puzzle, with or without a public key,
-  from 7400 satoshis, what strangers sent there included (`data/prizes.csv`, 247 coins of 77 puzzles, made by `tools/fetch_prizes.py`
-  from two explorers that must agree; `pzpeer netcheck N` lists them; the fingerprints do not change), so a home with a node and one
-  without also build the same first transaction (before, a node listed old deposits that servers cannot show: at puzzles 155 and 160
-  such a pair never paid).
+- pzpeer: a key found alone is swept without a node of one's own, whatever its address, and never in part. The servers' headers start
+  at block 338688, the first of the difficulty period in which the coins of the puzzles begin (January 2015): every coin ever sent to a
+  puzzle address is above it and is proven like any other, so the checkpoint never moves and no table is made again (a deposit of any
+  size, at any time, is seen by a home with a node and by one without alike). `pzpeer sweep` and the solo payout of a home take every
+  coin worth its input in one transaction, up to the 675 inputs of a standard transaction (before, the 16 largest, with the advice to
+  send the rest once the first was in a block, when whoever read the public key in it would have taken them). A sweep makes no
+  transaction when the chain did not answer about every coin: a named coin no server gives, no answer about the address, a node whose
+  scan failed (before, a node went on with the named coins alone), or, for `pzpeer sweep`, a coin worth its input that a server lists
+  and no server proves, which the refusal names with the server. The table of the program names only the coins the creator put at
+  each open puzzle, three a puzzle (`data/prizes.csv`, 231 coins of 77 puzzles; `pzpeer netcheck N` lists them): history, which never
+  changes, and the defence of a home whose servers all hide the prize; the fingerprints do not change.
 - pzpeer: a home that reads the chain from Electrum servers gives its piece of the key only once every named coin of the address is
   shown spent, with its proof, and one whose network names no coin never gives it: servers that hid such a coin would otherwise let the
   partner take it alone with the key. The shares of the payout are paid as before, and a start with `--rpc` exchanges the pieces. Before
   the pieces each side says whether it gives its own, and they follow only when both do: a side that keeps its own takes none, and a
   piece that comes before the word is wiped; after a "never" the pair is not tried again until a home starts again. A malformed `prize=`
   line is reported.
+- pzsolve: an encrypting campaign that ends between the find and the deletion of its search (a second Ctrl-C, `kill -9`, a power cut)
+  no longer keeps its seed and its state for ever: the next `hunt` or `merge` of the campaign deletes them before it shows `FOUND.txt`
+  (before, both showed it and returned at once). On Windows a console closed, a logoff or a shutdown at the find waits for the deletion
+  (before, the program told Windows it was done before it deleted anything). The other copies of the seed in memory go with it: the
+  text of `-s` and `--seed-file`, the order of the blocks, the copy of BSGS and the start key of a shared walk.
+- pzpeer, the payout: the payouts that did not pay are also counted for the home on the network, for ever, under its identity: at 10 it
+  tries no more there, and says to move `home.seed` away (before, only by own point: each later point of a walk that met a partner's
+  gave that partner 5 more tries, each a fee and a tiny coin from the prize, and a partner F that stopped after the first transaction
+  gained by it; every point also left a line in `failed-signings`, and at 1024 lines the home signed nothing more). The tiny coin is
+  sized by the lower of the two rates the homes propose, at half the rate of the session at least, so that F still cancels at that rate
+  (before, a partner F that proposed 4 times the other's rate got a coin 4 times as large).
 - pzpeer: the failed signings of a home on a network are also counted for ever, under its identity: at 64 it signs no more there and
   says what to do, a new home seed (each new point of a walk that had met another gave the partner three more failures on the same
   secret, as the pieces of those points differ by sums of public jumps, and only the count of the network, which starts again every 30
@@ -220,8 +237,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - pzpeer: an ALERT without the proof of its first record is refused, and an owner takes from a mailbox only the pairs that bring the
   other owner's proof: a stranger, or a mailbox, can no longer make an alert of a point it does not hold. An owner proves every record a
   custodian says `COINCIDENCE` for, 8 in a PROVE, and a custodian says so for each: copies planted on eight other records of an owner
-  can no longer take the places of a real coincidence at every republish. An owner a custodian does not know costs its address block 256
-  record tokens: filling the owners of a custodian takes a block as long as filling its records, about a month (before 7 hours, after
+  can no longer take the places of a real coincidence at every republish. An owner a custodian takes costs its address block 256 record
+  tokens (a record the custodian does not keep, at a full custodian, costs one, and a PROVE one a record): filling the owners of a custodian takes a block as long as filling its records, about a month (before 7 hours, after
   which no new home could store there, for ever). A lookup asks the contacts of its own table whatever their address block (before,
   four names that fail, placed in the block of a node it knew, kept it from that node). A connection gets 2 seconds for its handshake
   and its request together (before, 2 each).
@@ -304,6 +321,48 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- pzpeer, the session: the two homes build the first transaction from the coins of the puzzle they both see (`S_COINS`, the outpoints
+  each sees): two chains a block apart, or a coin that came to the address in a block during the session, gave two first transactions,
+  and anyone could keep that up with a coin a block. What is left at the puzzle address after the payout counts at the rate of the
+  session, and only when a payout at that rate takes it (before, coins worth an input at 20 sat/vB counted, and while the rate was
+  higher no payout took them: twelve coins of 9000 satoshis held the exchange of the pieces). A second transaction whose outputs are all
+  spent, as are both coins it spends, settles the payout also for a home that never saw its block, or that keeps a replacement of the one
+  that was mined (before, a home stopped before that block took it for void, and neither home got its key). F's sweep of its tiny coins
+  takes only coins worth more than their input (before, dust sent to its coin key made the sweep cost more than it held).
+- pzpeer, the payout: a second transaction that waits at a fee rate the chain no longer takes is replaced. When its two coins are still
+  unspent and it pays less than half of what the rate of a later session gives, both homes sign it again at that rate, from the same
+  coins to the same outputs, and it replaces the old one in the mempools (its inputs signal replacement, BIP 125). Whichever of the two
+  is mined pays the same split, and no try of the payout counts. A home whose own is in no block takes the partner's when it spends the
+  same coins at a higher fee. Before, such a transaction waited for ever, sent again at every block.
+- pzpeer: an alert of a coincidence whose two proofs did not meet within a day is forgotten, and the pair is a new alert when it comes
+  again: the other owner's ALERT, a mailbox, the custodians at the next republish. Before, it was refused as for a wrong proof, and
+  nothing of that pair counted any more until a restart: two homes that do not listen, one of them away for a weekend, never started
+  their session.
+- pzpeer: an alert is done, and its session starts, only once the other owner or one of its mailboxes took this home's proof; a post
+  that reached nobody is sent again at the next try. Done, the alert still sends that proof every hour for the rest of its day, for a
+  mailbox that lost it (the daemon is told once). Before, the alert was done after one post, taken or not, and the proof was never sent
+  again: the other home, if it did not listen, never heard of the pair.
+- pzpeer: a mailbox that has no more room, for one owner or in all, pushes out the oldest pair at the x that has the most pairs. Whoever
+  holds one point can pair it with records under any names, but only at that x: such a flood now pushes out its own pairs, and needs
+  about one point, a walk, for each pair it would push out. Before, the oldest pair went: 64 pairs at one point emptied the mailbox of a
+  home, and 4096 the whole mailbox.
+- pzpeer: a lookup told of a node at an address where it is not, before its real one, asks it at the real one too, and a failed
+  exchange counts against a contact of the routing table only at the address the table has for it. Before, the first address named was
+  the only one, and a failure at any address counted: one hostile answer could make the search for a home fail, and answers that named
+  a known node at addresses where nobody listens could drop it from the table.
+- pzpeer: from the answer to PROVE the owner takes at most 8 pairs for each record it proved (before, 8 times the records proved, in all,
+  so a lying custodian could bring 64 alerts of one record).
+- pzsolve: a key that could not be saved (`FOUND.txt` not written, or the key not encrypted) is no longer reported as found:
+  `report.txt`, `status.json`, `list` and `info` say `STOPPED` (before, `FOUND` and "KEY FOUND: see FOUND.txt", a file that did not
+  exist). No state written after it has its block as scanned, the checkpoint of the minute included (before, one taken at that moment
+  could, and the next start skipped the key); the progress of the session up to the find is saved.
+- pzsolve: after an encrypted find, the same `hunt` command with its `-s` (which a `--part` campaign needs) shows `FOUND.txt` (before,
+  "the given seed does not match", exit status 2: the seed had been forgotten), and `where` says that the visit order went with the seed
+  (before, it printed an order made from the zero seed).
+- pzsolve, linear search: after the canary gives keys back, a checkpoint that fails is tried again every 5 seconds until the state and
+  its copy are on disk (before, the state kept those keys as scanned until the checkpoint of the next minute, and its copy longer).
+- pzsolve: the warning of a `PZ_GPU_NK` that is not allowed lists the herds in L2 on CUDA too (allowed, and not listed), and says that
+  they take no `m`.
 - pzpeer, the exchange of the pieces: what is left at the puzzle address counts only the coins a payout could take, the named coins not
   shown spent among them (before, 100 000 satoshis of dust that no payout takes stopped the exchange for ever); with every output of the
   second transaction spent and coins left, a later session pays them out; a second transaction the partner gives again is taken by its
