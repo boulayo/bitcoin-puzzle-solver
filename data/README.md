@@ -65,15 +65,15 @@ strangers sent there. At the five addresses whose public key is known (140, 145,
 `tools/fetch_prizes.py` makes the file from the unspent coins of each address in the public APIs of **mempool.space** and
 **blockstream.info** (`/api/address/ADDRESS/utxo`, nothing but the address in the request, a pause between requests): the two must
 **agree on every coin** (txid, output, value, block), or nothing is written; `--raw DIR` keeps their answers. The rows of this revision
-were acquired on 2026-11-26 for the puzzles 140, 145, 150, 155 and 160, where the two sources agreed and each address held the three
-coins of the creator; run the tool for the other open puzzles and for what strangers sent since.
+were acquired on 2026-11-26 for the 77 open puzzles: the two sources agreed on all 247 coins (the three of the creator at every
+address, and 16 that strangers sent; puzzle 71 has the most, 7).
 
 The rows become the `prize=` lines of the networks written in the program (`pzpeer netcheck 140` lists them) and the coins `pzpeer
 sweep` looks up for the key of an address. A home without a node reads the chain from servers, which cannot show a coin older than
 their checkpoint: with the coins named it pays them, builds the same first transaction as a home with a node, and counts them in what is
 left at the address until each is spent (docs/en/NETWORK.md 5, 7.5, 8.2). The table is a snapshot: a coin spent since is found spent by
-the program, and one that came later is above every checkpoint, where a scan of the address lists it, so a later checkpoint needs no
-new table. `tools/gen_puzzles.py` checks that each row is of an open puzzle, with a txid of 64 hex digits, a value from 7400 satoshis
+the program, and one that came later is above the checkpoint of this version, where a scan of the address lists it. A version that
+moves the checkpoint forward needs the table made again, for the coins that came in between. `tools/gen_puzzles.py` checks that each row is of an open puzzle, with a txid of 64 hex digits, a value from 7400 satoshis
 to 21 million BTC, no coin twice and at most 16 coins a puzzle (what a network names: it fails when an address has more);
 `puzzles_verify()` repeats the first checks. A puzzle that is solved needs its rows removed.
 

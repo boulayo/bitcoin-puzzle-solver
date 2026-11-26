@@ -9,7 +9,8 @@ is written. A request carries nothing but the address; there is a pause between 
     python3 -I tools/gen_puzzles.py               # then: checks the table, rewrites src/puzzles_data.c
 
 The table is a snapshot: a coin spent since is found spent by the program, and one that came
-later is above every checkpoint, where a scan of the address lists it (docs/en/NETWORK.md 8.2).
+later is above the checkpoint of the servers (chain_spv_defaults), where a scan of the address
+lists it (docs/en/NETWORK.md 8.2). Run this again whenever that checkpoint moves forward.
 """
 import csv, json, os, sys, time, urllib.request
 

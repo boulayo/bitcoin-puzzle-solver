@@ -177,7 +177,8 @@ networks written in the program, of either kind, carry the coins of their addres
 netcheck 140` lists them): every coin that was there, confirmed and worth at least 7400 satoshis (what an input costs at 50 sat/vB,
 the lowest fee rate of a sweep; a payout of a pair takes a coin from 8880), when the table was made: the three of the creator at each
 address, of 2015, 2017 and 2023, and what strangers sent there. The table is a snapshot. A coin spent since is found spent; a coin that
-came later is above every checkpoint, where a scan of the address lists it, so a later checkpoint needs no new table. Naming the old
+came later is above the checkpoint of this version, where a scan of the address lists it (a version that moves the checkpoint forward
+makes the table again: `tools/fetch_prizes.py`). Naming the old
 coins is also what makes a home with a node and a home without one build the same first transaction: a node lists every coin of the
 address, servers none below their checkpoint (8.2).
 

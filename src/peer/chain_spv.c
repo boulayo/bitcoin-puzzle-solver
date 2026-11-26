@@ -564,7 +564,7 @@ int chain_spv_defaults(const char **out, uint64_t *cp_height, uint8_t cp_hash[32
                                        "tardis.bauerj.eu:50001",          "xtrum.com:50001"};
     const int n = (int)(sizeof MAIN / sizeof *MAIN);
     for (int i = 0; out && i < n; i++) out[i] = MAIN[i];
-    *cp_height = 969696;
+    *cp_height = 969696;                                        /* moved forward: make data/prizes.csv again (tools/fetch_prizes.py) */
     (void)btc_hash_from_hex("000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b", cp_hash);
     return n;
 }
