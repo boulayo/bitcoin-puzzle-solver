@@ -6,6 +6,25 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 ## [1.24.0] — unreleased
 
 ### Added
+- The release archives hold pzpeer and pzsign besides pzsolve (keep the three in one folder), with `licenses/` for the code they hold
+  (libsecp256k1, cb-mpc, OpenSSL), `NOTICE` and `docs/en/NETWORK.md`; the release workflow builds and checks all three on its five
+  platforms (the versions they report, the self-tests of pzsolve and pzsign, the glibc ceiling and the DLLs, the Windows package run on
+  Windows).
+- `hunt --seed-file FILE`: the seed from the first line of a file, taken as `-s` takes its value, and with `-` from the standard input
+  (typed without echo on a terminal), so that it stays out of the history of the shell and of the list of processes; `-s` is never
+  read as a file name. The split id of a `--part` campaign, 8 hex digits of a hash of what the computers of the split must share (the
+  seed, the target, the range, `--step`, `--chunk-bits`, the number of shares), in the log at every start, in `report.txt` and in
+  `where`: every computer of a split shows the same one, so a wrong `-s` or `--chunk-bits` shows at once.
+- The canary of silent misses of the linear search: every key is a near miss with probability 2^-32 and the engines and kernels report
+  each one, so the CPU engine (one count for all its threads) and each GPU must find about one in 2^32 of the keys they mark as
+  scanned. Every 2^38 keys of a worker (64 expected: about 90 s of a GPU at 3 G keys/s, 45 min of a CPU at 100 M keys/s) the count of
+  those keys and that of the session are held against the Chernoff bound: below 10^-9, which a correct worker practically never
+  reaches, the worker misses keys. An error line says so, the GPU is left out or the CPU threads stop, and its keys are scanned again:
+  the 2^38 of the window, or, when only the session gives it away, every key the campaign marked as scanned in this session. The
+  kangaroo and BSGS have no near misses: the canary is the linear search's (docs/en/ALGORITHMS.md 2.4).
+- CI: the unit tests of pzpeer under ASAN, UBSAN and TSAN with the real pzsign, its fuzzer, the self-test of pzsolve under ASAN and that
+  of pzsign under TSAN (`SIGNER_SAN`); and Bitcoin Core in regtest (checked by its hash), with the session, the whole network with a
+  node and with the light chain, `pzpeer sweep` and the linear search.
 - pzpeer: the shared linear search (docs/en/NETWORK.md 11), for a puzzle whose public key is not known. Its network is in the program
   (`pzpeer run --puzzle 71`: its address, blocks of 2^44 keys), or a file gives `address=` and `blockbits=`. The home picks a block
   nobody claimed, has `pzsolve hunt --near` scan it, and publishes the claim of the block with its proof keys to the 5 custodians of the
@@ -99,6 +118,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Changed
 
+- pzpeer: the claims a node keeps are found and added through a table by the index of the block (near the 2^21 claims of a full
+  `claims.bin` a new claim moved half of a sorted array, 4 ms; now about 1 µs), and the store of records opens about twice as fast
+  (a full one of 2^27 records in about 50 s instead of about 2 minutes): its index is keyed by SipHash-2-4 under a key drawn at every
+  start, so that records or identities chosen to land in one place cannot slow it down, the owners are counted by their number, and
+  the table is made at its size at once. `claims.bin` and `store.bin` do not change.
 - pzsolve: a new campaign with `--part` needs `-s`, the same on every computer of the split. Without it each computer drew a seed of its
   own, and the shares overlapped and left blocks that none of them scanned (about a quarter of the range with two computers), each one
   ending "scanned in full". `merge` writes what it merged, and a key it finds, to the log of the campaign.
@@ -133,6 +157,14 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
+- pzpeer: a home that reads the chain from Electrum servers gives its piece of the key only once every known coin of the prize is
+  proven spent, and one whose network names no coin of its prize never gives it: servers that hid such a coin would otherwise let the
+  partner take it alone with the key. The shares of the payout are paid as before, and a start with `--rpc` exchanges the pieces. The
+  networks written in the program carry the coins of their prize as `prize=` lines, the three of the creator at each of puzzles 140 to
+  160 (`data/prizes.csv`, from two block explorers that agree on every coin; the fingerprint does not change), and the light chain
+  finds such a coin by its transaction, also below its checkpoint. Before the pieces each side says whether it gives its own, and
+  they follow only when both do: a side that keeps its own takes none, and a piece that comes before the word is wiped; after a
+  "never" the pair is not tried again until a home starts again. A malformed `prize=` line is reported.
 - pzpeer: the answer to PROVE gives every other owner of the x, up to 8, the newest first, and a custodian keeps a record that its owner
   proves also past the 8 owners of its x, up to 16: copies planted before the real record, which their makers cannot prove, can no
   longer hide a coincidence (before, 7 copies at a custodian made the next owner of the point hear of the copies only, and 8 kept the
@@ -214,6 +246,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- pzsign: its selftest crashed now and then on Windows. It is the only place where two parties share a process, as two threads, and
+  ThreadSanitizer showed both filling the cache of algorithms of OpenSSL at their first use of HMAC, and both writing one global flag:
+  the first use is made before the second thread starts, and the flag is one a thread. A session is one party a process, as before.
 - pzpeer, the session: F reads the coins of its tiny coins while `S_ALIVE` goes to the partner (with a node, a scan of the whole set: S gave
   up as soon as F's node was four minutes slower than its own, at every session of the pair). A payout of coins that came to the address
   after the payout keeps its own second transaction (before, the record kept the height of the payout before, and the exchange neither

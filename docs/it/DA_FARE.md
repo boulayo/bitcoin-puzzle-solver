@@ -337,7 +337,7 @@ Electrum, e resta da decidere (sotto). Tutto il resto è corretto, con una prova
 | M3-M11 | GPU e OpenCL: lanci con gruppi di 1, un centro all'infinito preso per errore, quasi-colpi doppi, compilazioni ripetute, scritture non controllate; autotune senza motori buoni; SHA-256 su macOS 11 arm64 | corretti |
 
 **Da decidere.**
-- **P1, catena leggera e scambio dei pezzi.** Dopo il pagamento una casa dà il suo pezzo quando i server dicono che all'indirizzo del
+- **P1, catena leggera e scambio dei pezzi.** ~~Da decidere~~: **fatto il 26 novembre con la strada (c)**, vedi 3.13. Dopo il pagamento una casa dà il suo pezzo quando i server dicono che all'indirizzo del
   puzzle non resta niente. Un partner che controlla tutte le risposte Electrum di quella casa (rete locale, DNS, o un file di rete con
   i suoi server) può nascondere la moneta grande, far pagare una moneta esca, e dopo lo scambio prendersi il premio vero da solo. Strade:
   (a) mettere nel programma le monete di ogni puzzle (txid, uscita, importo, verificati da due fonti) e dare il pezzo solo quando
@@ -349,6 +349,18 @@ Electrum, e resta da decidere (sotto). Tutto il resto è corretto, con una prova
 - Un solo corpo per il passo del canguro: no, costa l'1,2 % di istruzioni in AVX2. L'inversione a lotti di BSGS in comune con gli altri
   motori: da misurare.
 
+### 3.13 Le migliorie del 26 novembre
+
+| | Cosa | Com'è ora |
+|---|---|---|
+| P1 | Con la catena leggera, server che nascondono la moneta del premio facevano dare il pezzo della chiave | le monete del creatore dei puzzle 140-160 sono nel programma (`data/prizes.csv`, due esploratori concordi); il pezzo si dà solo quando ognuna è spesa con la prova; senza monete note, con la catena leggera mai (con `--rpc` sì); prima dei pezzi ogni casa dice se dà il suo, e chi non lo dà non riceve quello dell'altra |
+| M1 | Il rilascio conteneva solo pzsolve | gli archivi hanno anche pzpeer e pzsign, con le licenze di libsecp256k1, cb-mpc e OpenSSL; il rilascio li compila e li prova su tutte e cinque le piattaforme |
+| M2 | Sanitizer e test in regtest solo a mano | due lavori nuovi nella CI: i test di pzpeer sotto ASAN, UBSAN e TSAN (pzsign compreso) e bitcoind in regtest con sessione, rete intera, catena leggera, sweep e ricerca lineare |
+| M3 | Nessun controllo, in produzione, di un motore che perde chiavi | ricerca lineare: le quasi giuste del motore CPU e di ogni GPU contate contro le chiavi cercate, a finestre di 2^38 chiavi; chi ne trova troppo poche viene escluso e le sue chiavi tornano da cercare. Da decidere: conservare i conti tra una sessione e l'altra (`state.dat`), un conto per core, un punto distinto ricontrollato ogni tanto per il canguro |
+| M4 | `--part`: niente mostrava che i computer avessero lo stesso seed e gli stessi blocchi | l'identificativo della divisione (8 cifre) a ogni avvio, in `report.txt` e in `where`; `--seed-file` dà il seed senza scriverlo nella riga di comando |
+| M5 | Registro delle dichiarazioni lento verso i 2 milioni; deposito pieno aperto in 2 minuti | una tabella per indice del blocco (1 µs a dichiarazione); il deposito si apre in circa 50 s, con un indice che nessuno può intasare; nessun file cambia formato |
+| W | `pzsign.exe selftest` andava in crash ogni tanto su Windows (lo ha trovato la prova del pacchetto) | due corse fra le due parti del self-test, che sono due thread di un processo (nell'uso vero ogni parte è un processo): corrette, e la CI prova pzsign sotto TSAN |
+
 ### 3.5 Librerie
 
 - OpenSSL 3.6.5 è uscita (13 CVE, nessuna tocca ciò che pzsign usa), ma cb-mpc accetta solo la 3.6.4: va scritta la procedura di
@@ -356,7 +368,7 @@ Electrum, e resta da decidere (sotto). Tutto il resto è corretto, con una prova
 - libsecp256k1 0.8.0 è uscita (nessuna correzione di sicurezza; verifica fino all'11 % più veloce).
 - cb-mpc: a luglio e agosto 2026 gli autori hanno corretto quattro volte la firma a due. A ogni aggiornamento va riconfrontato
   `import_piece` di pzsign con il loro `dkg`.
-- Un archivio che contiene pzpeer o pzsign deve portare le licenze di cb-mpc, libsecp256k1 e OpenSSL (`tools/package_release.sh`
-  copia solo quella del progetto).
+- ~~Un archivio che contiene pzpeer o pzsign deve portare le licenze di cb-mpc, libsecp256k1 e OpenSSL~~: fatto il 26 novembre
+  (`licenses/` negli archivi; quella di OpenSSL è `signer/openssl-LICENSE.txt`, da riprendere a ogni nuova versione).
 - Le protezioni del compilatore (canarini, FORTIFY) vengono solo dalla distribuzione: su Windows `pzpeer.exe` non le ha. Vanno
   scritte nel Makefile per pzpeer e pzsign.

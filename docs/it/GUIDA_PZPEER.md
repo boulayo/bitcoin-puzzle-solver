@@ -22,6 +22,9 @@ Il programma scrive in inglese: questa guida cita i suoi messaggi così come app
 ## 1. Cosa serve
 
 - Linux, macOS o Windows, a 64 bit.
+- **Senza compilare:** dalla versione 1.24.0 ogni archivio dei rilasci (pagina Releases del repository) contiene i tre programmi,
+  già provati, con le licenze; basta scompattarlo e passare alla sezione 4. Per una versione di prova, gli stessi archivi sono negli
+  artefatti di un'esecuzione a mano del workflow Release o, solo i programmi, in quelli della CI (7 giorni).
 - Per compilare (Linux e macOS): `make`, un compilatore C (gcc o clang), un compilatore C++ per pzsign, `curl` (la prima compilazione di
   pzsign scarica OpenSSL e ne controlla l'impronta), `python3` per i test. Su macOS bastano gli strumenti da riga di comando di Xcode.
 - Per Windows: i tre `.exe` si compilano su Linux con MinGW-w64 (`make windows winsigner`) oppure si prendono dagli artefatti della CI
