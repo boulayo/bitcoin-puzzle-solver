@@ -61,6 +61,9 @@ line of the help:
   The campaign counts, splits (`--part`) and reports the keys of the steps, and `where` takes a key of the steps. Unknown bits in
   several separate groups are not one step: split them into several campaigns, one for each value of the smaller group, when it is small.
 * `-s` takes 64 hex digits as they are and hashes any other text; without it, or with `auto`, the seed is random (not with `--part`: section 8.2).
+  `--seed-file FILE` takes the first line of a file as `-s` takes its value, and `--seed-file -` the first line of the standard input (typed
+  without echo on a terminal; a file named `-` is `./-`): the seed then stays out of the history of the shell and of the list of processes.
+  `-s` itself is never read as the name of a file, whatever its first character.
 * `--mem` is in GiB (`--mem 0.25` is 256 MiB). Without it the kangaroo takes 40 % of the free RAM for the table of distinguished points
   (at least 256 MiB, at most 64 GiB) and BSGS chooses a table that fits in 70 % of it.
 * The default `--chunk-bits` makes the blocks as large as the range allows while each share keeps 16 of them, at most 2^36 keys (a range of
@@ -490,10 +493,14 @@ the computers communicating. The short block at the end of the range, if any, is
 computer A:  pzsolve hunt -p 71 -s 5f3a…(64 digits) --part 0/2
 computer B:  pzsolve hunt -p 71 -s 5f3a…(same)      --part 1/2
 ```
-* **The same on all**: puzzle or range, seed (`-s`, 64 hexadecimal digits or any text you choose; a new campaign with `--part` is refused
-  without it, since each computer would draw a seed of its own and their shares would overlap and leave blocks that nobody scans) and
-  `--chunk-bits` (if you do not give it, it depends only on the range and on the number of shares, so it is already the same, but not between
-  versions before and after 1.19.1: then give it). **Different**: the shares.
+* **The same on all**: puzzle or range, seed (`-s` or `--seed-file`: 64 hexadecimal digits or any text you choose; a new campaign with
+  `--part` is refused without it, since each computer would draw a seed of its own and their shares would overlap and leave blocks that nobody
+  scans) and `--chunk-bits` (if you do not give it, it depends only on the range and on the number of shares, so it is already the same, but
+  not between versions before and after 1.19.1: then give it). **Different**: the shares.
+* **The split id**: at every start the log says `part Q/T, split id XXXXXXXX`, and `report.txt` and `where` say it too. It is a hash of what
+  the computers must share: the seed, the target, the range, `--step`, `--chunk-bits` and the number of shares (not the shares, nor the seed
+  itself). Every computer of the split must show the same id: one that shows another has another seed or another block size, and its shares do
+  not fit with the others; stop it and start its campaign again with the right options and another name (`-c`).
 * **Computers of different speeds**: give more shares to the faster one. With `pzsolve split 800M 120M` you get the proportional division
   (here `0-86/100` and `87-99/100`); `--part 0-86/100` is the same as `0,1,2,…,86/100`. One share per computer is enough if they are equal.
 * **The part belongs to the campaign**: it is decided at creation and does not change (a different `--part` on an existing campaign is refused, use `-c` for
@@ -742,8 +749,10 @@ of a campaign are never opened through a link (a folder copied from elsewhere co
   in RAM when the limits of the system allow it (usually not for the 256 MiB of scrypt without privileges); the plain key is too short-lived to be likely to reach
   swap, but nothing here guarantees it. Use encrypted swap, or none.
 * **Another copy of the seed.** A copy of the folder made before the find holds it, so does every other computer of a `--part` split (they all need it), and a
-  seed you typed (`-s`) is in the history of the shell: with the progress that the log showed while the search ran, it leads to the block of the key. Make no
-  backup or snapshot of the folder of an encrypting campaign on a machine you do not trust, and split a search only among machines you trust alike.
+  seed given with `-s` is in the history of the shell and, while the program runs, in the list of processes (`--seed-file` keeps it out of both): with the
+  progress that the log showed while the search ran, it leads to the block of the key. Make no backup or snapshot of the folder of an encrypting campaign on a
+  machine you do not trust, and split a search only among machines you trust alike. A seed that is a text must be hard to guess: the seed id and the split
+  id, which the reports show, let anyone check a guess.
 * **A weak password**, as in 11.4; a keylogger or a modified terminal, which see the password as you type.
 * **The metadata**: the address, the puzzle, the time and the campaign name stay in the clear (they are public by nature).
 

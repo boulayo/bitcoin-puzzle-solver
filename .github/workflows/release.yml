@@ -160,7 +160,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install MinGW-w64
         if: matrix.os == 'windows'
-        run: tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix zip
+        run: tools/ci_apt_install.sh gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix zip
       - name: Build (release, portable)
         env:
           PZV: ${{ needs.version.outputs.build }}
