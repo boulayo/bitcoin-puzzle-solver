@@ -53,12 +53,21 @@ static void key(const char *label, uint8_t out[32]) { pz_sha256((const uint8_t *
 
 static uint8_t prologue[38];
 
+/* the public key of a static secret, compressed, as a node has its own */
+static const uint8_t *pub(secp256k1_context *ctx, const uint8_t sec[32], uint8_t out[33])
+{
+    secp256k1_pubkey pk;
+    size_t n = 33;
+    CHECK(secp256k1_ec_pubkey_create(ctx, &pk, sec) && secp256k1_ec_pubkey_serialize(ctx, out, &n, &pk, SECP256K1_EC_COMPRESSED));
+    return out;
+}
+
 static void start(secp256k1_context *ctx, noise_hs *i, noise_hs *r)
 {
-    uint8_t si[32], ei[32], sr[32], er[32];
+    uint8_t si[32], ei[32], sr[32], er[32], p[33];
     key("s_i", si), key("e_i", ei), key("s_r", sr), key("e_r", er);
-    CHECK(noise_hs_init(i, ctx, true, prologue, sizeof prologue, si, ei));
-    CHECK(noise_hs_init(r, ctx, false, prologue, sizeof prologue, sr, er));
+    CHECK(noise_hs_init(i, ctx, true, prologue, sizeof prologue, si, pub(ctx, si, p), ei));
+    CHECK(noise_hs_init(r, ctx, false, prologue, sizeof prologue, sr, pub(ctx, sr, p), er));
 }
 
 /* the three messages, checked against the vectors; the channel of each side */
@@ -167,19 +176,19 @@ static void test_refusals(secp256k1_context *ctx)
     start(ctx, &i, &r);
     uint8_t other[38];
     memcpy(other, prologue, sizeof other), other[37] ^= 1;
-    uint8_t sr[32], er[32];
+    uint8_t sr[32], er[32], spub[33];
     key("s_r", sr), key("e_r", er);
-    CHECK(noise_hs_init(&r, ctx, false, other, sizeof other, sr, er));
+    CHECK(noise_hs_init(&r, ctx, false, other, sizeof other, sr, pub(ctx, sr, spub), er));
     n = noise_hs_write(&i, NULL, 0, m);
     CHECK(noise_hs_read(&r, m, n, p, &pl));
     n = noise_hs_write(&r, NULL, 0, m);
     CHECK(!noise_hs_read(&i, m, n, p, &pl));
     CHECK(noise_hs_write(&i, NULL, 0, m) == 0);                           /* broken for good */
-    /* a payload too long, an invalid secret */
+    /* a payload too long, an invalid ephemeral secret */
     start(ctx, &i, &r);
     CHECK(noise_hs_write(&i, m, NOISE_PAYLOAD_MAX + 1, m1) == 0);
     uint8_t zero[32] = {0};
-    CHECK(!noise_hs_init(&i, ctx, true, prologue, sizeof prologue, zero, zero));
+    CHECK(!noise_hs_init(&i, ctx, true, prologue, sizeof prologue, sr, spub, zero));
 }
 
 int main(void)

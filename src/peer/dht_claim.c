@@ -12,12 +12,12 @@ size_t claim_answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, uin
     uint8_t k[32];
     if (!d->claims) return 0;
     if (m[0] == DHT_CLAIM) {
-        /* the owner's own, for a block whose key this node may be a custodian of, within the rate of the records of its address block;
-         * the checks that cost come last (a signature and a few tens of hashes) */
+        /* the owner's own, for a block whose key this node may be a custodian of; the checks that cost come last (a signature and a
+         * few tens of hashes). A claim is the one request of its connection, so the rate of the connections of a block bounds them */
         if (len > 1 + BLOCK_CLAIM_MAX || !block_claim_decode(m + 1, len - 1, &cl[0]) || memcmp(cl[0].owner, c->remote, 32)) return 0;
         block_key(d->cfg.blocks, cl[0].index, k);
         ans[0] = DHT_CLAIMED;
-        ans[1] = !responsible(d, k) ? CLAIM_FULL : !lim_take(d, &c->addr, LIM_REC, 1) ? CLAIM_FULL
+        ans[1] = !responsible(d, k) ? CLAIM_FULL
                : !block_claim_check(d->cfg.ctx, d->cfg.blocks, &cl[0]) ? CLAIM_FAILED : (uint8_t)claims_put(d->claims, &cl[0]);
         return 2;
     }

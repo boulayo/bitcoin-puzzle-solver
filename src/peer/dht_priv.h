@@ -31,18 +31,13 @@
 #define PING_MS 3000               /* the answer to a ping: a node that listens gives it at once */
 #define REACH_MS 3600000           /* a node believes its port open for this long after a connection came in */
 #define QUEUE_MAX 64               /* accepted connections waiting for a handler: more are closed at once */
-#define SENT_MAX 256               /* pairs a custodian remembers having alerted */
-#define PROVE_MAX 256              /* records with a coincidence a custodian holds until the owner that stored them proves them */
-#define COIN_BURST 8               /* records with a coincidence of one address block a custodian takes at once (LIM_COIN): the most an
-                                    * honest custodian tells in one STORED, and the records of one PROVE */
-#define COIN_ALERTS 2              /* pairs of a record a custodian alerts itself (each costs it lookups and a dozen connections) */
 #define PROVE_ENTRY (RECORD_WIRE + 64)   /* a record in PROVE: its first bytes and its owner's proof */
 #define PARALLEL_MAX 16            /* arguments of parallel(): the custodians a publish stores to at a time */
 #define RELAY_WAITING 256          /* homes waiting at this relay for their partner: open connections, no thread (2 a block: 128 blocks to fill) */
 #define QUERY_STACK (256 << 10)
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
-enum { LIM_CONN, LIM_REC, LIM_ALERT, LIM_COIN, LIM_KINDS };
+enum { LIM_CONN, LIM_REC, LIM_KINDS };
 typedef struct lim_entry lim_entry;
 
 typedef struct {
@@ -59,14 +54,14 @@ typedef struct {
     int64_t looked;                /* the last lookup in the range of the bucket */
 } bucket;
 
-enum { JOB_ALERT_OWN, JOB_ALERT_OUT, JOB_PING, JOB_KINDS };   /* the kinds take turns, the oldest job of each first */
+enum { JOB_ALERT, JOB_PING, JOB_KINDS };   /* the kinds take turns, the oldest job of each first */
 
 typedef struct job {
     struct job *next;
     int kind;
-    record a, b;
-    dht_contact c;                 /* JOB_PING: the contact; an alert: the node it came from (its address), when there is one */
-    bool blocked;                  /* an alert counted against the address block of c */
+    record a, b;                   /* JOB_ALERT: the pair, the record of this node first */
+    dht_contact c;                 /* JOB_PING: the contact */
+    bool blocked;                  /* an alert counted against block, the address block it came from */
     uint8_t block[16];
 } job;
 
@@ -85,18 +80,6 @@ typedef struct {
     cc_entry *e;                   /* in the order of their targets */
     int n, cap;
 } cc_list;
-
-typedef struct {
-    uint8_t h[32];
-    int64_t at;
-} sent_alert;
-
-typedef struct {
-    record r;                      /* it came from its owner, who has to prove it */
-    record other[STORE_X_OWNERS];  /* the records of the other owners of its x, the newest first */
-    int n;
-    int64_t at;
-} prove_wait;
 
 typedef struct {
     int fd;
@@ -138,14 +121,10 @@ struct dht {
     pthread_mutex_t j_mu;          /* jobs */
     pthread_cond_t j_cv;
     job *jhead;                    /* the oldest first */
-    int jn, jn_alert, jturn;       /* the jobs, of them the alerts of a custodian; the kind whose turn it is */
-    pthread_mutex_t a_mu;          /* alerts of this node, alerts sent as a custodian */
+    int jn, jturn;                 /* the jobs; the kind whose turn it is */
+    pthread_mutex_t a_mu;          /* the alerts of this node */
     own_alert *alerts;
     int nalerts, calerts;
-    sent_alert sent[SENT_MAX];
-    int nsent;
-    prove_wait pw[PROVE_MAX];
-    int npw;
     pthread_mutex_t r_mu;          /* the relays */
     pthread_cond_t r_cv;
     relay_slot waiting[RELAY_WAITING], *active;
@@ -218,9 +197,10 @@ void dlog(const dht *d, const char *fmt, ...) __attribute__((format(SYS_PRINTF, 
 bool spawn(pthread_t *th, void *(*fn)(void *), void *arg, size_t stack, bool detached);
 bool lim_take(dht *d, const net_addr *a, int kind, double n);
 void path_of(const dht *d, const char *name, char *out, size_t cap);
-/* A job at the end of the queue. c: the contact of JOB_PING; of an alert, the node it came from (NULL: none), whose address block holds
- * at most ALERT_JOBS_BLOCK of the queued alerts of each kind. False when the queue has no room for it. */
-bool job_push(dht *d, int kind, const record *a, const record *b, const dht_contact *c);
+/* A job at the end of the queue: the ping of c, or the alert of the pair (a, b) that came from the address block `block` (NULL: from
+ * this node, or from an address that is not limited), which holds at most ALERT_JOBS_BLOCK of the queued alerts. False when the queue
+ * has no room for it. */
+bool job_push(dht *d, int kind, const record *a, const record *b, const dht_contact *c, const uint8_t *block);
 
 /* dht_table.c */
 /* fn on each of n (at most PARALLEL_MAX) arguments at once: the first on this thread, the others on threads of their own */
@@ -252,11 +232,10 @@ bool own_open(dht *d, char *err, size_t errlen);
 /* dht_alert.c */
 bool owner_ok(const dht *d, const record *r);
 bool pair_ok(const dht *d, const record *a, const record *b);
-bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, const dht_contact *from);
+bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, const net_addr *from);
 extern const uint8_t CUSTODY_NONCE[32];
 bool prove_to(dht *d, const dht_contact *c, const record *r, int n);
-void job_alert_out(dht *d, const record *a, const record *b);
-void job_alert_own(dht *d, const record *a, const record *b);
+void job_alert(dht *d, const record *a, const record *b);
 void retry_alerts(dht *d);
 
 /* dht_claim.c */

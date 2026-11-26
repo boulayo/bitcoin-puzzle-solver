@@ -7,8 +7,7 @@
 #include <pzcore/hash.h>
 #include <stdlib.h>
 
-#define RELAY_PER_BLOCK 2          /* relays (waiting or under way) of the homes of one address block, */
-#define RELAY_PER_ID 2             /* ... and waits of one identity */
+#define RELAY_PER_BLOCK 2          /* relays (waiting or under way) of the homes of one address block */
 #define RELAY_IDLE_MS 180000       /* a relay with no byte for this long is closed: a session says it is alive every minute */
 
 
@@ -34,18 +33,14 @@ static void *relay_main(void *arg)
     return NULL;
 }
 
-/* the relays (waiting or under way) that count against a home at block blk with identity id (r_mu held) */
-static void relay_count(dht *d, const uint8_t blk[16], const uint8_t id[32], int *in_block, int *of_id)
+/* the relays (waiting or under way) that count against a home at block blk (r_mu held) */
+static int relay_count(dht *d, const uint8_t blk[16])
 {
-    *in_block = *of_id = 0;
-    for (int i = 0; i < RELAY_WAITING; i++) {
-        const relay_slot *w = &d->waiting[i];
-        if (!w->used) continue;
-        *in_block += w->limited[0] && !memcmp(w->block[0], blk, 16);
-        *of_id += !memcmp(w->from, id, 32);
-    }
+    int n = 0;
+    for (int i = 0; i < RELAY_WAITING; i++) n += d->waiting[i].used && d->waiting[i].limited[0] && !memcmp(d->waiting[i].block[0], blk, 16);
     for (int i = 0; i < d->cfg.relay_max; i++)
-        for (int k = 0; k < 2; k++) *in_block += d->active[i].used && d->active[i].limited[k] && !memcmp(d->active[i].block[k], blk, 16);
+        for (int k = 0; k < 2; k++) n += d->active[i].used && d->active[i].limited[k] && !memcmp(d->active[i].block[k], blk, 16);
+    return n;
 }
 
 /* the waits that are over, closed (r_mu held) */
@@ -72,10 +67,9 @@ bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
     net_conn *other = NULL;
     relay_slot *act = NULL;
     bool kept = false;
-    int in_block, of_id;
     pthread_mutex_lock(&d->r_mu);
     relay_sweep(d);
-    relay_count(d, blk, c->remote, &in_block, &of_id);
+    int in_block = relay_count(d, blk);
     const bool room = !lim || in_block < RELAY_PER_BLOCK;      /* for the home that waits and for the one that joins it */
     for (int i = 0; i < RELAY_WAITING && !other && room; i++) {
         relay_slot *w = &d->waiting[i];
@@ -103,13 +97,12 @@ bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
             relay_slot *w = &d->waiting[i];
             if (w->used && !memcmp(w->name, name, 32) && !memcmp(w->from, c->remote, 32)) {   /* the same home again: the new join wins */
                 in_block -= w->limited[0] && !memcmp(w->block[0], blk, 16);
-                of_id--;
                 net_close(w->c);
                 w->used = false;
             }
             if (!w->used && free_at < 0) free_at = i;
         }
-        if (free_at >= 0 && (!lim || in_block < RELAY_PER_BLOCK) && of_id < RELAY_PER_ID) {
+        if (free_at >= 0 && (!lim || in_block < RELAY_PER_BLOCK)) {
             relay_slot *w = &d->waiting[free_at];
             memset(w, 0, sizeof *w);
             w->used = kept = true;

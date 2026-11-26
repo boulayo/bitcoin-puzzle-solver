@@ -33,9 +33,10 @@ typedef struct {
     uint8_t s[32], spub[33], e[32], epub[33], rs[33], re[33];
 } noise_hs;
 
-/* False for a static or ephemeral secret that is not a valid key. The prologue binds the network (docs/en/NETWORK.md 7.1). */
+/* s and spub: the static secret and its public key, compressed (the caller has it: no multiplication for it at each handshake). False
+ * for an ephemeral secret that is not a valid key. The prologue binds the network (docs/en/NETWORK.md 7.1). */
 bool noise_hs_init(noise_hs *hs, const secp256k1_context *ctx, bool initiator, const uint8_t *prologue, size_t plen, const uint8_t s[32],
-                   const uint8_t e[32]);
+                   const uint8_t spub[33], const uint8_t e[32]);
 /* The next message, with payload (at most NOISE_PAYLOAD_MAX bytes), into out (NOISE_HS_MAX bytes). Its length, 0 when it is not this side's turn. */
 size_t noise_hs_write(noise_hs *hs, const uint8_t *payload, size_t plen, uint8_t *out);
 /* Reads the next message of the other side; its payload into payload (NOISE_PAYLOAD_MAX bytes), its length in *plen. False when the message is

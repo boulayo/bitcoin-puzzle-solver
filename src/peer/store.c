@@ -28,11 +28,6 @@ typedef struct {
     uint32_t key, num;             /* 4 bytes of the SipHash of x, the number of the entry (EMPTY: a free slot) */
 } islot;
 
-typedef struct {
-    uint8_t id[32];                /* zeros: a number whose line a crash lost */
-    uint64_t n;                    /* the records held */
-} owner_slot;
-
 struct store {
     pthread_mutex_t mu;
     int fd, ofd;                   /* the records, the owners */
@@ -45,9 +40,10 @@ struct store {
     size_t cap, used;
     uint32_t *own;                 /* the owners by identity: their numbers (EMPTY: a free place) */
     size_t ocap, oused;
-    owner_slot *ids;               /* the owners by number: the entries name them so, and at the opening nothing is looked up */
+    uint8_t (*ids)[32];            /* the owners by number: the entries name them so, and at the opening nothing is looked up (zeros: a
+                                    * number whose line a crash lost) */
     uint32_t nids, capids;
-    uint64_t max, max_owner;       /* the limits of a custodian; 0: none */
+    uint64_t max;                  /* the limit of a custodian; 0: none */
 };
 
 static uint64_t le64(const uint8_t *p)
@@ -123,13 +119,13 @@ static bool index_room(store *st, size_t want)
 static uint32_t owner_find(const store *st, const uint8_t id[32])
 {
     for (size_t s = st->ocap ? (size_t)sip32(st, id) & (st->ocap - 1) : 0; st->ocap && st->own[s] != EMPTY; s = (s + 1) & (st->ocap - 1))
-        if (!memcmp(st->ids[st->own[s]].id, id, 32)) return st->own[s];
+        if (!memcmp(st->ids[st->own[s]], id, 32)) return st->own[s];
     return EMPTY;
 }
 
 static void owner_place(store *st, uint32_t num)
 {
-    size_t s = (size_t)sip32(st, st->ids[num].id) & (st->ocap - 1);
+    size_t s = (size_t)sip32(st, st->ids[num]) & (st->ocap - 1);
     while (st->own[s] != EMPTY) s = (s + 1) & (st->ocap - 1);
     st->own[s] = num;
     st->oused++;
@@ -141,11 +137,11 @@ static bool ids_reserve(store *st, uint32_t n)
 {
     if (n > st->capids) {
         const uint32_t nc = n > 2 * st->capids ? n : 2 * st->capids;
-        owner_slot *m = realloc(st->ids, (size_t)nc * sizeof *m);
+        uint8_t (*m)[32] = realloc(st->ids, (size_t)nc * sizeof *m);
         if (!m) return false;
         st->ids = m, st->capids = nc;
     }
-    for (; st->nids < n; st->nids++) memset(&st->ids[st->nids], 0, sizeof *st->ids);
+    for (; st->nids < n; st->nids++) memset(st->ids[st->nids], 0, sizeof *st->ids);
     return true;
 }
 
@@ -163,7 +159,7 @@ static bool owner_index(store *st, const uint8_t id[32], uint32_t num)
         free(old);
     }
     if (!ids_reserve(st, num + 1)) return false;
-    memcpy(st->ids[num].id, id, 32), st->ids[num].n = 0;
+    memcpy(st->ids[num], id, 32);
     owner_place(st, num);
     return true;
 }
@@ -189,8 +185,8 @@ static bool entry_decode(const store *st, const uint8_t e[STORE_ENTRY], record *
     uint32_t num = 0;
     for (int i = 0; i < 4; i++) num |= (uint32_t)e[RECORD_WIRE + i] << (8 * i);
     static const uint8_t none[32];
-    if (num >= st->nids || !memcmp(st->ids[num].id, none, 32)) return false;   /* an owner whose line a crash lost */
-    return record_wire_decode(e, st->ids[num].id, r);
+    if (num >= st->nids || !memcmp(st->ids[num], none, 32)) return false;   /* an owner whose line a crash lost */
+    return record_wire_decode(e, st->ids[num], r);
 }
 
 static bool read_at(store *st, uint64_t i, record *r)
@@ -299,7 +295,6 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
             if (i + j + STORE_CHECK_TAIL >= st->count && !record_check(ctx, net, &r)) continue;   /* the tail, where a crash cuts */
             add[na] = (islot){key4(st, r.x), (uint32_t)(i + j)};
             __builtin_prefetch(&st->idx[add[na++].key & (st->cap - 1)], 1);
-            st->ids[num].n++;
             st->weight += ldexpl(1, (int)r.dp);
         }
         for (size_t a = 0; a < na; a++) index_add(st, add[a].key, add[a].num);
@@ -309,11 +304,19 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
     return st;
 }
 
-void store_limits(store *st, uint64_t max_records, uint64_t max_per_owner)
+void store_limit(store *st, uint64_t max_records)
 {
     pthread_mutex_lock(&st->mu);
-    st->max = max_records, st->max_owner = max_per_owner;
+    st->max = max_records;
     pthread_mutex_unlock(&st->mu);
+}
+
+bool store_owner(store *st, const uint8_t owner[32])
+{
+    pthread_mutex_lock(&st->mu);
+    const bool known = owner_find(st, owner) != EMPTY;
+    pthread_mutex_unlock(&st->mu);
+    return known;
 }
 
 void store_close(store *st)
@@ -344,9 +347,8 @@ static store_status put(store *st, const record *r, bool proved, record *mine, r
     if (held >= 0) {
         s = STORE_DUP;
         if (mine) *mine = same[held];
-    } else if ((st->max && st->count >= st->max) || (st->max_owner && o != EMPTY && st->ids[o].n >= st->max_owner) ||
-               ns >= (proved ? X_MAX : STORE_X_OWNERS) ||
-               (st->max && o == EMPTY && st->oused >= st->max / 256 + 1024)) {     /* an identity costs little: owners take memory and disk */
+    } else if ((st->max && st->count >= st->max) || ns >= (proved ? X_MAX : STORE_X_OWNERS) ||
+               (st->max && o == EMPTY && st->oused >= st->max / STORE_OWNER_RECORDS + 1024)) {   /* the owners it may hold */
         s = STORE_FULL;
     } else {
         uint8_t e[STORE_ENTRY];
@@ -356,7 +358,6 @@ static store_status put(store *st, const record *r, bool proved, record *mine, r
         if (o != EMPTY && st->count + 1 < EMPTY && index_room(st, st->used + 1) &&
             sys_pwrite(st->fd, e, STORE_ENTRY, STORE_HDR + st->count * STORE_ENTRY) == STORE_ENTRY) {
             index_add(st, key4(st, r->x), (uint32_t)st->count++);
-            st->ids[o].n++;
             st->weight += ldexpl(1, (int)r->dp);
             s = STORE_OK;
             if (mine) *mine = *r;
@@ -377,10 +378,9 @@ store_status store_put(store *st, const record *r, record *mine, record *others,
     return put(st, r, false, mine, others, max, nothers);
 }
 
-store_status store_put_proved(store *st, const record *r)
+store_status store_put_proved(store *st, const record *r, record *others, int max, int *nothers)
 {
-    int no;
-    return put(st, r, true, NULL, NULL, 0, &no);
+    return put(st, r, true, NULL, others, max, nothers);
 }
 
 int store_find(store *st, const uint8_t x[32], record *out, int max)
@@ -469,24 +469,16 @@ void mbox_free(mbox *m)
 
 static bool has_owner(const mbox_pair *p, const uint8_t owner[32]) { return !memcmp(p->r[0].owner, owner, 32) || !memcmp(p->r[1].owner, owner, 32); }
 
-static void drop_at(mbox *m, size_t i)
-{
-    memmove(&m->e[i], &m->e[i + 1], (m->n - i - 1) * sizeof *m->e);
-    m->n--;
-}
-
-/* Room for one more pair among those of owner (among all when NULL), which may be limit: the oldest that no owner proved goes, else the
- * oldest. A flood for one owner pushes out its own pairs only, and pairs made of points copied from the table, which their sender
- * cannot prove, go before the ones an owner proved. */
+/* Room for one more pair among those of owner (among all when NULL), which may be limit: the oldest goes. A flood for one owner pushes
+ * out its own pairs only. */
 static void make_room(mbox *m, const uint8_t *owner, size_t limit)
 {
-    size_t k = 0, oldest = 0, bare = m->n;
+    size_t k = 0, oldest = 0;
     for (size_t i = m->n; i-- > 0;)
-        if (!owner || has_owner(&m->e[i], owner)) {
-            k++, oldest = i;
-            if (!m->e[i].has[0] && !m->e[i].has[1]) bare = i;
-        }
-    if (k >= limit) drop_at(m, bare < m->n ? bare : oldest);
+        if (!owner || has_owner(&m->e[i], owner)) k++, oldest = i;
+    if (k < limit) return;
+    memmove(&m->e[oldest], &m->e[oldest + 1], (m->n - oldest - 1) * sizeof *m->e);
+    m->n--;
 }
 
 /* the same owners at the same point with the same types: one pair, whatever the zero bits of its records (a proof does not cover them) */
@@ -505,18 +497,14 @@ bool mbox_put(mbox *m, const record *a, const record *b, const uint8_t proof[64]
     pthread_mutex_lock(&m->mu);
     size_t at = 0;
     while (at < m->n && !same_pair(&m->e[at], &p)) at++;
-    bool fresh = at == m->n;                                   /* the pair with other zero bits: the one kept stays */
-    if (fresh) {
+    if (at == m->n) {                                          /* the pair with other zero bits: the one kept stays */
         make_room(m, p.r[0].owner, m->per_owner);
         make_room(m, p.r[1].owner, m->per_owner);
         make_room(m, NULL, m->cap);
         m->e[at = m->n++] = p;
     }
-    if (proof && !m->e[at].has[who]) {
-        m->e[at].has[who] = true;
-        memcpy(m->e[at].proof[who], proof, 64);
-        fresh = true;
-    }
+    const bool fresh = !m->e[at].has[who];
+    if (fresh) m->e[at].has[who] = true, memcpy(m->e[at].proof[who], proof, 64);
     pthread_mutex_unlock(&m->mu);
     return fresh;
 }

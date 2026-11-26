@@ -7,95 +7,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define RESEND_MS (3600 * 1000LL)  /* a custodian alerts the same pair at most once an hour (a republished record alerts again) */
-#define PROVE_MS (600 * 1000LL)    /* a coincidence waits this long for the proof of the owner that stored it */
-
 /* ---- custody ---- */
 
-/* whether a custodian may alert this pair now: not within RESEND_MS of the last time */
-static bool sent_check(dht *d, const uint8_t h[32])
+/* Whether this node takes a record of another node, at the address from, as STORED tells it: one it may be a custodian of (else FAR),
+ * within the rate of the sender's block (else FULL). An owner the store does not know counts as STORE_OWNER_RECORDS records: a store
+ * holds an owner for ever and has room for one in that many records, so a block fills the owners no sooner than the store. */
+static int admit(dht *d, const record *r, const net_addr *from)
 {
-    const int64_t now = sys_now_ms();
-    bool ok = true;
-    int slot = -1, oldest = 0;
-    pthread_mutex_lock(&d->a_mu);
-    for (int i = 0; i < d->nsent && slot < 0; i++) {
-        if (!memcmp(d->sent[i].h, h, 32)) slot = i, ok = now - d->sent[i].at >= RESEND_MS;
-        else if (d->sent[i].at < d->sent[oldest].at) oldest = i;
-    }
-    if (slot < 0) slot = d->nsent < SENT_MAX ? d->nsent++ : oldest;
-    if (ok) {
-        memcpy(d->sent[slot].h, h, 32);
-        d->sent[slot].at = now;
-    }
-    pthread_mutex_unlock(&d->a_mu);
-    return ok;
-}
-
-/* an alert that found the queue full: the next record of the pair tries again, within the hour */
-static void sent_forget(dht *d, const uint8_t h[32])
-{
-    pthread_mutex_lock(&d->a_mu);
-    for (int i = 0; i < d->nsent; i++)
-        if (!memcmp(d->sent[i].h, h, 32)) d->sent[i].at = sys_now_ms() - RESEND_MS;
-    pthread_mutex_unlock(&d->a_mu);
-}
-
-/* the alert of a coincidence: a job that tells both owners and their mailboxes, not within RESEND_MS of the last one. from: the address
- * of the owner that proved a (NULL: this node's own) */
-static void coin_alert(dht *d, const record *a, const record *b, const net_addr *from)
-{
-    uint8_t h[32];
-    dht_contact src;
-    memset(&src, 0, sizeof src);
-    if (from) src.addr = *from;
-    pair_hash(a, b, h);
-    if (!sent_check(d, h)) return;
-    if (job_push(d, JOB_ALERT_OUT, a, b, from ? &src : NULL)) dlog(d, "coincidence (%s): alerting the owners", a->t == b->t ? "merge" : "useful");
-    else sent_forget(d, h);
-}
-
-/* A record r that came from its owner and made a coincidence with others (n records of the other owners of its x): held until the owner
- * proves r (PROVE), for PROVE_MS. A copy of another's point cannot be proved, so it alerts nobody (before, each such copy cost its victim
- * an alert, about 50 connections). Full: the oldest goes. */
-static void prove_wait_add(dht *d, const record *r, const record *others, int n)
-{
-    const int64_t now = sys_now_ms();
-    pthread_mutex_lock(&d->a_mu);
-    int at = 0;
-    for (int i = 0; i < d->npw; i++)                           /* r again: with the others it has now */
-        if (now - d->pw[i].at < PROVE_MS && !same_record(&d->pw[i].r, r)) d->pw[at++] = d->pw[i];
-    d->npw = at;
-    if (d->npw == PROVE_MAX) memmove(d->pw, d->pw + 1, (PROVE_MAX - 1) * sizeof *d->pw), d->npw--;
-    prove_wait *w = &d->pw[d->npw++];
-    w->r = *r, w->n = n, w->at = now;
-    memcpy(w->other, others, (size_t)n * sizeof *others);
-    pthread_mutex_unlock(&d->a_mu);
+    uint8_t k[32];
+    store_key(r->x, k);
+    if (!responsible(d, k)) return DHT_ST_FAR;
+    return lim_take(d, from, LIM_REC, store_owner(d->custody, r->owner) ? 1 : STORE_OWNER_RECORDS) ? DHT_ST_STORED : DHT_ST_FULL;
 }
 
 /* A record for the custody of this node: its status for STORED. from: the address of the owner that sent it, NULL for this node's own.
- * A record of another node is taken only when this node may be one of its custodians, and within the rate of the sender's block. A
- * coincidence of a record of another node waits for its owner's proof (COINCIDENCE, then PROVE), also for a duplicate: a republished
- * record alerts again, at most once an hour, and its owner hears of the coincidence from this node itself. The coincidences of one block
- * are limited, as each costs this node lookups and connections, and it alerts COIN_ALERTS pairs of a record at most (of this node's own
- * too: the other custodians of it tell it of every pair). A record this node does not keep because it is full is told COINCIDENCE all
- * the same, and kept once its owner proves it when its x was full (custody_proved). */
+ * A custodian is passive: when other owners have the x of the record it says COINCIDENCE (also for a duplicate, and for a record it
+ * does not keep because it is full) and alerts nobody. The owner proves its record (PROVE) and tells the others itself, with its proof.
+ * A coincidence of a record of this node is an alert of this node at once. A node of a linear search has no store, and takes and
+ * publishes no record (dht.c, answer). */
 int custody_put(dht *d, const record *r, const net_addr *from)
 {
-    uint8_t k[32];
-    record held, others[STORE_X_OWNERS];
+    static const net_addr self;                                /* the alerts of its own custody count as those of one address block */
+    record others[STORE_X_OWNERS];
     int no;
-    if (!d->custody || !owner_ok(d, r)) return DHT_ST_INVALID;
-    store_key(r->x, k);
-    if (from && !responsible(d, k)) return DHT_ST_FAR;
-    if (from && !lim_take(d, from, LIM_REC, 1)) return DHT_ST_FULL;
-    const store_status s = store_put(d->custody, r, &held, others, STORE_X_OWNERS, &no);
-    if (s == STORE_FULL) held = *r;
-    for (int i = 0; !from && i < no && i < COIN_ALERTS; i++) coin_alert(d, &held, &others[i], NULL);   /* its own: nothing to prove */
-    if (no && from && lim_take(d, from, LIM_COIN, 1)) {
-        prove_wait_add(d, &held, others, no);
-        return DHT_ST_COINCIDENCE;
-    }
+    const int st = from ? admit(d, r, from) : DHT_ST_STORED;
+    if (st != DHT_ST_STORED) return st;
+    const store_status s = store_put(d->custody, r, NULL, others, STORE_X_OWNERS, &no);
+    for (int i = 0; !from && i < no; i++) (void)alert_in(d, &others[i], r, NULL, &self);
+    if (no && from) return DHT_ST_COINCIDENCE;
     switch (s) {
     case STORE_OK: return DHT_ST_STORED;
     case STORE_DUP: return DHT_ST_DUP;
@@ -105,39 +44,24 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     }
 }
 
-/* the place of r among the coincidences that wait for a proof (a_mu held), -1 when it has none */
-static int prove_wait_at(const dht *d, const record *r)
-{
-    for (int i = 0; i < d->npw; i++)
-        if (same_record(&d->pw[i].r, r)) return i;
-    return -1;
-}
-
-/* A record of PROVE: sig, the proof of the owner of r (the sender, at from) for this custodian. r is kept, also past the owners of its x
- * that a store takes (copies planted under other identities before it cannot keep it out). The coincidences of r that wait for it are
- * alerted, the first COIN_ALERTS by this custodian itself, and all go into pairs (at most STORE_X_OWNERS) for the answer: the owner hears
- * of them from a custodian of its point, and not only from its mailboxes, which nodes placed near their key could keep from it, and of
- * every other owner of that x (the owner's proofs and POSSESS tell the copies apart). The number of pairs; 0 when nothing waits for r,
- * -1 for a wrong proof. */
+/* A record of PROVE: sig, the proof of the owner of r (the sender, at from) for this custodian. Nothing is remembered between STORE and
+ * PROVE: a record that its owner proves is taken as a STORE takes it, and kept also past the owners of its x that a store takes (copies
+ * planted under other identities before it cannot keep it out). The other owners of its x go into pairs (at most STORE_X_OWNERS, the
+ * newest first: the owner's proofs and POSSESS tell the copies apart), for the answer: the owner hears of them from a custodian of its
+ * point, and not only from its mailboxes, which nodes placed near their key could keep from it. A pair with a record of this node is an
+ * alert of this node. The number of pairs; -1 for a record this node does not take, or a wrong proof. */
 int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, mbox_pair *pairs)
 {
-    prove_wait w;
-    pthread_mutex_lock(&d->a_mu);
-    const bool any = prove_wait_at(d, r) >= 0;
-    pthread_mutex_unlock(&d->a_mu);
-    if (!any) return 0;
-    if (!record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return -1;
-    pthread_mutex_lock(&d->a_mu);
-    const int at = prove_wait_at(d, r);                        /* gone if another PROVE took it meanwhile */
-    if (at >= 0) w = d->pw[at], memmove(d->pw + at, d->pw + at + 1, (size_t)(d->npw - at - 1) * sizeof *d->pw), d->npw--;
-    pthread_mutex_unlock(&d->a_mu);
-    if (at >= 0) (void)store_put_proved(d->custody, &w.r);
-    for (int i = 0; at >= 0 && i < w.n; i++) {
-        if (i < COIN_ALERTS) coin_alert(d, &w.r, &w.other[i], from);
+    record others[STORE_X_OWNERS];
+    int no;
+    if (admit(d, r, from) != DHT_ST_STORED || !record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return -1;
+    (void)store_put_proved(d->custody, r, others, STORE_X_OWNERS, &no);
+    for (int i = 0; i < no; i++) {
         memset(&pairs[i], 0, sizeof *pairs);
-        pair_order(&w.r, &w.other[i], pairs[i].r);
+        pair_order(r, &others[i], pairs[i].r);
+        if (mine(d, &others[i])) (void)alert_in(d, r, &others[i], NULL, from);
     }
-    return at >= 0 ? w.n : 0;
+    return no;
 }
 
 /* ---- the custodians of a key ---- */
@@ -312,9 +236,9 @@ typedef struct {
     bool *failed;                  /* ... and whether an exchange with it failed (STORE or PROVE) */
 } batch_run;
 
-/* A worker of a batch: one custodian after the other, the STORE of all its records, then one PROVE of those it told COINCIDENCE (at most
- * COIN_BURST: an honest custodian tells no more). A slow or dead custodian holds one worker for one timeout, or two; before, the
- * custodians were served one after the other, and a PROVE went for each record. */
+/* A worker of a batch: one custodian after the other, the STORE of all its records, then the PROVEs of those it told COINCIDENCE,
+ * DHT_PROVE_MAX at a time, until one fails: every such record is proved, so copies planted on some records cannot keep the owner from the
+ * other owners of another. A slow or dead custodian holds one worker for one timeout, or two. */
 static void *store_main(void *arg)
 {
     batch_run *b = *(batch_run **)arg;
@@ -323,7 +247,7 @@ static void *store_main(void *arg)
     int at[DHT_STORE_MAX][2];
     for (int g; !stopping(d) && (g = atomic_fetch_add(&b->next, 1)) < b->ngroups;) {
         const dht_contact *t = &b->cust[g];
-        record coin[COIN_BURST];
+        record coin[DHT_STORE_MAX];
         int m = 0, nc = 0;
         size_t len;
         for (int i = 0; i < b->n; i++)
@@ -338,9 +262,11 @@ static void *store_main(void *arg)
             const record *r = &b->recs[at[q][0]];
             const uint8_t st = me ? (uint8_t)custody_put(d, r, NULL) : got ? ans[2 + q] : ST_NONE;
             b->st[at[q][0]][at[q][1]] = st;
-            if (!me && st == DHT_ST_COINCIDENCE && nc < COIN_BURST) coin[nc++] = *r;
+            if (!me && st == DHT_ST_COINCIDENCE) coin[nc++] = *r;
         }
-        b->failed[g] = !got || (nc && !prove_to(d, t, coin, nc));
+        bool ok = got;
+        for (int o = 0; ok && o < nc; o += DHT_PROVE_MAX) ok = prove_to(d, t, coin + o, nc - o < DHT_PROVE_MAX ? nc - o : DHT_PROVE_MAX);
+        b->failed[g] = !ok;
     }
     return NULL;
 }
@@ -391,7 +317,7 @@ static int send_batch(dht *d, const record *recs, const bool *old, int n, cc_lis
             const int g = b.group[i][j], st = b.st[i][j];
             const bool me = is_me(d, cs[i][j].id), has = st == DHT_ST_STORED || st == DHT_ST_DUP || st == DHT_ST_COINCIDENCE;
             held |= has ? (me ? 1 : 3) : 0;
-            all &= has;
+            all &= has && !(st == DHT_ST_COINCIDENCE && b.failed[g]);   /* its PROVE failed: it goes there again */
             if (copies && g >= 0 && !me && st != ST_NONE) (*copies)++;
             if (g >= 0 && (b.failed[g] || st == DHT_ST_FAR)) cc_stale(&d->cc, ts[i], true);   /* dead, or not a custodian: a new lookup */
         }
@@ -511,10 +437,10 @@ static int by_key(const void *a, const void *b) { return memcmp(((const keyed *)
 /* The records of own.bin again, to the custodians each did not have at the last republish: the nodes that joined since, or that moved
  * up among the closest of a key as others left. The records published since, and those of a lookup whose custodians did not all take
  * them, go to all their custodians; and every record does when all is set (the first contacts after none) or once a week (a custodian
- * that lost its store gets it back, and so does an alert lost on the way: a record that comes again alerts its coincidence again). The
- * records go by REPUB_WINDOW, in the order of their keys, so a batch has keys that follow each other and few custodians: in the order
- * of own.bin (of discovery) its keys were random, and at 1000 nodes a batch went to about 700 custodians. The lookups are new: those kept
- * are dropped. The copies sent. */
+ * that lost its store gets it back, and a coincidence lost on the way comes back: a record that comes again gets its COINCIDENCE
+ * again). The records go by REPUB_WINDOW, in the order of their keys, so a batch has keys that follow each other and few custodians:
+ * in the order of own.bin (of discovery) its keys were random, and at 1000 nodes a batch went to about 700 custodians. The lookups
+ * are new: those kept are dropped. The copies sent. */
 uint64_t dht_republish(dht *d, bool all)
 {
     cc_list prev = {0};

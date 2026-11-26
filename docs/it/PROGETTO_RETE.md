@@ -332,6 +332,6 @@ Deciso: si fa, senza transazioni automatiche. La chiave resta a chi la trova, ch
 | distanza | quanto ha camminato il canguro fino a quel punto: il segreto di casa |
 | coincidenza | due case sullo stesso punto, con tipi diversi |
 | pezzo | la parte di chiave che ogni casa ricava dalla coincidenza |
-| custode | un nodo che conserva punti altrui e avvisa delle coincidenze |
+| custode | un nodo che conserva punti altrui e segnala le coincidenze a chi glieli affida |
 | file della rete | il file che descrive una rete: puzzle, intervallo, seme dei salti. La sua impronta è la rete |
 | F e S | nel secondo passaggio: F può annullare, S riceve la firma per primo |

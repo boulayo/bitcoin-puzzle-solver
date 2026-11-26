@@ -268,7 +268,7 @@ static bool handshake(const net_cfg *cfg, net_conn *c, bool initiator, const uin
     bool ok = false;
     for (int tries = 0;; tries++) {                            /* a random value that is not a valid key: practically never */
         if (tries == 4 || !sys_random(e, sizeof e)) goto out;
-        if (noise_hs_init(&hs, cfg->ctx, initiator, cfg->prologue, sizeof cfg->prologue, cfg->self->sec, e)) break;
+        if (noise_hs_init(&hs, cfg->ctx, initiator, cfg->prologue, sizeof cfg->prologue, cfg->self->sec, cfg->self->pub33, e)) break;
     }
     const int64_t until = sys_now_ms() + c->timeout_ms;            /* the whole handshake: a peer that drips its bytes gains nothing */
     if (initiator) {

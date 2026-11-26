@@ -14,7 +14,7 @@
 #define LOOKUP_ASK_MAX 64          /* queries of one lookup: answers that keep pointing farther cannot make it endless */
 #define LOOKUP_BLOCK_MAX 4         /* queries of one lookup to the nodes of one address block (answers aimed at a victim) */
 #define RT_BLOCK_BUCKET 2          /* contacts of one address block in a bucket, */
-#define RT_BLOCK_TABLE 4           /* ... in the table, and in one NODES answer */
+#define RT_BLOCK_TABLE 4           /* ... and in the table */
 #define RESP_SLACK (2 * DHT_KSTORE) /* a custodian or a mailbox that knows this many nodes closer to the key is not one of it */
 #define BOOT_TRY 64                /* addresses tried at a bootstrap, BOOT_BATCH at a time (so a list of dead addresses costs a few timeouts) */
 #define BOOT_BATCH PARALLEL_MAX
@@ -62,12 +62,11 @@ void encode_contact(const dht_contact *c, uint8_t *p)
     p[80] = (uint8_t)(c->addr.port >> 8), p[81] = (uint8_t)c->addr.port;
 }
 
-/* NODES: every contact must be whole (its ID from its identity, with the zero bits, an address this node may dial), no address twice,
- * at most RT_BLOCK_TABLE in one block (an honest table has no more), or the answer is refused */
+/* NODES: every contact must be whole (its ID from its identity, with the zero bits, an address this node may dial), or the answer is
+ * refused. What it names are candidates of a lookup and no more: the lookup has its own limit of queries to one address block. */
 static bool parse_nodes(const dht *d, const uint8_t *m, size_t len, dht_contact *out, int *n)
 {
     if (len < 2 || m[0] != DHT_NODES || m[1] > DHT_K || len != 2 + (size_t)m[1] * NODE_LEN) return false;
-    uint8_t blk[DHT_K][16];
     for (int i = 0; i < m[1]; i++) {
         const uint8_t *p = m + 2 + (size_t)i * NODE_LEN;
         dht_contact *c = &out[i];
@@ -78,13 +77,6 @@ static bool parse_nodes(const dht *d, const uint8_t *m, size_t len, dht_contact 
         c->addr.port = (uint16_t)(p[80] << 8 | p[81]);
         keys_node_id(c->xonly, id);
         if (memcmp(id, c->id, 32) || !keys_id_ok(id, d->cfg.id_bits) || !addr_ok(d, &c->addr)) return false;
-        net_addr_block(&c->addr, blk[i]);
-        int inblock = 0;
-        for (int j = 0; j < i; j++) {
-            if (!memcmp(out[j].addr.ip, c->addr.ip, 16) && out[j].addr.port == c->addr.port) return false;   /* one address, two identities */
-            inblock += !memcmp(blk[j], blk[i], 16);
-        }
-        if (limited(d, &c->addr) && inblock >= RT_BLOCK_TABLE) return false;
     }
     *n = m[1];
     return true;
@@ -178,7 +170,7 @@ static void rt_note(dht *d, const dht_contact *c, bool answered)
         }
     }
     pthread_mutex_unlock(&d->rt_mu);
-    if (go && !job_push(d, JOB_PING, NULL, NULL, &ping)) {
+    if (go && !job_push(d, JOB_PING, NULL, NULL, &ping, NULL)) {
         pthread_mutex_lock(&d->rt_mu);
         b->pinging = b->has_cand = false;
         pthread_mutex_unlock(&d->rt_mu);
@@ -289,7 +281,7 @@ void job_ping(dht *d, const dht_contact *c)
     b->pinging = more;
     pthread_mutex_unlock(&d->rt_mu);
     if (alive) rt_seen(d, c);
-    if (more && !job_push(d, JOB_PING, NULL, NULL, &next)) {
+    if (more && !job_push(d, JOB_PING, NULL, NULL, &next, NULL)) {
         pthread_mutex_lock(&d->rt_mu);
         b->pinging = false;
         pthread_mutex_unlock(&d->rt_mu);
@@ -305,22 +297,23 @@ enum { C_NEW, C_ASKED, C_OK, C_FAIL, C_SKIP };   /* a candidate: not asked yet, 
 typedef struct {
     dht_contact c;
     int state;
-    uint8_t by[32];                /* the node whose answer named it; all zero for a contact of this node's own table */
+    uint8_t by[32];                /* the node whose answer named it; OWN for a contact of this node's own table */
 } cand;
+
+static const uint8_t OWN[32];
 
 /* Into the candidates, sorted by distance to t, at most SHORT_MAX. In a full list a new one takes the place of one that failed, or of
  * the farthest that another node named and that was not asked yet, when it is closer; never of one that answered, nor of a contact of
  * the own table: names that nobody checked cannot push out the nodes this node knows to be there. */
 static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c, int state, const uint8_t *by)
 {
-    static const uint8_t own[32];
     for (int i = 0; i < *n; i++)
         if (!memcmp(s[i].c.id, c->id, 32)) return;
     if (*n == SHORT_MAX) {
         int out = *n - 1;
         while (out >= 0 && s[out].state < C_FAIL) out--;
         if (out < 0) {
-            for (out = *n - 1; out >= 0 && (s[out].state != C_NEW || !memcmp(s[out].by, own, 32)); out--) {}
+            for (out = *n - 1; out >= 0 && (s[out].state != C_NEW || !memcmp(s[out].by, OWN, 32)); out--) {}
             if (out < 0 || !closer(t, c->id, s[out].c.id)) return;
         }
         memmove(&s[out], &s[out + 1], (size_t)(*n - 1 - out) * sizeof *s);
@@ -331,7 +324,7 @@ static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c,
     memmove(&s[at + 1], &s[at], (size_t)(*n - at) * sizeof *s);
     s[at].c = *c;
     s[at].state = state;
-    memcpy(s[at].by, by ? by : own, 32);
+    memcpy(s[at].by, by ? by : OWN, 32);
     (*n)++;
 }
 
@@ -340,12 +333,11 @@ static void cand_add(cand *s, int *n, const uint8_t t[32], const dht_contact *c,
  * and keep it from the nodes that are there. The contacts of the own table are not judged this way. */
 static void cand_distrust(cand *s, int n, const uint8_t failed[32])
 {
-    static const uint8_t own[32];
     const uint8_t *by = NULL;
     int bad = 0;
     for (int i = 0; i < n && !by; i++)
         if (!memcmp(s[i].c.id, failed, 32)) by = s[i].by;
-    if (!by || !memcmp(by, own, 32)) return;
+    if (!by || !memcmp(by, OWN, 32)) return;
     for (int i = 0; i < n; i++)
         if (!memcmp(s[i].by, by, 32)) bad += (s[i].state >= C_FAIL) - (s[i].state == C_OK);
     for (int i = 0; bad >= 3 && i < n; i++)
@@ -365,8 +357,10 @@ static int asked_in_block(const dht *d, const net_addr *a, uint8_t (*blocks)[16]
 
 /* A lookup: DHT_ALPHA workers (this thread and DHT_ALPHA - 1 others) each take the closest candidate not asked yet among the want closest
  * that did not fail, ask it, and take the next as soon as it answers: a slow or dead node holds one worker, not the lookup. It ends when
- * those want have all answered, or after LOOKUP_ASK_MAX queries. A candidate in a block that had its queries counts as failed: answers
- * that all point at one network (a victim, or the attacker's own) cannot make this node dial it more. */
+ * those want have all answered, or after LOOKUP_ASK_MAX queries. A candidate that another node named, in a block that had its queries,
+ * counts as failed: answers that all point at one network (a victim, or the attacker's own) cannot make this node dial it more. A
+ * contact of the own table is asked all the same (the table has RT_BLOCK_TABLE of a block at most): names that fail, placed in its
+ * block, cannot keep a lookup from a node this one knows. */
 typedef struct {
     dht *d;
     const uint8_t *target;
@@ -382,7 +376,8 @@ static int lookup_next(lookup *L)
 {
     for (int i = 0, live = 0; i < L->n && live < L->want && L->nasked < LOOKUP_ASK_MAX; i++) {
         cand *c = &L->s[i];
-        if (c->state == C_NEW && asked_in_block(L->d, &c->c.addr, L->blocks, L->nasked) >= LOOKUP_BLOCK_MAX) c->state = C_SKIP;
+        if (c->state == C_NEW && memcmp(c->by, OWN, 32) && asked_in_block(L->d, &c->c.addr, L->blocks, L->nasked) >= LOOKUP_BLOCK_MAX)
+            c->state = C_SKIP;
         if (c->state >= C_FAIL) continue;
         live++;
         if (c->state == C_NEW) return i;
@@ -486,12 +481,8 @@ void save_peers(dht *d)
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     dht_contact *cs = malloc(PEERS_MAX * sizeof *cs);
     char path[4096], tmp[4100];
-    int n = 0;
     if (!cs) return;
-    pthread_mutex_lock(&d->rt_mu);
-    for (int i = 0; i < DHT_BUCKETS; i++)
-        for (int j = 0; j < d->b[i].n && n < PEERS_MAX; j++) cs[n++] = d->b[i].e[j].c;
-    pthread_mutex_unlock(&d->rt_mu);
+    const int n = dht_contacts(d, cs, PEERS_MAX);
     path_of(d, "peers.txt", path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     pthread_mutex_lock(&mu);

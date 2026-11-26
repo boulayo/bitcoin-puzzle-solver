@@ -3,11 +3,13 @@
 /* dht.h - the node of the network (docs/en/NETWORK.md 7.3, 7.4): Kademlia (k = 20, alpha = 3, 256 buckets by XOR distance), the custody of
  * the records of others, the alerts of a coincidence and the mailboxes, over the connections of net.h.
  *
- * A record goes to the DHT_KSTORE nodes closest to K = SHA256("pznet1/key" || x). A custodian that sees the same x from two owners sends
- * ALERT(record, record) to both owners and to the DHT_KSTORE mailbox nodes of each (closest to SHA256("pznet1/mbox" || owner)). An alert
- * for this node is handed to the daemon (on_alert) only after both proofs of possession check out: this node's own (from own_distance) and
- * the other owner's, asked with POSSESS or sent by it in an ALERT that carries its proof (so two homes that do not listen prove to each
- * other through their mailboxes). A node that does not listen (listen_port 0) only dials out: it gets its alerts by polling its mailboxes.
+ * A record goes to the DHT_KSTORE nodes closest to K = SHA256("pznet1/key" || x). A custodian that sees the same x from two owners tells
+ * the one that stores (COINCIDENCE), and nobody else: that owner proves its record to the custodian (PROVE), gets the other owners of the
+ * x in the answer, and sends ALERT(record, record, proof) with its own proof of possession to each of them and to the DHT_KSTORE mailbox
+ * nodes of each (closest to SHA256("pznet1/mbox" || owner)). An alert for this node is handed to the daemon (on_alert) only after both
+ * proofs of possession check out: this node's own (from own_distance) and the other owner's, which its ALERT carries or POSSESS asks for
+ * (so two homes that do not listen prove to each other through their mailboxes). A node that does not listen (listen_port 0) only dials
+ * out: it gets its alerts by polling its mailboxes.
  * A node that listens is also a relay: it joins the connections of two homes that cannot dial each other (docs/en/NETWORK.md 7.7).
  *
  * Everything that comes from the network is bounded (docs/en/NETWORK.md 7.4): contacts per address block in the table, connections and
@@ -15,9 +17,9 @@
  * pairs a mailbox keeps, the alerts an owner remembers, the relays.
  *
  * Threads: one accepts, a bounded pool handles the connections (one request and its answer, or a session handed to on_session), one runs
- * the jobs that take time (the alerts of a custodian, the proofs of an alert, the ping of the oldest contact of a full bucket: each kind
- * in turn), one keeps the node fresh (bucket refresh, republish of the own records, mailbox polls, the alerts that wait for a proof,
- * peers.txt), one per relay under way; a publish stores to 16 custodians at a time, each on a thread, and a lookup asks DHT_ALPHA nodes
+ * the jobs that take time (the proofs of an alert, the ping of the oldest contact of a full bucket: each kind in turn), one keeps the
+ * node fresh (bucket refresh, republish of the own records, mailbox polls, the alerts that wait for a proof, peers.txt), one per relay
+ * under way; a publish stores to 16 custodians at a time, each on a thread, and a lookup asks DHT_ALPHA nodes
  * at a time. The callbacks run on those threads: they must be thread-safe and must not call dht_stop. Every other function may be
  * called from any thread. */
 #ifndef PZPEER_DHT_H
@@ -34,6 +36,7 @@
 #define DHT_BUCKETS 256
 #define DHT_STORE_MAX 255          /* records in one STORE */
 #define DHT_MBOX_MAX 64            /* pairs in one MBOX */
+#define DHT_PROVE_MAX 8            /* records in one PROVE: DHT_MBOX_MAX pairs answer them, STORE_X_OWNERS each */
 #define DHT_ANY_PORT (-1)          /* listen_port: any free port (tests; dht_port tells which) */
 #define DHT_MBOX_ENTRY (2 * RECORD_LEN + 1 + 2 * 64)   /* a pair in MBOX: the two records, which proofs follow, the two proofs */
 
@@ -44,7 +47,7 @@ enum {
     DHT_CLAIM = 32, DHT_CLAIMED, DHT_CLAIM_GET, DHT_CLAIMS   /* the claims of the blocks of a linear search (docs/en/NETWORK.md 11) */
 };
 
-/* the status of a record in STORED; COINCIDENCE asks the owner for PROVE before the custodian alerts anyone */
+/* the status of a record in STORED; COINCIDENCE: other owners have its x, and PROVE tells the owner which */
 enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_COINCIDENCE, DHT_ST_FAILED, DHT_ST_FULL, DHT_ST_FAR };
 
 typedef struct {
@@ -84,7 +87,7 @@ typedef struct {
                                     * hour, for a day; 0: 60 */
     bool allow_private;            /* a test network (or --allow-private): loopback and private addresses are taken, and not limited.
                                     * A public network refuses them in answers and in the table, so no answer sends it into the LAN */
-    uint64_t store_max;            /* records this node keeps as a custodian; 0: DHT_STORE_DEFAULT. An owner gets 1/16 of them at most */
+    uint64_t store_max;            /* records this node keeps as a custodian; 0: DHT_STORE_DEFAULT */
     int relay_max;                 /* relays at once (a node that listens is a relay); 0: 32 */
     uint64_t relay_bytes;          /* bytes of one relay, both ways together; 0: 32 MiB */
     unsigned relay_s;              /* the life of one relay; 0: 4 hours */

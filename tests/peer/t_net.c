@@ -310,7 +310,7 @@ static void test_drip(void)
     size_t n, plen;
     memcpy(prologue, "pznet5", 6), memcpy(prologue + 6, FP, 32);
     memset(e, 7, sizeof e);
-    CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, e));
+    CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, ida.pub33, e));
     sys_sleep_ms(2 * SHORT_MS);
     n = noise_hs_write(&hs, NULL, 0, m);
     CHECK(fd >= 0 && sys_send_all(fd, m, n, ms() + 3000) && sys_recv_all(fd, m, NET_HS2, ms() + 3000) && noise_hs_read(&hs, m, NET_HS2, pl, &plen));

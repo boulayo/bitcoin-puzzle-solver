@@ -175,7 +175,7 @@ static void test_store(void)
     wipe();
 }
 
-/* the limits of a custodian: records in all, records of one owner, owners of one x */
+/* the limits of a custodian: records in all, owners of one x, owners in all */
 static void test_limits(void)
 {
     char err[200];
@@ -183,25 +183,19 @@ static void test_limits(void)
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
-    store_limits(st, 6, 3);
+    store_limit(st, 6);
     record mine, others[STORE_X_OWNERS + 1];
     int no;
     uint8_t x[32];
-    for (int i = 0; i < 4; i++) {                              /* the fourth record of one owner is over its share */
+    CHECK(!store_owner(st, ida.xonly));
+    for (int i = 0; i < 8; i++) {                              /* 6 in all, whoever owns them: one owner may hold them all */
         char label[32];
         snprintf(label, sizeof label, "lim %d", i);
         point_x(label, x);
-        const record r = make(&ida, 0, x);
-        CHECK(store_put(st, &r, &mine, others, 4, &no) == (i < 3 ? STORE_OK : STORE_FULL));
+        const record r = make(i < 5 ? &ida : &idb, 0, x);
+        CHECK(store_put(st, &r, &mine, others, 4, &no) == (i < 6 ? STORE_OK : STORE_FULL));
     }
-    for (int i = 0; i < 4; i++) {                              /* the other owner fills the rest: 6 in all */
-        char label[32];
-        snprintf(label, sizeof label, "lim b %d", i);
-        point_x(label, x);
-        const record r = make(&idb, 0, x);
-        CHECK(store_put(st, &r, &mine, others, 4, &no) == (i < 3 ? STORE_OK : STORE_FULL));
-    }
-    CHECK(store_count(st) == 6);
+    CHECK(store_count(st) == 6 && store_owner(st, ida.xonly) && store_owner(st, idb.xonly) && !store_owner(st, idc.xonly));
     point_x("lim 0", x);
     const record dup = make(&ida, 0, x);                   /* a duplicate is no new record: still answered as one */
     CHECK(store_put(st, &dup, &mine, others, 4, &no) == STORE_DUP);
@@ -229,7 +223,7 @@ static void test_limits(void)
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
-    store_limits(st, 4096, 0);
+    store_limit(st, 4096);
     home_identity first = {0};
     int ok = 0;
     for (int i = 0; i <= 4096 / 256 + 1024; i++) {
@@ -277,15 +271,15 @@ static void test_planted(void)
         const record r1 = make(&ida, 0, x), r2 = make(&idb, 1, x);
         const bool full = copies == STORE_X_OWNERS;
         CHECK(store_put(st, &r1, &mine, others, STORE_X_OWNERS, &no) == (full ? STORE_FULL : STORE_OK) && no == copies);
-        CHECK(store_put_proved(st, &r1) == (full ? STORE_OK : STORE_DUP));
+        CHECK(store_put_proved(st, &r1, others, STORE_X_OWNERS, &no) == (full ? STORE_OK : STORE_DUP) && no == copies);
         CHECK(store_put(st, &r2, &mine, others, STORE_X_OWNERS, &no) == STORE_FULL && no == STORE_X_OWNERS && same(&others[0], &r1));
-        CHECK(store_put_proved(st, &r2) == STORE_OK);
+        CHECK(store_put_proved(st, &r2, others, STORE_X_OWNERS, &no) == STORE_OK && no == STORE_X_OWNERS && same(&others[0], &r1));
         CHECK(store_put(st, &r2, &mine, others, STORE_X_OWNERS, &no) == STORE_DUP && same(&others[0], &r1));
         for (int i = 0, held = copies + 2; full && i <= STORE_X_OWNERS; i++, held++) {
             snprintf(label, sizeof label, "late %d", i);
             const home_identity c = id_of(label);
             const record r = make(&c, 0, x);
-            CHECK(store_put_proved(st, &r) == (held < 2 * STORE_X_OWNERS ? STORE_OK : STORE_FULL));
+            CHECK(store_put_proved(st, &r, others, STORE_X_OWNERS, &no) == (held < 2 * STORE_X_OWNERS ? STORE_OK : STORE_FULL));
         }
         CHECK(store_find(st, x, all, 2 * STORE_X_OWNERS + 1) == (full ? 2 * STORE_X_OWNERS : copies + 2) && same(&all[full ? 6 : 0], &r2));
         store_close(st);
@@ -293,8 +287,8 @@ static void test_planted(void)
     wipe();
 }
 
-/* Many owners and records, and the store opened again: every record is found, an owner at its share is still full and the others are
- * not, and a new owner takes the next number (the opening keys the index anew and counts the records of each owner by its number) */
+/* Many owners and records, and the store opened again: every record is found, its owners are known, and a new owner takes the next
+ * number (the opening keys the index anew and finds the owners by their numbers) */
 static void test_reopen(void)
 {
     enum { OWN = 200, EACH = 25 };
@@ -307,7 +301,6 @@ static void test_reopen(void)
     CHECK(st != NULL);
     for (int i = 0; i <= OWN; i++) snprintf(label, sizeof label, "reopen %d", i), id[i] = id_of(label);
     for (int round = 0; st && round < 2; round++) {
-        store_limits(st, 0, EACH);
         for (int i = 0; i < OWN; i++)
             for (int j = 0; j < EACH; j++) {
                 uint8_t x[32];
@@ -319,8 +312,8 @@ static void test_reopen(void)
             }
         uint8_t x[32];
         point_x("reopen one more", x);
-        const record more = make(&id[0], 0, x), fresh = make(&id[OWN], 0, x);
-        CHECK(ok == OWN * EACH && store_count(st) == OWN * EACH && store_put(st, &more, &mine, others, 4, &no) == STORE_FULL);
+        const record fresh = make(&id[OWN], 0, x);
+        CHECK(ok == OWN * EACH && store_count(st) == OWN * EACH && store_owner(st, id[OWN - 1].xonly) && !store_owner(st, id[OWN].xonly));
         CHECK(store_weight(st) == OWN * EACH * ldexpl(1, (int)net.dpbits));
         if (round) CHECK(store_put(st, &fresh, &mine, others, 4, &no) == STORE_OK);
         store_close(st);
@@ -434,10 +427,13 @@ static void test_mbox(void)
     CHECK(!store_pair_ok(ctx, &net, &a, &bad));
     mbox *m = mbox_new(3, 0);
     mbox_pair pairs[4];
-    CHECK(m && mbox_put(m, &b, &a, NULL) && !mbox_put(m, &a, &b, NULL));   /* the same pair, in either order */
+    uint8_t pa[64], pb[64], pc[64];
+    memset(pa, 0xa, 64), memset(pb, 0xb, 64), memset(pc, 0xc, 64);
+    CHECK(m && mbox_put(m, &b, &a, pb) && !mbox_put(m, &b, &a, pb));   /* a pair comes with the proof of the owner of its first record */
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && mbox_get(m, idb.xonly, pairs, 4) == 1 && mbox_get(m, idc.xonly, pairs, 4) == 0);
-    const bool a_first = memcmp(ida.xonly, idb.xonly, 32) < 0;   /* kept in the order of the owners */
-    CHECK(same(&pairs[0].r[0], a_first ? &a : &b) && same(&pairs[0].r[1], a_first ? &b : &a) && !pairs[0].has[0] && !pairs[0].has[1]);
+    const bool a_first = memcmp(ida.xonly, idb.xonly, 32) < 0;   /* kept in the order of the owners, the proof at the place of its owner */
+    CHECK(same(&pairs[0].r[0], a_first ? &a : &b) && same(&pairs[0].r[1], a_first ? &b : &a));
+    CHECK(pairs[0].has[a_first ? 1 : 0] && !pairs[0].has[a_first ? 0 : 1] && !memcmp(pairs[0].proof[a_first ? 1 : 0], pb, 64));
     record ord[2];                                              /* that order, and the name of a pair, whichever order it comes in */
     uint8_t h1[32], h2[32];
     CHECK(pair_order(&a, &b, ord) == !a_first && same(&ord[0], &pairs[0].r[0]) && same(&ord[1], &pairs[0].r[1]));
@@ -448,68 +444,39 @@ static void test_mbox(void)
     a9.dp += 1;                                                 /* the name of a record has no zero bits */
     pair_hash(&a9, &b, h2);
     CHECK(!memcmp(h1, h2, 32));
-    /* a proof of each owner, kept with the pair at the place of its owner; the same again is nothing new */
-    uint8_t pa[64], pb[64];
-    memset(pa, 0xa, 64), memset(pb, 0xb, 64);
-    CHECK(mbox_put(m, &a, &b, pa) && !mbox_put(m, &a, &b, pa) && !mbox_put(m, &b, &a, NULL) && mbox_put(m, &b, &a, pb));
-    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && pairs[0].has[0] && pairs[0].has[1]);
+    /* the proof of the other owner, kept with the same pair; again, and with other zero bits, it is nothing new */
+    CHECK(mbox_put(m, &a, &b, pa) && !mbox_put(m, &a, &b, pa) && !mbox_put(m, &a9, &b, pa));
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && pairs[0].has[0] && pairs[0].has[1] && has_pair(pairs, 1, &a, &b));
     CHECK(!memcmp(pairs[0].proof[a_first ? 0 : 1], pa, 64) && !memcmp(pairs[0].proof[a_first ? 1 : 0], pb, 64));
-    CHECK(mbox_put(m, &c, &a2, NULL));
+    CHECK(mbox_put(m, &c, &a2, pc));
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 2 && mbox_get(m, ida.xonly, pairs, 1) == 1);
     CHECK(pairs[0].r[0].x[0] == x2[0] && !memcmp(pairs[0].r[0].x, x2, 32));   /* the newest first */
-    /* three more pairs in a mailbox of three: the oldest that nobody proved go */
+    /* three more pairs in a mailbox of three: the oldest go */
     for (int i = 0; i < 3; i++) {
         char label[16];
         uint8_t x[32];
         snprintf(label, sizeof label, "m3 %d", i);
         point_x(label, x);
         const record p = make(&idb, 0, x), q = make(&idc, 1, x);
-        CHECK(mbox_put(m, &p, &q, NULL));
+        CHECK(mbox_put(m, &p, &q, pb));
     }
-    /* the pair of a with c went, and the first of the three; the pair of a with b, which both proved, stays */
-    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &b) && mbox_get(m, idc.xonly, pairs, 4) == 2);
-    CHECK(mbox_put(m, &c, &a2, NULL));                          /* gone, so new again */
+    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 0 && mbox_get(m, idb.xonly, pairs, 4) == 3 && mbox_get(m, idc.xonly, pairs, 4) == 3);
+    CHECK(mbox_put(m, &c, &a2, pc) && mbox_get(m, idb.xonly, pairs, 4) == 2);   /* gone, so new again: the mailbox holds three */
     mbox_free(m);
     /* a limit per owner: a flood of pairs of b and c pushes out their own oldest only, not the pairs of a and d */
     const record d1 = make(&idd, 1, x1);
     m = mbox_new(100, 4);
-    CHECK(m && mbox_put(m, &a, &d1, NULL) && mbox_put(m, &a, &c, NULL));
+    CHECK(m && mbox_put(m, &a, &d1, pa) && mbox_put(m, &a, &c, pa));
     for (int i = 0; i < 10; i++) {
         char label[16];
         uint8_t x[32];
         snprintf(label, sizeof label, "m4 %d", i);
         point_x(label, x);
         const record p = make(&idb, 0, x), q = make(&idc, 1, x);
-        CHECK(mbox_put(m, &p, &q, NULL));
+        CHECK(mbox_put(m, &p, &q, pb));
     }
     CHECK(mbox_get(m, idb.xonly, pairs, 4) == 4 && mbox_get(m, idd.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));
     CHECK(mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &d1));   /* the pair of a with c went: c had too many */
-    mbox_free(m);
-    /* What one identity that copied the points of a can do to the pair of a with b, which b proved: the same point sent ten times is one
-     * pair, and ten points push out each other, not the proved pair. Before, any four of them pushed it out. */
-    m = mbox_new(100, 4);
-    CHECK(m && mbox_put(m, &b, &a, pb));
-    for (int i = 0; i < 10; i++) {
-        const record q = make(&idc, 1, x1);
-        CHECK(mbox_put(m, &a, &q, NULL) == (i == 0));
-    }
-    const record c9 = make(&idc, 1, x1);
-    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 2 && !mbox_put(m, &a, &c9, NULL) && mbox_get(m, idc.xonly, pairs, 4) == 1);
-    for (int i = 0; i < 10; i++) {
-        char label[16];
-        uint8_t x[32];
-        snprintf(label, sizeof label, "m5 %d", i);
-        point_x(label, x);
-        const record p = make(&ida, 0, x), q = make(&idc, 1, x);
-        CHECK(mbox_put(m, &p, &q, NULL));
-    }
-    CHECK(mbox_get(m, ida.xonly, pairs, 4) == 4 && has_pair(pairs, 4, &a, &b));
-    /* the same pair again with a proof: the proof is kept with it */
-    const record c1 = make(&idc, 1, x1);
-    mbox_free(m);
-    m = mbox_new(100, 4);
-    CHECK(m && mbox_put(m, &a, &c1, NULL) && mbox_put(m, &a, &c9, pa) && mbox_get(m, ida.xonly, pairs, 4) == 1 && has_pair(pairs, 1, &a, &c9));
-    CHECK(!mbox_put(m, &a, &c1, pa) && has_pair(pairs, mbox_get(m, ida.xonly, pairs, 4), &a, &c9));
     mbox_free(m);
 }
 

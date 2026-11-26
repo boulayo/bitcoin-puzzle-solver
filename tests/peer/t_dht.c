@@ -54,7 +54,7 @@ typedef struct {
     char dir[64], boot[32];
     const char *bootv[1];
     pthread_mutex_t mu;
-    point pts[32];
+    point pts[64];
     int npts, alerts, slow_ms;     /* slow_ms: own_distance takes that long (the cost of a job, without a network to spend it on) */
     record mine, theirs;
     bool merge;
@@ -402,7 +402,7 @@ static void test_coincidences(void)
     /* V cannot dial U for its proof: U, which can dial V, sent its own with its ALERT (before, V's alert waited for a day) */
     CHECK(alerts_of(V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rU) && !merge);
     printf("t_dht: the six alerts in %.1f s\n", (double)(ms() - t0) / 1000);
-    /* the mailboxes of each owner have the pair (the custodians send it there after the owners) */
+    /* the mailboxes of each owner have the pair: the other owner sent it there, with its proof */
     const int64_t t1 = ms();
     int mbA = 0, mbB = 0, mbU = 0, mbV = 0;
     for (; ms() - t1 < 15000; nap(50)) {
@@ -442,8 +442,9 @@ static void make_id(const char *label, home_identity *id)
     CHECK(keys_identity(ctx, seed, FP, BITS, id));
 }
 
-/* A copy of another's point alerts nobody: the custodian waits for the proof of the owner that stored it. A real coincidence: the owner
- * that proves its record hears of the pair from the custodian itself, in the answer to PROVE. */
+/* A copy of another's point alerts nobody: a custodian alerts nobody by itself, and the copier has no proof to send. A real coincidence:
+ * the owner that proves its record hears of the pair from the custodian, in the answer to PROVE, and the other owner from it, in an
+ * ALERT with its proof. */
 static void test_copied_point(void)
 {
     node *P = &nodes[21], *Q = &nodes[23], *R = &nodes[25];
@@ -456,6 +457,20 @@ static void test_copied_point(void)
     nap(3000);
     CHECK(in_mailboxes(P->id.xonly, &rP, &rQ) == 0 && in_mailboxes(Q->id.xonly, &rP, &rQ) == 0);
     CHECK(alerts_of(P, NULL, NULL, NULL) == 0);
+    home_identity cid;
+    make_id("prover", &cid);
+    net_cfg cli;
+    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
+    net_addr a;
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    uint8_t al[1 + 2 * RECORD_LEN + 64] = {DHT_ALERT}, ans[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY], zero[32] = {0}, h[32];
+    size_t n;
+    /* nor can the copier tell P itself: an ALERT without the proof of its first record, or with one that does not check out, is refused */
+    a.port = dht_port(P->d);
+    record_encode(&rQ, al + 1), record_encode(&rP, al + 1 + RECORD_LEN);
+    CHECK(!net_exchange(&cli, &a, P->id.xonly, al, 1 + 2 * RECORD_LEN, ans, sizeof ans, &n, NULL));
+    CHECK(!net_exchange(&cli, &a, P->id.xonly, al, sizeof al, ans, sizeof ans, &n, NULL));
+    CHECK(alerts_of(P, NULL, NULL, NULL) == 0);
     /* the real one, by hand: R stores a wild point, then an owner of its own the same x tame, which it proves */
     hashed("proved by hand", d2), even_point(d2, x2);
     memcpy(nq, qp, 32);
@@ -464,21 +479,14 @@ static void test_copied_point(void)
     CHECK(secp256k1_ec_seckey_tweak_add(ctx, dR, nq));
     give_point(R, 1, x2, dR);
     CHECK(publish_one(R, 1, x2, &rR));
-    home_identity cid;
-    make_id("prover", &cid);
-    net_cfg cli;
-    net_cfg_init(&cli, ctx, &cid, FP, BITS, 0, 2000);
     record mine = {.t = 0, .dp = net.dpbits};
     memcpy(mine.x, x2, 32), memcpy(mine.owner, cid.xonly, 32);
     int who;
     store_key(x2, k);
     CHECK(brute(k, 1, &who) == 1);
     node *cu = &nodes[who];
-    net_addr a;
-    CHECK(net_parse_addr("127.0.0.1:1", &a));
     a.port = dht_port(cu->d);
-    uint8_t req[2 + RECORD_WIRE + 64], ans[2 + DHT_MBOX_MAX * DHT_MBOX_ENTRY], zero[32] = {0};
-    size_t n;
+    uint8_t req[2 + RECORD_WIRE + 64];
     req[0] = DHT_STORE, req[1] = 1, record_wire_encode(&mine, req + 2);
     CHECK(net_exchange(&cli, &a, cu->id.xonly, req, 2 + RECORD_WIRE, ans, sizeof ans, &n, NULL) && n == 3 && ans[2] == DHT_ST_COINCIDENCE);
     req[0] = DHT_PROVE;                                        /* PROVE(1, the record, the proof) */
@@ -489,10 +497,21 @@ static void test_copied_point(void)
     record g0, g1;
     CHECK(record_decode(ans + 2, &g0) && record_decode(ans + 2 + RECORD_LEN, &g1));
     CHECK((same(&g0, &mine) && same(&g1, &rR)) || (same(&g0, &rR) && same(&g1, &mine)));
-    CHECK(net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 2 && ans[1] == 0);   /* nothing waits any more */
-    const int64_t t0 = ms();                                   /* and the custodian alerted R's mailboxes */
-    while (ms() - t0 < 10000 && in_mailboxes(R->id.xonly, &rR, &mine) == 0) nap(50);
-    CHECK(in_mailboxes(R->id.xonly, &rR, &mine) > 0);
+    /* again, the same answer: the custodian keeps nothing between STORE and PROVE, and tells nobody else */
+    CHECK(net_exchange(&cli, &a, cu->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 2 + DHT_MBOX_ENTRY && ans[1] == 1);
+    nap(500);
+    CHECK(alerts_of(R, NULL, NULL, NULL) == 0 && in_mailboxes(R->id.xonly, &rR, &mine) == 0);
+    /* the owner that proved tells R, with its proof for R over the pair: R, which holds its point, gets its alert */
+    a.port = dht_port(R->d);
+    record_encode(&mine, al + 1), record_encode(&rR, al + 1 + RECORD_LEN);
+    pair_hash(&mine, &rR, h);
+    CHECK(record_prove(ctx, &net, &mine, d2, R->id.xonly, h, al + 1 + 2 * RECORD_LEN));
+    CHECK(net_exchange(&cli, &a, R->id.xonly, al, sizeof al, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_OK);
+    const int64_t t0 = ms();
+    while (ms() - t0 < 10000 && alerts_of(R, NULL, NULL, NULL) == 0) nap(50);
+    record got, theirs;
+    bool merge;
+    CHECK(alerts_of(R, &got, &theirs, &merge) == 1 && same(&got, &rR) && same(&theirs, &mine) && !merge);
 }
 
 static void test_malformed(void)
@@ -898,10 +917,10 @@ static void test_linear(void)
         if (ln[i]) scratch_end(ln[i], names[i]);
 }
 
-/* What a public network refuses, and the limits by address block: in NODES answers (loopback and private addresses, port 0, one address
- * for two identities, more than 4 contacts of one block) and in the table (2 of a block in a bucket, 4 in the table). A test network takes
- * loopback without a limit. A node of a public network on 127.0.0.1 bootstraps from node 0 and keeps nothing: every answer points at
- * loopback. Before, all of it was taken. */
+/* What a public network refuses, and the limits by address block: in NODES answers (loopback and private addresses, port 0) and in the
+ * table (2 of a block in a bucket, 4 in the table). An answer may name one address twice and many contacts of one block: they are the
+ * candidates of a lookup, which asks 4 nodes of a block at most. A test network takes loopback without a limit. A node of a public
+ * network on 127.0.0.1 bootstraps from node 0 and keeps nothing: every answer points at loopback. Before, all of it was taken. */
 static void test_policy(void)
 {
     home_identity pid, tid, ids[24];
@@ -933,11 +952,9 @@ static void test_policy(void)
     m[2 + 82 + 80] = m[2 + 82 + 81] = 0;
     CHECK(dht_parse_nodes(tst, m, l, out) == -1 && dht_parse_nodes(pub, m, l, out) == -1);
     l = nodes_msg(m, ids, TWICE, 3);
-    CHECK(dht_parse_nodes(tst, m, l, out) == -1 && dht_parse_nodes(pub, m, l, out) == -1);
+    CHECK(dht_parse_nodes(tst, m, l, out) == 3 && dht_parse_nodes(pub, m, l, out) == 3);
     l = nodes_msg(m, ids, BLOCK5, 5);
-    CHECK(dht_parse_nodes(tst, m, l, out) == -1 && dht_parse_nodes(pub, m, l, out) == -1);
-    l = nodes_msg(m, ids, BLOCK5, 4);
-    CHECK(dht_parse_nodes(pub, m, l, out) == 4);
+    CHECK(dht_parse_nodes(tst, m, l, out) == 5 && dht_parse_nodes(pub, m, l, out) == 5);
     l = nodes_msg(m, ids, PUB2, 2);
     m[2 + 82 + 40] ^= 1;                                        /* the second identity does not give its ID */
     CHECK(dht_parse_nodes(pub, m, l, out) == -1);
@@ -981,8 +998,8 @@ static void test_policy(void)
 }
 
 /* A table with two identities at one address (a node gone, and the one now at its address, until the old one has failed three times):
- * the NODES answer gives that address once, the nearer of the two. Before, it gave both, and every asker refused the whole answer (one
- * address, two identities) and counted it as a failure of this node. */
+ * the NODES answer gives both, and the asker takes it. Before, every asker refused the whole answer (one address, two identities) and
+ * counted it as a failure of this node. */
 static void test_nodes_answer(void)
 {
     home_identity sid, cid, ids[3];
@@ -1004,7 +1021,7 @@ static void test_nodes_answer(void)
     size_t n;
     memcpy(req + 1, ids[1].id, 32);
     CHECK(net_exchange(&cli, &a, sid.xonly, req, sizeof req, ans, sizeof ans, &n, NULL));
-    CHECK(dht_parse_nodes(sd, ans, n, out) == 2 && !memcmp(out[0].id, ids[1].id, 32) && !memcmp(out[1].id, ids[2].id, 32));
+    CHECK(dht_parse_nodes(sd, ans, n, out) == 3 && !memcmp(out[0].id, ids[1].id, 32));
     scratch_end(sd, "s-nodes");
 }
 
@@ -1051,7 +1068,7 @@ static bool close_to(const uint8_t id[32], const uint8_t t[32], int bits)
 
 static void test_hostile_lookup(void)
 {
-    enum { H = 3, TAR = H * DHT_K };                           /* a port for each name: an answer with an address twice is refused whole */
+    enum { H = 3, TAR = H * DHT_K };                           /* a port for each name */
     static hostile hs[H];
     pthread_t th[H];
     uint16_t tar[TAR];
@@ -1159,6 +1176,17 @@ static void test_slowloris(void)
     sys_close(fifth);
     nap(300);
     CHECK(net_exchange(&cli, &a, sid.xonly, &ping, 1, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_PONG);
+    /* a connection that takes its time over the handshake has no more of it for its request: it is closed two seconds after it came
+     * (before, two seconds after the handshake: each had its own) */
+    net_conn *c = calloc(1, sizeof *c);
+    const int late = raw_connect(a.port);
+    nap(1200);
+    CHECK(c && late >= 0);
+    if (c && late >= 0) {
+        c->fd = late, c->timeout_ms = 2000;
+        CHECK(net_rehandshake(&cli, c, true, sid.xonly) && closed_within(late, 1500));
+        net_close(c);
+    }
     scratch_end(sv, "s-slow");
 }
 
@@ -1251,9 +1279,10 @@ static void test_first_contact(void)
     scratch_end(b, "s-first-b");
 }
 
-/* A flood of alerts that will never be proved: copies of a record of A2 by 1100 identities that are no node. A2 does not know that
- * point's distance, so they all wait, and fill its table of alerts (1024). Then a real coincidence of A2 with B2: before, it was refused
- * (the table was full of waiting alerts and kept them for a day); now the oldest waiting one goes, and the real one gets its on_alert. */
+/* A flood of alerts that will never end: a point that A2 does not hold, in a record with its name, and the same point under 1100
+ * identities, each with its proof (who holds a point signs for any name). A2 does not know that point's distance, so they all wait, and
+ * fill its table of alerts (1024). Then a real coincidence of A2 with B2: before, it was refused (the table was full of waiting alerts
+ * and kept them for a day); now the oldest waiting one goes, and the real one gets its on_alert. */
 static void test_alert_flood(void)
 {
     node *A2 = &nodes[17], *B2 = &nodes[19];
@@ -1276,16 +1305,18 @@ static void test_alert_flood(void)
         home_identity sy;
         snprintf(label, sizeof label, "sybil %d", i);
         make_id(label, &sy);
-        record r = {.t = 1, .dp = net.dpbits};
+        record r = {.t = 0, .dp = net.dpbits};
         memcpy(r.x, xf, 32), memcpy(r.owner, sy.xonly, 32);
-        uint8_t req[1 + 2 * RECORD_LEN], ans[1];
+        uint8_t req[1 + 2 * RECORD_LEN + 64], ans[1], h[32];
         size_t n;
         req[0] = DHT_ALERT;
-        record_encode(&rF, req + 1), record_encode(&r, req + 1 + RECORD_LEN);
+        record_encode(&r, req + 1), record_encode(&rF, req + 1 + RECORD_LEN);
+        pair_hash(&r, &rF, h);
+        CHECK(record_prove(ctx, &net, &r, dA, A2->id.xonly, h, req + 1 + 2 * RECORD_LEN));
         sent += net_exchange(&cli, &a, A2->id.xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 1 && ans[0] == DHT_OK;
     }
     CHECK(sent == 1100);
-    printf("t_dht: 1100 alerts that will never be proved sent in %.1f s\n", (double)(ms() - t0) / 1000);
+    printf("t_dht: 1100 alerts of a point the node does not hold sent in %.1f s\n", (double)(ms() - t0) / 1000);
     /* the real one: A2 tame, B2 wild + */
     hashed("after the flood", dA);
     even_point(dA, xA);
@@ -1624,9 +1655,67 @@ static void test_planted_copies(void)
     printf("t_dht: a coincidence behind %d copies planted at every custodian, alerted in %.1f s\n", STORE_X_OWNERS, (double)(ms() - t0) / 1000);
 }
 
+/* Copies planted on eight other points of an owner, at the custodians of a point where it has a real coincidence, and all nine sent
+ * in one STORE, that point last: the owner proves every record a custodian says COINCIDENCE for, and hears of the real one. Before, it
+ * proved the first eight of a STORE (and a custodian said COINCIDENCE for eight records of an address block at once): the copies took
+ * those places, at every republish again, and the owner never heard of the real one from its custodians. */
+static void test_starved_coincidence(void)
+{
+    enum { COPIES = DHT_PROVE_MAX };
+    node *A = &nodes[14], *B = &nodes[16];
+    uint8_t d[COPIES + 1][32], dB[32], k[32];
+    record batch[COPIES + 1], rB, mine, theirs;
+    dht_contact cs[DHT_K], cc[DHT_K];                           /* the custodians as a publish finds them: the closest of a lookup of 20 */
+    bool merge;
+    home_identity pid;
+    net_cfg cli;
+    make_id("starver", &pid);
+    net_cfg_init(&cli, ctx, &pid, FP, BITS, 0, 2000);
+    const int m = DHT_KSTORE;
+    bool found = false;
+    for (int i = 0; i < 100 && !found; i++) {                   /* the real point: A is no custodian of it */
+        char label[32];
+        snprintf(label, sizeof label, "starved %d", i);
+        hashed(label, d[COPIES]), even_point(d[COPIES], batch[COPIES].x);
+        store_key(batch[COPIES].x, k);
+        found = dht_lookup(A->d, k, cs, DHT_K) >= m && !has(cs, m, A->id.id, NULL);
+    }
+    CHECK(found);
+    int got = 0;
+    for (int i = 0; found && got < COPIES && i < 200000; i++) { /* eight points with the same custodians, a copy planted at each */
+        char label[32];
+        uint8_t ki[32], req[2 + RECORD_WIRE] = {DHT_STORE, 1}, ans[4];
+        size_t n;
+        snprintf(label, sizeof label, "starving %d", i);
+        hashed(label, d[got]), even_point(d[got], batch[got].x);
+        store_key(batch[got].x, ki);
+        if (ki[0] != k[0] || dht_lookup(A->d, ki, cc, DHT_K) < m) continue;
+        int shared = 0;
+        for (int j = 0; j < m; j++) shared += has(cc, m, cs[j].id, NULL);
+        if (shared != m) continue;
+        const record cp = rec_of(1, batch[got].x, pid.xonly);
+        record_wire_encode(&cp, req + 2);
+        for (int j = 0; j < m; j++)
+            CHECK(net_exchange(&cli, &cs[j].addr, cs[j].xonly, req, sizeof req, ans, sizeof ans, &n, NULL) && n == 3 && ans[2] == DHT_ST_STORED);
+        got++;
+    }
+    CHECK(got == COPIES);
+    if (got < COPIES) return;
+    for (int i = 0; i <= COPIES; i++) batch[i].t = 0, batch[i].dp = net.dpbits, give_point(A, 0, batch[i].x, d[i]);
+    wild_of(d[COPIES], dB);
+    give_point(B, 1, batch[COPIES].x, dB);
+    CHECK(publish_one(B, 1, batch[COPIES].x, &rB) && dht_publish(A->d, batch, COPIES + 1) == COPIES + 1);
+    const int64_t t0 = ms();
+    while (ms() - t0 < 20000 && (alerts_of(A, NULL, NULL, NULL) < 1 || alerts_of(B, NULL, NULL, NULL) < 1)) nap(50);
+    CHECK(alerts_of(A, &mine, &theirs, &merge) == 1 && same(&mine, &batch[COPIES]) && same(&theirs, &rB) && !merge);
+    CHECK(alerts_of(B, &mine, &theirs, &merge) == 1 && same(&mine, &rB) && same(&theirs, &batch[COPIES]) && !merge);
+    printf("t_dht: a coincidence behind %d copies planted on other points of its owner, alerted in %.1f s\n", COPIES, (double)(ms() - t0) / 1000);
+}
+
 /* A node of the table at an address of its own that answers as a custodian would, except: every record of a STORE is a coincidence, and
- * PROVE gets the answer the test set (LIAR_PAIRS) or none (LIAR_SILENT: it holds the connection past the timeout of the asker); or every
- * record of a STORE is stored, at once (LIAR_OK) or after a second (LIAR_SLOW). Each connection on a thread of its own. */
+ * PROVE and MBOX_GET get the answer the test set (LIAR_PAIRS) or, PROVE, none (LIAR_SILENT: it holds the connection past the timeout
+ * of the asker); or every record of a STORE is stored, at once (LIAR_OK) or after a second (LIAR_SLOW). Each connection on a thread
+ * of its own. */
 enum { LIAR_OK, LIAR_PAIRS, LIAR_SILENT, LIAR_SLOW };
 
 typedef struct {
@@ -1660,13 +1749,13 @@ static void *liar_conn_main(void *arg)
         if (req[0] == DHT_PING) ans[0] = DHT_PONG, n = 1;
         else if (req[0] == DHT_FIND_NODE) ans[0] = DHT_NODES, ans[1] = 0, n = 2;
         else if (req[0] == DHT_ALERT) ans[0] = DHT_OK, n = 1;
-        else if (req[0] == DHT_MBOX_GET) ans[0] = DHT_MBOX, ans[1] = 0, n = 2;
+        else if (req[0] == DHT_MBOX_GET && mode != LIAR_PAIRS) ans[0] = DHT_MBOX, ans[1] = 0, n = 2;
         else if (req[0] == DHT_STORE && len >= 2) {
             if (mode == LIAR_SLOW) nap(1000);
             ans[0] = DHT_STORED, ans[1] = req[1], n = 2 + (size_t)req[1];
             memset(ans + 2, mode == LIAR_OK || mode == LIAR_SLOW ? DHT_ST_STORED : DHT_ST_COINCIDENCE, req[1]);
-        } else if (req[0] == DHT_PROVE) {
-            atomic_fetch_add(&l->proves, 1);
+        } else if (req[0] == DHT_PROVE || req[0] == DHT_MBOX_GET) {
+            atomic_fetch_add(&l->proves, req[0] == DHT_PROVE);
             if (mode == LIAR_SILENT) nap(timeout_ms + 500);
             pthread_mutex_lock(&l->mu);
             if (mode == LIAR_PAIRS) memcpy(ans, l->mbox, l->mbox_len), n = l->mbox_len;
@@ -1698,7 +1787,7 @@ static void *liar_main(void *arg)
     return NULL;
 }
 
-/* the answer of the liar to PROVE: an MBOX with these pairs, without proofs */
+/* the answer of the liar to PROVE and to MBOX_GET: an MBOX with these pairs, without proofs */
 static void liar_answer(liar *l, const mbox_pair *p, int n)
 {
     pthread_mutex_lock(&l->mu);
@@ -1756,6 +1845,9 @@ static void lying_checks(node *O, node *P, liar *l)
     while (ms() - t0 < 10000 && (alerts_of(O, NULL, NULL, NULL) < 1 || alerts_of(P, NULL, NULL, NULL) < 1)) nap(50);
     CHECK(alerts_of(O, &mine, &theirs, &merge) == 1 && same(&mine, &rO[0]) && same(&theirs, &rP[0]));
     CHECK(alerts_of(P, &mine, &theirs, &merge) == 1 && same(&mine, &rP[0]) && same(&theirs, &rO[0]));
+    /* the liar as a mailbox of O: the pair of another point of O, which no owner proved, is no alert (before, any mailbox made one) */
+    liar_answer(l, pp + 1, 1);
+    CHECK(dht_mbox_poll(O->d) == 0);
     /* more pairs for one record than a custodian keeps owners of its x: the answer is refused whole */
     pp[0] = pair_of(&rO[2], &rP[2]);
     for (int i = 1; i <= STORE_X_OWNERS; i++) {
@@ -1789,6 +1881,22 @@ static void lying_checks(node *O, node *P, liar *l)
     const int64_t took = ms() - t0;
     printf("t_dht: 20 records to a custodian that does not answer PROVE in %.1f s\n", (double)took / 1000);
     CHECK(took < 2 * timeout_ms + 1500 && atomic_load(&l->proves) == proves + 1);
+    /* a PROVE that failed during a republish: its records go to that custodian again at the next one, though it said it holds them
+     * (before, they counted as held, and the custodian was left out until the weekly republish to all) */
+    (void)dht_republish(O->d, true);
+    atomic_store(&l->mode, LIAR_OK);
+    CHECK(dht_republish(O->d, false) > 0 && dht_republish(O->d, false) == 0);
+    /* every record a custodian says COINCIDENCE for is proved, DHT_PROVE_MAX at a time: 20 records, three PROVEs */
+    liar_answer(l, pp, 0);
+    atomic_store(&l->mode, LIAR_PAIRS);
+    for (int i = 0; i < 20; i++) {
+        char label[32];
+        uint8_t di[32];
+        snprintf(label, sizeof label, "proved %d", i);
+        hashed(label, di), even_point(di, r20[i].x);
+        give_point(O, 0, r20[i].x, di);
+    }
+    CHECK(dht_publish(O->d, r20, 20) == 20 && atomic_load(&l->proves) == proves + 2 + (20 + DHT_PROVE_MAX - 1) / DHT_PROVE_MAX);
 
     /* a publish while a republish waits for a slow custodian: it does not wait for the republish (before, it waited for all of it) */
     record *bulk = malloc(600 * sizeof *bulk), one;
@@ -1913,41 +2021,39 @@ static void victim_end(node *V)
     pthread_mutex_destroy(&V->mu);
 }
 
-/* ALERT(a, b), with the proof of the owner of a when there is one, to V from the loopback address src (each one a block of its own):
- * whether V took it */
-static bool alert_from(const char *src, const net_cfg *cli, const node *V, const record *a, const record *b, const uint8_t *proof)
+/* ALERT(a, rV, proof) to V from the loopback address src (each one a block of its own): a is the record of type t at the x of rV under
+ * the identity named who, with its proof for V, made with d, the distance of that point for that type. Whether V took it; *out: a. */
+static bool alert_from(const char *src, const net_cfg *cli, const node *V, const char *who, int t, const uint8_t d[32], const record *rV,
+                       record *out)
 {
-    uint8_t req[1 + 2 * RECORD_LEN + 64], ans[4];
+    uint8_t req[1 + 2 * RECORD_LEN + 64], ans[4], h[32];
     size_t n;
-    req[0] = DHT_ALERT, record_encode(a, req + 1), record_encode(b, req + 1 + RECORD_LEN);
-    if (proof) memcpy(req + 1 + 2 * RECORD_LEN, proof, 64);
-    return exchange_from(src, cli, dht_port(V->d), V->id.xonly, req, 1 + 2 * RECORD_LEN + (proof ? 64 : 0), ans, sizeof ans, &n) && n == 1 &&
-           ans[0] == DHT_OK;
+    home_identity id;
+    make_id(who, &id);
+    const record a = rec_of(t, rV->x, id.xonly);
+    if (out) *out = a;
+    req[0] = DHT_ALERT, record_encode(&a, req + 1), record_encode(rV, req + 1 + RECORD_LEN);
+    pair_hash(&a, rV, h);
+    CHECK(record_prove(ctx, &net, &a, d, V->id.xonly, h, req + 1 + 2 * RECORD_LEN));
+    return exchange_from(src, cli, dht_port(V->d), V->id.xonly, req, sizeof req, ans, sizeof ans, &n) && n == 1 && ans[0] == DHT_OK;
 }
 
-/* the real alert of the point x of V (its distance dV) with a wild other owner, with that owner's proof, from 127.0.0.1 */
-static record real_alert(const net_cfg *cli, const node *V, const char *partner, const uint8_t x[32], const uint8_t dV[32])
-{
-    uint8_t dB[32], h[32], proof[64];
-    home_identity bid;
-    make_id(partner, &bid), wild_of(dV, dB);
-    const record rV = rec_of(0, x, V->id.xonly), rB = rec_of(1, x, bid.xonly);
-    pair_hash(&rB, &rV, h);
-    CHECK(record_prove(ctx, &net, &rB, dB, V->id.xonly, h, proof) && alert_from("127.0.0.1", cli, V, &rB, &rV, proof));
-    return rB;
-}
-
-/* Forged alerts with a real record of a node, from one address block: they hold ALERT_JOBS_BLOCK (8) places of the queue of jobs, also
- * when tried again, so a real alert from another block is checked after a few of them (100 ms each here). Before, the 64 forged alerts
- * that one address sends at once were all queued before the real one: 13 s, and a flood that goes on kept it waiting. */
+/* Alerts of a point that a node does not hold, in a record with its name, under 64 identities that prove it (who holds a point signs
+ * for any name), from one address block: they hold ALERT_JOBS_BLOCK (8) places of the queue of jobs, also when tried again, so a real
+ * alert from another block is checked after a few of them (150 ms each here). Before, the 64 alerts that one address sends at once
+ * were all queued before the real one: 10 s, and a flood that goes on kept it waiting. */
 static void test_alert_blocks(void)
 {
     static node V;
-    if (!victim(&V, "s-blocks", 100)) return;
-    uint8_t dV[32], x[32];
+    if (!victim(&V, "s-blocks", 150)) return;
+    uint8_t dV[32], x[32], dF[32], xf[32];
     hashed("blocks", dV), even_point(dV, x);
+    hashed("blocks flood", dF), even_point(dF, xf);
     give_point(&V, 0, x, dV);
-    const record rV = rec_of(0, x, V.id.xonly);
+    const record rV = rec_of(0, x, V.id.xonly), rF = rec_of(0, xf, V.id.xonly);
+    uint8_t dW[32];
+    record rB;
+    wild_of(dV, dW);
     home_identity cid;
     make_id("blocks client", &cid);
     net_cfg cli;
@@ -1955,39 +2061,39 @@ static void test_alert_blocks(void)
     int sent = 0;
     for (int i = 0; i < 64 && sent == i; i++) {
         char label[32];
-        home_identity sy;
         snprintf(label, sizeof label, "blocks sybil %d", i);
-        make_id(label, &sy);
-        const record q = rec_of(1, x, sy.xonly);
-        sent += alert_from("127.0.0.2", &cli, &V, &rV, &q, NULL);
+        sent += alert_from("127.0.0.2", &cli, &V, label, 0, dF, &rF, NULL);
     }
     if (!sent) printf("t_dht: no address 127.0.0.2 on this machine: the alerts of two blocks not tried\n");
     if (sent) {
         CHECK(sent == 64);
         const int64_t t0 = ms();
-        const record rB = real_alert(&cli, &V, "blocks partner", x, dV);
+        CHECK(alert_from("127.0.0.1", &cli, &V, "blocks partner", 1, dW, &rV, &rB));
         while (ms() - t0 < 20000 && alerts_of(&V, NULL, NULL, NULL) < 1) nap(20);
         record mine, theirs;
         bool merge;
         const int64_t took = ms() - t0;
         CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rB) && took < 5000);
-        printf("t_dht: a real alert behind 64 forged ones from another block in %.1f s\n", (double)took / 1000);
+        printf("t_dht: a real alert behind 64 of another block that never end in %.1f s\n", (double)took / 1000);
     }
     victim_end(&V);
 }
 
-/* A real alert whose job waits behind slow ones (8 forged alerts of a point of V, from one block, 0.8 s each) while 1152 alerts of 18
- * other blocks fill the table of alerts (1024): its job in the queue keeps it there, and it is checked when its turn comes. Before, the
- * flood pushed it out first, its job found nothing, and V never got the alert. */
+/* A real alert whose job waits behind slow ones (8 alerts from one block, 0.4 s each) while 1152 alerts of 18 other blocks fill the
+ * table of alerts (1024), all of them of a point V does not hold, proved under other names: its job in the queue keeps it there, and
+ * it is checked when its turn comes. Before, the flood pushed it out first, its job found nothing, and V never got the alert. */
 static void test_alert_queue(void)
 {
     static node V;
     if (!victim(&V, "s-queue", 400)) return;
     uint8_t dV[32], x[32], dF[32], xf[32];
     hashed("queue", dV), even_point(dV, x);
-    hashed("queue flood", dF), even_point(dF, xf);             /* a point of V's that V does not know: a job of its alert is quick */
+    hashed("queue flood", dF), even_point(dF, xf);             /* a point with V's name that V does not hold */
     give_point(&V, 0, x, dV);
     const record rV = rec_of(0, x, V.id.xonly), rF = rec_of(0, xf, V.id.xonly);
+    uint8_t dW[32];
+    record rB;
+    wild_of(dV, dW);
     home_identity cid;
     make_id("queue client", &cid);
     net_cfg cli;
@@ -1995,11 +2101,8 @@ static void test_alert_queue(void)
     bool ok = true;
     for (int i = 0; i < 8 && ok; i++) {
         char label[32];
-        home_identity sy;
         snprintf(label, sizeof label, "queue slow %d", i);
-        make_id(label, &sy);
-        const record q = rec_of(1, x, sy.xonly);
-        ok = alert_from("127.0.0.20", &cli, &V, &rV, &q, NULL);
+        ok = alert_from("127.0.0.20", &cli, &V, label, 0, dF, &rF, NULL);
     }
     if (!ok) {
         printf("t_dht: no address 127.0.0.20 on this machine: the alert behind a flood not tried\n");
@@ -2007,16 +2110,13 @@ static void test_alert_queue(void)
         return;
     }
     const int64_t t0 = ms();
-    const record rB = real_alert(&cli, &V, "queue partner", x, dV);
+    CHECK(alert_from("127.0.0.1", &cli, &V, "queue partner", 1, dW, &rV, &rB));
     int sent = 0;
     for (int b = 2; b < 20; b++)
         for (int i = 0; i < 64; i++) {
             char label[48], src[24];
-            home_identity sy;
             snprintf(label, sizeof label, "queue flood %d %d", b, i), snprintf(src, sizeof src, "127.0.0.%d", b);
-            make_id(label, &sy);
-            const record q = rec_of(1, xf, sy.xonly);
-            sent += alert_from(src, &cli, &V, &rF, &q, NULL);
+            sent += alert_from(src, &cli, &V, label, 0, dF, &rF, NULL);
         }
     const int64_t flood = ms() - t0;
     CHECK(sent == 18 * 64);
@@ -2026,6 +2126,54 @@ static void test_alert_queue(void)
     CHECK(alerts_of(&V, &mine, &theirs, &merge) == 1 && same(&mine, &rV) && same(&theirs, &rB));
     printf("t_dht: a real alert behind 8 slow jobs and %d alerts of 18 blocks (sent in %.1f s), checked in %.1f s\n", sent,
            (double)flood / 1000, (double)(ms() - t0) / 1000);
+    victim_end(&V);
+}
+
+/* STORE of the n records of r by the identity of cli to V, from 127.0.0.1: the status of each into st; false when V did not answer */
+static bool store_to(const net_cfg *cli, const node *V, const record *r, int n, uint8_t *st)
+{
+    uint8_t req[2 + DHT_STORE_MAX * RECORD_WIRE] = {DHT_STORE, (uint8_t)n}, ans[2 + DHT_STORE_MAX];
+    size_t len;
+    net_addr a;
+    for (int i = 0; i < n; i++) record_wire_encode(&r[i], req + 2 + i * RECORD_WIRE);
+    CHECK(net_parse_addr("127.0.0.1:1", &a));
+    a.port = dht_port(V->d);
+    const bool ok = net_exchange(cli, &a, V->id.xonly, req, 2 + (size_t)n * RECORD_WIRE, ans, sizeof ans, &len, NULL) && len == 2 + (size_t)n;
+    if (ok) memcpy(st, ans + 2, (size_t)n);
+    return ok;
+}
+
+/* The owners of a custodian. A store has room for one owner in 256 records, keeps an owner for ever, and an identity costs little: so
+ * an owner the store does not know costs its address block 256 of its record tokens (100 000 at once, 50 a second), also when its
+ * record is refused. A block that spent them gets a new owner refused, and an owner the store knows served. Before, a new owner cost
+ * one token: one address block filled the owners of a custodian in 7 hours, and no new home could store there, for ever. */
+static void test_owner_cost(void)
+{
+    static node V;
+    static record valid[DHT_STORE_MAX + 2], bad[DHT_STORE_MAX];
+    if (!victim(&V, "s-owners", 0)) return;
+    home_identity kid, xid, yid;
+    net_cfg known, burner, fresh;
+    uint8_t st[DHT_STORE_MAX], d[32];
+    make_id("owner known", &kid), make_id("owner burner", &xid), make_id("owner new", &yid);
+    net_cfg_init(&known, ctx, &kid, FP, BITS, 0, 2000), net_cfg_init(&burner, ctx, &xid, FP, BITS, 0, 2000);
+    net_cfg_init(&fresh, ctx, &yid, FP, BITS, 0, 2000);
+    for (int i = 0; i < DHT_STORE_MAX + 2; i++) {
+        char label[32];
+        snprintf(label, sizeof label, "owner point %d", i);
+        hashed(label, d), even_point(d, valid[i].x);
+        valid[i].t = 0, valid[i].dp = net.dpbits;
+        if (i < DHT_STORE_MAX) bad[i] = valid[i], bad[i].dp = 40;   /* zero bits that x has not: refused after the tokens are taken */
+    }
+    CHECK(store_to(&known, &V, valid, 1, st) && st[0] == DHT_ST_STORED);
+    /* 255 refused records of an owner the store does not know: 65 280 tokens; the next 255 find 34 464 left, enough for 134 */
+    CHECK(store_to(&burner, &V, bad, DHT_STORE_MAX, st) && st[0] == DHT_ST_INVALID && st[DHT_STORE_MAX - 1] == DHT_ST_INVALID);
+    CHECK(store_to(&burner, &V, bad, DHT_STORE_MAX, st) && st[0] == DHT_ST_INVALID && st[DHT_STORE_MAX - 1] == DHT_ST_FULL);
+    CHECK(store_to(&known, &V, valid + 1, DHT_STORE_MAX, st) && st[0] == DHT_ST_STORED);   /* the rest of them, one a record */
+    CHECK(store_to(&fresh, &V, valid, 1, st) && st[0] == DHT_ST_FULL);                    /* a new owner: 256, five seconds away */
+    nap(200);
+    CHECK(store_to(&known, &V, valid + DHT_STORE_MAX + 1, 1, st) && st[0] == DHT_ST_STORED);
+    CHECK(dht_local_count(V.d) >= 3 && dht_local_count(V.d) <= 2 + DHT_STORE_MAX);
     victim_end(&V);
 }
 
@@ -2084,12 +2232,14 @@ int main(void)
     test_eviction();
     test_moved_contact();
     test_planted_copies();                                     /* after the eviction: its alerts that wait make lookups */
+    test_starved_coincidence();
     test_policy();
     test_nodes_answer();
     test_slowloris();
     test_alert_flood();
     test_alert_blocks();
     test_alert_queue();
+    test_owner_cost();
     test_lying_custodian();
     test_linear();
     t0 = ms();

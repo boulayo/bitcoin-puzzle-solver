@@ -91,14 +91,15 @@ static bool pub_of(const secp256k1_context *ctx, const uint8_t sec[32], uint8_t 
 }
 
 bool noise_hs_init(noise_hs *hs, const secp256k1_context *ctx, bool initiator, const uint8_t *prologue, size_t plen, const uint8_t s[32],
-                   const uint8_t e[32])
+                   const uint8_t spub[33], const uint8_t e[32])
 {
     memset(hs, 0, sizeof *hs);
     hs->ctx = ctx;
     hs->initiator = initiator;
     hs->msg = -1;
-    if (plen > NOISE_HS_MAX || !pub_of(ctx, s, hs->spub) || !pub_of(ctx, e, hs->epub)) return false;
+    if (plen > NOISE_HS_MAX || !pub_of(ctx, e, hs->epub)) return false;
     memcpy(hs->s, s, 32);
+    memcpy(hs->spub, spub, 33);
     memcpy(hs->e, e, 32);
     pz_sha256((const uint8_t *)PROTOCOL, sizeof PROTOCOL - 1, hs->h);
     memcpy(hs->ck, hs->h, 32);

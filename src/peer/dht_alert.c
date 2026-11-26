@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* dht_alert.c - the alerts of a coincidence (docs/en/NETWORK.md 7.3): those a custodian sends, those of this node and the proofs of
- * possession they wait for, the mailboxes. */
+/* dht_alert.c - the alerts of a coincidence (docs/en/NETWORK.md 7.3): those of this node and the proofs of possession they wait for, the
+ * proof it sends to the other owner, the mailboxes. */
 #include "dht_priv.h"
 #include <pzcore/hash.h>
 #include <pzcore/seal.h>
@@ -20,8 +20,8 @@ struct own_alert {
     int state;
     bool mine_ok, theirs_ok;       /* the proofs checked: this node's own (it knows the distance), the other owner's */
     bool queued, busy;             /* a job for it waits in the queue; a job works on it (one at a time) */
-    bool has_from;                 /* it came from another node: from, whose address block its jobs count against, also when retried */
-    dht_contact from;
+    bool blocked;                  /* it came from another node: its jobs count against the address block it came from, also when retried */
+    uint8_t block[16];
     int tries;
     int64_t until, next, posted;   /* retried at next (later each time) until until; this node's proof last sent to the other owner */
 };
@@ -33,7 +33,7 @@ void dht_mbox_key(const uint8_t owner[32], uint8_t k[32])
     pz_sha256(m, sizeof m, k);
 }
 
-/* the owner of a record is a node: its node ID has the zero bits (one hash; the custodian alerts it by its ID) */
+/* the owner of a record is a node: its node ID has the zero bits (one hash; the other owner finds it by its ID) */
 bool owner_ok(const dht *d, const record *r)
 {
     uint8_t id[32];
@@ -66,13 +66,13 @@ static int alert_state(dht *d, const uint8_t h[32], bool *theirs_ok)
     return st;
 }
 
-/* The alert of a pair with a record m of this node, from a node (NULL: this one) (a_mu held): found, or added (*fresh). When the table is
- * full the oldest one that is not waiting goes, else the oldest waiting one with no job queued, else the oldest no job works on: a flood
- * of alerts that will never be proved (copies of this node's points by owners that do not answer) cannot shut out the next real one,
- * whose job is queued at once and keeps it while it waits behind the jobs of the flood (the alerts of one address block hold
- * ALERT_JOBS_BLOCK places in the queue, also when tried again). Before, a flood from two blocks pushed it out before its job came. An
- * alert pushed out comes back with a mailbox poll, or the next republish to every custodian. NULL only without memory. */
-static own_alert *alert_add_locked(dht *d, const record *m, const record *t, const uint8_t h[32], const dht_contact *from, bool *fresh)
+/* The alert of a pair with a record m of this node, from the address block `block` (NULL: none) (a_mu held): found, or added (*fresh).
+ * When the table is full the oldest one that is not waiting goes, else the oldest waiting one with no job queued, else the oldest no job
+ * works on: a flood of alerts that will never be proved (pairs of a point this node does not hold, the copies of its points that a
+ * custodian answers to PROVE) cannot shut out the next real one, whose job is queued at once and keeps it while it waits behind the jobs
+ * of the flood (the alerts of one address block hold ALERT_JOBS_BLOCK places in the queue, also when tried again). An alert pushed out
+ * comes back with a mailbox poll, or the next republish to every custodian. NULL only without memory. */
+static own_alert *alert_add_locked(dht *d, const record *m, const record *t, const uint8_t h[32], const uint8_t *block, bool *fresh)
 {
     *fresh = false;
     own_alert *e = alert_find(d, h);
@@ -98,7 +98,7 @@ static own_alert *alert_add_locked(dht *d, const record *m, const record *t, con
     memset(e, 0, sizeof *e);
     memcpy(e->h, h, 32);
     e->mine = *m, e->theirs = *t;
-    if ((e->has_from = from != NULL)) e->from = *from;
+    if ((e->blocked = block != NULL)) memcpy(e->block, block, 16);
     e->state = AL_WAIT;
     e->until = sys_now_ms() + ALERT_TTL_MS;
     e->next = sys_now_ms() + d->retry_ms;
@@ -107,41 +107,43 @@ static own_alert *alert_add_locked(dht *d, const record *m, const record *t, con
 }
 
 /* the job of the alert h, which the caller marked queued: with no room in the queue the mark goes, and the maintenance thread retries it */
-static void alert_job(dht *d, const uint8_t h[32], const record *m, const record *t, const dht_contact *from)
+static void alert_job(dht *d, const uint8_t h[32], const record *m, const record *t, const uint8_t *block)
 {
-    if (job_push(d, JOB_ALERT_OWN, m, t, from)) return;
+    if (job_push(d, JOB_ALERT, m, t, NULL, block)) return;
     pthread_mutex_lock(&d->a_mu);
     own_alert *e = alert_find(d, h);
     if (e) e->queued = false;
     pthread_mutex_unlock(&d->a_mu);
 }
 
-/* A checked pair that came to this node (an ALERT, a mailbox, a custodian after PROVE, its own custody), with the proof of the owner of a
- * for the owner of b when one came (checked), from a node (NULL: this one): kept as a mailbox when this node may be a mailbox of one of
- * the owners, and an alert of this node when one record is its own, whose job counts against the address block of from. True for a new
- * alert of this node. */
-bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, const dht_contact *from)
+/* A checked pair that came to this node, from the address from (NULL: this node). With the proof of the owner of a for the owner of b
+ * (checked): an ALERT, or a pair of a mailbox. Without one (NULL): the answer of a custodian to PROVE, or this node's own custody. A pair
+ * with a proof is kept as a mailbox when this node may be a mailbox of one of the owners; a pair with a record of this node is an alert
+ * of this node, whose job counts against the address block of from. True for a new alert of this node. */
+bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, const net_addr *from)
 {
-    uint8_t ka[32], kb[32], h[32];
+    uint8_t ka[32], kb[32], h[32], blk[16];
     dht_mbox_key(a->owner, ka), dht_mbox_key(b->owner, kb);
-    if ((responsible(d, ka) || responsible(d, kb)) && mbox_put(d->mb, a, b, proof)) dlog(d, "an alert pair in the mailbox");
+    if (proof && (responsible(d, ka) || responsible(d, kb)) && mbox_put(d->mb, a, b, proof)) dlog(d, "an alert pair in the mailbox");
     if (!mine(d, a) && !mine(d, b)) return false;
     const record *m = mine(d, a) ? a : b, *t = m == a ? b : a;
+    const bool blocked = from && limited(d, from);
     bool fresh, go = false;
+    if (blocked) net_addr_block(from, blk);
     pair_hash(a, b, h);
     pthread_mutex_lock(&d->a_mu);
-    own_alert *e = alert_add_locked(d, m, t, h, from, &fresh);
+    own_alert *e = alert_add_locked(d, m, t, h, blocked ? blk : NULL, &fresh);
     if (e && e->state == AL_WAIT && proof && t == a && !e->theirs_ok) e->theirs_ok = go = true;   /* the other owner proved its record */
     const bool push = (fresh || go) && !e->queued && !e->busy; /* a job queued or under way sees the proof that came */
     if (push) e->queued = true;
     pthread_mutex_unlock(&d->a_mu);
     if (fresh) dlog(d, "an alert for this node: checking the proofs");
-    if (push) alert_job(d, h, m, t, from);
+    if (push) alert_job(d, h, m, t, blocked ? blk : NULL);
     return fresh;
 }
 
-/* an ALERT (with or without a proof) to a contact; to this node itself, what it would do with it */
-static void send_alert(dht *d, const dht_contact *c, const record *a, const record *b, const uint8_t *proof)
+/* ALERT(a, b, the proof of the owner of a for the owner of b) to a contact; to this node itself, what it would do with it */
+static void send_alert(dht *d, const dht_contact *c, const record *a, const record *b, const uint8_t proof[64])
 {
     if (is_me(d, c->id)) {
         (void)alert_in(d, a, b, proof, NULL);
@@ -152,30 +154,8 @@ static void send_alert(dht *d, const dht_contact *c, const record *a, const reco
     req[0] = DHT_ALERT;
     record_encode(a, req + 1);
     record_encode(b, req + 1 + RECORD_LEN);
-    if (proof) memcpy(req + 1 + PAIR_LEN, proof, 64);
-    heard(d, c, exchange(d, c, req, 1 + PAIR_LEN + (proof ? 64 : 0), ans, sizeof ans, &n) && n == 1);
-}
-
-/* the alert to an owner, at its contact c (found by its node ID; NULL: this node, or not found), and to its mailboxes */
-static void alert_owner(dht *d, const uint8_t owner[32], const dht_contact *c, const record *a, const record *b, const uint8_t *proof)
-{
-    dht_contact mb[DHT_KSTORE];
-    uint8_t k[32];
-    if (!memcmp(owner, d->me.xonly, 32)) (void)alert_in(d, a, b, proof, NULL);
-    else if (c) send_alert(d, c, a, b, proof);
-    dht_mbox_key(owner, k);
-    const int m = dht_lookup(d, k, mb, DHT_KSTORE);
-    for (int i = 0; i < m && !stopping(d); i++) send_alert(d, &mb[i], a, b, proof);
-}
-
-/* the job of a custodian: ALERT to both owners and to the mailboxes of each */
-void job_alert_out(dht *d, const record *a, const record *b)
-{
-    for (int w = 0; w < 2 && !stopping(d); w++) {
-        const uint8_t *owner = (w ? b : a)->owner;
-        dht_contact c;
-        alert_owner(d, owner, dht_find(d, owner, &c) ? &c : NULL, a, b, NULL);
-    }
+    memcpy(req + 1 + PAIR_LEN, proof, 64);
+    heard(d, c, exchange(d, c, req, sizeof req, ans, sizeof ans, &n) && n == 1);
 }
 
 /* this node knows the distance of its own record: the proof it would give, made and checked */
@@ -222,17 +202,22 @@ int dht_ask_proof(dht *d, const record *r)
 }
 
 /* This node's proof of possession for the other owner of an alert, over the pair: the pair's name is the nonce, so the proof can wait in
- * a mailbox, and it binds the other owner as the asker, so it proves nothing to anyone else (docs/en/NETWORK.md 7.3). To the other owner
- * at its contact c when it was found, and to its mailboxes, where it finds it when it does not listen. False when this node cannot make
- * it. */
+ * a mailbox, and it binds the other owner as the asker, so it proves nothing to anyone else (docs/en/NETWORK.md 7.3). In an ALERT to
+ * the other owner at its contact c when it was found, and to its mailboxes, where it finds it when it does not listen: this is how
+ * the other owner hears of the pair. False when this node cannot make the proof. */
 static bool post_proof(dht *d, const own_alert *e, const dht_contact *c)
 {
-    uint8_t dd[32], proof[64];
+    uint8_t dd[32], proof[64], k[32];
+    dht_contact mb[DHT_KSTORE];
     const bool ok = d->cfg.own_distance && d->cfg.own_distance(d->cfg.user, e->mine.x, e->mine.t, dd) &&
                     record_prove(d->cfg.ctx, d->cfg.net, &e->mine, dd, e->theirs.owner, e->h, proof);
     pz_secure_zero(dd, sizeof dd);
-    if (ok) alert_owner(d, e->theirs.owner, c, &e->mine, &e->theirs, proof);
-    return ok;
+    if (!ok) return false;
+    if (c) send_alert(d, c, &e->mine, &e->theirs, proof);
+    dht_mbox_key(e->theirs.owner, k);
+    const int m = dht_lookup(d, k, mb, DHT_KSTORE);
+    for (int i = 0; i < m && !stopping(d); i++) send_alert(d, &mb[i], &e->mine, &e->theirs, proof);
+    return true;
 }
 
 static int64_t backoff_ms(const dht *d, int tries)
@@ -242,11 +227,11 @@ static int64_t backoff_ms(const dht *d, int tries)
     return w < BACKOFF_MAX_MS ? w : BACKOFF_MAX_MS;
 }
 
-/* The job of an alert of this node: its own proof (the record is signed by this node, so when its distance is missing the daemon has not
- * read that point yet: the alert waits), then this node's proof sent to the other owner, then the other owner's proof, asked with POSSESS
- * unless it came already (an ALERT with its proof, a mailbox); the other owner is looked up once for both. on_alert when both check out;
- * only a wrong proof of the other owner refuses it. An alert that waits is tried again later each time (backoff_ms) for a day. */
-void job_alert_own(dht *d, const record *a, const record *b)
+/* The job of an alert of this node: its own proof (when the distance is missing the daemon may not have read that point yet, as after a
+ * restart: the alert waits), then this node's proof sent to the other owner, then the other owner's proof, asked with POSSESS unless it
+ * came already (an ALERT, a mailbox); the other owner is looked up once for both. on_alert when both check out; only a wrong proof of
+ * the other owner refuses it. An alert that waits is tried again later each time (backoff_ms) for a day. */
+void job_alert(dht *d, const record *a, const record *b)
 {
     uint8_t h[32];
     own_alert e;
@@ -297,13 +282,13 @@ void retry_alerts(dht *d)
         else if (n < 16) e->next = now + backoff_ms(d, e->tries + 1), e->queued = true, due[n++] = *e;
     }
     pthread_mutex_unlock(&d->a_mu);
-    for (int i = 0; i < n; i++) alert_job(d, due[i].h, &due[i].mine, &due[i].theirs, due[i].has_from ? &due[i].from : NULL);
+    for (int i = 0; i < n; i++) alert_job(d, due[i].h, &due[i].mine, &due[i].theirs, due[i].blocked ? due[i].block : NULL);
 }
 
-/* The pairs of an MBOX answer from c (a mailbox, or a custodian after PROVE) that concern this node: each new one, and each that brings
- * the other owner's proof, becomes an alert. After PROVE (the n records proved) only the pairs of those records count, at most as many
- * as a custodian keeps owners for them: the custodian cannot bring alerts of the other records of this node, nor more of them than it
- * may hold. False when the answer is malformed (its type exchange checked). */
+/* The pairs of an MBOX answer from c that concern this node. From a mailbox, each that brings the other owner's proof becomes an alert:
+ * a mailbox cannot make one of a pair nobody proved. From a custodian after PROVE (the n records proved), each new pair of those
+ * records does, at most as many as a custodian keeps owners for them: the custodian cannot bring alerts of the other records of this
+ * node, nor more of them than it may hold. False when the answer is malformed (its type exchange checked). */
 static bool mbox_take(dht *d, const dht_contact *c, const uint8_t *ans, size_t len, const record *proved, int n, int *fresh)
 {
     if (len < 2 || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY ||
@@ -325,7 +310,7 @@ static bool mbox_take(dht *d, const dht_contact *c, const uint8_t *ans, size_t l
         /* the other owner's proof for this node, when the mailbox has it */
         const uint8_t *pf = flags & (1 << (1 - me)) ? q + PAIR_LEN + 1 + (size_t)(1 - me) * 64 : NULL;
         if (pf && (theirs_ok || !record_proof_ok(d->cfg.ctx, d->cfg.net, &r[1 - me], d->me.xonly, h, pf))) pf = NULL;
-        if (st < 0 || pf) *fresh += alert_in(d, &r[1 - me], &r[me], pf, c);
+        if (pf || (proved && st < 0)) *fresh += alert_in(d, &r[1 - me], &r[me], pf, &c->addr);
     }
     return true;
 }
@@ -355,15 +340,15 @@ int dht_mbox_poll(dht *d)
  * it convinces that custodian alone, of what is true. */
 const uint8_t CUSTODY_NONCE[32];
 
-/* A custodian c told COINCIDENCE for the n records r (at most COIN_BURST): one PROVE with this node's proof of each (of those whose
+/* A custodian c told COINCIDENCE for the n records r (at most DHT_PROVE_MAX): one PROVE with this node's proof of each (of those whose
  * distance it knows), and the pairs it answers become alerts of this node. False when the custodian did not answer it as it should. */
 bool prove_to(dht *d, const dht_contact *c, const record *r, int n)
 {
-    uint8_t req[2 + COIN_BURST * PROVE_ENTRY], *ans = malloc(MBOX_LEN);
-    record proved[COIN_BURST];
+    uint8_t req[2 + DHT_PROVE_MAX * PROVE_ENTRY], *ans = malloc(MBOX_LEN);
+    record proved[DHT_PROVE_MAX];
     size_t len;
     int k = 0, fresh = 0;
-    for (int i = 0; i < n && i < COIN_BURST; i++) {
+    for (int i = 0; i < n && i < DHT_PROVE_MAX; i++) {
         uint8_t dd[32], *q = req + 2 + (size_t)k * PROVE_ENTRY;
         if (d->cfg.own_distance && d->cfg.own_distance(d->cfg.user, r[i].x, r[i].t, dd) &&
             record_prove(d->cfg.ctx, d->cfg.net, &r[i], dd, c->xonly, CUSTODY_NONCE, q + RECORD_WIRE))
