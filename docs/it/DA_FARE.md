@@ -143,7 +143,7 @@ commit; qui resta ciò che è aperto. I rilievi che chiedono una tua decisione s
 | F1 | A ogni arresto il canguro butta il percorso di ogni camminatore dall'ultimo punto distinto (fino a K·2^dp passi) | Fatto il 18 novembre: `herd.bin` nella campagna, anche per le schede video |
 | F2 | Pubblicare un record costa 7 connessioni; un riavvio ripubblica tutto | Fatto il 18 novembre: una ricerca per zona all'ora invece che per punto, e dopo un riavvio i punti che `own.bin` ha già non ripartono. Le connessioni tenute aperte no: legano i thread di chi risponde, ed è un modo di bloccare un nodo |
 | F3 | Ogni sessione rilegge tutte le monete non spese; in attesa, 4n+1 richieste ogni 15 secondi | Seguire le uscite e non le transazioni; `scripthash.subscribe` |
-| F4 | Un processore con AVX2 ma senza ADX (Intel Haswell) cade sul motore di base: 4,0 contro 8,8 M chiavi/s | Compilare i motori a corsie senza `-madx` |
+| F4 | Un processore con AVX2 ma senza ADX (Intel Haswell) cade sul motore di base: 4,0 contro 8,8 M chiavi/s | **Fatto il 26 novembre** (3.12): i motori a corsie AVX2 senza `-madx` |
 | F5 | Motori nuovi misurati: hash con SHA-NI nel motore a corsie AVX2 (+9 %), curva a 4 corsie da 52 bit con AVX-IFMA (+30 %, +45 % con SHA-NI) | Aggiungerli |
 | F6 | La scelta del motore CPU si rifà a ogni avvio (2 secondi); la memoria della scheda è contata due volte nel limite dei lanci | Ricordare la scelta; contare una volta |
 | F7 | Un core intero riservato per ogni scheda OpenCL | `clFlush`, attesa, poi `clFinish` |
@@ -302,6 +302,52 @@ Nessun modo di rubare il premio. Tutto quello che segue è corretto, con una pro
 Sul punto 8: con la soglia a metà, un blocco onesto su cento circa non si può dichiarare. La casa che l'ha cercato lo tiene per sé e
 non lo rifà, ma altre case lo possono riprendere: il tempo atteso per la chiave cresce di meno dell'1%, la fine del primo giro un po'
 di più (quei blocchi vengono ripresi più volte).
+
+### 3.12 Dalla revisione del 26 novembre (quattro revisori)
+
+Nessun modo trovato, nel protocollo, di rubare il premio o di sapere un pezzo; il punto P1 è un furto possibile attraverso i server
+Electrum, e resta da decidere (sotto). Tutto il resto è corretto, con una prova che fallisce senza la correzione dove si poteva.
+
+| | Cosa | Com'è ora |
+|---|---|---|
+| P2 | F cercava le sue monetine senza `S_ALIVE`: con un nodo lento S si arrendeva a ogni sessione | la ricerca manda gli `S_ALIVE` |
+| P3 | Catena leggera: un minuto di nuovo per ogni moneta; 256 monete di polvere bloccavano la casa per ore | un minuto per server per operazione, intestazioni comprese; chi annuncia blocchi che non mostra resta fuori dieci minuti |
+| P4 | Solo le prime 256 voci della storia: la polvere nascondeva una spesa | tutta la storia dopo la moneta, con una memoria di ciò che ogni transazione spende |
+| P5 | Il pagamento di monete arrivate dopo teneva l'altezza di quello prima: monete bloccate | la sua seconda transazione, reinviata o vista nulla |
+| P6 | Lo scambio dei pezzi con tutte le uscite già spese si chiudeva solo nella stessa sessione | anche in una sessione dopo |
+| P8 | Il pagamento da solo non aspettava una seconda transazione firmata e non ancora in un blocco | la aspetta |
+| P10 | Una transazione qualsiasi nel mempool (anche inventata da un server) bloccava lo scambio per sempre | conta solo una spesa firmata con la chiave dell'indirizzo |
+| P11 | Una seconda transazione tenuta si reinviava solo dentro una sessione | la casa la reinvia ogni dieci minuti |
+| P7, P9, P12-P17 | Domande ripetute alla catena, un'interruzione dello scambio, messaggi al partner con indirizzi e percorsi, tariffe in sat/kvB, file ereditabili, buffer di stdio con le distanze | corretti |
+| R1 | 7 o 8 copie piantate nascondevano ancora una coincidenza | tutti gli altri proprietari (fino a 8, i più nuovi prima); un record provato è tenuto oltre il limite (fino a 16) |
+| R2 | Un'ondata di avvisi buttava fuori quello vero prima del suo lavoro | un avviso col lavoro in coda resta; un solo lavoro per avviso |
+| R3 | Un nodo che inoltrava i byte prendeva il posto di un contatto buono | l'indirizzo cambia solo dopo un fallimento del vecchio |
+| R4 | Il test del relay contava 30 nodi su 32 (il fallimento visto su macOS) | conta tutti i nodi |
+| R5 | Chiunque leggeva la cassetta di chiunque | `MBOX_GET` solo al proprietario |
+| R7 | Due pzpeer sulla stessa cartella si rovinavano i file | `DIR/lock`: il secondo si ferma |
+| R6, R8-R17 | 256 file aperti su macOS, orologio messo indietro, `peers.txt` scritto da due, relay su una rete lineare, codice morto, "cannot listen" per ogni errore | corretti |
+| Win | Cartella fatta da una shell elevata: l'utente restava fuori | diritti col SID dell'utente, anche per una cartella fatta a mano |
+| S1 | `--part` senza `-s`: quote sovrapposte e blocchi che nessuno cerca | rifiutato: serve lo stesso `-s` su tutti i computer |
+| S2 | Windows: la cartella di una campagna sotto `C:\` era leggibile da tutti | lista di accesso dell'utente e del sistema |
+| S4 | Una campagna cifrata lasciava al ritrovamento il suo avanzamento (con il seed degli altri computer porta alla chiave) | rapporti senza avanzamento, `stats.csv` cancellato |
+| S6 | Canguro: una chiave non salvata non si ritrovava più | il punto che risolve va anche in `dp.bin` |
+| S3, S5, S7-S9, S11-S14 | Seed stampato, `near.txt` aperto su Windows, checkpoint lento preso per sospensione, `dp.bin` e rinomine non sincronizzati, contatore statico, doppioni, commenti, `merge` senza log | corretti |
+| M1 | I motori a corsie AVX2 volevano ADX: Haswell girava 2,5 volte più lento | compilati senza ADX (stessa velocità altrove) |
+| M2 | La verifica rapida di un motore metteva una chiave sola: un motore rotto a metà passava | una chiave in ogni finestra, ai bordi e al centro (pochi ms) |
+| M3-M11 | GPU e OpenCL: lanci con gruppi di 1, un centro all'infinito preso per errore, quasi-colpi doppi, compilazioni ripetute, scritture non controllate; autotune senza motori buoni; SHA-256 su macOS 11 arm64 | corretti |
+
+**Da decidere.**
+- **P1, catena leggera e scambio dei pezzi.** Dopo il pagamento una casa dà il suo pezzo quando i server dicono che all'indirizzo del
+  puzzle non resta niente. Un partner che controlla tutte le risposte Electrum di quella casa (rete locale, DNS, o un file di rete con
+  i suoi server) può nascondere la moneta grande, far pagare una moneta esca, e dopo lo scambio prendersi il premio vero da solo. Strade:
+  (a) mettere nel programma le monete di ogni puzzle (txid, uscita, importo, verificati da due fonti) e dare il pezzo solo quando
+  ciascuna è provata spesa; (b) con la catena leggera non dare mai il pezzo, solo con un nodo proprio (`--rpc`): le case incassano
+  comunque la loro quota, perdono solo la chiave dopo; (c) tutte e due. Proposta: (c).
+- Contatore dei passi del canguro a 64 bit (finisce dopo 1,8·10^19 passi di una campagna, decenni): lasciato.
+- Il registro delle dichiarazioni inserisce in ordine (lento verso i 2 milioni); l'apertura del deposito ricalcola un SHA-256 per voce
+  (1-2 minuti a deposito pieno): da cambiare con il formato dei file.
+- Un solo corpo per il passo del canguro: no, costa l'1,2 % di istruzioni in AVX2. L'inversione a lotti di BSGS in comune con gli altri
+  motori: da misurare.
 
 ### 3.5 Librerie
 

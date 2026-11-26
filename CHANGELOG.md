@@ -99,6 +99,24 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Changed
 
+- pzsolve: a new campaign with `--part` needs `-s`, the same on every computer of the split. Without it each computer drew a seed of its
+  own, and the shares overlapped and left blocks that none of them scanned (about a quarter of the range with two computers), each one
+  ending "scanned in full". `merge` writes what it merged, and a key it finds, to the log of the campaign.
+- The AVX2 lane engines (linear `avx2v`, the AVX2 lanes of the kangaroo and of BSGS) and the AVX2 hash of pzcore are built without ADX and
+  need AVX2 and BMI2 only: a Haswell, which has no ADX, runs them instead of the portable code (2.3 to 2.6 times the keys per second of
+  the linear search and 1.8 times the steps of the kangaroo, on the test machine). pzcore: `pz_cpu_has_avx2` is AVX2 and BMI2, and the
+  new `pz_cpu_has_adx` adds ADX, which the MULX/ADX code (`avx2`, `shani`, the BMI2/ADX kangaroo step and BSGS windows) and AVX-512
+  require. Elsewhere the speed is unchanged.
+- pzpeer: a publish, a lookup and the light chain do less work: the mailbox code without its dead branch, no second check of the answer
+  types that `exchange` checks, the height of the light chain asked of the servers every 10 seconds at most for all the sessions (before,
+  each session every 15 seconds), a wait that got no answer asks again once a minute. The fee rates of a refused session are given in
+  sat/vB. The fuzzer of hostile input also takes records, claims of blocks and network files.
+- Simpler code: pzsolve reads the name of a mode in one function and checks `-m` when the options are read, sets the address of a campaign
+  once, counts the work of a session (`run_session_units`) and the kangaroo's workers in the run; the two linear engine templates share
+  `engine_common.inc`, the three lane templates take their conversions from `fev_chain.inc`, and `selftest` checks the hash lanes with
+  the quick check. pzpeer: one function gives a task of the home its chain (`home_chain`), one checks a payout script
+  (`btc_script_standard`), the hook that let a test hold back the second transaction is gone, and `main` makes, checks and locks the
+  folder before the home starts.
 - pzsolve: a stop logs `stopping: saving the state and the walkers (Ctrl-C again quits without them)`, and the end of the input of
   `--stop-with-input` logs why. The kangaroo CPU step is chosen from three interleaved samples of each form (one sample could pick the
   slower form for a whole run after a busy moment).
@@ -115,12 +133,41 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Security
 
-- pzpeer: the answer to PROVE gives every other owner of the x (up to 7), so copies planted under two identities before the real record
-  can no longer hide a coincidence; the owner takes from that answer only the pairs of the records it proved, at most 7 each (before,
-  any 64 pairs of any of its records). The alert jobs of one address block hold 8 places in the queue, retries included, and the other
+- pzpeer: the answer to PROVE gives every other owner of the x, up to 8, the newest first, and a custodian keeps a record that its owner
+  proves also past the 8 owners of its x, up to 16: copies planted before the real record, which their makers cannot prove, can no
+  longer hide a coincidence (before, 7 copies at a custodian made the next owner of the point hear of the copies only, and 8 kept the
+  owner's record out); the owner takes from that answer only the pairs of the records it proved, at most 8 each (before, any 64 pairs of
+  any of its records). The alert jobs of one address block hold 8 places in the queue, retries included, and the other
   owner is looked up once a job (before, one address kept a real alert behind up to 1024 forged ones). 6to4, Teredo and every other
   address that is not local count by their /24 or /32 block (before, one IPv4 behind 6to4 had 2^80 blocks). A node of a linear search
   takes no records, ALERT, PROVE or POSSESS, and has no `store.bin` (before, anyone could fill its 5 GB).
+- pzpeer: an alert whose job waits in the queue is no longer pushed out of the table of alerts by a flood (before, two address blocks
+  whose forged alerts made slow jobs pushed every real alert out before its turn); an alert has one job at a time. A known contact moves
+  to a new address only after its old one failed (before, a node that named it at an address of its own, passing the bytes on, took its
+  place in the table and could cut it out later). A mailbox answers `MBOX_GET` only to its owner (before, anyone read the points of
+  anyone's coincidences). A node of a linear search relays nothing.
+- pzpeer: one pzpeer a folder: `run` and `node` hold `DIR/lock` while they run, and a second one on the folder stops at once (before,
+  two wrote over each other's records, journals and sessions). On Windows the folder gets an access list of the user, by the user's own
+  identity, and the system: one made from an elevated shell no longer shuts out the same user without elevation, and a folder made by
+  hand is made private too.
+- pzpeer, the light chain: each Electrum server has one minute for all its calls of an operation, its headers included (before, a minute
+  again for every coin it did not list: a server answering each call just in time, with 256 coins of dust sent to the puzzle address,
+  held every chain call of the home for hours, and every payout through servers failed); a server that announces blocks it cannot show
+  is left alone for ten minutes. A spend is looked for in the whole history after the coin, within that minute, and what each
+  transaction spends is kept from one look to the next (before, the oldest 256 entries: dust sent between a coin and its spend hid the
+  spend, and one lying server kept a spent coin in the first transaction). A spend waiting in the mempool counts only with an input
+  signed by the key of the address, in a transaction a server gives (before, any transaction a server listed there, a deposit or an id
+  it made up, held the exchange of the pieces for ever).
+- pzpeer: a home whose pzsolve finds the key on its own also waits for a second transaction it signed with a partner that is in no block
+  yet (before, its own transaction could replace that payout in the mempools, and with it the partner's share). What a session tells
+  the partner when it stops no longer says where this home's node or pzsign is.
+- pzsolve: an encrypting campaign that finds its key no longer says how far its search got: its last `report.txt`, `status.json` and line
+  of the log carry no progress, and `stats.csv` is deleted with the state (every other computer of a `--part` split holds the seed, and
+  with the progress that is where the key is). On Windows `near.txt` is deleted too (it was still open); a file that cannot be deleted is
+  said. A campaign with `--part` no longer prints its seed at every start.
+- pzsolve on Windows: the folder of a campaign is its owner's alone, as on Linux and macOS: an access list of the user and the system that
+  takes nothing from the folder above (a folder made under `C:\` let every user of the machine read the key and the seed and change
+  `campaign.conf`). A folder that another user made is refused; the folder must be on NTFS.
 - pzpeer: the failed signings of a network count for 30 days from the first of them, then start again; those of an own point
   count for ever, as before. A partner that spoils its messages could stop an honest home on a network for ever; now for a month at most.
 - pzpeer, before a network with real coins (docs/en/NETWORK.md; the prologue is `pznet5`, so earlier versions do not talk to this one):
@@ -167,6 +214,36 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Fixed
 
+- pzpeer, the session: F reads the coins of its tiny coins while `S_ALIVE` goes to the partner (with a node, a scan of the whole set: S gave
+  up as soon as F's node was four minutes slower than its own, at every session of the pair). A payout of coins that came to the address
+  after the payout keeps its own second transaction (before, the record kept the height of the payout before, and the exchange neither
+  sent the new second again nor saw it void: the coins stayed under the joint key and the pieces never came). The exchange of the pieces
+  settles also in a later session when every output of the second is spent. A count of failed signings taken off that cannot be written
+  no longer stops the exchange. A chain that does not answer is no longer read as a payout that went elsewhere. A second transaction kept
+  in `HOME/paid` and in no block yet is sent again every ten minutes by the home itself while its pair has no session.
+- pzpeer: the files of a home, the cookie of bitcoind, `headers.bin`, `peers.txt` and `/dev/urandom` are not inherited by the programs
+  pzpeer starts; `dp.bin` and the cookie are read without a buffer of stdio (the distances and the password only in buffers that are
+  wiped). The files it may have open are raised to 4096 where the system allows (macOS gives 256, fewer than the sockets of a busy
+  relay). The maintenance thread sleeps on the clock that only goes forward (a clock set back stalled it as long). Two bootstraps at once
+  no longer write `peers.txt` together. A start that fails says why (the port in use, the threads), instead of "cannot listen" for every
+  cause.
+- pzsolve, the kangaroo: a key whose `FOUND.txt` could not be written, or that could not be encrypted, is found again by the same command:
+  the point that solved it goes to `dp.bin` too (before, its walker was saved on that point and never reported it again). `dp.bin`
+  reaches the disk at every checkpoint (it was only flushed, while `herd.bin` was synced), and on Linux and macOS a durable rename syncs
+  its folder too. A checkpoint or report that keeps the disk busy more than 15 seconds is no longer taken for a suspension of the system.
+- The quick check of a CPU engine planted one key, on one side of the centre of one window: an engine that missed the keys above the
+  centre, or every lane of a vector but one, passed it. It now plants a key in every window and at every position where a window takes
+  its own branch, a few milliseconds per engine. An autotune in which no engine passes stops and says so (before, it used the portable
+  one anyway).
+- GPU, linear search: a block whose first centre is the point at infinity was taken for an error of the device (a recovery, the device
+  given up after four): the CPU scans it again; a block scanned again on the CPU reports its near misses once (before, twice); a recovery
+  builds the linear program once. GPU, kangaroo: a restart the device does not take is a device error; a distinguished point of a walker
+  outside the herd is dropped, not inserted without its species. OpenCL: launches are rounded up to a multiple of 64 work-items (a block
+  at the end of the range or the herd of a small range left the driver work-groups of 1 or n); the runtime is loaded once whichever
+  thread asks first; a device whose compiler refused the inline assembly builds without it from then on. macOS arm64: the SHA-256
+  instructions are no longer probed with a sysctl that macOS 11 lacks: every arm64 Mac has them.
+- t_dht: the relays done are counted on every node that listens. A channel relayed by the eviction node or the late node, as the slot
+  picked them, failed the test (seen once on macOS).
 - pzpeer: the owner takes the answer to PROVE (an MBOX, not the type of the request + 1; before, it refused it and counted the custodian
   as failed, so it never heard of its pairs from a custodian of its point). One PROVE goes to each custodian with every record it said
   COINCIDENCE for, at most 8 (before, a custodian that said so for every record and then kept silent held the home 10 s a record). A
