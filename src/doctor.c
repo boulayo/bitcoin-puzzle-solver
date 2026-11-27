@@ -8,7 +8,6 @@
 #include "campaign.h"
 #include "campaigns.h"
 #include "cpu_engine.h"
-#include "selftest.h"
 #include "profile.h"
 #include "platform.h"
 #include "envopts.h"
@@ -46,22 +45,18 @@ static void check_program(void)
 static void check_system(const sysinfo_t *s)
 {
     section("System");
-    char os[200], host[128], ram_total_text[32], ram_avail_text[32], l2_text[32], l3_text[32];
+    char os[200], host[128], ram_total_text[32], ram_avail_text[32];
     pz_os_description(os, sizeof os);
     pz_hostname(host, sizeof host);
     doctor_line('i', "%s, computer \"%s\"", os, host);
     doctor_line('i', "CPU: %s", s->model);
-    doctor_line('i', "%d usable logical threads, %d physical cores, L2 cache %s, L3 cache %s", s->ncpu, s->ncore,
-                pz_fmt_bytes((double)s->l2_kib * 1024, l2_text, sizeof l2_text), pz_fmt_bytes((double)s->l3_kib * 1024, l3_text, sizeof l3_text));
+    doctor_line('i', "%d usable logical threads, %d physical cores", s->ncpu, s->ncore);
     if (s->ncpu > s->ncore && s->ncore > 0)
         doctor_line('i', "hyper-threading/SMT is on: kangaroo runs faster with all threads; for the linear search see 'bench' (one thread per core is sometimes better)");
     pz_fmt_bytes((double)s->mem_total, ram_total_text, sizeof ram_total_text);
     pz_fmt_bytes((double)s->mem_avail, ram_avail_text, sizeof ram_avail_text);
     if (s->mem_avail < ((u64)2 << 30)) doctor_line('w', "available RAM %s of %s: low (kangaroo and BSGS keep their tables in RAM: close other programs or use --mem)", ram_avail_text, ram_total_text);
     else doctor_line('o', "RAM: %s total, %s available", ram_total_text, ram_avail_text);
-    char ps[128];
-    pz_power_scheme(ps, sizeof ps);
-    if (ps[0]) doctor_line('i', "active power plan: %s (a power-saving plan slows the CPU and GPU down; use 'High performance' for long campaigns)", ps);
     if (gpu_count_usable() <= 0) return;                       /* the priority of the threads that serve the GPUs */
     if (pz_boost_possible()) doctor_line('i', "high priority for the GPU threads: possible (the first-run tuning tries it by itself; PZ_PRIO_GPU=yes|no forces it)");
     else doctor_line('i', "high priority for the GPU threads: not possible for this user (on Linux it needs root or CAP_SYS_NICE): stays normal");
@@ -124,7 +119,7 @@ static void check_cache(void)
 static void check_gpus(void)
 {
     section("GPU");
-    gpu_doctor(false);   /* the kernel tests of --full run once, in the full self-test at the end: it covers the GPUs too */
+    gpu_doctor();
 }
 
 static long long mtime_of(const char *path)
@@ -210,17 +205,6 @@ static void check_disk(const char *base)
     } else doctor_line('x', "cannot write to %s (permissions or read-only disk): campaigns cannot save their state", where);
 }
 
-static void check_time(void)
-{
-    section("Time and suspension");
-    const double m0 = pz_mono(), w0 = pz_now();
-    pz_sleep(0.3);
-    const double dm = pz_mono() - m0, dw = pz_now() - w0;
-    if (dm < 0.25 || dm > 0.6) doctor_line('w', "the 0.3 s timer took %.2f s: unusual clock or scheduler", dm);
-    else if (dw - dm > 0.2 || dm - dw > 0.2) doctor_line('w', "monotonic clock (%.2f s) and system clock (%.2f s) disagree", dm, dw);
-    else doctor_line('o', "monotonic clock and system clock agree");
-}
-
 static void env_entry_line(const char *entry, void *ctx)
 {
     (void)ctx;
@@ -239,13 +223,11 @@ static void check_env(void)
 int doctor_run(int argc, char **argv)
 {
     const char *base = "campaigns";
-    bool full = false;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) && i + 1 < argc) {
             base = argv[++i];
             if (!base[0]) pz_die("--dir: invalid value '' (expected the name of a folder)");
         }
-        else if (!strcmp(argv[i], "--full")) full = true;
         else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dir")) pz_usage_error("doctor", "the option '%s' needs a value", argv[i]);
         else pz_usage_error("doctor", "unrecognized option '%s'", argv[i]);
     }
@@ -254,20 +236,13 @@ int doctor_run(int argc, char **argv)
     pz_fputs_wrap(stdout, "pzsolve doctor - checks the program, the machine and the saved state (paste this page if you ask for help)\n", PZ_LINE_MAX, 2);
     check_program();
     check_system(&s);
-    if (!full) check_primitives();           /* --full: the selftest at the end checks them, and more */
+    check_primitives();
     check_cpu_engines();
     check_gpus();
     check_cache();
     check_campaigns(base);
     check_disk(base);
-    check_time();
     check_env();
-    if (full) {
-        section("Full selftest");
-        const int rc = selftest_checks(false);
-        printf("\n");
-        doctor_line(rc ? 'x' : 'o', "full selftest: %s", rc ? "ERRORS" : "passed");
-    }
     printf("\n");
     if (g_err) printf("RESULT: %d error%s, %d warning%s, see the [XX] and [!!] lines\n", g_err, g_err == 1 ? "" : "s", g_warn, g_warn == 1 ? "" : "s");
     else if (g_warn) printf("RESULT: no errors, %d warning%s, see the [!!] lines\n", g_warn, g_warn == 1 ? "" : "s");

@@ -83,8 +83,7 @@ void run_init(run_ctx *r)
     atomic_store(&r->cpu_cap, INT_MAX);
     r->use_cpu = true;
     r->use_gpu = true;
-    /* 1 s and 60 s; the tests that need other intervals set PZ_TEST_REPORT_INTERVAL and PZ_TEST_CHECKPOINT_INTERVAL */
-    r->report_interval = g_env.test_report_interval ? g_env.test_report_interval : 1;
+    /* every 60 s; the tests that need a save within seconds set PZ_TEST_CHECKPOINT_INTERVAL */
     r->checkpoint_interval = g_env.test_checkpoint_interval ? g_env.test_checkpoint_interval : 60;
 }
 
@@ -94,14 +93,6 @@ int run_limit_threads(int n, int pct)
     if (pct < 1 || pct > 99) return n;
     int t = (int)(((long)n * pct + 50) / 100);       /* nearest whole thread */
     return t < 1 ? 1 : t > n ? n : t;
-}
-
-prio_mode run_prio_arg(const char *v)
-{
-    if (!strcmp(v, "auto")) return PRIO_AUTO;
-    if (!strcmp(v, "yes")) return PRIO_YES;
-    if (!strcmp(v, "no")) return PRIO_NO;
-    pz_die("--prio-gpu: invalid value '%s' (expected auto, yes or no)", v);
 }
 
 size_t run_limit_items(size_t n, int pct, size_t quantum)
@@ -135,7 +126,6 @@ void run_paths(run_ctx *r)
     snprintf(r->path_state, sizeof r->path_state, "%s/state.dat", d);
     snprintf(r->path_status, sizeof r->path_status, "%s/status.json", d);
     snprintf(r->path_report, sizeof r->path_report, "%s/report.txt", d);
-    snprintf(r->path_stats, sizeof r->path_stats, "%s/stats.csv", d);
     snprintf(r->path_log, sizeof r->path_log, "%s/log.txt", d);
     snprintf(r->path_found, sizeof r->path_found, "%s/FOUND.txt", d);
     snprintf(r->path_session, sizeof r->path_session, "%s/session.txt", d);
@@ -152,10 +142,10 @@ static bool found_save(run_ctx *r, const char *buf, size_t n)
     return ok;
 }
 
-int run_session_load(run_ctx *r)
+void run_session_load(run_ctx *r)
 {
     char *t = pz_read_file(r->path_session, NULL);
-    if (!t) return 1;
+    if (!t) return;
     double el = 0;
     unsigned long long un = 0;
     int ses = 0;
@@ -167,7 +157,6 @@ int run_session_load(run_ctx *r)
     r->elapsed_prev = el;
     r->prev_units_total = un;
     r->sessions = ses;
-    return 0;
 }
 
 int run_session_save(run_ctx *r, double elapsed_total, u64 units_total)
@@ -405,36 +394,15 @@ void run_final_progress(run_ctx *r, progress_info *pi)
     if (r->progress) r->progress(r, pi);
 }
 
-/* The fields of a detail line ("a | b | c") on lines of at most `width` columns, broken between fields; the continuation lines, and the
- * lines after a '\n' of the text, are indented by `hang` columns. Text that does not fit in `out` is cut. */
-static void wrap_fields(const char *in, int width, int hang, char *out, size_t n)
+/* `in` with every line after the first indented by `hang` columns, under the value of its field (text that does not fit in `out` is cut).
+ * The lines are not broken: whoever shows report.txt wraps them to its width. */
+static void indent_lines(const char *in, int hang, char *out, size_t n)
 {
     size_t o = 0;
-    int col = 0;
-#define APPEND(...) do { const int w_ = snprintf(out + o, n - o, __VA_ARGS__); o = w_ < 0 ? o : o + (size_t)w_ >= n ? n - 1 : o + (size_t)w_; } while (0)
-    for (const char *p = in; *p && o + 2 < n;) {
-        if (*p == '\n') {
-            APPEND("\n%*s", hang, "");
-            col = 0;
-            p++;
-            continue;
-        }
-        const char *sep = strstr(p, " | ");
-        const char *nl = strchr(p, '\n');
-        if (nl && (!sep || nl < sep)) sep = NULL;
-        const size_t len = sep ? (size_t)(sep - p) : nl ? (size_t)(nl - p) : strlen(p);
-        if (col > 0 && col + 3 + (int)len > width) {
-            APPEND(" |\n%*s", hang, "");
-            col = 0;
-        } else if (col > 0) {
-            APPEND(" | ");
-            col += 3;
-        }
-        APPEND("%.*s", (int)len, p);
-        col += (int)len;
-        p = sep ? sep + 3 : p + len;
+    for (const char *p = in; *p && o + (size_t)hang + 2 < n; p++) {
+        out[o++] = *p;
+        if (*p == '\n') o += (size_t)snprintf(out + o, n - o, "%*s", hang, "");
     }
-#undef APPEND
     out[o] = 0;
 }
 
@@ -504,7 +472,7 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     if (r->cfg.puzzle) snprintf(pzt, sizeof pzt, "puzzle #%d  ", r->cfg.puzzle);
 
     char detail[900], tleft[400] = "", rej[96] = "", speed[160] = "";
-    wrap_fields(pi->detail, 100, 16, detail, sizeof detail);
+    indent_lines(pi->detail, 16, detail, sizeof detail);
     const u64 bad = atomic_load(&r->hits_bad);
     if (bad) snprintf(rej, sizeof rej, "Rejected:       %llu candidate%s that failed the verification\n", (unsigned long long)bad, bad == 1 ? "" : "s");
     const bool over = !strcmp(state, "FOUND") || !strcmp(state, "COMPLETED");   /* nothing left to estimate */
@@ -587,19 +555,6 @@ void run_write_report_files(run_ctx *r, const progress_info *pi, bool final)
     free(j);
 }
 
-static void append_stats_csv(run_ctx *r, const progress_info *pi)
-{
-    bool fresh = access(r->path_stats, F_OK) != 0;
-    FILE *f = pz_fopen_private(r->path_stats, true);   /* binary: LF lines on Windows too; never a link */
-    if (!f) return;
-    if (fresh) fprintf(f, "unix_time,elapsed_s,fraction,done,rate_total,rate_cpu,rate_gpu\n");
-    double cpur, gpur;
-    ui_rates(r, &cpur, &gpur, NULL);
-    fprintf(f, "%lld,%.1f,%.12g,%.0Lf,%.1f,%.1f,%.1f\n", (long long)time(NULL), r->elapsed_prev + run_session_elapsed(r), pi->fraction,
-            pi->done, pi->rate, cpur, gpur);
-    fclose(f);
-}
-
 static int term_cols(void)
 {
     int c = pz_fd_terminal_cols(2);
@@ -671,19 +626,19 @@ int run_clock_gap(double dm, double dw, double *gap)
 void run_reporter_loop(run_ctx *r)
 {
     const ui_mode m0 = effective_ui(r);
-    const double term_period = m0 == UI_LOG ? 60.0 : (double)r->report_interval;
+    const double term_period = m0 == UI_LOG ? 60.0 : 1.0;
     double t_last = pz_mono(), prev_mono = t_last, prev_wall = pz_now();
     double next_term = t_last + (m0 == UI_LOG ? 10.0 : 1.0);   /* the first frame appears after a second (a minute-long wait would look hung) */
-    double next_files = t_last + 2, next_ckpt = t_last + r->checkpoint_interval, next_csv = t_last + 60, t_ckpt = t_last - 5;   /* t_ckpt: the last checkpoint */
+    double next_files = t_last + 2, next_ckpt = t_last + r->checkpoint_interval, t_ckpt = t_last - 5;   /* t_ckpt: the last checkpoint */
     progress_info pi;
     const double alpha = 0.35;
     const double alpha_eta = 1.0 - exp(-1.0 / 30.0);   /* BSGS only: ~30 s time constant for the estimates */
     const bool use_est = r->cfg.mode != MODE_BSGS;     /* BSGS changes rate at the end of the table phase: the smoothed rate follows that better */
     rate_est est;
-    rate_est_init(&est, use_est ? r->rate_prior : 0);
+    rate_est_init(&est);
     r->est_state = use_est ? RATE_MEASURING : RATE_STEADY;
     r->all_started = !use_est;
-    double t_any = -1, next_remember = t_last + 300;   /* first moment a worker produced; next time the steady rate is remembered */
+    double t_any = -1;                                  /* first moment a worker produced */
     double t_peak = r->t_start;                         /* the peak counts from 5 s after this */
     while (!atomic_load(&r->stop)) {
         pz_sleep(0.1);
@@ -758,11 +713,6 @@ void run_reporter_loop(run_ctx *r)
                 rate_est_add(&est, now, (double)sum, started);
                 r->rate_eta = rate_est_value(&est, now, &r->est_state);
                 r->settle_at = rate_est_settle_time(&est);
-                if (r->remember_rate && now >= next_remember) {
-                    const double s = rate_est_sustained(&est, now);
-                    if (s > 0) r->remember_rate(r, s);
-                    next_remember = now + 300;
-                }
             } else {
                 r->rate_eta = r->rate_eta == 0 ? tot : alpha_eta * tot + (1 - alpha_eta) * r->rate_eta;
             }
@@ -772,13 +722,12 @@ void run_reporter_loop(run_ctx *r)
         bool back = false;                       /* keys the canary gave back, which the state on disk still has as scanned: saved within */
         if (r->cfg.mode == MODE_LINEAR && r->sched) sched_given_back(r->sched, &back);   /* 5 s, and again every 5 s while the disk refuses them */
         if (back && now - t_ckpt >= 5) next_ckpt = now;
-        bool need_pi = now >= next_term || now >= next_files || now >= next_ckpt || now >= next_csv;
+        bool need_pi = now >= next_term || now >= next_files || now >= next_ckpt;
         if (!need_pi) continue;
         run_final_progress(r, &pi);
         if (now >= next_term) { ui_draw(r, &pi, false); next_term = now + term_period; }
         /* report.txt and status.json: 2 s after the start, then with the checkpoint (60 s), and at the end */
         if (now >= next_files) { run_write_report_files(r, &pi, false); next_files = now + r->checkpoint_interval; }
-        if (now >= next_csv) { append_stats_csv(r, &pi); next_csv = now + 60; }
         if (now >= next_ckpt) {
             if (r->checkpoint && !atomic_load(&r->found) && r->checkpoint(r) != 0) pz_log(PZ_LOG_WARN, "checkpoint save failed");
             next_ckpt = now + r->checkpoint_interval;
@@ -791,8 +740,4 @@ void run_reporter_loop(run_ctx *r)
     if (run_interrupted() && !atomic_load(&r->found))
         pz_log(PZ_LOG_INFO, "stopping: %s", r->cfg.mode == MODE_KANGAROO ? "saving the state and the walkers (Ctrl-C again quits without them)"
                                                                        : "saving the state (Ctrl-C again quits without saving)");
-    if (use_est && r->remember_rate) {
-        const double sus = rate_est_sustained(&est, pz_mono());
-        if (sus > 0) r->remember_rate(r, sus);
-    }
 }

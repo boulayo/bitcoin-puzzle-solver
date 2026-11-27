@@ -16,10 +16,10 @@ For a computer that someone else controls (a rented machine) there is a checklis
 | `pzsolve merge (-c NAME \| -p N) -f FILE_OR_FOLDER … [-d DIR] [--mem GiB] [--encrypt-pubkey HEX \| --encrypt-password] [--on-found COMMAND]` | merges the distinguished points of other computers into a kangaroo campaign (see section 8.1) |
 | `pzsolve encrypt-keygen [--random]` | makes the public key (from a password you type, or random) to which a campaign encrypts the key it finds: for rented computers (section 11) |
 | `pzsolve decrypt-key [--raw-key] [--address A] [FILE \| -]` | decrypts the key that a campaign found and encrypted (section 11) |
-| `pzsolve doctor [-d DIR] [--full]` | checks program, system, CPU, GPU, the saved tuning and profile, campaigns, disk, clock and `PZ_*` variables, and says what is wrong; paste its output when asking for help |
+| `pzsolve doctor [-d DIR]` | checks program, system, CPU, GPU, the saved tuning and profile, campaigns, disk and `PZ_*` variables, and says what is wrong; paste its output when asking for help |
 | `pzsolve devices`   | detected CPU, instruction sets, RAM and GPUs (CUDA and OpenCL) |
 | `pzsolve selftest`  | built-in correctness checks (primitives, database, SIMD engines, kangaroo, BSGS, GPU) |
-| `pzsolve bench [--together [--linear] [-t N] [--gpu L] [--prio-gpu P]] [--gpu-only] [--variants [--turns N]] [--retune]` | speed of every CPU engine (1…N threads), of the kangaroo, of BSGS and of the GPUs (with bandwidth and whole-integer throughput); `--together`: section 7.9; `--variants`: every GPU kernel variant in one table, section 7.5 |
+| `pzsolve bench [--together [--linear] [-t N] [--gpu L]] [--gpu-only] [--variants [--turns N]] [--retune]` | speed of every CPU engine (1…N threads), of the kangaroo, of BSGS and of the GPUs (with bandwidth and whole-integer throughput); `--together`: section 7.9; `--variants`: every GPU kernel variant in one table, section 7.5 |
 | `pzsolve kstat BITS TRIALS [THREADS [R [DP]]]` | statistics of the kangaroo cost on ranges of 2^BITS keys (R jumps instead of 256 and fixed dp-bits, no restarts: for studying cycles) |
 | `pzsolve version`   | version and build commit |
 
@@ -83,10 +83,7 @@ line of the help:
   it is not written, and the campaign resumes only with the same key. `-s`, `-m` and `--part` are not given with them.
 
 A value that cannot be used stops the command with a message such as `--limit: invalid value '100' (expected an integer between 1 and 99)`,
-and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`. The options removed in 1.23.0 are refused (exit status 2)
-with a message that says what to use instead: `-H`/`--hash160` (give the address with `-a`), `--new` and `--resume` (hunt creates the campaign or
-resumes it), `--report-interval` and `--checkpoint-interval` (1 s and 60 s), and `--gpu-api`, `--no-tune`, `--isa`, `--prio-gpu`, which became the
-environment variables `PZ_GPU_API`, `PZ_NO_PROFILE`, `PZ_ISA` and `PZ_PRIO_GPU` (section 7.10).
+and an unknown option with `unrecognized option '--foo' (see 'pzsolve help hunt')`.
 
 Examples:
 
@@ -146,7 +143,6 @@ campaigns/NAME/
   session.txt     total time and sessions
   report.txt      readable report, rewritten every minute with the checkpoint (the first time 2 s after the start, and at the end)
   status.json     state for external programs (includes time left and probabilities), rewritten with report.txt
-  stats.csv       time series, one row per minute (the file appears after the first minute)
   log.txt         timestamped events (also the error that ended a run)
   near.txt        linear search with --near: the near misses, one key a line (section 3)
   FOUND.txt       only when the key is found (permissions 0600 on Linux and macOS; on Windows it inherits the folder's rights); with --encrypt-pubkey it holds the encrypted line, not the key,
@@ -215,10 +211,7 @@ folder list every worker one by one at all times.
 * **Provisional estimate**. In the first seconds the displayed speed is misleading: a GPU is counted only when its first launch ends, the
   clocks rise, and a laptop slows down after a few minutes under load. For this reason the time left does not appear until every engine has
   produced something (the line says `Time left     measuring...` and the speed carries the remark `[starting: not all engines are counted yet]`),
-  and then starts from the steady-state speed of a previous run of the same configuration, if there is one, otherwise from the one measured
-  by the tuning (ALGORITHMS.md section 11). While the estimate settles a line says so: `provisional (from the remembered speed, settles in ~2 min)`,
-  `provisional (from the tuning run, settles in ~40 s)`, or `provisional (settles in ~34 s)` when there is nothing to start from. With
-  `PZ_NO_PROFILE=1` the remembered speeds are neither used nor updated; `pzsolve doctor` lists them.
+  and for its first minute after that a line says it is still settling: `provisional (settles in ~34 s)` (ALGORITHMS.md section 11).
 * **Chance**: probability of success within the next hour, day, week, month and year at this rate, *assuming that the key is in
   the range* (formulas in [`ALGORITHMS.md`](ALGORITHMS.md) section 11).
 * In BSGS, while the table is being built, the panel shows phase 1 of 2 and how many giant steps will follow.
@@ -366,8 +359,8 @@ Every GPU is served by a thread that launches the kernels, collects the results 
 wait for its turn while the card sits idle; on laptops the effect is mixed up with the shared power limit. The tuning compares normal and
 high priority with all the CPU threads and keeps the high one only if it is measurably faster. The outcome goes into the profile (`prio=1`) and the log says it
 (`GPU: the threads that serve the GPUs run at high priority (from the machine profile)`). The environment variable `PZ_PRIO_GPU=yes|no` imposes or
-excludes it (it is not measured, and a profile measured that way is an entry of its own); `auto`, or no variable, is the default (for
-`bench --together` the same choice is `--prio-gpu yes|no`). On Windows it is `ABOVE_NORMAL` for the card threads only (which sleep almost all the time
+excludes it (it is not measured, and a profile measured that way is an entry of its own), for `bench --together` too; `auto`, or no variable,
+is the default. On Windows it is `ABOVE_NORMAL` for the card threads only (which sleep almost all the time
 waiting for the kernel: they take no time away from the computation); on Linux it is `nice -5` and needs root or `CAP_SYS_NICE`: without it the
 measurement is skipped and `doctor` says so. It is not a promise of speed: if the cause is the power of the laptop and not the wait of the thread,
 the measurement will give ~0 % and the priority stays normal.
@@ -384,8 +377,7 @@ does not start and stop in waves. It is achieved with fewer compute units, all a
   all the time, but with fewer blocks in flight. The kangaroo consequently has fewer kangaroos. The log writes it
   (`limit 40%: CPU 6 of 16 threads, GPUs at 40% of the work-items`, then `GPU[0]: limit 40%: 3328 work-items per launch`).
 * **BSGS**: only the CPU threads (the table construction also uses fewer threads and takes longer). The GPUs do not take part anyway.
-* The machine tuning (about 2 minutes at full load) and the profile are neither used nor updated; the steady-state speed of a limited run
-  is remembered separately (`pzsolve doctor` lists it with "limit N%"), so that the time estimates stay realistic. `--retune` with `--limit` is rejected.
+* The machine tuning (about 2 minutes at full load) and the profile are neither used nor updated. `--retune` with `--limit` is rejected.
 * The limit is not saved in the campaign: every run chooses its own, and resuming without `--limit` goes back to the whole machine. The panel
   writes "limit X%" before the speeds, and `report.txt` and `status.json` (`limit_percent`) report it.
 
@@ -420,7 +412,7 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 | `PZ_GPU_NK=N` | fix the variant of the kangaroo kernel (skips the tuning): walkers per thread with the suffixes of ALGORITHMS.md section 5, e.g. `128`, `128b`, `128c`, `64l` |
 | `PZ_GPU_TUNE=0` | no tuning; `=1` runs it also on the devices that are not GPUs, for tests (any other value is refused) |
 | `PZ_OPENCL_ALL=1` | use OpenCL CPU devices too (section 7.1) |
-| `PZ_NO_PROFILE=1` | the machine profile is neither measured nor used (all threads and all GPUs, section 7.6), nor are the remembered speeds of the panel (section 6) |
+| `PZ_NO_PROFILE=1` | the machine profile is neither measured nor used (all threads and all GPUs, section 7.6) |
 | `PZ_ISA=NAME` | the CPU engine of the linear search, instead of the one the micro-benchmark picks: `auto`, `baseline`, `avx2`, `shani` (avx2 with the SHA-256 instructions of the CPU), `avx2v`, `avx512v` (curve arithmetic on the SIMD lanes), `avx512i` (avx512v with AVX-512 IFMA); on arm64 `auto`, `baseline`, `neon`, `neon2`. Unlike the other variables, a name that is not one of these, or one that the CPU cannot run, stops `hunt` with an error before anything is created; the log says `imposed by PZ_ISA` |
 | `PZ_PRIO_GPU=auto\|yes\|no` | the priority of the threads that serve the GPUs: `yes` high, `no` normal, both without measuring it; `auto` measured by the tuning (section 7.7) |
 | `PZ_NO_LARGE_PAGES=1` | do not use large pages (Windows, section 10) |
@@ -431,7 +423,7 @@ not one of those allowed) is reported once, as `NAME=TEXT ignored (...)`, and th
 | `NO_COLOR` | any value but the empty one: no bold type in the panel |
 | `TERM=dumb` | the terminal cannot move the cursor: no panel (`--ui log`) |
 
-The variables for tests and diagnostics (`PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_BSGS_SCALAR`, `PZ_TEST_*`, `PZ_ASSUME_IFMA`, `PZ_EXPECT_SHANI`
+The variables for tests and diagnostics (`PZ_KANG_ROUND`, `PZ_BSGS_SCALAR`, `PZ_TEST_*`, `PZ_ASSUME_IFMA`, `PZ_EXPECT_SHANI`
 and those of the simulated CUDA driver) are described in [`ARCHITECTURE.md`](https://github.com/boulayo/bitcoin-puzzle-solver/blob/main/docs/en/ARCHITECTURE.md) section 5b.
 
 ## 8. Performance tips
@@ -527,8 +519,8 @@ computer B:  pzsolve hunt -p 71 -s 5f3a…(same)      --part 1/2
 
 It checks in one page the program, the system, the CPU (quick check of every engine with a known
 key), the GPUs (opening the device and a bit-by-bit comparison with the CPU), the saved tuning and profile, the campaigns of the folder
-(stopped or running, last save, suspensions suffered), disk space and atomic writing, the clock and the `PZ_*` variables.
-Lines marked `[XX]` are errors, `[!!]` warnings. `doctor --full` also runs the whole self-test; `-d DIR` gives the folder of the campaigns.
+(stopped or running, last save, suspensions suffered), disk space and atomic writing, and the `PZ_*` variables.
+Lines marked `[XX]` are errors, `[!!]` warnings. `pzsolve selftest` runs the whole self-test; `-d DIR` gives the folder of the campaigns.
 
 ### 9.2 Sleep and hibernation
 
@@ -570,7 +562,7 @@ their last distinguished points are lost, about `walkers × 2^dp-bits` (ALGORITH
 | `file … was written with another jump table (id …, this campaign: …)` | `dp.bin` of the same range written with another seed (or the setup of another computer): move it away to start the distinguished points again |
 | `file … was written by a newer version of pzsolve` | the `dp.bin` of the campaign comes from a later version: it is left as it is; use that version |
 | `the BSGS table needs … but only … of RAM are available` | little RAM: use `--mem`, a smaller `--bsgs-entries` (at creation) or `--mode kangaroo` |
-| `table … is not usable: …` / `table header corrupted` | truncated `--table` file or one from another program: delete it, it will be rebuilt |
+| `table … is not usable: …` / `table header corrupted` | truncated `--table` file, one of 1.13.0 or earlier, or one from another program: delete it, it will be rebuilt |
 | `self-test failed, device excluded` | faulty driver or wrong kernel compiler: update the driver; for an NVIDIA card the program also tries OpenCL; report the case |
 | `CUDA: the driver is too old for this PTX` | update the NVIDIA driver (525 or later), or set `PZ_GPU_API=opencl` |
 | `CUDA driver not found` (in `devices`) | normal without an NVIDIA card; with an NVIDIA card, reinstall the graphics driver |
@@ -654,7 +646,8 @@ someone who controls the machine while it runs.
 
    It shows the key id that the line was encrypted to, asks for the password (nothing is shown while you type), checks that it is the right one **before**
    it tries anything ("encrypted to the public key with id A, but this password gives id B: wrong password"), and decrypts. A line is self-contained: it opens with
-   the secret alone, so a line copied out of a mail is enough, with no address or puzzle next to it. The command always prints the key in hexadecimal and as a WIF, and
+   the secret alone, so a line copied out of a mail is enough, with no address or puzzle next to it. It opens one line per run: in a text with several, the
+   first one (and it says so). The command always prints the key in hexadecimal and as a WIF, and
    the two addresses of that key (P2PKH and P2WPKH). Then, if the text has an `address:` line (`FOUND.txt` does) or you give `--address ADDRESS`, it compares the
    key with that address and prints `OK` or `MISMATCH` (and exits with 1); with no address it says `address not checked: no address: line in the text and no --address`
    and exits with 0. Check by eye, or with `--address`, that the address is the one you were hunting: a line can be made by anyone who knows the public key, so only

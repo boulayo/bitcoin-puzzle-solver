@@ -33,7 +33,7 @@ void gpu_bench(void);
  * length of a launch; saved only with --retune (gpu_set_retune). */
 void gpu_bench_variants(int turns);
 /* 'doctor': the GPUs a campaign would use (what they are, whether they compute correctly), and the saved kernel choices. */
-void gpu_doctor(bool full);
+void gpu_doctor(void);
 void gpu_doctor_cache(void);
 
 /* Kangaroo: start() reports how many walkers the GPUs will run (k_total), launch() receives the kang_state. */

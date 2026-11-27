@@ -17,6 +17,7 @@
 #include "envopts.h"
 #include "encrypt.h"
 #include "onfound.h"
+#include "ui.h"
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
@@ -407,20 +408,6 @@ static void check_options_for_campaign(const opts_t *o, const campaign_cfg *c, c
     if (fresh && c->mode == MODE_BSGS) run_bsgs_check(c, &r->sys, !o->no_cpu, mem_bytes(o->mem_gb), o->table, NULL);
 }
 
-/* The size of a range in words: "8,388,608 keys", "2^43 keys", "about 6.65e35 keys". */
-static void size_text(const pz_u256 *sz, const char *dec, char *out, size_t n)
-{
-    const size_t len = strlen(dec);
-    int bits = 0, top = -1;
-    for (int i = 0; i < 256; i++)
-        if ((sz->w[i / 64] >> (i % 64)) & 1) { bits++; top = i; }
-    if (len <= 9 || (len <= 12 && bits != 1)) {
-        char g[48];
-        snprintf(out, n, "%s key%s", pz_group_digits(dec, g, sizeof g), strcmp(dec, "1") ? "s" : "");
-    } else if (bits == 1) snprintf(out, n, "2^%d keys", top);
-    else snprintf(out, n, "about %c.%c%ce%zu keys", dec[0], dec[1], dec[2], len - 1);
-}
-
 /* ---- encrypting the key that is found (docs/en/USAGE.md, "Encrypting the key") ---- */
 
 /* Core dumps and same-user ptrace off, once: the plain key is in memory for a moment when it is found, and the password while it is typed. */
@@ -754,8 +741,7 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
         if (g_isa && !cpu_engine_quickcheck(g_isa)) pz_die("the CPU engine '%s' gave a wrong result in the quick check: set PZ_ISA to another one", g_isa->name);
     }
 
-    r->prio_gpu = g_env.prio_gpu == PZ_ENV_PRIO_YES ? PRIO_YES : g_env.prio_gpu == PZ_ENV_PRIO_NO ? PRIO_NO : PRIO_AUTO;   /* PZ_PRIO_GPU */
-    r->gpu_boost = r->prio_gpu == PRIO_YES;
+    r->gpu_boost = g_env.prio_gpu == PZ_ENV_PRIO_YES;
     r->limit_pct = o->limit;
     profile_apply(r, o->retune);   /* CPU threads and GPUs: the measured best of this machine unless the user chose (nothing under --limit) */
     if (run_interrupted()) return false;    /* Ctrl-C during the measurement: nothing has started, nothing is lost */
@@ -766,7 +752,6 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
         r->gpu_boost = false;
     }
     gpu_set_boost(r->use_gpu && r->gpu_boost);
-    if (!g_env.no_profile) profile_rate_setup(r);
 
     return true;
 }
@@ -774,13 +759,11 @@ static bool apply_options(const opts_t *o, run_ctx *r, int *thr_full)
 /* The lines that start the session in the log: version, target, range, mode, hardware and what the options changed. */
 static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
 {
-    char idb[17], rng[3 * PZ_U256_HEX_BUF + 40], rsz[80], addr[80];
+    char idb[17], rng[3 * PZ_U256_HEX_BUF + 40], rsz[32], addr[80];
     seed_to_id(r->cfg.seed, idb);
     cfg_range_text(&r->cfg, rng, sizeof rng);
-    pz_u256 sz = cfg_range_size(&r->cfg);
-    pz_u256_to_dec(&sz, rsz);
-    char rsz_short[64];
-    size_text(&sz, rsz, rsz_short, sizeof rsz_short);
+    const pz_u256 sz = cfg_range_size(&r->cfg);
+    ui_fmt_range_bits(&sz, rsz, sizeof rsz);
     pz_strlcpy(addr, r->cfg.address, sizeof addr);
     char memb[32];
     pz_fmt_bytes((double)r->sys.mem_total, memb, sizeof memb);
@@ -789,7 +772,7 @@ static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
     void (*const say)(pz_loglevel, const char *, ...) = run_ui_is_panel(r) ? pz_log_file : pz_log;
     if (r->cfg.puzzle) say(PZ_LOG_INFO, "target: puzzle #%d  address %s", r->cfg.puzzle, addr);
     else say(PZ_LOG_INFO, "target: address %s", addr);
-    pz_log(PZ_LOG_INFO, "range: %s (%s)", rng, rsz_short);
+    pz_log(PZ_LOG_INFO, "range: %s (%s keys)", rng, rsz);
     if (r->cfg.mode == MODE_LINEAR)
         say(PZ_LOG_INFO, "mode: linear | seed id %s | order: blocks of 2^%u keys permuted with the seed", idb, r->cfg.chunk_bits);
     else if (r->cfg.mode == MODE_BSGS)
@@ -815,7 +798,7 @@ static void log_session_header(const run_ctx *r, bool resuming, int thr_full)
         if (r->use_gpu) snprintf(gpu, sizeof gpu, "%sGPUs at %d%% of the work-items", r->use_cpu ? ", " : "", r->limit_pct);
         pz_log(PZ_LOG_INFO, "limit %d%%: %s%s", r->limit_pct, cpu, gpu);
     }
-    if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", r->prio_gpu == PRIO_YES ? " (PZ_PRIO_GPU=yes)" : " (from the machine profile)");
+    if (r->use_gpu && r->gpu_boost) pz_log(PZ_LOG_INFO, "GPU: the threads that serve the GPUs run at high priority%s", g_env.prio_gpu == PZ_ENV_PRIO_YES ? " (PZ_PRIO_GPU=yes)" : " (from the machine profile)");
     if (r->node) pz_log(PZ_LOG_INFO, "node %u: kangaroo starting points differ from those of the other computers on the same campaign", r->node);
     pz_log(PZ_LOG_INFO, "campaign folder: %s", r->cfg.dir);
 }

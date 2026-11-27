@@ -158,7 +158,7 @@ if grep -q avx512f /proc/cpuinfo && ! grep -q avx512ifma /proc/cpuinfo; then
 fi
 }
 
-# the CUDA path with the simulated driver: self-test, campaigns, bench, widths, --prio-gpu, the panel
+# the CUDA path with the simulated driver: self-test, campaigns, bench, widths, PZ_PRIO_GPU, the panel
 sec_cuda() {
 step "GPU: CUDA path with a simulated driver (same API as the NVIDIA driver, kernels run on the CPU)"
 $MOCK build/pzsolve selftest 2>&1 | grep -q "Mock CUDA GPU (CPU) via CUDA  *kernels identical to the CPU" && echo "  OK GPU self-test via CUDA" || { echo "  FAIL GPU self-test via CUDA"; fail=$((fail+1)); }
@@ -179,9 +179,9 @@ rm -rf "$T/c4"; run $MOCK build/pzsolve hunt -p 44 -a "$KA" -k "$KP" -m kangaroo
 check_found "$T/c4/c" "$KK" && echo "  OK kangaroo via CUDA with --limit" || { echo "  FAIL kangaroo via CUDA with --limit"; fail=$((fail+1)); }
 }
 
-# the bench with the simulated driver, the width of what is printed, --prio-gpu
+# the bench with the simulated driver, the width of what is printed, PZ_PRIO_GPU
 sec_bench() {
-step "bench, widths and --prio-gpu (simulated GPU)"
+step "bench, widths and PZ_PRIO_GPU (simulated GPU)"
 outhas "copy bandwidth" $MOCK PZ_GPU_TUNE=1 build/pzsolve bench --gpu-only && echo "  OK GPU bench (bandwidth and throughput probes) via CUDA" || { echo "  FAIL GPU bench via CUDA"; fail=$((fail+1)); }
 outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together via CUDA" || { echo "  FAIL bench --together via CUDA"; fail=$((fail+1)); }
 outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear via CUDA" || { echo "  FAIL bench --together --linear via CUDA"; fail=$((fail+1)); }
@@ -191,11 +191,10 @@ for c in "build/pzsolve devices" "build/pzsolve selftest" "build/pzsolve bench -
   w=$($MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 $c 2>&1 | width)
   [ "$w" -le 128 ] && echo "  OK '${c#build/pzsolve }' via CUDA: lines of at most 128 columns ($w)" || { echo "  FAIL '${c#build/pzsolve }' via CUDA: a line of $w columns"; fail=$((fail+1)); }
 done
-# priority of the threads serving the GPUs: --prio-gpu is validated and fixes it (no measurement); in auto mode it is measured,
+# priority of the threads serving the GPUs: PZ_PRIO_GPU=yes|no fixes it (no measurement); in auto mode it is measured,
 # but only where the system lets the program raise a thread's priority (root / CAP_SYS_NICE on Linux)
-build/pzsolve bench --together --prio-gpu maybe >/dev/null 2>&1 && { echo "  FAIL --prio-gpu with an invalid value accepted"; fail=$((fail+1)); } || echo "  OK --prio-gpu: invalid value rejected"
-outhas "the first configuration measured again" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu yes && echo "  OK bench --together --prio-gpu yes" || { echo "  FAIL bench --together --prio-gpu yes"; fail=$((fail+1)); }
-outhas "in alternating pairs (all CPU threads)" $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 --prio-gpu no && { echo "  FAIL --prio-gpu no measured the priority"; fail=$((fail+1)); } || echo "  OK --prio-gpu no: priority not measured"
+outhas "the first configuration measured again" $MOCK PZ_PRIO_GPU=yes PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together with PZ_PRIO_GPU=yes" || { echo "  FAIL bench --together with PZ_PRIO_GPU=yes"; fail=$((fail+1)); }
+outhas "in alternating pairs (all CPU threads)" $MOCK PZ_PRIO_GPU=no PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && { echo "  FAIL PZ_PRIO_GPU=no measured the priority"; fail=$((fail+1)); } || echo "  OK PZ_PRIO_GPU=no: priority not measured"
 if [ "$(id -u)" = 0 ]; then
   outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together -t 1 && echo "  OK bench --together measures the priority of the GPU threads" || { echo "  FAIL priority measurement"; fail=$((fail+1)); }
   outhas "high priority for the GPU threads: " $MOCK PZ_GPU_TUNE=1 PZ_BENCH_SCALE=0.15 build/pzsolve bench --together --linear -t 1 && echo "  OK bench --together --linear measures the priority" || { echo "  FAIL priority measurement (linear)"; fail=$((fail+1)); }
@@ -251,10 +250,6 @@ step "doctor, GPU errors and two devices (simulated GPU)"
 # like a driver reset after sleep) must reopen the GPU; a frozen process (SIGSTOP, like sleep) must be noticed
 outhas "RESULT: " build/pzsolve doctor -d "$T" && echo "  OK doctor" || { echo "  FAIL doctor"; fail=$((fail+1)); }
 $MOCK build/pzsolve doctor -d "$T" >/dev/null && echo "  OK doctor with a simulated GPU (no errors)" || { echo "  FAIL doctor with a simulated GPU"; fail=$((fail+1)); }
-# doctor --full tests the GPU kernels once (in the full self-test), not in the GPU section and again in the self-test
-$MOCK build/pzsolve doctor --full -d "$T" >"$T/dfull.out" 2>&1; DRC=$?
-NG=$(grep -c '^  GPU\[0\]' "$T/dfull.out"); NR=$(grep -c 'GPU recovery rules' "$T/dfull.out")
-[ $DRC -eq 0 ] && [ "$NG" = 1 ] && [ "$NR" = 1 ] && echo "  OK doctor --full: the GPU tests run once" || { echo "  FAIL doctor --full: GPU[0] test $NG times, recovery rules $NR times (rc=$DRC)"; fail=$((fail+1)); }
 gpu_fault_test() {   # MODE PUZZLE: GPU only, the injected error arrives while the campaign runs (a few seconds into the search), the device must be reopened
   local f="$T/fault.$1" d="$T/fl.$1" o="$T/fl.$1.log" tp
   rm -rf "$d" "$f"

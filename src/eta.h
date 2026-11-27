@@ -47,18 +47,16 @@ void eta_summarize(const eta_in *m, double rate, eta_summary *out);
 /* ---- the rate the completion times are computed from ----
  * The first samples of a run say little: the GPUs are not counted until their first launch ends, the clocks are still rising, and a
  * laptop slows down after a few minutes of load. So the estimate (1) does not exist until every worker has produced something,
- * (2) is the average over a sliding window (at most 2 minutes) after that moment, and (3) starts from a remembered rate when there is
- * one (the steady rate of an earlier run of the same configuration, else the calibration's) and hands over to the measure in 150 s. */
-#define RATE_N 720                       /* one sample per second: 12 minutes of history */
+ * (2) is the average over a sliding window (at most 2 minutes) after that moment, and (3) is provisional for its first minute. */
+#define RATE_N 180                       /* one sample per second: 3 minutes of history, more than the window */
 typedef enum { RATE_MEASURING = 0, RATE_PROVISIONAL, RATE_STEADY } rate_state;
 typedef struct {
     double t[RATE_N], u[RATE_N];         /* ring of (time, total units counted so far) */
     int n, head;                         /* samples held, index of the next write */
     double ready;                        /* time at which every worker had produced, < 0 until then */
-    double prior;                        /* remembered rate in units/s, 0 = none */
 } rate_est;
 
-void rate_est_init(rate_est *e, double prior);
+void rate_est_init(rate_est *e);
 /* One sample per second (`t` increasing). `started`: every worker has produced something. */
 void rate_est_add(rate_est *e, double t, double units, bool started);
 /* The machine slept for `gap` seconds: earlier samples are moved so that the interval across the gap counts only time spent running. */
@@ -67,7 +65,5 @@ void rate_est_gap(rate_est *e, double gap);
 double rate_est_value(const rate_est *e, double now, rate_state *state);
 /* The time at which rate_est_value turns RATE_STEADY (if a measure exists by then), 0 while not every worker has produced something. */
 double rate_est_settle_time(const rate_est *e);
-/* The steady rate worth remembering: the average from 90 s after the start over at most the last 10 minutes; 0 until 120 s of it exist. */
-double rate_est_sustained(const rate_est *e, double now);
 
 #endif

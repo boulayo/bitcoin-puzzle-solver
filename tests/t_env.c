@@ -14,9 +14,8 @@ static int fails;
  * with "NAME=" works the same way on Windows, where it removes the variable). */
 static const char *const ALL[] = {
     "PZ_GPU_API", "PZ_NO_CUDA", "PZ_NO_OPENCL", "PZ_CUDA_LIB", "PZ_OPENCL_ALL", "PZ_GPU_HALF", "PZ_GPU_NK", "PZ_GPU_TUNE", "PZ_NO_PROFILE", "PZ_NO_LARGE_PAGES",
-    "PZ_ISA", "PZ_PRIO_GPU", "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_VERBOSE", "PZ_KANG_MIX", "PZ_KANG_ROUND",
-    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_TEST_KTHREAD", "PZ_TEST_JUMP", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N",
-    "PZ_TEST_REPORT_INTERVAL", "PZ_TEST_CHECKPOINT_INTERVAL"};
+    "PZ_ISA", "PZ_PRIO_GPU", "PZ_BENCH_SCALE", "XDG_CACHE_HOME", "HOME", "LOCALAPPDATA", "TMPDIR", "TERM", "NO_COLOR", "PZ_KANG_MIX", "PZ_KANG_ROUND",
+    "PZ_BSGS_SCALAR", "PZ_ASSUME_IFMA", "PZ_TEST_DP_CAP", "PZ_TEST_SEAL_LOG2N", "PZ_TEST_CHECKPOINT_INTERVAL"};
 
 static void setv(const char *name, const char *value)
 {
@@ -79,17 +78,16 @@ static void t_defaults(void)
     CHECK(g_env.gpu_half == 0 && g_env.gpu_nk == 0 && !g_env.gpu_nk_text[0]);
     CHECK(g_env.bench_scale == 1.0);
     CHECK(!g_env.xdg_cache_home[0] && !g_env.home[0] && !g_env.local_app_data[0] && !g_env.tmpdir[0] && !g_env.term_dumb && !g_env.no_color);
-    CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma);
-    CHECK(g_env.test_kthread == 0 && g_env.test_jump == 0 && g_env.test_dp_cap == -1 && g_env.test_seal_log2n == 0);
-    CHECK(!g_env.isa[0] && g_env.prio_gpu == PZ_ENV_PRIO_AUTO && g_env.test_report_interval == 0 && g_env.test_checkpoint_interval == 0);
+    CHECK(g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma);
+    CHECK(g_env.test_dp_cap == -1 && g_env.test_seal_log2n == 0);
+    CHECK(!g_env.isa[0] && g_env.prio_gpu == PZ_ENV_PRIO_AUTO && g_env.test_checkpoint_interval == 0);
 }
 
 /* The two-state variables: on with any value except "" and "0"; each one alone, and nothing else changes. */
 static const struct { const char *name; size_t off; } FLAGS[] = {
     {"PZ_NO_CUDA", offsetof(struct pz_env, no_cuda)}, {"PZ_NO_OPENCL", offsetof(struct pz_env, no_opencl)},
     {"PZ_OPENCL_ALL", offsetof(struct pz_env, opencl_all)}, {"PZ_NO_PROFILE", offsetof(struct pz_env, no_profile)},
-    {"PZ_NO_LARGE_PAGES", offsetof(struct pz_env, no_large_pages)}, {"PZ_KANG_VERBOSE", offsetof(struct pz_env, kang_verbose)},
-    {"PZ_BSGS_SCALAR", offsetof(struct pz_env, bsgs_scalar)},
+    {"PZ_NO_LARGE_PAGES", offsetof(struct pz_env, no_large_pages)}, {"PZ_BSGS_SCALAR", offsetof(struct pz_env, bsgs_scalar)},
     {"PZ_ASSUME_IFMA", offsetof(struct pz_env, assume_ifma)}};
 #define NFLAGS ((int)(sizeof FLAGS / sizeof *FLAGS))
 
@@ -169,18 +167,6 @@ static void t_numbers(void)
         CHECK(try_value("PZ_GPU_HALF", bad_half[k], last, sizeof last) == 1 && g_env.gpu_half == 0);
         CHECK(strstr(last, "PZ_GPU_HALF=") && strstr(last, " ignored (expected an integer between 1 and 4194304)"));
     }
-    /* PZ_TEST_KTHREAD: 16 or more */
-    CHECK(try_value("PZ_TEST_KTHREAD", "16", last, sizeof last) == 0 && g_env.test_kthread == 16);
-    CHECK(try_value("PZ_TEST_KTHREAD", "1048576", last, sizeof last) == 0 && g_env.test_kthread == 1048576);
-    static const char *const bad_kt[] = {"15", "8", "0", "-16", "abc", "16x", "1048577", "2147483648", "9999999999999999999999"};
-    for (size_t k = 0; k < sizeof bad_kt / sizeof *bad_kt; k++)
-        CHECK(try_value("PZ_TEST_KTHREAD", bad_kt[k], last, sizeof last) == 1 && g_env.test_kthread == 0);
-    /* PZ_TEST_JUMP: positive, up to what an int holds */
-    CHECK(try_value("PZ_TEST_JUMP", "1", last, sizeof last) == 0 && g_env.test_jump == 1);
-    CHECK(try_value("PZ_TEST_JUMP", "2147483647", last, sizeof last) == 0 && g_env.test_jump == 2147483647);
-    static const char *const bad_tj[] = {"0", "-3", "2147483648", "1.5", "x", "3 "};
-    for (size_t k = 0; k < sizeof bad_tj / sizeof *bad_tj; k++)
-        CHECK(try_value("PZ_TEST_JUMP", bad_tj[k], last, sizeof last) == 1 && g_env.test_jump == 0);
     /* PZ_TEST_DP_CAP: zero is a value (the table then has the minimum size), unset is -1 */
     CHECK(try_value("PZ_TEST_DP_CAP", "0", last, sizeof last) == 0 && g_env.test_dp_cap == 0);
     CHECK(try_value("PZ_TEST_DP_CAP", "64", last, sizeof last) == 0 && g_env.test_dp_cap == 64);
@@ -196,19 +182,14 @@ static void t_numbers(void)
     static const char *const bad_sl[] = {"0", "18", "-4", "x", "4k", "99999999999999999999"};
     for (size_t k = 0; k < sizeof bad_sl / sizeof *bad_sl; k++)
         CHECK(try_value("PZ_TEST_SEAL_LOG2N", bad_sl[k], last, sizeof last) == 1 && g_env.test_seal_log2n == 0);
-    /* PZ_TEST_REPORT_INTERVAL, PZ_TEST_CHECKPOINT_INTERVAL: seconds, 1 to a day */
-    static const struct { const char *name; size_t off; } SECS[] = {{"PZ_TEST_REPORT_INTERVAL", offsetof(struct pz_env, test_report_interval)},
-                                                                   {"PZ_TEST_CHECKPOINT_INTERVAL", offsetof(struct pz_env, test_checkpoint_interval)}};
-    for (size_t i = 0; i < sizeof SECS / sizeof *SECS; i++) {
-        const int *v = (const int *)((const char *)&g_env + SECS[i].off);
-        CHECK(try_value(SECS[i].name, "1", last, sizeof last) == 0 && *v == 1);
-        CHECK(try_value(SECS[i].name, "86400", last, sizeof last) == 0 && *v == 86400);
-        CHECK(try_value(SECS[i].name, "", last, sizeof last) == 0 && *v == 0);
-        static const char *const bad_s[] = {"0", "-1", "86401", "2s", "x", "1.5"};
-        for (size_t k = 0; k < sizeof bad_s / sizeof *bad_s; k++) {
-            CHECK(try_value(SECS[i].name, bad_s[k], last, sizeof last) == 1 && *v == 0);
-            CHECK(strstr(last, SECS[i].name) && strstr(last, " ignored (expected an integer between 1 and 86400)"));
-        }
+    /* PZ_TEST_CHECKPOINT_INTERVAL: seconds, 1 to a day */
+    CHECK(try_value("PZ_TEST_CHECKPOINT_INTERVAL", "1", last, sizeof last) == 0 && g_env.test_checkpoint_interval == 1);
+    CHECK(try_value("PZ_TEST_CHECKPOINT_INTERVAL", "86400", last, sizeof last) == 0 && g_env.test_checkpoint_interval == 86400);
+    CHECK(try_value("PZ_TEST_CHECKPOINT_INTERVAL", "", last, sizeof last) == 0 && g_env.test_checkpoint_interval == 0);
+    static const char *const bad_s[] = {"0", "-1", "86401", "2s", "x", "1.5"};
+    for (size_t k = 0; k < sizeof bad_s / sizeof *bad_s; k++) {
+        CHECK(try_value("PZ_TEST_CHECKPOINT_INTERVAL", bad_s[k], last, sizeof last) == 1 && g_env.test_checkpoint_interval == 0);
+        CHECK(strstr(last, "PZ_TEST_CHECKPOINT_INTERVAL=") && strstr(last, " ignored (expected an integer between 1 and 86400)"));
     }
     /* PZ_BENCH_SCALE: a number from 0.01 to 100 */
     CHECK(try_value("PZ_BENCH_SCALE", "0.2", last, sizeof last) == 0 && g_env.bench_scale == 0.2);
@@ -288,7 +269,7 @@ static void t_reinit(void)
     CHECK(!g_env.no_cuda && g_env.gpu_half == 0);
     clear_all();
     setv("PZ_GPU_HALF", "x");
-    setv("PZ_TEST_JUMP", "-1");
+    setv("PZ_TEST_DP_CAP", "x");
     setv("PZ_BENCH_SCALE", "0");
     setv("PZ_GPU_TUNE", "9");
     setv("PZ_NO_PROFILE", "1");

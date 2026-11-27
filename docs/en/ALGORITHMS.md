@@ -661,10 +661,10 @@ path, which is also triggered by every zero denominator in the batch inversion.
   giant step: about 0.02 ns per giant step at `T = 2^34` and 0.15 ns at `T = 2^40`, against ≈ 70 ns for the step itself (one thread);
   such a match is counted as a false positive in the statistics. Storing `b` took 40 of the 64 bits of a cell: without it a table holds
   twice as many baby steps in the same RAM, so a search whose table is limited by the RAM needs half the giant steps.
-* **Tables of earlier versions** are read and used as they are: `PZBSGS02` (1.11.0 to 1.13.0: 8-byte cells, 24-bit tag and 40-bit `b`,
-  8 per bucket, load 0.70, 11.4 bytes per baby step) and `PZBSGS01` (up to 1.10.0: one array of the same cells, linear probing, load
-  0.65, 12.3 bytes per baby step). They cannot be converted without computing the baby steps again (a cell keeps 24 bits of `x.n[1]` and
-  its home bucket is known only to within its run), and they are written back in their own format.
+* **Tables of earlier versions** are refused: `PZBSGS02` (1.11.0 to 1.13.0: 8-byte cells, 24-bit tag and 40-bit `b`, 8 per bucket,
+  11.4 bytes per baby step) and `PZBSGS01` (up to 1.10.0: the same cells in one array, linear probing). They cannot be converted without
+  computing the baby steps again (a cell keeps 24 bits of `x.n[1]` and its home bucket is known only to within its run), which is what
+  building the table anew does, in half the RAM: the message says to delete the file.
 * **Parallel construction**: blocks of up to 2^22 baby steps taken from an atomic counter; each thread uses the same batch-inversion
   window. Measured on 4 cores (AVX-512): ≈ 40–50 M entries/s (smaller blocks on small tables, so every core works).
 * **SIMD lane windows**: 4 (AVX2) or 8 (AVX-512, IFMA) consecutive windows per instruction, with the arithmetic of
@@ -732,9 +732,8 @@ same arithmetic on **4 (AVX2) or 8 (AVX-512) independent windows** in parallel, 
 ## 11. Time-estimation model (`src/eta.c`)
 
 Estimates are computed from a *realistic rate from the start* (`rate_est` in `eta.c`): no estimate until every
-engine has produced something (a GPU counts only at the end of a launch), then the average over a sliding window of up to 2 minutes; at the start
-it is blended, with a weight growing up to 150 s, with a *remembered* speed (the steady-state speed of a previous run of the same
-configuration, which on laptops is lower than the cold speed measured by tuning). BSGS, which changes speed at the end
+engine has produced something (a GPU counts only at the end of a launch), then the average over a sliding window of up to 2 minutes,
+marked provisional for its first minute. BSGS, which changes speed at the end
 of table construction, keeps a moving average of ≈ 30 s. They show the time *still needed* and the probability of
 success in the next 1 h / 24 h / 7 d / 30 d / 365 d:
 

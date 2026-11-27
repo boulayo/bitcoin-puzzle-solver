@@ -248,13 +248,8 @@ static void panel_estimate(panel_t *p, const run_ctx *r, const progress_info *pi
     }
     add_line(p, "", "", ln);
     if (pi->est_state == RATE_PROVISIONAL) {
-        const char *from = r->rate_prior_kind == 2 ? "from the remembered speed" : r->rate_prior_kind == 1 ? "from the tuning run" : "";
         const double left = r->settle_at > 0 && !final ? r->settle_at - pz_mono() : -1;   /* never a time that has passed, nor one after a stop */
-        char when[48] = "";
-        if (left >= 60) snprintf(when, sizeof when, "settles in ~%d min", (int)ceil(left / 60));
-        else if (left > 0) snprintf(when, sizeof when, "settles in ~%d s", (int)ceil(left));
-        if (from[0] && when[0]) snprintf(ln, sizeof ln, "              provisional (%s, %s)", from, when);
-        else if (from[0] || when[0]) snprintf(ln, sizeof ln, "              provisional (%s%s)", from, when);
+        if (left > 0) snprintf(ln, sizeof ln, "              provisional (settles in ~%d s)", (int)ceil(left));
         else snprintf(ln, sizeof ln, "              provisional");
         add_line(p, p->D0, p->D1, ln);
     }

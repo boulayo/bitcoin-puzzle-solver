@@ -156,47 +156,13 @@ static int text_cols(const char *s, size_t n)
     return c;
 }
 
-/* A token that is a unit or a suffix of the number before it ("34.78 M", "12 MiB", "2 minutes"): never separated from that number. */
-static bool unit_token(const char *t, const char *end)
-{
-    static const char *const units[] = {"M", "G", "k", "K", "T", "MiB", "GiB", "KiB", "MB", "GB", "kB", "MHz", "GHz", "kHz", "s", "ms", "us", "ns",
-                                        "%", "x", "B", "steps/s", "keys/s", "M/s", "G/s", "MB/s", "GB/s", "years", "days", "hours", "minutes",
-                                        "seconds", "bytes", "steps", "keys", "threads", "thread", NULL};
-    size_t n = 0;
-    while (t + n < end && t[n] != ' ' && t[n] != ',' && t[n] != ';' && t[n] != ')' && t[n] != ':') n++;
-    for (int i = 0; units[i]; i++)
-        if (strlen(units[i]) == n && !strncmp(units[i], t, n)) return true;
-    return false;
-}
-
-/* How good a place the space at q is to end a line: -1 forbidden, otherwise higher is better (the end of a sentence, a semicolon or a
- * colon, a comma, the start of a parenthesis). */
-static int break_score(const char *s, const char *q, const char *end)
-{
-    if (q <= s || q + 1 >= end || q[1] == ' ') return -1;
-    const char prev = q[-1];
-    const char *tok = q;
-    while (tok > s && tok[-1] != ' ') tok--;
-    if ((size_t)(q - tok) == 2 && !strncmp(tok, "->", 2)) return -1;                          /* an arrow stays with its value */
-    if (q[1] == '-' && q + 3 < end && q[2] == '>' && q[3] == ' ') return -1;
-    if (prev >= '0' && prev <= '9' && unit_token(q + 1, end)) return -1;                       /* "27.61 M": number and unit stay together */
-    if (prev == '.' && q + 1 < end && ((q[1] >= 'A' && q[1] <= 'Z') || q[1] == '(')) return 5; /* a new sentence */
-    if (prev == ';' || prev == '|') return 4;
-    if (prev == ':' || prev == ',') return 3;
-    if (q[1] == '(') return 2;
-    if (prev == ')') return 1;
-    return 0;
-}
-
-/* Where to break the text s..end so that the first line fits `width` columns (it starts at column col0): at the best place in the
- * second half of the line, never leaving a last line of a few characters; NULL when there is no space to break at. The next line starts
- * at column `hang`: a word that would not fit there either (a key, a path) is never moved to it, nor is the text before it when the
- * word starts on this line: the line is left longer instead, and broken after the word. */
+/* Where to break the text s..end so that the first line fits `width` columns (it starts at column col0): at the last space that fits
+ * (the last of a run of spaces, never one at either end); NULL when there is no space to break at. The next line starts at column
+ * `hang`: a word that would not fit there either (a key, a path) is never moved to it, nor is the text before it when the word starts
+ * on this line: the line is left longer instead, and broken after the word. */
 static const char *pick_break(const char *s, const char *end, int col0, int width, int hang)
 {
-    const int low = col0 + (width - col0) * 75 / 100;
-    const char *best = NULL, *fit = NULL, *first_after = NULL, *keep_to = s, *no_break = NULL;
-    int best_score = -1;
+    const char *fit = NULL, *keep_to = s, *no_break = NULL;
     int col = col0;
     for (const char *w = s; w < end;) {                 /* the first word too long for a line of its own */
         const char *we = w;
@@ -210,22 +176,13 @@ static const char *pick_break(const char *s, const char *end, int col0, int widt
         while (w < end && *w == ' ') w++;
     }
     for (const char *q = s; q < end; q++) {
-        if (*q == ' ') {
-            const int sc = q < keep_to || q == no_break ? -1 : break_score(s, q, end);
-            if (sc >= 0) {
-                if (col <= width) {
-                    fit = q;
-                    const int rest = text_cols(q + 1, (size_t)(end - q - 1));
-                    const int value = sc * 10 + 80 * col / width;   /* a natural place counts for more, a fuller line too */
-                    if (col >= low && (rest >= 10 || !best) && value >= best_score) { best = q; best_score = value; }
-                } else if (!first_after) first_after = q;
-            }
+        if (*q == ' ' && q > s && q + 1 < end && q[1] != ' ' && q >= keep_to && q != no_break) {
+            if (col > width) return fit ? fit : q;      /* nothing fits before a word longer than the line: break after it */
+            fit = q;
         }
         if (((unsigned char)*q & 0xC0) != 0x80) col++;
     }
-    if (best) return best;
-    if (fit) return fit;
-    return first_after;                       /* a word longer than the line: break after it */
+    return fit;
 }
 
 /* Column where the description of an option or command starts in this line, or -1 when the line has none. */

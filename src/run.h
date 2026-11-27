@@ -39,8 +39,6 @@ typedef struct {
     char detail[320];
 } progress_info;
 
-/* Priority of the threads serving the GPUs (PZ_PRIO_GPU for hunt, --prio-gpu for bench --together): auto = measured by the calibration and remembered in the machine profile. */
-typedef enum { PRIO_AUTO = 0, PRIO_NO, PRIO_YES } prio_mode;
 typedef enum { UI_AUTO = 0, UI_FULL, UI_LINE, UI_LOG } ui_mode;   /* auto = full on a terminal, log otherwise */
 
 typedef struct run_ctx {
@@ -71,12 +69,11 @@ typedef struct run_ctx {
     const cpu_engine *engine;
     canary cpu_canary;               /* linear search: the canary of the CPU engine, for all its threads (each GPU has its own) */
     bool use_cpu, use_gpu;
-    int report_interval;             /* seconds between terminal updates */
     int checkpoint_interval;         /* seconds */
     ui_mode ui;
     double peak_rate;                /* highest smoothed total rate seen in this session */
-    double rate_eta;                 /* the rate the completion times are computed from: a window average once every worker produces,
-                                      * started from a remembered rate when there is one (BSGS: slowly smoothed) */
+    double rate_eta;                 /* the rate the completion times are computed from: a window average once every worker produces
+                                      * (BSGS: slowly smoothed) */
     rate_state est_state;            /* how far to trust rate_eta */
     double settle_at;                /* monotonic time at which a provisional rate_eta becomes steady (0: not known yet) */
     bool all_started;                /* every worker has produced something (a GPU is counted only when its first launch ends) */
@@ -85,17 +82,11 @@ typedef struct run_ctx {
     _Atomic u64 units_base;          /* units of this session before that change (stored before rate_restart is set) */
     double t_base;                   /* seconds of the session at that change (the reporter's) */
     _Atomic int effort_warned;       /* kangaroo: the warning about 5x the expected effort has been logged */
-    double rate_prior;               /* remembered rate for the completion times at the start (0 = none) */
-    int rate_prior_kind;             /* 0 none, 1 the calibration's (measured cold), 2 the steady rate of an earlier run */
-    double rate_cold;                /* the calibration's rate of the profile entry in use (0 = none) */
-    char rate_key[1100];             /* where the steady rate of this run is remembered (profile_rate_setup) */
-    void (*remember_rate)(struct run_ctx *, double);   /* given the steady rate every few minutes and at the end (NULL: not remembered) */
     bool silent_setup;               /* no informational logs from setup code (self-tests) */
     bool threads_explicit;           /* --threads given */
     bool mode_auto;                  /* no --mode given: the program chose the method */
     int limit_pct;                   /* --limit: use only this percentage (1..99) of the CPU threads and of the GPU work-items, all of them
                                       * running flat out all the time (0 = off). Set by run_limit_setup */
-    prio_mode prio_gpu;              /* PZ_PRIO_GPU */
     bool gpu_boost;                  /* the threads serving the GPUs run above the CPU workers (from PZ_PRIO_GPU or the profile) */
     u32 node;                        /* kangaroo: this computer's number in a campaign shared by several (--node): different starting points */
     bool node_given;                 /* --node was given (0 included): the jump table id goes to the terminal too */
@@ -109,7 +100,7 @@ typedef struct run_ctx {
     double paused_total;             /* seconds of this session the machine slept or stood still (detected by the reporter): not computing time */
     int sessions;
     u64 prev_units_total;            /* units from previous sessions */
-    char path_state[600], path_status[600], path_report[600], path_stats[600], path_log[600], path_found[600], path_session[600];
+    char path_state[600], path_status[600], path_report[600], path_log[600], path_found[600], path_session[600];
     char path_reserve[600];          /* space kept for FOUND.txt, given back when the disk is full at the find */
 
     /* mode hooks */
@@ -172,7 +163,6 @@ void run_claim_hit(void *user, const pz_u256 *index);
 
 /* --limit: how many of n units (CPU threads, GPU work-items) pct percent is. Threads: whole, at least 1, rounded to the nearest. */
 int run_limit_threads(int n, int pct);
-prio_mode run_prio_arg(const char *v);              /* the value of bench --prio-gpu (auto, yes, no): exits with a message on any other */
 #define RUN_MAX_THREADS (MAX_WORKERS - 16)          /* the most CPU threads -t accepts (hunt and bench) */
 /* GPU work-items: pct percent of n, rounded to a multiple of `quantum`, never below `quantum` (and never above n). pct outside 1..99: n. */
 size_t run_limit_items(size_t n, int pct, size_t quantum);
@@ -183,7 +173,7 @@ void run_limit_setup(run_ctx *r);
 
 /* campaign directory handling */
 void run_paths(run_ctx *r);
-int run_session_load(run_ctx *r);
+void run_session_load(run_ctx *r);     /* session.txt into the totals of the earlier sessions (none: they stay 0) */
 int run_session_save(run_ctx *r, double elapsed_total, u64 units_total);
 
 /* reporter: runs in the calling thread until stop/found, then writes the final report */

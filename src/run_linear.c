@@ -244,7 +244,7 @@ int linear_bench_together(const cpu_engine *engine, int threads, const char *gpu
     for (int j = 0; j < ngpu; j++) gidx[j] = gpu_session_index(gpu_session_at(gpus, j));
     for (int i = 0; i < r->nws && gi < ngpu; i++)
         if (r->ws[i].kind == 'G') gw[gi++] = i;
-    const tg_scan_cfg cfg = {r, gpus, ngpu, gw, gidx, total, full, threads > 0, "keys/s", lin_set_cpu, r, choice ? choice->prio : PRIO_AUTO};
+    const tg_scan_cfg cfg = {r, gpus, ngpu, gw, gidx, total, full, threads > 0, "keys/s", lin_set_cpu, r, choice ? choice->prio : PZ_ENV_PRIO_AUTO};
     tg_choice ch = tg_scan(&cfg);
 
     atomic_store(&r->stop, 1);

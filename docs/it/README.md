@@ -54,7 +54,7 @@ candidata della scansione lineare. Gli algoritmi sono spiegati in [`docs/en/ALGO
   data a `pzsolve encrypt-keygen`. Protegge ciò che resta dopo di te, non una macchina il cui amministratore legge la memoria mentre il programma gira:
   [USO](USO.md) sezione 11.
 * **Pannello e file.** Un pannello aggiornato ogni secondo mostra velocità per dispositivo, tempo residuo e probabilità di successo. La
-  cartella della campagna contiene `report.txt`, `status.json`, `stats.csv`, `log.txt` e, a chiave trovata, `FOUND.txt` (permessi 0600).
+  cartella della campagna contiene `report.txt`, `status.json`, `log.txt` e, a chiave trovata, `FOUND.txt` (permessi 0600).
 
 ## Avvio rapido
 

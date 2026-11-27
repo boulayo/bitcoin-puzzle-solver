@@ -372,7 +372,6 @@ kang_state *kang_create(run_ctx *r)
         long double k = ks->sqrtW / (256.0L * nthr);
         ks->K_thread = k < 16 ? 16 : (k > KANG_K_THREAD_MAX ? KANG_K_THREAD_MAX : (int)k);
         ks->K_thread = (ks->K_thread + 15) & ~15;          /* whole vectors for the lane-parallel rounds */
-        if (g_env.test_kthread) ks->K_thread = (g_env.test_kthread + 15) & ~15;   /* tests: walkers per CPU thread (the regime of long walks on a small interval) */
     }
     ks->K_total = ks->K_thread * nthr + k_gpu;
     return ks;
@@ -446,13 +445,8 @@ static long double make_jump_table(kang_state *ks)
     u128 mean3;
     {
         const pz_u256 rw = u256_isqrt(&ks->W), qw = u256_isqrt(&rw);          /* sqrt(W) and W^(1/4), rounded down */
-        pz_u256 m;
-        if (g_env.test_jump) {                                              /* tests: mean jump in units of sqrt(W) */
-            m = pz_u256_mul_u32(&rw, (u32)g_env.test_jump);
-        } else {
-            m = u256_mul_u64(&rw, qw.w[0]);                                 /* W^(3/4); W^(1/4) < 2^48 */
-            m = pz_u256_shr(&m, 4);                                            /* the mean jump is W^(3/4) / 16 */
-        }
+        pz_u256 m = u256_mul_u64(&rw, qw.w[0]);                         /* W^(3/4); W^(1/4) < 2^48 */
+        m = pz_u256_shr(&m, 4);                                            /* the mean jump is W^(3/4) / 16 */
         if (pz_u256_bits(&m) > 120) m = pz_u256_pow2(120);                        /* jump distances are 128-bit (W above 2^165) */
         mean3 = (u128)m.w[1] << 64 | m.w[0];
         if (mean3 < 2 * KANG_MOD) mean3 = 2 * KANG_MOD;

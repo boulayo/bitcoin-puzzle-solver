@@ -193,16 +193,6 @@ static void bs_cleanup(run_ctx *r)
 
 /* ---- the checks before a campaign, and the campaign ---- */
 
-/* RAM of the table of T baby steps: that of a table built now, or, when `table_path` already holds a table, that of the file (a table
- * saved by an earlier version takes more per baby step). */
-static u64 table_ram(const char *table_path, u64 T)
-{
-    char err[256];
-    u64 fT, ram;
-    if (table_path[0] && access(table_path, F_OK) == 0 && bsgs_table_peek_ram(table_path, &fT, &ram, err, sizeof err) && fT == T) return ram;
-    return bsgs_bytes_for(T);
-}
-
 /* What decides whether a BSGS campaign can run at all: the CPU, the size of the range for the table, the RAM, and a folder that the
  * table can be saved to. 'hunt' asks it before it creates the folder of a new campaign, so that a refused command leaves nothing
  * behind, and run_bsgs() asks it again (a resumed campaign, another machine). Exits with a message when the campaign cannot run;
@@ -223,7 +213,7 @@ void run_bsgs_check(const campaign_cfg *cfg, const sysinfo_t *sys, bool use_cpu,
         pz_die("%s%s", err, range ? ": use -m kangaroo" : "");
     }
 
-    const u64 bytes = table_ram(table_path, T);
+    const u64 bytes = bsgs_bytes_for(T);
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
     pz_fmt_bytes((double)sys->mem_avail, ma, sizeof ma);
     const bool have_table = table_path[0] && access(table_path, F_OK) == 0;
@@ -256,7 +246,7 @@ int run_bsgs(run_ctx *r)
     bsgs_sched_cfg(&b->P, &r->cfg, &b->scfg);
 
     const u64 T = r->cfg.bsgs_t;
-    const u64 bytes = table_ram(r->table_path, T);
+    const u64 bytes = bsgs_bytes_for(T);
     char mb[48], ma[48], bsgs_cost[48], kang_cost[48], tg[32], ng[32];
     pz_fmt_bytes((double)bytes, mb, sizeof mb);
     pz_fmt_bytes((double)r->sys.mem_avail, ma, sizeof ma);

@@ -16,9 +16,7 @@
  * filled from the first one on.  A lookup reads its bucket (one line) and goes on to the next only when the last cell of the bucket
  * is in use.  The cells do not keep b: when a tag matches, b is found by a small baby-step giant-step over [1, T] with a table of
  * about 2*sqrt(T) entries that keep it (bsgs_recover), which a tag matching by chance (about once in 2^28 giant steps) costs too.
- * Tables saved by the earlier versions are read and used as they are: "PZBSGS02" (8-byte cells: 24-bit tag | 40-bit b, 8 per
- * bucket, load 0.70, 11.4 bytes per baby step) and "PZBSGS01" (the same cells in one array probed linearly, bsgs_table.linear, load
- * 0.65, 12.3 bytes per baby step). */
+ * That small table keeps b in 8-byte cells (24-bit tag | 40-bit b, BS_BUCKET per bucket). */
 #ifndef PZ_BSGS_H
 #define PZ_BSGS_H
 
@@ -27,23 +25,22 @@
 
 #define BS_HALF 512                 /* points on each side of a group centre (one batch inversion per group) */
 #define BS_GRP (2 * BS_HALF)
-#define BS_MAX_T (((u64)1 << 40) - 1)   /* the baby index is at most 40 bits (the cells of PZBSGS01/02 store it in 40 bits) */
+#define BS_MAX_T (((u64)1 << 40) - 1)   /* the baby index is at most 40 bits (the 8-byte cells store it in 40 bits) */
 #define BS_BUCKET32 16              /* cells of 4 bytes per bucket: 64 bytes, one cache line */
 #define BS_LOAD_NUM 7               /* a new table has BS_LOAD_NUM / BS_LOAD_DEN of its cells in use (integers: its size must be */
 #define BS_LOAD_DEN 10              /* the same on every platform, the header of a saved table is checked against it) */
-#define BS_BUCKET 8                 /* PZBSGS02: cells of 8 bytes per bucket (64 bytes), BS_LOAD2_NUM / BS_LOAD2_DEN of them in use */
+#define BS_BUCKET 8                 /* cells of 8 bytes per bucket (64 bytes), BS_LOAD2_NUM / BS_LOAD2_DEN of them in use */
 #define BS_LOAD2_NUM 7
 #define BS_LOAD2_DEN 10
 
 typedef struct {
-    u64 *slots;          /* the cells, 64-byte aligned: 8 bytes (tag:24 | b:40) in PZBSGS01/02, two of 4 bytes (tag32) per word in PZBSGS03; 0 = empty */
+    u64 *slots;          /* the cells, 64-byte aligned: two of 4 bytes (tag32) per word, or 8 bytes (tag:24 | b:40); 0 = empty */
     u64 nslots;          /* number of 8-byte words (a multiple of BS_BUCKET: 64 bytes) */
     u64 T;               /* baby steps stored: b = 1..T */
     void *map;           /* mmap'd region (slots lives inside it) */
     size_t map_bytes;
     bool thp;            /* transparent huge pages accepted by the kernel */
-    bool tag32;          /* PZBSGS03: 4-byte cells with a tag only (every table built with bsgs_table_alloc) */
-    bool linear;         /* table read from a PZBSGS01 file: one array of cells, linear probing (never true for a table that was built) */
+    bool tag32;          /* 4-byte cells with a tag only: every table but the small one of bsgs_recover */
     _Atomic(void *) aux; /* PZBSGS03: the small table that gives b back when a tag matches, built on the first match (bsgs_recover) */
 } bsgs_table;
 
@@ -80,7 +77,7 @@ bool bsgs_table_alloc(bsgs_table *t, u64 T, char *err, size_t errlen);
 void bsgs_table_free(bsgs_table *t);
 /* Builds the whole table with `nthreads` threads. units[i] counts the babies inserted by thread i. Returns false if stopped. */
 bool bsgs_table_build(bsgs_table *t, int nthreads, _Atomic u64 **units, _Atomic int *stop);
-/* Number of non-empty slots (parallel). */
+/* Number of cells in use of a table of tags (parallel). */
 u64 bsgs_table_count(const bsgs_table *t, int nthreads);
 /* Looks the x-coordinate up (lo, hi are x.n[0], x.n[1], normalized): true when the table has an entry with its tag. *b_out (optional)
  * receives the baby index stored with it, 0 for a PZBSGS03 table, whose cells keep only the tag (bsgs_recover gives it back). */
@@ -89,11 +86,9 @@ bool bsgs_table_contains(const bsgs_table *t, u64 xlo, u64 xhi, u64 *b_out);
  * baby-step giant-step over [1, T] with a table of about 2*sqrt(T) entries that keep b (built on the first call, kept with the
  * table, safe from several threads): about sqrt(T)/4 giant steps for each sign of q. */
 u64 bsgs_recover(const bsgs_table *t, const pz_ge *q);
-/* Persistence. peek() reads only the header; peek_ram() also gives the RAM the table takes once loaded (more for an old-format file
- * than bsgs_bytes_for(T)). A table read from an old-format file is written back in that format. */
+/* Persistence of a table of tags (PZBSGS03). peek() reads only the header. */
 bool bsgs_table_save(const bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen);
 bool bsgs_table_peek(const char *path, u64 *T, char *err, size_t errlen);
-bool bsgs_table_peek_ram(const char *path, u64 *T, u64 *ram_bytes, char *err, size_t errlen);
 bool bsgs_table_load(bsgs_table *t, const char *path, int nthreads, char *err, size_t errlen);
 
 /* ---- giant steps ---- */

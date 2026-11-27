@@ -108,7 +108,7 @@ static bool line_value(const char *text, const char *name, char *out, size_t cap
     return false;
 }
 
-typedef struct { char text[PZ_SEAL_TEXT_BUF + 8]; int line; u8 payload[PZ_SEAL_PAYLOAD_LEN]; bool ok; } token_t;
+typedef struct { char text[PZ_SEAL_TEXT_BUF + 8]; int line; u8 payload[PZ_SEAL_PAYLOAD_LEN]; } token_t;
 
 /* What the options and the arguments of `decrypt-key` give. */
 typedef struct { bool raw; char address[80]; const char *file; } decrypt_opts;
@@ -156,60 +156,40 @@ static char *decrypt_read_text(const char *file, bool from_stdin)
     return text;
 }
 
-#define DECRYPT_TOKENS_MAX 64
-
-/* The tokens of the text (those that start with PZENC1:, at most DECRYPT_TOKENS_MAX), decoded; *bad counts those whose check characters do not match. */
-static token_t *decrypt_find_tokens(const char *text, int *ntok, int *bad)
+/* The first token of the text (the one that starts with PZENC1:), decoded, with the key id it was encrypted to shown; false, with the
+ * reason on stderr, when there is none or it cannot be opened. A FOUND.txt holds one: a second one is only mentioned. */
+static bool decrypt_find_token(const char *text, const char *where, token_t *t)
 {
-    token_t *tok = pz_xcalloc(DECRYPT_TOKENS_MAX, sizeof *tok);
-    int nt = 0, line = 1;
-    for (const char *p = text; *p;) {
-        if (*p == '\n') { line++; p++; continue; }
-        if (strncmp(p, PZ_SEAL_TEXT_PREFIX, PZ_SEAL_TEXT_PREFIX_LEN) != 0) { p++; continue; }
-        size_t n = PZ_SEAL_TEXT_PREFIX_LEN;
-        while (is_b58(p[n])) n++;
-        if (nt < DECRYPT_TOKENS_MAX) {
-            token_t *t = &tok[nt++];
-            t->line = line;
-            snprintf(t->text, sizeof t->text, "%.*s", (int)(n < sizeof t->text - 1 ? n : sizeof t->text - 1), p);
-            const pz_seal_status st = n < sizeof t->text - 1 ? pz_seal_decode(t->payload, t->text) : PZ_SEAL_E_FORMAT;
-            if (st == PZ_SEAL_OK) t->ok = true;
-            else {
-                (*bad)++;
-                fprintf(stderr, "line %d: the encrypted key is damaged or incomplete: the check characters at its end do not match (a cut or mistyped copy; copy it again)\n", line);
-            }
-        }
-        p += n;
+    const char *p = strstr(text, PZ_SEAL_TEXT_PREFIX);
+    if (!p) {
+        fprintf(stderr, "no encrypted key (a token that starts with PZENC1:) was found in %s\n", where);
+        return false;
     }
-    *ntok = nt;
-    return tok;
-}
-
-/* Says for which public key each token is encrypted, and drops (counting it in *bad) those of a version this program does not know or whose
- * point is not valid. Returns how many can be tried. */
-static int decrypt_check_tokens(token_t *tok, int nt, int *bad)
-{
-    int usable = 0;
-    for (int i = 0; i < nt; i++) {
-        if (!tok[i].ok) continue;
-        u8 kid[4];
-        char idh[9];
-        const pz_seal_status st = pz_seal_peek(tok[i].payload, kid);
-        if (st == PZ_SEAL_E_VERSION) {
-            fprintf(stderr, "line %d: version %d of the format, which this program does not know (it reads version %d): use a newer pzsolve\n", tok[i].line, tok[i].payload[0], PZ_SEAL_VERSION);
-            tok[i].ok = false;
-            (*bad)++;
-        } else if (st != PZ_SEAL_OK) {
-            fprintf(stderr, "line %d: the encrypted key is damaged (the point inside it is not valid)\n", tok[i].line);
-            tok[i].ok = false;
-            (*bad)++;
-        } else {
-            pz_hex_encode(kid, 4, idh);
-            printf("line %d: encrypted to the public key with id %s\n", tok[i].line, idh);
-            usable++;
-        }
+    t->line = 1;
+    for (const char *q = text; q < p; q++) t->line += *q == '\n';
+    size_t n = PZ_SEAL_TEXT_PREFIX_LEN;
+    while (is_b58(p[n])) n++;
+    if (strstr(p + n, PZ_SEAL_TEXT_PREFIX))
+        fprintf(stderr, "more than one encrypted key: only the first one (line %d) is opened; run the command once for each of them\n", t->line);
+    snprintf(t->text, sizeof t->text, "%.*s", (int)(n < sizeof t->text - 1 ? n : sizeof t->text - 1), p);
+    if (n >= sizeof t->text - 1 || pz_seal_decode(t->payload, t->text) != PZ_SEAL_OK) {
+        fprintf(stderr, "line %d: the encrypted key is damaged or incomplete: the check characters at its end do not match (a cut or mistyped copy; copy it again)\n", t->line);
+        return false;
     }
-    return usable;
+    u8 kid[4];
+    char idh[9];
+    const pz_seal_status st = pz_seal_peek(t->payload, kid);
+    if (st == PZ_SEAL_E_VERSION) {
+        fprintf(stderr, "line %d: version %d of the format, which this program does not know (it reads version %d): use a newer pzsolve\n", t->line, t->payload[0], PZ_SEAL_VERSION);
+        return false;
+    }
+    if (st != PZ_SEAL_OK) {
+        fprintf(stderr, "line %d: the encrypted key is damaged (the point inside it is not valid)\n", t->line);
+        return false;
+    }
+    pz_hex_encode(kid, 4, idh);
+    printf("line %d: encrypted to the public key with id %s\n", t->line, idh);
+    return true;
 }
 
 /* The address to check the key against and the puzzle (only shown), as far as the options or the text give them. */
@@ -256,9 +236,9 @@ static bool decrypt_ask_secret(bool raw, bool from_stdin, pz_u256 *d)
     return true;
 }
 
-/* Shows the key that a token gave (its line of the text, the key in hex, the WIF, the addresses) and checks it against the address of the
- * target; *recovered counts the keys shown, *failed those that are not the target's. */
-static void decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, const pz_ge *kp, const decrypt_target *tg, int *recovered, int *failed)
+/* Shows the key that the token gave (its line of the text, the key in hex, the WIF, the addresses) and checks it against the address of the
+ * target; false when it is not the target's. */
+static bool decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, const pz_ge *kp, const decrypt_target *tg)
 {
     char key_hex[PZ_U256_HEX_BUF], wif[PZ_WIF_BUF], addr_p2pkh[PZ_P2PKH_ADDRESS_BUF], addr_p2wpkh[96];
     u8 pub[33], hk[20];
@@ -270,6 +250,7 @@ static void decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, con
     if (pz_hash160_to_segwit_address("bc", hk, addr_p2wpkh, sizeof addr_p2wpkh) < 0) addr_p2wpkh[0] = 0;
     printf("\nKey recovered (line %d)\n  key (hex):         0x%s\n  WIF compressed:    %s\n  address (P2PKH):   %s\n  address (P2WPKH):  %s\n", line, key_hex, wif, addr_p2pkh, addr_p2wpkh);
     if (tg->puzzle) printf("  puzzle:            #%d\n", tg->puzzle);
+    bool ok = true;
     if (!tg->have_addr) {
         printf("address not checked: no address: line in the text and no --address\n");
     } else if (memcmp(hk, tg->h160, 20) == 0) {
@@ -277,16 +258,21 @@ static void decrypt_report_key(int line, const u8 key[32], const pz_u256 *k, con
     } else {
         printf("  check:             MISMATCH, the key does not belong to the address %s\n", tg->address);
         fprintf(stderr, "line %d: MISMATCH: the key that came out does not belong to the address %s\n", line, tg->address);
-        (*failed)++;
+        ok = false;
     }
     pz_secure_zero(key_hex, sizeof key_hex);
     pz_secure_zero(wif, sizeof wif);
-    (*recovered)++;
+    return ok;
 }
 
-/* Opens the token with the private key `d` (whose key id is `mine`) and shows the key it holds. */
-static void decrypt_open_token(const token_t *t, const pz_u256 *d, const char *mine, bool raw, const decrypt_target *tg, int *recovered, int *failed)
+/* Opens the token with the private key `d` and shows the key it holds; the exit status: 0 when the key was recovered and, if there is an
+ * address, belongs to it. */
+static int decrypt_open_token(const token_t *t, const pz_u256 *d, bool raw, const decrypt_target *tg)
 {
+    pz_ge q;
+    char mine[9];
+    if (!pz_ec_mul_g(&q, d)) { fprintf(stderr, "that is not a usable key\n"); return EC_EXIT_ERROR; }
+    enc_key_id(&q, mine);
     u8 key[32];
     const pz_seal_status st = pz_seal_open(key, t->payload, d);       /* the key id is compared before anything is tried */
     if (st != PZ_SEAL_OK) {
@@ -297,34 +283,17 @@ static void decrypt_open_token(const token_t *t, const pz_u256 *d, const char *m
                     raw ? "private key" : "password", mine, raw ? "key" : "password");
         else if (st == PZ_SEAL_E_TAG) fprintf(stderr, "line %d: the key id is right but the authentication failed: the encrypted key was altered\n", t->line);
         else fprintf(stderr, "line %d: the encrypted key cannot be opened (status %d)\n", t->line, (int)st);
-        (*failed)++;
-        return;
+        return EC_EXIT_NOT_OPENED;
     }
     pz_u256 k;
     pz_ge kp;
     pz_u256_from_be(&k, key);
-    if (!pz_ec_mul_g(&kp, &k)) {
-        fprintf(stderr, "line %d: the key that came out is not a valid private key (nothing is shown)\n", t->line);
-        (*failed)++;
-    } else {
-        decrypt_report_key(t->line, key, &k, &kp, tg, recovered, failed);
-    }
+    bool ok = pz_ec_mul_g(&kp, &k);
+    if (!ok) fprintf(stderr, "line %d: the key that came out is not a valid private key (nothing is shown)\n", t->line);
+    else ok = decrypt_report_key(t->line, key, &k, &kp, tg);
     pz_secure_zero(key, sizeof key);
     pz_secure_zero(&k, sizeof k);
-}
-
-/* Opens every readable token with the private key `d`; the exit status: 0 when a key was recovered and every token went well. */
-static int decrypt_open_tokens(const token_t *tok, int nt, int bad, const pz_u256 *d, bool raw, const decrypt_target *tg)
-{
-    pz_ge q;
-    char mine[9];
-    if (!pz_ec_mul_g(&q, d)) { fprintf(stderr, "that is not a usable key\n"); return EC_EXIT_ERROR; }
-    enc_key_id(&q, mine);
-    int recovered = 0, failed = 0;
-    for (int i = 0; i < nt; i++)
-        if (tok[i].ok) decrypt_open_token(&tok[i], d, mine, raw, tg, &recovered, &failed);
-    if (recovered == 0) return failed ? EC_EXIT_NOT_OPENED : EC_EXIT_ERROR;
-    return failed || bad ? EC_EXIT_NOT_OPENED : 0;
+    return ok ? 0 : EC_EXIT_NOT_OPENED;
 }
 
 int decrypt_key_main(int argc, char **argv)
@@ -333,34 +302,19 @@ int decrypt_key_main(int argc, char **argv)
     if (!decrypt_parse_args(argc, argv, &o)) return 0;
     const bool from_stdin = !o.file || !strcmp(o.file, "-");
     char *text = decrypt_read_text(o.file, from_stdin);
-    int nt = 0, bad = 0;
-    token_t *tok = decrypt_find_tokens(text, &nt, &bad);
-    if (nt == 0) {
-        free(text);
-        free(tok);
-        fprintf(stderr, "no encrypted key (a token that starts with PZENC1:) was found in %s\n", from_stdin ? "the input" : o.file);
-        return EC_EXIT_ERROR;
-    }
-    const int usable = decrypt_check_tokens(tok, nt, &bad);
+    token_t tok;
+    const bool usable = decrypt_find_token(text, from_stdin ? "the input" : o.file, &tok);
     decrypt_target tg;
     decrypt_find_target(text, &o, &tg);
     free(text);
-    if (!usable) {
-        free(tok);
-        return EC_EXIT_ERROR;
-    }
+    if (!usable) return EC_EXIT_ERROR;
     if (tg.have_addr && !pz_address_to_hash160(tg.address, tg.h160)) {
-        free(tok);
         fprintf(stderr, "'%s' is not a main-network address (a \"1...\" or \"bc1q...\" address)\n", tg.address);
         return EC_EXIT_ERROR;
     }
     pz_u256 d;
-    if (!decrypt_ask_secret(o.raw, from_stdin, &d)) {
-        free(tok);
-        return EC_EXIT_ERROR;
-    }
-    const int rc = decrypt_open_tokens(tok, nt, bad, &d, o.raw, &tg);
+    if (!decrypt_ask_secret(o.raw, from_stdin, &d)) return EC_EXIT_ERROR;
+    const int rc = decrypt_open_token(&tok, &d, o.raw, &tg);
     pz_secure_zero(&d, sizeof d);
-    free(tok);
     return rc;
 }

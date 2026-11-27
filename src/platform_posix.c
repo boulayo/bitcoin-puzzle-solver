@@ -266,8 +266,6 @@ bool pz_disk_space(const char *path, u64 *free_bytes, u64 *total_bytes)
     return true;
 }
 
-void pz_power_scheme(char *buf, size_t n) { if (n) buf[0] = 0; }
-
 #ifdef __APPLE__
 /* macOS: `caffeinate -i -w <our pid>` keeps the system from idle sleep for as long as this process lives (the helper exits with it). */
 static pid_t g_caffeinate;

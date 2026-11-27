@@ -5,7 +5,6 @@
 #include "../src/bsgs_priv.h"
 #include "../src/platform.h"
 #include <pzcore/hash.h>
-#include <math.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -95,7 +94,7 @@ static void t_table(void)
     CHECK(bsgs_table_build(&t, 3, units, NULL));
     CHECK(u0 + u1 + u2 >= T);
     CHECK(bsgs_table_count(&t, 2) == T);
-    CHECK(t.tag32 && !t.linear);
+    CHECK(t.tag32);
     int missing = 0, wrong = 0;
     for (u64 b = 1; b <= T; b += (b < 200 ? 1 : 37)) {
         pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
@@ -163,6 +162,14 @@ static void t_table(void)
     CHECK(pz_pwrite(f, &flipped, 1, 40) == 1);
     CHECK(!bsgs_table_peek(path, &pt, err, sizeof err));
     CHECK(pz_pwrite(f, &byte, 1, 40) == 1);
+    /* another magic is refused, the 8-byte cells of 1.13.0 and earlier with the advice to delete the file */
+    const char *magic[] = {"PZBSGS01", "PZBSGS02", "PZBSGS04"};
+    for (int i = 0; i < 3; i++) {
+        CHECK(pz_pwrite(f, magic[i], 8, 0) == 8);
+        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err) && strstr(err, i < 2 ? "delete it" : "not supported"));
+        CHECK(!bsgs_table_load(&l, path, 2, err, sizeof err));
+    }
+    CHECK(pz_pwrite(f, "PZBSGS03", 8, 0) == 8 && bsgs_table_peek(path, &pt, err, sizeof err));
     CHECK(pz_fd_truncate(f, (u64)size - 8) == 0);
     CHECK(!bsgs_table_load(&l, path, 2, err, sizeof err));
     close(f);
@@ -175,7 +182,7 @@ static void t_table(void)
 typedef struct { pz_u256 key; int hits; _Atomic int *stop; bool stop_on_hit; } hit_rec;
 static void on_hit(void *u, const pz_u256 *k) { hit_rec *h = u; h->hits++; h->key = *k; if (h->stop_on_hit) atomic_store(h->stop, 1); }
 
-/* ---- the layout of the table: buckets, overflow, threads, the old format ---- */
+/* ---- the layout of the table: buckets, overflow, threads ---- */
 
 static int cmp_u64(const void *a, const void *b) { u64 x = *(const u64 *)a, y = *(const u64 *)b; return x < y ? -1 : x > y; }
 
@@ -455,7 +462,7 @@ static void t_build_threads(void)
     const u64 T = 20000;
     bsgs_table a, b;
     CHECK(bsgs_table_alloc(&a, T, err, sizeof err) && bsgs_table_alloc(&b, T, err, sizeof err));
-    CHECK(a.nslots == bsgs_slots_for(T) && a.tag32 && !a.linear && ((uintptr_t)a.slots & 63) == 0);
+    CHECK(a.nslots == bsgs_slots_for(T) && a.tag32 && ((uintptr_t)a.slots & 63) == 0);
     CHECK(bsgs_table_build(&a, 1, NULL, NULL));
     CHECK(bsgs_table_build(&b, 4, NULL, NULL));
     CHECK(bsgs_table_count(&a, 3) == T && bsgs_table_count(&b, 3) == T);
@@ -491,259 +498,6 @@ static void t_build_threads(void)
     free(sa); free(sb);
     bsgs_table_free(&a);
     bsgs_table_free(&b);
-}
-
-/* ---- the old format (PZBSGS01), written here from its description, and checked against a file written by the version that had it ---- */
-
-static u64 old_slots(u64 T) { u64 n = (u64)ceill((long double)T / (long double)0.65) + 64; return (n + 7) & ~(u64)7; }
-
-static u64 old_mix(u64 v, u64 i)
-{
-    u64 x = (v + i * 0x9E3779B97F4A7C15ULL) * 0xC2B2AE3D27D4EB4FULL;
-    x = (x << 31 | x >> 33) * 0x165667B19E3779F9ULL;
-    return x ^ (x >> 29);
-}
-
-static void put64(unsigned char *p, u64 v) { for (int i = 0; i < 8; i++) p[i] = (unsigned char)(v >> (8 * i)); }
-
-/* The file of the first version for T baby steps added in order b = 1..T to a single array of cells (linear probing, load 0.65),
- * as one thread of that version did it; returns the bytes (header and cells) and their number. */
-static unsigned char *old_file(u64 T, size_t *len)
-{
-    const u64 n = old_slots(T);
-    unsigned char *f = calloc(1, 4096 + n * 8);
-    u64 *cells = calloc(n, 8);
-    for (u64 b = 1; b <= T; b++) {
-        pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
-        pz_fe x = q.x;
-        pz_fe_normalize(&x);
-        u64 i = (u64)(((u128)x.n[0] * n) >> 64);
-        while (cells[i]) i = i + 1 == n ? 0 : i + 1;
-        cells[i] = ((x.n[1] & 0xFFFFFF) << 40) | b;
-    }
-    u64 sum = 0;
-    for (u64 i = 0; i < n; i++) { sum += old_mix(cells[i], i); put64(f + 4096 + i * 8, cells[i]); }
-    memcpy(f, "PZBSGS01", 8);
-    put64(f + 8, 0x0102030405060708ULL);
-    put64(f + 16, 1);
-    put64(f + 24, T);
-    put64(f + 32, n);
-    put64(f + 40, 24);
-    put64(f + 48, 40);
-    put64(f + 56, T);
-    put64(f + 64, sum);
-    pz_fe_to_be(f + 72, &pz_ec_g.x);
-    pz_ge tg = pub_of(&(pz_u256){{T, 0, 0, 0}});
-    pz_fe_to_be(f + 104, &tg.x);
-    pz_sha256(f, 4096 - 32, f + 4096 - 32);
-    free(cells);
-    *len = 4096 + n * 8;
-    return f;
-}
-
-static bool write_file(const char *path, const unsigned char *d, size_t n)
-{
-    int fd = pz_open_rw(path, true);
-    if (fd < 0) return false;
-    bool ok = pz_pwrite(fd, d, n, 0) == (i64)n;
-    close(fd);
-    return ok;
-}
-
-static unsigned char *read_file(const char *path, size_t *n)
-{
-    int fd = pz_open_read(path);
-    if (fd < 0) return NULL;
-    i64 sz = pz_fd_size(fd);
-    unsigned char *d = malloc((size_t)sz);
-    bool ok = pz_pread(fd, d, (size_t)sz, 0) == sz;
-    close(fd);
-    if (!ok) { free(d); return NULL; }
-    *n = (size_t)sz;
-    return d;
-}
-
-static void t_old_format(void)
-{
-    char err[200], tdir[600], path[700], path2[700];
-    CHECK(pz_make_temp_dir(tdir, sizeof tdir, "pzbsgs1"));
-    snprintf(path, sizeof path, "%s/old.bin", tdir);
-    snprintf(path2, sizeof path2, "%s/resaved.bin", tdir);
-
-    /* the file for 500 baby steps is, byte for byte, the one that the version with this format wrote with one thread */
-    size_t len;
-    unsigned char *f = old_file(500, &len), dg[32];
-    char hex[65];
-    pz_sha256(f, len, dg);
-    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", dg[i]);
-    CHECK(len == 10816 && strcmp(hex, "ab8979a87569961b08aa4453f421b35442f50e37726d48d69da598a78d2a3d51") == 0);
-    free(f);
-
-    const u64 Ts[] = {500, 3000};
-    for (size_t ti = 0; ti < 2; ti++) {
-        const u64 T = Ts[ti];
-        f = old_file(T, &len);
-        CHECK(write_file(path, f, len));
-        u64 pt = 0, ram = 0;
-        CHECK(bsgs_table_peek(path, &pt, err, sizeof err) && pt == T);
-        CHECK(bsgs_table_peek_ram(path, &pt, &ram, err, sizeof err) && pt == T && ram == old_slots(T) * 8 && ram > bsgs_bytes_for(T));
-        bsgs_table l;
-        CHECK(bsgs_table_load(&l, path, 3, err, sizeof err));
-        CHECK(l.linear && l.T == T && l.nslots == old_slots(T));
-        /* every baby step is there */
-        int wrong = 0;
-        for (u64 b = 1; b <= T; b++) {
-            pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
-            pz_fe x = q.x;
-            pz_fe_normalize(&x);
-            u64 got = 0;
-            CHECK(bsgs_table_contains(&l, x.n[0], x.n[1], &got));
-            wrong += got != b;
-        }
-        CHECK(wrong <= 1);
-        /* a search with it finds the key, like one with a table of the new layout */
-        {
-            const u64 lo0 = 1ULL << 22, W = 1ULL << 20, key0 = lo0 + 777777;
-            pz_u256 lo = pz_u256_from_u64(lo0), hi = pz_u256_from_u64(lo0 + W - 1), key = pz_u256_from_u64(key0);
-            pz_ge P = pub_of(&key);
-            bsgs_params p;
-            CHECK(bsgs_params_init(&p, &lo, &hi, &P, T, err, sizeof err));
-            bsgs_job job;
-            bsgs_job_init(&job, &l, &p);
-            hit_rec h = {pz_u256_zero(), 0, NULL, false};
-            CHECK(bsgs_scan(&job, -(int64_t)p.A, p.Ng, on_hit, &h, NULL, NULL, NULL) == p.Ng);
-            CHECK(h.hits == 1 && !pz_u256_cmp(&h.key, &key));
-        }
-        /* saved again, it is the same file: the old format stays the old format */
-        CHECK(bsgs_table_save(&l, path2, 2, err, sizeof err));
-        size_t len2;
-        unsigned char *g = read_file(path2, &len2);
-        CHECK(g && len2 == len && memcmp(g, f, len) == 0);
-        free(g);
-        bsgs_table_free(&l);
-        /* damage is found as in the new format */
-        unsigned char *bad = malloc(len);
-        memcpy(bad, f, len);
-        bad[4096 + (len - 4096) / 2] ^= 0x10;
-        CHECK(write_file(path, bad, len));
-        CHECK(!bsgs_table_load(&l, path, 2, err, sizeof err));
-        memcpy(bad, f, len);
-        bad[16] ^= 1;                                                    /* the version, in the header */
-        CHECK(write_file(path, bad, len));
-        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err) && !bsgs_table_load(&l, path, 2, err, sizeof err));
-        free(bad);
-        free(f);
-    }
-    /* a table of the current layout is not read as an old one and the other way round: the magic decides */
-    {
-        bsgs_table t;
-        CHECK(bsgs_table_alloc(&t, 300, err, sizeof err) && bsgs_table_build(&t, 2, NULL, NULL));
-        CHECK(bsgs_table_save(&t, path, 2, err, sizeof err));
-        size_t n = 0;
-        unsigned char *d = read_file(path, &n);
-        CHECK(d && n == 4096 + t.nslots * 8 && memcmp(d, "PZBSGS03", 8) == 0);
-        u64 pt, ram;
-        CHECK(bsgs_table_peek_ram(path, &pt, &ram, err, sizeof err) && pt == 300 && ram == bsgs_bytes_for(300));
-        memcpy(d, "PZBSGS01", 8);                                       /* the checksum of the header no longer fits */
-        CHECK(write_file(path, d, n));
-        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err));
-        memcpy(d, "PZBSGS04", 8);
-        CHECK(write_file(path, d, n));
-        CHECK(!bsgs_table_peek(path, &pt, err, sizeof err) && strstr(err, "not supported"));
-        free(d);
-        bsgs_table_free(&t);
-    }
-    CHECK(pz_remove_tree(tdir) == 0);
-}
-
-/* ---- the second format (PZBSGS02, 1.11.0 to 1.13.0: 8-byte cells with b, 8 per bucket, load 0.70), written here from its description ---- */
-
-static unsigned char *v2_file(u64 T, size_t *len)
-{
-    const u64 nb = (T * 10 + 55) / 56 + 8, n = nb * BS_BUCKET;
-    unsigned char *f = calloc(1, 4096 + n * 8);
-    u64 *cells = pz_xaligned(64, n * 8);
-    memset(cells, 0, n * 8);
-    for (u64 b = 1; b <= T; b++) {
-        pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
-        pz_fe x = q.x;
-        pz_fe_normalize(&x);
-        CHECK(bs_insert(cells, nb, x.n[0], x.n[1], b));
-    }
-    u64 sum = 0;
-    for (u64 i = 0; i < n; i++) { sum += old_mix(cells[i], i); put64(f + 4096 + i * 8, cells[i]); }
-    memcpy(f, "PZBSGS02", 8);
-    put64(f + 8, 0x0102030405060708ULL);
-    put64(f + 16, 2);
-    put64(f + 24, T);
-    put64(f + 32, n);
-    put64(f + 40, 24);
-    put64(f + 48, 40);
-    put64(f + 56, T);
-    put64(f + 64, sum);
-    pz_fe_to_be(f + 72, &pz_ec_g.x);
-    pz_ge tg = pub_of(&(pz_u256){{T, 0, 0, 0}});
-    pz_fe_to_be(f + 104, &tg.x);
-    put64(f + 136, BS_BUCKET);
-    pz_sha256(f, 4096 - 32, f + 4096 - 32);
-    pz_afree(cells);
-    *len = 4096 + n * 8;
-    return f;
-}
-
-static void t_format2(void)
-{
-    char err[200], tdir[600], path[700], path2[700];
-    CHECK(pz_make_temp_dir(tdir, sizeof tdir, "pzbsgs2"));
-    snprintf(path, sizeof path, "%s/v2.bin", tdir);
-    snprintf(path2, sizeof path2, "%s/resaved.bin", tdir);
-    /* for 500 baby steps it is, byte for byte, the file that 1.13.0 wrote with one thread (tests/data/bsgs_v2_t500.bin) */
-    size_t len;
-    unsigned char *f = v2_file(500, &len), dg[32];
-    char hex[65];
-    pz_sha256(f, len, dg);
-    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", dg[i]);
-    CHECK(len == 10368 && strcmp(hex, "59bd797431e05f3abf92f4f96a8054a742c5ecbd824c9841c56ce724ce24c051") == 0);
-    free(f);
-    const u64 T = 3000;
-    f = v2_file(T, &len);
-    CHECK(write_file(path, f, len));
-    u64 pt = 0, ram = 0;
-    CHECK(bsgs_table_peek_ram(path, &pt, &ram, err, sizeof err) && pt == T && ram == len - 4096 && ram > bsgs_bytes_for(T));
-    bsgs_table l;
-    CHECK(bsgs_table_load(&l, path, 3, err, sizeof err));
-    CHECK(!l.tag32 && !l.linear && l.T == T);
-    int wrong = 0;
-    for (u64 b = 1; b <= T; b++) {
-        pz_ge q = pub_of(&(pz_u256){{b, 0, 0, 0}});
-        pz_fe x = q.x;
-        pz_fe_normalize(&x);
-        u64 got = 0;
-        CHECK(bsgs_table_contains(&l, x.n[0], x.n[1], &got));
-        wrong += got != b;
-    }
-    CHECK(wrong <= 1);
-    {   /* a search with it finds the key */
-        const u64 lo0 = 1ULL << 22, W = 1ULL << 20, key0 = lo0 + 777777;
-        pz_u256 lo = pz_u256_from_u64(lo0), hi = pz_u256_from_u64(lo0 + W - 1), key = pz_u256_from_u64(key0);
-        pz_ge P = pub_of(&key);
-        bsgs_params p;
-        CHECK(bsgs_params_init(&p, &lo, &hi, &P, T, err, sizeof err));
-        bsgs_job job;
-        bsgs_job_init(&job, &l, &p);
-        hit_rec h = {pz_u256_zero(), 0, NULL, false};
-        CHECK(bsgs_scan(&job, -(int64_t)p.A, p.Ng, on_hit, &h, NULL, NULL, NULL) == p.Ng);
-        CHECK(h.hits == 1 && !pz_u256_cmp(&h.key, &key));
-    }
-    /* saved again, it is the same file */
-    CHECK(bsgs_table_save(&l, path2, 2, err, sizeof err));
-    size_t len2;
-    unsigned char *g = read_file(path2, &len2);
-    CHECK(g && len2 == len && memcmp(g, f, len) == 0);
-    free(g);
-    bsgs_table_free(&l);
-    free(f);
-    CHECK(pz_remove_tree(tdir) == 0);
 }
 
 static void solve_expect(const pz_u256 *lo, const pz_u256 *hi, const pz_u256 *key, u64 T, int nthreads)
@@ -936,8 +690,6 @@ int main(void)
     t_recover();
     t_recover_threads();
     t_build_threads();
-    t_old_format();
-    t_format2();
     t_solve();
     t_window_edges();
     t_scan_contract();

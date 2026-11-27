@@ -34,7 +34,6 @@ extern const bs_vengine BSV_AVX2V, BSV_AVX512V, BSV_AVX512I;
 #define BS_SSE2 1
 #endif
 
-static inline u64 bs_slot_index(u64 nslots, u64 xlo) { return (u64)(((u128)xlo * nslots) >> 64); }   /* linear (old) layout: first cell to look at */
 static inline u64 bs_bucket_index(u64 nbuckets, u64 xlo) { return (u64)(((u128)xlo * nbuckets) >> 64); }
 static inline u64 bs_entry(u64 xhi, u64 b) { return ((xhi & BS_TAG_MASK) << BS_VAL_BITS) | b; }
 

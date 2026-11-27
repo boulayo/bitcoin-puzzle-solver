@@ -76,10 +76,8 @@ int pz_getpid(void);
 void pz_hostname(char *buf, size_t n);
 void pz_os_description(char *buf, size_t n);               /* "Windows 10.0 build 22631", "Ubuntu 22.04.4 LTS (Linux 6.8)", "macOS 14.5 (Darwin 23.5.0)" */
 bool pz_disk_space(const char *path, u64 *free_bytes, u64 *total_bytes);   /* of the file system holding `path` */
-/* Windows: the active power scheme (name), "" elsewhere or when unknown; prevent_sleep(true) stops the system from going to
- * sleep while the caller lives (Windows: SetThreadExecutionState on the calling thread, macOS: a `caffeinate` helper for the process;
- * false if unsupported, e.g. Linux). */
-void pz_power_scheme(char *buf, size_t n);
+/* prevent_sleep(true) stops the system from going to sleep while the caller lives (Windows: SetThreadExecutionState on the calling thread,
+ * macOS: a `caffeinate` helper for the process; false if unsupported, e.g. Linux). */
 bool pz_prevent_sleep(bool on);
 /* Raises (on) or restores the scheduling priority of the CALLING thread above the CPU workers': ABOVE_NORMAL on Windows, nice -5 on
  * Linux (needs root or CAP_SYS_NICE). False when the system refused: the thread keeps the priority it had. Always false on macOS,

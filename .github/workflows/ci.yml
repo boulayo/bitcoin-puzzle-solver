@@ -1,11 +1,10 @@
 # Continuous integration: every push and pull request builds pzsolve for the five release targets and runs its built-in
 # self-test (the independent-reference checks of the field arithmetic, the hashes, every CPU engine, the kangaroo and BSGS solvers).
 #
-#   linux-x86_64   ubuntu-22.04      gcc, clang, and the portable scalar build (X86=0); the glibc floor is checked too, and the gcc
-#                                    job also checks the puzzle database against its generator and runs the self-test through the
-#                                    simulated CUDA driver (tests/mock_cuda)
-#   linux-shani    ubuntu-24.04      the SHA-extension code under QEMU (make test-shani); informational, see the job
-#   linux-arm64    ubuntu-22.04-arm  the portable scalar code (what Apple Silicon also runs)
+#   linux-x86_64   ubuntu-22.04      gcc and clang; the glibc floor is checked too, and the gcc job also checks the puzzle database
+#                                    against its generator and runs the self-test through the simulated CUDA driver (tests/mock_cuda)
+#   linux-shani    ubuntu-24.04      the SHA-extension code under QEMU (make test-shani)
+#   linux-arm64    ubuntu-22.04-arm  the portable scalar code (what Apple Silicon also runs, and X86=0 builds on x86)
 #   windows-x86_64 cross-compiled with MinGW-w64 on Ubuntu, then run on a real windows-latest machine
 #   macos-arm64    macos-15          Apple Silicon, Apple clang
 #   macos-x86_64   macos-15          the Intel binary, cross-compiled on the Apple Silicon runner (make MACOS_ARCH=x86_64, Apple
@@ -75,10 +74,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x86_64, variant: gcc,      runner: ubuntu-22.04,     cc: gcc,   args: '' }
-          - { name: linux-x86_64, variant: clang,    runner: ubuntu-22.04,     cc: clang, args: '' }
-          - { name: linux-x86_64, variant: portable, runner: ubuntu-22.04,     cc: gcc,   args: 'X86=0' }
-          - { name: linux-arm64,  variant: gcc,      runner: ubuntu-22.04-arm, cc: gcc,   args: '' }
+          - { name: linux-x86_64, variant: gcc,   runner: ubuntu-22.04,     cc: gcc }
+          - { name: linux-x86_64, variant: clang, runner: ubuntu-22.04,     cc: clang }
+          - { name: linux-arm64,  variant: gcc,   runner: ubuntu-22.04-arm, cc: gcc }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Toolchain
@@ -88,14 +86,12 @@ jobs:
           ${{ matrix.cc }} --version | sed -n 1p
           make --version | sed -n 1p
       - name: Build
-        run: make -k -j"$(nproc)" CC=${{ matrix.cc }} ${{ matrix.args }} 2>&1 | tee build.log
-      - name: Self-test
-        run: build/pzsolve selftest
+        run: make -k -j"$(nproc)" CC=${{ matrix.cc }} 2>&1 | tee build.log
       - name: Detected hardware and engines
         run: build/pzsolve devices
-      # every engine and step at a fifth of the usual time of a measurement (0.6 s each): the table of a runner in about 20 s
-      - name: CPU engine speeds (informational)
-        continue-on-error: true
+      # every engine and step at a fifth of the usual time of a measurement (0.6 s each): the table of a runner in about 20 s, and the
+      # rates of its CPU in the log (the self-test runs at the end of the unit tests)
+      - name: CPU engine speeds
         run: PZ_BENCH_SCALE=0.2 build/pzsolve bench
       - name: Smoke test (find the key of puzzle 20)
         run: |
@@ -104,14 +100,14 @@ jobs:
       - name: Binary needs no glibc newer than 2.34
         run: tools/check_binary.sh linux build/pzsolve
       - name: Unit tests
-        run: make test CC=${{ matrix.cc }} ${{ matrix.args }}
+        run: make test CC=${{ matrix.cc }}
       # pzpeer and its unit tests; on the gcc job also pzsign (OpenSSL, cb-mpc and pzsign: a few minutes) and its tests, and with it the
       # tests of the two-party signing and of the session
       - name: pzsign (the two-party signer)
         if: matrix.name == 'linux-x86_64' && matrix.variant == 'gcc'
         run: make -j"$(nproc)" signer-test
       - name: pzpeer (build and unit tests)
-        run: make peer-test CC=${{ matrix.cc }} ${{ matrix.args }}
+        run: make peer-test CC=${{ matrix.cc }}
       - name: pzpeer and pzsign need no glibc newer than 2.34
         if: matrix.name == 'linux-x86_64' && matrix.variant == 'gcc'
         run: |
@@ -156,15 +152,14 @@ jobs:
   # may or may not have. QEMU's user-mode emulator (qemu-x86_64 -cpu max) executes them anywhere, so `make test-shani` runs the library
   # tests, the shani engine test and the self-test under it (about 70 s after the build). This is a job of its own on ubuntu-24.04
   # because the engine uses AVX2 and needs a QEMU that emulates it: the one of ubuntu-24.04 is 8.2 (tried), the one of ubuntu-22.04 is
-  # 6.2, which does not. Informational: the step may fail (a stalled mirror, no QEMU package) without failing the workflow.
+  # 6.2, which does not.
   linux-shani:
     name: linux-x86_64 (SHA extensions under QEMU)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: make test-shani (informational)
-        continue-on-error: true
+      - name: make test-shani
         timeout-minutes: 15
         run: |
           echo "::add-matcher::.github/problem-matchers/cc.json"
@@ -299,11 +294,8 @@ jobs:
       - name: Detected hardware and engines
         if: steps.rosetta.outputs.skip != '1'
         run: ${{ steps.rosetta.outputs.run }} build/pzsolve devices
-      # The runners may expose a virtual GPU through Apple's OpenCL: the first self-test leaves it out so that the CPU code is
-      # judged on its own, the second one lets the program try whatever OpenCL finds and does not fail the job.
-      - name: Self-test (CPU)
-        if: steps.rosetta.outputs.skip != '1'
-        run: PZ_NO_OPENCL=1 ${{ steps.rosetta.outputs.run }} build/pzsolve selftest
+      # The runners may expose a virtual GPU through Apple's OpenCL: the self-test of the unit tests leaves it out so that the CPU code
+      # is judged on its own, this one lets the program try whatever OpenCL finds and does not fail the job.
       - name: Self-test (with OpenCL, informational)
         if: steps.rosetta.outputs.skip != '1'
         continue-on-error: true

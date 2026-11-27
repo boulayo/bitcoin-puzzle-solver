@@ -65,10 +65,7 @@ static const char *main_text(void)
     return text;
 }
 
-static const char *hunt_text(void)
-{
-    static char text[16384];
-    snprintf(text, sizeof text,
+static const char hunt_text[] =
 "pzsolve hunt - start (or resume) a search campaign\n"
 "\n"
 "USAGE\n"
@@ -105,9 +102,9 @@ static const char *hunt_text(void)
 "                          OpenCL GPU in use]\n"
 "      --no-cpu            do not use the CPU\n"
 "      --no-gpu            do not use the GPUs\n"
-"      --limit X           use only X%% of the machine (1..99), always at full speed and without pauses: X%% of the CPU threads\n"
-"                          (one per physical core first) and X%% of the GPU work-items; less heat and power, speed reduced\n"
-"                          accordingly [off]. It does not use or update the machine tuning; with -t the X%% is computed on the\n"
+"      --limit X           use only X% of the machine (1..99), always at full speed and without pauses: X% of the CPU threads\n"
+"                          (one per physical core first) and X% of the GPU work-items; less heat and power, speed reduced\n"
+"                          accordingly [off]. It does not use or update the machine tuning; with -t the X% is computed on the\n"
 "                          given threads\n"
 "      --keep-awake        Windows and macOS: prevent the system from going to sleep while the campaign runs\n"
 "      --stop-with-input   stop as at a Ctrl-C (the state is saved) when standard input ends: a program that starts pzsolve\n"
@@ -161,8 +158,8 @@ static const char *hunt_text(void)
 "      --bsgs-entries N    bsgs: baby steps of the table when it is created [optimal for the range, within the RAM limits]\n"
 "      --dp-bits B         kangaroo: bits of the distinguished points (0..60) [0: automatic]\n"
 "      --mem GIB           kangaroo and bsgs: maximum RAM for the table, in GiB (1 GiB = 1073741824 bytes; 0.001 at least)\n"
-"                          [kangaroo: 40%% of the free RAM, at least 256 MiB and at most 64 GiB; bsgs: the table is chosen to\n"
-"                          fit in 70%% of the free RAM]\n"
+"                          [kangaroo: 40% of the free RAM, at least 256 MiB and at most 64 GiB; bsgs: the table is chosen to\n"
+"                          fit in 70% of the free RAM]\n"
 "      --chunk-bits B      linear: size of the permuted blocks, 2^B keys (20..40) [as large as the range allows with 16 blocks\n"
 "                          per share, at most 36]; smaller blocks slow down the CPU and above all the GPUs, which receive\n"
 "                          one block per launch\n"
@@ -179,15 +176,13 @@ static const char *hunt_text(void)
 "  0                       the key was found (also when the campaign had already found it: it is in FOUND.txt)\n"
 "  1                       the search finished without finding the key (the whole range, or the whole --part, was covered)\n"
 "  2                       error: invalid options, campaign in use, unreadable files, a state that could not be saved\n"
-"  130                     interrupted by Ctrl-C, SIGTERM or the closing of the terminal: the state is saved, the same command resumes\n");
-    return text;
-}
+"  130                     interrupted by Ctrl-C, SIGTERM or the closing of the terminal: the state is saved, the same command resumes\n";
 
 static const char bench_text[] =
 "pzsolve bench - measure the speed of the CPU and GPU engines\n"
 "\n"
 "USAGE\n"
-"  pzsolve bench [--together [--linear] [-t N] [--gpu LIST] [--prio-gpu P]] [--gpu-only] [--variants [--turns N]] [--retune]\n"
+"  pzsolve bench [--together [--linear] [-t N] [--gpu LIST]] [--gpu-only] [--variants [--turns N]] [--retune]\n"
 "\n"
 "Without options: every CPU engine, the kangaroo, BSGS, and the GPUs.\n"
 "\n"
@@ -197,7 +192,6 @@ static const char bench_text[] =
 "      --linear            with --together: the linear search instead of the kangaroo\n"
 "  -t, --threads N         with --together: try only N CPU threads\n"
 "      --gpu LIST          with --together: use only the listed GPUs (as in hunt)\n"
-"      --prio-gpu P        with --together: auto | yes | no (for hunt it is the environment variable PZ_PRIO_GPU)\n"
 "      --gpu-only          skip the CPU tests and run only the GPU ones (bandwidth, integer instructions, linear search, kangaroo)\n"
 "      --variants          GPUs only: every variant of the linear and kangaroo kernels of each GPU, measured in turns (in order,\n"
 "                          reversed, in order), one table per kernel with the median, the spread and the tuner's choice, then the\n"
@@ -232,8 +226,7 @@ static const struct { const char *cmd, *text; } short_help[] = {
               "  pzsolve split SPEED_1 SPEED_2 [...]\n\nARGUMENTS\n"
               "  SPEED                   keys per second of each computer, with k, M, G or T allowed (800M, 1.5G); at most 64\n"},
     {"doctor", "pzsolve doctor - check the program, machine, GPUs, cache and campaigns and report what is wrong\n\nUSAGE\n"
-               "  pzsolve doctor [-d DIR] [--full]\n\nOPTIONS\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"
-               "      --full              also run the full selftest, GPUs included\n"},
+               "  pzsolve doctor [-d DIR]\n\nOPTIONS\n  -d, --dir DIR           base folder of the campaigns [./campaigns]\n"},
     {"puzzle", "pzsolve puzzle - show the data of a puzzle and the effort to solve it\n\nUSAGE\n  pzsolve puzzle N [--rate SPEED]\n\nOPTIONS\n"
                "      --rate SPEED        the speed used for the times, keys per second with k, M, G or T allowed (800M, 1.5G) [measured on\n"
                "                          the CPU of this machine]\n"},
@@ -262,14 +255,14 @@ static const struct { const char *cmd, *text; } short_help[] = {
                        "                          Store it like a secret; 'decrypt-key --raw-key' reads it. Lost, the encrypted key is lost\n"},
     {"decrypt-key", "pzsolve decrypt-key - decrypt the key that a campaign found and encrypted\n\nUSAGE\n  pzsolve decrypt-key [--raw-key] [--address ADDRESS] [FILE | -]\n\n"
                        "Reads FILE (default: FOUND.txt in the current folder if there is one, otherwise standard input; - is standard input)\n"
-                       "or a pasted text, finds every token 'PZENC1:...' in it and shows the key id it was encrypted to; the other lines are\n"
-                       "ignored. Asks for the password (hidden), checks that it is the right one before it tries to decrypt, decrypts, and\n"
-                       "prints the key (hex and WIF) and the addresses of the key (P2PKH and P2WPKH). A line opens with the secret alone. If\n"
-                       "the text has an 'address:' line (FOUND.txt has one) or --address is given, it also checks that the key belongs to that\n"
-                       "address and prints OK or MISMATCH; otherwise it says that the address was not checked. Exit status 0 when the key was\n"
-                       "recovered (and, if there was an address, matches it); 1 when the secret does not open the line or the address does not\n"
-                       "match; 2 when the input is not usable. Without a terminal the password is one line of standard input (the text then\n"
-                       "comes from FILE).\n"
+                       "or a pasted text, finds the token 'PZENC1:...' in it (the first one: one per run) and shows the key id it was\n"
+                       "encrypted to; the other lines are ignored. Asks for the password (hidden), checks that it is the right one before it\n"
+                       "tries to decrypt, decrypts, and prints the key (hex and WIF) and the addresses of the key (P2PKH and P2WPKH). A line\n"
+                       "opens with the secret alone. If the text has an 'address:' line (FOUND.txt has one) or --address is given, it also\n"
+                       "checks that the key belongs to that address and prints OK or MISMATCH; otherwise it says that the address was not\n"
+                       "checked. Exit status 0 when the key was recovered (and, if there was an address, matches it); 1 when the secret does\n"
+                       "not open the line or the address does not match; 2 when the input is not usable. Without a terminal the password is\n"
+                       "one line of standard input (the text then comes from FILE).\n"
                        "\nOPTIONS\n"
                        "      --raw-key           read the private key (64 hex digits, hidden) instead of a password: for a key made with\n"
                        "                          'encrypt-keygen --random'\n"
@@ -281,7 +274,7 @@ static const struct { const char *cmd, *text; } short_help[] = {
 static const char *help_text(const char *topic)
 {
     if (!topic) return main_text();
-    if (!strcmp(topic, "hunt")) return hunt_text();
+    if (!strcmp(topic, "hunt")) return hunt_text;
     if (!strcmp(topic, "bench")) return bench_text;
     for (size_t i = 0; i < sizeof short_help / sizeof *short_help; i++)
         if (!strcmp(topic, short_help[i].cmd)) return short_help[i].text;
@@ -330,30 +323,6 @@ static const struct option long_opts[] = {
     {"on-found", 1, 0, O_ONFOUND}, {"jump-seed", 1, 0, O_JUMPSEED}, {"start-key", 1, 0, O_STARTKEY}, {"step", 1, 0, O_STEP}, {"stop-with-input", 0, 0, O_STOPIN},
     {"seed-file", 1, 0, O_SEEDFILE}, {"file", 1, 0, 'f'}, {"help", 0, 0, 'h'},
     {0, 0, 0, 0}};
-
-/* The options removed in 1.23.0 and what takes their place: each one is refused with its own message, not as an unknown option. The
- * names are those of the command line, between blanks; dropping an entry makes that option an unknown one. */
-static const struct { const char *names, *msg; } removed_opts[] = {
-    {" -H --hash160 ", "--hash160 (-H) was removed in 1.23.0: give the address with -a"},
-    {" --new --resume ", "--new and --resume were removed in 1.23.0: hunt creates the campaign or resumes it"},
-    {" --gpu-api ", "--gpu-api was removed in 1.23.0: set the environment variable PZ_GPU_API=cuda|opencl instead"},
-    {" --no-tune ", "--no-tune was removed in 1.23.0: set the environment variable PZ_NO_PROFILE=1 instead"},
-    {" --report-interval ", "--report-interval was removed in 1.23.0: the panel is updated every second"},
-    {" --checkpoint-interval ", "--checkpoint-interval was removed in 1.23.0: the state is saved every 60 seconds"},
-    {" --isa ", "--isa was removed in 1.23.0: set the environment variable PZ_ISA instead (same values: auto, baseline, avx2, ...)"},
-    {" --prio-gpu ", "--prio-gpu was removed in 1.23.0: set the environment variable PZ_PRIO_GPU=auto|yes|no instead"},
-};
-
-/* An option that getopt_long did not recognize ("-H", "--isa", "--isa=avx2"): the message of removed_opts when it is one of those. */
-static void check_removed_option(const char *arg)
-{
-    char name[48];
-    const size_t l = strcspn(arg, "=");
-    if (l + 3 > sizeof name) return;
-    snprintf(name, sizeof name, " %.*s ", (int)l, arg);
-    for (size_t i = 0; i < sizeof removed_opts / sizeof *removed_opts; i++)
-        if (strstr(removed_opts[i].names, name)) pz_die("%s", removed_opts[i].msg);
-}
 
 /* ---- the values of the options: the whole text must be a number in its range (atoi would take "12abc"); integers go through
  * pz_arg_int (util.c) ---- */
@@ -539,7 +508,6 @@ void parse_opts(int argc, char **argv, opts_t *o)
             exit(0);
         case ':': pz_usage_error(g_cmd, "the option '%s' needs a value", bad_option(argv, optbuf, sizeof optbuf));
         default:
-            check_removed_option(bad_option(argv, optbuf, sizeof optbuf));
             pz_usage_error(g_cmd, "unrecognized option '%s'", bad_option(argv, optbuf, sizeof optbuf));
         }
     }

@@ -50,7 +50,7 @@ linear scan. The algorithms are explained in [`docs/en/ALGORITHMS.md`](docs/en/A
   that `pzsolve encrypt-keygen` was given. It protects what is left behind, not a machine whose administrator reads the memory while it runs:
   [USAGE](docs/en/USAGE.md) section 11.
 * **Live panel and files.** A panel updated once per second shows speed per device, time left and success probability. The campaign
-  folder holds `report.txt`, `status.json`, `stats.csv`, `log.txt` and, when the key is found, `FOUND.txt` (permissions 0600).
+  folder holds `report.txt`, `status.json`, `log.txt` and, when the key is found, `FOUND.txt` (permissions 0600).
 
 ## Quick start
 

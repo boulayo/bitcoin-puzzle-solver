@@ -531,7 +531,7 @@ int kangaroo_bench_together(int threads, const char *gpu_filter, tg_choice *choi
         if (ready || pz_mono() - tw > 300 || atomic_load(&r->stop) || run_interrupted()) break;
         pz_sleep(0.2);
     }
-    const tg_scan_cfg cfg = {r, gpus, ngpu, gw, gidx, total, full, threads > 0, "steps/s", kang_set_cpu, r, choice ? choice->prio : PRIO_AUTO};
+    const tg_scan_cfg cfg = {r, gpus, ngpu, gw, gidx, total, full, threads > 0, "steps/s", kang_set_cpu, r, choice ? choice->prio : PZ_ENV_PRIO_AUTO};
     tg_choice ch = tg_scan(&cfg);
 
     atomic_store(&r->stop, 1);

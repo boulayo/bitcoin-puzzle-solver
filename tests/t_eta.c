@@ -31,7 +31,7 @@ static void t_rate_est(void)
     rate_state st;
     /* 190 M/s of CPU from the start, 800 M/s of GPU from second 8; sampled once a second */
     rate_est e;
-    rate_est_init(&e, 0);
+    rate_est_init(&e);
     for (int t = 1; t <= 100; t++) {
         rate_est_add(&e, t, sim_units(t, 190e6, 800e6, 8, 0, 1), t >= 9);
         double v = rate_est_value(&e, t, &st);
@@ -42,38 +42,13 @@ static void t_rate_est(void)
         CHECK((st == RATE_STEADY) == (rate_est_settle_time(&e) > 0 && t >= rate_est_settle_time(&e)));   /* the time the panel counts down to */
     }
     CHECK(rate_est_settle_time(&e) == 9 + 60);
-    CHECK(rate_est_sustained(&e, 100) == 0);                              /* not enough steady time yet */
     /* the old way of seeding (the first one-second sample, CPU only) would have said 190 M/s: the estimate never does */
-    /* a remembered rate: the first estimate is the memory, the measure takes over by 150 s */
-    rate_est_init(&e, 800e6);
-    double first = -1, at20 = -1, at200 = -1;
-    for (int t = 1; t <= 200; t++) {
-        rate_est_add(&e, t, sim_units(t, 190e6, 800e6, 8, 0, 1), t >= 9);
-        double v = rate_est_value(&e, t, &st);
-        if (t == 1) { first = v; CHECK(st == RATE_PROVISIONAL); }
-        if (t == 20) at20 = v;
-        if (t == 200) { at200 = v; CHECK(st == RATE_STEADY); }
-        CHECK((st == RATE_STEADY) == (rate_est_settle_time(&e) > 0 && t >= rate_est_settle_time(&e)));
-    }
-    CHECK(rate_est_settle_time(&e) == 9 + 150);
-    CHECK(near(first, 800e6, 1e-12));
-    CHECK(at20 > 800e6 && at20 < 990e6 * 1.01);                           /* moving from the memory to the measure */
-    CHECK(near(at200, 990e6, 0.01));
-    /* a laptop that slows down by 20% in the first 3 minutes: the estimate follows the window, the steady rate is what is remembered */
-    rate_est_init(&e, 0);
-    double sus = 0;
-    for (int t = 1; t <= 700; t++) {
-        rate_est_add(&e, t, sim_units(t, 190e6, 800e6, 8, 0.25, 180), t >= 9);
-        if (t == 700) {
-            double v = rate_est_value(&e, t, &st);
-            double final_rate = sim_rate(t, 190e6, 800e6, 8, 0.25, 180);
-            CHECK(near(v, final_rate, 0.005) && st == RATE_STEADY);
-            sus = rate_est_sustained(&e, t);
-            CHECK(near(sus, final_rate, 0.02));
-        }
-    }
+    /* a laptop that slows down by 20% in the first 3 minutes: the estimate follows the window */
+    rate_est_init(&e);
+    for (int t = 1; t <= 700; t++) rate_est_add(&e, t, sim_units(t, 190e6, 800e6, 8, 0.25, 180), t >= 9);
+    CHECK(near(rate_est_value(&e, 700, &st), sim_rate(700, 190e6, 800e6, 8, 0.25, 180), 0.005) && st == RATE_STEADY);
     /* the machine sleeps for ten minutes: the interval across the gap counts only running time */
-    rate_est_init(&e, 0);
+    rate_est_init(&e);
     for (int t = 1; t <= 100; t++) rate_est_add(&e, t, 1e9 * t, t >= 2);
     rate_est_gap(&e, 600);
     for (int t = 101; t <= 110; t++) {
@@ -81,21 +56,17 @@ static void t_rate_est(void)
         CHECK(near(rate_est_value(&e, t + 600, &st), 1e9, 0.01));
     }
     /* the ring wraps without losing track; samples that do not advance in time are ignored */
-    rate_est_init(&e, 0);
+    rate_est_init(&e);
     for (int t = 1; t <= 2000; t++) rate_est_add(&e, t, 5e8 * t, true);
     rate_est_add(&e, 2000, 9e18, true);
-    CHECK(e.n == RATE_N && near(rate_est_value(&e, 2000, &st), 5e8, 1e-9) && near(rate_est_sustained(&e, 2000), 5e8, 1e-9));
+    CHECK(e.n == RATE_N && near(rate_est_value(&e, 2000, &st), 5e8, 1e-9));
     /* workers that never start, or a stall after a good start */
-    rate_est_init(&e, 0);
+    rate_est_init(&e);
     for (int t = 1; t <= 50; t++) rate_est_add(&e, t, 0, false);
     CHECK(rate_est_value(&e, 50, &st) == 0 && st == RATE_MEASURING);
-    rate_est_init(&e, 700e6);
+    rate_est_init(&e);
     for (int t = 1; t <= 300; t++) rate_est_add(&e, t, t < 20 ? 7e8 * t : 7e8 * 20, true);
-    CHECK(rate_est_value(&e, 300, &st) == 0 && st == RATE_MEASURING);     /* a prior is not kept alive once the run has clearly stalled */
-    rate_est_init(&e, 800e6);
-    for (int t = 1; t <= 400; t++) rate_est_add(&e, t, 0, false);         /* and when no worker ever produced */
-    CHECK(rate_est_value(&e, 100, &st) == 800e6 && st == RATE_PROVISIONAL);
-    CHECK(rate_est_value(&e, 400, &st) == 0 && st == RATE_MEASURING);
+    CHECK(rate_est_value(&e, 300, &st) == 0 && st == RATE_MEASURING);
 }
 
 int main(void)

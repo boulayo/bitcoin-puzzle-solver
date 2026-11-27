@@ -146,15 +146,11 @@ void pz_env_init(void)
     g_env.term_dumb = term && !strcmp(term, "dumb");
     g_env.no_color = env_get("NO_COLOR") != NULL;
 
-    g_env.kang_verbose = env_flag("PZ_KANG_VERBOSE");
     if (env_get("PZ_KANG_MIX")) g_env.kang_mix = env_flag("PZ_KANG_MIX");     /* unset: measured */
     env_text("PZ_KANG_ROUND", g_env.kang_round, sizeof g_env.kang_round);
     g_env.bsgs_scalar = env_flag("PZ_BSGS_SCALAR");
     g_env.assume_ifma = env_flag("PZ_ASSUME_IFMA");
-    if (env_int("PZ_TEST_KTHREAD", 16, 1 << 20, &n)) g_env.test_kthread = (int)n;
-    if (env_int("PZ_TEST_JUMP", 1, 2147483647, &n)) g_env.test_jump = (int)n;
     if (env_int("PZ_TEST_DP_CAP", 0, (long long)1 << 62, &n)) g_env.test_dp_cap = n;
     if (env_int("PZ_TEST_SEAL_LOG2N", 1, 17, &n)) g_env.test_seal_log2n = (int)n;
-    if (env_int("PZ_TEST_REPORT_INTERVAL", 1, 86400, &n)) g_env.test_report_interval = (int)n;
     if (env_int("PZ_TEST_CHECKPOINT_INTERVAL", 1, 86400, &n)) g_env.test_checkpoint_interval = (int)n;
 }

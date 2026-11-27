@@ -1271,7 +1271,7 @@ percentage points, the geometry of the species (8.8).
 The definition of `P` and the reason for the long jumps of schema 3 are in ALGORITHMS.md section 8.10; this is the rest of the section.
 
 **Measurements.** Simulator (`tools/research/ksim.c`, which now counts merges and restarts; `rsmin=N` restarts a walker at the first distinguished point
-after `N` steps) and real curve (`PZ_TEST_KTHREAD` and `PZ_TEST_JUMP` impose walkers per thread and mean jump, for tests only):
+after `N` steps) and real curve (`PZ_TEST_KTHREAD` and `PZ_TEST_JUMP` imposed walkers per thread and mean jump; removed in 1.24.0):
 
 | case | `P` | cost |
 |---|---|---|

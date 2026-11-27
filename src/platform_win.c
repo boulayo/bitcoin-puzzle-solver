@@ -342,24 +342,6 @@ bool pz_disk_space(const char *path, u64 *free_bytes, u64 *total_bytes)
     return true;
 }
 
-void pz_power_scheme(char *buf, size_t n)
-{
-    if (!n) return;
-    buf[0] = 0;
-    char sys[MAX_PATH], cmd[MAX_PATH + 64];                /* by its full path: a bare name is looked for in the current folder first */
-    if (!GetSystemDirectoryA(sys, sizeof sys)) return;
-    snprintf(cmd, sizeof cmd, "\"%s\\powercfg.exe\" /getactivescheme 2>nul", sys);
-    FILE *f = _popen(cmd, "r");
-    if (!f) return;
-    char line[256];
-    if (fgets(line, sizeof line, f)) {
-        char *p = strchr(line, '(');                       /* "Power Scheme GUID: ...  (Balanced)" */
-        char *q = p ? strrchr(p, ')') : NULL;
-        if (p && q && q > p + 1) { *q = 0; pz_strlcpy(buf, p + 1, n); }
-    }
-    _pclose(f);
-}
-
 bool pz_prevent_sleep(bool on)
 {
     return SetThreadExecutionState(ES_CONTINUOUS | (on ? ES_SYSTEM_REQUIRED : 0)) != 0;

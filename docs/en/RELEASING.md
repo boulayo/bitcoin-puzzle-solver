@@ -145,9 +145,9 @@ only when `PZ_NVRTC` is set to the path of `libnvrtc.so.12` (NVRTC 12.0 from pip
 runs `python3 -I tools/gen_ptx.py --nvrtc "$PZ_NVRTC" --check` and takes about a minute). **Neither workflow runs it**, and
 `tools/release.sh` does not set it: for a release that changed a kernel, run `PZ_NVRTC=/path/to/libnvrtc.so.12 tools/release.sh`, or
 `verify.sh` by itself, so that a stale module cannot ship. What the CI workflow (`ci.yml`) does run on every push, besides the build
-and the self-test (Linux x86-64 with gcc, clang and without the x86 engines, Linux arm64): a campaign on puzzle 20, `tools/check_binary.sh`,
+and the self-test (Linux x86-64 with gcc and clang, Linux arm64): a campaign on puzzle 20, `tools/check_binary.sh`,
 the unit tests, `tools/gen_puzzles.py --check`, the self-test through the simulated CUDA driver, the Windows cross-build, `tools/check_docs.sh`
-and, as an informational job, `make test-shani` (the SHA-extension code under QEMU).
+and `make test-shani` (the SHA-extension code under QEMU).
 
 ## Compatibility of the files between versions
 
@@ -156,9 +156,10 @@ The public versions start at 1.8.0 (the version numbers before it were developme
 | From → to | What changes |
 |-----------|--------------|
 | 1.8.x–1.9.0 → 1.9.1 and later | campaigns resume, except kangaroo campaigns with fewer than 256 kangaroos (small ranges): their `dp.bin` (schema 1) cannot be used: `hunt` kept it as `dp.bin.v2` and started a new one up to 1.23.4 and from 1.24.0 refuses it (move the file away), `merge` refuses it. `--no-progress` is gone (use `--ui log`) |
-| 1.11.0 and later → earlier | BSGS tables saved by 1.11.0 to 1.13.0 (`PZBSGS02`) cannot be read by earlier versions; the `PZBSGS01` tables of earlier versions are still read |
+| 1.11.0 and later → earlier | BSGS tables saved by 1.11.0 to 1.13.0 (`PZBSGS02`) cannot be read by earlier versions; the `PZBSGS01` tables of earlier versions are read up to 1.23.4 |
 | 1.12.0 and later → earlier | a `dp.bin` created by 1.12.0 and later (`PZDP5`, with the jump table id in its header) cannot be read by earlier versions; a `PZDP4` file of 1.9.1 to 1.11.0 is read and continued as it is |
-| 1.14.0 → 1.13.0 and earlier | BSGS tables saved by 1.14.0 and later (`PZBSGS03`, 4-byte cells) cannot be read by 1.13.0 and earlier; the `PZBSGS01` and `PZBSGS02` tables are still read and used as they are |
+| 1.14.0 → 1.13.0 and earlier | BSGS tables saved by 1.14.0 and later (`PZBSGS03`, 4-byte cells) cannot be read by 1.13.0 and earlier; the `PZBSGS01` and `PZBSGS02` tables are read and used as they are up to 1.23.4 |
+| 1.24.0 | BSGS tables saved by 1.13.0 and earlier (`PZBSGS01`, `PZBSGS02`) are refused: delete the file, and the next run builds the table again as `PZBSGS03` (half the RAM) |
 | 1.11.0 | the Italian spellings of the options (`--parte`, `--nodo`, `--limite`, ...) are gone |
 | 1.12.0 | `--limit 100` is refused (it meant no limit: leave `--limit` out) |
 

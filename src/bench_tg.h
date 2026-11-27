@@ -6,6 +6,7 @@
 
 #include "run.h"
 #include "gpu.h"
+#include "envopts.h"
 
 typedef struct tg_choice {
     bool better;             /* a configuration beats the default clearly (beyond the noise), confirmed by alternating pairs, or `spare` */
@@ -14,7 +15,7 @@ typedef struct tg_choice {
     unsigned off;            /* bit j set: GPU j (order of the sessions) is better switched off */
     int ngpu, gidx[16];      /* device index (what --gpu takes) of each GPU session */
     double def_rate, best_rate, gain_pct;   /* rates in units/s: the default's and the best's, both confirmed when `better` */
-    prio_mode prio;          /* IN (the callers zero the struct: PRIO_AUTO): PRIO_NO / PRIO_YES fix the priority of the GPU service threads, AUTO measures it */
+    int prio;                /* IN, PZ_ENV_PRIO_* (the callers zero the struct: AUTO): NO / YES fix the priority of the GPU service threads, AUTO measures it */
     bool boost;              /* OUT: the GPU service threads are better at a higher priority (the whole scan ran with it) */
     bool boost_tested;       /* OUT: the priority was measured (a GPU, a system that lets us, mode AUTO) */
     double boost_gain_pct;   /* OUT: measured gain of the higher priority at the default configuration (may be negative) */
@@ -33,7 +34,7 @@ typedef struct {
     /* sets the number of CPU workers that run (the others idle); called before every measurement */
     void (*set_cpu)(void *ctx, int cap);
     void *ctx;
-    prio_mode prio;          /* as tg_choice.prio */
+    int prio;                /* as tg_choice.prio */
 } tg_scan_cfg;
 
 /* The same measurements for the linear search (defined in run_linear.c, like kangaroo_bench_together in run_kangaroo.c). `engine`

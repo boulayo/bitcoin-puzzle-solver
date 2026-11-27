@@ -13,6 +13,7 @@ vec()  { python3 tools/ref.py "$1"; }   # prints key/pub/h160/addr/wif/x/y lines
 field(){ vec "$1" | awk -v k="$2" '$1==k{print $2}'; }
 dbfield() { awk -F, -v n="$1" -v c="$2" 'NR>1 && $1==n{print $c}' data/puzzles.csv; }
 rndkey() { python3 -c "import random,sys; random.seed($2); n=$1; print(hex(random.randrange(2**(n-1), 2**n)))"; }
+oneline() { tr -s '\n ' '  '; }   # a message with its lines joined: the program wraps them at 128 columns
 
 # A slow or loaded machine takes longer to reach a state, so the checks wait for the state with a deadline (E2E_WAIT seconds, 60 by default)
 # instead of sleeping a fixed time; what a check proves does not change, only how long it may take.
@@ -71,15 +72,6 @@ GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/res/FOUND.txt"
 [ "$GOT" = "${K#0x}" ] && ok "key found after resuming" || bad "after resuming: expected ${K#0x} found '$GOT'"
 OUT=$($BIN hunt -c res -d "$DIR" --ui log -q --no-gpu 2>&1)
 echo "$OUT" | grep -q "already found" && ok "a finished campaign is not run again" || bad "finished campaign run again"
-
-echo "== stop with repeated signals in quick succession (timeout sends the signal to the process and to its group)"
-A31=$(field 0x5e36d2eb addr)
-for i in 1 2 3 4 5; do
-  rm -rf "$DIR/sig"
-  run_until 'running "$DIR/sig"' $BIN hunt -p 31 -a "$A31" -c sig -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
-  [ -s "$DIR/sig/state.dat" ] || { bad "attempt $i: no checkpoint after the stop"; break; }
-  [ $i -eq 5 ] && ok "checkpoint always written on stop (5 attempts)"
-done
 
 echo "== FOUND.txt that cannot be written (a folder in its way): the box says so instead of 'saved in', the key is on the screen"
 rm -rf "$DIR/nf"; mkdir -p "$DIR/nf/FOUND.txt"
@@ -215,20 +207,11 @@ OUT=$($BIN hunt -p 47 -m bsgs --table "$DIR/t.tbl" -c bst2 -d "$DIR" --ui log --
 echo "$OUT" | grep -q "reading the table" && ok "table read back from file for another puzzle" || bad "table not read back"
 GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bst2/FOUND.txt" 2>/dev/null)
 [ "$GOT" = "$(dbfield 47 4)" ] && ok "bsgs with table from file: key found" || bad "bsgs with table from file: '$GOT'"
-# a table of the first format (PZBSGS01: one array of cells, linear probing; 500 baby steps, written by the version that had it) is still read, used as it is, and left alone
-cp tests/data/bsgs_v1_t500.bin "$DIR/old.tbl"
-OUT=$($BIN hunt -p 20 -m bsgs --table "$DIR/old.tbl" -c bsold -d "$DIR" --ui log --no-gpu 2>&1)
-echo "$OUT" | grep -q "reading the table" && ok "table of the old format read" || bad "table of the old format not read"
-GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bsold/FOUND.txt" 2>/dev/null)
-[ "$GOT" = "$(dbfield 20 4)" ] && ok "bsgs with a table of the old format: key found" || bad "bsgs with a table of the old format: '$GOT'"
-cmp -s tests/data/bsgs_v1_t500.bin "$DIR/old.tbl" && ok "table of the old format not rewritten" || bad "table of the old format modified"
-# the same for a table of the second format (PZBSGS02: 8-byte cells in buckets; 500 baby steps, written by 1.13.0)
-cp tests/data/bsgs_v2_t500.bin "$DIR/old2.tbl"
-OUT=$($BIN hunt -p 20 -m bsgs --table "$DIR/old2.tbl" -c bsold2 -d "$DIR" --ui log --no-gpu 2>&1)
-echo "$OUT" | grep -q "reading the table" && ok "table of the second format read" || bad "table of the second format not read"
-GOT=$(awk '/private key hex/{sub(/^0x/, "", $4); print $4}' "$DIR/bsold2/FOUND.txt" 2>/dev/null)
-[ "$GOT" = "$(dbfield 20 4)" ] && ok "bsgs with a table of the second format: key found" || bad "bsgs with a table of the second format: '$GOT'"
-cmp -s tests/data/bsgs_v2_t500.bin "$DIR/old2.tbl" && ok "table of the second format not rewritten" || bad "table of the second format modified"
+# a table of 1.13.0 or earlier (8-byte cells, PZBSGS01 and 02) is refused with the advice to delete it, and left alone
+{ printf PZBSGS02; head -c 4088 /dev/zero; } > "$DIR/old.tbl"
+OUT=$($BIN hunt -p 20 -m bsgs --table "$DIR/old.tbl" -c bsold -d "$DIR" --ui log --no-gpu 2>&1); RC=$?
+[ $RC -ne 0 ] && echo "$OUT" | grep -q "delete it" && [ ! -e "$DIR/bsold" ] && [ "$(wc -c < "$DIR/old.tbl")" -eq 4096 ] \
+  && ok "table of an old layout refused, with the advice to delete it" || bad "table of an old layout: rc=$RC $OUT"
 head -c 100000 "$DIR/t.tbl" > "$DIR/trunc.tbl"
 $BIN hunt -p 48 -m bsgs --table "$DIR/trunc.tbl" -c bst3 -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1 && bad "truncated table accepted" || ok "truncated table rejected"
 rm -rf "$DIR/bsr"
@@ -272,9 +255,6 @@ SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/stab/p71/session.txt")
 [ "$SEED1" = "$SEED2" ] && [ "$SES" = 2 ] && ok "running the same command again resumes the campaign (2 sessions, same seed)" || bad "automatic resume: sessions '$SES'"
 [ "$($BIN puzzles | grep -cE '^ *[0-9]+ +(solved|OPEN) ')" = 160 ] && ok "list of the 160 puzzles" || bad "puzzle list incomplete"
 $BIN puzzles --open | grep -qE '^ *[0-9]+ +solved ' && bad "--open shows solved puzzles" || ok "--open filter"
-for old_opt in --aperti --risolti; do
-  $BIN puzzles $old_opt >/dev/null 2>&1 && bad "puzzles $old_opt accepted" || ok "puzzles $old_opt (former Italian spelling) rejected"
-done
 
 echo "== campaign lock and the list command"
 rm -rf "$DIR/lk"
@@ -347,7 +327,7 @@ SK=$(python3 -c "print(hex((0xa5c<<36)|(0xb7e1<<20)|0x12345))"); SR=a5c000012345
 for m in linear kangaroo bsgs; do
   [ $m = linear ] && T="-a $(field $SK addr)" || T="-k $(field $SK pub)"
   $BIN hunt -r $SR --step 100000 $T -m $m -c st$m -d "$DIR" --ui log --no-gpu >"$DIR/st$m.out" 2>&1; RC=$?
-  [ $RC -eq 0 ] && grep -qi "private key hex: $SK" "$DIR/st$m/FOUND.txt" && grep -q "step 0x100000 (65,536 keys)" "$DIR/st$m.out" &&
+  [ $RC -eq 0 ] && grep -qi "private key hex: $SK" "$DIR/st$m/FOUND.txt" && grep -q "step 0x100000 (2^16 keys)" "$DIR/st$m.out" &&
     ok "--step, $m: the key of the steps found" || bad "--step, $m: exit status $RC"
 done
 $BIN hunt -r $SR --step 200000 -a "$(field $SK addr)" -c stlinear -d "$DIR" --ui log -q --no-gpu >"$DIR/st2.out" 2>&1; RC=$?
@@ -363,25 +343,6 @@ for sig in INT TERM; do
 done
 $BIN hunt -p 40 -t 0 -c xe -d "$DIR" -q >/dev/null 2>&1; RC=$?
 [ $RC -eq 2 ] && ok "invalid option: exit status 2" || bad "invalid option: exit status $RC"
-# the options removed in 1.23.0: each one says what to use instead, with exit status 2, and creates nothing (merge and info too)
-for rm_opt in "-H 751e76e8199196d454941c45d1b3a323f1433bd6|--hash160 (-H) was removed in 1.23.0: give the address with -a" \
-              "--hash160=751e76e8199196d454941c45d1b3a323f1433bd6|--hash160 (-H) was removed" \
-              "--new|--new and --resume were removed in 1.23.0: hunt creates the campaign or resumes it" "--resume|--new and --resume were removed" \
-              "--gpu-api opencl|--gpu-api was removed in 1.23.0: set the environment variable PZ_GPU_API=cuda|opencl instead" \
-              "--no-tune|--no-tune was removed in 1.23.0: set the environment variable PZ_NO_PROFILE=1 instead" \
-              "--report-interval 2|--report-interval was removed in 1.23.0: the panel is updated every second" \
-              "--checkpoint-interval 5|--checkpoint-interval was removed in 1.23.0: the state is saved every 60 seconds" \
-              "--isa baseline|--isa was removed in 1.23.0: set the environment variable PZ_ISA instead" \
-              "--prio-gpu yes|--prio-gpu was removed in 1.23.0: set the environment variable PZ_PRIO_GPU=auto|yes|no instead"; do
-  opt=${rm_opt%%|*}; msg=${rm_opt#*|}
-  rm -rf "$DIR/xr"
-  OUT=$($BIN hunt -p 40 $opt -c xr -d "$DIR/xr" -q 2>&1 >/dev/null); RC=$?
-  [ $RC -eq 2 ] && grep -q -F -- "$msg" <<<"$OUT" && [ ! -e "$DIR/xr" ] && ok "hunt $opt: '$msg', exit status 2" || bad "hunt $opt: rc=$RC: $OUT"
-done
-for cmd in "merge -c xr -f x" "info -c xr" "list"; do
-  OUT=$($BIN $cmd --no-tune -d "$DIR/xr" 2>&1 >/dev/null); RC=$?
-  [ $RC -eq 2 ] && grep -q -F -- "--no-tune was removed in 1.23.0" <<<"$OUT" && ok "${cmd%% *} --no-tune: the message of the removed option, exit status 2" || bad "${cmd%% *} --no-tune: rc=$RC: $OUT"
-done
 # PZ_ISA takes the values of the old --isa, checked the same way before anything is created; PZ_PRIO_GPU, a word that is not allowed is ignored
 rm -rf "$DIR/xr"
 OUT=$(PZ_ISA=foo $BIN hunt -p 20 -c xr -d "$DIR/xr" -q --no-gpu 2>&1 >/dev/null); RC=$?
@@ -460,8 +421,8 @@ echo "$OUT" | grep -q "campaign resumed" && ok "a state without seed id (earlier
 grep -q '^seed_id=' "$DIR/sd/sc/state.dat" && ok "the next save records the seed id" || bad "seed_id not recorded after resuming an old state"
 
 echo "== environment variables: a value that cannot be used is reported once, and ignored"
-OUT=$(PZ_GPU_API=vulkan PZ_TEST_JUMP=-1 PZ_BENCH_SCALE=100 PZ_NO_CUDA=0 $BIN version 2>&1 >/dev/null)
-[ "$(grep -c ' ignored ' <<<"$OUT")" = 2 ] && grep -q "PZ_GPU_API=vulkan ignored (expected cuda or opencl)" <<<"$OUT" && grep -q "PZ_TEST_JUMP=-1 ignored (expected an integer between 1 and 2147483647)" <<<"$OUT" \
+OUT=$(PZ_GPU_API=vulkan PZ_TEST_DP_CAP=x PZ_BENCH_SCALE=100 PZ_NO_CUDA=0 $BIN version 2>&1 >/dev/null)
+[ "$(grep -c ' ignored ' <<<"$OUT")" = 2 ] && grep -q "PZ_GPU_API=vulkan ignored (expected cuda or opencl)" <<<"$OUT" && grep -q "PZ_TEST_DP_CAP=x ignored (expected an integer between 0 and 4611686018427387904)" <<<"$OUT" \
   && ok "two unusable values reported once each; a valid number and PZ_NO_CUDA=0 are not" || bad "environment warnings: $OUT"
 
 echo "== input error checks"
@@ -482,7 +443,7 @@ for kopts in "-m kangaroo" "-m auto"; do
 done
 
 echo "== invalid options: clear error and no half-created campaign left behind"
-for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "-m fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "-m kangaroo --near" "--retune --limit 50" "--ritara" "--no-taratura" "--sveglio" "--nodo 3" "--parte 0/2" "--limite 50"; do
+for bad_opts in "-t 0" "-t 12abc" "-p 40x" "--mem abc" "--chunk-bits 99" "--dp-bits -1" "--bsgs-entries 0" "--no-cpu --no-gpu" "-c ../x" "-c .hidden" "-c con" "-c NUL" "-c com1" "-c LPT9.txt" "-c aux.x" "-c trailing." "--ui fancy" "-m fancy" "--chunk-bits 10" "--gpu 99" "--gpu 0,," "--gpu ''" "71" "-m bsgs --no-cpu" "-m bsgs --table /nonexistent_dir/x.tbl" "-m bsgs --mem 0.0001 --bsgs-entries 1000000" "-m bsgs --bsgs-entries 900000000000" "-m linear --node 3" "-m kangaroo --near" "--retune --limit 50"; do
   rm -rf "$DIR/opt"
   $BIN hunt -p 40 $bad_opts -d "$DIR/opt" -q >/dev/null 2>&1 && bad "options '$bad_opts' accepted" || { [ ! -e "$DIR/opt" ] || [ -z "$(ls -A "$DIR/opt" 2>/dev/null)" ] && ok "options '$bad_opts' rejected without leaving files" || bad "options '$bad_opts' left a campaign behind"; }
 done
@@ -726,6 +687,9 @@ OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/typo.txt" 2>&1);
 echo "$LINE" > "$DIR/line.txt"
 OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/line.txt" 2>&1); RC=$?
 [ $RC -eq 0 ] && echo "$OUT" | grep -q "key (hex): *0x$HEXL\$" && echo "$OUT" | grep -q "address not checked: no address: line in the text and no --address" && echo "$OUT" | grep -q "address (P2PKH): *$AL" && echo "$OUT" | grep -q "address (P2WPKH): *bc1q" && ok "decrypt-key: the line alone opens with the secret alone; it shows the key and its addresses and says that the address was not checked (exit status 0)" || bad "line alone: rc=$RC $OUT"
+printf '%s\n%s\n' "$LINE" "${LINE%???}" > "$DIR/two.txt"
+OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key "$DIR/two.txt" 2>&1); RC=$?
+[ $RC -eq 0 ] && echo "$OUT" | grep -q "only the first one (line 1) is opened" && echo "$OUT" | grep -q "key (hex): *0x$HEXL\$" && ok "decrypt-key: of two lines the first is opened, and it says so" || bad "two lines: rc=$RC $OUT"
 OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$AL" "$DIR/line.txt" 2>&1); RC=$?
 [ $RC -eq 0 ] && echo "$OUT" | grep -q "0x$HEXL" && echo "$OUT" | grep -q "check: *OK" && ok "decrypt-key: the line with --address opens and the address is checked" || bad "line with --address: rc=$RC $OUT"
 OUT=$(printf '%s\n' "$EPRIV" | $BIN decrypt-key --raw-key --address "$(field 0x2a3f5c2 addr)" "$DIR/line.txt" 2>&1); RC=$?
@@ -799,7 +763,7 @@ $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERPRIV" >
 [ $RC -eq 2 ] && ok "a private key given as the public key is refused" || bad "private key as public key: rc=$RC"
 OTHERPUB=$($BIN encrypt-keygen --random 2>/dev/null | awk '/^public key/{print $3}')
 OUT=$($BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu --encrypt-pubkey "$OTHERPUB" 2>&1); RC=$?
-[ $RC -eq 2 ] && echo "$OUT" | grep -q "cannot be switched" && echo "$OUT" | grep -q "Resume it without --encrypt-pubkey" && ok "resumed with another public key: refused, with the way to proceed" || bad "other key on resume: rc=$RC $OUT"
+[ $RC -eq 2 ] && echo "$OUT" | oneline | grep -q "cannot be switched" && echo "$OUT" | oneline | grep -q "Resume it without --encrypt-pubkey" && ok "resumed with another public key: refused, with the way to proceed" || bad "other key on resume: rc=$RC $OUT"
 for f in state.dat session.txt log.txt report.txt status.json reserve.bin lock; do [ -e "$DIR/encr/$f" ] || bad "before the find the campaign has no $f"; done
 $BIN hunt -c encr -d "$DIR" --ui log -q --no-gpu >/dev/null 2>&1
 [ "$(ls -A "$DIR/encr" | tr '\n' ' ')" = "FOUND.txt campaign.conf " ] && grep -q '^seed=0\{64\}$' "$DIR/encr/campaign.conf" \
@@ -816,7 +780,7 @@ for pair in "99.0.0|refused" "1.0.0|resumed" "|resumed"; do
   OUT=$(run_until 'running "$DIR/rq/p71"' $BIN hunt -c p71 -d "$DIR/rq" --ui log --no-gpu -t 1 2>&1; echo "rc=$RC"); RC=${OUT##*rc=}
   SES=$(awk -F= '$1=="sessions"{print $2}' "$DIR/rq/p71/session.txt")
   if [ "$WANT" = refused ]; then
-    [ "$RC" = 2 ] && echo "$OUT" | grep -q "this campaign needs pzsolve $REQ or later: it was made with" && echo "$OUT" | grep -q "(this is pzsolve $($BIN version | awk 'NR==1{print $2}'))" && [ "$SES" = 1 ] \
+    [ "$RC" = 2 ] && echo "$OUT" | oneline | grep -q "this campaign needs pzsolve $REQ or later: it was made with" && echo "$OUT" | oneline | grep -q "(this is pzsolve $($BIN version | awk 'NR==1{print $2}'))" && [ "$SES" = 1 ] \
       && ok "requires=$REQ: refused with the version needed and this one, the campaign untouched (1 session)" || bad "requires=$REQ: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"
   else
     echo "$OUT" | grep -q "campaign resumed" && [ "$SES" = 2 ] && ok "requires=${REQ:-(no line)}: resumed (2 sessions)" || bad "requires=${REQ:-(no line)}: rc=$RC sessions '$SES': $(echo "$OUT" | grep -i -E 'error|needs')"

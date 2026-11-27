@@ -195,7 +195,7 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
     for (int j = 0; j < c->ngpu; j++) out.gidx[j] = c->gidx[j];
     out.cap = c->full;
     out.prio = c->prio;
-    out.boost = c->prio == PRIO_YES;
+    out.boost = c->prio == PZ_ENV_PRIO_YES;
     gpu_set_boost(out.boost);                 /* the warm-up and (unless measured below) the whole scan run with this */
 
     /* CPU thread counts: all, all but the threads that serve CUDA devices, three quarters, one per physical core, half of those, none.
@@ -219,7 +219,7 @@ static tg_choice tg_scan_inner(const tg_scan_cfg *c)
     /* The first configuration is the default one: measured right after the herds are built, with the GPU clocks still rising, it
      * would look worse than it is. A warm-up at the default settings comes first and is thrown away. */
     if (!atomic_load(&r->stop)) { tg_printf("  warm-up: %.0f s at the default configuration (not counted)\n", window); (void)tg_run(c, c->full, 0, 0, window); }
-    if (c->prio == PRIO_AUTO && c->ngpu > 0 && pz_boost_possible() && !atomic_load(&r->stop)) {
+    if (c->prio == PZ_ENV_PRIO_AUTO && c->ngpu > 0 && pz_boost_possible() && !atomic_load(&r->stop)) {
         double g = 0;
         out.boost_tested = true;
         out.boost = tg_prio_test(c, settle, window, 2.0, &g);

@@ -231,8 +231,7 @@ static void kround_choose_pair(void)
     for (int i = 0; i < n; i++) pos[i] = i, f1[i] = KROUNDS[one].fn, f2[i] = KROUNDS[two].fn;
     double r[2];
     kbench_layouts(&s, n, (kang_round_fn *const[2]){f1, f2}, pos, r);
-    if (g_env.kang_verbose)
-        fprintf(stderr, "kangaroo CPU: IFMA with %d threads: one vector %.2f, two vectors %.2f M steps/s\n", n, r[0] / 1e6, r[1] / 1e6);
+    pz_log(PZ_LOG_DEBUG, "kangaroo CPU: IFMA with %d threads: one vector %.2f, two vectors %.2f M steps/s", n, r[0] / 1e6, r[1] / 1e6);
     g_kround = r[1] > r[0] * 1.03 ? two : one;
 }
 
@@ -281,9 +280,8 @@ static void kround_choose_mix(bool measured)
         double r[2];
         kbench_layouts(&s, n, (kang_round_fn *const[2]){uni, mix}, pos, r);
         ru = r[0], rm = r[1];
-        if (g_env.kang_verbose)
-            fprintf(stderr, "kangaroo CPU: %d threads: %s on all %.2f, mixed with %s %.2f M steps/s\n", n, KROUNDS[g_kround].name, ru / 1e6,
-                    KROUNDS[vx86].name, rm / 1e6);
+        pz_log(PZ_LOG_DEBUG, "kangaroo CPU: %d threads: %s on all %.2f, mixed with %s %.2f M steps/s", n, KROUNDS[g_kround].name, ru / 1e6,
+               KROUNDS[vx86].name, rm / 1e6);
     }
     g_kmix = kang_mix_wanted(g_env.kang_mix, ru, rm);
     g_kmix_gain = ru > 0 ? rm / ru - 1.0 : 0;
@@ -400,7 +398,7 @@ static void kround_pick(void)
         }
     for (int i = 0; i < NKROUNDS; i++) {
         if (!g_kround_ok[i]) continue;
-        if (g_env.kang_verbose) fprintf(stderr, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)\n", KROUNDS[i].name, rate[i] / 1e6);
+        pz_log(PZ_LOG_DEBUG, "kangaroo CPU: %-22s %.2f M steps/s (1 thread)", KROUNDS[i].name, rate[i] / 1e6);
         if (rate[i] > best * 1.03) { best = rate[i]; g_kround = i; }
     }
     kround_choose_pair();

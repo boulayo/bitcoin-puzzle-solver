@@ -99,31 +99,24 @@ static void fill_row(row_t *w, const char *base, time_t now)
     if (cfg_load(&c, p, w->err, sizeof w->err) != 0) { w->bad = true; return; }
     w->puzzle = c.puzzle;
     w->mode = mode_name(c.mode);
-    snprintf(p, sizeof p, "%s/status.json", dir);
-    char *js = pz_read_file(p, NULL);
-    char v[64];
-    pz_strlcpy(w->state, "NEW", sizeof w->state);
+    campaign_state(dir, w->state, sizeof w->state);
+    const bool done = !strcmp(w->state, "FOUND") || !strcmp(w->state, "COMPLETED");   /* STOPPED keeps the last speed, which TIME LEFT uses */
     pz_strlcpy(w->frac, "-", sizeof w->frac);
     pz_strlcpy(w->rate, "-", sizeof w->rate);
     pz_strlcpy(w->eta, "-", sizeof w->eta);
     pz_strlcpy(w->upd, "-", sizeof w->upd);
-    snprintf(p, sizeof p, "%s/FOUND.txt", dir);
-    bool found = access(p, F_OK) == 0;
-    bool running = campaign_is_running(dir);
-    if (js) {
-        if (json_get(js, "state", v, sizeof v)) pz_strlcpy(w->state, v, sizeof w->state);
-        if (json_get(js, "fraction", v, sizeof v)) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);
-        if (json_get(js, "rate_per_second", v, sizeof v)) {
-            double rt = atof(v);
-            if (rt > 0) { char b[32]; pz_fmt_si(rt, b, sizeof b); snprintf(w->rate, sizeof w->rate, "%s/s", b); }
-        }
-        if (json_get(js, "eta_seconds_50", v, sizeof v) && strcmp(v, "null") != 0) pz_fmt_duration(atof(v), w->eta, sizeof w->eta);
-        if (json_get(js, "updated_unix", v, sizeof v)) pz_fmt_age((double)now - atof(v), w->upd, sizeof w->upd);
-        free(js);
+    snprintf(p, sizeof p, "%s/status.json", dir);
+    char *js = pz_read_file(p, NULL);
+    if (!js) return;
+    char v[64];
+    if (json_get(js, "fraction", v, sizeof v)) pz_fmt_percent(atof(v), w->frac, sizeof w->frac);
+    if (!done && json_get(js, "rate_per_second", v, sizeof v) && atof(v) > 0) {
+        char b[32];
+        snprintf(w->rate, sizeof w->rate, "%s/s", pz_fmt_si(atof(v), b, sizeof b));
     }
-    pz_strlcpy(w->state, campaign_shown_state(w->state, found, running), sizeof w->state);
-    if (found || !strcmp(w->state, "COMPLETED")) pz_strlcpy(w->rate, "-", sizeof w->rate);   /* STOPPED: the last speed, which TIME LEFT uses */
-    if (found || !strcmp(w->state, "COMPLETED")) pz_strlcpy(w->eta, "-", sizeof w->eta);
+    if (!done && json_get(js, "eta_seconds_50", v, sizeof v) && strcmp(v, "null") != 0) pz_fmt_duration(atof(v), w->eta, sizeof w->eta);
+    if (json_get(js, "updated_unix", v, sizeof v)) pz_fmt_age((double)now - atof(v), w->upd, sizeof w->upd);
+    free(js);
 }
 
 bool campaign_status_get(const char *dir, const char *key, char *out, size_t n)

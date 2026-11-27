@@ -27,9 +27,9 @@ struct pz_env {
     char gpu_nk_text[16];           /*   the text as given, for the messages */
     int gpu_tune;                   /* PZ_GPU_TUNE=0|1: PZ_ENV_TUNE_OFF, PZ_ENV_TUNE_ALL (also the devices that are not GPUs), else PZ_ENV_TUNE_DEFAULT */
     /* the rest of the program */
-    bool no_profile;                /* PZ_NO_PROFILE: the machine profile and the remembered speeds are neither measured nor used */
+    bool no_profile;                /* PZ_NO_PROFILE: the machine profile is neither measured nor used */
     char isa[32];                   /* PZ_ISA=name: the CPU engine of the linear search ("auto" or "" unset: measured); hunt checks the name */
-    int prio_gpu;                   /* PZ_PRIO_GPU=auto|yes|no: PZ_ENV_PRIO_*, auto when unset (the tuning measures it) */
+    int prio_gpu;                   /* PZ_PRIO_GPU=auto|yes|no for hunt and bench: PZ_ENV_PRIO_*, auto when unset (the tuning measures it) */
     bool no_large_pages;            /* PZ_NO_LARGE_PAGES: Windows, no large pages for the tables */
     double bench_scale;             /* PZ_BENCH_SCALE=X (0.01 to 100): factor of the durations of the measurements, 1 unset */
     /* places and terminal (the standard variables) */
@@ -40,16 +40,12 @@ struct pz_env {
     bool term_dumb;                 /* TERM=dumb */
     bool no_color;                  /* NO_COLOR set to anything but "" */
     /* tests and diagnostics */
-    bool kang_verbose;              /* PZ_KANG_VERBOSE: the speed of every kangaroo step */
     int kang_mix;                   /* PZ_KANG_MIX=0|1: scalar step on the other threads of a core off or on (the flag rule), -1 unset: measured */
     char kang_round[16];            /* PZ_KANG_ROUND=id: imposes the CPU kangaroo step (the check against the steps of this CPU is made where it is used) */
     bool bsgs_scalar;               /* PZ_BSGS_SCALAR: BSGS with the scalar windows only */
     bool assume_ifma;               /* PZ_ASSUME_IFMA: IFMA is taken as present when AVX-512 is (tests on hosts whose CPUID hides it) */
-    int test_kthread;               /* PZ_TEST_KTHREAD=N (16 to 2^20): walkers per CPU thread, 0 unset */
-    int test_jump;                  /* PZ_TEST_JUMP=N (1 to 2^31-1): mean jump in units of sqrt(W), 0 unset */
     long long test_dp_cap;          /* PZ_TEST_DP_CAP=N: entries of the table of distinguished points to start with, -1 unset */
     int test_seal_log2n;            /* PZ_TEST_SEAL_LOG2N=N (1 to 17): scrypt cost 2^N for the key of a password, in place of 2^18 (tests only, with a warning), 0 unset */
-    int test_report_interval;       /* PZ_TEST_REPORT_INTERVAL=S (1 to 86400): seconds between updates of the panel, in place of 1, 0 unset */
     int test_checkpoint_interval;   /* PZ_TEST_CHECKPOINT_INTERVAL=S (1 to 86400): seconds between saves of the state, in place of 60, 0 unset */
 };
 

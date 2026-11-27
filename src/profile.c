@@ -30,18 +30,8 @@ static void profile_key(const run_ctx *r, char *out, size_t n)
     const bool kang = r->cfg.mode == MODE_KANGAROO;
     snprintf(out, n, "%s|%s|%s|%d/%d|%s|%s%s", kang ? "kang" : "lin", PZ_VERSION, r->sys.model, r->sys.ncpu, r->sys.ncore,
              kang ? kang_round_isa() : engine_isa(), gsig,           /* not the measured choices: they may change between runs */
-             r->prio_gpu == PRIO_YES ? "|prio-yes" : r->prio_gpu == PRIO_NO ? "|prio-no" : "");     /* a measurement under a fixed priority is its own entry */
+             g_env.prio_gpu == PZ_ENV_PRIO_YES ? "|prio-yes" : g_env.prio_gpu == PZ_ENV_PRIO_NO ? "|prio-no" : "");   /* a measurement under a fixed priority is its own entry */
     for (char *c = out; *c; c++) if (*c == '\n' || *c == '\r' || *c == '=') *c = '_';
-}
-
-/* The whole part of a non-negative number: the rates are saved as integers ("%.0f": "1030000000"), so no strtod is needed; a fraction or an
- * exponent ends the number. */
-static double parse_rate(const char *p)
-{
-    double v = 0;
-    int digits = 0;
-    for (; *p >= '0' && *p <= '9' && digits < 18; p++, digits++) v = v * 10 + (*p - '0');
-    return v;
 }
 
 /* The saved value of `key` ("default" or "t=N g=LIST at=EPOCH ..."), false if there is none. */
@@ -95,10 +85,8 @@ static void apply_value(run_ctx *r, const char *val, bool fresh)
         struct tm tmv;
         if (t > 0) { pz_localtime(t, &tmv); strftime(when, sizeof when, "%Y-%m-%d", &tmv); }
     }
-    const char *rp = strstr(val, "rate=");
-    r->rate_cold = rp ? parse_rate(rp + 5) : 0;           /* what the calibration measured for this entry: the first guess of the completion times */
     /* "prio=1": the threads serving the GPUs were faster at a higher priority (unless PZ_PRIO_GPU decided) */
-    const bool prio = strstr(val, "prio=1") != NULL && r->prio_gpu == PRIO_AUTO;
+    const bool prio = strstr(val, "prio=1") != NULL && g_env.prio_gpu == PZ_ENV_PRIO_AUTO;
     if (prio) r->gpu_boost = true;
     const char *pn = prio ? ", high priority for the GPU threads" : "";
     if (!strncmp(val, "default", 7)) {
@@ -145,7 +133,7 @@ void profile_apply(run_ctx *r, bool force)
            force ? "tuning requested" : "first run of this version on this machine");
     tg_choice ch;
     memset(&ch, 0, sizeof ch);
-    ch.prio = r->prio_gpu;                      /* PRIO_AUTO unless PZ_PRIO_GPU fixed it: then there is nothing to measure */
+    ch.prio = g_env.prio_gpu;                   /* AUTO unless PZ_PRIO_GPU fixed it: then there is nothing to measure */
     tg_silent = pz_log_quiet();                 /* a quiet hunt gets no tables */
     int rc = kang ? kangaroo_bench_together(0, NULL, &ch) : linear_bench_together(r->engine, 0, NULL, &ch);
     if (rc) { tg_silent = 0; pz_log(PZ_LOG_WARN, "CPU+GPU tuning failed: using the default values (will try again on the next run)"); return; }
@@ -158,55 +146,15 @@ void profile_apply(run_ctx *r, bool force)
     tg_print_advice(&ch, kang ? "steps/s" : "keys/s");
     tg_silent = 0;
     const char *pt = ch.boost && ch.boost_tested ? " prio=1" : "";      /* only a measured result is remembered */
-    const double cold = ch.better ? ch.best_rate : ch.def_rate;        /* units/s of the configuration that is applied, measured cold */
-    char rt[40] = "";
-    if (cold > 0 && cold < 1e17) snprintf(rt, sizeof rt, " rate=%.0f", cold);
     if (ch.better) {
         char gl[64];
         tg_gpu_list(&ch, gl, sizeof gl);
-        snprintf(val, sizeof val, "t=%d%s%s%s at=%lld gain=%.1f%s", ch.cap, gl[0] ? " g=" : "", gl, pt, (long long)time(NULL), ch.gain_pct, rt);
+        snprintf(val, sizeof val, "t=%d%s%s%s at=%lld gain=%.1f", ch.cap, gl[0] ? " g=" : "", gl, pt, (long long)time(NULL), ch.gain_pct);
     } else {
-        snprintf(val, sizeof val, "default%s at=%lld%s", pt, (long long)time(NULL), rt);
+        snprintf(val, sizeof val, "default%s at=%lld", pt, (long long)time(NULL));
     }
     profile_save(key, val);
     apply_value(r, val, true);
-}
-
-/* The key of the steady rate of this configuration: the machine key plus what changes the speed (threads, GPUs, priority). */
-static void rate_key(const run_ctx *r, char *out, size_t n)
-{
-    char base[900];
-    profile_key(r, base, sizeof base);
-    /* "x": the thread count was chosen (-t or the profile), "a": the default, from which a core is set aside for every OpenCL GPU later on */
-    char lim[16] = "";
-    if (r->limit_pct) snprintf(lim, sizeof lim, "|lim=%d", r->limit_pct);            /* a limited run has its own steady rate */
-    snprintf(out, n, "sus|%s|t=%d%s|g=%s%s%s", base, r->use_cpu ? r->nthreads : 0, r->threads_explicit ? "x" : "a",
-             r->use_gpu ? (r->gpu_filter[0] ? r->gpu_filter : "all") : "none", r->gpu_boost ? "|hi" : "", lim);
-    for (char *c = out; *c; c++) if (*c == '\n' || *c == '\r' || *c == '=') *c = '_';
-}
-
-static void remember_rate(run_ctx *r, double rate)
-{
-    char val[64];
-    snprintf(val, sizeof val, "%.0f at=%lld", rate, (long long)time(NULL));
-    profile_save(r->rate_key, val);                  /* the key made at the start: r->nthreads may have changed since (cores set aside for OpenCL GPUs) */
-}
-
-void profile_rate_setup(run_ctx *r)
-{
-    if (r->cfg.mode == MODE_BSGS) return;
-    char val[96];
-    rate_key(r, r->rate_key, sizeof r->rate_key);
-    r->remember_rate = remember_rate;
-    r->rate_prior = 0;
-    r->rate_prior_kind = 0;
-    if (profile_load(r->rate_key, val, sizeof val) && parse_rate(val) > 0) {
-        r->rate_prior = parse_rate(val);
-        r->rate_prior_kind = 2;
-    } else if (r->rate_cold > 0) {
-        r->rate_prior = r->rate_cold;
-        r->rate_prior_kind = 1;
-    }
 }
 
 void profile_doctor(void)
@@ -220,26 +168,7 @@ void profile_doctor(void)
     char *eq;
     for (char *p = t, *line; (line = pz_keyed_line(&p, &eq));) {
         if (strstr(line, needle)) {
-            const char *cfg = strstr(line, "|t_");                       /* "sus|...|t_16|g_all|hi=826000000 at=...": a steady rate */
-            if (!strncmp(line, "sus|", 4) && eq && cfg && cfg < eq) {
-                char b[32], c[96];
-                size_t i = 0;
-                for (const char *q = cfg + 3; q < eq && *q >= '0' && *q <= '9' && i + 1 < sizeof c; q++) c[i++] = *q;      /* thread count */
-                c[i] = 0;
-                const char *rest = cfg + 3 + i;                                                                        /* "a|g_all|hi" */
-                char g[64] = "";
-                const char *gp = strstr(rest, "|g_");
-                if (gp) {
-                    size_t k = 0;
-                    for (gp += 3; gp < eq && *gp != '|' && k + 1 < sizeof g; gp++) g[k++] = *gp;
-                    g[k] = 0;
-                }
-                const char *lp = strstr(rest, "|lim_");
-                char lim[40] = "";
-                if (lp && lp < eq) snprintf(lim, sizeof lim, ", limit %d%%", pz_atoi(lp + 5));
-                doctor_line('i', "remembered steady speed (%s threads%s, GPU %s%s%s): %s/s", c, *rest == 'x' ? " chosen" : " by default", g,
-                            strstr(rest, "|hi") && strstr(rest, "|hi") < eq ? ", high priority" : "", lim, pz_fmt_si(parse_rate(eq + 1), b, sizeof b));
-            } else doctor_line('i', "saved profile: %.170s", line);
+            doctor_line('i', "saved profile: %.170s", line);
             cnt++;
         }
     }

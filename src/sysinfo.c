@@ -34,24 +34,11 @@ static void detect_os(sysinfo_t *s)
         s->mem_total = ms.ullTotalPhys;
         s->mem_avail = ms.ullAvailPhys;   /* free + standby (file cache that can be dropped): like Linux MemAvailable */
     }
+    /* physical cores (processor group 0: masks are 64-bit; further logical CPUs count as cores of their own) */
+    for (int i = 0; i < s->ncpu; i++) s->core_of[i] = -1;
     DWORD len = 0;
     GetLogicalProcessorInformation(NULL, &len);
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION *info = len ? malloc(len) : NULL;
-    if (info && GetLogicalProcessorInformation(info, &len)) {
-        for (DWORD i = 0; i < len / sizeof *info; i++) {
-            if (info[i].Relationship != RelationCache) continue;
-            const CACHE_DESCRIPTOR *c = &info[i].Cache;
-            if (c->Type != CacheUnified && c->Type != CacheData) continue;
-            if (c->Level == 2 && !s->l2_kib) s->l2_kib = (int)(c->Size / 1024);
-            if (c->Level == 3 && !s->l3_kib) s->l3_kib = (int)(c->Size / 1024);
-        }
-    }
-    free(info);
-    /* physical cores (processor group 0: masks are 64-bit; further logical CPUs count as cores of their own) */
-    for (int i = 0; i < s->ncpu; i++) s->core_of[i] = -1;
-    len = 0;
-    GetLogicalProcessorInformation(NULL, &len);
-    info = len ? malloc(len) : NULL;
     if (info && GetLogicalProcessorInformation(info, &len)) {
         for (DWORD i = 0; i < len / sizeof *info; i++) {
             if (info[i].Relationship != RelationProcessorCore) continue;
@@ -137,10 +124,6 @@ static void detect_os(sysinfo_t *s)
     if (level > 0 && level <= 100 && s->mem_total / 100 * level > avail) avail = s->mem_total / 100 * level;
     if (avail == 0 || avail > s->mem_total) avail = s->mem_total / 2;
     s->mem_avail = avail;
-    u64 l2 = sysctl_num("hw.l2cachesize");
-    if (l2 == 0) l2 = sysctl_num("hw.perflevel0.l2cachesize");   /* Apple Silicon: performance cores */
-    s->l2_kib = (int)(l2 / 1024);
-    s->l3_kib = (int)(sysctl_num("hw.l3cachesize") / 1024);       /* absent on Apple Silicon */
 }
 
 void sysinfo_pin_thread(const sysinfo_t *s, int n)
@@ -169,18 +152,6 @@ static u64 meminfo_kib(const char *text, const char *key)
 {
     const char *p = pz_kv_find(text, key, ':', 0);
     return p ? pz_strtou64(p) : 0;
-}
-
-static int cache_kib(int cpu, int idx)
-{
-    char path[160];
-    snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cache/index%d/size", cpu, idx);
-    char *t = pz_read_file(path, NULL);
-    if (!t) return 0;
-    int v = pz_atoi(t);
-    if (strchr(t, 'M')) v *= 1024;
-    free(t);
-    return v;
 }
 
 /* Memory still available to this process under a cgroup limit (v2 memory.max / v1 limit_in_bytes), or 0 when unlimited/unknown. */
@@ -237,8 +208,6 @@ static void detect_os(sysinfo_t *s)
     u64 cg = cgroup_headroom();
     if (cg && cg < s->mem_avail) s->mem_avail = cg;       /* inside a container the cgroup limit is what the OOM killer enforces */
     if (cg && cg < s->mem_total) s->mem_total = cg;
-    s->l2_kib = cache_kib(s->cpu_ids[0], 2);
-    s->l3_kib = cache_kib(s->cpu_ids[0], 3);
     /* physical cores: (package, core id) pairs; without topology every CPU is a core */
     int key[1024];
     for (int i = 0; i < s->ncpu; i++) {

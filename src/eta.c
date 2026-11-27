@@ -62,11 +62,10 @@ void eta_summarize(const eta_in *m, double rate, eta_summary *o)
 
 /* ---------------- rate estimator ---------------- */
 
-void rate_est_init(rate_est *e, double prior)
+void rate_est_init(rate_est *e)
 {
     memset(e, 0, sizeof *e);
     e->ready = -1;
-    e->prior = prior > 0 && isfinite(prior) ? prior : 0;
 }
 
 void rate_est_add(rate_est *e, double t, double units, bool started)
@@ -103,42 +102,15 @@ static double rate_since(const rate_est *e, double from, double min_span)
     return du > 0 ? du / dt : 0;
 }
 
-/* Seconds after `ready`: the remembered rate counts alone until RATE_BLEND_FROM and has handed over to the measure at RATE_HANDOVER, which is
- * when the estimate is steady; without a remembered rate the measure is steady at RATE_SETTLE. */
-#define RATE_BLEND_FROM 10.0
-#define RATE_HANDOVER 150.0
+/* Seconds after `ready` at which the estimate becomes steady */
 #define RATE_SETTLE 60.0
 
-/* Seconds after `ready` at which the estimate becomes steady. */
-static double settle_delay(const rate_est *e) { return e->prior > 0 ? RATE_HANDOVER : RATE_SETTLE; }
-
-double rate_est_settle_time(const rate_est *e) { return e->ready >= 0 ? e->ready + settle_delay(e) : 0; }
+double rate_est_settle_time(const rate_est *e) { return e->ready >= 0 ? e->ready + RATE_SETTLE : 0; }
 
 double rate_est_value(const rate_est *e, double now, rate_state *state)
 {
-    rate_state st = RATE_MEASURING;
-    double v = 0;
     const double since = e->ready >= 0 ? now - e->ready : -1;
-    if (e->ready < 0 && e->n > 0 && now - e->t[(e->head + RATE_N - e->n) % RATE_N] > 300) {
-        if (state) *state = RATE_MEASURING;                      /* nothing has run for five minutes: the remembered rate is not a promise any more */
-        return 0;
-    }
-    const double meas = since >= 3 ? rate_since(e, now - (since < 120 ? since : 120), 3) : 0;
-    if (e->prior > 0 && since < RATE_HANDOVER) {             /* the remembered rate hands over to the measure */
-        const double w = since < RATE_BLEND_FROM ? 0 : (since - RATE_BLEND_FROM) / (RATE_HANDOVER - RATE_BLEND_FROM);   /* weight of the measure */
-        v = meas > 0 ? w * meas + (1 - w) * e->prior : e->prior;
-        st = RATE_PROVISIONAL;
-    } else if (meas > 0) {
-        v = meas;
-        st = since >= settle_delay(e) ? RATE_STEADY : RATE_PROVISIONAL;
-    }
-    if (state) *state = st;
+    const double v = since >= 3 ? rate_since(e, now - (since < 120 ? since : 120), 3) : 0;
+    if (state) *state = !(v > 0) ? RATE_MEASURING : since >= RATE_SETTLE ? RATE_STEADY : RATE_PROVISIONAL;
     return v;
-}
-
-double rate_est_sustained(const rate_est *e, double now)
-{
-    if (e->ready < 0 || now - e->ready < 210) return 0;
-    const double from = fmax(e->ready + 90, now - 600);
-    return rate_since(e, from, 120);
 }

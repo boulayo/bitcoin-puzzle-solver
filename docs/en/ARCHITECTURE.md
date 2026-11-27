@@ -21,7 +21,7 @@
 | `puzzles.h/.c`, `puzzles_data.c` | database of the 160 puzzles (generated from `data/puzzles.csv`) plus the addresses of the emptied puzzles 161-256 (`data/puzzles_withdrawn.csv`) and its verification |
 | `campaigns.h/.c` | campaign lock (via `platform.h`), `list` command |
 | `eta.h/.c`, `ui.h/.c` | time / probability estimation models and the speed estimator (`rate_est`); rendering of the panel and the status line (pure formatting, no I/O) |
-| `bench_tg.h/.c`, `profile.h/.c`, `doctor.h/.c` | joint CPU+GPU comparison (`bench --together` and the first-run tuning), machine profile and remembered steady-state speed, `doctor` command |
+| `bench_tg.h/.c`, `profile.h/.c`, `doctor.h/.c` | joint CPU+GPU comparison (`bench --together` and the first-run tuning), machine profile, `doctor` command |
 | `bsgs.h`, `bsgs_priv.h`, `bsgs.c`, `bsgs_base.c` | symmetric BSGS: hash table of the baby steps, giant steps in groups (`bsgs_base.c`: the scalar window routine), save/load |
 | `bsgs_vec_impl.inc` + `bsgs_avx2v.c` / `bsgs_avx512v.c` / `bsgs_avx512i.c` | the same windows of 1024 points, 4 or 8 per instruction (`fev.h`/`fev52.h`); verified against the scalar ones before use |
 | `kangaroo.h`, `kangaroo_priv.h`, `kangaroo.c` | kangaroo: structures shared by the CPU and GPU workers, setup (jump table, `dp_bits`, size of the table: the first table is as large as the points expected need, within the memory limit), table of distinguished points (growth, thinning in place) and solving of a collision, herds of walkers and their restarts |
@@ -70,7 +70,7 @@ main ─ cmd_hunt ─ creates/loads campaign.conf ─ run_linear
                         │ sched_new (perm + intervals) ─ sched_load (state.dat / .bak)
                         ├─ CPU thread i:  loop { sched_claim → engine.scan → sched_complete }
                         ├─ GPU thread j:  loop { sched_claim → kernel pz_search → hit → sched_complete }
-                        └─ main thread: reporter (1 Hz) → terminal, report.txt, status.json, stats.csv,
+                        └─ main thread: reporter (1 Hz) → terminal, report.txt, status.json,
                                         checkpoint every 60 s
 Every hit (CPU or GPU) → run_scan_candidate: ignored if the key lies beyond the end of the range (the engines scan whole lanes, so the last
 block can reach a few keys past it) → run_submit_key: recomputes k·G, compares hash160/pubkey → FOUND.txt → global stop
@@ -123,11 +123,9 @@ kang_insert_dps (under the table mutex): inserts or compares with the existing e
   little-endian cells. `PZBSGS03` (written now): 4-byte cells holding a 32-bit tag (the low word of the second word of the abscissa, 0 =
   empty) and not the baby index, which `bsgs_recover` computes again when a tag matches; buckets of 16 cells, one cache line, 70 % of the
   cells in use, the bucket of an abscissa is `⌊x.n[0]·buckets/2^64⌋`, a full bucket spills into the next one, and the cells of a bucket
-  are taken in order (a lookup stops at the first bucket whose last cell is free; `load` checks that property). Earlier formats, still
-  loaded, used as they are and written back in their format (they cannot be turned into the new one without computing the baby steps
-  again): `PZBSGS02` (1.11.0 to 1.13.0) with 8-byte cells (24-bit tag ∥ 40-bit baby index) in buckets of 8, 11.4 bytes per baby step;
-  `PZBSGS01` (up to 1.10.0) with the same cells in one array, linear probing, load 0.65 (`bsgs_table.linear`, 12.3 bytes per baby step).
-* `session.txt`, `stats.csv`, `status.json`, `report.txt`: see [`USAGE.md`](USAGE.md).
+  are taken in order (a lookup stops at the first bucket whose last cell is free; `load` checks that property). The 8-byte cells of
+  1.13.0 and earlier (`PZBSGS01`, `PZBSGS02`) are refused with the advice to delete the file: the next run builds the table again.
+* `session.txt`, `status.json`, `report.txt`: see [`USAGE.md`](USAGE.md).
 
 ## 5. Concurrency and memory
 
@@ -162,17 +160,17 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices |
 | `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off (the text of `PZ_GPU_NK` is read by `gpu_variant.c`) |
 | `PZ_NO_PROFILE` | `no_profile` | `cmd_hunt.c`, `profile.c` |
-| `PZ_ISA`, `PZ_PRIO_GPU` | `isa`, `prio_gpu` | `cmd_hunt.c`: the CPU engine of the linear search (the name is checked there, and an unknown or unsupported one stops the command), the priority of the threads that serve the GPUs (`run_ctx.prio_gpu`, part of the key of the profile when it is not `auto`) |
+| `PZ_ISA`, `PZ_PRIO_GPU` | `isa`, `prio_gpu` | `cmd_hunt.c`: the CPU engine of the linear search (the name is checked there, and an unknown or unsupported one stops the command), the priority of the threads that serve the GPUs (also read by `bench --together` and `profile.c`, part of the key of the profile when it is not `auto`) |
 | `PZ_NO_LARGE_PAGES` | `no_large_pages` | `platform_win.c`: `pz_map_zeroed` |
 | `PZ_BENCH_SCALE` | `bench_scale` | `bench_tg.c`, `selftest.c` (`bench`): duration of the timed measurements |
 | `XDG_CACHE_HOME`, `HOME`, `LOCALAPPDATA` | `xdg_cache_home`, `home`, `local_app_data` | `util.c`: `pz_cache_file` |
 | `TMPDIR` | `tmpdir` | `platform_posix.c`: `pz_make_temp_dir` |
 | `TERM`, `NO_COLOR` | `term_dumb`, `no_color` | `platform_posix.c`, `platform_win.c` (`pz_stderr_is_terminal`), `run_common.c` (the panel) |
-| `PZ_KANG_ROUND`, `PZ_KANG_VERBOSE`, `PZ_KANG_MIX` | `kang_round`, `kang_verbose`, `kang_mix` (-1 when unset: measured) | `kang_cpu.c`: choice of the CPU step of the kangaroo; `PZ_KANG_ROUND=base\|x86\|avx2v\|avx512v\|avx512i\|avx512i2` imposes one when the CPU can run it (`avx512i2`: IFMA on pairs of vectors), `PZ_KANG_VERBOSE=1` prints the speed of every variant measured |
+| `PZ_KANG_ROUND`, `PZ_KANG_MIX` | `kang_round`, `kang_mix` (-1 when unset: measured) | `kang_cpu.c`: choice of the CPU step of the kangaroo; `PZ_KANG_ROUND=base\|x86\|avx2v\|avx512v\|avx512i\|avx512i2` imposes one when the CPU can run it (`avx512i2`: IFMA on pairs of vectors); the speed of every variant measured is a debug line of the log (`-v` shows it) |
 | `PZ_BSGS_SCALAR` | `bsgs_scalar` | `bsgs.c`: scalar windows only, no lane-based ones |
 | `PZ_ASSUME_IFMA` | `assume_ifma` | `cpu_common.c`: `cpu_has_ifma` is true when the CPU has AVX-512 (for the emulator of `tools/ifma_emul.h` and hosts whose virtual CPUID hides IFMA) |
-| `PZ_TEST_KTHREAD`, `PZ_TEST_JUMP`, `PZ_TEST_DP_CAP` | `test_kthread`, `test_jump`, `test_dp_cap` | `kangaroo.c` (`kang_create`, `kang_configure`): walkers per CPU thread (16 to 1048576); the mean jump in units of √W (1 or more: long walks on a small range); the first size of the table of distinguished points (at least 64: a tiny table exercises its growth and thinning) |
-| `PZ_TEST_REPORT_INTERVAL`, `PZ_TEST_CHECKPOINT_INTERVAL` | `test_report_interval`, `test_checkpoint_interval` | `run_common.c` (`run_init`): the seconds between updates of the panel and between saves of the state (1 to 86400) in place of 1 and 60, for the tests that need a save within seconds |
+| `PZ_TEST_DP_CAP` | `test_dp_cap` | `kangaroo.c` (`kang_configure`): the first size of the table of distinguished points (at least 64: a tiny table exercises its growth and thinning) |
+| `PZ_TEST_CHECKPOINT_INTERVAL` | `test_checkpoint_interval` | `run_common.c` (`run_init`): the seconds between saves of the state (1 to 86400) in place of 60, for the tests that need a save within seconds |
 | `PZ_TEST_SEAL_LOG2N` | `test_seal_log2n` | `encrypt.c` (`enc_log2n`): the scrypt cost of the key of a password, 2^N (1 to 17) instead of 2^18, so that the tests of the password take milliseconds; a warning is printed whenever it is in effect, and the real cost stays reachable only without it |
 
 None of them is read in a loop that runs per key or per step: they are read at start-up, when a device or a campaign is set up, or in a one-time choice.

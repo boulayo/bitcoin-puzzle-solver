@@ -12,7 +12,6 @@ typedef struct {
     int ncore;                /* physical cores among them */
     char model[128];
     u64 mem_total, mem_avail; /* bytes */
-    int l2_kib, l3_kib;
 } sysinfo_t;
 
 /* Fills s; the CPUs come in the order of sysinfo_spread_order. */

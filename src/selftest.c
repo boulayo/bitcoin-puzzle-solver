@@ -10,7 +10,6 @@
 #include "bench_tg.h"
 #include "platform.h"
 #include "envopts.h"
-#include "profile.h"
 #include "puzzles.h"
 #include "bsgs.h"
 #include "outfmt.h"
@@ -182,71 +181,6 @@ static void t_priority(void)
     CHECK(ok ? lv[1] != lv[0] : lv[1] == lv[0]);                                      /* changed exactly when the system allowed it */
     CHECK(pz_boost_possible() == ok);
     pz_result_line("GPU thread priority", "%s", ok ? "raised and restored" : "not allowed for this user: the tuning skips it");
-}
-
-/* The rate remembered for the completion times: stored per configuration in the machine profile, found again by the next run. The cache
- * folder is redirected to a temporary one for the duration of the test. */
-static run_ctx *rate_ctx(int threads, bool kang)
-{
-    run_ctx *r = pz_xcalloc(1, sizeof *r);
-    r->cfg.mode = kang ? MODE_KANGAROO : MODE_LINEAR;
-    r->use_cpu = r->use_gpu = true;
-    r->nthreads = threads;
-    sysinfo_detect(&r->sys);
-    return r;
-}
-
-static void t_rate_memory(void)
-{
-    char tmp_dir[512];
-    if (!pz_make_temp_dir(tmp_dir, sizeof tmp_dir, "pzrate")) { pz_result_line("speed remembered per configuration", "not tested: no temporary folder"); return; }
-    char old_cache_home[PZ_ENV_PATH];
-    pz_strlcpy(old_cache_home, g_env.xdg_cache_home, sizeof old_cache_home);
-    pz_strlcpy(g_env.xdg_cache_home, tmp_dir, sizeof g_env.xdg_cache_home);
-    run_ctx *first_run = rate_ctx(4, false);
-    profile_rate_setup(first_run);
-    CHECK(first_run->rate_prior == 0 && first_run->rate_prior_kind == 0 && first_run->remember_rate != NULL);   /* nothing known yet */
-    first_run->rate_cold = 900e6;                                                                               /* the calibration's rate of the profile entry */
-    profile_rate_setup(first_run);
-    CHECK(first_run->rate_prior == 900e6 && first_run->rate_prior_kind == 1);
-    first_run->remember_rate(first_run, 812345678.0);                                                           /* the steady rate of a run */
-    run_ctx *second_run = rate_ctx(4, false);
-    second_run->rate_cold = 900e6;
-    profile_rate_setup(second_run);
-    CHECK(second_run->rate_prior == 812345678.0 && second_run->rate_prior_kind == 2);                           /* beats the cold one */
-    run_ctx *other_threads = rate_ctx(5, false);                                                                /* another thread count: another configuration */
-    profile_rate_setup(other_threads);
-    CHECK(other_threads->rate_prior == 0);
-    run_ctx *kangaroo_mode = rate_ctx(4, true);                                                                 /* the other mode */
-    profile_rate_setup(kangaroo_mode);
-    CHECK(kangaroo_mode->rate_prior == 0);
-    run_ctx *boosted = rate_ctx(4, false);                                                                      /* the priority is part of the configuration */
-    boosted->gpu_boost = true;
-    profile_rate_setup(boosted);
-    CHECK(boosted->rate_prior == 0);
-    first_run->remember_rate(first_run, 700e6);                                                                 /* a later run replaces the value */
-    profile_rate_setup(second_run);
-    CHECK(second_run->rate_prior == 700e6);
-    run_ctx *bsgs_run = rate_ctx(4, false);                                                                     /* BSGS has no memory */
-    bsgs_run->cfg.mode = MODE_BSGS;
-    profile_rate_setup(bsgs_run);
-    CHECK(bsgs_run->remember_rate == NULL && bsgs_run->rate_prior == 0);
-    run_ctx *limited = rate_ctx(4, false);                                                                      /* a limited run has a speed of its own */
-    limited->limit_pct = 50;
-    profile_rate_setup(limited);
-    CHECK(limited->rate_prior == 0);
-    limited->remember_rate(limited, 300e6);
-    run_ctx *limited_again = rate_ctx(4, false);
-    limited_again->limit_pct = 50;
-    profile_rate_setup(limited_again);
-    CHECK(limited_again->rate_prior == 300e6 && limited_again->rate_prior_kind == 2);
-    profile_rate_setup(second_run);
-    CHECK(second_run->rate_prior == 700e6);                                                                     /* and does not touch the unlimited one */
-    free(limited); free(limited_again);
-    free(first_run); free(second_run); free(other_threads); free(kangaroo_mode); free(boosted); free(bsgs_run);
-    pz_strlcpy(g_env.xdg_cache_home, old_cache_home, sizeof g_env.xdg_cache_home);
-    pz_remove_tree(tmp_dir);
-    pz_result_line("speed remembered per configuration", "OK");
 }
 
 /* Campaigns that run at the same time in one process, as the self-tests and the measurements make them: each one keeps its own counters and
@@ -553,15 +487,10 @@ static void t_limit(void)
 int selftest_run(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    return selftest_checks(true);
-}
-
-int selftest_checks(bool banner)
-{
     pz_ec_init();
     const int was_quiet = pz_log_quiet();
     pz_log_set_quiet(1);          /* the small campaigns run by the checks must not print their own log lines (paths, "KEY FOUND") */
-    if (banner) printf("pzsolve %s - selftest\n", PZ_VERSION);
+    printf("pzsolve %s - selftest\n", PZ_VERSION);
     int f0;
 #define SECTION(title) printf("\n[%d/7] %s\n", ++sec, title); f0 = g_fail
     int sec = 0;
@@ -609,17 +538,14 @@ int selftest_checks(bool banner)
         int rc = gpu_selftest();
         CHECK(rc == 0);
     }
-    t_rate_memory();
     t_twin_runs();
 #undef SECTION
-    if (banner) {
-        const int ng = gpu_count_usable();                          /* the GPU checks count as one: say what they covered */
-        char what[48];
-        if (ng > 0) snprintf(what, sizeof what, "CPU and %d GPU%s", ng, ng == 1 ? "" : "s");
-        else snprintf(what, sizeof what, "CPU only");
-        if (g_fail) printf("\nSELFTEST FAILED: %d of %d checks (%s)\n", g_fail, g_checks, what);
-        else printf("\nSELFTEST PASSED: %d checks (%s), no errors\n", g_checks, what);
-    }
+    const int ng = gpu_count_usable();                              /* the GPU checks count as one: say what they covered */
+    char what[48];
+    if (ng > 0) snprintf(what, sizeof what, "CPU and %d GPU%s", ng, ng == 1 ? "" : "s");
+    else snprintf(what, sizeof what, "CPU only");
+    if (g_fail) printf("\nSELFTEST FAILED: %d of %d checks (%s)\n", g_fail, g_checks, what);
+    else printf("\nSELFTEST PASSED: %d checks (%s), no errors\n", g_checks, what);
     pz_log_set_quiet(was_quiet);
     return g_fail != 0;
 }
@@ -706,8 +632,6 @@ int bench_run(int argc, char **argv)
     bool together = false, gpu_only = false, linear = false, variants = false;
     int threads = 0, turns = 3;
     const char *gpus = NULL;
-    prio_mode prio = PRIO_AUTO;
-    bool prio_given = false;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--help") || !strcmp(a, "-h")) { pz_help("bench", stdout); return 0; }
@@ -722,14 +646,10 @@ int bench_run(int argc, char **argv)
             gpus = argv[++i];
             if (!pz_index_list_valid(gpus)) pz_die("--gpu: invalid list '%s' (comma-separated indices, see 'devices')", gpus);
         }
-        else if (!strcmp(a, "--prio-gpu") && i + 1 < argc) {
-            prio = run_prio_arg(argv[++i]);
-            prio_given = true;
-        }
-        else if (!strcmp(a, "-t") || !strcmp(a, "--threads") || !strcmp(a, "--gpu") || !strcmp(a, "--prio-gpu") || !strcmp(a, "--turns")) pz_usage_error("bench", "the option '%s' needs a value", a);
+        else if (!strcmp(a, "-t") || !strcmp(a, "--threads") || !strcmp(a, "--gpu") || !strcmp(a, "--turns")) pz_usage_error("bench", "the option '%s' needs a value", a);
         else pz_usage_error("bench", "unrecognized option '%s'", a);
     }
-    if ((threads || gpus || linear || prio_given) && !together) pz_usage_error("bench", "-t, --gpu, --prio-gpu and --linear are used together with --together");
+    if ((threads || gpus || linear) && !together) pz_usage_error("bench", "-t, --gpu and --linear are used together with --together");
     if (variants && together) pz_usage_error("bench", "--variants and --together are two different measurements: one at a time");
     if (turns != 3 && !variants) pz_usage_error("bench", "--turns is used together with --variants");
     if (gpus) gpu_check_filter(gpus);
@@ -740,7 +660,7 @@ int bench_run(int argc, char **argv)
     if (together) {
         tg_choice ch;
         memset(&ch, 0, sizeof ch);
-        ch.prio = prio;
+        ch.prio = g_env.prio_gpu;                                   /* PZ_PRIO_GPU, as in hunt */
         int rc = linear ? linear_bench_together(NULL, threads, gpus, &ch) : kangaroo_bench_together(threads, gpus, &ch);
         if (!rc) tg_print_advice(&ch, linear ? "keys/s" : "steps/s");
         return rc;
