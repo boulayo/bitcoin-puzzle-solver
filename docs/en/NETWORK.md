@@ -171,8 +171,7 @@ the program, as the parameters of a chain come with a node of that chain.
 
 The other lines are settings of the node that reads them, and each is checked where it is used: `entry=host:port` (a node to start
 from), `electrum=host:port` and `checkpoint=HEIGHT:HASH` (section 8.2), `prize=txid:vout:sats` (a named coin of the puzzle address,
-found even when no scan of the address lists it; its value and script are read from the chain; it counts in what is left at the
-address, before the pieces of the key are exchanged, until it is spent, 7.5 step 8). Any number of each, at most 16 `prize=`. The
+found even when no scan of the address lists it; its value and script are read from the chain). Any number of each, at most 16 `prize=`. The
 networks written in the program, of either kind, carry as `prize=` lines the coins the creator put at their address (`data/prizes.csv`;
 `pzpeer netcheck 140` lists them): three a puzzle, of 2015, 2017 and 2023, history that never changes. What others send there is in no
 table: every coin of a puzzle address is above the checkpoint of the servers, and their scans show it as a node's does (8.2). The named
@@ -1108,7 +1107,7 @@ held while it runs: a second one on it stops at once; two would write over each 
 `HOME/start.key` is the start key pzpeer gives to pzsolve, written at every start through a new file of mode 0600; `HOME/terms` and `HOME/payout` keep the terms accepted and the payout address;
 `HOME/failed-signings` counts the failed signings (section 7.5); the campaign is
 in `HOME/campaigns/net-NAME`, its output in `HOME/pzsolve.out`, and what pzsign says in `HOME/pzsign.out`. After a payout `HOME/paid`
-keeps the pair until the pieces are exchanged, and the key goes into `HOME/FOUND.txt`; the node of the home keeps its contacts and the
+keeps the pair, whose session at each start pays out what came to the address since; the node of the home keeps its contacts and the
 records it holds for others in `HOME/node/`.
 
 ### A node that stays on

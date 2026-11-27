@@ -429,12 +429,36 @@ modo sicuro.
   quelli veri la prova `tests/peer/mainnet.sh` (`pzpeer netcheck N --chain`), nel flusso `mainnet.yml` di GitHub. ~~`pzpeer sweep`
   riscarica le intestazioni a ogni esecuzione~~: le tiene in `pzchain`.
 - Con un solo server lento e centinaia di monete, uno sweep leggero può esaurire il minuto del server e rifiutare (con `--rpc` no).
-- Dopo il pagamento, una moneta rimasta che nessun pagamento alla tariffa della sessione prende (per esempio una sola da 100 000
-  satoshi sopra i 100 sat/vB) va a chi la spazza per primo con la chiave, cioè a una delle due case: accettato (27 novembre).
+- ~~Dopo il pagamento, una moneta rimasta che nessun pagamento prende va a chi la spazza per primo con la chiave~~: con 3.16 nessuna
+  casa conosce la chiave, e una moneta rimasta resta sotto la chiave comune per una sessione dopo.
 - Un avviso fatto che rimanda ancora la sua prova è il primo a uscire quando la tabella degli avvisi (1024) è piena.
 - Una macchina persa fra il ritrovamento cifrato e la cancellazione tiene seme e stato finché un `hunt` o `merge` non ci gira.
 - La preferenza di `S_SECOND` per la seconda transazione rifirmata e la strada -2 della catena leggera sono provate solo leggendo il
   codice.
+
+### 3.16 Semplificazioni del 27 novembre
+
+Fatte tutte quelle senza perdita, più queste con una piccola perdita: M1, E1, S1 con E6, S2, N12, M4, S15. Non fatte: S3 ed E10 (scelta
+del 27 novembre), E2 (serve prima una misura su una scheda vera), N14, N15, M2, S16, S17.
+
+| | Cosa | Com'è ora |
+|---|---|---|
+| M1 | Lo scambio dei pezzi della chiave dopo il pagamento | tolto: il premio si divide come prima, 45/45/10, con la firma a due, e nessuna casa conosce la chiave. Era l'unico passo dopo il pagamento che poteva costare soldi a una casa. Le monete arrivate dopo all'indirizzo le paga una sessione successiva della coppia, a ogni partenza della casa |
+| E1 | La forma "tags once" del canguro GPU | tolta: 19 moduli invece di 25, 243 KB in meno nell'eseguibile, l'1,5 % in meno sulla A2000 |
+| S1, E6 | Le tabelle BSGS della 1.13.0 e prima | rifiutate con il consiglio di cancellarle: si rifanno |
+| S2 | La velocità ricordata per la stima dei tempi | tolta: la stima compare dopo 3 secondi, provvisoria per un minuto |
+| N12 | La rotazione delle chiavi dentro una connessione | tolta; prologo `pznet6` |
+| M4 | Una firma di pzsign alla volta | le firme possono sovrapporsi: il conto della rete ne limita il numero |
+| S15 | `stats.csv` | tolto |
+| Senza perdita | Codice morto o doppio in rete, pagamenti, pzsolve e motori; un solo generatore casuale del sistema; strumenti di ricerca abbandonati; test più veloci | circa 1500 righe di codice e 2,5 MB di PTX in meno; `t_session` da 7 minuti e mezzo a 3, `t_record` da 10 a 3 secondi |
+
+**Resta aperto.**
+- E2: la durata fissa dei lanci GPU (250 righe in meno) aspetta una misura su una scheda vera.
+- Le misure che decidono sul motore `shani`, sui greggi GPU in L2 (una RTX 40) e sulle finestre CUDA da 128 e NK 256.
+- La prova `e2e_linear` in regtest dura da 8 a 34 minuti nella CI, secondo dove cade la chiave, con un limite di 40.
+- Dopo M1 un pagamento si riconosce dalla monetina di F spesa insieme al premio. Se un'altra coppia prende il premio mentre la seconda
+  transazione di questa aspetta, e F recupera la sua monetina, la casa scrive "paid" anche se non lo è stato. Nessun soldo si muove
+  diversamente, e il premio è già andato: è sbagliato solo il messaggio.
 
 ### 3.5 Librerie
 

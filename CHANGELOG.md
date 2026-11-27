@@ -55,9 +55,7 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 - `hunt --step STEP`: only the keys `S, S + STEP, S + 2·STEP, ...` of the range, for a key whose unknown bits are one block in the middle.
   Every method runs at its full speed: the kangaroo and BSGS on a transformed public key, the linear engines and kernels moving by
   `STEP·G`. A campaign with a step needs 1.24.0 (`requires=` in its campaign.conf).
-- pzpeer: after the payout has 6 confirmations and nothing of value is left at the puzzle address, the two homes give each other their
-  pieces, and each has the key of the puzzle, in `FOUND.txt` and on the terminal (encrypted when pzsolve encrypts its key). Every step
-  that matters gets a short line on the terminal, and every 10 minutes a line of the network with its rate and the time the key needs.
+- pzpeer: every step of a session that matters gets a short line on the terminal, and every 10 minutes a line of the network with its rate and the time the key needs.
 - pzpeer: 10% of a prize goes to the author of pzpeer, the rest half each to the two homes (45% each); a home whose pzsolve finds the
   key on its own sends the coins at once, 90% to its payout address and 10% to the author. The share and its address are in the code, by
   version of the terms, outside the network file and its fingerprint; a pair pays by the older version of its two homes. The first start
@@ -127,6 +125,31 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Changed
 
+- pzpeer: a connection keeps one key each way for its whole life. The rotation of BOLT 8 every 1000 encryptions is gone: the 64-bit
+  nonce never wraps, and whoever can read the keys of a live connection can read the identity key and the home seed beside them. The
+  prologue is `pznet6`: earlier builds do not talk to this one.
+- pzpeer: runs of pzsign may overlap. Each counts on the network before it starts, which bounds them (10); the turn of one at a time,
+  its two-minute wait and "another signing took too long" are gone, and a pzsign that hangs no longer holds every other signing.
+- pzpeer: one setup of the light chain for `run`, `sweep` and `netcheck --chain`: `chain_spv_init` takes the program's servers and
+  checkpoint on the main chain when none are given, and off regtest the six-hour age of the tip; `pzpeer sweep` also refuses servers
+  whose last block is more than six hours old.
+- Simpler code, the same function. One generator of the operating system, exported by pzcore (`pz_os_random`), for pzsolve and pzpeer
+  (macOS reads `getentropy`, a Linux kernel without getrandom a checked `/dev/urandom`). `pzpeer run` and `pzpeer node` read their
+  options in one function and set up their node in one (`home_node`); `--store-gb` takes 1 to 1000000 for both. Gone in pzpeer: the
+  requests of the table over a session connection, the alerts `pzpeer node` would print, `store_read`, five knobs of the node that
+  nothing set, the copy of the bootstrap list, the bound on a whole PROVE answer (8 pairs a record bound it already), the second
+  ephemeral keys of a handshake, the fallback fee rate and confirmation target of the chains; one broadcast of bytes; `peers.txt` and
+  `own.cust` written by `sys_new_file`. In pzsolve: one enum for the priority of the GPU threads, the help of `hunt` a constant text, one
+  formatter of the size of a range (the log says `(2^16 keys)`), `list` takes the state from `campaign_state`, `pz_fputs_wrap` breaks
+  at the last space that fits, the rate estimator keeps 3 minutes of samples, the BSGS file code reads and writes one layout. In the
+  engines: the lane kangaroo runs the backward pass of one vector through `kv_bwd_step`, as the pairs do; the two counts of a GPU
+  kangaroo launch are two buffers (`rt_buf_part` and the OpenCL sub-buffer are gone); `PZ_GPU_NK` is kept as one variant code;
+  `PZ_PROF_NOHASH`, `pz_fe_copy` and `tests/t_kernels.c` are gone (`make test` fails on a `.ptx` file that `modules.txt` does not list).
+  Speeds unchanged.
+- Tests and CI: `t_session` waits 6 s for a message that does not come (20 before) and drops two cases that others cover (about 170 s
+  instead of 440), `t_record` takes 3 s instead of 10; the history notes and lists of test cases are gone from docs/en/NETWORK.md; CI
+  runs the self-test once per job, has no `X86=0` job on x86 (the arm64 job builds the portable engines), and `make test-shani` and the
+  CPU speeds of `bench` fail the workflow when they fail; e2e has no 5-attempt signal loop.
 - pzpeer: `pzpeer sweep` without a node keeps the block headers in `DIR/headers.bin` (`--dir`, default `pzchain`, locked as the folder of
   a home): fetched the first time, then only the new ones (before, some 50 MB again at every sweep).
 - pzpeer: a light home appends the new block headers to `headers.bin` (51 MB from the new checkpoint) instead of writing the whole file
@@ -160,6 +183,34 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
 
 ### Removed
 
+- pzpeer: the exchange of the pieces of the key after the payout. The two homes of a pair never learn the key: the prize is split as
+  before, 45% to each home and 10% to the author, by the two transactions and the joint signature alone. The exchange was the only step
+  after a payout that could cost a home money (a piece given while a coin it did not see was still at the address went to the partner).
+  With it go `HOME/FOUND.txt` of a pair, the wait of 6 confirmations, the look into the mempools of the servers, and the refusal of a
+  light home whose network names no coin. Coins sent to the address after a payout stay under the joint key and are paid out by a later
+  session of the pair, which every start of the home runs. A payout is told by F's tiny coin, which only the second transaction spends
+  along with the prize. Message 24 is left unused; both homes need this version.
+- `tools/fetch_prizes.py`: the table of the creator's coins (`data/prizes.csv`) only loses rows, by hand, when a puzzle is solved.
+- pzpeer, the light chain: the refusal of a "transaction" of 64 bytes. None can be a coin or a spend of a puzzle (a P2PKH transaction is
+  at least 85 bytes), and the check did not cover the form of CVE-2017-12842 that matters, which costs far more than any prize.
+- The "tags once" form of the GPU kangaroo kernel (`KANG_META`, `PZ_GPU_NK` with `m`): on the RTX A2000, the one card that measured it,
+  its best kernel was 1.5 % ahead of `NK` 128 quads, which the tuner picks again, and the other five were 15 to 19 % behind. 19 CUDA
+  modules instead of 25 (the others are unchanged byte for byte), 243 KB less in the executable, and the first tuning of a GPU measures
+  8 kangaroo variants instead of 14 with CUDA and 6 instead of 12 with OpenCL. `PZ_GPU_NK` with `m` is ignored with a warning.
+- Research tools of work that is gone: `tools/research/pz_linear_interleaved.cl.txt` with the `-DPZ_INTERLEAVE=1` of `sass_sched.py`,
+  `sass_energy.py`, `tools/research/sass/` and `kang_schema3f.txt` (in the git history before 1.24.0).
+- BSGS tables of 1.13.0 and earlier (`PZBSGS01`, `PZBSGS02`, 8-byte cells): `hunt` refuses such a `--table` file and says to delete it;
+  the next run builds the table again as `PZBSGS03`, in half the RAM. A table holds no key, seed or progress.
+- The remembered steady speed: the time left no longer starts from the speed of an earlier run of the same configuration or of the
+  tuning run. It appears 3 s after every engine has produced something and is provisional for its first minute, as in BSGS; `doctor` no
+  longer lists those speeds.
+- The messages of the options removed in 1.23.0 (`-H`/`--hash160`, `--new`, `--resume`, `--gpu-api`, `--no-tune`, `--report-interval`,
+  `--checkpoint-interval`, `--isa`, `--prio-gpu`): they are unknown options now, still refused with exit status 2 before anything is made.
+- `doctor --full` (`pzsolve selftest` runs the self-test), and the power plan (Windows) and clock lines of `doctor`; `bench --prio-gpu`
+  (`bench --together` reads `PZ_PRIO_GPU`, as `hunt` does); `stats.csv`; the CPU L2 and L3 cache sizes in `devices` and `doctor`; the
+  variables `PZ_TEST_REPORT_INTERVAL`, `PZ_TEST_KTHREAD`, `PZ_TEST_JUMP` and `PZ_KANG_VERBOSE` (the speeds of the CPU kangaroo steps are
+  debug lines of the log, which `-v` shows).
+- `decrypt-key` opens one line per run: the first `PZENC1:` token of the text (it says so when there are more), not up to 64.
 - `tools/research/kang_block_sched.py`, the model of the block herd, gone with it; the helpers `kang_bytes.py` took from it are in
   `kang_bytes.py`.
 - The block herd of the GPU kangaroo (`PZ_GPU_NK=4g`, the module `kang4g`): no tuning offered it and it was slower than `NK` 128 quads
@@ -220,12 +271,7 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   and no server proves, which the refusal names with the server. The table of the program names only the coins the creator put at
   each open puzzle, three a puzzle (`data/prizes.csv`, 231 coins of 77 puzzles; `pzpeer netcheck N` lists them): history, which never
   changes, and the defence of a home whose servers all hide the prize; the fingerprints do not change.
-- pzpeer: a home that reads the chain from Electrum servers gives its piece of the key only once every named coin of the address is
-  shown spent, with its proof, and one whose network names no coin never gives it: servers that hid such a coin would otherwise let the
-  partner take it alone with the key. The shares of the payout are paid as before, and a start with `--rpc` exchanges the pieces. Before
-  the pieces each side says whether it gives its own, and they follow only when both do: a side that keeps its own takes none, and a
-  piece that comes before the word is wiped; after a "never" the pair is not tried again until a home starts again. A malformed `prize=`
-  line is reported.
+- pzpeer: a malformed `prize=` line of a network file is reported.
 - pzsolve: an encrypting campaign that ends between the find and the deletion of its search (a second Ctrl-C, `kill -9`, a power cut)
   no longer keeps its seed and its state for ever: the next `hunt` or `merge` of the campaign deletes them before it shows `FOUND.txt`
   (before, both showed it and returned at once). On Windows a console closed, a logoff or a shutdown at the find waits for the deletion
@@ -271,9 +317,7 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   held every chain call of the home for hours, and every payout through servers failed); a server that announces blocks it cannot show
   is left alone for ten minutes. A spend is looked for in the whole history after the coin, within that minute, and what each
   transaction spends is kept from one look to the next (before, the oldest 256 entries: dust sent between a coin and its spend hid the
-  spend, and one lying server kept a spent coin in the first transaction). A spend waiting in the mempool counts only with an input
-  signed by the key of the address, in a transaction a server gives (before, any transaction a server listed there, a deposit or an id
-  it made up, held the exchange of the pieces for ever).
+  spend, and one lying server kept a spent coin in the first transaction).
 - pzpeer: a home whose pzsolve finds the key on its own also waits for a second transaction it signed with a partner that is in no block
   yet (before, its own transaction could replace that payout in the mempools, and with it the partner's share). What a session tells
   the partner when it stops no longer says where this home's node or pzsign is.
@@ -332,11 +376,9 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   for a key everyone has). Before, they made a network for it.
 - pzpeer, the session: the two homes build the first transaction from the coins of the puzzle they both see (`S_COINS`, the outpoints
   each sees): two chains a block apart, or a coin that came to the address in a block during the session, gave two first transactions,
-  and anyone could keep that up with a coin a block. What is left at the puzzle address after the payout counts at the rate of the
-  session, and only when a payout at that rate takes it (before, coins worth an input at 20 sat/vB counted, and while the rate was
-  higher no payout took them: twelve coins of 9000 satoshis held the exchange of the pieces). A second transaction whose outputs are all
-  spent, as are both coins it spends, settles the payout also for a home that never saw its block, or that keeps a replacement of the one
-  that was mined (before, a home stopped before that block took it for void, and neither home got its key). F's sweep of its tiny coins
+  and anyone could keep that up with a coin a block. A second transaction whose outputs are all spent settles the payout also for a
+  home that never saw its block, or that keeps a replacement of the one that was mined (before, a home stopped before that block took
+  it for void). F's sweep of its tiny coins
   takes only coins worth more than their input (before, dust sent to its coin key made the sweep cost more than it held).
 - pzpeer, the payout: a second transaction that waits at a fee rate the chain no longer takes is replaced. When its two coins are still
   unspent and it pays less than half of what the rate of a later session gives, both homes sign it again at that rate, from the same
@@ -372,10 +414,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   its copy are on disk (before, the state kept those keys as scanned until the checkpoint of the next minute, and its copy longer).
 - pzsolve: the warning of a `PZ_GPU_NK` that is not allowed lists the herds in L2 on CUDA too (allowed, and not listed), and says that
   they take no `m`.
-- pzpeer, the exchange of the pieces: what is left at the puzzle address counts only the coins a payout could take, the named coins not
-  shown spent among them (before, 100 000 satoshis of dust that no payout takes stopped the exchange for ever); with every output of the
-  second transaction spent and coins left, a later session pays them out; a second transaction the partner gives again is taken by its
-  signatures, not by the payout addresses of the day (a home that had changed its payout address refused it and never got its key). The
+- pzpeer: a second transaction the partner gives again is taken by its signatures, not by the payout addresses of the day (a home that
+  had changed its payout address refused it). The
   light chain finds the spend of a coin in a transaction of any shape (one with more than 16 inputs or outputs was taken to spend
   nothing). A custodian that left a PROVE unanswered during a republish gets those records again at the next one, not a week later.
 - pzsign: its selftest crashed now and then on Windows. It is the only place where two parties share a process, as two threads, and
@@ -383,10 +423,8 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   the first use is made before the second thread starts, and the flag is one a thread. A session is one party a process, as before.
 - pzpeer, the session: F reads the coins of its tiny coins while `S_ALIVE` goes to the partner (with a node, a scan of the whole set: S gave
   up as soon as F's node was four minutes slower than its own, at every session of the pair). A payout of coins that came to the address
-  after the payout keeps its own second transaction (before, the record kept the height of the payout before, and the exchange neither
-  sent the new second again nor saw it void: the coins stayed under the joint key and the pieces never came). The exchange of the pieces
-  settles also in a later session when every output of the second is spent. A count of failed signings taken off that cannot be written
-  no longer stops the exchange. A chain that does not answer is no longer read as a payout that went elsewhere. A second transaction kept
+  after the payout keeps its own second transaction (before, the record kept the height of the payout before, and a later session
+  neither sent the new second again nor saw it void: the coins stayed under the joint key). A chain that does not answer is no longer read as a payout that went elsewhere. A second transaction kept
   in `HOME/paid` and in no block yet is sent again every ten minutes by the home itself while its pair has no session.
 - pzpeer: the files of a home, the cookie of bitcoind, `headers.bin`, `peers.txt` and `/dev/urandom` are not inherited by the programs
   pzpeer starts; `dp.bin` and the cookie are read without a buffer of stdio (the distances and the password only in buffers that are
@@ -423,12 +461,11 @@ Each release is tagged `vX.Y.Z` (see [`docs/en/RELEASING.md`](https://github.com
   turn of its loop (before, only after a day without a stop, all at once), keeps a block with too few proof keys as scanned without
   claiming it, and no longer saves the block it was picking when it is stopped. `claims.bin` opens with one sort (it was quadratic).
 - pzpeer, the session: the second transaction is kept on disk as soon as it is signed, and every session of a pair starts with what
-  each side has of it (`S_SECOND`): a home stopped before its block, or one that lost its record, is still paid and gets its key (before,
+  each side has of it (`S_SECOND`): a home stopped before its block, or one that lost its record, is still paid (before,
   the two homes failed at every try). The transactions of a payout and the cancel go to the chain again at every block; S stops waiting
   for the second transaction once F's cancel is in a block (before, 144 blocks); a wait asks the chain once a block. A pzsign that does
   not start counts no try of the payout, and the session says why and tells the partner (before, an empty reason); `pzpeer run` checks
-  `pzsign version` at its start. The exchange of the pieces settles when both homes spent their payout already (the output of the
-  author shows the second transaction in a block). F's tiny coins left by earlier sessions of a pair go to its payout address once no
+  `pzsign version` at its start. F's tiny coins left by earlier sessions of a pair go to its payout address once no
   second transaction can take them. A line of `failed-signings` without its date that is at the limit gets its date. pzpeer stops
   pzsolve within a minute, then interrupts it, then kills it (before, it could wait for ever). With Electrum servers each server has its
   own minute for its calls of an operation (a slow first one used it for all).
