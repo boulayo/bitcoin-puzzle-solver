@@ -240,23 +240,26 @@ pzsolve hunt -r START:END -k PUBKEY --dp-bits N --jump-seed HEX --start-key FILE
 - Transport: TCP, `Noise_XX_secp256k1_ChaChaPoly_SHA256`.
   - DH: libsecp256k1 ECDH, output `SHA256(compressed shared point)`, as in BOLT 8.
   - Static keys are the identity keys (compressed points on the wire, x-only identity = their x).
-  - Prologue: `"pznet5" || F`, so peers of another network, or of earlier versions of the protocol (the short record, records named
-    without their zero bits, then PROVE, the fee rate after the proofs and F from the point, then a PROVE of several records), fail the
-    handshake.
+  - Prologue: `"pznet6" || F`, so peers of another network, or of earlier versions of the protocol (the short record, records named
+    without their zero bits, then PROVE, the fee rate after the proofs and F from the point, then a PROVE of several records, then the
+    frames without the rotation of their keys), fail the handshake.
   - The three handshake messages have fixed lengths, so they travel without a length: 33 bytes (`e`), 98 (`e`, `ee`, `s`, `es`, an
     empty payload), 67 (`s`, `se`, and as payload the port the initiator listens on, 2 bytes, 0 when it does not accept connections).
     The responder puts the initiator in its routing table with the address it sees and that port.
   - Both sides check that the node ID of the other's static key has the 16 zero bits. An initiator that dials a known contact also
     checks that the responder is that identity, before it sends the third message (the one that shows its own key).
   - After the handshake, frames of at most 65 535 bytes: a 2-byte encrypted length and the encrypted body, each with its own nonce, as in
-    BOLT 8; a key rotates after 1000 encryptions (500 frames).
+    BOLT 8, but with one key a direction for the whole connection. Its 64-bit nonce never wraps: a connection carries one exchange or
+    one session (a relay 32 MiB at most). BOLT 8 rotates its keys every 1000 encryptions, so that one who reads the keys of a live
+    connection cannot read what it carried before; here that one can read the identity key and the home seed beside them.
   - One TCP connection per exchange: connect, handshake, one request frame, one answer frame, close. A session (messages 16–31) keeps its
     connection. The connect has a deadline (10 s by default), the whole handshake one more (a peer that sends a byte now and then gains
     nothing: before, each of its three messages had a deadline of its own), and each frame one: a peer that stops talking costs a
     timeout. A malformed message, or a frame longer than the receiver takes, closes the connection without an answer.
   - A relayed channel (7.7) runs a second handshake, end to end, on the same socket after the relay joined it to the partner's; there the
     responder checks the initiator's identity too.
-  - Ephemeral keys: 32 bytes from the system (`getrandom`, or `/dev/urandom`).
+  - Ephemeral keys: 32 bytes of the operating system's generator (`pz_os_random` of pzcore, the generator of pzsolve too: getrandom,
+    getentropy, BCryptGenRandom).
 
 ### 7.2 The record of a distinguished point
 

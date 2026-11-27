@@ -5,7 +5,6 @@
  * the claims it keeps for others). */
 #include "linear.h"
 #include "block.h"
-#include "bt.h"
 #include "claims.h"
 #include "dbg.h"
 #include "dht.h"
@@ -194,17 +193,9 @@ int linear_run(const home_cfg *cfg, const netfile *nf, const char *dir)
     if (!(l.own = claims_open(path, nf->fp, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     record_net rn = {.dpbits = RECORD_DP_MAX};                 /* a linear network has no records: its nodes take none (dht.c, answer) */
     memcpy(rn.fp, nf->fp, 32);
-    const char *boot[64];
-    char entries[16][NETFILE_LINE_MAX];
-    int nb = 0;
-    while (nb < 16 && netfile_opt(nf, "entry", nb, entries[nb], sizeof entries[nb])) boot[nb] = entries[nb], nb++;
-    for (int i = 0; i < cfg->npeers && nb < 64; i++) boot[nb++] = cfg->peers[i];
     snprintf(nodedir, sizeof nodedir, "%s/node", dir);
-    const bool main_chain = !strcmp(nf->chain, "main");
-    dht_config dc = {.ctx = keys_ctx(), .net = &rn, .self = &id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
-                     .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .verbose = cfg->verbose,
-                     .portmap = cfg->portmap, .allow_private = !main_chain || cfg->allow_private, .blocks = &l.bn};
-    dc.bt_routers = bt_routers(main_chain, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
+    dht_config dc = home_node(cfg, nf, &rn, &id, nodedir);
+    dc.blocks = &l.bn;
     if (!(l.d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), claims_close(l.own), 1;
     sys_on_stop(on_signal);
     const int nc = dht_start(l.d);

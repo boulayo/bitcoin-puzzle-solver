@@ -64,9 +64,9 @@ void encode_contact(const dht_contact *c, uint8_t *p)
 
 /* NODES: every contact must be whole (its ID from its identity, with the zero bits, an address this node may dial), or the answer is
  * refused. What it names are candidates of a lookup and no more: the lookup has its own limit of queries to one address block. */
-static bool parse_nodes(const dht *d, const uint8_t *m, size_t len, dht_contact *out, int *n)
+int parse_nodes(const dht *d, const uint8_t *m, size_t len, dht_contact *out)
 {
-    if (len < 2 || m[0] != DHT_NODES || m[1] > DHT_K || len != 2 + (size_t)m[1] * NODE_LEN) return false;
+    if (len < 2 || m[0] != DHT_NODES || m[1] > DHT_K || len != 2 + (size_t)m[1] * NODE_LEN) return -1;
     for (int i = 0; i < m[1]; i++) {
         const uint8_t *p = m + 2 + (size_t)i * NODE_LEN;
         dht_contact *c = &out[i];
@@ -76,16 +76,9 @@ static bool parse_nodes(const dht *d, const uint8_t *m, size_t len, dht_contact 
         memcpy(c->addr.ip, p + 64, 16);
         c->addr.port = (uint16_t)(p[80] << 8 | p[81]);
         keys_node_id(c->xonly, id);
-        if (memcmp(id, c->id, 32) || !keys_id_ok(id, d->cfg.id_bits) || !addr_ok(d, &c->addr)) return false;
+        if (memcmp(id, c->id, 32) || !keys_id_ok(id, d->cfg.id_bits) || !addr_ok(d, &c->addr)) return -1;
     }
-    *n = m[1];
-    return true;
-}
-
-int dht_parse_nodes(const dht *d, const uint8_t *msg, size_t len, dht_contact *out)
-{
-    int n;
-    return parse_nodes(d, msg, len, out, &n) ? n : -1;
+    return m[1];
 }
 
 /* ---- the routing table ---- */
@@ -214,7 +207,7 @@ int rt_closest(dht *d, const uint8_t t[32], dht_contact *out, int max)
     return n;
 }
 
-int rt_count(dht *d)
+int dht_count(dht *d)
 {
     int n = 0;
     pthread_mutex_lock(&d->rt_mu);
@@ -425,9 +418,9 @@ static void *lookup_main(void *arg)
         L->busy++;
         pthread_mutex_unlock(&L->mu);
         dht_contact got[DHT_K];
-        int ngot = 0;
         size_t len;
-        const bool ok = exchange(L->d, &c, req, sizeof req, ans, sizeof ans, &len) && parse_nodes(L->d, ans, len, got, &ngot);
+        const int ngot = exchange(L->d, &c, req, sizeof req, ans, sizeof ans, &len) ? parse_nodes(L->d, ans, len, got) : -1;
+        const bool ok = ngot >= 0;
         heard(L->d, &c, ok);
         pthread_mutex_lock(&L->mu);
         L->busy--;
@@ -502,23 +495,20 @@ void save_peers(dht *d)
 {
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     dht_contact *cs = malloc(PEERS_MAX * sizeof *cs);
-    char path[4096], tmp[4100];
+    char path[4096];
     if (!cs) return;
     const int n = dht_contacts(d, cs, PEERS_MAX);
     path_of(d, "peers.txt", path, sizeof path);
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
     pthread_mutex_lock(&mu);
-    FILE *f = n ? sys_fopen(tmp, "w") : NULL;                  /* no contact: the old list is kept for the next start */
-    if (f) {
-        for (int i = 0; i < n; i++) {
-            char a[64], h[65];
-            net_addr_str(&cs[i].addr, a, sizeof a);
-            pz_hex_encode(cs[i].xonly, 32, h);
-            fprintf(f, "%s %s\n", a, h);
-        }
-        if (fclose(f) == 0) (void)sys_replace(tmp, path);
-        else (void)remove(tmp);
+    FILE *f = n ? sys_new_file(path, false) : NULL;            /* no contact: the old list is kept for the next start */
+    bool ok = f != NULL;
+    for (int i = 0; ok && i < n; i++) {
+        char a[64], h[65];
+        net_addr_str(&cs[i].addr, a, sizeof a);
+        pz_hex_encode(cs[i].xonly, 32, h);
+        ok = fprintf(f, "%s %s\n", a, h) > 0;
     }
+    (void)sys_new_file_done(f, path, ok);
     pthread_mutex_unlock(&mu);
     free(cs);
 }
@@ -527,8 +517,8 @@ static int boot_list(dht *d, boot_addr *out, int max)
 {
     int n = 0;
     for (int i = 0; i < d->cfg.nbootstrap && n < max; i++) {
-        if (net_parse_addr(d->boot[i], &out[n].a)) out[n++].has_id = false;
-        else dlog(d, "bootstrap: cannot resolve %s", d->boot[i]);
+        if (net_parse_addr(d->cfg.bootstrap[i], &out[n].a)) out[n++].has_id = false;
+        else dlog(d, "bootstrap: cannot resolve %s", d->cfg.bootstrap[i]);
     }
     /* the contacts of the last run, with their identities, up to half of what is left: addresses that anyone can announce in the table of
      * BitTorrent do not push them out, nor do they push those out */
@@ -596,7 +586,7 @@ int bootstrap(dht *d)
         (void)dht_lookup(d, d->me.id, out, DHT_K);
         save_peers(d);
     }
-    const int have = rt_count(d);
+    const int have = dht_count(d);
     dlog(d, "bootstrap: %d of %d addresses answered, %d contacts", ok, n, have);
     return have;
 }
@@ -617,7 +607,7 @@ void refresh(dht *d, bool all)
     for (int i = (int)d->cfg.id_bits; deepest >= 0 && i <= last && !stopping(d); i++) {
         uint8_t t[32];
         dht_contact out[DHT_K];
-        if (!all && now - looked[i] < d->refresh_ms) continue;
+        if (!all && now - looked[i] < REFRESH_MS) continue;
         if (!sys_random(t, sizeof t)) return;
         for (int b = 0; b <= i; b++) {                         /* the first i bits of this node, then bit i flipped */
             const uint8_t mask = (uint8_t)(0x80 >> (b % 8)), bit = (uint8_t)((d->me.id[b / 8] & mask) ^ (b == i ? mask : 0));
@@ -626,12 +616,6 @@ void refresh(dht *d, bool all)
         (void)dht_lookup(d, t, out, DHT_K);
     }
 }
-
-void dht_refresh(dht *d) { refresh(d, true); }
-
-void dht_seen(dht *d, const dht_contact *c) { rt_seen(d, c); }
-
-int dht_count(dht *d) { return rt_count(d); }
 
 /* The j-th closest of N nodes spread evenly over the IDs lies at about j / (N + 1) of their space from any point: a least-squares fit of
  * the distances of the DHT_K nodes closest to a random point gives N (a lookup that finds fewer knows them all). */

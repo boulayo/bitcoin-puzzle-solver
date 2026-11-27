@@ -9,7 +9,7 @@
  * of a file is dropped. A store refuses a second record with the same x from the same owner. Records with the same x
  * from different owners are a coincidence: store_put gives them to the caller. A custodian's store has limits (store_limit): records
  * in all, owners in all (one per STORE_OWNER_RECORDS records it may hold, and 1024 more), owners of one x (STORE_X_OWNERS, and as many
- * more whose owners proved them: store_put_proved); beyond them it is full.
+ * more whose owners proved them); beyond them it is full.
  *
  * The files are ours, so the records are not checked again when they are opened, except the last STORE_CHECK_TAIL: a crash can leave an
  * entry that is whole in length but not in content. One that fails its check there is not indexed. The records store_put reports as a
@@ -53,19 +53,14 @@ void store_close(store *st);
 void store_limit(store *st, uint64_t max_records);
 /* Whether the store knows this owner: it took a record of it (an owner once taken stays). */
 bool store_owner(store *st, const uint8_t owner[32]);
-/* Checks and stores r. mine: the record of r's owner with r's x that the store now holds (r itself, or the earlier one for STORE_DUP;
- * not set for STORE_FULL). others: the records with the same x from other owners, the newest first, at most max, their number in
- * *nothers (0 unless STORE_OK, STORE_DUP or STORE_FULL): with any, a coincidence. mine and others may be NULL when max is 0. */
-store_status store_put(store *st, const record *r, record *mine, record *others, int max, int *nothers);
-/* store_put of a record whose owner proved it (its proof of possession checked out): taken also when its x has STORE_X_OWNERS owners,
- * up to twice as many. Copies planted before the real record cannot keep it out, and the newest first shows it to the next owner.
- * others, max and nothers as for store_put. */
-store_status store_put_proved(store *st, const record *r, record *others, int max, int *nothers);
+/* Checks and stores r. proved: its owner proved it (its proof of possession checked out), so it is taken also when its x has
+ * STORE_X_OWNERS owners, up to twice as many: copies planted before the real record cannot keep it out, and the newest first shows it to
+ * the next owner. others: the records with the same x from other owners, the newest first, at most max, their number in *nothers (0
+ * unless STORE_OK, STORE_DUP or STORE_FULL): with any, a coincidence. */
+store_status store_put(store *st, const record *r, bool proved, record *others, int max, int *nothers);
 /* The records with this x, the newest first, at most max (and 2 * STORE_X_OWNERS); their number. */
 int store_find(store *st, const uint8_t x[32], record *out, int max);
 uint64_t store_count(store *st);
-/* The i-th record of the file (in the order they came); false past the end or for a damaged one. */
-bool store_read(store *st, uint64_t i, record *out);
 /* The jumps the records stand for: the sum of 2^dp over the records, each the work of a walk that finds one point in 2^dp. */
 long double store_weight(store *st);
 /* K = SHA256("pznet1/key" || x), the key of a record in the table. */

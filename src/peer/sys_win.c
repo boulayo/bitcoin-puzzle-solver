@@ -5,7 +5,6 @@
 #include "sys.h"
 #include <windows.h>
 #include <aclapi.h>
-#include <bcrypt.h>
 #include <iphlpapi.h>
 #include <sddl.h>
 #include <errno.h>
@@ -17,11 +16,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
-/* ---- time and randomness ---- */
+/* ---- time ---- */
 
 int64_t sys_now_ms(void) { return (int64_t)GetTickCount64(); }
 void sys_sleep_ms(int ms) { Sleep(ms > 0 ? (DWORD)ms : 0); }
-bool sys_random(void *out, size_t n) { return BCryptGenRandom(NULL, out, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0; }
 
 /* ---- sockets ---- */
 

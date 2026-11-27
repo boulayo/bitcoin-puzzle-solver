@@ -163,7 +163,8 @@ static long os_sys(uint8_t *p, size_t n)
 #elif defined(__linux__)
     return (long)getrandom(p, n, 0);           /* blocks until the kernel's pool is initialised */
 #else
-    return getentropy(p, n) == 0 ? (long)n : -1;
+    const size_t k = n < 256 ? n : 256;                        /* the most getentropy gives at a time */
+    return getentropy(p, k) == 0 ? (long)k : -1;
 #endif
 }
 
@@ -226,6 +227,8 @@ static bool os_fill(uint8_t *p, size_t n, char *err, size_t errlen)
     }
     return true;
 }
+
+bool pz_os_random(void *buf, size_t n) { return os_fill(buf, n, NULL, 0); }
 
 /* ---- the mixing ---- */
 

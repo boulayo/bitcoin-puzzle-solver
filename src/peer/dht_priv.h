@@ -35,10 +35,17 @@
 #define PARALLEL_MAX 16            /* arguments of parallel(): the custodians a publish stores to at a time */
 #define RELAY_WAITING 256          /* homes waiting at this relay for their partner: open connections, no thread (2 a block: 128 blocks to fill) */
 #define QUERY_STACK (256 << 10)
+#define REFRESH_MS 3600000         /* a bucket with no lookup in its range for this long gets one */
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
 enum { LIM_CONN, LIM_REC, LIM_KINDS };
 typedef struct lim_entry lim_entry;
+
+typedef struct {
+    uint8_t id[32];                /* node ID = SHA256("pznet1/id" || xonly) */
+    uint8_t xonly[32];             /* identity */
+    net_addr addr;
+} dht_contact;
 
 typedef struct {
     dht_contact c;
@@ -100,7 +107,7 @@ struct dht {
     atomic_llong in_ms;            /* when the last connection of another node came in */
     int64_t t0;
     dht_contact me;
-    char *dir, **boot;
+    char *dir;
     store *custody;
     claims *claims;                /* a linear search: the claims kept as a custodian (NULL: none) */
     mbox *mb;
@@ -108,7 +115,7 @@ struct dht {
     atomic_bool unplaced;          /* an own record went to no other node: the first contacts after none get all of them again */
     int lfd;
     uint16_t port;
-    int64_t refresh_ms, republish_ms, retry_ms, alert_ms, relay_ms, slot_ms, probe_ms;
+    int64_t retry_ms, alert_ms, slot_ms, probe_ms;
     pthread_mutex_t rt_mu;         /* the routing table */
     bucket b[DHT_BUCKETS];
     pthread_mutex_t l_mu;          /* the limits by address block */
@@ -129,7 +136,6 @@ struct dht {
     pthread_cond_t r_cv;
     relay_slot waiting[RELAY_WAITING], *active;
     int nactive;
-    uint64_t relays_done;
     pthread_mutex_t p_mu;          /* publishing: own.bin and what follows, the lookups kept (never across an exchange) */
     int ownfd;                     /* own.bin */
     uint64_t nown, replay, replay_end;   /* its records; those a restart may give again (dht_publish) */
@@ -209,17 +215,28 @@ void rt_seen(dht *d, const dht_contact *c);     /* it answered */
 void rt_asked(dht *d, const dht_contact *c);    /* it asked */
 void rt_failed(dht *d, const dht_contact *c);   /* an exchange with it failed */
 int rt_closest(dht *d, const uint8_t t[32], dht_contact *out, int max);
-int rt_count(dht *d);
+int dht_contacts(dht *d, dht_contact *out, int max);   /* the contacts of the routing table, at most max; their number */
 bool responsible(dht *d, const uint8_t key[32]);
+/* The check of a NODES answer, as a lookup makes it: its contacts, -1 when the answer is refused whole. */
+int parse_nodes(const dht *d, const uint8_t *m, size_t len, dht_contact *out);
 /* One request to a contact, dialled with its identity, and its answer, whose type must be the one of that request: its own + 1, MBOX
  * for PROVE. */
 bool exchange(dht *d, const dht_contact *c, const uint8_t *req, size_t rlen, uint8_t *ans, size_t cap, size_t *alen);
 void heard(dht *d, const dht_contact *c, bool ok);
 void job_ping(dht *d, const dht_contact *c);
 void encode_contact(const dht_contact *c, uint8_t *p);
+/* The want (at most DHT_K) nodes closest to target, this one included when it listens, nearest first: an iterative lookup. */
+int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want);
 /* dht_lookup, and *whole: no node closer than the farthest of the result was left unasked (the lookup did not stop at its query limit), so
  * the result is the closest of all the nodes that answer; a whole result of fewer than want is every such node */
 int lookup_whole(dht *d, const uint8_t target[32], dht_contact *out, int want, bool *whole);
+/* The contact of an identity: from the routing table, or by a lookup of its node ID. False when no node answers for it (it is offline,
+ * or it does not listen). */
+bool dht_find(dht *d, const uint8_t xonly[32], dht_contact *out);
+/* A connection to a contact, checked to be its identity, for the frames of a session (types 16 to 31; the other side gets the first in
+ * on_session). Close it with net_close. */
+net_conn *dht_dial(dht *d, const dht_contact *c);
+/* A lookup of a random ID in the range of each bucket (all: also of those looked up within REFRESH_MS) */
 void refresh(dht *d, bool all);
 int bootstrap(dht *d);
 void save_peers(dht *d);
@@ -228,15 +245,25 @@ void save_peers(dht *d);
 int custody_put(dht *d, const record *r, const net_addr *from);
 int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_addr *from, mbox_pair *pairs);
 bool own_open(dht *d, char *err, size_t errlen);
+/* The own records again now (the maintenance thread does it every day), each to the custodians it did not have at the last republish
+ * (all: to every custodian, as at the first contacts after none). The copies sent. */
+uint64_t dht_republish(dht *d, bool all);
 
 /* dht_alert.c */
+/* SHA256("pznet1/mbox" || owner): the mailboxes of an owner are the DHT_KSTORE nodes closest to it. */
+void dht_mbox_key(const uint8_t owner[32], uint8_t k[32]);
 bool owner_ok(const dht *d, const record *r);
 bool pair_ok(const dht *d, const record *a, const record *b);
 bool alert_in(dht *d, const record *a, const record *b, const uint8_t *proof, const net_addr *from);
 extern const uint8_t CUSTODY_NONCE[32];
 bool prove_to(dht *d, const dht_contact *c, const record *r, int n);
+/* The proof of possession of r from its owner at its contact c (POSSESS): 1 it checks out, 0 a wrong proof, -1 none (offline,
+ * unreachable, or it closed without one). */
+int ask_proof(dht *d, const dht_contact *c, const record *r);
 void job_alert(dht *d, const record *a, const record *b);
 void retry_alerts(dht *d);
+/* Asks this node's mailboxes for its alerts now (the maintenance thread does it on its own): the new pairs found. */
+int dht_mbox_poll(dht *d);
 
 /* dht_claim.c */
 size_t claim_answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, uint8_t *ans);

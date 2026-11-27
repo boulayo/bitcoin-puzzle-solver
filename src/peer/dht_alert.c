@@ -162,47 +162,33 @@ static bool send_alert(dht *d, const dht_contact *c, const record *a, const reco
     return ok;
 }
 
-/* this node knows the distance of its own record: the proof it would give, made and checked */
+/* whether this node can prove its own record: it knows the distance, and record_prove finds that it fits (the proof is not sent, so
+ * any nonce does) */
 static bool own_proof(dht *d, const record *r)
 {
-    uint8_t dd[32], nonce[32], sig[64];
-    const bool ok = d->cfg.own_distance && sys_random(nonce, sizeof nonce) && d->cfg.own_distance(d->cfg.user, r->x, r->t, dd) &&
-                    record_prove(d->cfg.ctx, d->cfg.net, r, dd, d->me.xonly, nonce, sig) &&
-                    record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, nonce, sig);
+    uint8_t dd[32], sig[64];
+    const bool ok = d->cfg.own_distance && d->cfg.own_distance(d->cfg.user, r->x, r->t, dd) &&
+                    record_prove(d->cfg.ctx, d->cfg.net, r, dd, d->me.xonly, CUSTODY_NONCE, sig);
     pz_secure_zero(dd, sizeof dd);
     return ok;
 }
 
-int dht_proof_on(dht *d, net_conn *c, const record *r)
+/* Only a dial that fails counts against the contact. An owner that closes without a proof (it has no such point) is neither seen nor
+ * failed: a pair that names an honest node, at a lying custodian, cannot make this node drop it from the table. */
+int ask_proof(dht *d, const dht_contact *c, const record *r)
 {
-    if (memcmp(c->remote, r->owner, 32)) return 0;
     uint8_t req[1 + RECORD_LEN + 32], ans[1 + 64];
     size_t n;
+    int st = -1;
+    net_conn *k = dht_dial(d, c);                              /* checked to be the owner: the identity of its contact */
+    if (!k) return rt_failed(d, c), -1;
     req[0] = DHT_POSSESS;
     record_encode(r, req + 1);
-    if (!sys_random(req + 1 + RECORD_LEN, 32) || !net_send(c, req, sizeof req) || !net_recv(c, ans, sizeof ans, &n)) return -1;
-    return n == sizeof ans && ans[0] == DHT_PROOF && record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, req + 1 + RECORD_LEN, ans + 1);
-}
-
-/* dht_ask_proof from the owner of r, at its contact c */
-static int ask_proof_at(dht *d, const dht_contact *c, const record *r)
-{
-    net_conn *k = dht_dial(d, c);
-    if (!k) {
-        rt_failed(d, c);
-        return -1;
-    }
-    const int st = dht_proof_on(d, k, r);
+    if (sys_random(req + 1 + RECORD_LEN, 32) && net_send(k, req, sizeof req) && net_recv(k, ans, sizeof ans, &n))
+        st = n == sizeof ans && ans[0] == DHT_PROOF && record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, req + 1 + RECORD_LEN, ans + 1);
     net_close(k);
     if (st >= 0) rt_seen(d, c);
     return st;
-}
-
-int dht_ask_proof(dht *d, const record *r)
-{
-    dht_contact c;
-    if (mine(d, r)) return own_proof(d, r) ? 1 : 0;
-    return dht_find(d, r->owner, &c) ? ask_proof_at(d, &c, r) : -1;
 }
 
 /* This node's proof of possession for the other owner of an alert, over the pair: the pair's name is the nonce, so the proof can wait in
@@ -255,7 +241,7 @@ void job_alert(dht *d, const record *a, const record *b)
     const bool post = e.mine_ok && (!e.posted || sys_now_ms() - e.posted >= d->alert_ms / POSTS), ask = e.mine_ok && !e.theirs_ok;
     const bool found = (post || ask) && dht_find(d, e.theirs.owner, &c);
     if (post && post_proof(d, &e, found ? &c : NULL)) e.posted = sys_now_ms();
-    const int asked = !ask ? -2 : found ? ask_proof_at(d, &c, &e.theirs) : -1;
+    const int asked = !ask ? -2 : found ? ask_proof(d, &c, &e.theirs) : -1;
     int st = AL_WAIT;
     pthread_mutex_lock(&d->a_mu);
     if ((p = alert_find(d, h))) {
@@ -306,14 +292,11 @@ void retry_alerts(dht *d)
 /* The pairs of an MBOX answer from c that concern this node. From a mailbox, each that brings the other owner's proof becomes an alert:
  * a mailbox cannot make one of a pair nobody proved. From a custodian after PROVE (the n records proved), each new pair of those
  * records does, at most as many for each as a custodian keeps owners of one x: the custodian cannot bring alerts of the other records
- * of this node, nor more of them than it may hold. False when the answer is malformed (its type exchange checked), or longer than that
- * for all the records together. */
+ * of this node, nor more of them than it may hold. False when the answer is malformed (its type exchange checked). */
 static bool mbox_take(dht *d, const dht_contact *c, const uint8_t *ans, size_t len, const record *proved, int n, int *fresh)
 {
     int took[DHT_PROVE_MAX] = {0};                             /* after PROVE: the pairs of each record proved */
-    if (len < 2 || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY ||
-        (proved && ans[1] > n * STORE_X_OWNERS))
-        return false;
+    if (len < 2 || ans[1] > DHT_MBOX_MAX || len != 2 + (size_t)ans[1] * DHT_MBOX_ENTRY) return false;
     for (int p = 0; p < ans[1]; p++) {
         const uint8_t *q = ans + 2 + (size_t)p * DHT_MBOX_ENTRY, flags = q[PAIR_LEN];
         record r[2];
@@ -383,5 +366,3 @@ bool prove_to(dht *d, const dht_contact *c, const record *r, int n)
     if (fresh) dlog(d, "%d alerts from a custodian of the point", fresh);
     return ok;
 }
-
-int dht_local_mbox(dht *d, const uint8_t owner[32], mbox_pair *pairs, int max) { return mbox_get(d->mb, owner, pairs, max); }

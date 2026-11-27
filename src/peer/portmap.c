@@ -88,11 +88,30 @@ static const char *element(const char *p, const char *limit, const char *tag, si
     return a;
 }
 
+/* The SOAP action of the service type at the control address ctl on the mapping of TCP port `port`, with the arguments that follow those
+ * that name the mapping: the answer of the router in body. 1 for a 200, 0 for another answer, -1 for none. */
+static int soap(char *body, const struct sockaddr_in *router, const char *ctl, const char *type, const char *action, uint16_t port,
+                const char *more, struct in_addr *local)
+{
+    char xml[1024], req[2048];
+    const int sl = snprintf(xml, sizeof xml,
+        "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+        "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:%s xmlns:u=\"%s\">"
+        "<NewRemoteHost></NewRemoteHost><NewExternalPort>%u</NewExternalPort><NewProtocol>TCP</NewProtocol>%s"
+        "</u:%s></s:Body></s:Envelope>\r\n", action, type, (unsigned)port, more, action);
+    const int rl = snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: text/xml; charset=\"utf-8\"\r\n"
+                            "SOAPAction: \"%s#%s\"\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+                            ctl, inet_ntoa(router->sin_addr), ntohs(router->sin_port), type, action, sl, xml);
+    if (sl <= 0 || (size_t)sl >= sizeof xml || rl <= 0 || (size_t)rl >= sizeof req || !http(router, req, (size_t)rl, body, BODY_MAX, local))
+        return -1;
+    return !strncmp(body, "HTTP/1.", 7) && !strncmp(body + 8, " 200", 4);
+}
+
 static bool upnp(char *body, uint16_t port, unsigned lease_s, const char *ssdp, char *why, size_t cap)
 {
     static const char SEARCH[] = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\n"
                                  "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n";
-    char pkt[2048], req[2048], soap[1024], desc[512], type[128], ctl[256];
+    char pkt[2048], req[2048], more[400], desc[512], type[128], ctl[256];
     net_addr to, seen = {.ip = {[10] = 0xff, [11] = 0xff}};
     struct sockaddr_in dst = {.sin_family = AF_INET}, from, router;
     struct in_addr local;
@@ -151,33 +170,17 @@ static bool upnp(char *body, uint16_t port, unsigned lease_s, const char *ssdp, 
 
     /* 3. the mapping; a router that only takes mappings without end (error 725) is asked for one. Lease 0: the mapping goes */
     if (!lease_s) {
-        const int sl = snprintf(soap, sizeof soap,
-            "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
-            "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:DeletePortMapping xmlns:u=\"%s\">"
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>%u</NewExternalPort><NewProtocol>TCP</NewProtocol>"
-            "</u:DeletePortMapping></s:Body></s:Envelope>\r\n", type, (unsigned)port);
-        rl = snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: text/xml; charset=\"utf-8\"\r\n"
-                      "SOAPAction: \"%s#DeletePortMapping\"\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-                      ctl, inet_ntoa(router.sin_addr), ntohs(router.sin_port), type, sl, soap);
-        const bool ok = sl > 0 && (size_t)sl < sizeof soap && rl > 0 && (size_t)rl < sizeof req && http(&router, req, (size_t)rl, body, BODY_MAX, &local) &&
-                        !strncmp(body, "HTTP/1.", 7) && !strncmp(body + 8, " 200", 4);
+        const bool ok = soap(body, &router, ctl, type, "DeletePortMapping", port, "", &local) == 1;
         snprintf(why, cap, ok ? "the router at %s closed port %u" : "the router at %s did not close port %u", inet_ntoa(router.sin_addr), (unsigned)port);
         return ok;
     }
     for (int attempt = 0; attempt < 2; attempt++) {
-        const int sl = snprintf(soap, sizeof soap,
-            "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
-            "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:AddPortMapping xmlns:u=\"%s\">"
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>%u</NewExternalPort><NewProtocol>TCP</NewProtocol>"
-            "<NewInternalPort>%u</NewInternalPort><NewInternalClient>%s</NewInternalClient><NewEnabled>1</NewEnabled>"
-            "<NewPortMappingDescription>pzpeer</NewPortMappingDescription><NewLeaseDuration>%u</NewLeaseDuration>"
-            "</u:AddPortMapping></s:Body></s:Envelope>\r\n", type, (unsigned)port, (unsigned)port, inet_ntoa(local), attempt ? 0 : lease_s);
-        rl = snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: text/xml; charset=\"utf-8\"\r\n"
-                      "SOAPAction: \"%s#AddPortMapping\"\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-                      ctl, inet_ntoa(router.sin_addr), ntohs(router.sin_port), type, sl, soap);
-        if (sl <= 0 || (size_t)sl >= sizeof soap || rl <= 0 || (size_t)rl >= sizeof req || !http(&router, req, (size_t)rl, body, BODY_MAX, &local))
-            return fail(why, cap, "the router did not answer the request");
-        if (!strncmp(body, "HTTP/1.", 7) && !strncmp(body + 8, " 200", 4)) {
+        snprintf(more, sizeof more, "<NewInternalPort>%u</NewInternalPort><NewInternalClient>%s</NewInternalClient><NewEnabled>1</NewEnabled>"
+                 "<NewPortMappingDescription>pzpeer</NewPortMappingDescription><NewLeaseDuration>%u</NewLeaseDuration>", (unsigned)port,
+                 inet_ntoa(local), attempt ? 0 : lease_s);
+        const int got = soap(body, &router, ctl, type, "AddPortMapping", port, more, &local);
+        if (got < 0) return fail(why, cap, "the router did not answer the request");
+        if (got) {
             snprintf(why, cap, "the router at %s sends port %u to this machine%s", inet_ntoa(router.sin_addr), (unsigned)port, attempt ? " without end" : "");
             return true;
         }

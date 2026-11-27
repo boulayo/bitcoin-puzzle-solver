@@ -68,13 +68,14 @@ static void test_mix(void)
 static void test_inputs(void)
 {
     uint64_t t[TIMER_WORDS], w[CPU_WORDS] = {0};
-    uint8_t a[OS_BYTES], b[OS_BYTES];
+    uint8_t a[OS_BYTES], b[OS_BYTES], big[1000] = {0};
     char err[160] = "";
     timer_fill(t);
     CHECK(t[TIMER_WORDS - 1] != t[0]);
     const size_t n = cpu_fill(w);
     CHECK(n <= CPU_WORDS && (n == 0 || cpu_has(0) || cpu_has(1)));
     CHECK(os_fill(a, sizeof a, err, sizeof err) && os_fill(b, sizeof b, err, sizeof err) && memcmp(a, b, sizeof a) != 0 && !err[0]);
+    CHECK(pz_os_random(big, sizeof big) && !all_zero(big + 744, 256));     /* more than getentropy gives at once */
     printf("  timer: %llu ticks over %d hashes; CPU generator: %zu of %d words\n", (unsigned long long)(t[TIMER_WORDS - 1] - t[0]),
            TIMER_WORDS - 1, n, CPU_WORDS);
 }
@@ -105,6 +106,7 @@ static void test_os_failures(void)
         g_os_fault = c[i].fault;
         CHECK(!pz_seed_generate(seed, err, sizeof err) && all_zero(seed, 32) && strstr(err, c[i].why) == err);
         CHECK(!pz_seed_generate(seed, NULL, 0) && all_zero(seed, 32));               /* nobody asks why */
+        CHECK(pz_os_random(seed, sizeof seed) == (c[i].fault == OSF_REPEAT));         /* the generator alone checks no repeat */
     }
     g_os_fault = OSF_ENOSYS;                                                         /* a kernel without getrandom: its device, on Linux */
 #if defined(__linux__)

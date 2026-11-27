@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
-/* sys.c - the part of sys.h that is the same on every system: the waits built on the calls that do not wait, the files written whole,
- * the end of a child. */
+/* sys.c - the part of sys.h that is the same on every system: the generator of pzcore, the waits built on the calls that do not wait, the
+ * files written whole, the end of a child. */
 #include "sys.h"
+#include <pzcore/seed.h>
 #include <string.h>
 #include <unistd.h>
+
+bool sys_random(void *out, size_t n) { return pz_os_random(out, n); }
 
 int sys_wait(int fd, bool to_write, int64_t deadline)
 {

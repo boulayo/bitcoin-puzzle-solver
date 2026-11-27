@@ -41,7 +41,7 @@ int custody_put(dht *d, const record *r, const net_addr *from)
     int no;
     const int st = from ? admit(d, r, from) : DHT_ST_STORED;
     if (st != DHT_ST_STORED) return st;
-    const store_status s = store_put(d->custody, r, NULL, others, STORE_X_OWNERS, &no);
+    const store_status s = store_put(d->custody, r, false, others, STORE_X_OWNERS, &no);
     if (from) owner_back(d, r, from);
     for (int i = 0; !from && i < no; i++) (void)alert_in(d, &others[i], r, NULL, &self);
     if (no && from) return DHT_ST_COINCIDENCE;
@@ -65,7 +65,7 @@ int custody_proved(dht *d, const record *r, const uint8_t sig[64], const net_add
     record others[STORE_X_OWNERS];
     int no;
     if (admit(d, r, from) != DHT_ST_STORED || !record_proof_ok(d->cfg.ctx, d->cfg.net, r, d->me.xonly, CUSTODY_NONCE, sig)) return -1;
-    (void)store_put_proved(d->custody, r, others, STORE_X_OWNERS, &no);
+    (void)store_put(d->custody, r, true, others, STORE_X_OWNERS, &no);
     owner_back(d, r, from);
     for (int i = 0; i < no; i++) {
         memset(&pairs[i], 0, sizeof *pairs);
@@ -407,21 +407,19 @@ static void cust_load(dht *d, cc_list *l, uint64_t *n, uint64_t *full)
 
 static void cust_save(dht *d, const cc_list *l, uint64_t n, uint64_t full)
 {
-    char path[4200], tmp[4300];
+    char path[4200];
     uint8_t h[56] = "PZCUST02";
     cust_path(d, path, sizeof path);
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
     memcpy(h + 8, d->cfg.net->fp, 32);
     for (int i = 0; i < 8; i++) h[40 + i] = (uint8_t)(n >> (8 * i)), h[48 + i] = (uint8_t)(full >> (8 * i));
-    FILE *f = sys_fopen(tmp, "wb");
+    FILE *f = sys_new_file(path, false);
     bool ok = f && fwrite(h, 1, 56, f) == 56;
     for (int i = 0; ok && i < l->n; i++) {
         if (!l->e[i].clean) continue;
         ok = fwrite(l->e[i].t, 1, 32, f) == 32 && fputc(l->e[i].n, f) != EOF;
         for (int j = 0; ok && j < l->e[i].n; j++) ok = fwrite(l->e[i].c[j].id, 1, 32, f) == 32;
     }
-    if (f) ok = fclose(f) == 0 && ok;
-    if (!ok || !sys_replace(tmp, path)) remove(tmp);
+    (void)sys_new_file_done(f, path, ok);
 }
 
 /* own.bin cut to its first n records (p_mu held), and own.cust forgotten: its records are not those any more */
@@ -458,7 +456,7 @@ uint64_t dht_republish(dht *d, bool all)
     repub rp = {0};
     uint64_t before = 0, full = 0, copies = 0;
     const uint64_t now = wall_us() / 1000000;
-    if (!rt_count(d)) return atomic_store(&d->unplaced, true), 0;   /* nobody to send them to: at the first contacts */
+    if (!dht_count(d)) return atomic_store(&d->unplaced, true), 0;   /* nobody to send them to: at the first contacts */
     record *batch = malloc(DHT_STORE_MAX * sizeof *batch);
     bool old[DHT_STORE_MAX];
     cust_load(d, &prev, &before, &full);
@@ -500,8 +498,6 @@ uint64_t dht_republish(dht *d, bool all)
 }
 
 /* a node of a linear search has no store */
-int dht_local_records(dht *d, const uint8_t x[32], record *out, int max) { return d->custody ? store_find(d->custody, x, out, max) : 0; }
-
 uint64_t dht_local_count(dht *d) { return d->custody ? store_count(d->custody) : 0; }
 
 double dht_local_weight(dht *d) { return d->custody ? (double)store_weight(d->custody) : 0; }

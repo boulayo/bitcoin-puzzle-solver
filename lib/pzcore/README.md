@@ -28,7 +28,7 @@ One header per module in `include/pzcore/`; `pzcore/pzcore.h` includes them all.
 | `aead.h` | ChaCha20, Poly1305 and the AEAD ChaCha20-Poly1305 (RFC 8439), with no table and no branch on the key or the data: the cipher of the encrypted channels of pzpeer |
 | `perm.h` | `pz_perm_init / apply / invert`: a seed-keyed bijection of `[0, M)`, `M <= 2^192`, expected O(1) per call, identical on every platform and version (pinned by `tests/perm_pins.h`) |
 | `cpu.h` | `pz_cpu_has_avx2 / adx / avx512 / ifma / shani / sha2` |
-| `seed.h` | `pz_seed_generate`: a 256-bit secret seed from the OS generator (mandatory, read twice), with RDSEED / RDRAND or RNDRRS / RNDR and 256 readings of the CPU's counter mixed in by HKDF-SHA256 when they are there: as good as the OS generator, and no worse if that is weak and one of the other two is not. `pz_seed_harden`: no core files, not dumpable (`docs/en/NETWORK.md` 4.1) |
+| `seed.h` | `pz_seed_generate`: a 256-bit secret seed from the OS generator (mandatory, read twice), with RDSEED / RDRAND or RNDRRS / RNDR and 256 readings of the CPU's counter mixed in by HKDF-SHA256 when they are there: as good as the OS generator, and no worse if that is weak and one of the other two is not. `pz_os_random`: the OS generator alone. `pz_seed_harden`: no core files, not dumpable (`docs/en/NETWORK.md` 4.1) |
 | advanced: `fev.h`, `fev52.h`, `impl/` | lane-parallel field arithmetic (AVX2, AVX-512 IFMA) and the lane hash templates that the pzsolve engines include; not part of the stable interface |
 
 ## Rules

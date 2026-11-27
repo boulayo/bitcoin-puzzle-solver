@@ -24,6 +24,8 @@
 #define BOOT_RETRY_MS 30000
 #define SAVE_MS 300000
 #define REPUB_FIRST_MS 120000      /* the first republish after a start: what went to nobody before the stop, what changed meanwhile */
+#define REPUBLISH_MS (24 * 3600 * 1000LL)   /* then every day */
+#define MEET_MS 900000             /* between two rounds in the table of BitTorrent, which forgets in half an hour; 2 minutes while alone */
 #define HANDLER_STACK (1 << 20)
 
 /* the limits by address block (docs/en/NETWORK.md 7.4): a bucket of tokens of each kind, refilled at a rate up to a burst */
@@ -223,15 +225,6 @@ static size_t answer(dht *d, const net_conn *c, const uint8_t *m, size_t len, ui
     }
 }
 
-bool dht_serve(dht *d, net_conn *c, const uint8_t *msg, size_t len)
-{
-    uint8_t *ans = malloc(ANS_MAX);
-    const size_t n = ans && len && msg[0] != DHT_RELAY ? answer(d, c, msg, len, ans) : 0;
-    const bool ok = n && net_send(c, ans, n);
-    free(ans);
-    return ok;
-}
-
 static void serve(dht *d, int fd, const net_addr *from, uint8_t *req, uint8_t *ans)
 {
     net_cfg in = d->ncfg;                                      /* a peer that opens and says nothing holds a handler for IN_MS */
@@ -335,7 +328,7 @@ static void *accept_main(void *arg)
         if (fd == -2) sys_sleep_ms(50);                                      /* out of descriptors: let the handlers close some */
         if (fd < 0) continue;
         if (!lim(d, &from, LIM_CONN, 1, 1)) {                  /* its block has its share of the handlers, or of the rate */
-            net_close_fd(fd);
+            sys_close(fd);
             continue;
         }
         pthread_mutex_lock(&d->q_mu);
@@ -347,7 +340,7 @@ static void *accept_main(void *arg)
         }
         pthread_mutex_unlock(&d->q_mu);
         if (!room) {                                           /* busy: the dialler tries another node */
-            net_close_fd(fd);
+            sys_close(fd);
             (void)lim(d, &from, LIM_CONN, 0, -1);
         }
     }
@@ -367,7 +360,7 @@ static void *handler_main(void *arg)
         pthread_mutex_unlock(&d->q_mu);
         if (!go) break;
         if (req && ans) serve(d, p.fd, &p.from, req, ans);
-        else net_close_fd(p.fd);
+        else sys_close(p.fd);
         (void)lim(d, &p.from, LIM_CONN, 0, -1);
     }
     free(req);
@@ -387,14 +380,13 @@ static void *meet_main(void *arg)
     memcpy(m, TAG, sizeof TAG - 1), memcpy(m + sizeof TAG - 1, d->cfg.net->fp, 32);
     pz_sha256(m, sizeof m, h);
     memcpy(bc.infohash, h, 20);
-    const int64_t period = (int64_t)(d->cfg.rendezvous_s ? d->cfg.rendezvous_s : 900) * 1000;   /* that table forgets in half an hour */
     int64_t next_meet = 0, next_map = 0;
     bool mapped = false;
     char why[400];
     while (!stopping(d)) {
         const int64_t now = sys_now_ms();
         if (d->cfg.portmap && d->port && now >= next_map) {    /* a lease of two hours, asked again before half of it passes */
-            const unsigned s = portmap(d->port, 7200, d->me.xonly, d->cfg.router, why, sizeof why);
+            const unsigned s = portmap(d->port, 7200, d->me.xonly, NULL, why, sizeof why);
             dlog(d, "router: %s", why);
             mapped |= s != 0;
             next_map = now + (s ? 500LL * (s < 120 ? 120 : s) : 600000);
@@ -410,12 +402,12 @@ static void *meet_main(void *arg)
             pthread_mutex_unlock(&d->f_mu);
             dlog(d, "rendezvous: %s, %d addresses, announced to %d nodes", n < 0 ? "no node of the table of BitTorrent answered" : "done",
                  fresh, took);
-            if (fresh && rt_count(d) < DHT_K) (void)bootstrap(d);
-            next_meet = sys_now_ms() + (rt_count(d) ? period : period < 120000 ? period : 120000);
+            if (fresh && dht_count(d) < DHT_K) (void)bootstrap(d);
+            next_meet = sys_now_ms() + (dht_count(d) ? MEET_MS : 120000);
         }
         sys_sleep_ms(200);
     }
-    if (mapped) (void)portmap(d->port, 0, d->me.xonly, d->cfg.router, why, sizeof why), dlog(d, "router: %s", why);   /* none left behind */
+    if (mapped) (void)portmap(d->port, 0, d->me.xonly, NULL, why, sizeof why), dlog(d, "router: %s", why);   /* none left behind */
     return NULL;
 }
 
@@ -426,17 +418,15 @@ static void *maint_main(void *arg)
 {
     dht *d = arg;
     const int64_t t0 = sys_now_ms();
-    int64_t polled = t0, next_refresh = t0 + 60000, next_save = t0 + SAVE_MS,
-            next_repub = t0 + (d->republish_ms < REPUB_FIRST_MS ? d->republish_ms : REPUB_FIRST_MS),
+    int64_t polled = t0, next_refresh = t0 + 60000, next_save = t0 + SAVE_MS, next_repub = t0 + REPUB_FIRST_MS,
             next_boot = t0 + BOOT_RETRY_MS, next_retry = t0 + 1000;
-    bool alone = !rt_count(d);
-    if (next_refresh > t0 + d->refresh_ms) next_refresh = t0 + d->refresh_ms;
+    bool alone = !dht_count(d);
     /* in slices of 200 ms, on the clock that only goes forward: before, a wait until a time of the wall clock lasted as long again as
      * the clock was set back meanwhile */
     for (sys_sleep_ms(200); !stopping(d); sys_sleep_ms(200)) {
         const int64_t now = sys_now_ms();
         if (now >= next_boot) {
-            if (!rt_count(d)) (void)bootstrap(d);                /* alone: the bootstrap list and peers.txt again */
+            if (!dht_count(d)) (void)bootstrap(d);               /* alone: the bootstrap list and peers.txt again */
             next_boot = sys_now_ms() + BOOT_RETRY_MS;
         }
         if (now >= next_retry) {
@@ -452,18 +442,18 @@ static void *maint_main(void *arg)
         }
         if (now >= next_refresh) {
             refresh(d, false);
-            next_refresh = sys_now_ms() + (d->refresh_ms < 60000 ? d->refresh_ms : 60000);
+            next_refresh = sys_now_ms() + 60000;
         }
         if (now >= next_save) {
             save_peers(d);
             next_save = now + SAVE_MS;
         }
-        const int nc = rt_count(d);
+        const int nc = dht_count(d);
         const bool met = alone && nc && atomic_exchange(&d->unplaced, false);   /* the first contacts after none: what went to nobody */
         alone = !nc;
         if (now >= next_repub || met) {
             (void)dht_republish(d, met);
-            next_repub = sys_now_ms() + d->republish_ms;
+            next_repub = sys_now_ms() + REPUBLISH_MS;
         }
     }
     return NULL;
@@ -483,25 +473,16 @@ dht *dht_create(const dht_config *cfg, char *err, size_t errlen)
 {
     dht *d = calloc(1, sizeof *d);
     char path[4096];
-    if (!d || !cfg->dir || !(d->dir = dup_str(cfg->dir)) || !(d->boot = calloc((size_t)cfg->nbootstrap + 1, sizeof *d->boot))) {
+    if (!d || !cfg->dir || !(d->dir = dup_str(cfg->dir))) {          /* a copy: the caller's may be on its stack (the tests) */
         snprintf(err, errlen, "out of memory");
-        if (d) free(d->dir), free(d);
+        free(d);
         return NULL;
     }
     d->cfg = *cfg;
     d->cfg.dir = d->dir;
-    for (int i = 0; i < cfg->nbootstrap; i++)
-        if (!(d->boot[i] = dup_str(cfg->bootstrap[i]))) {
-            d->cfg.nbootstrap = i;
-            break;
-        }
-    d->cfg.bootstrap = (const char *const *)d->boot;
     d->lfd = d->ownfd = -1;
-    d->refresh_ms = 1000LL * (cfg->refresh_s ? cfg->refresh_s : 3600);
-    d->republish_ms = 1000LL * (cfg->republish_s ? cfg->republish_s : 86400);
     d->retry_ms = 1000LL * (cfg->retry_s ? cfg->retry_s : 60);
     d->alert_ms = 1000LL * (cfg->alert_s ? cfg->alert_s : 86400);
-    d->relay_ms = 1000LL * (cfg->relay_s ? cfg->relay_s : 4 * 3600);
     d->slot_ms = 1000LL * (cfg->relay_slot_s ? cfg->relay_slot_s : 60);
     if (d->cfg.handlers <= 0) d->cfg.handlers = 8;
     if (d->cfg.relay_max <= 0) d->cfg.relay_max = 32;
@@ -598,9 +579,9 @@ void dht_stop(dht *d)
     pthread_cond_broadcast(&d->j_cv);
     pthread_mutex_unlock(&d->j_mu);
     if (d->has_accept) pthread_join(d->th_accept, NULL);
-    net_close_fd(d->lfd);                                      /* new connections are refused from here on */
+    sys_close(d->lfd);                                         /* new connections are refused from here on */
     for (int i = 0; i < d->nhandlers; i++) pthread_join(d->th_handlers[i], NULL);
-    for (; d->qn; d->qn--, d->qhead = (d->qhead + 1) % QUEUE_MAX) net_close_fd(d->q[d->qhead].fd);
+    for (; d->qn; d->qn--, d->qhead = (d->qhead + 1) % QUEUE_MAX) sys_close(d->q[d->qhead].fd);
     if (d->has_jobs) pthread_join(d->th_jobs, NULL);
     if (d->has_maint) pthread_join(d->th_maint, NULL);
     if (d->has_meet) pthread_join(d->th_meet, NULL);
@@ -616,8 +597,6 @@ void dht_stop(dht *d)
     if (d->ownfd >= 0) (void)sys_sync(d->ownfd), close(d->ownfd);
     free(d->cc.e);
     mbox_free(d->mb);
-    for (int i = 0; d->boot && d->boot[i]; i++) free(d->boot[i]);
-    free(d->boot);
     free(d->th_handlers);
     free(d->alerts);
     free(d->lim);

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* net.h - TCP and the encrypted channel between two nodes (docs/en/NETWORK.md 7.1). One TCP connection per exchange: connect, the Noise XX
- * handshake with the prologue "pznet5" || F, one request frame, one answer frame, close. A session (messages 16 to 31) keeps its connection
+ * handshake with the prologue "pznet6" || F, one request frame, one answer frame, close. A session (messages 16 to 31) keeps its connection
  * and goes on with frames; a relay keeps those of the two homes it joins (below). The sockets are those of sys.h (sys_posix.c,
  * sys_win.c), and every wait has a deadline: a peer that stops talking costs a timeout, never a thread.
  *
@@ -35,7 +35,7 @@ typedef struct {
 typedef struct {
     const secp256k1_context *ctx;
     const home_identity *self;
-    uint8_t prologue[38];          /* "pznet5" || F */
+    uint8_t prologue[38];          /* "pznet6" || F */
     unsigned id_bits;              /* leading zero bits a node ID must have: NODE_ID_ZERO_BITS on a real network */
     uint16_t port;                 /* the port this node listens on, told to the nodes it dials; 0 when it does not listen */
     int timeout_ms;
@@ -74,7 +74,6 @@ int net_listen(const char *host, uint16_t port, uint16_t *bound);
 /* The next connection on a listening socket within timeout_ms: its socket, and the address it comes from. -1 when none came, -2 on an error
  * of the system (too many open files: the caller waits a little). */
 int net_accept(int lfd, int timeout_ms, net_addr *from);
-void net_close_fd(int fd);
 
 /* Dials and runs the handshake as initiator. expect: the x-only identity the other side must have (NULL: any valid one). NULL on failure.
  * The connect has its timeout, and the whole handshake one more: a responder that drips its bytes cannot stretch it. */

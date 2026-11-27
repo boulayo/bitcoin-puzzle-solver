@@ -84,32 +84,31 @@ static void test_store(void)
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
-    record mine, others[4];
+    record others[4], found[8];
     int no;
     const record a1 = make(&ida, 0, x1);
-    CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_OK && no == 0 && same(&mine, &a1));
-    CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_DUP && no == 0 && same(&mine, &a1));
-    const record a1b = make(&ida, 1, x1);                   /* the same x from the same owner, even with another type */
-    CHECK(store_put(st, &a1b, &mine, others, 4, &no) == STORE_DUP && same(&mine, &a1));
+    CHECK(store_put(st, &a1, false, others, 4, &no) == STORE_OK && no == 0);
+    CHECK(store_put(st, &a1, false, others, 4, &no) == STORE_DUP && no == 0);
+    const record a1b = make(&ida, 1, x1);                   /* the same x from the same owner, even with another type: the first kept */
+    CHECK(store_put(st, &a1b, false, others, 4, &no) == STORE_DUP && store_find(st, x1, found, 8) == 1 && same(&found[0], &a1));
     const record next = make(&ida, 0, x2);
-    CHECK(store_put(st, &next, &mine, others, 4, &no) == STORE_OK);
+    CHECK(store_put(st, &next, false, others, 4, &no) == STORE_OK);
     record bad = make(&idb, 0, x3);
     bad.dp = net.dpbits + 30;                                   /* zero bits that x has not */
-    CHECK(store_put(st, &bad, &mine, others, 4, &no) == STORE_INVALID);
+    CHECK(store_put(st, &bad, false, others, 4, &no) == STORE_INVALID);
     bad = make(&idb, 0, x3);
     memset(bad.owner, 0xff, 32);                                /* an owner that is no key */
-    CHECK(store_put(st, &bad, &mine, others, 4, &no) == STORE_INVALID);
+    CHECK(store_put(st, &bad, false, others, 4, &no) == STORE_INVALID);
     CHECK(store_weight(st) == 2 * ldexpl(1, (int)net.dpbits));
     /* a useful coincidence: the same x from another owner with another type */
     const record b1 = make(&idb, 1, x1);
-    CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_OK && no == 1 && same(&others[0], &a1) && same(&mine, &b1));
-    CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_DUP && no == 1 && same(&others[0], &a1));   /* again: still reported */
+    CHECK(store_put(st, &b1, false, others, 4, &no) == STORE_OK && no == 1 && same(&others[0], &a1));
+    CHECK(store_put(st, &b1, false, others, 4, &no) == STORE_DUP && no == 1 && same(&others[0], &a1));   /* again: still reported */
     /* a merge: a third owner with the type of the first */
     const record c1 = make(&idc, 0, x1);
-    CHECK(store_put(st, &c1, &mine, others, 4, &no) == STORE_OK && no == 2);
+    CHECK(store_put(st, &c1, false, others, 4, &no) == STORE_OK && no == 2);
     CHECK((same(&others[0], &a1) && same(&others[1], &b1)) || (same(&others[0], &b1) && same(&others[1], &a1)));
     CHECK(others[0].t == c1.t || others[1].t == c1.t);
-    record found[8];
     CHECK(store_find(st, x1, found, 8) == 3 && store_find(st, x3, found, 8) == 0);
     CHECK(store_count(st) == 4);
     /* many records of one owner: the index grows past its first size */
@@ -119,7 +118,7 @@ static void test_store(void)
         snprintf(label, sizeof label, "many %d", i);
         point_x(label, x);
         const record r = make(&idc, i % 3 - 1, x);
-        if (store_put(st, &r, &mine, others, 4, &no) != STORE_OK) CHECK(!"stored");
+        if (store_put(st, &r, false, others, 4, &no) != STORE_OK) CHECK(!"stored");
     }
     CHECK(store_count(st) == 4 + MANY);
     store_close(st);
@@ -130,10 +129,8 @@ static void test_store(void)
     CHECK(st != NULL);
     if (!st) return;
     CHECK(store_count(st) == 4 + MANY && store_find(st, x1, found, 8) == 3 && store_find(st, x2, found, 8) == 1 && same(&found[0], &next));
-    CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_DUP && no == 2);
+    CHECK(store_put(st, &a1, false, others, 4, &no) == STORE_DUP && no == 2);
     CHECK(store_weight(st) == (4 + MANY) * ldexpl(1, (int)net.dpbits));
-    record r0;
-    CHECK(store_read(st, 0, &r0) && same(&r0, &a1) && !store_read(st, 4 + MANY, &r0));
     for (int i = 0; i < MANY; i += 97) {
         char label[32];
         uint8_t x[32];
@@ -157,7 +154,7 @@ static void test_store(void)
     CHECK(file_size(PATH) == STORE_HDR + (4 + MANY) * STORE_ENTRY);
     if (st) {
         const record c3 = make(&idc, 0, x3);           /* the next record goes where the torn one was */
-        CHECK(store_put(st, &c3, &mine, others, 4, &no) == STORE_OK && store_find(st, x3, found, 8) == 1 && same(&found[0], &c3));
+        CHECK(store_put(st, &c3, false, others, 4, &no) == STORE_OK && store_find(st, x3, found, 8) == 1 && same(&found[0], &c3));
         store_close(st);
     }
     CHECK(file_size(PATH) == STORE_HDR + (5 + MANY) * STORE_ENTRY);
@@ -184,7 +181,7 @@ static void test_limits(void)
     CHECK(st != NULL);
     if (!st) return;
     store_limit(st, 6);
-    record mine, others[STORE_X_OWNERS + 1];
+    record others[STORE_X_OWNERS + 1];
     int no;
     uint8_t x[32];
     CHECK(!store_owner(st, ida.xonly));
@@ -193,12 +190,12 @@ static void test_limits(void)
         snprintf(label, sizeof label, "lim %d", i);
         point_x(label, x);
         const record r = make(i < 5 ? &ida : &idb, 0, x);
-        CHECK(store_put(st, &r, &mine, others, 4, &no) == (i < 6 ? STORE_OK : STORE_FULL));
+        CHECK(store_put(st, &r, false, others, 4, &no) == (i < 6 ? STORE_OK : STORE_FULL));
     }
     CHECK(store_count(st) == 6 && store_owner(st, ida.xonly) && store_owner(st, idb.xonly) && !store_owner(st, idc.xonly));
     point_x("lim 0", x);
     const record dup = make(&ida, 0, x);                   /* a duplicate is no new record: still answered as one */
-    CHECK(store_put(st, &dup, &mine, others, 4, &no) == STORE_DUP);
+    CHECK(store_put(st, &dup, false, others, 4, &no) == STORE_DUP);
     store_close(st);
     wipe();
     /* owners of one x: STORE_X_OWNERS, then the store is full for that x, and still reports the coincidences of a record it refuses */
@@ -214,7 +211,7 @@ static void test_limits(void)
         hashed(label, seed);
         CHECK(keys_identity(ctx, seed, FP, 4, &id));
         const record r = make(&id, i % 2, x);
-        const store_status got = store_put(st, &r, &mine, others, STORE_X_OWNERS + 1, &no);
+        const store_status got = store_put(st, &r, false, others, STORE_X_OWNERS + 1, &no);
         CHECK(got == (i < STORE_X_OWNERS ? STORE_OK : STORE_FULL) && no == i);   /* not kept, its coincidences told all the same */
     }
     store_close(st);
@@ -234,13 +231,13 @@ static void test_limits(void)
         hashed(label, seed), point_x(label, x);
         if (!keys_identity(ctx, seed, FP, 4, &id)) continue;
         const record r = make(&id, 0, x);
-        ok += store_put(st, &r, &mine, others, 4, &no) == (i < 4096 / 256 + 1024 ? STORE_OK : STORE_FULL);
+        ok += store_put(st, &r, false, others, 4, &no) == (i < 4096 / 256 + 1024 ? STORE_OK : STORE_FULL);
         if (!i) first = id;
     }
     CHECK(ok == 4096 / 256 + 1024 + 1);
     point_x("many again", x);
     const record again = make(&first, 0, x);
-    CHECK(store_put(st, &again, &mine, others, 4, &no) == STORE_OK);
+    CHECK(store_put(st, &again, false, others, 4, &no) == STORE_OK);
     store_close(st);
     wipe();
 }
@@ -252,7 +249,7 @@ static void test_limits(void)
 static void test_planted(void)
 {
     char err[200], label[32];
-    record mine, others[STORE_X_OWNERS], all[2 * STORE_X_OWNERS + 1];
+    record others[STORE_X_OWNERS], all[2 * STORE_X_OWNERS + 1];
     int no;
     for (int copies = STORE_X_OWNERS - 1; copies <= STORE_X_OWNERS; copies++) {
         uint8_t x[32];
@@ -266,20 +263,20 @@ static void test_planted(void)
             snprintf(label, sizeof label, "copier %d", i);
             const home_identity c = id_of(label);
             const record r = make(&c, 1, x);
-            CHECK(store_put(st, &r, &mine, others, STORE_X_OWNERS, &no) == STORE_OK);
+            CHECK(store_put(st, &r, false, others, STORE_X_OWNERS, &no) == STORE_OK);
         }
         const record r1 = make(&ida, 0, x), r2 = make(&idb, 1, x);
         const bool full = copies == STORE_X_OWNERS;
-        CHECK(store_put(st, &r1, &mine, others, STORE_X_OWNERS, &no) == (full ? STORE_FULL : STORE_OK) && no == copies);
-        CHECK(store_put_proved(st, &r1, others, STORE_X_OWNERS, &no) == (full ? STORE_OK : STORE_DUP) && no == copies);
-        CHECK(store_put(st, &r2, &mine, others, STORE_X_OWNERS, &no) == STORE_FULL && no == STORE_X_OWNERS && same(&others[0], &r1));
-        CHECK(store_put_proved(st, &r2, others, STORE_X_OWNERS, &no) == STORE_OK && no == STORE_X_OWNERS && same(&others[0], &r1));
-        CHECK(store_put(st, &r2, &mine, others, STORE_X_OWNERS, &no) == STORE_DUP && same(&others[0], &r1));
+        CHECK(store_put(st, &r1, false, others, STORE_X_OWNERS, &no) == (full ? STORE_FULL : STORE_OK) && no == copies);
+        CHECK(store_put(st, &r1, true, others, STORE_X_OWNERS, &no) == (full ? STORE_OK : STORE_DUP) && no == copies);
+        CHECK(store_put(st, &r2, false, others, STORE_X_OWNERS, &no) == STORE_FULL && no == STORE_X_OWNERS && same(&others[0], &r1));
+        CHECK(store_put(st, &r2, true, others, STORE_X_OWNERS, &no) == STORE_OK && no == STORE_X_OWNERS && same(&others[0], &r1));
+        CHECK(store_put(st, &r2, false, others, STORE_X_OWNERS, &no) == STORE_DUP && same(&others[0], &r1));
         for (int i = 0, held = copies + 2; full && i <= STORE_X_OWNERS; i++, held++) {
             snprintf(label, sizeof label, "late %d", i);
             const home_identity c = id_of(label);
             const record r = make(&c, 0, x);
-            CHECK(store_put_proved(st, &r, others, STORE_X_OWNERS, &no) == (held < 2 * STORE_X_OWNERS ? STORE_OK : STORE_FULL));
+            CHECK(store_put(st, &r, true, others, STORE_X_OWNERS, &no) == (held < 2 * STORE_X_OWNERS ? STORE_OK : STORE_FULL));
         }
         CHECK(store_find(st, x, all, 2 * STORE_X_OWNERS + 1) == (full ? 2 * STORE_X_OWNERS : copies + 2) && same(&all[full ? 6 : 0], &r2));
         store_close(st);
@@ -294,7 +291,7 @@ static void test_reopen(void)
     enum { OWN = 200, EACH = 25 };
     static home_identity id[OWN + 1];
     char err[200], label[32];
-    record mine, others[4], found[4];
+    record others[4], found[4];
     int no, ok = 0;
     wipe();
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
@@ -307,7 +304,7 @@ static void test_reopen(void)
                 snprintf(label, sizeof label, "reopen %d %d", i, j);
                 point_x(label, x);
                 const record r = make(&id[i], j % 3 - 1, x);
-                if (!round) ok += store_put(st, &r, &mine, others, 4, &no) == STORE_OK;
+                if (!round) ok += store_put(st, &r, false, others, 4, &no) == STORE_OK;
                 else ok += store_find(st, x, found, 4) == 1 && same(&found[0], &r);
             }
         uint8_t x[32];
@@ -315,7 +312,7 @@ static void test_reopen(void)
         const record fresh = make(&id[OWN], 0, x);
         CHECK(ok == OWN * EACH && store_count(st) == OWN * EACH && store_owner(st, id[OWN - 1].xonly) && !store_owner(st, id[OWN].xonly));
         CHECK(store_weight(st) == OWN * EACH * ldexpl(1, (int)net.dpbits));
-        if (round) CHECK(store_put(st, &fresh, &mine, others, 4, &no) == STORE_OK);
+        if (round) CHECK(store_put(st, &fresh, false, others, 4, &no) == STORE_OK);
         store_close(st);
         if (round) CHECK(file_size(PATH ".owners") == STORE_HDR + (OWN + 1) * 32);   /* once closed: Windows tells an open file's size late */
         st = round ? NULL : store_open(PATH, ctx, &net, err, sizeof err);
@@ -335,17 +332,17 @@ static void test_damaged(void)
     store *st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);
     if (!st) return;
-    record mine, others[4], found[4];
+    record others[4], found[4];
     int no;
     const record a1 = make(&ida, 0, x1);
-    CHECK(store_put(st, &a1, &mine, others, 4, &no) == STORE_OK);
+    CHECK(store_put(st, &a1, false, others, 4, &no) == STORE_OK);
     for (int i = 0; i < STORE_CHECK_TAIL; i++) {               /* enough records after it that it is out of the tail */
         char label[32];
         uint8_t x[32];
         snprintf(label, sizeof label, "fill %d", i);
         point_x(label, x);
         const record r = make(&idc, 1, x);
-        if (store_put(st, &r, &mine, others, 4, &no) != STORE_OK) CHECK(!"stored");
+        if (store_put(st, &r, false, others, 4, &no) != STORE_OK) CHECK(!"stored");
     }
     store_close(st);
     /* an entry at the end, as a crash could leave it: it claims 40 zero bits that its x has not */
@@ -367,7 +364,7 @@ static void test_damaged(void)
     if (!st) return;
     CHECK(store_count(st) == 2 + STORE_CHECK_TAIL && store_find(st, x2, found, 4) == 0);
     const record b1 = make(&idb, 1, x1);                       /* the same x as the damaged a1: stored, but no coincidence */
-    CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_OK && no == 0);
+    CHECK(store_put(st, &b1, false, others, 4, &no) == STORE_OK && no == 0);
     store_close(st);
     wipe();
 }
@@ -385,7 +382,7 @@ static void test_lost_owner(void)
 {
     char err[200], opath[256];
     uint8_t x1[32], x2[32], x3[32], head[STORE_HDR + 32];
-    record mine, others[4], found[4];
+    record others[4], found[4];
     int no;
     point_x("lost 1", x1), point_x("lost 2", x2), point_x("lost 3", x3);
     snprintf(opath, sizeof opath, "%s.owners", PATH);
@@ -394,7 +391,7 @@ static void test_lost_owner(void)
     CHECK(st != NULL);
     if (!st) return;
     const record b1 = make(&idb, 0, x1), c2 = make(&idc, 0, x2), a3 = make(&ida, 0, x3);
-    CHECK(store_put(st, &b1, &mine, others, 4, &no) == STORE_OK && store_put(st, &c2, &mine, others, 4, &no) == STORE_OK);
+    CHECK(store_put(st, &b1, false, others, 4, &no) == STORE_OK && store_put(st, &c2, false, others, 4, &no) == STORE_OK);
     store_close(st);
     FILE *f = fopen(opath, "rb");                               /* the owners file loses its second line */
     CHECK(f && fread(head, 1, sizeof head, f) == sizeof head);
@@ -406,7 +403,7 @@ static void test_lost_owner(void)
     CHECK(st != NULL);
     if (!st) return;
     CHECK(store_find(st, x2, found, 4) == 0 && store_find(st, x1, found, 4) == 1);
-    CHECK(store_put(st, &a3, &mine, others, 4, &no) == STORE_OK);   /* a new owner: not the number of the lost one */
+    CHECK(store_put(st, &a3, false, others, 4, &no) == STORE_OK);   /* a new owner: not the number of the lost one */
     store_close(st);
     st = store_open(PATH, ctx, &net, err, sizeof err);
     CHECK(st != NULL);

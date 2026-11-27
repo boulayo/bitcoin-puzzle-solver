@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* t_noise.c - the handshake XX and the frames of noise.c against vectors made with an independent implementation: the noiseprotocol
- * package of Python with a secp256k1 DH plugged in (SHA256 of the compressed shared point), the frames and the key rotation of BOLT 8
+ * package of Python with a secp256k1 DH plugged in (SHA256 of the compressed shared point), the frames of BOLT 8 without its key rotation
  * written over the cryptography package. Then the refusals: a changed byte anywhere, a message out of turn, another prologue. */
 #include "peertest.h"
 #include "noise.h"
@@ -30,7 +30,7 @@ static const char B1[] =
     "8d2c1b8500b69614aeb86db01574861c5fe2fb9a9d794c5c09ddbd2aeb93f522fd3089497065170444dea5340ab54114c277ccd07a48b4e43a247ecf"
     "6eb6746690f5ba8ad626bfac227affa8db38f3b100271fc137fb716ab84cca3e9fe8f4ed7df262c71d53c86db0eee28692403a06b182";
 static const char F3[] =
-    "16290810844dab9725b7072c671de12d83fa3084538b3e4a6b7bf41a28af15632878f433dad40a8dd56e2903dc21be4862eeb09e4b";
+    "77a5f640aac4cbbf71455197e8080ec1b3443b6d95b7c8aebc9e10ddb77c2cbb2eb0cbee1fb1c6e28776619808022b98d814d0fd6d386231";
 
 static size_t unhex(const char *h, uint8_t *out)
 {
@@ -120,13 +120,13 @@ static void test_frames(secp256k1_context *ctx)
     n = noise_frame_seal(&rtx, big, 200, f);                              /* the other direction */
     CHECK(same(f, n, B1));
     CHECK(recv_frame(&irx, f, n, b, &l) && l == 200 && !memcmp(b, big, 200));
-    for (int k = 0; k < 1200; k++) {                                      /* 2400 encryptions: the keys rotate twice */
+    for (int k = 0; k < 1200; k++) {                                      /* 2400 encryptions with one key: a nonce of two bytes */
         char t[16];
         const int tl = snprintf(t, sizeof t, "%d", k);
         n = noise_frame_seal(&itx, (const uint8_t *)t, (size_t)tl, f);
         CHECK(recv_frame(&rrx, f, n, b, &l) && l == (size_t)tl && !memcmp(b, t, l));
     }
-    n = noise_frame_seal(&itx, (const uint8_t *)"after two rotations", 19, f);
+    n = noise_frame_seal(&itx, (const uint8_t *)"after 2400 encryptions", 22, f);
     CHECK(same(f, n, F3));
     /* a changed bit of the head or of the body is refused */
     uint8_t g[sizeof f];
@@ -137,7 +137,7 @@ static void test_frames(secp256k1_context *ctx)
     memcpy(g, f, n), g[NOISE_HEAD + 2] ^= 1;
     CHECK(noise_frame_head(&rrx, g, &l) && !noise_frame_body(&rrx, g + NOISE_HEAD, l, b));
     rrx = save;
-    CHECK(recv_frame(&rrx, f, n, b, &l) && l == 19);
+    CHECK(recv_frame(&rrx, f, n, b, &l) && l == 22);
     CHECK(!recv_frame(&rrx, f, n, b, &l));                                /* the same frame again: the nonce has moved on */
     CHECK(noise_frame_seal(&itx, big, NOISE_FRAME_MAX + 1, f) == 0);
 }

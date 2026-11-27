@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include <fcntl.h>
+#include <pzcore/seed.h>  /* pz_os_random: cryptographic randomness from the OS (pzcore: one generator for pzsolve and pzpeer) */
 #include <time.h>
 
 #ifdef __APPLE__
@@ -73,7 +74,6 @@ void pz_localtime(time_t t, struct tm *out);
 /* ---- process / system ---- */
 int pz_getpid(void);
 void pz_hostname(char *buf, size_t n);
-bool pz_os_random(void *buf, size_t n);                    /* cryptographic randomness from the OS */
 void pz_os_description(char *buf, size_t n);               /* "Windows 10.0 build 22631", "Ubuntu 22.04.4 LTS (Linux 6.8)", "macOS 14.5 (Darwin 23.5.0)" */
 bool pz_disk_space(const char *path, u64 *free_bytes, u64 *total_bytes);   /* of the file system holding `path` */
 /* Windows: the active power scheme (name), "" elsewhere or when unknown; prevent_sleep(true) stops the system from going to

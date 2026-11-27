@@ -196,7 +196,7 @@ static bool read_at(store *st, uint64_t i, record *r)
 }
 
 /* The records with x, the newest first (by their place in the file), at most X_MAX: the slots of its 4-byte key, read back and
- * compared. The newest first: past STORE_X_OWNERS of an x, a record is there because its owner proved it (store_put_proved). */
+ * compared. The newest first: past STORE_X_OWNERS of an x, a record is there because its owner proved it. */
 static int find_locked(store *st, const uint8_t x[32], record out[X_MAX])
 {
     if (!st->cap) return 0;
@@ -291,7 +291,7 @@ store *store_open(const char *path, const secp256k1_context *ctx, const record_n
             uint32_t num = 0;
             for (int b = 0; b < 4; b++) num |= (uint32_t)buf[j * STORE_ENTRY + RECORD_WIRE + b] << (8 * b);
             if (num < EMPTY && num + 1 > refs) refs = num + 1;
-            if (!entry_decode(st, buf + j * STORE_ENTRY, &r)) continue;   /* damaged on disk: not indexed (store_read refuses it too) */
+            if (!entry_decode(st, buf + j * STORE_ENTRY, &r)) continue;   /* damaged on disk: not indexed */
             if (i + j + STORE_CHECK_TAIL >= st->count && !record_check(ctx, net, &r)) continue;   /* the tail, where a crash cuts */
             add[na] = (islot){key4(st, r.x), (uint32_t)(i + j)};
             __builtin_prefetch(&st->idx[add[na++].key & (st->cap - 1)], 1);
@@ -331,8 +331,7 @@ void store_close(store *st)
     free(st);
 }
 
-/* store_put, and store_put_proved with proved */
-static store_status put(store *st, const record *r, bool proved, record *mine, record *others, int max, int *nothers)
+store_status store_put(store *st, const record *r, bool proved, record *others, int max, int *nothers)
 {
     *nothers = 0;
     if (!record_check(st->ctx, &st->net, r)) return STORE_INVALID;   /* outside the lock: the costly part */
@@ -346,7 +345,6 @@ static store_status put(store *st, const record *r, bool proved, record *mine, r
     uint32_t o = owner_find(st, r->owner);
     if (held >= 0) {
         s = STORE_DUP;
-        if (mine) *mine = same[held];
     } else if ((st->max && st->count >= st->max) || ns >= (proved ? X_MAX : STORE_X_OWNERS) ||
                (st->max && o == EMPTY && st->oused >= st->max / STORE_OWNER_RECORDS + 1024)) {   /* the owners it may hold */
         s = STORE_FULL;
@@ -360,7 +358,6 @@ static store_status put(store *st, const record *r, bool proved, record *mine, r
             index_add(st, key4(st, r->x), (uint32_t)st->count++);
             st->weight += ldexpl(1, (int)r->dp);
             s = STORE_OK;
-            if (mine) *mine = *r;
         }
     }
     pthread_mutex_unlock(&st->mu);
@@ -371,16 +368,6 @@ static store_status put(store *st, const record *r, bool proved, record *mine, r
         if (i != held && record_check(st->ctx, &st->net, &same[i])) others[no++] = same[i];
     *nothers = no;
     return s;
-}
-
-store_status store_put(store *st, const record *r, record *mine, record *others, int max, int *nothers)
-{
-    return put(st, r, false, mine, others, max, nothers);
-}
-
-store_status store_put_proved(store *st, const record *r, record *others, int max, int *nothers)
-{
-    return put(st, r, true, NULL, others, max, nothers);
 }
 
 int store_find(store *st, const uint8_t x[32], record *out, int max)
@@ -407,14 +394,6 @@ long double store_weight(store *st)
     const long double w = st->weight;
     pthread_mutex_unlock(&st->mu);
     return w;
-}
-
-bool store_read(store *st, uint64_t i, record *out)
-{
-    pthread_mutex_lock(&st->mu);
-    const bool ok = i < st->count && read_at(st, i, out);
-    pthread_mutex_unlock(&st->mu);
-    return ok;
 }
 
 bool store_pair_ok(const secp256k1_context *ctx, const record_net *net, const record *a, const record *b)

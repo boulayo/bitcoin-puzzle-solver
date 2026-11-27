@@ -15,9 +15,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#if defined(__linux__)
-#include <sys/random.h>
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 #include <net/route.h>
 #include <stdlib.h>
 #include <sys/sysctl.h>
@@ -29,7 +27,7 @@
 
 extern char **environ;
 
-/* ---- time and randomness ---- */
+/* ---- time ---- */
 
 int64_t sys_now_ms(void)
 {
@@ -42,24 +40,6 @@ void sys_sleep_ms(int ms)
 {
     const struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000};
     nanosleep(&ts, NULL);
-}
-
-bool sys_random(void *out, size_t n)
-{
-    size_t got = 0;
-#if defined(__linux__)
-    while (got < n) {
-        const ssize_t r = getrandom((char *)out + got, n - got, 0);
-        if (r > 0) got += (size_t)r;
-        else if (r < 0 && errno != EINTR) break;               /* ENOSYS on an old kernel: the device below */
-    }
-    if (got == n) return true;
-#endif
-    FILE *f = sys_fopen("/dev/urandom", "rb");
-    if (!f) return false;
-    got = fread(out, 1, n, f);
-    fclose(f);
-    return got == n;
 }
 
 /* ---- sockets ---- */

@@ -6,6 +6,8 @@
 #ifndef PZPEER_HOME_H
 #define PZPEER_HOME_H
 
+#include "dht.h"
+#include "netfile.h"
 #include <stdbool.h>
 
 #define PZSOLVE_STOP_MS 60000      /* a stopped pzsolve saves its state (the walkers of a GPU too) within this, or is interrupted */
@@ -48,6 +50,10 @@ typedef struct {
 /* Makes dir if it is not there, for this user alone, and takes its lock (one pzpeer a folder); false, with the reason on stderr, when it
  * cannot. For a home, a node and the headers of pzpeer sweep. */
 bool home_own_dir(const char *dir);
+
+/* The node of a home, or of pzpeer node, in the folder dir, as cfg and the network say: the boot list (the entry lines of the network file,
+ * then the peers given), the table of BitTorrent, the port, the custody. The caller adds its callbacks, or the blocks of a linear search. */
+dht_config home_node(const home_cfg *cfg, const netfile *nf, const record_net *net, const home_identity *id, const char *dir);
 
 /* Runs until SIGINT or SIGTERM (or, with exit_when_done, the end of the first session or of pzsolve). 0 when it ended well. */
 int home_run(const home_cfg *cfg);

@@ -29,14 +29,15 @@ static void test_keys(void)
 {
     uint8_t seed[32], fp2[32] = {1}, a[32], b[32];
     hashed("home seed", seed);
-    home_identity id, id2;
+    home_identity id, id2, few;
     CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id));
     CHECK(id.id[0] == 0 && id.id[1] == 0 && keys_id_ok(id.id, NODE_ID_ZERO_BITS));
     uint8_t again[32];
     keys_node_id(id.xonly, again);
     CHECK(!memcmp(again, id.id, 32));
-    CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id2) && id2.j == id.j && !memcmp(id2.sec, id.sec, 32));   /* deterministic */
-    CHECK(keys_identity(ctx, seed, fp2, NODE_ID_ZERO_BITS, &id2) && memcmp(id2.xonly, id.xonly, 32) != 0);         /* another network */
+    /* deterministic, and another network gives another: at 8 bits, as 16 take seconds */
+    CHECK(keys_identity(ctx, seed, FP, 8, &few) && keys_identity(ctx, seed, FP, 8, &id2) && id2.j == few.j && !memcmp(id2.sec, few.sec, 32));
+    CHECK(keys_identity(ctx, seed, fp2, 8, &id2) && memcmp(id2.xonly, few.xonly, 32) != 0);
     CHECK(!memcmp(id.pub33 + 1, id.xonly, 32));                                                 /* the Noise key has the same x */
     keys_starts(seed, FP, a);
     keys_starts(seed, fp2, b);
@@ -46,7 +47,6 @@ static void test_keys(void)
     CHECK(keys_id_ok(zid, NODE_ID_ZERO_BITS) && !keys_id_ok(nid, NODE_ID_ZERO_BITS));
     CHECK(keys_id_ok(nid, 15) && !keys_id_ok(nid, 16) && keys_id_ok(zid, 16) && !keys_id_ok(zid, 17) && keys_id_ok(nid, 0));
     /* fewer bits (the tests of the network): the first j whose ID has 4 zero bits, about 16 tries, at or before the one with 16 */
-    home_identity few;
     CHECK(keys_identity(ctx, seed, FP, 4, &few) && keys_id_ok(few.id, 4) && few.j <= id.j);
     CHECK(few.j == id.j || !keys_id_ok(few.id, NODE_ID_ZERO_BITS));
     CHECK(!keys_identity(ctx, seed, FP, 33, &few));
@@ -146,7 +146,7 @@ static void test_record(void)
     uint8_t seed[32];
     hashed("owner", seed);
     home_identity id;
-    CHECK(keys_identity(ctx, seed, FP, NODE_ID_ZERO_BITS, &id));
+    CHECK(keys_identity(ctx, seed, FP, 0, &id));               /* record_check asks only that the owner be a key */
     record r = {.t = -1, .dp = 0}, back;
     uint8_t d[32], enc[RECORD_LEN];
     hashed("distance", d);

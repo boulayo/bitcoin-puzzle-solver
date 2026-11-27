@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* noise.h - Noise_XX_secp256k1_ChaChaPoly_SHA256 (the Noise Protocol Framework, revision 34) and the frames of the channel after it, as in
- * BOLT 8: a 2-byte length and the body, each encrypted with its own nonce, keys rotated every 1000 encryptions (docs/en/NETWORK.md 7.1).
+ * BOLT 8: a 2-byte length and the body, each encrypted with its own nonce, but without its rotation of the keys (docs/en/NETWORK.md 7.1).
  *
  * A state machine with no I/O: the caller moves the bytes. DH is libsecp256k1 ECDH, whose output is SHA256 of the compressed shared point;
  * public keys travel compressed (33 bytes). The ephemeral secret is given by the caller, so a handshake can be replayed in a test. */
@@ -20,7 +20,7 @@
 #define NOISE_TAG 16
 
 typedef struct {
-    uint8_t k[32], ck[32];
+    uint8_t k[32];
     uint64_t n;
 } noise_cs;                         /* one direction of the channel */
 

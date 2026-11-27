@@ -14,7 +14,6 @@
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
@@ -227,39 +226,6 @@ void pz_hostname(char *buf, size_t n)
     if (n == 0) return;
     if (gethostname(buf, n - 1) != 0) buf[0] = 0;
     buf[n - 1] = 0;
-}
-
-bool pz_os_random(void *buf, size_t n)
-{
-    u8 *p = buf;
-#ifdef __linux__
-    while (n) {
-        ssize_t r = getrandom(p, n, 0);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) break;
-        p += r;
-        n -= (size_t)r;
-    }
-#else
-    while (n) {                                          /* macOS and the BSDs: getentropy, at most 256 bytes per call */
-        const size_t k = n < 256 ? n : 256;
-        if (getentropy(p, k) != 0) break;
-        p += k;
-        n -= k;
-    }
-#endif
-    if (n == 0) return true;
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);   /* very old kernels */
-    if (fd < 0) return false;
-    while (n) {
-        ssize_t r = read(fd, p, n);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) break;
-        p += r;
-        n -= (size_t)r;
-    }
-    close(fd);
-    return n == 0;
 }
 
 void pz_os_description(char *buf, size_t n)

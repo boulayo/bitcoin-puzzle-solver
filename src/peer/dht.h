@@ -51,12 +51,6 @@ enum {
 enum { DHT_ST_STORED, DHT_ST_DUP, DHT_ST_INVALID, DHT_ST_COINCIDENCE, DHT_ST_FAILED, DHT_ST_FULL, DHT_ST_FAR };
 
 typedef struct {
-    uint8_t id[32];                /* node ID = SHA256("pznet1/id" || xonly) */
-    uint8_t xonly[32];             /* identity */
-    net_addr addr;
-} dht_contact;
-
-typedef struct {
     const secp256k1_context *ctx;
     const record_net *net;         /* F, the zero bits of a distinguished point, Q' */
     const home_identity *self;
@@ -65,7 +59,8 @@ typedef struct {
     int listen_port;               /* 0: no listening (the node dials out and polls its mailboxes); DHT_ANY_PORT: a free one */
     const char *dir;               /* data folder: store.bin (custody; claims.bin on a linear search), own.bin and own.cust (own records),
                                     * peers.txt */
-    const char *const *bootstrap;  /* "host:port": the entry= lines of the network file, --peer (peers.txt is read by the node) */
+    const char *const *bootstrap;  /* "host:port": the entry= lines of the network file, --peer (peers.txt is read by the node). They must
+                                    * stay valid while the node runs, as bt_routers */
     int nbootstrap;
     /* An alert for this node, after both proofs of possession: mine is this node's record, theirs the other owner's; merge when they
      * have the same type (both walkers should restart: no key comes of it). It can come again for the same pair after a restart. */
@@ -79,8 +74,6 @@ typedef struct {
     void *user;
     int timeout_ms;                /* 0: NET_TIMEOUT_MS */
     int handlers;                  /* threads that answer; 0: 8 */
-    unsigned refresh_s;            /* bucket refresh; 0: 3600 */
-    unsigned republish_s;          /* republish of the own records; 0: 86400 */
     unsigned mbox_poll_s;          /* mailbox polls; 0: 3600 while the others reach this node, 60 otherwise */
     unsigned probe_s;              /* how long a node that listens goes without a connection coming in before it doubts its port; 0: 120 */
     unsigned retry_s;              /* an alert whose other owner did not answer is retried after this, then twice as late each time up to an
@@ -92,14 +85,11 @@ typedef struct {
     uint64_t store_max;            /* records this node keeps as a custodian; 0: DHT_STORE_DEFAULT */
     int relay_max;                 /* relays at once (a node that listens is a relay); 0: 32 */
     uint64_t relay_bytes;          /* bytes of one relay, both ways together; 0: 32 MiB */
-    unsigned relay_s;              /* the life of one relay; 0: 4 hours */
     unsigned relay_slot_s;         /* the slot of time that picks the relay of a pair (docs/en/NETWORK.md 7.7); 0: 60 */
     const char *const *bt_routers; /* "host:port" of nodes of the table of BitTorrent: the node announces itself there and looks for the others
                                     * (bt.h), with no server of this network. They must stay valid while the node runs. NULL: not used */
     int nbt_routers;
-    unsigned rendezvous_s;         /* between two rounds there; 0: 900 (120 while the node has no contact) */
     bool portmap;                  /* ask the router of the LAN to let the listening port in (portmap.h) */
-    const char *router;            /* tests: the address of that router; NULL: the one of the default route */
     bool verbose;                  /* what the node does, on stderr */
     const block_net *blocks;       /* a linear search: the claims of its blocks are kept (claims.bin) and answered, and no records (any x
                                     * with the zero bits passes their checks, with no walk); NULL: a search of records, without claims */
@@ -125,9 +115,6 @@ uint16_t dht_port(const dht *d);    /* 0 when the node does not listen */
  * first: those own.bin has in the same order are not sent again (nor counted). The records sent now that at least one custodian holds.
  * It does not wait for a republish under way. */
 int dht_publish(dht *d, record *recs, int n);
-/* The own records again now (the maintenance thread does it every republish_s), each to the custodians it did not have at the last
- * republish (all: to every custodian, as at the first contacts after none). The copies sent. */
-uint64_t dht_republish(dht *d, bool all);
 
 /* A claim of a block of this node: to the DHT_KSTORE custodians of the key of its block (block_key). The custodians that took it. */
 int dht_claim_publish(dht *d, const block_claim *c);
@@ -135,15 +122,6 @@ int dht_claim_publish(dht *d, const block_claim *c);
 int dht_claims_of(dht *d, uint64_t index, block_claim *out, int max);
 /* The claims this node keeps as a custodian. */
 uint64_t dht_claims_held(dht *d);
-
-/* The want (at most DHT_K) nodes closest to target, this one included when it listens, nearest first: an iterative lookup. */
-int dht_lookup(dht *d, const uint8_t target[32], dht_contact *out, int want);
-/* The contact of an identity: from the routing table, or by a lookup of its node ID. False when no node answers for it (it is offline,
- * or it does not listen). */
-bool dht_find(dht *d, const uint8_t xonly[32], dht_contact *out);
-/* A connection to a contact, checked to be its identity, for the frames of a session (types 16 to 31; the other side gets the first in
- * on_session). Close it with net_close. */
-net_conn *dht_dial(dht *d, const dht_contact *c);
 
 /* The daemon's side of a channel: waits up to ms (0: only a look) for the connection the partner opened to this node, the one on_session
  * got; NULL when none came. *give_up: set when the daemon stops waiting (it is stopping). */
@@ -154,36 +132,12 @@ typedef net_conn *(*dht_wait_fn)(void *arg, int ms, bool *give_up);
  * connection when it comes (wait), else through a relay, with a handshake end to end that checks the partner. NULL when none could be
  * made in time, or when wait gives up. wait may be NULL. Close the channel with net_close. */
 net_conn *dht_channel(dht *d, const uint8_t partner[32], const uint8_t name[32], int wait_ms, dht_wait_fn wait, void *arg);
-/* The relays of this node: waiting for their second home, under way, and done since it started. */
-void dht_relays(dht *d, int *waiting, int *active, uint64_t *done);
 
-/* The proof of possession of a record by its owner (found and dialled; this node's own record is proved from own_distance): 1 the proof
- * checks out, 0 the owner answered with a wrong proof, -1 no answer (offline, unreachable, or it closed without a proof). */
-int dht_ask_proof(dht *d, const record *r);
-/* The same over an open connection to the owner (a session); 0 when the connection is not with the owner of r. */
-int dht_proof_on(dht *d, net_conn *c, const record *r);
-/* Answers a request of the table (types 1 to 12) that came on a session connection; false for a malformed one (close the connection). */
-bool dht_serve(dht *d, net_conn *c, const uint8_t *msg, size_t len);
-
-/* Asks this node's mailboxes for its alerts now (the maintenance thread does it on its own): the new pairs found. */
-int dht_mbox_poll(dht *d);
-/* A lookup in the range of every bucket now (the maintenance thread does it every refresh_s). */
-void dht_refresh(dht *d);
-/* A contact heard from, as the routing table takes it (a full bucket pings its oldest contact). */
-void dht_seen(dht *d, const dht_contact *c);
-/* The contacts of the routing table, at most max; their number. dht_count: how many there are. */
-int dht_contacts(dht *d, dht_contact *out, int max);
-int dht_count(dht *d);
+int dht_count(dht *d);              /* how many contacts the routing table has */
 /* An estimate of the nodes that listen (the custodians), from one lookup of a random point: about a fifth of it off, so worth averaging. */
 double dht_nodes(dht *d);
-/* What the node holds: the records of the network with x, the number of them, the alert pairs of an owner in its mailbox. */
-int dht_local_records(dht *d, const uint8_t x[32], record *out, int max);
+/* The records this node holds as a custodian, and the jumps they stand for: the sum of 2^(their zero bits). */
 uint64_t dht_local_count(dht *d);
-double dht_local_weight(dht *d);   /* the jumps the records held stand for: the sum of 2^(their zero bits) */
-int dht_local_mbox(dht *d, const uint8_t owner[32], mbox_pair *pairs, int max);
-/* SHA256("pznet1/mbox" || owner): the mailboxes of an owner are the DHT_KSTORE nodes closest to it. */
-void dht_mbox_key(const uint8_t owner[32], uint8_t k[32]);
-/* The check of a NODES answer, as a lookup makes it (for the tests): its contacts, -1 when the answer is refused whole. */
-int dht_parse_nodes(const dht *d, const uint8_t *msg, size_t len, dht_contact *out);
+double dht_local_weight(dht *d);
 
 #endif

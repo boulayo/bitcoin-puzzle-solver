@@ -10,7 +10,6 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <sddl.h>
-#include <bcrypt.h>
 #include <io.h>
 #include <process.h>
 #include <share.h>
@@ -318,11 +317,6 @@ void pz_hostname(char *buf, size_t n)
     if (n == 0) return;
     if (!GetComputerNameA(buf, &l)) buf[0] = 0;
     buf[n - 1] = 0;
-}
-
-bool pz_os_random(void *buf, size_t n)
-{
-    return BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
 }
 
 void pz_os_description(char *buf, size_t n)

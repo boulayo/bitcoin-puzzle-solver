@@ -24,7 +24,7 @@ void net_cfg_init(net_cfg *cfg, const secp256k1_context *ctx, const home_identit
     memset(cfg, 0, sizeof *cfg);
     cfg->ctx = ctx;
     cfg->self = self;
-    memcpy(cfg->prologue, "pznet5", 6);
+    memcpy(cfg->prologue, "pznet6", 6);
     memcpy(cfg->prologue + 6, fp, 32);
     cfg->id_bits = id_bits;
     cfg->port = port;
@@ -166,8 +166,6 @@ void net_addr_block(const net_addr *a, uint8_t block[16])
 
 /* ---- sockets ---- */
 
-void net_close_fd(int fd) { sys_close(fd); }
-
 int net_listen(const char *host, uint16_t port, uint16_t *bound)
 {
     sockaddr_any s;
@@ -266,10 +264,9 @@ static bool handshake(const net_cfg *cfg, net_conn *c, bool initiator, const uin
     uint8_t e[32], m[NOISE_HS_MAX], pl[NOISE_PAYLOAD_MAX], rs[33];
     size_t n, plen;
     bool ok = false;
-    for (int tries = 0;; tries++) {                            /* a random value that is not a valid key: practically never */
-        if (tries == 4 || !sys_random(e, sizeof e)) goto out;
-        if (noise_hs_init(&hs, cfg->ctx, initiator, cfg->prologue, sizeof cfg->prologue, cfg->self->sec, cfg->self->pub33, e)) break;
-    }
+    /* an ephemeral secret that is not a valid key (2^-128) fails the exchange */
+    if (!sys_random(e, sizeof e) || !noise_hs_init(&hs, cfg->ctx, initiator, cfg->prologue, sizeof cfg->prologue, cfg->self->sec, cfg->self->pub33, e))
+        goto out;
     const int64_t until = sys_now_ms() + c->timeout_ms;            /* the whole handshake: a peer that drips its bytes gains nothing */
     if (initiator) {
         const uint8_t port[2] = {(uint8_t)(cfg->port >> 8), (uint8_t)cfg->port};

@@ -37,6 +37,10 @@ PZ_BEGIN_DECLS
  * may be NULL with errlen 0) says why. */
 bool pz_seed_generate(uint8_t seed[PZ_SEED_LEN], char *err, size_t errlen);
 
+/* n bytes of the operating system's generator, read as the os input above (on a Linux without getrandom, from /dev/urandom once it is
+ * checked); false when it fails. */
+bool pz_os_random(void *buf, size_t n);
+
 /* For a process that holds secrets: no core files and, on Linux, not dumpable, so that other processes of the same user cannot attach
  * to it or read its memory. False when it did not take effect (always on Windows, which has no such call). */
 bool pz_seed_harden(void);

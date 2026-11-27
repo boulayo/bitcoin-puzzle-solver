@@ -10,7 +10,6 @@
 #include <string.h>
 
 static const char PROTOCOL[] = "Noise_XX_secp256k1_ChaChaPoly_SHA256";   /* longer than 32 bytes: h starts as its hash */
-#define ROTATE_AFTER 1000
 
 /* the ChaChaPoly nonce of Noise: 4 zero bytes and the counter in little-endian */
 static void nonce_of(uint64_t n, uint8_t out[12])
@@ -173,7 +172,6 @@ bool noise_hs_split(noise_hs *hs, noise_cs *tx, noise_cs *rx, uint8_t remote_sta
     hkdf2(hs->ck, empty, 0, k1, k2);
     noise_cs *first = hs->initiator ? tx : rx, *second = hs->initiator ? rx : tx;   /* the initiator sends with the first key */
     memcpy(first->k, k1, 32), memcpy(second->k, k2, 32);
-    memcpy(first->ck, hs->ck, 32), memcpy(second->ck, hs->ck, 32);
     first->n = second->n = 0;
     memcpy(remote_static, hs->rs, 33);
     memcpy(hash, hs->h, 32);
@@ -183,23 +181,13 @@ bool noise_hs_split(noise_hs *hs, noise_cs *tx, noise_cs *rx, uint8_t remote_sta
     return true;
 }
 
-/* after ROTATE_AFTER encryptions with a key: ck, k = HKDF(ck, k), as in BOLT 8 */
-static void cs_next(noise_cs *c)
-{
-    if (++c->n < ROTATE_AFTER) return;
-    uint8_t k[32];
-    memcpy(k, c->k, 32);
-    hkdf2(c->ck, k, 32, c->ck, c->k);
-    pz_secure_zero(k, sizeof k);
-    c->n = 0;
-}
-
+/* One key a direction for the whole connection: its 64-bit nonce never wraps. BOLT 8 rotates it every 1000 encryptions, for secrecy
+ * within a connection; here whoever can read the keys of a live connection can read the identity key and the home seed beside them. */
 static void cs_seal(noise_cs *c, const uint8_t *pt, size_t len, uint8_t *out)
 {
     uint8_t nonce[12];
-    nonce_of(c->n, nonce);
+    nonce_of(c->n++, nonce);
     pz_aead_seal(c->k, nonce, NULL, 0, pt, len, out, out + len);
-    cs_next(c);
 }
 
 static bool cs_open(noise_cs *c, const uint8_t *in, size_t len, uint8_t *pt)
@@ -207,7 +195,7 @@ static bool cs_open(noise_cs *c, const uint8_t *in, size_t len, uint8_t *pt)
     uint8_t nonce[12];
     nonce_of(c->n, nonce);
     if (!pz_aead_open(c->k, nonce, NULL, 0, in, len, in + len, pt)) return false;
-    cs_next(c);
+    c->n++;
     return true;
 }
 

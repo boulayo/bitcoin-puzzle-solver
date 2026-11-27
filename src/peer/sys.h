@@ -31,7 +31,7 @@
 
 int64_t sys_now_ms(void);          /* a clock that only goes forward, in milliseconds: every deadline below is a value of it */
 void sys_sleep_ms(int ms);
-bool sys_random(void *out, size_t n);   /* from the random source of the system; false when it cannot be read */
+bool sys_random(void *out, size_t n);   /* pz_os_random of pzcore: the generator of the system; false when it cannot be read */
 
 /* ---- sockets ----
  * Every socket made here is non-blocking and is not inherited by the processes pzpeer starts; writing to one the other side closed is an

@@ -9,6 +9,7 @@
 
 #define RELAY_PER_BLOCK 2          /* relays (waiting or under way) of the homes of one address block */
 #define RELAY_IDLE_MS 180000       /* a relay with no byte for this long is closed: a session says it is alive every minute */
+#define RELAY_MS (4 * 3600 * 1000LL)   /* the life of one relay */
 
 
 typedef struct {
@@ -21,12 +22,11 @@ static void *relay_main(void *arg)
 {
     relay_job *j = arg;
     dht *d = j->d;
-    const uint64_t n = net_splice(j->a, j->b, d->cfg.relay_bytes, d->relay_ms, RELAY_IDLE_MS, &d->stop);
+    const uint64_t n = net_splice(j->a, j->b, d->cfg.relay_bytes, RELAY_MS, RELAY_IDLE_MS, &d->stop);
     dlog(d, "a relay ended: %" PRIu64 " bytes", n);
     pthread_mutex_lock(&d->r_mu);                              /* the last use of d: dht_stop may free it once this is unlocked */
     j->slot->used = false;
     d->nactive--;
-    d->relays_done++;
     pthread_cond_broadcast(&d->r_cv);
     pthread_mutex_unlock(&d->r_mu);
     free(j);
@@ -135,16 +135,6 @@ bool relay_in(dht *d, net_conn *c, const uint8_t *m, size_t len)
     pthread_cond_broadcast(&d->r_cv);
     pthread_mutex_unlock(&d->r_mu);
     return true;
-}
-
-void dht_relays(dht *d, int *waiting, int *active, uint64_t *done)
-{
-    pthread_mutex_lock(&d->r_mu);
-    relay_sweep(d);
-    int w = 0;
-    for (int i = 0; i < RELAY_WAITING; i++) w += d->waiting[i].used;
-    *waiting = w, *active = d->nactive, *done = d->relays_done;
-    pthread_mutex_unlock(&d->r_mu);
 }
 
 /* The relay of a pair in a slot of time: the node closest to SHA256("pznet1/relay" || name || slot) that is neither of the two homes.

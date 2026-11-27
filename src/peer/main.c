@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* SPDX-FileCopyrightText: 2026 Leonardo Boulay */
 /* main.c - pzpeer, the daemon of the shared kangaroo network (docs/en/NETWORK.md). */
-#include "bt.h"
 #include "btc.h"
 #include "chain_spv.h"
 #include "dbg.h"
@@ -16,6 +15,7 @@
 #include <pzcore/seed.h>
 #include <signal.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,10 +78,13 @@ static int usage_to(FILE *f)
 static int usage(void) { return usage_to(stderr); }
 
 /* a wrong command line: what is wrong, in one line, status 2 */
-static int bad(const char *cmd, const char *fmt, const char *arg)
+static int __attribute__((format(SYS_PRINTF, 2, 3))) bad(const char *cmd, const char *fmt, ...)
 {
+    va_list ap;
+    va_start(ap, fmt);
     fprintf(stderr, "pzpeer %s: ", cmd);
-    fprintf(stderr, fmt, arg);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
     fprintf(stderr, " (see 'pzpeer --help')\n");
     return 2;
 }
@@ -217,81 +220,100 @@ static void on_signal(int sig)
     interrupted = 1;
 }
 
-static void print_alert(void *user, const record *mine, const record *theirs, bool merge)
+/* The options of pzpeer run (run) or pzpeer node into cfg, and the debug log opened: -1 when they are good, else the status to end with
+ * (0 after --help). The lists cfg points to are kept here, for the life of the process. */
+static int options(bool run, int argc, char **argv, home_cfg *cfg)
 {
-    char x[65], o[65], ts[16];
-    pz_hex_encode(mine->x, 32, x);
-    pz_hex_encode(theirs->owner, 32, o);
-    printf("%s alert (%s): x %s, the other owner %s\n", stamp(ts), merge ? "merge" : "useful", x, o);
-    fflush(stdout);
-}
-
-/* The folder of a home or a node, before anything is written in it: for this user alone (a home keeps there its seed, the distances of
- * every point and the output of pzsolve, which shows a key it finds), and for this process alone (two pzpeer on one folder would write
- * over each other's records, journals and sessions) */
-/* A node for manual tests of the network: no points of its own (no dp.bin, no sessions), so it is a custodian and a mailbox only. */
-static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
-{
-    const char *network = NULL, *dir = NULL, *bind = NULL, *boot[16 + 32];
-    int puzzle = 0;
-    char entries[16][NETFILE_LINE_MAX], dirname[48], seedpath[1100], err[300];
-    int nb = 0, npeer = 0;
-    long port = DEFAULT_PORT, store_gb = 0;
-    bool verbose = false, allow_private = false, no_bt = false, portmap = true;
-    const char *peers[32], *routers[8], *debug = NULL;
-    int nrouters = 0;
+    static const char *peers[32], *servers[8], *routers[8];
+    const char *cmd = run ? "run" : "node", *debug = NULL;
+    cfg->peers = peers, cfg->electrum = servers, cfg->bt_routers = routers;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
-        char *end;
-        if (!strcmp(a, "--verbose")) { verbose = true; continue; }
-        if (!strcmp(a, "--allow-private")) { allow_private = true; continue; }
-        if (!strcmp(a, "--no-bt")) { no_bt = true; continue; }
-        if (!strcmp(a, "--no-portmap")) { portmap = false; continue; }
+        if (run && !strcmp(a, "--")) {                          /* the rest goes to pzsolve hunt, but not what pzpeer gives it itself */
+            static const char *const OWN[] = {"--puzzle", "--range", "--address", "--pubkey", "--campaign", "--dir", "--seed", "--mode", "--step",
+                                              "--part", "--dp-bits", "--jump-seed", "--start-key", "--ui"};   /* --part: half a block would be claimed */
+            for (int j = i + 1; j < argc; j++) {
+                const char *o = argv[j];
+                const size_t l = strcspn(o, "=");                 /* pzsolve takes a long option by any unique start of its name */
+                bool own = false;
+                if (o[0] == '-' && o[1] != '-')                    /* short ones, also grouped (-qk) or with their value (-k02aa) */
+                    for (const char *c = o + 1; *c && isalpha((unsigned char)*c) && !own; c++) own = strchr("prakcdsm", *c) != NULL;
+                for (size_t k = 0; !own && o[0] == '-' && o[1] == '-' && l > 2 && k < sizeof OWN / sizeof *OWN; k++) own = !strncmp(o, OWN[k], l);
+                if (own) return bad(cmd, "%s after --: pzpeer gives pzsolve the range, the part, the key, the walk and the folder itself", o);
+            }
+            cfg->pzsolve_args = (const char *const *)argv + i + 1, cfg->nargs = argc - i - 1;
+            break;
+        }
+        if (!strcmp(a, "--verbose")) { cfg->verbose = true; continue; }
+        if (!strcmp(a, "--allow-private")) { cfg->allow_private = true; continue; }
+        if (!strcmp(a, "--no-bt")) { cfg->no_bt = true; continue; }
+        if (!strcmp(a, "--no-portmap")) { cfg->portmap = false; continue; }
+        if (run && !strcmp(a, "--exit-when-done")) { cfg->exit_when_done = true; continue; }
+        if (run && !strcmp(a, "--accept-terms")) { cfg->accept_terms = true; continue; }
         if (!strcmp(a, "--help")) return usage_to(stdout);
-        if (!v) return bad("node", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
-        if (!strcmp(a, "--network")) network = v;
-        else if (!strcmp(a, "--puzzle") && !(puzzle = puzzle_of(v))) return bad("node", "--puzzle: invalid value '%s' (expected a puzzle number)", v);
+        if (!v) return bad(cmd, strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
+        if (!strcmp(a, "--network")) cfg->network = v;
+        else if (!strcmp(a, "--puzzle") && !(cfg->puzzle = puzzle_of(v))) return bad(cmd, "--puzzle: invalid value '%s' (expected a puzzle number)", v);
         else if (!strcmp(a, "--puzzle")) {}
-        else if (!strcmp(a, "--dir")) dir = v;
-        else if (!strcmp(a, "--bind")) bind = v;
-        else if (!strcmp(a, "--peer") && npeer < 32) peers[npeer++] = v;
-        else if (!strcmp(a, "--bt-router") && nrouters < 8) routers[nrouters++] = v;
+        else if (!strcmp(a, "--dir")) cfg->dir = v;
+        else if (!strcmp(a, "--bind")) cfg->listen_host = v;
+        else if (!strcmp(a, "--peer") && cfg->npeers < 32) peers[cfg->npeers++] = v;
+        else if (!strcmp(a, "--bt-router") && cfg->nbt_routers < 8) routers[cfg->nbt_routers++] = v;
         else if (!strcmp(a, "--debug")) debug = v;
-        else if (!strcmp(a, "--listen")) {
-            port = strtol(v, &end, 10);
-            if (*end || port < 0 || port > 65535) return bad("node", "--listen: invalid value '%s' (expected a port from 0 to 65535)", v);
-        } else if (!strcmp(a, "--store-gb")) {
-            store_gb = strtol(v, &end, 10);
-            if (*end || store_gb < 1 || store_gb > 1000000) return bad("node", "--store-gb: invalid value '%s' (expected 1 to 1000000)", v);
-        } else return bad("node", "unrecognized option '%s'", a);
+        else if (run && !strcmp(a, "--payout")) cfg->payout = v;
+        else if (run && !strcmp(a, "--rpc")) {                 /* kept here, and blanked where the list of processes shows it */
+            static char rpc[512];
+            snprintf(rpc, sizeof rpc, "%s", v), cfg->rpc = rpc;
+            memset(argv[i + 1], 'x', strlen(v));
+        }
+        else if (run && !strcmp(a, "--rpc-cookie")) cfg->rpc_cookie = v;
+        else if (run && !strcmp(a, "--pzsolve")) cfg->pzsolve = v;
+        else if (run && !strcmp(a, "--pzsign")) cfg->pzsign = v;
+        else if (run && !strcmp(a, "--electrum") && cfg->nelectrum < 8) servers[cfg->nelectrum++] = v;
+        else if (!strcmp(a, "--listen") || !strcmp(a, "--store-gb") || (run && (!strcmp(a, "--id-bits") || !strcmp(a, "--solo-wait")))) {
+            char *end;
+            const long n = strtol(v, &end, 10), lo = !strcmp(a, "--store-gb") ? 1 : 0,   /* --store-gb 0 would be the default, not none */
+                       hi = !strcmp(a, "--listen") ? 65535 : !strcmp(a, "--id-bits") ? 32 : 1000000;
+            if (*end || n < lo || n > hi)
+                return bad(cmd, "%s: invalid value '%s' (expected %s%ld to %ld)", a, v, !strcmp(a, "--listen") ? "a port from " : "", lo, hi);
+            if (!strcmp(a, "--listen")) cfg->listen_port = (int)n;
+            else if (!strcmp(a, "--id-bits")) cfg->id_bits = (unsigned)n;
+            else if (!strcmp(a, "--solo-wait")) cfg->solo_wait = (unsigned)n;
+            else cfg->store_gb = (unsigned)n;
+        } else return bad(cmd, "unrecognized option '%s'", a);
         i++;
     }
     if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
+    return -1;
+}
+
+/* A node for manual tests of the network: no points of its own (no dp.bin, no sessions), so it is a custodian and a mailbox only. */
+static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
+{
+    home_cfg opt = {.id_bits = NODE_ID_ZERO_BITS, .listen_port = DEFAULT_PORT, .portmap = true};
+    const int rc = options(false, argc, argv, &opt);
+    if (rc >= 0) return rc;
+    char dirname[48], seedpath[1100], err[300];
     netfile nf;
     record_net net;
     block_net bn;
     uint8_t seed[32];
     home_identity id;
-    if (!load_net(ctx, network, puzzle, &nf, &net, &bn)) return 1;
-    if (!dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), dir = dirname;
-    if (!home_own_dir(dir)) return 1;
-    snprintf(seedpath, sizeof seedpath, "%s/node.seed", dir);          /* its identity, as the keys of a Bitcoin node in its folder */
+    if (!load_net(ctx, opt.network, opt.puzzle, &nf, &net, &bn)) return 1;
+    if (!opt.dir) snprintf(dirname, sizeof dirname, "pznode-%.31s", nf.net), opt.dir = dirname;
+    if (!home_own_dir(opt.dir)) return 1;
+    snprintf(seedpath, sizeof seedpath, "%s/node.seed", opt.dir);      /* its identity, as the keys of a Bitcoin node in its folder */
     const int got = keys_seed_file(seedpath, seed, err, sizeof err);
     if (!got) return fprintf(stderr, "%s\n", err), 1;
     if (got == 2) printf("a new node seed in %s: the identity of this node (no coin depends on it)\n", seedpath);
-    const bool have_id = keys_identity(ctx, seed, nf.fp, NODE_ID_ZERO_BITS, &id);
+    const bool have_id = keys_identity(ctx, seed, nf.fp, opt.id_bits, &id);
     pz_secure_zero(seed, sizeof seed);
     if (!have_id) {
         fprintf(stderr, "no identity from this seed\n");
         return 1;
     }
-    while (nb < 16 && netfile_opt(&nf, "entry", nb, entries[nb], sizeof entries[nb])) boot[nb] = entries[nb], nb++;   /* then --peer */
-    for (int i = 0; i < npeer; i++) boot[nb++] = peers[i];
-    dht_config cfg = {.ctx = ctx, .net = &net, .self = &id, .id_bits = NODE_ID_ZERO_BITS, .listen_host = bind, .listen_port = (int)port,
-                      .dir = dir, .bootstrap = boot, .nbootstrap = nb, .on_alert = print_alert, .verbose = verbose, .portmap = portmap,
-                      .allow_private = allow_private || strcmp(nf.chain, "main") != 0,
-                      .store_max = (uint64_t)store_gb * 1000000000ull / STORE_ENTRY, .blocks = nf.linear ? &bn : NULL};
-    cfg.bt_routers = bt_routers(!strcmp(nf.chain, "main"), no_bt, routers, nrouters, &cfg.nbt_routers);
+    dht_config cfg = home_node(&opt, &nf, &net, &id, opt.dir);
+    cfg.blocks = nf.linear ? &bn : NULL;
     char idhex[65];
     dht *d = dht_create(&cfg, err, sizeof err);
     if (!d) {
@@ -303,7 +325,7 @@ static int cmd_node(const secp256k1_context *ctx, int argc, char **argv)
     const int n = dht_start(d);
     pz_hex_encode(id.xonly, 32, idhex);
     char ts[16], how[40] = "not listening";
-    if (port) snprintf(how, sizeof how, "listening on port %u", dht_port(d));
+    if (opt.listen_port) snprintf(how, sizeof how, "listening on port %u", dht_port(d));
     if (n >= 0) printf("%s node %s, %s, %d contact%s\n", stamp(ts), idhex, how, n, n == 1 ? "" : "s");   /* else dht_start said why */
     fflush(stdout);
     for (int tick = 1; n >= 0 && !interrupted; tick++) {
@@ -335,65 +357,8 @@ static int cmd_run(int argc, char **argv)
     char solve[4096], sign[4096];
     home_cfg cfg = {.pzsolve = beside(argv[0], "pzsolve", solve), .pzsign = beside(argv[0], "pzsign", sign), .id_bits = NODE_ID_ZERO_BITS,
                     .listen_port = DEFAULT_PORT, .portmap = true};
-    const char *peers[32], *servers[8], *routers[8], *debug = NULL;
-    for (int i = 2; i < argc; i++) {
-        const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
-        if (!strcmp(a, "--")) {                                 /* the rest goes to pzsolve hunt, but not what pzpeer gives it itself */
-            static const char *const OWN[] = {"--puzzle", "--range", "--address", "--pubkey", "--campaign", "--dir", "--seed", "--mode", "--step",
-                                              "--part", "--dp-bits", "--jump-seed", "--start-key", "--ui"};   /* --part: half a block would be claimed */
-            for (int j = i + 1; j < argc; j++) {
-                const char *o = argv[j];
-                const size_t l = strcspn(o, "=");                 /* pzsolve takes a long option by any unique start of its name */
-                bool own = false;
-                if (o[0] == '-' && o[1] != '-')                    /* short ones, also grouped (-qk) or with their value (-k02aa) */
-                    for (const char *c = o + 1; *c && isalpha((unsigned char)*c) && !own; c++) own = strchr("prakcdsm", *c) != NULL;
-                for (size_t k = 0; !own && o[0] == '-' && o[1] == '-' && l > 2 && k < sizeof OWN / sizeof *OWN; k++) own = !strncmp(o, OWN[k], l);
-                if (own) return bad("run", "%s after --: pzpeer gives pzsolve the range, the part, the key, the walk and the folder itself", o);
-            }
-            cfg.pzsolve_args = (const char *const *)argv + i + 1, cfg.nargs = argc - i - 1;
-            break;
-        }
-        if (!strcmp(a, "--verbose")) { cfg.verbose = true; continue; }
-        if (!strcmp(a, "--exit-when-done")) { cfg.exit_when_done = true; continue; }
-        if (!strcmp(a, "--allow-private")) { cfg.allow_private = true; continue; }
-        if (!strcmp(a, "--no-bt")) { cfg.no_bt = true; continue; }
-        if (!strcmp(a, "--no-portmap")) { cfg.portmap = false; continue; }
-        if (!strcmp(a, "--accept-terms")) { cfg.accept_terms = true; continue; }
-        if (!strcmp(a, "--help")) return usage_to(stdout);
-        if (!v) return bad("run", strncmp(a, "--", 2) ? "unexpected argument '%s'" : "unrecognized option '%s', or it needs a value", a);
-        if (!strcmp(a, "--network")) cfg.network = v;
-        else if (!strcmp(a, "--puzzle") && !(cfg.puzzle = puzzle_of(v))) return bad("run", "--puzzle: invalid value '%s' (expected a puzzle number)", v);
-        else if (!strcmp(a, "--puzzle")) {}
-        else if (!strcmp(a, "--dir")) cfg.dir = v;
-        else if (!strcmp(a, "--payout")) cfg.payout = v;
-        else if (!strcmp(a, "--rpc")) {                        /* kept here, and blanked where the list of processes shows it */
-            static char rpc[512];
-            snprintf(rpc, sizeof rpc, "%s", v), cfg.rpc = rpc;
-            memset(argv[i + 1], 'x', strlen(v));
-        }
-        else if (!strcmp(a, "--rpc-cookie")) cfg.rpc_cookie = v;
-        else if (!strcmp(a, "--bind")) cfg.listen_host = v;
-        else if (!strcmp(a, "--pzsolve")) cfg.pzsolve = v;
-        else if (!strcmp(a, "--pzsign")) cfg.pzsign = v;
-        else if (!strcmp(a, "--peer") && cfg.npeers < 32) peers[cfg.npeers++] = v;
-        else if (!strcmp(a, "--electrum") && cfg.nelectrum < 8) servers[cfg.nelectrum++] = v;
-        else if (!strcmp(a, "--bt-router") && cfg.nbt_routers < 8) routers[cfg.nbt_routers++] = v;
-        else if (!strcmp(a, "--debug")) debug = v;
-        else if (!strcmp(a, "--listen") || !strcmp(a, "--id-bits") || !strcmp(a, "--store-gb") || !strcmp(a, "--solo-wait")) {
-            char *end;
-            const long n = strtol(v, &end, 10);
-            if (*end || n < 0 || n > (!strcmp(a, "--listen") ? 65535 : !strcmp(a, "--id-bits") ? 32 : 1000000))
-                return fprintf(stderr, "pzpeer run: %s: invalid value '%s' (expected %s)\n", a, v,
-                               !strcmp(a, "--listen") ? "a port from 0 to 65535" : !strcmp(a, "--id-bits") ? "0 to 32" : "1 to 1000000"), 2;
-            if (!strcmp(a, "--listen")) cfg.listen_port = (int)n;
-            else if (!strcmp(a, "--id-bits")) cfg.id_bits = (unsigned)n;
-            else if (!strcmp(a, "--solo-wait")) cfg.solo_wait = (unsigned)n;
-            else cfg.store_gb = (unsigned)n;
-        } else return bad("run", "unrecognized option '%s'", a);
-        i++;
-    }
-    cfg.peers = peers, cfg.electrum = servers, cfg.bt_routers = routers;
-    if (debug && !dbg_open(debug)) return fprintf(stderr, "--debug: cannot write %s\n", debug), 1;
+    const int rc = options(true, argc, argv, &cfg);
+    if (rc >= 0) return rc;
     netfile nf;
     char err[300], dirname[48];
     if (!netfile_get(cfg.network, cfg.puzzle, &nf, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;

@@ -125,6 +125,22 @@ bool home_own_dir(const char *dir)
     return got > 0;
 }
 
+dht_config home_node(const home_cfg *cfg, const netfile *nf, const record_net *net, const home_identity *id, const char *dir)
+{
+    static char entries[16][NETFILE_LINE_MAX];                 /* static, as the list: one node a process, which keeps it while it runs */
+    static const char *boot[16 + 32];
+    int nb = 0;
+    while (nb < 16 && netfile_opt(nf, "entry", nb, entries[nb], sizeof entries[nb])) boot[nb] = entries[nb], nb++;
+    for (int i = 0; i < cfg->npeers && nb < 16 + 32; i++) boot[nb++] = cfg->peers[i];
+    const bool main_chain = !strcmp(nf->chain, "main");
+    dht_config dc = {.ctx = keys_ctx(), .net = net, .self = id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
+                     .listen_port = cfg->listen_port, .dir = dir, .bootstrap = boot, .nbootstrap = nb, .verbose = cfg->verbose,
+                     .portmap = cfg->portmap, .allow_private = !main_chain || cfg->allow_private,
+                     .store_max = (uint64_t)cfg->store_gb * 1000000000ull / STORE_ENTRY};
+    dc.bt_routers = bt_routers(main_chain, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
+    return dc;
+}
+
 static volatile sig_atomic_t g_stop;                            /* 1: stop; 2 (a second signal): do not wait for the sessions */
 static void on_signal(int sig) { (void)sig, g_stop = g_stop < 2 ? g_stop + 1 : 2; }
 
@@ -1113,12 +1129,7 @@ int home_run(const home_cfg *cfg)
     if (!home_seed(h, err, sizeof err)) return fprintf(stderr, "%s\n", err), 1;
     if (!keys_identity(h->ctx, h->seed, h->nf.fp, cfg->id_bits, &h->id)) return fprintf(stderr, "no identity\n"), 1;
     paid_load(h);
-    /* the table: the entry lines of the file and the peers given */
-    const char *boot[64];
-    char entries[16][NETFILE_LINE_MAX], line[NETFILE_LINE_MAX];
-    int nb = 0;
-    while (nb < 16 && netfile_opt(&h->nf, "entry", nb, entries[nb], sizeof entries[nb])) boot[nb] = entries[nb], nb++;
-    for (int i = 0; i < cfg->npeers && nb < 64; i++) boot[nb++] = cfg->peers[i];
+    char line[NETFILE_LINE_MAX];
     /* the prizes, prize=txid:vout:sats (the txid as explorers show it; the value is the chain's), of the file or of the program for its
      * networks: a session finds them even when no scan of the puzzle address lists them, and gives its piece of the key only once each is
      * spent (session.c) */
@@ -1135,12 +1146,8 @@ int home_run(const home_cfg *cfg)
                  " the pieces of the key are exchanged only with a node of one's own (--rpc)");
     char nodedir[1100];
     snprintf(nodedir, sizeof nodedir, "%s/node", h->dir);
-    dht_config dc = {.ctx = h->ctx, .net = &h->net, .self = &h->id, .id_bits = cfg->id_bits, .listen_host = cfg->listen_host,
-                     .listen_port = cfg->listen_port, .dir = nodedir, .bootstrap = boot, .nbootstrap = nb, .on_alert = on_alert,
-                     .own_distance = own_distance, .on_session = on_session, .user = h, .verbose = cfg->verbose, .portmap = cfg->portmap,
-                     .allow_private = h->chain != BTC_MAIN || cfg->allow_private,
-                     .store_max = (uint64_t)cfg->store_gb * 1000000000ull / STORE_ENTRY};
-    dc.bt_routers = bt_routers(h->chain == BTC_MAIN, cfg->no_bt, cfg->bt_routers, cfg->nbt_routers, &dc.nbt_routers);
+    dht_config dc = home_node(cfg, &h->nf, &h->net, &h->id, nodedir);
+    dc.on_alert = on_alert, dc.own_distance = own_distance, dc.on_session = on_session, dc.user = h;
     if (!(h->d = dht_create(&dc, err, sizeof err))) return fprintf(stderr, "%s\n", err), 1;
     sys_on_stop(on_signal);
     const int nc = dht_start(h->d);

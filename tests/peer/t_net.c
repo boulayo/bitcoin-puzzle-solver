@@ -85,7 +85,7 @@ static void start(server *s, pthread_t *th, const home_identity *id, const uint8
 static void finish(server *s, pthread_t th)
 {
     pthread_join(th, NULL);
-    net_close_fd(s->lfd);
+    sys_close(s->lfd);
 }
 
 static void test_addr(void)
@@ -285,14 +285,14 @@ static void test_timeouts(void)
     int64_t t0 = ms();
     CHECK(net_dial(&cli, &addr, NULL) == NULL);
     CHECK(ms() - t0 >= SHORT_MS - 50 && ms() - t0 < SHORT_MS + 1000);
-    net_close_fd(lfd);
+    sys_close(lfd);
     /* nobody listens: refused at once */
     t0 = ms();
     CHECK(net_dial(&cli, &addr, NULL) == NULL && ms() - t0 < 1000);
     /* no accept within the time: -1 */
     const int l2 = net_listen("127.0.0.1", 0, &port);
     CHECK(l2 >= 0 && net_accept(l2, 50, &addr) == -1);
-    net_close_fd(l2);
+    sys_close(l2);
 }
 
 /* An initiator that sends each handshake message just within one timeout of the last: before, each message had a timeout of its own and
@@ -308,7 +308,7 @@ static void test_drip(void)
     noise_hs hs;
     uint8_t e[32], m[NOISE_HS_MAX], pl[NOISE_PAYLOAD_MAX], prologue[38], port[2] = {0, 0};
     size_t n, plen;
-    memcpy(prologue, "pznet5", 6), memcpy(prologue + 6, FP, 32);
+    memcpy(prologue, "pznet6", 6), memcpy(prologue + 6, FP, 32);
     memset(e, 7, sizeof e);
     CHECK(noise_hs_init(&hs, ctx, true, prologue, sizeof prologue, ida.sec, ida.pub33, e));
     sys_sleep_ms(2 * SHORT_MS);
@@ -412,7 +412,7 @@ static void relay_run(uint64_t max, const uint8_t *expect_a, int frames, relay_h
     pthread_join(ta, NULL);
     pthread_join(tc, NULL);
     pthread_join(tr, NULL);
-    net_close_fd(r->lfd);
+    sys_close(r->lfd);
 }
 
 static void test_relay(void)
@@ -449,7 +449,7 @@ static void test_relay(void)
         pthread_join(th, NULL);
         CHECK(r.moved == 0 && ms() - t0 >= 250 && ms() - t0 < 1500);
         net_close(x), net_close(y);
-        net_close_fd(r.lfd);
+        sys_close(r.lfd);
     }
     /* the initiator expects another identity than the one at the other end (a relay that splices it to someone else): refused before
      * it shows its own key, and the other side sees the end */
@@ -470,7 +470,7 @@ static void test_relay(void)
     CHECK(pthread_create(&ta, NULL, relay_home_main, &a) == 0);
     CHECK(pthread_create(&tc, NULL, relay_home_main, &c) == 0);
     pthread_join(ta, NULL), pthread_join(tc, NULL), pthread_join(tr, NULL);
-    net_close_fd(r.lfd);
+    sys_close(r.lfd);
     CHECK(!c.hs_ok && a.echoed == 0);
 }
 
@@ -482,7 +482,7 @@ static void test_ipv6(void)
         printf("t_net: no IPv6 on this machine, its test skipped\n");
         return;
     }
-    net_close_fd(lfd);
+    sys_close(lfd);
     server s;
     pthread_t th;
     memset(&s, 0, sizeof s);
