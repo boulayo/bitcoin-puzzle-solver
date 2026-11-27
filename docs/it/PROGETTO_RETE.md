@@ -58,21 +58,21 @@ Resta un problema: nell'ultimo scambio uno dei due riceve la firma completa per 
 2. **Secondo passaggio**, dopo una conferma. La transazione spende il premio e anche la moneta minuscola di uno dei due, che chiamo F: il
    10% all'autore, il resto metà e metà. L'altro, S, riceve la firma completa per primo e la spedisce.
 3. **Se dopo 3 blocchi il premio non si è mosso**, F spende la sua moneta minuscola. La transazione che S teneva da parte non vale più.
-4. **Dopo 6 conferme del pagamento** le due case si scambiano i pezzi, se all'indirizzo non è rimasto niente di valore: ognuna controlla il
-   pezzo dell'altra, li somma e ha la chiave. La salva in `FOUND.txt` e la mostra sullo schermo, cifrata se pzsolve cifra la sua. Una
-   delle due dà il pezzo per prima, e l'altra può tenersi il suo: guadagna solo ciò che la chiave apre ancora, cioè le monete dello stesso
-   indirizzo sulle catene nate da Bitcoin (al #140 circa 300 euro, contro 14 BTC) e ciò che vi arriverà in futuro.
 
 Una firma trattenuta vale quindi poco più di mezz'ora (3 blocchi, poi quello che contiene l'annullamento), se i blocchi arrivano
 puntuali e il nodo o i server della catena rispondono: un blocco lento, o una catena che tace, allunga l'attesa.
+
+Nessuna delle due case conosce mai la chiave: il premio lo pagano le due transazioni, con la firma a due. Ciò che solo la chiave aprirebbe
+resta sotto la chiave comune: le monete dello stesso indirizzo sulle catene nate da Bitcoin (al #140 circa 300 euro, contro 14 BTC). Le
+monete che arrivano all'indirizzo dopo il pagamento le paga una sessione successiva della coppia.
 
 ### 2.4 Cosa vede chi partecipa
 
 Avvia `pzpeer run`. La prima volta il programma mostra le condizioni (45% a ciascuna casa della coppia, 10% all'autore; 90% a chi trova
 da solo) e chiede di accettarle, poi chiede l'indirizzo di pagamento; li ricorda per le volte dopo. Crea il seme di casa (una volta),
 avvia pzsolve, pubblica i punti, e se arriva una coincidenza firma e paga. Sullo schermo una riga breve per ogni passaggio che conta: la
-coincidenza, le transazioni mandate e confermate, il pagamento con gli importi, lo scambio dei pezzi e la chiave. Se pzsolve trova la
-chiave da solo, la casa manda subito le monete: 90% al suo indirizzo, 10% all'autore.
+coincidenza, le transazioni mandate e confermate, il pagamento con gli importi. Se pzsolve trova la chiave da solo, la casa manda subito
+le monete: 90% al suo indirizzo, 10% all'autore.
 
 **La quota dell'autore** è scritta nel programma, non nel file della rete né in un'opzione: nessuno la imposta. Non entra nell'impronta
 della rete, quindi una versione nuova può cambiare l'indirizzo o abbassare la quota senza creare una rete nuova e senza perdere punti. Una
@@ -140,7 +140,7 @@ Tre revisioni indipendenti hanno cercato modi di rubare, bloccare o ingannare. O
 | prova del ritrovo sulla rete BitTorrent vera e dell'apertura della porta su un router vero | provati solo contro una tabella e un router finti, vedi 6.2 |
 | prova di una rete intera su un Windows vero e su un Mac | sulle macchine Windows e macOS della CI passano i test di pzpeer e la firma a due con pzsign (su Mac per Apple silicon e per Intel); la prova completa con tre case è fatta su Linux e, per i programmi Windows, con l'emulatore Wine |
 | ripartenza dei canguri dopo una fusione fra case | un po' di lavoro sprecato |
-| sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia; dopo un pagamento lo scambio dei pezzi invece riprende (`paid` nella cartella) |
+| sessione che sopravvive a un riavvio di pzpeer | la coppia ricomincia; un pagamento firmato invece riprende da dove era (`paid` nella cartella) |
 | controlli a campione dei cammini | un punto falso occupa spazio, non ruba |
 | ripubblicazione che regge a campagna avanzata | traffico troppo alto verso la fine |
 | revisione esterna della libreria di firma | la revisione dell'uso che ne facciamo è fatta; quella dell'interno no, vedi ipotesi I4 |

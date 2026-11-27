@@ -4,7 +4,7 @@
 with the independent reference implementation (tools/ref.py), plus the addresses of the
 withdrawn puzzles 161..256 from data/puzzles_withdrawn.csv (n,address) and the coins the
 creator put at the addresses of the open puzzles from data/prizes.csv (n,txid,vout,sats; see
-data/README.md, tools/fetch_prizes.py).
+data/README.md).
 
     python3 -I tools/gen_puzzles.py            # rewrite src/puzzles_data.c
     python3 -I tools/gen_puzzles.py --check    # fail if the committed file is stale

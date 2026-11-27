@@ -3,10 +3,10 @@
 # SPDX-FileCopyrightText: 2026 Leonardo Boulay
 # The whole network on one machine, on a bitcoind in regtest: a custodian node and three homes (pzpeer run, each with its pzsolve), a
 # puzzle of 58 bits funded with 1 BTC, a block a second. It passes when a coincidence between two homes ends in the payout, 45% each and
-# 10% to the author, read back from the node, and then in the key of the puzzle in FOUND.txt of both, once they gave each other their
-# pieces. With three equal homes two coincidences in three are between homes; a home that finds the key on its own first (its own walkers
-# meet too) sends the coins, 90% to itself and 10% to the author, which is checked, and a new try starts with a new puzzle, up to 12. Such a
-# home sends them at once; here 90 seconds later (--solo-wait), so that a pair that met meanwhile is paid first. The points have 16 zero
+# 10% to the author, read back from the node. With three equal homes two coincidences in three are between homes; a home that finds the
+# key on its own first (its own walkers meet too) sends the coins, 90% to itself and 10% to the author, which is checked, and a new try
+# starts with a new puzzle, up to 12. Such a home sends them at once; here 90 seconds later (--solo-wait), so that a pair that met
+# meanwhile is paid first. The points have 16 zero
 # bits: with 14 each home made about 900 a second, more than pzpeer publishes on a shared test machine (a few hundred), the network saw
 # a fifth to a third of them, and the coincidences between homes, which grow with the square of the points seen, were ten times rarer
 # than those within a home.
@@ -15,7 +15,7 @@
 # pair is paid, and the prize is smaller by the fee and the tiny coin of each first transaction (about 15 000 satoshis at 20 sat/vB).
 # With PZ_E2E_LIGHT=1 the homes have no node: they read the chain from two Electrum servers (tests/peer/electrum_bridge.py over the same
 # bitcoind) and check every answer themselves (chain_spv.c); the prize= line of the network file names the coin of the prize, which they
-# must see spent before they give their pieces (with no such line a light home gives none).
+# look up alone, as the networks written in the program do.
 # With PZ_E2E_WIN=1 the three programs are the Windows ones of build/win, run under Wine (the bitcoind stays the one of this machine).
 # With PZ_E2E_MEET=1 nobody is given an address, as on the first day of a network: no custodian node and no entry line; the homes find
 # each other through a stand-in of the table of BitTorrent (tests/peer/bt_table.py), and the first runs alone for PZ_E2E_ALONE seconds
@@ -82,7 +82,7 @@ import json,sys; t=json.load(sys.stdin); print(next(d["vout"] for d in t["detail
     printf 'net=e2e%d\npuzzle=0\npubkey=%s\nrange=%x:%x\njumpseed=%s\nschema=net-06\ndpbits=16\nchain=regtest\n' \
         "$try" "$PUB" $((1 << (B - 1))) $(((1 << B) - 1)) "$(python3 -c 'import os; print(os.urandom(32).hex())')" > "$T/net.txt"
     [ -z "${PZ_E2E_MEET:-}" ] && echo "entry=127.0.0.1:$PORT" >> "$T/net.txt"
-    echo "prize=$FUND:$FVOUT:100000000" >> "$T/net.txt"              # the coin of the prize: a home gives its piece once it is spent
+    echo "prize=$FUND:$FVOUT:100000000" >> "$T/net.txt"              # the coin of the prize, found even when no scan lists it
     declare -A PAY PID
     for h in a b c; do PAY[$h]=$(rpc wallet getnewaddress '["", "legacy"]' | tr -d '"'); done
     A0=$(at "raw($AUTHOR)")
@@ -114,16 +114,6 @@ import json,sys; t=json.load(sys.stdin); print(next(d["vout"] for d in t["detail
         # 45% each and 10% to the author of what the fees leave: the author gets a ninth of what the two homes got
         python3 -c "import sys; a,b,l,a0,a1=map(float,sys.argv[1:]); sys.exit(0 if min(a,b)>0.449 and abs(a-b)<2e-8 and a+b<0.9 and l==0 and abs(a1-a0-(a+b)/9)<3e-8 else 1)" \
             "$G1" "$G2" "$LEFT" "$A0" "$A1" || { echo "E2E NET FAILED: the amounts are not 45% each and 10% to the author"; exit 1; }
-        # after the confirmations of the payout the two homes give each other their pieces: each has the key, in FOUND.txt
-        for h in $1 $2; do
-            KEY=$(awk '/^private key hex:/{print $4}' "$T/$h/FOUND.txt" 2>/dev/null)
-            python3 -c "import sys; sys.exit(0 if sys.argv[1] and int(sys.argv[1], 16) == int(sys.argv[2], 16) else 1)" "${KEY:-}" "$K" ||
-                { echo "E2E NET FAILED: home $h has not the key in FOUND.txt (logs in $T)"; trap - EXIT; exit 1; }
-            SHOWN=$(sed -n 's/.*THE KEY OF THE PUZZLE: \(0x[0-9a-f]*\).*/\1/p' "$T/$h.log" | head -1)
-            python3 -c "import sys; sys.exit(0 if sys.argv[1] and int(sys.argv[1], 16) == int(sys.argv[2], 16) else 1)" "${SHOWN:-}" "$K" ||
-                { echo "E2E NET FAILED: home $h did not show the key"; trap - EXIT; exit 1; }
-        done
-        echo "   the key, in FOUND.txt of both homes: $K"
         echo "E2E NET PASSED (try $try)"; exit 0
     fi
     if grep -q "found the key on its own" "$T"/[abc].log; then

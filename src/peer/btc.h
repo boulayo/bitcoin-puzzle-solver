@@ -30,6 +30,7 @@
 #define BTC_DER_MAX       72
 #define BTC_MAX_MONEY     2100000000000000ull   /* 21 million BTC in satoshis */
 #define BTC_SEQUENCE_FINAL 0xffffffffu
+#define BTC_COINBASE_MATURITY 100        /* the blocks a coinbase output waits before it can be spent */
 
 typedef struct {
     uint8_t  prev_txid[32];                 /* internal order */

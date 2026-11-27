@@ -81,8 +81,8 @@ PZSIGN=build/pzsign build/peer/t_session
 ```
 
 Due case simulate passano per ogni caso della sessione: il pagamento normale, una casa che si ferma a metà e riparte, un partner che non
-risponde, che rifiuta, che mente o che prova a prendersi il premio da solo, il premio già preso, la catena letta da server Electrum. Circa
-5 minuti; alla fine `t_session: OK`.
+risponde, che rifiuta, che mente o che prova a prendersi il premio da solo, il premio già preso, monete arrivate dopo il pagamento. Circa
+3 minuti; alla fine `t_session: OK`.
 
 ### 3.4 La rete intera
 
@@ -91,8 +91,8 @@ tests/peer/e2e_net.sh
 ```
 
 Un nodo custode e tre case vere (ognuna col suo pzsolve) su un puzzle di prova di 58 bit con 1 BTC di regtest. Passa quando due case si
-incontrano, il premio arriva 45 % a ciascuna e 10 % all'autore, e poi entrambe hanno la chiave in `FOUND.txt`: `E2E NET PASSED`. Se una
-casa trova la chiave da sola prima, il test controlla il 90 % a lei e il 10 % all'autore e riprova con un nuovo puzzle. Alcuni minuti.
+incontrano e il premio arriva 45 % a ciascuna e 10 % all'autore: `E2E NET PASSED`. Se una casa trova la chiave da sola prima, il test
+controlla il 90 % a lei e il 10 % all'autore e riprova con un nuovo puzzle. Alcuni minuti.
 
 Le varianti, da provare dopo:
 
@@ -211,13 +211,10 @@ Le righe da aspettarsi: `home ... on network p140: N contacts, listening`, poi `
 `network: about N nodes, ... points in all, ... jumps/s (this home ...); half the chance within ..., 9 in 10 within ...`.
 
 **Quando due case si incontrano** non c'è niente da fare: compaiono righe `session ...: a coincidence with home ...: the payout starts`,
-poi `session ...: ended:` con l'esito. Il premio va dritto dall'indirizzo del puzzle agli indirizzi delle due case e dell'autore; dopo la
-conferma le due case si scambiano i pezzi della chiave, che finisce in `FOUND.txt` della cartella. Una casa senza nodo proprio (che
-legge la catena dai server Electrum) dà il suo pezzo solo se vede spese, con la prova, tutte le monete note del premio, quelle scritte nel
-programma per i puzzle 140-160 o le righe `prize=` del file di rete: con un file di rete senza righe `prize=` non lo dà mai, e la chiave
-arriva solo ripartendo con `--rpc` (le quote del premio arrivano comunque). Se la casa si ferma a metà, alla
-ripartenza riprende da dove era (il file `paid`). **Una casa che trova la chiave da sola** manda subito il 90 % al suo indirizzo e il 10 %
-all'autore.
+poi `session ...: ended:` con l'esito. Il premio va dritto dall'indirizzo del puzzle agli indirizzi delle due case e dell'autore, con la
+firma a due: nessuna delle due case conosce la chiave, né prima né dopo. Se la casa si ferma a metà, alla ripartenza riprende da dove era
+(il file `paid`); le monete che arrivano all'indirizzo dopo il pagamento le paga una sessione successiva della coppia, a ogni partenza
+della casa. **Una casa che trova la chiave da sola** manda subito il 90 % al suo indirizzo e il 10 % all'autore.
 
 Ctrl-C ferma la casa; ripartita, riprende la campagna di pzsolve.
 
@@ -293,10 +290,10 @@ Prima una partenza a mano (termini e indirizzo), poi, con i percorsi completi e 
 - **`home.seed`**: è l'identità della casa e la chiave di tutti i suoi punti e rivendicazioni. Tienine una copia fuori dal computer. pzpeer
   rifiuta un seed leggibile da altri utenti o una cartella della casa che altri possono aprire.
 - `payout`: l'indirizzo di pagamento. Controllalo dopo la prima partenza (`payout address of this home: ...`).
-- `FOUND.txt` e `paid`, se ci sono: non cancellarli.
+- `paid`, se c'è: non cancellarlo.
 
 I file della cartella: `home.seed`, `start.key`, `terms`, `payout`, `failed-signings`, `campaigns/`, `pzsolve.out`, `pzsign.out`, `paid`,
-`FOUND.txt`, `node/` (contatti e punti custoditi); nella ricerca lineare `block` e `own_claims.bin`.
+`headers.bin` (senza nodo proprio), `node/` (contatti e punti custoditi); nella ricerca lineare `block` e `own_claims.bin`.
 
 ## 6. Messaggi frequenti
 

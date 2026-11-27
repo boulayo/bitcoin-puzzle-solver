@@ -113,7 +113,7 @@ int sweep_main(int argc, char **argv)
         else to = NULL, i = argc;
     }
     btc_chain chain;
-    uint8_t to_spk[BTC_SPK_MAX], spk[BTC_P2PKH_LEN], sec[32], cp[32];
+    uint8_t to_spk[BTC_SPK_MAX], spk[BTC_P2PKH_LEN], sec[32];
     const size_t to_len = to && btc_chain_parse(chain_name, &chain) ? btc_address_script(chain, to, to_spk) : 0;
     if (!to_len) return fprintf(stderr, "usage: pzpeer sweep --to ADDRESS [--chain main|test|signet|regtest]\n"
                                         "                    [--rpc H:P:USER:PASSWORD | --electrum HOST:PORT ...] [--feerate SAT_PER_VBYTE]\n"
@@ -130,21 +130,19 @@ int sweep_main(int argc, char **argv)
 
     /* the chain: the node of the user, or Electrum servers whose answers are proven */
     btc_rpc rpc;
-    chain_rpc crpc = {.rpc = &rpc, .chain = chain, .conf_target = 2, .fallback_feerate = 2000};
+    chain_rpc crpc = {.rpc = &rpc, .chain = chain};
     chain_spv spv;
-    uint64_t cph = 0;
-    bool has_cp = false;
     char why[300], hdrpath[1100];
     if (rpc_arg && !btc_rpc_init_arg(&rpc, rpc_arg, cookie)) return fprintf(stderr, "--rpc: %s\n", rpc.err.msg), 1;
     if (!rpc_arg) {
         if (!home_own_dir(dir)) return 1;
         snprintf(hdrpath, sizeof hdrpath, "%s/headers.bin", dir);
-        if (chain == BTC_MAIN) has_cp = true, nservers = nservers ? (chain_spv_defaults(NULL, &cph, cp), nservers) : chain_spv_defaults(servers, &cph, cp);
-        if (!nservers || !chain_spv_init(&spv, chain, cph, has_cp ? cp : NULL, servers, nservers, hdrpath)) return fprintf(stderr, "no chain: give --rpc or --electrum\n"), 1;
-        spv.fallback_feerate = 2000, spv.whole = btc_fee(BTC_P2PKH_IN_SIZE, rate ? rate : SWEEP_MIN_RATE) + 1;   /* what the sweep takes */
+        if (!chain_spv_init(&spv, chain, 0, NULL, servers, nservers, hdrpath)) return fprintf(stderr, "no chain: give --rpc or --electrum\n"), 1;
+        spv.whole = btc_fee(BTC_P2PKH_IN_SIZE, rate ? rate : SWEEP_MIN_RATE) + 1;   /* what the sweep takes */
         uint64_t tip;
-        if (has_cp && !spv_tip(&spv.headers, &tip))
-            fprintf(stderr, "the block headers since block %llu are fetched from the servers into %s (the first time: minutes)\n", (unsigned long long)cph, hdrpath);
+        if (!spv_tip(&spv.headers, &tip))
+            fprintf(stderr, "the block headers since block %llu are fetched from the servers into %s (the first time: minutes)\n",
+                    (unsigned long long)spv.headers.base, hdrpath);
     }
     if ((rpc_arg ? chain_rpc_ready(&crpc, why, sizeof why) : chain_spv_ready(&spv, why, sizeof why)) != 1) return fprintf(stderr, "the chain is not ready: %s\n", why), 1;
     const session_chain ch = rpc_arg ? chain_rpc_iface(&crpc) : chain_spv_iface(&spv);

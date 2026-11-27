@@ -147,21 +147,19 @@ static int cmd_dpcheck(const secp256k1_context *ctx, const char *netpath, const 
  * (the first time some 640 000: minutes). The check of a machine that will run without a node of its own. */
 static int netcheck_chain(const netfile *nf)
 {
-    const char *list[CHAIN_SPV_SERVERS];
-    uint8_t cp[32], h160[20], spk[BTC_SPK_MAX], txid[32];
-    uint64_t cph, tip;
+    uint8_t h160[20], spk[BTC_SPK_MAX], txid[32];
+    uint64_t tip;
     char why[300], line[NETFILE_LINE_MAX], hex[65];
     payout_coin coins[64];
     chain_spv spv;
     if (strcmp(nf->chain, "main")) return fprintf(stderr, "--chain: for a network of the main chain\n"), 1;
     if (nf->linear && btc_address_script(BTC_MAIN, nf->address, spk) != BTC_P2PKH_LEN) return fprintf(stderr, "--chain: not a P2PKH address\n"), 1;
     if (!nf->linear) pz_hash160(nf->pubkey33, 33, h160), btc_script_p2pkh(h160, spk);
-    const int n = chain_spv_defaults(list, &cph, cp);
-    if (!home_own_dir(SWEEP_DIR) || !chain_spv_init(&spv, BTC_MAIN, cph, cp, list, n, SWEEP_DIR "/headers.bin")) return 1;
-    spv.max_tip_age = 6 * 3600, spv.whole = 1;                  /* every coin listed must be proven */
+    if (!home_own_dir(SWEEP_DIR) || !chain_spv_init(&spv, BTC_MAIN, 0, NULL, NULL, 0, SWEEP_DIR "/headers.bin")) return 1;
+    spv.whole = 1;                                              /* every coin listed must be proven */
     if (!spv_tip(&spv.headers, &tip))
         printf("the block headers since block %llu are fetched from the servers into " SWEEP_DIR "/headers.bin (the first time: minutes)\n",
-               (unsigned long long)cph);
+               (unsigned long long)spv.headers.base);
     fflush(stdout);
     int ok = chain_spv_ready(&spv, why, sizeof why) == 1;
     printf("chain: %s\n", why);

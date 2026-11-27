@@ -13,7 +13,6 @@
 #include <string.h>
 #include <time.h>
 
-#define COINBASE_MATURITY 100
 #define COINS_MAX 256
 #define SPENDS_MAX 2048            /* the transactions whose inputs are kept: a txid names its bytes for ever */
 #define SPENDS_KEEP 1024           /* inputs of one of them, at most: a larger one is looked into again every time */
@@ -49,8 +48,7 @@ static void put_hash(json_w *w, const uint8_t h[32])
 /* the script hash of the protocol: SHA-256 of the script, shown reversed like a txid */
 static void script_hash(const uint8_t *spk, size_t len, uint8_t sh[32]) { pz_sha256(spk, len, sh); }
 
-/* The bytes of a transaction (malloc'd), accepted only when their hash is txid. A "transaction" of 64 bytes is refused: an inner node of
- * a Merkle tree is 64 bytes, and could be passed off as a leaf. */
+/* The bytes of a transaction (malloc'd), accepted only when their hash is txid. */
 static bool get_tx(electrum *e, const uint8_t txid[32], uint8_t **raw, size_t *len)
 {
     json_w w;
@@ -63,7 +61,7 @@ static bool get_tx(electrum *e, const uint8_t txid[32], uint8_t **raw, size_t *l
     if (!electrum_call(e, "blockchain.transaction.get", &w, &d, &res)) return false;
     const char *hex = json_str(res);
     const size_t hl = hex ? strlen(hex) : 0;
-    bool ok = hl >= 2 && hl % 2 == 0 && hl / 2 != 64 && (*raw = malloc(hl / 2)) != NULL;
+    bool ok = hl >= 2 && hl % 2 == 0 && (*raw = malloc(hl / 2)) != NULL;
     ok = ok && pz_unhex(hex, hl, *raw) && btc_txid(*raw, hl / 2, got) && !memcmp(got, txid, 32);
     json_free(&d);
     if (!ok) {
@@ -304,7 +302,7 @@ static int prove(chain_spv *c, electrum *e, const uint8_t spk[BTC_P2PKH_LEN], co
     size_t len, pl;
     if (l->height > tip || !get_tx(e, l->txid, &raw, &len)) return -1;
     const bool ours = btc_prevout(raw, len, l->txid, l->vout, value, &ps, &pl) && pl == BTC_P2PKH_LEN && !memcmp(ps, spk, pl) &&
-                      tip - l->height + 1 >= (is_coinbase(raw, len) ? COINBASE_MATURITY : 1);
+                      tip - l->height + 1 >= (is_coinbase(raw, len) ? BTC_COINBASE_MATURITY : 1);
     free(raw);
     return !ours ? 0 : get_proof(c, e, l->txid, l->height) ? 1 : -1;
 }
@@ -399,15 +397,17 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     return n;
 }
 
-bool chain_spv_send(chain_spv *c, const uint8_t *raw, size_t n)
+/* to every server: one that keeps it to itself changes nothing. True when one of them then gives it back */
+static bool broadcast(void *ctx, const uint8_t *raw, size_t n)
 {
+    chain_spv *c = ctx;
     servers s;
     uint8_t txid[32], *back;
     size_t bl;
     bool ok = false;
     if (!btc_txid(raw, n, txid)) return false;
     open_all(&s, c);
-    for (int i = 0; i < c->nservers; i++) {                    /* to every server: one that keeps it to itself changes nothing */
+    for (int i = 0; i < c->nservers; i++) {
         json_w w;
         json_doc d;
         const json_val *res;
@@ -422,13 +422,6 @@ bool chain_spv_send(chain_spv *c, const uint8_t *raw, size_t n)
     }
     close_all(&s);
     return ok;
-}
-
-static bool broadcast(void *ctx, const btc_tx *tx)
-{
-    uint8_t raw[BTC_TX_MAX_SIZE];
-    const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
-    return n && chain_spv_send(ctx, raw, n);
 }
 
 /* Output txid:vout: -1 spent by a confirmed transaction, with its proof; -2 when no server gives the transaction (its bytes count only with
@@ -514,60 +507,14 @@ static uint64_t feerate(void *ctx)
         json_free(&d);
     }
     close_all(&s);
-    if (!n) return c->fallback_feerate;
+    if (!n) return 0;
     qsort(f, (size_t)n, sizeof *f, by_u64);
     return f[(n - 1) / 2];                                     /* the lower median: servers that raise the fee win only as a majority */
 }
 
-/* The spends of a script waiting in the mempool: a transaction some server lists there and gives (its bytes hashed to its id), with an
- * input validly signed for the script, which only its key makes. A spend takes its coin out of listunspent, so a coin about to be spent
- * looks gone already; what is only sent to the script counts for nothing (a node's scan does not show it either), nor does an id a server
- * lists and does not give. When no server could look into all it lists (no time left), 1: it cannot be told. -1 when none answered. */
-static int pending(void *ctx, const uint8_t spk[BTC_P2PKH_LEN])
-{
-    chain_spv *c = ctx;
-    servers s;
-    uint8_t sh[32];
-    int found = 0, answered = 0, whole = 0;
-    btc_tx *tx = malloc(sizeof *tx);
-    if (!tx) return -1;
-    open_all(&s, c);
-    script_hash(spk, BTC_P2PKH_LEN, sh);
-    for (int i = 0; i < c->nservers; i++) {
-        json_w w;
-        json_doc d;
-        const json_val *res;
-        if (!s.up[i]) continue;
-        jw_init(&w);
-        jw_arr(&w), put_hash(&w, sh), jw_end(&w);
-        if (!electrum_call(&s.e[i], "blockchain.scripthash.get_mempool", &w, &d, &res)) continue;
-        bool all = res->type == JSON_ARRAY;
-        const json_val *it = res + 1;
-        for (uint32_t j = 0; all && j < res->n; j++, it = json_next(it)) {
-            uint8_t id[32], *raw;
-            size_t len;
-            if (!btc_hash_from_hex(json_str(json_get(it, "tx_hash")), id)) continue;
-            if (!get_tx(&s.e[i], id, &raw, &len)) {
-                all = s.e[i].fd >= 0 && s.e[i].budget >= 0;    /* it did not give it, or there is no time left to ask */
-                continue;
-            }
-            bool signed_for = false;
-            const bool parsed = btc_tx_parse(tx, raw, len);
-            for (size_t k = 0; parsed && k < tx->n_in && !signed_for; k++) signed_for = btc_verify_p2pkh(tx, k, spk, BTC_P2PKH_LEN);
-            found += signed_for;
-            free(raw);
-        }
-        answered++, whole += all;
-        json_free(&d);
-    }
-    close_all(&s);
-    free(tx);
-    return !answered ? -1 : found ? found : !whole;
-}
-
 static int ready(void *ctx, char *why, size_t cap) { return chain_spv_ready(ctx, why, cap); }
 
-session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, pending, ready}; }
+session_chain chain_spv_iface(chain_spv *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, ready, true}; }
 
 int chain_spv_ready(chain_spv *c, char *why, size_t cap)
 {
@@ -610,12 +557,22 @@ int chain_spv_defaults(const char **out, uint64_t *cp_height, uint8_t cp_hash[32
 bool chain_spv_init(chain_spv *c, btc_chain chain, uint64_t cp_height, const uint8_t *cp_hash, const char *const *srv, int nservers,
                     const char *headers_path)
 {
-    uint8_t g[32];
+    const char *main_srv[CHAIN_SPV_SERVERS];
+    uint8_t g[32], main_cp[32];
+    uint64_t main_height;
     memset(c, 0, sizeof *c);
+    if (chain == BTC_MAIN) {                                    /* what the caller leaves out */
+        const int n = chain_spv_defaults(main_srv, &main_height, main_cp);
+        if (!nservers) srv = main_srv, nservers = n;
+        if (!cp_hash) cp_height = main_height, cp_hash = main_cp;
+    }
     if (nservers < 1 || nservers > CHAIN_SPV_SERVERS || (!cp_hash && cp_height)) return false;
     if (!cp_hash) spv_genesis(chain, g);
     if (!spv_init(&c->headers, chain, cp_height, cp_hash ? cp_hash : g)) return false;
     c->chain = chain, c->nservers = nservers, c->headers_path = headers_path;
+    /* six hours without a block: the servers are behind, or lie. The height, which every waiting session asks, from the servers every ten
+     * seconds at most */
+    if (chain != BTC_REGTEST) c->max_tip_age = 6 * 3600, c->tip_ms = 10000;
     for (int i = 0; i < nservers; i++) c->servers[i] = srv[i], c->conn[i].fd = -1;
     pthread_mutex_init(&c->mu, NULL);
     pthread_mutex_init(&c->io, NULL);

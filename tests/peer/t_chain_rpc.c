@@ -122,7 +122,7 @@ static void start(node_fn fn, btc_chain chain)
     N.calls[0] = 0;
     pthread_mutex_unlock(&N.mu);
     CHECK(btc_rpc_init(&R, "127.0.0.1", N.port, "u", "p"));
-    CR = (chain_rpc){.rpc = &R, .chain = chain, .fallback_feerate = 2000};
+    CR = (chain_rpc){.rpc = &R, .chain = chain};
     CH = chain_rpc_iface(&CR);
 }
 
@@ -334,22 +334,22 @@ static answer ans_misc(const char *method, const char *params, int nth)
 static void test_misc(void)
 {
     start(ans_misc, BTC_REGTEST);
-    CR.conf_target = 2;
     /* A failed call is not height 0: a session waits a number of blocks from a height, and 0 would end the wait at once. */
-    CHECK(CH.height(CH.ctx) == 500);
-    CHECK(CH.height(CH.ctx) == 501 && CR.tip == 501);   /* tried again after the failure */
+    CHECK(CH.height(CH.ctx) == 500 && CH.height(CH.ctx) == 500);   /* the failure: the last height */
+    CHECK(CH.height(CH.ctx) == 501 && CR.tip == 501);
     btc_tx tx;
-    uint8_t id[32] = {1}, spk[BTC_P2PKH_LEN];
+    uint8_t id[32] = {1}, spk[BTC_P2PKH_LEN], raw[BTC_TX_MAX_SIZE];
     pt_unhex(SPK_HEX, spk, sizeof spk);
     btc_tx_init(&tx);
     CHECK(btc_tx_add_in(&tx, id, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&tx, 1000, spk, sizeof spk));
+    const size_t n = btc_tx_serialize(&tx, raw, sizeof raw);
     /* sent; sent already (in a block, in the mempool); refused */
-    CHECK(CH.broadcast(CH.ctx, &tx) && CH.broadcast(CH.ctx, &tx) && CH.broadcast(CH.ctx, &tx));
-    CHECK(!CH.broadcast(CH.ctx, &tx) && !CH.broadcast(CH.ctx, &tx));
+    CHECK(CH.broadcast(CH.ctx, raw, n) && CH.broadcast(CH.ctx, raw, n) && CH.broadcast(CH.ctx, raw, n));
+    CHECK(!CH.broadcast(CH.ctx, raw, n) && !CH.broadcast(CH.ctx, raw, n));
     CHECK(CH.confirmations(CH.ctx, id, 0) == -1 && CH.confirmations(CH.ctx, id, 0) == -2);
     CHECK(CH.confirmations(CH.ctx, id, 0) == 3);   /* spent in the mempool only: still there (the spend may leave the mempools) */
     CHECK(CH.confirmations(CH.ctx, id, 0) == 0);   /* its block was taken away and it waits in the mempool with its spend: no spend in a block */
-    CHECK(CH.feerate(CH.ctx) == 4321 && CH.feerate(CH.ctx) == 2000);   /* satoshis per 1000 virtual bytes; the fallback */
+    CHECK(CH.feerate(CH.ctx) == 4321 && CH.feerate(CH.ctx) == 0);   /* satoshis per 1000 virtual bytes; no estimate */
     btc_rpc_done(&R);
 }
 

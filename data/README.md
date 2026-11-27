@@ -61,18 +61,17 @@ without a public key): `n,txid,vout,sats`, the txid as explorers show it. Three 
 * an output of `12f34b58b04dfb0233ce889f674781c0e0c7ba95482cca469125af41a78d13b3` (block 785620, April 2023), one for each puzzle
   open then (`n - 76` from puzzle 121 on), `n · 0.09` BTC.
 
-They are history and never change: the table is made again only when a puzzle is solved, and its rows go. What others send to an
-address is not in it. A home without a node reads the chain from servers whose headers start at block 338688, before the first of
-these coins: their scans show every coin of a puzzle address, proven, as a node's does. The rows serve only as a defence when every
-server of such a home hides the prize: they become the `prize=` lines of the networks written in the program (`pzpeer netcheck 140`
-lists them) and the coins `pzpeer sweep` looks up for the key of an address, each found by its txid, and a home gives its piece of the
-key only once each is proven spent (docs/en/NETWORK.md 5, 7.5 step 8, 8.2).
+They are history and never change. What others send to an address is not in it. A home without a node reads the chain from servers
+whose headers start at block 338688, before the first of these coins: their scans show every coin of a puzzle address, proven, as a
+node's does. The rows serve as a defence when every server of such a home hides the prize: they become the `prize=` lines of the
+networks written in the program (`pzpeer netcheck 140` lists them), which a session pays even when no scan lists them, and the coins
+`pzpeer sweep` looks up for the key of an address, each found by its txid, so that its transaction, which shows the public key, leaves
+none behind (docs/en/NETWORK.md 5, 8.2).
 
-`tools/fetch_prizes.py` makes the file from the unspent coins of each address in the public APIs of **mempool.space** and
-**blockstream.info** (`/api/address/ADDRESS/utxo`, nothing but the address in the request, a pause between requests), keeping the
-outputs of the three transactions: the two must **agree on every coin** (txid, output, value, block), or nothing is written; `--raw DIR`
-keeps their answers. The rows of this revision were acquired on 2026-11-26 for the 77 open puzzles: the two sources agreed on all their
-coins, of which the table keeps the 231 of the creator.
+The rows were acquired on 2026-11-26 for the 77 open puzzles, from the unspent coins of each address in the public APIs of
+**mempool.space** and **blockstream.info** (`/api/address/ADDRESS/utxo`), keeping the outputs of the three transactions: the two
+sources agreed on every coin (txid, output, value, block), of which the table keeps the 231 of the creator. When a puzzle is solved its
+three rows are removed by hand (`tools/gen_puzzles.py` refuses them once the key is in `puzzles.csv`); nothing else changes the table.
 `tools/gen_puzzles.py` checks that each row is of an open puzzle and an output of one of the three transactions, of the value it gave
 the puzzle (and, for the first two, of its number), one of each a puzzle; `puzzles_verify()` repeats the first checks.
 
@@ -80,7 +79,7 @@ the puzzle (and, for the first two, of its number), one of each a puzzle; `puzzl
 
 ```sh
 $EDITOR data/puzzles.csv                 # n,address,pubkey,privkey  (pubkey/privkey may be empty)
-python3 -I tools/fetch_prizes.py --raw DIR   # data/prizes.csv: the coins of the creator at the open puzzles, from two explorers
+$EDITOR data/prizes.csv                  # a puzzle solved: its rows go
 python3 -I tools/gen_puzzles.py          # checks every row and rewrites src/puzzles_data.c
 make test                                # includes the check in C
 ```

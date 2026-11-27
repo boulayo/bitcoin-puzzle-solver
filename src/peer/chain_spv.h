@@ -25,21 +25,23 @@ typedef struct {
     spv_chain headers;
     pthread_mutex_t mu;                       /* the headers: sessions share them */
     const char *headers_path;                 /* where they are kept between runs (NULL: nowhere) */
-    uint64_t fallback_feerate;                /* when no server gives an estimate: satoshis per 1000 virtual bytes */
     int timeout_ms;                           /* of one call to a server; 0: 10000 */
     int op_ms;                                /* the time of the calls of one server in one operation, its headers included; 0: 60000 */
-    int tip_ms;                               /* the height is asked of the servers at most this often, in ms (0: at every call); any
-                                               * operation asks it too */
+    int tip_ms;                               /* the height is asked of the servers at most this often, in ms (0: at every call;
+                                               * chain_spv_init sets ten seconds but on regtest); any operation asks it too */
     int64_t synced;                           /* when it was asked last (mu) */
     struct spv_spends *spends;                /* the inputs of the transactions looked into for a spend (made at the first; io) */
-    unsigned max_tip_age;                     /* a chain whose last block is older than this many seconds is not ready (0: any) */
+    unsigned max_tip_age;                     /* a chain whose last block is older than this many seconds is not ready (0: any;
+                                               * chain_spv_init sets six hours but on regtest) */
     uint64_t whole;                           /* for a sweep, the least value of a coin it takes, and coins is -1 when a server lists
                                                * one that no server proves (a sweep that left it would show the public key to whoever
                                                * takes it); 0 for sessions, which one lying server would stop so */
     char unproven[300];                       /* that coin and the server that lists it (io) */
 } chain_spv;
 
-/* cp_hash NULL: the genesis block of the chain (cp_height 0). False for a checkpoint of the main chain that is not on a period boundary. */
+/* The light chain of a home, of pzpeer sweep and of pzpeer netcheck --chain. On the main chain, no servers (nservers 0) are the built-in
+ * ones and no checkpoint (cp_hash NULL) is the built-in one (chain_spv_defaults); elsewhere cp_hash NULL is the genesis block (cp_height 0).
+ * False for a checkpoint of the main chain that is not on a period boundary, or no server. */
 bool chain_spv_init(chain_spv *c, btc_chain chain, uint64_t cp_height, const uint8_t *cp_hash, const char *const *servers, int nservers,
                     const char *headers_path);
 /* What a network of the main chain uses when nothing else is given: public Electrum servers that take plain TCP, of different operators
@@ -52,7 +54,5 @@ session_chain chain_spv_iface(chain_spv *c);
  * about 640 000 headers, minutes). 1: ready; 0: not now (no server answers, or the chain they give ends too long ago), with the reason in
  * why. */
 int chain_spv_ready(chain_spv *c, char *why, size_t cap);
-/* A transaction as bytes (a sweep, larger than a btc_tx) to every server; true when one of them then gives it back. */
-bool chain_spv_send(chain_spv *c, const uint8_t *raw, size_t n);
 
 #endif

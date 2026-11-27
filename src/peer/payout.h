@@ -53,14 +53,14 @@ uint64_t payout_worth(uint64_t feerate);
 /* The first transaction from the coins of the puzzle: the largest first (ties by outpoint), at most PAYOUT_MAX_COINS, without the coins worth
  * less than 3 times the fee of their input. False when what is taken does not pay the fee and the tiny coins. */
 bool payout_first(const payout_terms *t, const payout_coin *coins, size_t n, btc_tx *tx);
-/* The second transaction, from the first as it was confirmed: a legacy txid covers the signatures, and a third party can still change the
- * encoding of one before a miner takes it, so the second is built only from the first that is in a block. */
+/* The second transaction, from the first (payout_first, of the same terms) as it was confirmed: a legacy txid covers the signatures, and a
+ * third party can still change the encoding of one before a miner takes it, so the second is built only from the first that is in a block. */
 bool payout_second(const payout_terms *t, const btc_tx *first, btc_tx *tx);
 /* The second transaction again, from the same two coins of the first, worth all, at the fee rate of t: the outputs of `second`, whose rate
  * the chain no longer takes, with their values by the same split. False unless it pays more than twice the fee of `second`. Whichever of
  * the two is mined, each party gets its share. */
 bool payout_bump(const payout_terms *t, const btc_tx *second, uint64_t all, btc_tx *tx);
-/* The cancel of party F: its tiny coin of the first transaction to its own payout address, less the fee. */
+/* The cancel of party F: its tiny coin of the first transaction (payout_first, of the same terms) to its own payout address, less the fee. */
 bool payout_cancel(const payout_terms *t, const btc_tx *first, btc_tx *tx);
 /* F's tiny coins (n of them, at most BTC_MAX_IN) to its own payout address, less the fee; false when they do not pay it and more than
  * the dust limit. Unsigned: each input is F's coin key. */

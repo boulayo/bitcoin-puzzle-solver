@@ -115,29 +115,23 @@ int main(void)
     CHECK(c.out[0].value > 2 * PAYOUT_TINY_MIN - 2000 && c.out[0].value < 2 * PAYOUT_TINY_MIN && !payout_sweep(&t, tiny, 0, &c));
     tiny[0].value = tiny[1].value = 300;
     CHECK(!payout_sweep(&t, tiny, 2, &c));
-    /* refusals: nothing worth spending, a first transaction that is not one */
+    /* refusal: nothing worth spending */
     CHECK(!payout_first(&t, coins, 2, &a2));
-    btc_tx bad = a;
-    bad.out[1].value++;
-    CHECK(!payout_second(&t, &bad, &b) && !payout_cancel(&t, &bad, &c));
     /* a high fee rate makes the tiny coins larger: F's cancel always leaves at least its own fee and the dust limit */
     payout_terms hot = t;
     hot.feerate = hot.low_feerate = 500000;                      /* 500 sat/vB, both homes */
     btc_tx ha, hc;
     CHECK(payout_tiny(&t) == PAYOUT_TINY_MIN && payout_tiny(&hot) > 150000);
     CHECK(payout_first(&hot, coins, 10, &ha) && ha.n_out == 2 && ha.out[1].value == payout_tiny(&hot));
-    CHECK(payout_cancel(&hot, &ha, &hc) && hc.out[0].value > payout_tiny(&hot) / 2 && !payout_cancel(&hot, &a, &hc));
-    /* the lower rate of the two homes sizes it, but half the fee rate at least: F's cancel at the fee rate still leaves the dust limit
-     * (before, a partner F that proposed 4 times the other's rate had a coin 4 times as large, which it kept when it stopped the payout) */
+    CHECK(payout_cancel(&hot, &ha, &hc) && hc.out[0].value > payout_tiny(&hot) / 2);
+    /* the lower rate of the two homes sizes it, but half the fee rate at least: F's cancel at the fee rate still leaves the dust limit,
+     * and a partner F that proposes 4 times the other's rate gains little for it (it keeps its tiny coin when it stops the payout) */
     payout_terms push = hot;
     push.low_feerate = hot.feerate / 4;
     CHECK(payout_first(&push, coins, 10, &ha) && payout_cancel(&push, &ha, &hc) && hc.out[0].value == 546);
     push.low_feerate = hot.feerate / 4 * 3;
     CHECK(payout_tiny(&push) > ha.out[1].value && payout_tiny(&push) < payout_tiny(&hot));
-    hot.first = 2;
-    CHECK(!payout_first(&hot, coins, 10, &ha) && !payout_cancel(&hot, &ha, &hc));
-    /* a first transaction only when its prize pays for the second: at 25 sat/vB with P2PKH payouts the second needs more than a tiny coin
-     * (before, a prize of a few hundred satoshis more than the tiny coin had its first transaction and never a second) */
+    /* a first transaction only when its prize pays for the second: at 25 sat/vB with P2PKH payouts the second needs more than a tiny coin */
     payout_terms w = t;
     w.feerate = 25000, w.pay_len[1] = BTC_P2PKH_LEN, memcpy(w.pay_spk[1], w.pay_spk[0], BTC_P2PKH_LEN);
     int built = 0;

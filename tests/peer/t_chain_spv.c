@@ -147,7 +147,6 @@ typedef struct {
     bool no_work;                  /* announces five blocks more, linked but without proof of work */
     bool drop_broadcast;           /* says it took a transaction and keeps it to itself */
     bool blind_mempool;            /* does not show the mempool */
-    bool phantom;                  /* lists in the mempool of every script a transaction it does not have */
     int slow_ms;                   /* answers every call this late */
     int slow_scan_ms;              /* answers its histories and proofs this late: each in time, and as many as it is asked */
     int chunk;                     /* gives at most this many headers a call, as a server may (0: what is asked) */
@@ -312,18 +311,6 @@ static bool answer(server *s, const char *method, const json_val *p, char *out, 
             }
         return strcat(out, "]"), true;
     }
-    if (!strcmp(method, "blockchain.scripthash.get_mempool")) {
-        int n = 0;
-        strcat(out, "[");
-        if (s->l.phantom) strcat(out, "{\"tx_hash\": \"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\", \"height\": 0, \"fee\": 999}"), n++;
-        for (int i = 0; a0 && !s->l.blind_mempool && i < W.nt; i++) {
-            char hex[65];
-            if (W.t[i].height != 0 || !touches(s, i, a0, NULL)) continue;
-            btc_hash_to_hex(W.t[i].txid, hex);
-            snprintf(out + strlen(out), cap - strlen(out), "%s{\"tx_hash\": \"%s\", \"height\": 0, \"fee\": 999}", n++ ? ", " : "", hex);
-        }
-        return strcat(out, "]"), true;
-    }
     if (!strcmp(method, "blockchain.transaction.broadcast")) {
         btc_tx tx;
         uint8_t raw[600], id[32];
@@ -422,7 +409,7 @@ static void view(chain_spv *c, session_chain *ch, server *a, server *b, server *
     if (d) srv[n++] = d->addr;
     pz_sha256d(W.hdr[0], 80, cp);
     CHECK(chain_spv_init(c, BTC_REGTEST, 0, cp, srv, n, NULL));
-    c->timeout_ms = 3000, c->fallback_feerate = 1234;
+    c->timeout_ms = 3000;
     *ch = chain_spv_iface(c);
 }
 
@@ -490,7 +477,7 @@ int main(void)
          * named it takes the prize, which no scan proves, and finds the other one spent. A named coin no server gives, and it refuses: the
          * transaction would show the public key and leave the rest of the coins to whoever is first. So does a sweep that takes a coin
          * only with its proof (whole, pzpeer sweep) when a server lists one that none proves, here the prize below the checkpoint, named
-         * or not: it names that server (before, such a coin was dropped without a word, and one not named was left behind) */
+         * or not: it names that server, as a coin left behind would go to whoever reads the public key */
         payout_coin named[3] = {{.vout = 0}, {.vout = 0}, {.vout = 0}};
         memcpy(named[0].txid, fid, 32), memcpy(named[1].txid, f2id, 32), memcpy(named[2].txid, other, 32);
         sweep_info si = {.rate = 50000};
@@ -513,7 +500,7 @@ int main(void)
               !memcmp(sw.in[0].prev_txid, fid, 32));
         free(si.raw);
         chain_spv_free(&c);
-        /* From the checkpoint of the chain every coin is proven: a sweep needs no coin named (before, it was refused on a light chain). A
+        /* From the checkpoint of the chain every coin is proven: a sweep needs no coin named. A
          * server whose proofs prove nothing is asked in vain, and the sweep refuses; next to an honest one, which proves what it lists,
          * the sweep goes on, whichever comes first */
         view(&c, &ch, &honest, NULL, NULL);
@@ -533,7 +520,7 @@ int main(void)
         CHECK(!sweep_tx(&ch, psec, NULL, 0, aspk, BTC_P2PKH_LEN, NULL, &si) && si.taken == 1 && !c.unproven[0]);
         free(si.raw);
         chain_spv_free(&c);
-        /* a node whose scan fails: the named coins alone would be swept, and the rest left (before, it went on) */
+        /* a node whose scan fails: no sweep, as the named coins alone would leave the rest */
         session_chain node = {.coins = scan_fails, .coin = named_there, .feerate = a_rate};
         CHECK((no = sweep_tx(&node, psec, named, 1, aspk, BTC_P2PKH_LEN, NULL, &si)) && strstr(no, "did not answer") && !si.raw);
     }
@@ -563,8 +550,8 @@ int main(void)
     CHECK(ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.confirmations(ch.ctx, fid, 0) == 0 && ch.confirmations(ch.ctx, f2id, 0) == 0);
     chain_spv_free(&c);
 
-    /* blocks without work: not taken, the chain ends where the work ends, and the server that announced them is left alone (before, it
-     * was asked again at every operation, which it could hold for a minute each); next to an honest one the answers are the true ones */
+    /* blocks without work: not taken, the chain ends where the work ends, and the server that announced them is left alone, as it could
+     * hold every operation for a minute; next to an honest one the answers are the true ones */
     view(&c, &ch, &nowork, NULL, NULL);
     CHECK(ch.height(ch.ctx) == 4 && ch.coins(ch.ctx, pspk, coins, 8) == -1);
     chain_spv_free(&c);
@@ -591,8 +578,10 @@ int main(void)
     forged = pay;
     CHECK(btc_sign_p2pkh(&forged, 0, asec));                   /* signed by the wrong key */
     CHECK(btc_sign_p2pkh(&pay, 0, psec));
+    uint8_t praw[BTC_TX_MAX_SIZE];
+    const size_t pn = btc_tx_serialize(&pay, praw, sizeof praw);
     view(&c, &ch, &keeper, NULL, NULL);
-    CHECK(!ch.broadcast(ch.ctx, &pay) && keeper.broadcasts == 1);
+    CHECK(!ch.broadcast(ch.ctx, praw, pn) && keeper.broadcasts == 1);
     chain_spv_free(&c);
     /* a transaction that spends the prize without a valid signature, shown from a mempool: the prize has not moved */
     pthread_mutex_lock(&W.mu);
@@ -605,7 +594,7 @@ int main(void)
     pthread_mutex_unlock(&W.mu);
     chain_spv_free(&c);
     view(&c, &ch, &keeper, &honest, NULL);
-    CHECK(ch.broadcast(ch.ctx, &pay) && honest.broadcasts == 1 && ch.broadcast(ch.ctx, &pay));   /* and again: known already */
+    CHECK(ch.broadcast(ch.ctx, praw, pn) && honest.broadcasts == 1 && ch.broadcast(ch.ctx, praw, pn));   /* and again: known already */
     /* in the mempool, validly signed: not spent yet, for every server. One server could show a transaction that was never sent (the
      * second transaction a partner holds back), and F would not cancel: a spend counts once it is confirmed, by proof */
     CHECK(ch.confirmations(ch.ctx, fid, 0) == 4);
@@ -629,8 +618,8 @@ int main(void)
     CHECK(ch.height(ch.ctx) == 6 && ch.coins(ch.ctx, pspk, coins, 8) == 0 && ch.height(ch.ctx) == 7);
     chain_spv_free(&c);
 
-    /* dust between a coin and its spend: 260 transactions to its script in the blocks between (before, only the oldest 256 after the coin
-     * were looked into, and the spend stayed hidden). What each spends is kept: the next look asks the server for few of them again */
+    /* dust between a coin and its spend: 260 transactions to its script in the blocks between do not hide the spend. What each spends is
+     * kept: the next look asks the server for few of them again */
     uint8_t dsec[32], dspk[BTC_P2PKH_LEN], did[32];
     spk_of("dusted", dsec, dspk);
     btc_tx dcoin, dspend;
@@ -671,8 +660,8 @@ int main(void)
     chain_spv_free(&c);
 
     /* a server that hides the coins and answers slowly, next to an honest one that lists 256 of them: it has op_ms for the whole
-     * operation (before, op_ms again for every coin it did not list: here a minute, on the main chain hours) */
-    server slow, phantom, slower;
+     * operation, not for every coin it did not list (on the main chain, hours) */
+    server slow;
     start(&slow, (lies){.hide_unspent = true, .slow_scan_ms = 100});
     view(&c, &ch, &slow, &honest, NULL);
     c.op_ms = 2000;
@@ -680,42 +669,8 @@ int main(void)
     CHECK(ch.coins(ch.ctx, dspk, coins, 8) >= 0 && sys_now_ms() - t1 < 20000);
     chain_spv_free(&c);
 
-    /* the mempool of the puzzle address: what is only sent to it is no spend of it, nor is an id a server lists and does not give (before,
-     * any transaction there held the exchange of the pieces); a server with no time left to look into its list cannot tell; a spend that
-     * its key signed is one */
-    btc_tx fund3, dep, spend3;
-    uint8_t f3id[32];
-    btc_tx_init(&fund3), btc_tx_init(&dep), btc_tx_init(&spend3);
-    CHECK(btc_tx_add_in(&fund3, other, 9, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&fund3, 200000, pspk, BTC_P2PKH_LEN) && btc_tx_txid(&fund3, f3id));
-    CHECK(btc_tx_add_in(&dep, other, 10, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&dep, 150000, pspk, BTC_P2PKH_LEN));
-    CHECK(btc_tx_add_in(&spend3, f3id, 0, BTC_SEQUENCE_FINAL) && btc_tx_add_out(&spend3, 190000, aspk, BTC_P2PKH_LEN) && btc_sign_p2pkh(&spend3, 0, psec));
-    pthread_mutex_lock(&W.mu);
-    add_tx(&fund3);
-    pthread_mutex_unlock(&W.mu);
-    mine_block();
-    pthread_mutex_lock(&W.mu);
-    add_tx(&dep);
-    pthread_mutex_unlock(&W.mu);
-    start(&phantom, (lies){.phantom = true});
-    start(&slower, (lies){.slow_ms = 300});
-    view(&c, &ch, &honest, &phantom, NULL);
-    CHECK(ch.pending(ch.ctx, pspk) == 0);
-    chain_spv_free(&c);
-    view(&c, &ch, &slower, NULL, NULL);
-    CHECK(ch.height(ch.ctx) > 0);                              /* its headers, before its time is short */
-    c.op_ms = 750;                                             /* the time of two of its answers: none left for the transaction */
-    CHECK(ch.pending(ch.ctx, pspk) != 0);                      /* it cannot tell: 1, or -1 where its time ran out before the list (a slow
-                                                                  machine); either holds the exchange of the pieces */
-    chain_spv_free(&c);
-    pthread_mutex_lock(&W.mu);
-    add_tx(&spend3);
-    pthread_mutex_unlock(&W.mu);
-    view(&c, &ch, &honest, &phantom, NULL);
-    CHECK(ch.pending(ch.ctx, pspk) >= 1);
-    chain_spv_free(&c);
-
-    /* a coin spent by a transaction of 17 inputs, more than a btc_tx holds: every input of it is looked at (before, such a transaction
-     * was taken to spend nothing, and a coin an outside wallet swept so stayed unspent for ever) */
+    /* a coin spent by a transaction of 17 inputs, more than a btc_tx holds: every input of it is looked at, as a wallet that sweeps many
+     * coins at once spends so */
     btc_tx fund4;
     uint8_t f4id[32];
     btc_tx_init(&fund4);
@@ -733,8 +688,8 @@ int main(void)
     CHECK(ch.confirmations(ch.ctx, f4id, 0) == -1);
     chain_spv_free(&c);
 
-    /* A sweep takes every coin worth its input at once, here 20, and leaves the dust (before, the 16 largest, with the advice to send
-     * the rest once the first was in a block: by then whoever read the public key in it had taken them) */
+    /* A sweep takes every coin worth its input at once, here 20, and leaves the dust: a second transaction would come after the first
+     * showed the public key */
     uint8_t msec[32], mspk[BTC_P2PKH_LEN];
     spk_of("many", msec, mspk);
     pthread_mutex_lock(&W.mu);
@@ -759,9 +714,9 @@ int main(void)
     chain_spv_free(&c);
 
     /* The first sync, from the checkpoint to the tip, takes several operations (on the main chain some 640 000 headers, a minute of each
-     * server an operation): ready goes on while they bring headers (before, one operation, and the rest waited for the first session) */
+     * server an operation): ready goes on while they bring headers, so that no session waits for them */
     server drip;
-    start(&drip, (lies){.chunk = 1, .slow_ms = 100});          /* some 9 headers an operation: 18 take three (wide margins for slow CI) */
+    start(&drip, (lies){.chunk = 1, .slow_ms = 100});          /* some 9 headers an operation: 17 take two at least (wide margins for slow CI) */
     view(&c, &ch, &drip, NULL, NULL);
     c.op_ms = 1000;
     uint64_t synced = 0;
@@ -772,7 +727,7 @@ int main(void)
     chain_spv_free(&c);
 
     stop(&honest), stop(&hider), stop(&stale), stop(&noproof), stop(&nowork), stop(&keeper), stop(&blind);
-    stop(&slow), stop(&phantom), stop(&slower), stop(&drip);
+    stop(&slow), stop(&drip);
     secp256k1_context_destroy(ctx);
     TEST_DONE("t_chain_spv");
 }

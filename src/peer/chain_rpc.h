@@ -13,8 +13,6 @@
 typedef struct {
     btc_rpc *rpc;
     btc_chain chain;
-    unsigned conf_target;          /* blocks for estimatesmartfee (6) */
-    uint64_t fallback_feerate;     /* when the node has no estimate (regtest, a node just started): satoshis per 1000 virtual bytes */
     uint64_t tip;                  /* the last height the node gave: the height while it does not answer */
 } chain_rpc;
 
@@ -25,7 +23,5 @@ session_chain chain_rpc_iface(chain_rpc *c);
  * headers it knows); -1 never (it is on another chain than c->chain). why gets the reason, or where the node is (cap bytes). A
  * session does not start on a node that is behind: the coins it reports may be spent already, or not there yet. */
 int chain_rpc_ready(chain_rpc *c, char *why, size_t cap);
-/* A transaction as bytes (a sweep, larger than a btc_tx) to the node; true also when it has it already. */
-bool chain_rpc_send(chain_rpc *c, const uint8_t *raw, size_t n);
 
 #endif

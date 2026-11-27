@@ -7,9 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-#define COINBASE_MATURITY 100
 
 /* the address of a P2PKH script on the chain, for the descriptor of scantxoutset */
 static bool p2pkh_address(btc_chain chain, const uint8_t spk[BTC_P2PKH_LEN], char *out, size_t cap)
@@ -54,7 +51,7 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     if (n > (size_t)max) n = (size_t)max;                       /* the scan reports every coin, and fills at most max */
     int k = 0;
     for (size_t i = 0; ok && i < n; i++) {
-        if (!u[i].height || (u[i].coinbase && tip + 1 < u[i].height + COINBASE_MATURITY)) continue;   /* not spendable yet */
+        if (!u[i].height || (u[i].coinbase && tip + 1 < u[i].height + BTC_COINBASE_MATURITY)) continue;   /* not spendable yet */
         if (u[i].spk_len != BTC_P2PKH_LEN || memcmp(u[i].spk, spk, BTC_P2PKH_LEN)) continue;           /* not the script asked */
         memcpy(out[k].txid, u[i].txid, 32), out[k].vout = u[i].vout, out[k].value = u[i].value, k++;
     }
@@ -62,19 +59,13 @@ static int coins(void *ctx, const uint8_t spk[BTC_P2PKH_LEN], payout_coin *out, 
     return ok ? k : -1;
 }
 
-bool chain_rpc_send(chain_rpc *c, const uint8_t *raw, size_t n)
+static bool broadcast(void *ctx, const uint8_t *raw, size_t n)
 {
+    chain_rpc *c = ctx;
     uint8_t txid[32];
     if (btc_rpc_sendrawtransaction(c->rpc, raw, n, txid)) return true;
     /* sent already, by the partner or by an earlier try: -27 (in the chain) or a mempool that knows it */
     return c->rpc->err.kind == BTC_RPC_ERPC && (c->rpc->err.code == -27 || strstr(c->rpc->err.msg, "already") != NULL);
-}
-
-static bool broadcast(void *ctx, const btc_tx *tx)
-{
-    uint8_t raw[BTC_TX_MAX_SIZE];
-    const size_t n = btc_tx_serialize(tx, raw, sizeof raw);
-    return n && chain_rpc_send(ctx, raw, n);
 }
 
 static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
@@ -91,24 +82,20 @@ static int confirmations(void *ctx, const uint8_t txid[32], uint32_t vout)
 }
 
 /* The height has no value for "unknown", and a session counts blocks from it: a 0 after a call that failed would end a wait of a
- * few blocks at once (and F would cancel). So a few tries, then the last height the node gave. */
+ * few blocks at once (and F would cancel). So the last height the node gave. */
 static uint64_t height(void *ctx)
 {
     chain_rpc *c = ctx;
     uint64_t h;
-    for (int tries = 0; tries < 10; tries++) {
-        if (btc_rpc_getblockcount(c->rpc, &h)) return c->tip = h;
-        sys_sleep_ms(1000);
-    }
+    if (btc_rpc_getblockcount(c->rpc, &h)) c->tip = h;
     return c->tip;
 }
 
-static uint64_t feerate(void *ctx)
+static uint64_t feerate(void *ctx)                              /* within 2 blocks (project 4.5) */
 {
     chain_rpc *c = ctx;
     uint64_t f = 0;
-    if (!btc_rpc_estimatesmartfee(c->rpc, c->conf_target ? c->conf_target : 6, &f) || f == 0) f = c->fallback_feerate;
-    return f;
+    return btc_rpc_estimatesmartfee(c->rpc, 2, &f) ? f : 0;
 }
 
 /* a prize of the network file: an output of the puzzle in the node's set, confirmed (the mempool does not count) and mature */
@@ -118,14 +105,13 @@ static int coin(void *ctx, const uint8_t txid[32], uint32_t vout, const uint8_t 
     bool found;
     btc_utxo u;
     if (!btc_rpc_gettxout(c->rpc, txid, vout, &found, &u)) return -1;
-    if (!found || !u.confirmations || (u.coinbase && u.confirmations < COINBASE_MATURITY) || u.spk_len != BTC_P2PKH_LEN ||
+    if (!found || !u.confirmations || (u.coinbase && u.confirmations < BTC_COINBASE_MATURITY) || u.spk_len != BTC_P2PKH_LEN ||
         memcmp(u.spk, spk, BTC_P2PKH_LEN))
         return 0;
     memcpy(out->txid, txid, 32), out->vout = vout, out->value = u.value;
     return 1;
 }
 
-/* the node's scan reads its set of coins, which a spend in the mempool does not change: no pending to look at */
 static int ready(void *ctx, char *why, size_t cap) { return chain_rpc_ready(ctx, why, cap); }
 
-session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, NULL, ready}; }
+session_chain chain_rpc_iface(chain_rpc *c) { return (session_chain){c, coins, broadcast, confirmations, height, feerate, coin, ready, false}; }

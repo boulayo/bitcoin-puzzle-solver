@@ -39,8 +39,8 @@ print('   the node would take it: %s, fee %.0f sat/vB' % (r['allowed'], r['fees'
 rpc getrawmempool '[]' | grep -q "$TXID" && { echo "E2E SWEEP FAILED: the transaction was sent"; exit 1; }
 echo "$OUT" | grep -q "NOT SENT" && echo "0000" | build/pzpeer sweep --chain regtest --rpc "$PZ_REGTEST" --to "$MINE" 2>&1 | grep -q "64 hex digits" || { echo "E2E SWEEP FAILED: the messages"; exit 1; }
 # an address with more coins than a btc_tx holds, two of them dust (a puzzle address collects dozens): every coin worth its input goes,
-# 18 inputs in one transaction that the node would take, and the dust is named (before: the 16 largest, and the advice to send the rest
-# later, when whoever read the public key in the first would take them)
+# 18 inputs in one transaction that the node would take, and the dust is named (a second transaction would come after the first showed
+# the public key)
 K=$(newkey); ADDR=$(addr_of "$K")
 for i in $(seq 1 18); do rpc wallet sendtoaddress "[\"$ADDR\", 0.0$((10 + i))]" >/dev/null; done
 rpc wallet sendtoaddress "[\"$ADDR\", 0.00000600]" >/dev/null; rpc wallet sendtoaddress "[\"$ADDR\", 0.00000700]" >/dev/null
