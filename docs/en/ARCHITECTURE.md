@@ -49,16 +49,16 @@
 | `main.c`, `cmd.h`, `cmd_hunt.c`, `cmd_merge.c`, `cmd_campaigns.c`, `cmd_puzzle.c`, `cmd_devices.c` | the command line: `main.c` holds `main`, the dispatch, the help texts and the reader of the options that `hunt`, `info`, `list`, `where` and `merge` share; the front end of each command is in its `cmd_*.c` (`cmd_hunt.c`: the campaign of the options, new or resumed, the session and the found key, whose encryption and banner `cmd_merge.c` uses too; `cmd_campaigns.c`: `info`, `list`, `where`, `split`; `cmd_puzzle.c`: `puzzle`, `puzzles`), and `cmd.h` declares the entry points and what they share; the other commands are in `cmd_encrypt.c`, `doctor.c`, `selftest.c` (`selftest`, `bench`) and `kangaroo.c` (`kstat`) |
 
 **Embedded kernels.** The kernels are compiled into the executable by `tools/embed.c`, which the `Makefile` builds and runs on the build
-machine. The OpenCL sources (about 100 KB) become plain arrays (`build/kernels_gen.c`). The 25 PTX modules (18 MB of text in `src/kernels/ptx/`,
+machine. The OpenCL sources (about 100 KB) become plain arrays (`build/kernels_gen.c`). The 19 PTX modules (14 MB of text in `src/kernels/ptx/`,
 committed) are embedded compressed (`build/ptx_gen.c`, `embed -z`) in the format described at the top of `src/lz.c`; the encoder is in
 `embed.c`, which checks each stream it writes with the real decoder, so the build stops if a stream does not unpack to its file. The
-modules of a family differ in few lines (`linear128` and `linear256` in 62 of 55,000), so each module is stored against another one
+modules of a family differ in few lines (`linear128` and `linear256` in 62 of 47,500), so each module is stored against another one
 (the `base` column of `src/kernels/ptx/modules.txt`): the text of the base is the dictionary of the stream, and `pz_blob_text` unpacks the base first. Together
-the modules take about 1.1 MB instead of 18 MB, and the stripped Linux executable is about 3 MB instead of 20 MB. `rtcu_build` unpacks the
+the modules take about 0.8 MB instead of 14 MB, and the stripped Linux executable is about 2.5 MB instead of 16 MB. `rtcu_build` unpacks the
 module it is about to load (a few milliseconds, once per module load; no hot path touches this), hands the NUL-terminated text to the
 driver and frees it. `tools/gen_ptx.py` and the `.ptx` files are unchanged. The simulated CUDA driver embeds the same files plain
-(`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves;
-`tests/t_kernels.c` does the same for every module without a driver.
+(`embed` without `-z`) and compares the text it is given with them, so it checks the unpacked bytes against the files themselves, and
+`make test` fails if a `.ptx` file is not listed in `modules.txt`.
 
 The x86 SIMD engines are optional. When the `Makefile` builds for a target other than x86-64 it defines `PZ_NO_X86_VARIANTS`; the engine
 registry (`cpu_common.c`), BSGS (`bsgs.c`) and the kangaroo (`kang_cpu.c`) then use only the scalar code.
@@ -160,7 +160,7 @@ stays. The variables of the users are described in [`USAGE.md`](USAGE.md) (secti
 | `PZ_NO_CUDA`, `PZ_NO_OPENCL` | `no_cuda`, `no_opencl` | `rt.c`: which runtimes are loaded |
 | `PZ_CUDA_LIB` | `cuda_lib` | `rt_cuda.c`: the driver library to load |
 | `PZ_GPU_API`, `PZ_OPENCL_ALL` | `gpu_api`, `opencl_all` | `gpu.c`: choice of the devices |
-| `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_cfg`, `gpu_nk_meta`, `gpu_nk_l2`, `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off (the text of `PZ_GPU_NK` is read by `gpu_variant.c`) |
+| `PZ_GPU_HALF`, `PZ_GPU_NK`, `PZ_GPU_TUNE` | `gpu_half`, `gpu_nk` (+ `gpu_nk_text`), `gpu_tune` | `gpu_tune.c`: forced variants, tuning on or off (the text of `PZ_GPU_NK` is read by `gpu_variant.c`) |
 | `PZ_NO_PROFILE` | `no_profile` | `cmd_hunt.c`, `profile.c` |
 | `PZ_ISA`, `PZ_PRIO_GPU` | `isa`, `prio_gpu` | `cmd_hunt.c`: the CPU engine of the linear search (the name is checked there, and an unknown or unsupported one stops the command), the priority of the threads that serve the GPUs (`run_ctx.prio_gpu`, part of the key of the profile when it is not `auto`) |
 | `PZ_NO_LARGE_PAGES` | `no_large_pages` | `platform_win.c`: `pz_map_zeroed` |
@@ -201,7 +201,7 @@ cannot run (`make test-shani`), is a variable of the tests alone: `tests/t_engin
 | Complete campaigns | `tests/e2e.sh` (includes the encrypted key in the three modes, `--on-found`, `decrypt-key`, the refusals; `tests/pty_seal.py` runs the hidden password prompt on a pseudo-terminal) |
 | Seed generator | `lib/pzcore/tests/t_seed.c`: known answers of the mixing (computed in Python), every bit of every input changing the seed, no input passing for another, 2000 seeds without a duplicate, the OS generator failing in each of its ways (the hook of its test build), the hardening of the process |
 | Encrypted key | `lib/pzcore/tests/t_kdf.c` (RFC 4231, 5869, 7914 vectors), `t_seal.c` (seal and open against `gen_seal_vectors.py`, every byte of the payload damaged, hostile points, the key of a password at the real cost), `tests/t_encrypt.c` (public key parsing, associated data, `campaign.conf`, secret from standard input, `--on-found`, hardening), `src/selftest.c` |
-| Compressed kernels | `tests/t_lz.c`: the decoder and the encoder (round trips of the real PTX modules and of random and adversarial texts, streams built by hand, truncated, extended and corrupted streams must be refused and never touch memory outside the buffers; run under ASan/UBSan by `tools/verify.sh`); `tests/t_kernels.c`: every module embedded in the program unpacks to exactly the bytes of its `.ptx` file |
+| Compressed kernels | `tests/t_lz.c`: the decoder and the encoder (round trips of the real PTX modules and of random and adversarial texts, streams built by hand, truncated, extended and corrupted streams must be refused and never touch memory outside the buffers; run under ASan/UBSan by `tools/verify.sh`); `tools/embed.c` checks every stream it writes against its `.ptx` file, and the build stops if one differs |
 | CUDA path without a GPU | `tests/mock_cuda/`: a **simulated CUDA driver** (`libcuda.so.1` / `nvcuda.dll`) with the same APIs, which recognizes the PTX modules (by comparing the text it is given with the files, byte for byte) and runs the same kernel sources on the CPU, checking every call (pointers, copies outside the buffers, launch shape, arguments). It can show several devices (`PZ_MOCK_DEVICES`, `PZ_MOCK_SAME_NAME`), serves several threads, counts the modules loaded and the launches (`PZ_MOCK_COUNT`) and fails one launch on request (`PZ_MOCK_FAIL_FILE`). It verifies all the CUDA host code; the PTX-to-GPU compilation is left to the real driver and is covered by the self-test at startup |
 | Windows | `make windows` / `make wintest`: static MinGW-w64 exe, unit tests, self-test and campaigns run under Wine (`tools/verify.sh`) |
 | Sanitizer / Valgrind | `make asan`, `make tsan`, `valgrind` (see `docs/en/RELEASING.md`, section "Before every release") |

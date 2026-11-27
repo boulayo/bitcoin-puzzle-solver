@@ -541,9 +541,9 @@ int gpu_selftest(void)
         for (size_t k = 0; k < sizeof KV_L2_NK / sizeof *KV_L2_NK && ok && devs[i].l2_bytes >= KANG_L2_MIN; k++)
             for (int c = 0; c < 2 && ok; c++) {       /* the kernels only the cache-sized herds use */
                 bool seen = false;                    /* tested above, as a variant of its own */
-                for (int j = 0; j < nk; j++) seen |= ks[j] == KV_MAKE(KV_L2_NK[k], c, 0, 0, 0);
+                for (int j = 0; j < nk; j++) seen |= ks[j] == KV_MAKE(KV_L2_NK[k], c, 0, 0);
                 if (seen) continue;
-                s->kvar = KV_MAKE(KV_L2_NK[k], c, 0, 0, 0);
+                s->kvar = KV_MAKE(KV_L2_NK[k], c, 0, 0);
                 s->NK = KV_L2_NK[k];
                 ok = gpu_test_kang(s);
             }

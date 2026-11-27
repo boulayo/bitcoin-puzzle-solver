@@ -60,10 +60,6 @@ typedef struct {
 
 static VFLUSH PZ_VABI void vctx_flush(vctx_t *c)
 {
-#ifdef PZ_PROF_NOHASH
-    c->n = 0;
-    return;
-#endif
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     const pz_vu t = pz_v_set(t0);
     for (int k = 0; k * PZ_LANES < c->n; k++) {

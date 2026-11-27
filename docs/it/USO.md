@@ -419,7 +419,7 @@ come se la variabile non ci fosse.
 | `PZ_NO_CUDA=1`, `PZ_NO_OPENCL=1` | non caricare quel runtime |
 | `PZ_CUDA_LIB=PERCORSO` | la libreria del driver CUDA da caricare, con il suo percorso, al posto di quella del sistema (le prove danno così il loro driver simulato su Windows, dove un driver si cerca solo nella cartella di sistema) |
 | `PZ_GPU_HALF=N` | fissa la finestra del kernel lineare (salta la taratura; i valori sono in ALGORITHMS.md sezione 5); un numero che il dispositivo non offre viene segnalato per ogni dispositivo |
-| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128cm`, `64l` |
+| `PZ_GPU_NK=N` | fissa la variante del kernel del canguro (salta la taratura): camminatori per thread con i suffissi di ALGORITHMS.md sezione 5, es. `128`, `128b`, `128c`, `64l` |
 | `PZ_GPU_TUNE=0` | nessuna taratura; `=1` la fa anche sui dispositivi che non sono GPU, per i test (ogni altro valore è rifiutato) |
 | `PZ_OPENCL_ALL=1` | usa anche i dispositivi OpenCL su CPU (sezione 7.1) |
 | `PZ_NO_PROFILE=1` | il profilo della macchina non si misura né si usa (tutti i thread e tutte le GPU, sezione 7.6), e nemmeno le velocità ricordate del pannello (sezione 6) |

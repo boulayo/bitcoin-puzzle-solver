@@ -18,11 +18,8 @@ static const struct { const char *word; char suffix; const char *cl_option; } KV
 /* What the name of a variant says of a herd wider than the default one (KV_WIDE), the row being the number; there is no suffix for them. */
 static const char *const KV_WIDE_NAMES[] = {"", ", 4x herd", ", 8x herd", ", full herd"};
 
-#define KV_META_WORD ", tags once"
-#define KV_META_SUFFIX 'm'
-#define KV_META_CL_OPTION " -DKANG_META=1"
 #define KV_L2_WORD " L2 herd"
-#define KV_L2_SUFFIX 'l'
+#define KV_L2_SUFFIX "l"
 
 char *gpu_variant_name(int v, char *b, size_t n)
 {
@@ -32,8 +29,8 @@ char *gpu_variant_name(int v, char *b, size_t n)
 
 char *gpu_kvariant_name(int v, char *b, size_t n)
 {
-    snprintf(b, n, "NK %d%s%s%s%s%s", KV_NK(v), KV_FORMS[KV_CFG(v) % KV_NFORMS].word, KV_META(v) ? KV_META_WORD : "",
-             KV_L2(v) && (KV_CFG(v) || KV_META(v)) ? "," : "", KV_L2(v) ? KV_L2_WORD : "", KV_WIDE_NAMES[KV_WIDE(v)]);
+    snprintf(b, n, "NK %d%s%s%s%s", KV_NK(v), KV_FORMS[KV_CFG(v) % KV_NFORMS].word, KV_L2(v) && KV_CFG(v) ? "," : "",
+             KV_L2(v) ? KV_L2_WORD : "", KV_WIDE_NAMES[KV_WIDE(v)]);
     return b;
 }
 
@@ -46,12 +43,8 @@ char *gpu_variant_code(int v, char *b, size_t n)
 char *gpu_kvariant_code(int v, char *b, size_t n)
 {
     if (KV_WIDE(v)) { snprintf(b, n, "-"); return b; }
-    const char suffix[4] = {KV_FORMS[KV_CFG(v) % KV_NFORMS].suffix, KV_META(v) ? KV_META_SUFFIX : 0, KV_L2(v) ? KV_L2_SUFFIX : 0, 0};
-    char text[4];
-    int k = 0;
-    for (int i = 0; i < 3; i++) if (suffix[i]) text[k++] = suffix[i];
-    text[k] = 0;
-    snprintf(b, n, "%d%s", KV_NK(v), text);
+    const char form[2] = {KV_FORMS[KV_CFG(v) % KV_NFORMS].suffix, 0};
+    snprintf(b, n, "%d%s%s", KV_NK(v), form, KV_L2(v) ? KV_L2_SUFFIX : "");
     return b;
 }
 
@@ -64,13 +57,11 @@ bool gpu_kvariant_parse(const char *text, int *code)
     int cfg = 0;
     for (int c = 1; c < KV_NFORMS; c++)
         if (*e == KV_FORMS[c].suffix) { cfg = c; e++; break; }
-    int meta = 0, l2 = 0;
-    if (*e == KV_META_SUFFIX) { meta = 1; e++; }
-    if (*e == KV_L2_SUFFIX) { l2 = 1; e++; }
+    int l2 = 0;
+    if (*e == KV_L2_SUFFIX[0]) { l2 = 1; e++; }
     if (*e) return false;
-    *code = KV_MAKE((int)nk, cfg, meta, l2, 0);
+    *code = KV_MAKE((int)nk, cfg, l2, 0);
     return true;
 }
 
 const char *gpu_kvariant_cl_config(int cfg) { return cfg >= 0 && cfg < KV_NFORMS ? KV_FORMS[cfg].cl_option : ""; }
-const char *gpu_kvariant_cl_meta(int meta) { return meta ? KV_META_CL_OPTION : ""; }

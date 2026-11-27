@@ -20,43 +20,38 @@
 /* Kangaroo kernel variants: kangaroos per work-item (NK: one field inversion is shared by NK steps, so larger is cheaper
  * in arithmetic but needs more private memory) | configuration << 16: 0 keeps the running product of the batch inversion
  * for every walker, 1 only for every other one (half the traffic for those products, half a field multiplication more per
- * step), 2 every fourth | metadata << 20: 1 writes the tag two steps back once per launch instead of at every step and reads the
- * flags of a quad once (KANG_META in pz_kang.cl: 7 bytes less per step on the SASS, slower on the RTX A2000 as measured, RESEARCH.md
- * section 5 after 1.19.2; the suffix m of PZ_GPU_NK), 0 the form of 1.19.2. Measured on the device like the linear variants. */
+ * step), 2 every fourth. Bit 20 is unused (it was the "tags once" form of 1.20.0 to 1.23.4), so the other codes keep their numbers.
+ * Measured on the device like the linear variants. */
 #define KV_NK(v) ((v) & 0xFFFF)
 #define KV_CFG(v) (((v) >> 16) & 0xF)
-#define KV_META(v) (((v) >> 20) & 1)
-#define KV_METAFLAG (1 << 20)
 #define KV_L2(v) (((v) >> 24) & 1)            /* the herd is sized to fit the L2 cache (fewer work-items), see kang_l2_threads */
-#define KV_KERNEL(v) ((v) & 0x1FFFFF)         /* NK | cfg << 16 | metadata << 20: what the kernel build takes (modules.txt: cfg + 16 metadata) */
+#define KV_KERNEL(v) ((v) & 0xFFFFF)          /* NK | cfg << 16: what the kernel build takes (modules.txt: cfg) */
 #define KV_L2FLAG (1 << 24)
 #define KV_WIDE(v) (((v) >> 25) & 3)          /* a herd wider than the default one (more work-items), see kang_wide_threads_for */
 #define KV_WIDEFLAG(w) ((w) << 25)
 enum { KV_WIDE_X4 = 1, KV_WIDE_X8 = 2, KV_WIDE_FULL = 3 };   /* OpenCL: 4 or 8 times the work-items; CUDA: 512 per SM past the cap */
 
 /* Building a code from its fields (constant expressions, so that a table of variants can be written with them): the window and the minimum
- * of resident blocks per SM of a linear kernel; the walkers per work-item, the configuration (KV_CFG), the form of the metadata (0 or 1), the
- * L2 herd (0 or 1) and the width of the herd (KV_WIDE_*, 0 for the default one) of a kangaroo kernel. The fields are read back with the
- * macros above. */
+ * of resident blocks per SM of a linear kernel; the walkers per work-item, the configuration (KV_CFG), the L2 herd (0 or 1) and the width
+ * of the herd (KV_WIDE_*, 0 for the default one) of a kangaroo kernel. The fields are read back with the macros above. */
 #define VAR_MAKE(half, minb) ((half) | (minb) << 16)
-#define KV_MAKE(nk, cfg, meta, l2, wide) ((nk) | (cfg) << 16 | (meta) << 20 | (l2) << 24 | KV_WIDEFLAG(wide))
+#define KV_MAKE(nk, cfg, l2, wide) ((nk) | (cfg) << 16 | (l2) << 24 | KV_WIDEFLAG(wide))
 
-/* The name of a variant as the logs, the tables of 'bench --variants' and 'doctor' print it ("256, register cap", "NK 128 quads, tags once"),
- * and its text code as PZ_GPU_HALF or PZ_GPU_NK takes it ("262400", "128cm"; "-" for a kangaroo variant that no text can force: the wide herds).
+/* The name of a variant as the logs, the tables of 'bench --variants' and 'doctor' print it ("256, register cap", "NK 128 quads"),
+ * and its text code as PZ_GPU_HALF or PZ_GPU_NK takes it ("262400", "128c"; "-" for a kangaroo variant that no text can force: the wide herds).
  * Each writes into b (n bytes) and returns it. */
 char *gpu_variant_name(int v, char *b, size_t n);
 char *gpu_kvariant_name(int v, char *b, size_t n);
 char *gpu_variant_code(int v, char *b, size_t n);
 char *gpu_kvariant_code(int v, char *b, size_t n);
 
-/* The text of PZ_GPU_NK, "128", "64b", "128cm", "64l": the walkers per work-item, then the suffix of a configuration (b pairs, c quads),
- * then m (the tags written once) and l (the herd sized to the L2 cache). On success the code, without a width (the wide herds
- * have no text); false, leaving *code alone, for anything else. */
+/* The text of PZ_GPU_NK, "128", "64b", "128c", "64bl": the walkers per work-item, then the suffix of a configuration (b pairs, c quads),
+ * then l (the herd sized to the L2 cache). On success the code, without a width (the wide herds have no text); false, leaving *code
+ * alone, for anything else. */
 bool gpu_kvariant_parse(const char *text, int *code);
 
 /* The option of the OpenCL build for a configuration (KV_CFG) of the kangaroo kernel, with its blank in front (" -DMC=2"), or "" for the
- * default configuration and for one it does not know; and the option for the form of the metadata. */
+ * default configuration and for one it does not know. */
 const char *gpu_kvariant_cl_config(int cfg);
-const char *gpu_kvariant_cl_meta(int meta);
 
 #endif

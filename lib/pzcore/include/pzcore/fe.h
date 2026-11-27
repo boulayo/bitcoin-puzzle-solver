@@ -26,7 +26,6 @@ static const pz_fe pz_fe_p PZ_UNUSED = {{0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFF
 
 static inline void pz_fe_set_u64(pz_fe *r, uint64_t v) { r->n[0] = v; r->n[1] = r->n[2] = r->n[3] = 0; }
 static inline void pz_fe_zero(pz_fe *r) { pz_fe_set_u64(r, 0); }
-static inline void pz_fe_copy(pz_fe *r, const pz_fe *a) { *r = *a; }
 
 /* r += c * PZ_FE_C with full carry propagation, c small. Keeps r < 2^256. */
 static inline void pz_fe_fold_(uint64_t r[4], uint64_t c)

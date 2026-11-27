@@ -62,17 +62,6 @@ static void env_text(const char *name, char *out, size_t cap)
     memcpy(out, v, strlen(v) + 1);
 }
 
-bool pz_env_parse_nk(const char *t, int *nk, int *cfg, bool *meta, bool *l2)
-{
-    int v;
-    if (!gpu_kvariant_parse(t, &v)) return false;                /* the grammar and the layout of the code are in gpu_variant.c */
-    *nk = KV_NK(v);
-    *cfg = KV_CFG(v);
-    *meta = KV_META(v) != 0;
-    *l2 = KV_L2(v) != 0;
-    return true;
-}
-
 static void env_gpu_api(void)
 {
     const char *v = env_get("PZ_GPU_API");
@@ -104,8 +93,8 @@ static void env_gpu_nk(void)
 {
     const char *v = env_get("PZ_GPU_NK");
     if (!v) return;
-    if (strlen(v) >= sizeof g_env.gpu_nk_text || !pz_env_parse_nk(v, &g_env.gpu_nk, &g_env.gpu_nk_cfg, &g_env.gpu_nk_meta, &g_env.gpu_nk_l2)) {
-        env_ignored("PZ_GPU_NK", v, "expected a number of walkers, with the suffix b or c, then m and then l if wanted, as in 128b");
+    if (strlen(v) >= sizeof g_env.gpu_nk_text || !gpu_kvariant_parse(v, &g_env.gpu_nk)) {      /* the grammar is in gpu_variant.c */
+        env_ignored("PZ_GPU_NK", v, "expected a number of walkers, with the suffix b or c and then l if wanted, as in 128b");
         return;
     }
     memcpy(g_env.gpu_nk_text, v, strlen(v) + 1);

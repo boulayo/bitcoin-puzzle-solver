@@ -363,13 +363,8 @@ a file as one that is not the campaign's, and `hunt` says to move it away. A fil
   traffic for half a multiplication more per step), and `NK` = 64 or 128 with the products every fourth walker (`c`), and on cards of more than
   64 SMs, where the default herd is capped at 32768 work-items, `NK` = 64 at 512 work-items per SM ("full herd"); with OpenCL `NK` = 32, 64
   or 128 (default 64), plain or `b`, and `NK` = 32 or 64, plain or `b`, with 4 or 8 times the 64 work-items per compute unit ("4x herd", "8x
-  herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). Each of these except `NK` 256 and the wide herds also
-  comes with the *tags written once* (`m` after the letter: `128m`, `128cm`, "tags once"): the tag of the point two steps back is stored in
-  the last round of a launch instead of at every step, and the quads kernel reads the flags of its four walkers once, 7 bytes less per step
-  on the SASS; on the RTX A2000 the two forms measured side by side (RESEARCH.md section 5, after 1.19.2) go opposite ways: `NK` 64 quads with the
-  tags once 922 M steps/s against 896 (+2.9 %), `NK` 128 quads 743 against 908 (-18 %), so the form of 1.19.2 is the default and the tuner
-  picks between them (on that card `NK` 64 quads, tags once: +1.5 % over the `NK` 128 quads of 1.19.2). On cards with at least 8 MiB of L2 the tuning also tries herds sized to fit in half of the L2 (fewer
-  work-items, `NK` 16, 32 or 64, plain or `b`).
+  herd"; at most 128 per compute unit on Intel GPUs, whose compute unit is one EU). On cards with at least 8 MiB of L2 the tuning also tries
+  herds sized to fit in half of the L2 (fewer work-items, `NK` 16, 32 or 64, plain or `b`, with `l` at the end: `64l`, `32bl`).
   `PZ_GPU_NK` forces a variant. The design of the kernel around memory traffic and its measurements: RESEARCH.md sections 5 and 8.4.
 * **Verification**: at startup every device runs (a) field operations, hash160 and point additions compared with the CPU,
   (b) a linear search with a planted key, (c) for the kangaroo **the same group of walkers run on GPU and on CPU,

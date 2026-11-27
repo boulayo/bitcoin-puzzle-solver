@@ -121,7 +121,7 @@ bool rtcl_build(rt_mod *m, rt_prog_id prog, int param)
         src[1] = (const char *)pz_kang_h; len[1] = pz_kang_h_len;
         src[2] = (const char *)pz_kang_cl; len[2] = pz_kang_cl_len;
         nsrc = 3;
-        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s%s", KV_NK(param), gpu_kvariant_cl_config(KV_CFG(param)), gpu_kvariant_cl_meta(KV_META(param)));
+        snprintf(opts, sizeof opts, "-cl-std=CL1.2 -DNK=%d%s", KV_NK(param), gpu_kvariant_cl_config(KV_CFG(param)));
         break;
     default: src[1] = (const char *)pz_test_cl; len[1] = pz_test_cl_len; snprintf(opts, sizeof opts, "-cl-std=CL1.2"); break;
     }
@@ -174,26 +174,6 @@ bool rtcl_buf_new(rt_buf *b, const void *init)
     if (!m || rc != CL_SUCCESS) { rt_log(PZ_LOG_ERR, "OpenCL: allocation of a %zu-byte buffer failed (%d)", b->bytes, rc); return false; }
     b->h = m;
     return true;
-}
-
-bool rtcl_buf_part(rt_buf *b, rt_buf *of, size_t off)
-{
-    const cl_api *cl = cl_load();
-    if (!cl->CreateSubBuffer) return false;
-    const size_t region[2] = {off, b->bytes};
-    cl_int rc;
-    cl_mem m = cl->CreateSubBuffer((cl_mem)of->h, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, region, &rc);
-    if (!m || rc != CL_SUCCESS) { rt_log(PZ_LOG_DEBUG, "OpenCL: sub-buffer not available (%d)", rc); return false; }
-    b->h = m;
-    return true;
-}
-
-/* CL_DEVICE_MEM_BASE_ADDR_ALIGN is in bits */
-size_t rtcl_part_align(rt_ctx *c)
-{
-    cl_uint bits = 0;
-    if (cl_load()->GetDeviceInfo((cl_device_id)c->dev.cl_dev, CL_DEVICE_MEM_BASE_ADDR_ALIGN, sizeof bits, &bits, NULL) != CL_SUCCESS || bits < 32) bits = 4096;
-    return bits / 8;
 }
 
 void rtcl_buf_free(rt_buf *b) { if (b->h) cl_load()->ReleaseMemObject((cl_mem)b->h); }

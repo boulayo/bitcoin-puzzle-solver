@@ -35,7 +35,6 @@ static void load(void)
     LOAD(ReleaseCommandQueue, "ReleaseCommandQueue");
     LOAD(CreateBuffer, "CreateBuffer");
     LOAD(ReleaseMemObject, "ReleaseMemObject");
-    *(void **)&g_api.CreateSubBuffer = pz_lib_sym(g_api.lib, "clCreateSubBuffer");   /* optional: the callers do without it */
     LOAD(CreateProgramWithSource, "CreateProgramWithSource");
     LOAD(BuildProgram, "BuildProgram");
     LOAD(GetProgramBuildInfo, "GetProgramBuildInfo");

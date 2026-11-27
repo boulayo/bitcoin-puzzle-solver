@@ -282,10 +282,10 @@ static int tune_check_variant_names(void)
     char nb[64];
     TCHK(!strcmp(gpu_kvariant_name(64 | 1 << 16 | KV_WIDEFLAG(KV_WIDE_X4), nb, sizeof nb), "NK 64 pairs, 4x herd"));
     TCHK(!strcmp(gpu_kvariant_name(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "NK 64, full herd"));
-    TCHK(!strcmp(gpu_kvariant_name(128 | 2 << 16 | KV_METAFLAG, nb, sizeof nb), "NK 128 quads, tags once"));
-    TCHK(!strcmp(gpu_kvariant_name(64 | KV_METAFLAG | KV_L2FLAG, nb, sizeof nb), "NK 64, tags once, L2 herd"));
-    TCHK(!strcmp(gpu_kvariant_code(128 | 2 << 16 | KV_METAFLAG, nb, sizeof nb), "128cm") && !strcmp(gpu_kvariant_code(64 | 1 << 16 | KV_L2FLAG, nb, sizeof nb), "64bl"));
-    TCHK(!strcmp(gpu_kvariant_code(64 | KV_METAFLAG | KV_L2FLAG, nb, sizeof nb), "64ml") && !strcmp(gpu_kvariant_code(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "-"));
+    TCHK(!strcmp(gpu_kvariant_name(128 | 2 << 16, nb, sizeof nb), "NK 128 quads") && !strcmp(gpu_kvariant_name(64 | KV_L2FLAG, nb, sizeof nb), "NK 64 L2 herd"));
+    TCHK(!strcmp(gpu_kvariant_name(32 | 1 << 16 | KV_L2FLAG, nb, sizeof nb), "NK 32 pairs, L2 herd"));
+    TCHK(!strcmp(gpu_kvariant_code(128 | 2 << 16, nb, sizeof nb), "128c") && !strcmp(gpu_kvariant_code(64 | 1 << 16 | KV_L2FLAG, nb, sizeof nb), "64bl"));
+    TCHK(!strcmp(gpu_kvariant_code(64 | KV_L2FLAG, nb, sizeof nb), "64l") && !strcmp(gpu_kvariant_code(64 | KV_WIDEFLAG(KV_WIDE_FULL), nb, sizeof nb), "-"));
     return fails;
 }
 
@@ -370,17 +370,17 @@ static int tune_check_variant_encoding(void)
 {
     int fails = 0;
     TCHK(VAR_MAKE(256, 4) == 262400 && VAR_MAKE(128, 0) == 128 && VAR_HALF(262400) == 256 && VAR_MINB(262400) == 4);
-    TCHK(KV_MAKE(128, 2, 1, 0, 0) == 1179776 && KV_MAKE(64, 1, 1, 1, KV_WIDE_FULL) == 118554688);
-    TCHK(KV_MAKE(64, 0, 1, 1, 0) == 17825856 && KV_MAKE(64, 1, 0, 1, KV_WIDE_FULL) == 117506112);
-    const int v = 118554688;
-    TCHK(KV_NK(v) == 64 && KV_CFG(v) == 1 && KV_META(v) == 1 && KV_L2(v) == 1 && KV_WIDE(v) == KV_WIDE_FULL && KV_KERNEL(v) == (64 | 1 << 16 | 1 << 20));
+    TCHK(KV_MAKE(128, 2, 0, 0) == 131200 && KV_MAKE(64, 0, 1, 0) == 16777280 && KV_MAKE(64, 1, 1, KV_WIDE_FULL) == 117506112);
+    const int v = 117506112;
+    TCHK(KV_NK(v) == 64 && KV_CFG(v) == 1 && KV_L2(v) == 1 && KV_WIDE(v) == KV_WIDE_FULL && KV_KERNEL(v) == (64 | 1 << 16));
     static const struct { const char *text; int code; } good[] = {
-        {"128", 128}, {"64b", 64 | 1 << 16}, {"256c", 256 | 2 << 16}, {"128cm", 1179776}, {"64l", 64 | 1 << 24}, {"64ml", 17825856},
-        {"32bml", 32 | 1 << 16 | 1 << 20 | 1 << 24}, {"65535", 65535},
+        {"128", 128}, {"64b", 64 | 1 << 16}, {"256c", 256 | 2 << 16}, {"64l", 64 | 1 << 24}, {"32bl", 32 | 1 << 16 | 1 << 24}, {"16cl", 16 | 2 << 16 | 1 << 24},
+        {"65535", 65535},
     };
     int code = -1;
     for (size_t i = 0; i < sizeof good / sizeof *good; i++) TCHK(gpu_kvariant_parse(good[i].text, &code) && code == good[i].code);
-    static const char *const bad[] = {"", "0", "b", "12k", "64lm", "64bb", "64bc", "64x", "4g", "65536", "99999999999", "-4", " 64", "64 ", "64b ", "m"};
+    static const char *const bad[] = {"", "0", "b", "l", "12k", "64lb", "64bb", "64bc", "64ll", "64x", "4g", "65536", "99999999999", "-4", "+64", "1.5",
+                                      " 64", "64 ", "64b ", "m", "128m", "128cm", "64bml"};
     code = -1;
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) TCHK(!gpu_kvariant_parse(bad[i], &code) && code == -1);
     char text[24];
@@ -392,7 +392,6 @@ static int tune_check_variant_encoding(void)
     TCHK(!strcmp(gpu_variant_code(262400, text, sizeof text), "262400") && !strcmp(gpu_variant_name(262400, text, sizeof text), "256, register cap"));
     TCHK(!strcmp(gpu_kvariant_cl_config(0), "") && !strcmp(gpu_kvariant_cl_config(1), " -DMC=2") && !strcmp(gpu_kvariant_cl_config(2), " -DMC=4"));
     TCHK(!strcmp(gpu_kvariant_cl_config(3), "") && !strcmp(gpu_kvariant_cl_config(15), ""));
-    TCHK(!strcmp(gpu_kvariant_cl_meta(0), "") && !strcmp(gpu_kvariant_cl_meta(1), " -DKANG_META=1"));
     return fails;
 }
 

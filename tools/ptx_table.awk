@@ -18,12 +18,11 @@ function param_of(    s) {
     s = size_of()
     return $3 + 0 ? s " | " $3 " << 16" : s
 }
-# the -D options the kernel emulation takes: the size, the batch products and the form of the metadata (not the register cap, which is for
-# the compiler of the GPU)
+# the -D options the kernel emulation takes: the size and the batch products (not the register cap, which is for the compiler of the GPU)
 function emul_defines(    i, d) {
     d = ""
     for (i = 5; i <= NF; i++)
-        if ($i ~ /^-D(HALF|NK|MC|KANG_META)=[0-9]+$/) d = d " " $i
+        if ($i ~ /^-D(HALF|NK|MC)=[0-9]+$/) d = d " " $i
     return d
 }
 # the linear kernels the simulated driver runs differ by the size and by the batch products (a "p" when they are kept every other denominator)

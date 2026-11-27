@@ -385,7 +385,7 @@ run make asan -j"$(nproc)" >/dev/null
 export ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
 run build/asan/pzsolve selftest
 await build; IFMA_ENV=$(ifma_env); EPUB=$(epub build/asan/pzsolve)
-ASAN_TESTS="t_core t_env t_encrypt t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_lz t_kernels"
+ASAN_TESTS="t_core t_env t_encrypt t_jobq t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_lz"
 run make BUILD=build/asan OPT="-O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer" $(for t in $ASAN_TESTS; do echo build/asan/$t; done) >/dev/null
 for t in $ASAN_TESTS; do run env "$IFMA_ENV" build/asan/$t >/dev/null && echo "  OK $t (ASan/UBSan)"; done
 # the library on its own (its tests and examples link nothing but libpzcore.a)

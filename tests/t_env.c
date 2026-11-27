@@ -3,6 +3,7 @@
  * values that cannot be used (they leave the default and are reported once, as a warning in the log). */
 #include "../src/platform.h"
 #include "../src/envopts.h"
+#include "../src/gpu_variant.h"
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -75,7 +76,7 @@ static void t_defaults(void)
     free(t);
     CHECK(g_env.gpu_api == PZ_ENV_API_AUTO && g_env.gpu_tune == PZ_ENV_TUNE_DEFAULT);
     CHECK(!g_env.no_cuda && !g_env.no_opencl && !g_env.opencl_all && !g_env.no_profile && !g_env.no_large_pages);
-    CHECK(g_env.gpu_half == 0 && g_env.gpu_nk == 0 && g_env.gpu_nk_cfg == 0 && !g_env.gpu_nk_l2 && !g_env.gpu_nk_text[0]);
+    CHECK(g_env.gpu_half == 0 && g_env.gpu_nk == 0 && !g_env.gpu_nk_text[0]);
     CHECK(g_env.bench_scale == 1.0);
     CHECK(!g_env.xdg_cache_home[0] && !g_env.home[0] && !g_env.local_app_data[0] && !g_env.tmpdir[0] && !g_env.term_dumb && !g_env.no_color);
     CHECK(!g_env.kang_verbose && g_env.kang_mix == -1 && !g_env.kang_round[0] && !g_env.bsgs_scalar && !g_env.assume_ifma);
@@ -233,28 +234,14 @@ static void t_tune_and_nk(void)
         CHECK(try_value("PZ_GPU_TUNE", bad_tune[k], last, sizeof last) == 1 && g_env.gpu_tune == PZ_ENV_TUNE_DEFAULT);
         CHECK(strstr(last, "PZ_GPU_TUNE=") && strstr(last, " ignored (expected 0 or 1)"));
     }
-    static const struct { const char *text; int nk, cfg; bool meta, l2; } good[] = {
-        {"128", 128, 0, false, false}, {"128b", 128, 1, false, false}, {"64c", 64, 2, false, false}, {"64l", 64, 0, false, true},
-        {"32bl", 32, 1, false, true}, {"16cl", 16, 2, false, true}, {"65535", 65535, 0, false, false}, {"128m", 128, 0, true, false},
-        {"128cm", 128, 2, true, false}, {"64bml", 64, 1, true, true}};
-    for (size_t k = 0; k < sizeof good / sizeof *good; k++) {
-        CHECK(try_value("PZ_GPU_NK", good[k].text, last, sizeof last) == 0);
-        CHECK(g_env.gpu_nk == good[k].nk && g_env.gpu_nk_cfg == good[k].cfg && g_env.gpu_nk_meta == good[k].meta && g_env.gpu_nk_l2 == good[k].l2
-              && !strcmp(g_env.gpu_nk_text, good[k].text));
-    }
+    /* PZ_GPU_NK keeps the code of the text (its grammar is tested with the codes, gpu_tune_selftest.c) */
+    CHECK(try_value("PZ_GPU_NK", "32bl", last, sizeof last) == 0 && g_env.gpu_nk == KV_MAKE(32, 1, 1, 0) && !strcmp(g_env.gpu_nk_text, "32bl"));
     CHECK(try_value("PZ_GPU_NK", "", last, sizeof last) == 0 && g_env.gpu_nk == 0);
-    static const char *const bad_nk[] = {"b", "l", "m", "0", "128x", "128lb", "128bc", "128bb", "128mb", "128lm", "128mm", "4g", "65536", "-1", "128 ", " 128",
-                                         "+128", "1.5", "12345678901234567890"};
+    static const char *const bad_nk[] = {"128x", "128cm", "12345678901234567890"};
     for (size_t k = 0; k < sizeof bad_nk / sizeof *bad_nk; k++) {
-        CHECK(try_value("PZ_GPU_NK", bad_nk[k], last, sizeof last) == 1);
-        CHECK(g_env.gpu_nk == 0 && g_env.gpu_nk_cfg == 0 && !g_env.gpu_nk_meta && !g_env.gpu_nk_l2 && !g_env.gpu_nk_text[0]);
+        CHECK(try_value("PZ_GPU_NK", bad_nk[k], last, sizeof last) == 1 && g_env.gpu_nk == 0 && !g_env.gpu_nk_text[0]);
         CHECK(strstr(last, "PZ_GPU_NK=") && strstr(last, " ignored (expected a number of walkers"));
     }
-    int nk = 7, cfg = 7;                                       /* a refused text leaves the outputs alone */
-    bool meta = true, l2 = true;
-    CHECK(!pz_env_parse_nk("", &nk, &cfg, &meta, &l2) && !pz_env_parse_nk("12k", &nk, &cfg, &meta, &l2) && nk == 7 && cfg == 7 && meta && l2);
-    CHECK(pz_env_parse_nk("256b", &nk, &cfg, &meta, &l2) && nk == 256 && cfg == 1 && !meta && !l2);
-    CHECK(pz_env_parse_nk("64cm", &nk, &cfg, &meta, &l2) && nk == 64 && cfg == 2 && meta && !l2);
 }
 
 static void t_places(void)

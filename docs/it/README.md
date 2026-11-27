@@ -149,7 +149,7 @@ dice, per ogni motore, da dove viene il suo numero e con quale versione; `pzsolv
 | ricerca lineare, GPU, CUDA | RTX A2000 Laptop (20 SM, 4 GB), `bench --variants`, finestra 512 con il limite di registri | 888 M chiavi/s (mediana di tre turni) | 1.20.0 (RESEARCH 5) |
 | ricerca lineare, GPU, OpenCL | Intel UHD dello stesso portatile (Xe-LP, 32 EU) | 17,5 M chiavi/s in `bench`, 16 M in una campagna | 1.15.0 (RESEARCH 10.5) |
 | canguro, CPU | lo stesso i7-11850H, corsie IFMA | 261 M passi/s con 16 thread, 48,0 M con uno | 1.15.0 (RESEARCH 10.5) |
-| canguro, GPU, CUDA | la stessa RTX A2000 Laptop, `NK` 64 quads con i tag scritti una volta (la scelta del tuner) | 922 M passi/s | 1.20.0 (RESEARCH 5) |
+| canguro, GPU, CUDA | la stessa RTX A2000 Laptop, `NK` 128 quads (la scelta del tuner) | 908 M passi/s | 1.20.0 (RESEARCH 5) |
 | canguro, GPU, OpenCL | la stessa Intel UHD | 56 M passi/s | 1.15.0 (RESEARCH 10.5) |
 | BSGS | un thread di uno Xeon a 2,8 GHz sotto KVM, corsie AVX-512 | 36 ns di aritmetica per passo gigante più da 16 a 45 ns di ricerche in tabella (tabella in L2, o da 768 MiB); nessuna velocità dell'intera macchina | 1.14.0 (RESEARCH 8.11) |
 | GPU AMD (OpenCL) | nessuna | non misurato: solo conteggi di istruzioni (clang) | 1.15.0 |

@@ -283,7 +283,6 @@ static void CAT(kv_setup_, ISA)(kang_worker *w)
     w->vsync = CAT(kv_sync_, ISA);
 }
 
-#ifdef KV_PAIR
 /* Everything the backward pass reads and writes besides the vectors it works on. */
 typedef struct {
     kang_worker *w;
@@ -299,15 +298,15 @@ typedef struct {
 typedef struct {
     kv_aux *a;
     pz_fev ic, jy, t, lam, l2, x3, y3;
-    pz_vl jv0, jv1, sel, dpm, rsm, s0, s1, s2;
+    pz_vl jv0, jv1, sel;
 } kv_ctx;
 
 /* The backward pass of the batch inversion fused with the step, for the nu (1 or 2) vectors c, c-1: the inverse of the
  * batch product is peeled off in order, then every stage of the step runs for all of them before the next stage starts.
  * One vector alone is a chain of about a thousand dependent instructions, longer than the window of out-of-order execution,
- * so the units idle while a product waits for the one before it; two chains side by side keep them busy. The arithmetic of
- * every vector is exactly the same as when it runs alone (the vectors do not depend on each other), and the events are
- * recorded in the same order (c first, then c - 1). */
+ * so the units idle while a product waits for the one before it; two chains side by side keep them busy (KV_PAIR; the other
+ * steps run one vector at a time). The arithmetic of every vector is exactly the same as when it runs alone (the vectors do
+ * not depend on each other), and the events are recorded in the same order (c first, then c - 1). */
 static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_env *E, pz_fev *inv, int c, int nu)
 {
     kang_worker *w = E->w;
@@ -410,8 +409,6 @@ static inline __attribute__((always_inline)) PZ_VABI void kv_bwd_step(const kv_e
     }
 }
 
-#endif
-
 void CAT(kang_round_, ISA)(kang_worker *w)
 {
     const int K = w->K, nc = K / NL;
@@ -493,90 +490,13 @@ void CAT(kang_round_, ISA)(kang_worker *w)
     pz_fev_inv(&inv, &chk);
     const int ndp0 = w->ndp, nrs0 = w->nrestart;
     const pz_vl one = pz_vl_set(1), dpmask = pz_vl_set(P->dp_mask), cap = pz_vl_set(P->cap_since);
-#ifdef KV_PAIR
     const kv_env E = {w, vx, vy, vdx, vtmp, A, vjt, pl, one, dpmask, cap, bndv, bnd, n};
+#ifdef KV_PAIR
     int c = nc - 1;
     for (; c >= 1; c -= 2) kv_bwd_step(&E, &inv, c, 2);     /* two vectors at a time: see kv_bwd_step */
     if (c == 0) kv_bwd_step(&E, &inv, 0, 1);
 #else
-    for (int c = nc - 1; c >= 0; c--) {
-        kv_aux *a = &A[c];
-        pz_fev ic;
-        if (c > 0) {
-            kv_mul(&ic, &inv, &vtmp[c - 1]);
-            kv_mul(&inv, &inv, &vdx[c]);
-        } else {
-            ic = inv;
-        }
-        pz_fev jy, t, lam, l2, x3, y3, ny;
-        pz_vl e[KV_BN];
-        kv_load_words(e, KV_B, KV_BN, vjt, a->jb);
-        memcpy(jy.l, e + KV_Y - KV_B, sizeof jy.l);
-        const pz_vl jv0 = e[KV_V - KV_B], jv1 = e[KV_V - KV_B + 1];
-        kv_sub_jump(&t, &vy[c], &jy);
-        kv_mul(&lam, &t, &ic);
-        kv_sqr(&l2, &lam);
-        kv_x3_t(&x3, &t, &l2, &vx[c], &vdx[c]);
-        kv_mul_sub(&y3, &lam, &t, &vy[c]);
-        kv_canon(&x3, &y3);
-        /* canonical representative: even y (p - y for the odd lanes); sel = all ones in those lanes */
-        const pz_vl sel = pz_vl_set(0) - (y3.l[0] & one);
-        {
-            pz_vl br = pz_vl_set(0);
-            for (int i = 0; i < PZ_FEV_NLIMB; i++) {          /* p - y limb by limb (y canonical, so no reduction) */
-                const pz_vl t2 = pl[i] - y3.l[i] - br;
-                br = t2 >> 63;
-                ny.l[i] = i < PZ_FEV_NLIMB - 1 ? t2 & pz_vl_set(PZ_FEV_MASK) : t2;
-            }
-        }
-        for (int i = 0; i < PZ_FEV_NLIMB; i++) y3.l[i] = (ny.l[i] & sel) | (y3.l[i] & ~sel);
-
-        /* distance += jump (192-bit, carries as 0/1 lanes), then negated where y was odd: (d ^ sel) + 1 */
-        pz_vl s0 = a->d0 + jv0, c0 = (pz_vl)(s0 < jv0) & one;
-        pz_vl s1 = a->d1 + jv1, c1 = (pz_vl)(s1 < jv1) & one;
-        s1 += c0;
-        c1 |= (pz_vl)(s1 < c0) & one;
-        pz_vl s2 = a->d2 + c1;
-        const pz_vl b = sel & one;
-        s0 = (s0 ^ sel) + b;
-        const pz_vl k0 = (pz_vl)(s0 < b) & one;
-        s1 = (s1 ^ sel) + k0;
-        const pz_vl k1 = (pz_vl)(s1 < k0) & one;
-        s2 = (s2 ^ sel) + k1;
-        a->d0 = s0; a->d1 = s1; a->d2 = s2;
-        a->sig ^= sel;
-        const pz_vl tag = pz_fev_word64(&vx[c], 2) & pz_vl_set(0xFFFFFFFFULL);
-        kv_cycle_update(a, tag, bndv);
-        a->prev2 = a->prev;
-        a->prev = tag;
-        const pz_vl n1 = pz_fev_word64(&x3, 1);
-        const pz_vl dpm = (pz_vl)((n1 & dpmask) == pz_vl_set(0));
-        pz_vl rsm = pz_vl_set(0);
-        if (bnd) rsm = (pz_vl)(pz_vl_set(n + 1) - a->lastdp > cap) & ~dpm;      /* the watchdog, on checkpoint steps only */
-        vx[c] = x3;
-        vy[c] = y3;
-        const pz_vl ev = dpm | rsm;
-        u64 any = 0;
-        for (int l = 0; l < NL; l++) any |= ev[l];
-        if (LIKELY(!any)) continue;
-        const pz_vl n2 = pz_fev_word64(&x3, 2);
-        for (int l = 0; l < NL; l++) {
-            const int i = c * NL + l;
-            if (ev[l]) a->lastdp[l] = n + 1;
-            if (dpm[l]) {
-                unsigned kind = w->kind[i] == 0 ? KIND_TAME : (a->sig[l] == 0 ? KIND_WILD_P : KIND_WILD_M);
-                kang_dp_reserve(w);
-                w->dpbuf[w->ndp].tagk = (n2[l] & ~3ULL) | kind;
-                w->dpbuf[w->ndp].d.w[0] = s0[l];
-                w->dpbuf[w->ndp].d.w[1] = s1[l];
-                w->dpbuf[w->ndp].d.w[2] = s2[l];
-                w->dpidx[w->ndp] = i;
-                w->ndp++;
-            } else if (rsm[l]) {
-                w->restart[w->nrestart++] = i;
-            }
-        }
-    }
+    for (int c = nc - 1; c >= 0; c--) kv_bwd_step(&E, &inv, c, 1);
 #endif
     kv_sort_events(w, ndp0, nrs0);
     w->round = n + 1;

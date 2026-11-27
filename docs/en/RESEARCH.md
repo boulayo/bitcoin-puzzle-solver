@@ -439,8 +439,8 @@ The arithmetic on the device itself is still to be timed on a card.
 
 **After 1.19.1: energy per key on a card held back by its power limit.** On the A2000 the two-pipe kernel of 1.18.0 gained 11 % (793 to
 882 M keys/s) where the issue model said 20 %, and by the issue model the card ran at about 1.3 GHz sustained against the 1.89 GHz of the
-probes: it is held by its power limit, so what bounds the speed is the energy of a key, not its cycles alone. The model is
-`tools/research/sass_energy.py`: the executed path of the loops over the keys, from the SASS of `ptxas` (sm_86, NVRTC 12.0), counted by
+probes: it is held by its power limit, so what bounds the speed is the energy of a key, not its cycles alone. The model was
+`tools/research/sass_energy.py` (in the git history before 1.24.0): the executed path of the loops over the keys, from the SASS of `ptxas` (sm_86, NVRTC 12.0), counted by
 class and by operand traffic (register reads, reads served by the operand reuse cache, which `nvdisasm` marks `.reuse` from the control
 bits described by Jia et al., *Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking*, 2018; constant-bank and uniform
 operands; register writes), the cycles of the issue model above (the mean of 16 staggered starts of the warps: one start alone moves the
@@ -639,7 +639,7 @@ A2000's herd are 160 MiB per round against 2 MiB of L2).
   for gfx1030 clang 18 gives the same VGPR counts within 4 (the quads 250 → 254, no spill) and the same private loads and stores by count.
   **Expected on the A2000**, a model: at 181 → 174 bytes per step and the bandwidth it already reaches, 911 → ≈ 948 M steps/s (+4 %) with `NK`
   128 quads; the instructions per step do not move, so the energy of a step falls with its bytes. Measured below: the gain did not appear, and
-  the form is now the variant "tags once" (`PZ_GPU_NK=128cm`) next to the kernel of 1.19.2.
+  the form became the variant "tags once" next to the kernel of 1.19.2 (removed in 1.24.0, below).
 * **Counted and dropped.**
   * *x kept across the turn of the pass.* The kernel has one pass per round since 1.7.0 (no second read of x), and the walkers whose state
     could stay on chip from the end of one pass to the start of the next are the few the L2 already serves (above). Shared memory would hold
@@ -749,6 +749,8 @@ A2000's herd are 160 MiB per round against 2 MiB of L2).
   all the losers share) and at how the card's memory system treats a 4-byte store per lane where an 8-byte one was, which the local-memory
   interleaving model of candidate 2 says is harmless and the card says is not. Both forms stay, the 1.19.2 one as the default and the other
   as the variant the tuner measures; a card with another memory system may rank them differently, which is what the tuner is for.
+  1.24.0 removed the tags once: +1.5 % on the one card measured did not pay for six modules (243 KB of the executable) and six more
+  variants to tune on each runtime; the tuner's pick on the A2000 is again `NK` 128 quads, 908 M steps/s.
 
 **After 1.19.2: the hash160 of the linear kernel.** Two thirds of the instructions of a key are the hash filter `hash160_w2` (SHA-256 of the
 33-byte key, RIPEMD-160 of the digest, word 2 only). This part accounts for every one of them against the floor of the expression on this
@@ -852,9 +854,9 @@ products) and hashes the two x of pair i + 1, kept from the turn before with the
 `hash160_w2` inlined (a call in the kernels of 1.19.2) and the full hash of a key that passes the filter the only call left in the loop,
 behind one branch for both keys; the first pending pair is the centre and C − HALF·G, the epilogue hashes pair 1. Same keys, same
 arithmetic: bit-exact against the CPU on the simulated CUDA driver (the self-test with the tuning of all the variants, planted-key hunts with
-each window forced). The source is `tools/research/pz_linear_interleaved.cl.txt`, the whole kernel in this form (CUDA only; it lived in
+each window forced). The source was `tools/research/pz_linear_interleaved.cl.txt`, the whole kernel in this form (CUDA only; it lived in
 pz_linear.cl under `PZ_INTERLEAVE` until 1.21.1, and the simulated driver could run a module built with `-DPZ_INTERLEAVE=1`; since no module
-is built from it, the kernel source now keeps only the form that runs). Tools as above: NVRTC 12.0, `ptxas` 12.9 for sm_75, sm_80, sm_86, sm_89 and sm_90,
+is built from it, the kernel source keeps only the form that runs, and the file is in the git history before 1.24.0). Tools as above: NVRTC 12.0, `ptxas` 12.9 for sm_75, sm_80, sm_86, sm_89 and sm_90,
 `nvdisasm` 12.0, the issue model of `tools/research/sass_sched.py`, which now reads the loop with the hash inlined. No card: every speed
 below is the model, every count is SASS.
 
@@ -918,9 +920,9 @@ below is the model, every count is SASS.
   form to a card as a forceable variant when the model gains on every target at both slot costs; this one lost at two slots on three
   targets of five, and the card has now judged a change of the kernel's shape more harshly than the model twice (the peeled loop of
   1.19.1: −2.8 % for 14 instructions saved). The two modules (windows 256 and 512 with the cap) added 230 KB to the executable (2.4 MB of PTX each against 1.5, about
-  115 KB each compressed, the first against `linear256m4`, the second against the first: the inlined hash shares little with the called one). The source form stays in
-  `tools/research/pz_linear_interleaved.cl.txt`, and `python3 -I tools/research/sass_sched.py --nvrtc ... --ptxas ... --nvdisasm ...
-  --module linear512m4 --warps 4 -DPZ_INTERLEAVE=1`, which compiles that file in place of pz_linear.cl, reproduces the figures. What is left of the idea is what the model says of the ideal order: about 5 %, which no scheduler we can
+  115 KB each compressed, the first against `linear256m4`, the second against the first: the inlined hash shares little with the called one). The source form,
+  `tools/research/pz_linear_interleaved.cl.txt`, and `sass_sched.py ... --module linear512m4 --warps 4 -DPZ_INTERLEAVE=1`, which compiled
+  that file in place of pz_linear.cl, reproduce the figures from the git history before 1.24.0. What is left of the idea is what the model says of the ideal order: about 5 %, which no scheduler we can
   steer reaches.
 
 ## 8. Theoretical limits: how much can still be improved?
@@ -1067,7 +1069,7 @@ function:
 * **One-level Karatsuba: tried (1.7.7).** 3 products 4×4 instead of 1 of 8×8 (48 limb products instead of 64), in both forms
   (additive, with 129-bit sums fixed up with masks; subtractive, with `|a1 − a0|·|b1 − b0|` and a sign), checked by program
   with 2 million products (`tools/research/sass/kara_check.c`) and counted with NVRTC 12.0, `ptxas` and `nvdisasm` for sm_86
-  (`tools/research/sass_count.py`, kernels in `tools/research/sass/`). The test bench costs 96 load and store instructions, subtracted from the figures:
+  (`tools/research/sass_count.py`, kernels in `tools/research/sass/`; that folder is in the git history before 1.24.0). The test bench costs 96 load and store instructions, subtracted from the figures:
 
   | 8×8-limb product, without reduction | instructions |
   |---|---|
@@ -1503,7 +1505,7 @@ model and curve on the test intervals, 2.5 standard errors from zero and 1.8 fro
 standard errors, is not reached, and seeing 0.8 % at three would take six times the trials above (a day of four cores). A second table of species in the program
 would mean either a schema of its own with its own log format (campaigns of the two schemas could no longer be merged) or a silent change of
 the coverage of every campaign resumed, for a gain that the exact model puts at a quarter of a percent. The walk is not changed, schema 3
-stays, and the log format with it. The layout is kept as `tools/research/kang_schema3f.txt` for whoever wants to measure
+stays, and the log format with it. The layout, `tools/research/kang_schema3f.txt`, is in the git history before 1.24.0 for whoever wants to measure
 it further (`kbands.py` with 16, 28 and 38 bands on 1536 points; `kspec_table.py` turns it into a species table).
 
 **C. Walkers per thread, restarts.** Not touched: 8.12 found no excess of the walks from 4096 walkers on, every campaign runs at least 2^14, and

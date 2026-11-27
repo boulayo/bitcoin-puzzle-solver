@@ -70,7 +70,7 @@ static bool CAT(bsv_groups_, ISA)(const void *vt, pz_ge *C, u64 *xlo, u64 *xhi, 
     pz_fev_from_limbs(&b, T->sx);
     pz_fev_sub(&dx[BS_HALF], &b, &xc);
     /* batched inversion, every lane independently: with 52-bit limbs the two interleaved chains of pz_fev_inv_batch (10 % less time per
-     * window than one chain); the 29-bit layouts keep the loop here, which measured 0.4 % faster than the call of the same single chain */
+     * window than one chain); the 29-bit layouts keep the loop here: the call of the same single chain measured 6.9 % slower on AVX2 */
 #ifdef PZ_FEV_IFMA
     if (!pz_fev_inv_batch(dx, tmp, BS_HALF + 1)) return false;
 #else

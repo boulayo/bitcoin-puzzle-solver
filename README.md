@@ -142,7 +142,7 @@ says, for each engine, where its figure comes from and with which version; `pzso
 | linear scan, GPU, CUDA | RTX A2000 Laptop (20 SM, 4 GB), `bench --variants`, window 512 with the register cap | 888 M keys/s (median of three turns) | 1.20.0 (RESEARCH 5) |
 | linear scan, GPU, OpenCL | Intel UHD of the same laptop (Xe-LP, 32 EU) | 17.5 M keys/s in `bench`, 16 M in a campaign | 1.15.0 (RESEARCH 10.5) |
 | kangaroo, CPU | the same i7-11850H, IFMA lanes | 261 M steps/s on 16 threads, 48.0 M on one | 1.15.0 (RESEARCH 10.5) |
-| kangaroo, GPU, CUDA | the same RTX A2000 Laptop, `NK` 64 quads with the tags once (the tuner's pick) | 922 M steps/s | 1.20.0 (RESEARCH 5) |
+| kangaroo, GPU, CUDA | the same RTX A2000 Laptop, `NK` 128 quads (the tuner's pick) | 908 M steps/s | 1.20.0 (RESEARCH 5) |
 | kangaroo, GPU, OpenCL | the same Intel UHD | 56 M steps/s | 1.15.0 (RESEARCH 10.5) |
 | BSGS | one thread of a Xeon at 2.8 GHz under KVM, AVX-512 lanes | 36 ns of arithmetic per giant step plus 16 to 45 ns of table lookups (a table in L2, or 768 MiB); no whole-machine rate | 1.14.0 (RESEARCH 8.11) |
 | AMD GPUs (OpenCL) | none | not measured: instruction counts only (clang) | 1.15.0 |

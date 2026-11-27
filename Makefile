@@ -108,8 +108,8 @@ PTXAWK   := awk -f tools/ptx_table.awk
 PTXMODS  := $(shell $(PTXAWK) -v mode=names $(PTXTAB))
 PTX      := $(addprefix src/kernels/ptx/,$(addsuffix .ptx,$(PTXMODS)))
 # The PTX modules are embedded compressed (src/lz.c, tools/embed.c -z) and unpacked when one is loaded. The modules of a family differ
-# in few lines (linear128 and linear256 in 148 of 38,000), so each one is compressed against another, its base, whose text serves as
-# the dictionary: all together they take about 1 MB instead of 12 MB. Name:base pairs from the table; a base must come before its
+# in few lines (linear128 and linear256 in 62 of 47,500), so each one is compressed against another, its base, whose text serves as
+# the dictionary: all together they take about 0.8 MB instead of 14 MB. Name:base pairs from the table; a base must come before its
 # dependents there, and a module without a base is compressed on its own.
 PTXBASE  := $(shell $(PTXAWK) -v mode=bases $(PTXTAB))
 PTXITEMS := $(foreach p,$(PTXMODS),pz_ptx_$(p)$(addprefix :pz_ptx_,$(patsubst $(p):%,%,$(filter $(p):%,$(PTXBASE)))) src/kernels/ptx/$(p).ptx)
@@ -265,13 +265,6 @@ $(BUILD)/ptx_mods.c: $(PTXTAB) tools/ptx_table.awk | $(BUILD)
 $(BUILD)/ptx_mods.o: $(BUILD)/ptx_mods.c src/rt_priv.h
 	$(CC) $(COMMON) -MMD -MP -c $< -o $@
 
-# the list of the embedded modules and of their files, for tests/t_kernels.c
-$(BUILD)/ptx_tab.c: $(PTXTAB) $(PTX) $(BUILD)/embed
-	$(BUILD)/embed -T $@ $(PTXITEMS)
-
-$(BUILD)/ptx_tab.o: $(BUILD)/ptx_tab.c src/lz.h
-	$(CC) $(DEPLOY) -O1 -Isrc -c $< -o $@
-
 # The objects of the engines for one instruction set (eng_*, kang_*, bsgs_*) are built by this rule with its flags, in the target-specific ISAFLAGS;
 # the rest, eng_base included, with none.
 $(BUILD)/%.o: src/%.c | $(BUILD)
@@ -305,7 +298,7 @@ $(BIN): $(OBJS) $(ALLENG) $(LIB)
 	$(CC) $(COMMON) -o $@ $^ $(LDLIBS)
 
 # Unit tests (built against the same sources)
-TESTS := t_core t_env t_encrypt t_jobq t_canary t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz t_kernels
+TESTS := t_core t_env t_encrypt t_jobq t_canary t_engine t_puzzles t_eta t_bsgs t_fuzz t_ui t_gpufe t_lz
 TESTOBJS := $(filter-out $(BUILD)/main.o $(BUILD)/cmd_hunt.o $(BUILD)/cmd_merge.o $(BUILD)/cmd_campaigns.o $(BUILD)/cmd_puzzle.o $(BUILD)/cmd_devices.o $(BUILD)/selftest.o $(BUILD)/run_common.o $(BUILD)/cmd_encrypt.o $(BUILD)/run_linear.o $(BUILD)/run_kangaroo.o $(BUILD)/bench_tg.o $(BUILD)/profile.o $(BUILD)/doctor.o $(BUILD)/gpu.o $(BUILD)/gpu_tune.o $(BUILD)/gpu_bench.o $(BUILD)/gpu_tune_selftest.o $(BUILD)/gpu_selftest.o $(BUILD)/rt.o $(BUILD)/rt_cl.o $(BUILD)/rt_cuda.o $(BUILD)/cl_api.o $(BUILD)/kernels_gen.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_mods.o $(BUILD)/kangaroo.o $(BUILD)/kang_log.o $(BUILD)/kang_cpu.o $(BUILD)/kang_selftest.o $(BUILD)/kang_base.o $(BUILD)/run_bsgs.o,$(OBJS))
 
 # t_gpufe: the kernel field arithmetic compiled for the host: PTX carry-chain variant (emulated), the OpenCL one with add-with-carry
@@ -322,18 +315,19 @@ $(BUILD)/kfe_amd.o: tests/mock_cuda/kern_fe.c tests/mock_cuda/pz_host.h src/kern
 $(BUILD)/t_gpufe$(EXE): tests/t_gpufe.c $(BUILD)/kfe_fast.o $(BUILD)/kfe_carry.o $(BUILD)/kfe_port.o $(BUILD)/kfe_amd.o $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(BUILD)/kfe_fast.o $(BUILD)/kfe_carry.o $(BUILD)/kfe_port.o $(BUILD)/kfe_amd.o $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
-# t_lz tests the decoder and the encoder (tools/embed.c, which it includes); t_kernels checks that the modules embedded in the program
-# unpack to the files of src/kernels/ptx, which is what the simulated CUDA driver compares them with
+# t_lz tests the decoder and the encoder (tools/embed.c, which it includes; embed also checks every stream it writes)
 $(BUILD)/t_lz$(EXE): tests/t_lz.c tools/embed.c src/lz.h $(BUILD)/lz.o | $(BUILD)
 	$(CC) $(COMMON) -o $@ $< $(BUILD)/lz.o $(LDLIBS)
-$(BUILD)/t_kernels$(EXE): tests/t_kernels.c src/lz.h $(BUILD)/lz.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_tab.o | $(BUILD)
-	$(CC) $(COMMON) -o $@ $< $(BUILD)/lz.o $(BUILD)/ptx_gen.o $(BUILD)/ptx_tab.o $(LDLIBS)
 
 # PZ_TEST_DIR: where a test writes its files (t_jobq), its own build folder
 $(BUILD)/t_%$(EXE): tests/t_%.c $(TESTOBJS) $(TESTENG) | $(BUILD)
 	$(CC) $(COMMON) -DPZ_TEST_DIR=\"$(BUILD)\" -o $@ $< $(TESTOBJS) $(TESTENG) $(LDLIBS)
 
+# a .ptx file that modules.txt does not list would be neither embedded nor regenerated
+PTXSTRAY := $(filter-out $(PTX),$(wildcard src/kernels/ptx/*.ptx))
+
 test: lib-test $(BIN) $(addsuffix $(EXE),$(addprefix $(BUILD)/,$(TESTS)))
+	@test -z "$(PTXSTRAY)" || { echo "not listed in $(PTXTAB): $(PTXSTRAY)"; exit 1; }
 	@for t in $(TESTS); do $(RUN) ./$(BUILD)/$$t$(EXE) || exit 1; done
 	$(RUN) ./$(BIN) selftest
 

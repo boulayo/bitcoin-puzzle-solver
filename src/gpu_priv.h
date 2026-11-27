@@ -39,8 +39,7 @@ struct gpu_session {
     rt_mod *kprog;
     rt_kern *kstep;
     int kprog_var;               /* the kernel variant (kvar) that kprog was built for */
-    rt_buf *b_state, *b_jump, *b_dps, *b_flags, *b_rc, *b_rl, *b_hist;
-    size_t rc_off;               /* the restart count is b_rc, a part of b_flags at this offset (one transfer reads both counts); 0: a buffer of its own */
+    rt_buf *b_state, *b_jump, *b_dps, *b_flags, *b_rc, *b_rl, *b_hist;   /* b_flags: the DP count; b_rc: the restart count */
     int T, NK, kvar;             /* kangaroo kernel: walkers per work-item, kernel variant (NK | cfg << 16) */
     bool l2fit;                  /* the herd is sized to the L2 cache (see kang_l2_threads_for) */
     int wide;                    /* KV_WIDE_*: the herd is wider than the default one (see kang_wide_threads_for), 0: it is not */

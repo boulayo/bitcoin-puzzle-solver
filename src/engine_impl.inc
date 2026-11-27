@@ -28,10 +28,6 @@ typedef struct {
 
 static inline void ctx_flush(ctx_t *c)
 {
-#ifdef PZ_PROF_NOHASH   /* profiling aid: measures the elliptic-curve half alone */
-    c->n = 0;
-    return;
-#endif
     PZ_HASH_FILTER_FN(&c->X[0][0], c->pfx, c->outw);
     const u32 t0 = c->job->target_w[PZ_HASH_FILTER_WORD];
     for (int l = 0; l < c->n; l++)
