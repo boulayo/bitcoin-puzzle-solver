@@ -321,7 +321,7 @@ MC="$T/mc"; mkdir -p "$MC/p140"
 printf 'PZDP2\n' > "$MC/p140/dp.bin"; head -c 32 /dev/zero >> "$MC/p140/dp.bin"; cp "$MC/p140/dp.bin" "$T/dp.old"
 build/pzsolve hunt -p 140 -s "$NS" --dp-bits 22 --node 2 --no-gpu -t 2 --mem 0.05 -c p140 -d "$MC" --ui log >"$T/old.log" 2>&1 && { echo "  FAIL hunt accepted a dp.bin of an older layout"; fail=$((fail+1)); } \
   || { grep -q "does not belong to this campaign" "$T/old.log" && cmp -s "$MC/p140/dp.bin" "$T/dp.old" && echo "  OK hunt refuses a dp.bin of an older kangaroo layout and leaves it alone" || { echo "  FAIL old dp.bin"; fail=$((fail+1)); }; }
-outhas "does not belong to this campaign" build/pzsolve merge -c p140 -d "$MA" -f "$T/dp.old" && echo "  OK merge refuses a log of an older kangaroo layout" || { echo "  FAIL merge of an old log"; fail=$((fail+1)); }
+outhas "not the log of this campaign" build/pzsolve merge -c p140 -d "$MA" -f "$T/dp.old" && echo "  OK merge refuses a log of an older kangaroo layout" || { echo "  FAIL merge of an old log"; fail=$((fail+1)); }
 # a dp.bin of a NEWER version ("PZDP6") is not an older layout: hunt refuses it and leaves it alone (no dp.bin.v6), merge says where it comes from
 MD="$T/md"; mkdir -p "$MD/p140"
 printf 'PZDP6\n' > "$MD/p140/dp.bin"; head -c 64 /dev/zero >> "$MD/p140/dp.bin"; cp "$MD/p140/dp.bin" "$T/dp.new"

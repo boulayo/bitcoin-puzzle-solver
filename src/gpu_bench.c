@@ -226,7 +226,7 @@ static int bench_variants_table(const tune_ops *op, int turns, double smp[][TUNE
     size_t o = (size_t)snprintf(line, sizeof line, "  %-9s%-25s", "code", "variant");
     if (per_turn)
         for (int t = 0; t < turns; t++) {
-            char h[16];
+            char h[24];
             snprintf(h, sizeof h, "turn %d", t + 1);
             o += (size_t)snprintf(line + o, sizeof line - o, "%11s", h);
         }
